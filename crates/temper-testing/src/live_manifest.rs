@@ -17,6 +17,9 @@ mod plan_feature;
 mod process;
 #[cfg(target_os = "linux")]
 mod standalone_shutdown;
+mod stimuli;
+#[cfg(test)]
+mod stimulus_manifest_tests;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -47,6 +50,10 @@ use process::{
 #[cfg(target_os = "linux")]
 pub use standalone_shutdown::{
     StandaloneShutdownEvidence, StandaloneShutdownRequest, run_standalone_shutdown_acceptance,
+};
+pub use stimuli::{
+    StimulusFailure, StimulusKind, StimulusOutcome, StimulusRuntime, StimulusSpec, StimulusStatus,
+    execute_stimuli,
 };
 
 const ENGINEER: &str = "engineer";
@@ -205,6 +212,36 @@ impl LiveManifestHarness {
         let repository = process::engine_block_on(repository(&forge, &self.scenario.repo))?;
         let issue =
             process::engine_block_on(seed_intake(&forge, &repository, &self.scenario.intake))?;
+        let stimuli = stimuli::execute_live_stimuli(
+            &self.scenario.execution.stimuli,
+            stimuli::LiveStimulusResources {
+                scenario: &self.scenario,
+                server: &server,
+                runner: &mut runner,
+                temper: &self.temper,
+                bundle_dir: &bundle_dir,
+                logs: &logs,
+                scenario_run_id: &scenario_run_id,
+                standalone: &mut standalone,
+                forge: &forge,
+                repository: &repository,
+                issue,
+            },
+        )
+        .map_err(|failure| {
+            workspace.retain_on_drop();
+            write_snapshot(&logs.fake_llm_log, &fake.log_tail());
+            write_snapshot(
+                &logs.ci_diagnostics_log,
+                &ci_diagnostics(&forge, &repository),
+            );
+            format!(
+                "declared live stimulus failed: {}\nstandalone log: {}\nCI diagnostics: {}",
+                failure.diagnostic(),
+                logs.standalone_log.display(),
+                logs.ci_diagnostics_log.display()
+            )
+        })?;
 
         let timeout = convergence_timeout(self.scenario.timeout);
         let convergence_start = Instant::now();
@@ -218,6 +255,7 @@ impl LiveManifestHarness {
         ) {
             Ok(final_state) => final_state,
             Err(error) => {
+                workspace.retain_on_drop();
                 write_snapshot(&logs.fake_llm_log, &fake.log_tail());
                 write_snapshot(
                     &logs.ci_diagnostics_log,
@@ -255,6 +293,7 @@ impl LiveManifestHarness {
         let convergence = convergence_start.elapsed();
 
         if convergence >= self.scenario.poll_backstop {
+            workspace.retain_on_drop();
             return Err(format!(
                 "converged in {convergence:?}, not before the long poll backstop {:?}; raw webhooks should wake the standalone engine\n--- standalone log ---\n{}",
                 self.scenario.poll_backstop,
@@ -262,12 +301,14 @@ impl LiveManifestHarness {
             ));
         }
         if fake.architect_requests() < 2 {
+            workspace.retain_on_drop();
             return Err(format!(
                 "fake LLM never served the architect tool loop\n{}",
                 fake.log_tail()
             ));
         }
         if fake.engineer_requests() < 2 {
+            workspace.retain_on_drop();
             return Err(format!(
                 "fake LLM never served the engineer tool loop\n{}",
                 fake.log_tail()
@@ -310,6 +351,7 @@ impl LiveManifestHarness {
             handoff: None,
             codebase_memory: None,
             plan_feature: None,
+            stimuli,
             logs,
         })
     }
@@ -370,6 +412,7 @@ pub struct LiveManifestEvidence {
     pub handoff: Option<LiveHandoffEvidence>,
     pub codebase_memory: Option<LiveCodebaseMemoryEvidence>,
     pub plan_feature: Option<LivePlanFeatureEvidence>,
+    pub stimuli: Vec<StimulusOutcome>,
     pub logs: LiveLogPaths,
 }
 
@@ -396,6 +439,7 @@ impl LiveManifestEvidence {
                 "  convergence: {:?} (poll_backstop: {:?}, total: {:?})",
                 self.convergence, self.poll_backstop, self.total_elapsed
             ),
+            format!("  stimuli: {}", self.stimuli.len()),
             format!(
                 "  fake_llm: {} architect_requests={} engineer_requests={} tester_requests={} log={}",
                 self.fake_llm.base_url,
@@ -421,6 +465,17 @@ impl LiveManifestEvidence {
             ),
             "  ci_jobs:".to_string(),
         ];
+        for stimulus in &self.stimuli {
+            lines.push(format!(
+                "  stimulus: {} action={} status={} attempts={} timeout={:?} duration={:?}",
+                stimulus.id,
+                stimulus.action,
+                stimulus.status.as_str(),
+                stimulus.attempts,
+                stimulus.timeout,
+                stimulus.duration
+            ));
+        }
         for job in &self.final_state.ci_jobs {
             lines.push(format!(
                 "    - {} status={} conclusion={:?} url={:?}",

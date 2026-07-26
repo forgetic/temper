@@ -4,6 +4,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
 use temper_testing::live_manifest::{
     LiveManifestEvidence, ScenarioBundle, TemperCommand, run_live_manifest,
 };
@@ -11,7 +12,11 @@ use temper_testing::live_manifest::{
 use crate::run_context::ScenarioRunFacts;
 use crate::run_evidence;
 
+#[path = "live/artifacts.rs"]
+mod artifacts;
+
 use super::observability::capture_observability;
+use artifacts::{RetainedLogPaths, copy_report_artifacts, stimulus_log_paths};
 
 const PRIMARY_TEMPER_BIN_ENV: &str = "TEMPER_SCENARIO_TEMPER_BIN";
 const COMPAT_TEMPER_BIN_ENV: &str = "TEMPER_BIN";
@@ -24,7 +29,7 @@ pub(super) fn run_and_print(
 ) -> Result<run_evidence::RunEvidenceArtifact, String> {
     let evidence = run_live(scenario, temper_bin)?;
     let lines = live_evidence_lines(&evidence, None);
-    let artifact = live_artifact(&evidence, context, &lines, None);
+    let artifact = live_artifact(scenario, &evidence, context, &lines, None);
     print_outcome(&lines, facts, context);
     retain_artifact_workspace(evidence);
     Ok(artifact)
@@ -79,67 +84,8 @@ fn retain_artifact_workspace(evidence: LiveManifestEvidence) {
     std::mem::forget(evidence);
 }
 
-#[derive(Debug)]
-struct RetainedLogPaths {
-    workspace_root: PathBuf,
-    init_log: PathBuf,
-    repo_populate_log: PathBuf,
-    standalone_log: PathBuf,
-    fake_llm_log: PathBuf,
-    ci_diagnostics_log: PathBuf,
-    codebase_mcp_log: Option<PathBuf>,
-}
-
-fn copy_report_artifacts(
-    evidence: &LiveManifestEvidence,
-    artifact_dir: &Path,
-) -> Result<RetainedLogPaths, String> {
-    let root = artifact_dir.join("live-manifest-artifacts");
-    fs::create_dir_all(&root)
-        .map_err(|error| format!("create live artifact directory {}: {error}", root.display()))?;
-    let retained = RetainedLogPaths {
-        workspace_root: root.clone(),
-        init_log: root.join("init.log"),
-        repo_populate_log: root.join("repo-populate.log"),
-        standalone_log: root.join("standalone.log"),
-        fake_llm_log: root.join("fake-llm.log"),
-        ci_diagnostics_log: root.join("ci-diagnostics.log"),
-        codebase_mcp_log: evidence
-            .codebase_memory
-            .as_ref()
-            .map(|_| root.join("fake-codebase-memory-mcp.jsonl")),
-    };
-    copy_log(&evidence.logs.init_log, &retained.init_log)?;
-    copy_log(
-        &evidence.logs.repo_populate_log,
-        &retained.repo_populate_log,
-    )?;
-    copy_log(&evidence.logs.standalone_log, &retained.standalone_log)?;
-    copy_log(&evidence.logs.fake_llm_log, &retained.fake_llm_log)?;
-    copy_log(
-        &evidence.logs.ci_diagnostics_log,
-        &retained.ci_diagnostics_log,
-    )?;
-    if let (Some(codebase_memory), Some(destination)) = (
-        evidence.codebase_memory.as_ref(),
-        retained.codebase_mcp_log.as_ref(),
-    ) {
-        copy_log(&codebase_memory.fake_mcp_log, destination)?;
-    }
-    Ok(retained)
-}
-
-fn copy_log(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::copy(source, destination).map(|_| ()).map_err(|error| {
-        format!(
-            "copy live artifact {} to {}: {error}",
-            source.display(),
-            destination.display()
-        )
-    })
-}
-
 fn live_artifact(
+    scenario: &ScenarioBundle,
     evidence: &LiveManifestEvidence,
     context: &run_evidence::RunEvidenceContext,
     lines: &[String],
@@ -299,6 +245,12 @@ fn live_artifact(
         poll_backstop_ms: Some(duration_ms(evidence.poll_backstop)),
         ..run_evidence::ConvergenceEvidence::default()
     });
+    artifact.binary = binary_identity(&evidence.temper_binary);
+    artifact.execution = Some(run_evidence::ExecutionEvidence {
+        status: "completed".to_string(),
+        total_duration_ms: duration_ms(evidence.total_elapsed),
+        failure: None,
+    });
     artifact.provider = Some(run_evidence::ProviderEvidence {
         forgejo_url: Some(evidence.forge_url.clone()),
         repo_slug: Some(evidence.repo_slug.clone()),
@@ -308,8 +260,38 @@ fn live_artifact(
         merged_sha: evidence.final_state.pull_request.merged_sha.clone(),
         temper_binary: Some(evidence.temper_binary.display().to_string()),
         fake_llm_url: Some(evidence.fake_llm.base_url.clone()),
+        jig_script_paths: vec![scenario.jig_script_path().display().to_string()],
+        request_log_path: Some(fake_llm_log.display().to_string()),
+        request_count: Some(
+            evidence.fake_llm.architect_requests
+                + evidence.fake_llm.engineer_requests
+                + evidence.fake_llm.tester_requests,
+        ),
+        request_counts_by_role: [
+            (
+                "architect".to_string(),
+                evidence.fake_llm.architect_requests,
+            ),
+            ("engineer".to_string(), evidence.fake_llm.engineer_requests),
+            ("tester".to_string(), evidence.fake_llm.tester_requests),
+        ]
+        .into_iter()
+        .collect(),
     });
-    artifact.observability = Some(capture_observability(evidence, standalone_log));
+    let source_stimulus_logs;
+    let stimulus_logs = if let Some(retained_logs) = retained_logs {
+        &retained_logs.stimulus_logs
+    } else {
+        source_stimulus_logs =
+            stimulus_log_paths(&evidence.logs.standalone_log).unwrap_or_default();
+        &source_stimulus_logs
+    };
+    let mut observability_logs = stimulus_logs
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    observability_logs.push(standalone_log);
+    artifact.observability = Some(capture_observability(evidence, &observability_logs));
     let mut log_paths = vec![
         init_log.display().to_string(),
         repo_populate_log.display().to_string(),
@@ -319,6 +301,7 @@ fn live_artifact(
     if let Some(codebase_mcp_log) = codebase_mcp_log {
         log_paths.push(codebase_mcp_log.display().to_string());
     }
+    log_paths.extend(stimulus_logs.iter().map(|path| path.display().to_string()));
     artifact.artifacts = run_evidence::ArtifactCollections {
         log_paths,
         artifact_paths: vec![
@@ -327,7 +310,30 @@ fn live_artifact(
         ],
     };
     artifact.evidence_lines = lines.to_vec();
+    artifact.stimuli = evidence
+        .stimuli
+        .iter()
+        .map(|outcome| run_evidence::StimulusEvidence {
+            id: outcome.id.clone(),
+            action: outcome.action.clone(),
+            status: outcome.status.as_str().to_string(),
+            attempts: outcome.attempts,
+            timeout_ms: duration_ms(outcome.timeout),
+            duration_ms: duration_ms(outcome.duration),
+            details: outcome.details.clone(),
+        })
+        .collect();
     artifact
+}
+
+fn binary_identity(path: &Path) -> Option<run_evidence::BinaryIdentityEvidence> {
+    let bytes = fs::read(path).ok()?;
+    let digest = Sha256::digest(&bytes);
+    Some(run_evidence::BinaryIdentityEvidence {
+        path: path.display().to_string(),
+        sha256: format!("{digest:x}"),
+        size_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+    })
 }
 
 fn duration_ms(duration: std::time::Duration) -> u64 {
@@ -459,6 +465,23 @@ fn live_evidence_lines(
             "CI job: name={} status={} conclusion={:?} url={:?}",
             job.name, job.status, job.conclusion, job.url
         ));
+    }
+    for stimulus in &evidence.stimuli {
+        lines.push(format!(
+            "stimulus: id={} action={} status={} attempts={} timeout={:?} duration={:?} details={:?}",
+            stimulus.id,
+            stimulus.action,
+            stimulus.status.as_str(),
+            stimulus.attempts,
+            stimulus.timeout,
+            stimulus.duration,
+            stimulus.details
+        ));
+    }
+    if let Some(retained_logs) = retained_logs {
+        for path in &retained_logs.stimulus_logs {
+            lines.push(format!("log pre-restart standalone: {}", path.display()));
+        }
     }
     lines.extend([
         format!(

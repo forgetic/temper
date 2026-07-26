@@ -3,8 +3,9 @@
 use toml::Value;
 
 use super::super::model::{
-    ASSERTION_STATUS_FAILED, ASSERTION_STATUS_PASSED, ASSERTION_STATUS_UNSUPPORTED,
-    AssertionResultEvidence, IssueStateEvidence, PullRequestStateEvidence, RepositoryStateEvidence,
+    ASSERTION_STATUS_FAILED, ASSERTION_STATUS_MISSING_FACT, ASSERTION_STATUS_PASSED,
+    ASSERTION_STATUS_UNSUPPORTED, AssertionResultEvidence, IssueStateEvidence,
+    PullRequestStateEvidence, RepositoryStateEvidence,
 };
 
 pub(super) struct SelectedIssue<'a> {
@@ -24,7 +25,7 @@ pub(super) struct SelectedRepository<'a> {
 
 pub(super) enum SelectionProblem {
     Failed(String),
-    Unsupported(String),
+    MissingFact(String),
 }
 
 pub(super) fn select_issue<'a>(
@@ -32,7 +33,7 @@ pub(super) fn select_issue<'a>(
     id: Option<&str>,
 ) -> Result<SelectedIssue<'a>, SelectionProblem> {
     if issues.is_empty() {
-        return Err(SelectionProblem::Unsupported(
+        return Err(SelectionProblem::MissingFact(
             "run evidence has no final issue facts".to_string(),
         ));
     }
@@ -53,7 +54,7 @@ pub(super) fn select_issue<'a>(
                 })
             }
             [] if issues.iter().all(|issue| issue.id.is_none()) => {
-                Err(SelectionProblem::Unsupported(format!(
+                Err(SelectionProblem::MissingFact(format!(
                     "cannot resolve issue artifact `issue:{id}` because run evidence has multiple issues and no issue ids"
                 )))
             }
@@ -71,7 +72,7 @@ pub(super) fn select_issue<'a>(
     }
     match issues {
         [issue] => Ok(SelectedIssue { issue, note: None }),
-        _ => Err(SelectionProblem::Unsupported(
+        _ => Err(SelectionProblem::MissingFact(
             "pulling an issue assertion without an issue id is ambiguous because multiple issues are present"
                 .to_string(),
         )),
@@ -83,7 +84,7 @@ pub(super) fn select_pull_request<'a>(
     id: Option<&str>,
 ) -> Result<SelectedPullRequest<'a>, SelectionProblem> {
     if pull_requests.is_empty() {
-        return Err(SelectionProblem::Unsupported(
+        return Err(SelectionProblem::MissingFact(
             "run evidence has no final pull request facts".to_string(),
         ));
     }
@@ -114,7 +115,7 @@ pub(super) fn select_pull_request<'a>(
                 .iter()
                 .all(|pull_request| pull_request.id.is_none()) =>
             {
-                Err(SelectionProblem::Unsupported(format!(
+                Err(SelectionProblem::MissingFact(format!(
                     "cannot resolve pull request artifact `pull_request:{id}` because run evidence has multiple pull requests and no pull request ids"
                 )))
             }
@@ -135,7 +136,7 @@ pub(super) fn select_pull_request<'a>(
             pull_request,
             note: None,
         }),
-        _ => Err(SelectionProblem::Unsupported(
+        _ => Err(SelectionProblem::MissingFact(
             "pull request assertion without a pull request id is ambiguous because multiple pull requests are present"
                 .to_string(),
         )),
@@ -147,7 +148,7 @@ pub(super) fn select_repository<'a>(
     id: Option<&str>,
 ) -> Result<SelectedRepository<'a>, SelectionProblem> {
     if repositories.is_empty() {
-        return Err(SelectionProblem::Unsupported(
+        return Err(SelectionProblem::MissingFact(
             "run evidence has no final repository facts".to_string(),
         ));
     }
@@ -171,7 +172,7 @@ pub(super) fn select_repository<'a>(
                 })
             }
             [] if repositories.iter().all(repository_has_no_identity) => {
-                Err(SelectionProblem::Unsupported(format!(
+                Err(SelectionProblem::MissingFact(format!(
                     "cannot resolve repository artifact `repo:{id}` because run evidence has multiple repositories and no repository ids or slugs"
                 )))
             }
@@ -189,7 +190,7 @@ pub(super) fn select_repository<'a>(
             repository,
             note: None,
         }),
-        _ => Err(SelectionProblem::Unsupported(
+        _ => Err(SelectionProblem::MissingFact(
             "repository assertion without a repository id is ambiguous because multiple repositories are present"
                 .to_string(),
         )),
@@ -250,9 +251,11 @@ pub(super) struct ResultBuilder {
     id: String,
     description: String,
     artifact: Option<String>,
+    required: bool,
     details: Vec<String>,
     passed: usize,
     failed: usize,
+    missing_fact: usize,
     unsupported: usize,
 }
 
@@ -262,11 +265,18 @@ impl ResultBuilder {
             id,
             description,
             artifact,
+            required: true,
             details: Vec::new(),
             passed: 0,
             failed: 0,
+            missing_fact: 0,
             unsupported: 0,
         }
+    }
+
+    pub(super) fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
     }
 
     pub(super) fn passed(mut self, detail: impl Into<String>) -> Self {
@@ -281,6 +291,12 @@ impl ResultBuilder {
         self
     }
 
+    pub(super) fn missing_fact(mut self, detail: impl Into<String>) -> Self {
+        self.missing_fact += 1;
+        self.details.push(detail.into());
+        self
+    }
+
     pub(super) fn unsupported(mut self, detail: impl Into<String>) -> Self {
         self.unsupported += 1;
         self.details.push(detail.into());
@@ -290,6 +306,8 @@ impl ResultBuilder {
     pub(super) fn build(self) -> AssertionResultEvidence {
         let status = if self.failed > 0 {
             ASSERTION_STATUS_FAILED
+        } else if self.missing_fact > 0 {
+            ASSERTION_STATUS_MISSING_FACT
         } else if self.unsupported > 0 || self.passed == 0 {
             ASSERTION_STATUS_UNSUPPORTED
         } else {
@@ -297,6 +315,7 @@ impl ResultBuilder {
         };
         AssertionResultEvidence {
             id: self.id,
+            required: self.required,
             status: status.to_string(),
             description: self.description,
             artifact: self.artifact,
@@ -313,6 +332,15 @@ impl ResultBuilder {
             duration_ms: None,
             details: self.details,
         }
+    }
+}
+
+pub(super) fn required_assertion(table: &toml::Table) -> Result<bool, String> {
+    match table.get("required") {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| "required must be a boolean".to_string()),
+        None => Ok(true),
     }
 }
 

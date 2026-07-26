@@ -1,7 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use toml::Value as TomlValue;
+
+use super::stimuli::{StimulusKind, StimulusSpec};
 
 /// Typed, ordered live actions resolved from a scenario manifest.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -10,6 +13,7 @@ pub struct ManifestExecutionPlan {
     pub agents: Vec<AgentFixture>,
     pub convergence: ConvergenceStrategy,
     pub jig_script_path: PathBuf,
+    pub stimuli: Vec<StimulusSpec>,
 }
 
 impl ManifestExecutionPlan {
@@ -39,6 +43,15 @@ impl ManifestExecutionPlan {
         }
         validate_required_actions(&steps)?;
         validate_action_links(manifest, &steps, &agents)?;
+        validate_stimulus_placement(&steps)?;
+        let stimuli = steps
+            .iter()
+            .filter_map(|step| match &step.action {
+                ManifestAction::Stimulus(stimulus) => Some(stimulus.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        validate_stimulus_sequence(&stimuli)?;
 
         let convergence = steps
             .iter()
@@ -82,6 +95,7 @@ impl ManifestExecutionPlan {
             agents,
             convergence: *convergence,
             jig_script_path: (*jig_script_path).clone(),
+            stimuli,
         })
     }
 
@@ -130,6 +144,7 @@ pub enum ManifestAction {
     WaitForConvergence {
         strategy: ConvergenceStrategy,
     },
+    Stimulus(StimulusSpec),
 }
 
 impl ManifestAction {
@@ -145,6 +160,7 @@ impl ManifestAction {
             Self::StartCodebaseMemoryMcp => "mcp.fake_codebase_memory.start",
             Self::ConfigureAgentTools => "agent.tools.configure",
             Self::WaitForConvergence { .. } => "workflow.wait_convergence",
+            Self::Stimulus(stimulus) => stimulus.action(),
         }
     }
 }
@@ -270,10 +286,128 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             })?;
             Ok(ManifestAction::WaitForConvergence { strategy })
         }
+        "temper.restart"
+        | "forgejo_runner.restart"
+        | "ci.fail"
+        | "ci.recover"
+        | "delivery.repeat" => Ok(ManifestAction::Stimulus(parse_stimulus(
+            name, table, index,
+        )?)),
         other => Err(format!(
             "{field}.action `{other}` is not supported by the live manifest executor"
         )),
     }
+}
+
+fn validate_stimulus_placement(steps: &[ManifestStep]) -> Result<(), String> {
+    let convergence_index = steps
+        .iter()
+        .position(|step| matches!(step.action, ManifestAction::WaitForConvergence { .. }))
+        .unwrap_or(steps.len());
+    if let Some(step) = steps[convergence_index.saturating_add(1)..]
+        .iter()
+        .find(|step| matches!(step.action, ManifestAction::Stimulus(_)))
+    {
+        return Err(format!(
+            "stimulus step `{}` must run before workflow.wait_convergence; assertions are the only after-convergence hooks",
+            step.id
+        ));
+    }
+    Ok(())
+}
+
+fn parse_stimulus(action: &str, table: &toml::Table, index: usize) -> Result<StimulusSpec, String> {
+    const MAX_TIMEOUT_MS: u64 = 600_000;
+    const MAX_ATTEMPTS: u64 = 3;
+    const MAX_DELIVERIES: u64 = 10;
+    let field = format!("steps[{index}]");
+    let timeout_ms = bounded_integer(table, "timeout_ms", &field, 30_000, 1, MAX_TIMEOUT_MS)?;
+    let max_attempts = bounded_integer(table, "max_attempts", &field, 1, 1, MAX_ATTEMPTS)?;
+    let kind = match action {
+        "temper.restart" => StimulusKind::RestartTemper,
+        "forgejo_runner.restart" => StimulusKind::RestartRunner,
+        "ci.fail" => StimulusKind::CiFailure {
+            repo_id: required_table_string(table, "repo", &field)?,
+            workflow_path: required_stimulus_file(table, "fixture", &field)?,
+        },
+        "ci.recover" => StimulusKind::CiRecovery {
+            repo_id: required_table_string(table, "repo", &field)?,
+            workflow_path: required_stimulus_file(table, "fixture", &field)?,
+        },
+        "delivery.repeat" => StimulusKind::RepeatDelivery {
+            artifact: required_table_string(table, "artifact", &field)?,
+            deliveries: bounded_integer(table, "deliveries", &field, 2, 2, MAX_DELIVERIES)?,
+        },
+        _ => unreachable!("caller filters stimulus actions"),
+    };
+    Ok(StimulusSpec {
+        id: required_table_string(table, "id", &field)?,
+        kind,
+        timeout: Duration::from_millis(timeout_ms),
+        max_attempts,
+    })
+}
+
+fn required_stimulus_file(table: &toml::Table, key: &str, field: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(required_table_string(table, key, field)?);
+    if path.is_file() {
+        Ok(path)
+    } else {
+        Err(format!(
+            "{field}.{key} must resolve to a readable fixture file: {}",
+            path.display()
+        ))
+    }
+}
+
+fn bounded_integer(
+    table: &toml::Table,
+    key: &str,
+    field: &str,
+    default: u64,
+    min: u64,
+    max: u64,
+) -> Result<u64, String> {
+    let Some(value) = table.get(key) else {
+        return Ok(default);
+    };
+    let value = value
+        .as_integer()
+        .and_then(|value| u64::try_from(value).ok())
+        .filter(|value| (min..=max).contains(value))
+        .ok_or_else(|| format!("{field}.{key} must be an integer from {min} through {max}"))?;
+    Ok(value)
+}
+
+fn validate_stimulus_sequence(stimuli: &[StimulusSpec]) -> Result<(), String> {
+    let mut pending_ci_failures = BTreeMap::<&str, &str>::new();
+    for stimulus in stimuli {
+        match &stimulus.kind {
+            StimulusKind::CiFailure { repo_id, .. } => {
+                if pending_ci_failures.insert(repo_id, &stimulus.id).is_some() {
+                    return Err(format!(
+                        "stimulus `{}` declares another CI failure for `{repo_id}` before recovery",
+                        stimulus.id
+                    ));
+                }
+            }
+            StimulusKind::CiRecovery { repo_id, .. } => {
+                if pending_ci_failures.remove(repo_id.as_str()).is_none() {
+                    return Err(format!(
+                        "stimulus `{}` recovers CI for `{repo_id}` without a preceding ci.fail stimulus",
+                        stimulus.id
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some((repo, stimulus)) = pending_ci_failures.first_key_value() {
+        return Err(format!(
+            "CI failure stimulus `{stimulus}` for `{repo}` has no bounded ci.recover stimulus"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_required_actions(steps: &[ManifestStep]) -> Result<(), String> {
@@ -371,6 +505,33 @@ fn validate_action_links(
                     "step `{}` references unknown repository id `{repo_id}`",
                     step.id
                 ));
+            }
+            ManifestAction::Stimulus(StimulusSpec {
+                kind:
+                    StimulusKind::CiFailure { repo_id, .. } | StimulusKind::CiRecovery { repo_id, .. },
+                ..
+            }) if !repository_ids.contains(repo_id.as_str()) => {
+                return Err(format!(
+                    "stimulus step `{}` references unknown repository id `{repo_id}`",
+                    step.id
+                ));
+            }
+            ManifestAction::Stimulus(StimulusSpec {
+                kind: StimulusKind::RepeatDelivery { artifact, .. },
+                ..
+            }) => {
+                let Some(issue_id) = artifact.strip_prefix("issue:") else {
+                    return Err(format!(
+                        "stimulus step `{}` delivery.repeat artifact must use issue:<id>, got `{artifact}`",
+                        step.id
+                    ));
+                };
+                if !issue_ids.contains(issue_id) && !issue_bindings.contains(issue_id) {
+                    return Err(format!(
+                        "stimulus step `{}` references unknown issue id or binding `{issue_id}`",
+                        step.id
+                    ));
+                }
             }
             ManifestAction::SeedIssue { issue_id, .. }
                 if !issue_ids.contains(issue_id.as_str()) =>

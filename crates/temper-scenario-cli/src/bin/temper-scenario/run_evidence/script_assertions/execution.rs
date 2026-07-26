@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::super::model::{
-    ASSERTION_STATUS_FAILED, ASSERTION_STATUS_PASSED, AssertionResultEvidence, RunEvidenceArtifact,
+    ASSERTION_STATUS_FAILED, ASSERTION_STATUS_PASSED, ASSERTION_STATUS_TIMED_OUT,
+    AssertionResultEvidence, RunEvidenceArtifact,
 };
 use super::{SCRIPT_CONTEXT_SCHEMA, SCRIPT_CONTEXT_VERSION, SCRIPT_KIND_COMMAND, ScriptHook};
 
@@ -169,7 +170,9 @@ pub(super) fn run_hook(
         details.push(format!("stderr excerpt: {excerpt}"));
     }
 
-    let assertion_status = if !timed_out && status.success() {
+    let assertion_status = if timed_out {
+        ASSERTION_STATUS_TIMED_OUT
+    } else if status.success() {
         ASSERTION_STATUS_PASSED
     } else {
         ASSERTION_STATUS_FAILED
@@ -217,6 +220,7 @@ fn execution_result(
 ) -> AssertionResultEvidence {
     AssertionResultEvidence {
         id: hook.id.clone(),
+        required: hook.required,
         status: status.to_string(),
         description: description.to_string(),
         artifact: Some(format!("script:{}", hook.id)),

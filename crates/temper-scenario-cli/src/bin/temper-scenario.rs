@@ -20,6 +20,7 @@ mod validate_pr;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Instant;
 
 use temper_scenario_core::{
     DEFAULT_SCENARIOS_DIR, Diagnostic, Severity, check_scenario, check_scenarios,
@@ -29,6 +30,7 @@ use temper_scenario_core::{
 use run_context::{ScenarioRunFacts, ScenarioTier};
 
 const EX_USAGE: u8 = 64;
+const RUN_EVIDENCE_FILE: &str = "run-evidence.json";
 
 const USAGE: &str = "\
 temper-scenario: list, check, run, validate, and draft Temper scenario artifacts
@@ -281,6 +283,7 @@ fn run_command(args: &[String]) -> ExitCode {
 
     let evidence_context =
         run_evidence::RunEvidenceContext::from_check_report(&report, &facts, &selected_runner);
+    let started = Instant::now();
     let result = selected_runner.run_and_print(
         &report.scenario_path,
         manifest_path,
@@ -301,7 +304,7 @@ fn run_command(args: &[String]) -> ExitCode {
                     }
                 };
             if let Some(assertions) = assertion_evidence {
-                artifact.assertions = Some(assertions);
+                artifact.record_assertions(assertions);
             }
 
             let artifact_dir = run_artifact_dir(args.evidence_out.as_deref(), &manifest.name);
@@ -319,7 +322,15 @@ fn run_command(args: &[String]) -> ExitCode {
             if let Some(assertions) = artifact.assertions.as_ref() {
                 run_evidence::print_assertions(assertions);
             }
-            if let Some(path) = args.evidence_out.as_deref() {
+            let evidence_destination = args
+                .evidence_out
+                .clone()
+                .or_else(|| assertions_failed.then(|| artifact_dir.join(RUN_EVIDENCE_FILE)));
+            if let Some(path) = evidence_destination.as_deref() {
+                artifact
+                    .artifacts
+                    .artifact_paths
+                    .push(resolved_run_evidence_output(path).display().to_string());
                 match artifact.write_to_path(path) {
                     Ok(path) => println!("run evidence: {}", path.display()),
                     Err(error) => {
@@ -336,9 +347,47 @@ fn run_command(args: &[String]) -> ExitCode {
             }
         }
         Err(error) => {
+            let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let mut artifact = evidence_context.failure_artifact(error.clone(), elapsed_ms);
+            match run_evidence::evaluate_manifest_assertions(manifest_path, &artifact) {
+                Ok(Some(assertions)) => artifact.record_assertions(assertions),
+                Ok(None) => {}
+                Err(assertion_error) => artifact.limitations.push(format!(
+                    "Declarative assertions could not be evaluated after execution failure: {assertion_error}"
+                )),
+            }
+            artifact.limitations.push(
+                "After-convergence script assertions were not executed because convergence did not complete."
+                    .to_string(),
+            );
+            let path = args
+                .evidence_out
+                .clone()
+                .unwrap_or_else(|| run_artifact_dir(None, &manifest.name).join(RUN_EVIDENCE_FILE));
+            artifact
+                .artifacts
+                .artifact_paths
+                .push(resolved_run_evidence_output(&path).display().to_string());
+            match artifact.write_to_path(&path) {
+                Ok(path) => eprintln!(
+                    "temper-scenario run: failure evidence retained at {}",
+                    path.display()
+                ),
+                Err(write_error) => eprintln!(
+                    "temper-scenario run: could not retain failure evidence: {write_error}"
+                ),
+            }
             eprintln!("temper-scenario run: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn resolved_run_evidence_output(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.join(RUN_EVIDENCE_FILE)
+    } else {
+        path.to_path_buf()
     }
 }
 
@@ -354,13 +403,26 @@ fn run_artifact_dir(evidence_out: Option<&Path>, scenario_name: &str) -> PathBuf
             .unwrap_or_else(|| PathBuf::from("."));
     }
 
-    PathBuf::from("target")
-        .join("temper-scenario-artifacts")
-        .join(format!(
-            "{}-{}",
-            safe_file_component(scenario_name),
-            std::process::id()
-        ))
+    let root = env::current_dir()
+        .ok()
+        .and_then(|current| scenario_workspace_root(&current))
+        .map(|root| root.join("target"))
+        .unwrap_or_else(std::env::temp_dir);
+    root.join("temper-scenario-artifacts").join(format!(
+        "{}-{}",
+        safe_file_component(scenario_name),
+        std::process::id()
+    ))
+}
+
+fn scenario_workspace_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start;
+    loop {
+        if current.join("Cargo.toml").is_file() && current.join("scenarios").is_dir() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
 }
 
 fn safe_file_component(value: &str) -> String {

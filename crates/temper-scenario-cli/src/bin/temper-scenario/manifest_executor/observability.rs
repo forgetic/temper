@@ -11,14 +11,21 @@ use crate::run_evidence;
 
 pub(super) fn capture_observability(
     evidence: &LiveManifestEvidence,
-    standalone_log: &Path,
+    standalone_logs: &[&Path],
 ) -> run_evidence::ObservabilityEvidence {
-    let events = capture_structured_events(evidence, standalone_log);
+    let events = capture_structured_events(evidence, standalone_logs);
     run_evidence::ObservabilityEvidence {
         scenario_run_id: evidence.scenario_run_id.clone(),
         log_format: evidence.temper_log_format.clone(),
         rust_log: evidence.rust_log.clone(),
-        event_log_path: standalone_log.display().to_string(),
+        event_log_path: standalone_logs
+            .last()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        event_log_paths: standalone_logs
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
         captured_events: events.len(),
         events,
     }
@@ -26,11 +33,8 @@ pub(super) fn capture_observability(
 
 fn capture_structured_events(
     evidence: &LiveManifestEvidence,
-    standalone_log: &Path,
+    standalone_logs: &[&Path],
 ) -> Vec<run_evidence::StructuredEventEvidence> {
-    let Ok(contents) = fs::read_to_string(standalone_log) else {
-        return Vec::new();
-    };
     let source_issue_ref = format!(
         "{}#{}",
         evidence.repo_slug, evidence.final_state.issue.number
@@ -40,42 +44,47 @@ fn capture_structured_events(
         evidence.repo_slug, evidence.final_state.pull_request.number
     );
     let mut events = Vec::new();
-    for line in contents.lines() {
-        let Ok(record) = serde_json::from_str::<JsonValue>(line) else {
+    for standalone_log in standalone_logs {
+        let Ok(contents) = fs::read_to_string(standalone_log) else {
             continue;
         };
-        let Some(fields) = record.get("fields").and_then(JsonValue::as_object) else {
-            continue;
-        };
-        let Some(event) = fields.get("event").and_then(JsonValue::as_str) else {
-            continue;
-        };
-        let mut fact_fields = BTreeMap::new();
-        fact_fields.insert("event".to_string(), event.to_string());
-        fact_fields.insert(
-            "scenario.run_id".to_string(),
-            evidence.scenario_run_id.clone(),
-        );
-        for (key, value) in fields {
-            fact_fields.insert(key.clone(), json_value_to_field(value));
+        for line in contents.lines() {
+            let Ok(record) = serde_json::from_str::<JsonValue>(line) else {
+                continue;
+            };
+            let Some(fields) = record.get("fields").and_then(JsonValue::as_object) else {
+                continue;
+            };
+            let Some(event) = fields.get("event").and_then(JsonValue::as_str) else {
+                continue;
+            };
+            let mut fact_fields = BTreeMap::new();
+            fact_fields.insert("event".to_string(), event.to_string());
+            fact_fields.insert(
+                "scenario.run_id".to_string(),
+                evidence.scenario_run_id.clone(),
+            );
+            for (key, value) in fields {
+                fact_fields.insert(key.clone(), json_value_to_field(value));
+            }
+            collect_span_fields(&record, &mut fact_fields);
+            enrich_event_fields(
+                &mut fact_fields,
+                &source_issue_ref,
+                &implementation_pr_ref,
+                evidence.final_state.issue.number,
+            );
+            events.push(run_evidence::StructuredEventEvidence {
+                sequence: events.len() + 1,
+                event: event.to_string(),
+                service: fact_fields.get("service").cloned(),
+                target: record
+                    .get("target")
+                    .and_then(JsonValue::as_str)
+                    .map(str::to_string),
+                fields: fact_fields,
+            });
         }
-        collect_span_fields(&record, &mut fact_fields);
-        enrich_event_fields(
-            &mut fact_fields,
-            &source_issue_ref,
-            &implementation_pr_ref,
-            evidence.final_state.issue.number,
-        );
-        events.push(run_evidence::StructuredEventEvidence {
-            sequence: events.len() + 1,
-            event: event.to_string(),
-            service: fact_fields.get("service").cloned(),
-            target: record
-                .get("target")
-                .and_then(JsonValue::as_str)
-                .map(str::to_string),
-            fields: fact_fields,
-        });
     }
     events
 }

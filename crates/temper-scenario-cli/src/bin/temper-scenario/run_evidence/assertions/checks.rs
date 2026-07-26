@@ -7,9 +7,9 @@ use super::common::SUPPORTED_REPO_CHECK_FIELDS;
 use super::issue::evaluate_issue_check;
 use super::pull_request::evaluate_pull_request_check;
 use super::repository::evaluate_repo_check;
-use super::support::{ArtifactSelector, ResultBuilder};
+use super::support::{ArtifactSelector, ResultBuilder, required_assertion};
 
-const CONTROL_FIELDS: &[&str] = &["id", "artifact"];
+const CONTROL_FIELDS: &[&str] = &["id", "artifact", "required"];
 const SUPPORTED_CHECK_FIELDS: &[&str] = &[
     "state",
     "labels",
@@ -83,6 +83,10 @@ fn evaluate_check(
         None => format!("Manifest check `{id}`."),
     };
     let mut builder = ResultBuilder::new(id, description, artifact_name.clone());
+    match required_assertion(check) {
+        Ok(required) => builder = builder.required(required),
+        Err(message) => return builder.failed(message).build(),
+    }
 
     for key in check.keys() {
         if CONTROL_FIELDS.contains(&key.as_str())

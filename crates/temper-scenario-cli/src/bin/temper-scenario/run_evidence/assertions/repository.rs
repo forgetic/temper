@@ -18,7 +18,9 @@ pub(super) fn evaluate_repo_check(
     let SelectedRepository { repository, note } = match selected {
         Ok(selected) => selected,
         Err(SelectionProblem::Failed(message)) => return builder.failed(message).build(),
-        Err(SelectionProblem::Unsupported(message)) => return builder.unsupported(message).build(),
+        Err(SelectionProblem::MissingFact(message)) => {
+            return builder.missing_fact(message).build();
+        }
     };
     if let Some(note) = note {
         builder = builder.passed(note);
@@ -64,7 +66,7 @@ pub(super) fn evaluate_repo_check(
             None
         }
         BranchSelection::Ambiguous(detail) | BranchSelection::Unsupported(detail) => {
-            builder = builder.unsupported(detail);
+            builder = builder.missing_fact(detail);
             None
         }
         BranchSelection::NotNeeded => None,
@@ -78,7 +80,7 @@ pub(super) fn evaluate_repo_check(
         };
         let Some(branch) = branch else {
             return builder
-                .unsupported(
+                .missing_fact(
                     "contains_engineer_diff could not be evaluated because no branch fact matched",
                 )
                 .build();
@@ -171,7 +173,7 @@ fn evaluate_contains_engineer_diff(
     expected: bool,
 ) -> ResultBuilder {
     let Some(actual) = branch.contains_engineer_diff else {
-        return builder.unsupported(format!(
+        return builder.missing_fact(format!(
             "repository `{repo_name}` branch `{}` is missing contains_engineer_diff fact",
             branch.name
         ));

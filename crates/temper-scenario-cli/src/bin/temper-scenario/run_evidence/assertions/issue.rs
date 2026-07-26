@@ -17,7 +17,9 @@ pub(super) fn evaluate_issue_check(
     let SelectedIssue { issue, note } = match selected {
         Ok(selected) => selected,
         Err(SelectionProblem::Failed(message)) => return builder.failed(message).build(),
-        Err(SelectionProblem::Unsupported(message)) => return builder.unsupported(message).build(),
+        Err(SelectionProblem::MissingFact(message)) => {
+            return builder.missing_fact(message).build();
+        }
     };
     if let Some(note) = note {
         builder = builder.passed(note);

@@ -56,7 +56,7 @@ fn evaluate_single_pr_merged_source_closed(
     );
 
     if artifact.final_state.pull_requests.is_empty() {
-        builder = builder.unsupported("run evidence has no final pull request facts");
+        builder = builder.missing_fact("run evidence has no final pull request facts");
     } else {
         let merged = artifact
             .final_state
@@ -87,8 +87,8 @@ fn evaluate_single_pr_merged_source_closed(
                 ));
             }
         }
-        SourceIssueCandidates::Unsupported(message) => {
-            builder = builder.unsupported(message);
+        SourceIssueCandidates::MissingFact(message) => {
+            builder = builder.missing_fact(message);
         }
     }
 
@@ -168,7 +168,7 @@ fn evaluate_count(
 ) -> AssertionResultEvidence {
     let builder = ResultBuilder::new(id, description, None);
     let Some(actual) = actual else {
-        return builder.unsupported(missing_fact).build();
+        return builder.missing_fact(missing_fact).build();
     };
     if actual == expected {
         builder
@@ -189,7 +189,7 @@ fn evaluate_no_duplicate_prs(
     let mut builder = ResultBuilder::new(id, description, None);
     if artifact.final_state.pull_requests.is_empty() {
         return builder
-            .unsupported("run evidence has no final pull request facts")
+            .missing_fact("run evidence has no final pull request facts")
             .build();
     }
     let implementation = artifact
@@ -200,7 +200,7 @@ fn evaluate_no_duplicate_prs(
         .collect::<Vec<_>>();
     if implementation.is_empty() {
         return builder
-            .unsupported("run evidence has pull requests but no implementation label facts")
+            .missing_fact("run evidence has pull requests but no implementation label facts")
             .build();
     }
     if implementation
@@ -208,7 +208,7 @@ fn evaluate_no_duplicate_prs(
         .any(|pull_request| pull_request.head_branch.is_none())
     {
         return builder
-            .unsupported("implementation PR duplicate detection requires head_branch facts")
+            .missing_fact("implementation PR duplicate detection requires head_branch facts")
             .build();
     }
 
@@ -290,12 +290,12 @@ fn count_pull_request_action_events(
 
 enum SourceIssueCandidates<'a> {
     Issues(Vec<&'a IssueStateEvidence>),
-    Unsupported(String),
+    MissingFact(String),
 }
 
 fn source_issue_candidates(artifact: &RunEvidenceArtifact) -> SourceIssueCandidates<'_> {
     if artifact.final_state.issues.is_empty() {
-        return SourceIssueCandidates::Unsupported(
+        return SourceIssueCandidates::MissingFact(
             "run evidence has no final issue facts".to_string(),
         );
     }
@@ -331,7 +331,7 @@ fn source_issue_candidates(artifact: &RunEvidenceArtifact) -> SourceIssueCandida
     if artifact.final_state.issues.len() == 1 {
         return SourceIssueCandidates::Issues(artifact.final_state.issues.iter().collect());
     }
-    SourceIssueCandidates::Unsupported(
+    SourceIssueCandidates::MissingFact(
         "run evidence has multiple issues but no source/parent issue id or provider issue number fact"
             .to_string(),
     )
@@ -382,12 +382,19 @@ mod tests {
         RunEvidenceArtifact {
             schema: RUN_EVIDENCE_SCHEMA.to_string(),
             version: RUN_EVIDENCE_VERSION,
+            verdict: super::super::super::model::RunEvidenceVerdict::Passed,
             scenario: ScenarioEvidence {
                 name: "implementation-pr-handoff".to_string(),
                 source: "checked-in".to_string(),
                 source_description: "checked-in scenario".to_string(),
                 scenario_path: "scenarios/implementation-pr-handoff".to_string(),
                 manifest_path: "scenarios/implementation-pr-handoff/scenario.toml".to_string(),
+                feature: None,
+                plan: None,
+                mapped_scenario: Some("implementation-pr-handoff".to_string()),
+                source_branch: None,
+                checkout_head_sha: None,
+                resolved_content_digest: Some("sha256:test".to_string()),
                 runner_id: "manifest".to_string(),
                 runner_selector: "runner.uses".to_string(),
                 runner_selection: "runner: `manifest` selected by runner.uses".to_string(),
@@ -395,6 +402,8 @@ mod tests {
                 tier_description: "live".to_string(),
                 topology: TopologyEvidence::default(),
             },
+            binary: None,
+            execution: None,
             fixtures: Vec::new(),
             final_state: FinalStateEvidence {
                 issues: Vec::new(),
@@ -409,11 +418,15 @@ mod tests {
                 log_format: "json".to_string(),
                 rust_log: "temper=debug".to_string(),
                 event_log_path: "standalone.log".to_string(),
+                event_log_paths: vec!["standalone.log".to_string()],
                 captured_events: events.len(),
                 events,
             }),
             artifacts: ArtifactCollections::default(),
             evidence_lines: Vec::new(),
+            stimuli: Vec::new(),
+            limitations: Vec::new(),
+            follow_up_intent: None,
             assertions: None,
         }
     }
