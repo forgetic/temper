@@ -11,11 +11,14 @@
 //! malformed Forge references.
 
 mod assertion_templates;
+mod content_digest;
 mod diagnostics;
 mod discovery;
+mod feature_metadata;
 mod inheritance;
 mod issue_refs;
 mod manifest;
+mod mapping;
 mod parse;
 mod path_refs;
 mod repo_refs;
@@ -32,12 +35,19 @@ pub use assertion_templates::{
     ASSERTION_TEMPLATE_CATALOG, ASSERTION_TEMPLATE_NAMES, AssertionTemplate,
     is_known_assertion_template,
 };
+pub use content_digest::{ScenarioContentDigestError, scenario_content_digest};
 pub use diagnostics::{Diagnostic, Severity};
 pub use discovery::{check_scenario, check_scenarios, discover_scenarios, resolve_manifest_path};
 pub use manifest::{
     CheckReport, DiscoverError, IssueReference, ManifestLoadError, PathReference,
     RepositoryReference, ScenarioEntry, ScenarioIntent, ScenarioManifest, ScenarioRunnerSelection,
     ScenarioStability, ScenarioStatus, ScenarioTopology,
+};
+pub use mapping::{
+    FEATURE_SCENARIO_MAPPING_SCHEMA, FeatureMappingChange, FeatureScenarioBaseComparison,
+    FeatureScenarioMapping, FeatureScenarioResolveError, ForgeIssueKey,
+    ResolveFeatureScenarioRequest, ResolvedFeatureScenario, ScenarioFeatureContract,
+    resolve_feature_scenario, validate_source_branch,
 };
 pub use parse::{load_manifest, load_resolved_manifest_toml, parse_manifest_str};
 pub use validation_report::{
@@ -65,6 +75,8 @@ pub const DEFAULT_SCENARIOS_DIR: &str = "scenarios";
 pub const MANIFEST_FILE_NAMES: &[&str] =
     &["scenario.toml", "manifest.toml", "temper-scenario.toml"];
 
+#[cfg(test)]
+mod mapping_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

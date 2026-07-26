@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use crate::{Diagnostic, Severity};
+use crate::{Diagnostic, FeatureScenarioMapping, ScenarioFeatureContract, Severity};
 
 /// Lifecycle status for a scenario manifest.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
@@ -232,6 +232,8 @@ pub struct ScenarioManifest {
     pub intent: ScenarioIntent,
     pub runner: ScenarioRunnerSelection,
     pub topology: ScenarioTopology,
+    pub feature_mapping: Option<FeatureScenarioMapping>,
+    pub feature_contract: Option<ScenarioFeatureContract>,
     pub assertion_templates: Vec<String>,
     pub repositories: Vec<RepositoryReference>,
     pub issues: Vec<IssueReference>,

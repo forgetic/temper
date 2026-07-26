@@ -25,6 +25,7 @@ impl RunEvidenceArtifact {
         for (field, value) in [
             ("feature", self.scenario.feature.as_deref()),
             ("plan", self.scenario.plan.as_deref()),
+            ("mapping_id", self.scenario.mapping_id.as_deref()),
             ("mapped_scenario", self.scenario.mapped_scenario.as_deref()),
             ("source_branch", self.scenario.source_branch.as_deref()),
             (

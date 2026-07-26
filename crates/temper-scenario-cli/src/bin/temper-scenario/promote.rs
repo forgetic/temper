@@ -19,8 +19,11 @@ Options:
   --output-dir <DIR>    Directory for the candidate Markdown draft (default: current directory)
   -h, --help            Print help
 
-This scaffold only writes a deterministic operator prompt. It does not create
-Forgejo issues or PRs and does not generate a complete scenario. Promotion is
+This scaffold only writes a deterministic operator prompt for post-validation
+promotion. For a feature/plan scenario, use `temper-scenario scaffold`; that
+command writes a checked-in scenario-ready inherited bundle with local Jig data
+instead of a Markdown-only candidate. It does not create
+Forgejo issues or PRs. Promotion is
 optional follow-up work: the validation report remains the required artifact,
 and promoted scenarios should preserve stable intended behavior rather than
 incidental implementation details.";

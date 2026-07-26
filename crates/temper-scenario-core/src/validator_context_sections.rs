@@ -137,6 +137,21 @@ pub struct ScenarioMetadataContext {
     /// Commit containing the scenario metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
+    /// Deterministic feature-to-scenario mapping identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping_id: Option<String>,
+    /// Mapped feature issue in `owner/name#number` form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<String>,
+    /// Mapped plan issue in `owner/name#number` form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Feature source branch declared by the scenario mapping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_branch: Option<String>,
+    /// Deterministic digest of the resolved manifest and scenario content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
 }
 
 /// Suggested scenario or ad-hoc validation case for the validator to inspect.

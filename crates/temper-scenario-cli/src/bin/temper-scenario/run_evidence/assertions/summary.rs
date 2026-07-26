@@ -391,6 +391,7 @@ mod tests {
                 manifest_path: "scenarios/implementation-pr-handoff/scenario.toml".to_string(),
                 feature: None,
                 plan: None,
+                mapping_id: None,
                 mapped_scenario: Some("implementation-pr-handoff".to_string()),
                 source_branch: None,
                 checkout_head_sha: None,

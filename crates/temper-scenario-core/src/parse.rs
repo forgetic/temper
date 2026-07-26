@@ -5,6 +5,7 @@ use std::path::Path;
 
 use toml::Value;
 
+use crate::feature_metadata::{parse_feature_metadata, validate_feature_metadata_ownership};
 use crate::inheritance::{resolve_manifest_file, resolve_manifest_value};
 use crate::issue_refs::collect_issue_references;
 use crate::path_refs::{absolutize_path_references, collect_path_references};
@@ -135,6 +136,7 @@ fn parse_sourced_manifest_value(
     let scenario = table.get("scenario").and_then(Value::as_table);
     let mut diagnostics = Vec::new();
 
+    validate_feature_metadata_ownership(sourced, &mut diagnostics);
     validate_schema_version(table, &mut diagnostics);
 
     let name = required_metadata_string(table, scenario, "name", &mut diagnostics);
@@ -143,6 +145,7 @@ fn parse_sourced_manifest_value(
     let intent = parse_intent(table, scenario, &mut diagnostics);
     let runner = parse_runner(table, &mut diagnostics);
     let topology = parse_topology(table, &mut diagnostics);
+    let (feature_mapping, feature_contract) = parse_feature_metadata(table, &mut diagnostics);
     let assertion_templates = parse_assertion_templates(table, &mut diagnostics);
 
     let mut path_references = Vec::<PathReference>::new();
@@ -168,6 +171,8 @@ fn parse_sourced_manifest_value(
             intent,
             runner,
             topology,
+            feature_mapping,
+            feature_contract,
             assertion_templates,
             repositories,
             issues,

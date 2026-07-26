@@ -254,6 +254,74 @@ candidate from a validation report or artifact directory, but that command is
 only a prompt scaffold: it does not create Forgejo issues or PRs, and it does
 not replace the required validation report.
 
+## Feature scenario scaffold and deterministic mapping
+
+Use `scaffold` for feature/plan work instead of the Markdown-only `promote`
+prompt. It creates a small inherited bundle with a local Jig script, a bounded
+runtime, typed feature/plan mapping, and an explicit claim → stimulus →
+observable → assertion contract:
+
+```sh
+cargo run -p temper-scenario-cli -- scaffold \
+  --feature ai/temper#778 \
+  --plan ai/temper#779 \
+  --source-branch feature/778-exact-head-validation \
+  --name exact-head-feature-validation
+```
+
+The command refuses to overwrite an existing scenario path and writes only
+`scenario.toml`, `README.md`, and `jig/<name>.json`. It does not emit
+credentials, logs, caches, evidence, or other runtime state. The generated
+manifest inherits `scenarios/basic-delivery` by default and uses `[jig]` to
+replace the inherited fake-LLM script without copying the workflow, repo, or CI
+fixtures. Authors should replace the scaffold Jig responses and narrow the
+required assertions while preserving the inherited validation-grade topology.
+
+Mapped scenarios declare both typed authoring metadata sections:
+
+```toml
+[validation]
+feature = "ai/temper#778"
+plan = "ai/temper#779"
+source_branch = "feature/778-exact-head-validation"
+change = "new" # use "updated" when the scenario exists at the landing base
+
+[feature_contract]
+claim = "The feature enforces exact-head validation."
+stimulus = "Exercise one stale and one current validation attempt."
+observable = "Structured head, digest, assertion, and landing-gate facts."
+assertion = "Only current passing evidence authorizes landing."
+runtime_budget_seconds = 600
+jig_script_path = "jig/exact-head-feature-validation.json"
+```
+
+Resolve a feature mapping at the checked-out head before a focused CI or
+validator run:
+
+```sh
+cargo run -p temper-scenario-cli -- resolve-feature \
+  --feature ai/temper#778 \
+  --landing-base origin/main \
+  --json-out target/feature-scenario-mapping.json
+```
+
+Resolution selects exactly one active explicit mapping and rejects missing,
+duplicate, inactive, unsafe, dirty, unchanged, or digest-mismatched scenarios.
+It compares the mapped path and prior feature mapping against the supplied
+landing base, so copied or renamed directories do not acquire an implicit
+mapping. Successful stdout and `--json-out` content are identical
+`temper.scenario.feature-mapping.v1` JSON. They include the stable mapping id,
+feature and plan, repo-relative scenario and manifest paths, declared source
+branch, exact checkout head, resolved landing-base SHA, change classification,
+and a SHA-256 digest.
+
+The digest canonicalizes the resolved inherited manifest, hashes referenced
+fixture content, and hashes all files owned by the mapped scenario in sorted
+order. Absolute checkout paths and directory enumeration order do not affect it.
+The same mapping fields are represented in `ScenarioMetadataContext`, run
+evidence, and `ValidatorResult` so validator handoffs and Forge audit rendering
+can carry the identity without scraping CLI prose.
+
 ## Authoring model
 
 Author scenarios as data, not as runners:

@@ -432,6 +432,7 @@ fn enrich_validator_result(
     let artifact = loaded.artifact;
     result.feature = artifact.scenario.feature.clone();
     result.plan = artifact.scenario.plan.clone();
+    result.mapping_id = artifact.scenario.mapping_id.clone();
     result.scenario_name = artifact
         .scenario
         .mapped_scenario

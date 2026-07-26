@@ -32,6 +32,9 @@ pub struct ValidatorResult {
     /// Plan artifact bound to this validation attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// Deterministic feature-to-scenario mapping identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping_id: Option<String>,
     /// Mapped checked-in scenario name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scenario_name: Option<String>,
@@ -89,6 +92,7 @@ impl ValidatorResult {
             verdict,
             feature: None,
             plan: None,
+            mapping_id: None,
             scenario_name: None,
             scenario_path: None,
             source_branch: None,
@@ -148,6 +152,7 @@ impl ValidatorResult {
             verdict,
             feature: None,
             plan: None,
+            mapping_id: None,
             scenario_name: None,
             scenario_path: None,
             source_branch: None,
@@ -200,6 +205,7 @@ impl ValidatorResult {
         for (field, value) in [
             ("feature", self.feature.as_deref()),
             ("plan", self.plan.as_deref()),
+            ("mapping_id", self.mapping_id.as_deref()),
             ("scenario_name", self.scenario_name.as_deref()),
             ("scenario_path", self.scenario_path.as_deref()),
             ("source_branch", self.source_branch.as_deref()),

@@ -102,6 +102,8 @@ pub(crate) struct ScenarioEvidence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) plan: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) mapping_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) mapped_scenario: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) source_branch: Option<String>,

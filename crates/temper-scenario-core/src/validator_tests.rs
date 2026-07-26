@@ -172,6 +172,7 @@ fn strict_validator_contract_rejects_missing_or_unproven_required_evidence() {
     );
     result.feature = Some("ai/temper#778".to_string());
     result.plan = Some("ai/temper#779".to_string());
+    result.mapping_id = Some("ai/temper#778:exact-head-feature-validation".to_string());
     result.scenario_name = Some("exact-head-feature-validation".to_string());
     result.scenario_path = Some("scenarios/exact-head-feature-validation".to_string());
     result.source_branch = Some("feature/778-exact-head-validation".to_string());

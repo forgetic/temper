@@ -9,6 +9,7 @@ description = "Scenario manifest parsing, discovery, and validation for executab
 
 [dependencies]
 serde = { workspace = true }
+sha2 = "0.10"
 thiserror = { workspace = true }
 toml = { workspace = true }
 
