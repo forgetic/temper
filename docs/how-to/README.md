@@ -17,6 +17,7 @@ Current guides:
 - [Operate durable agent traces and OpenTelemetry](operate-agent-traces.md)
 - [Benchmark coding-agent sessions](benchmark-agent-sessions.md)
 - [Deploy Temper with systemd](deploy-with-systemd.md)
+- [Migrate a persistent Forgejo service to 16.0.1](migrate-forgejo-16-api-ci.md)
 - Run the operator demo: `examples/reference-delivery/` (`./run.sh`) —
   deterministic jig-backed agents against a real throwaway Forgejo plus real
   host-mode forgejo-runner; see its

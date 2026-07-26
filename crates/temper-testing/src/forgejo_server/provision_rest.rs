@@ -208,9 +208,10 @@ pub(super) async fn add_team_member(
     accept_or_conflict(resp, "add team member")
 }
 
-/// Mints a token for `login` via the user's own **basic-auth** (admin-on-behalf
-/// 404s on 7.0.x; findings-phase-0 §3). Token names are unique per process so
-/// repeated single-repo provisions do not collide. Returns the raw `sha1` token.
+/// Mints a token for `login` via the user's own **basic-auth**. The
+/// admin-on-behalf shape is not part of the supported API contract. Token names
+/// are unique per process so repeated single-repo provisions do not collide.
+/// Returns the raw `sha1` token.
 pub(super) async fn mint_user_token(client: &Client, base: &str, login: &str) -> Result<String> {
     let resp = client
         .send(

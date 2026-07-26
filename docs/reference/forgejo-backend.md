@@ -88,16 +88,16 @@ Forgejo models pull requests as issues. Consequences:
   index, not `/pulls`.
 
 `body_contains`, author, and assignee filters are applied client-side after the
-narrowest safe provider query. Forgejo 7.0.x has no reliable exact body-substring
-search. Ordinary `IssueQuery.labels` and `PullRequestQuery.labels` remain portable
-all-of filters: although Forgejo versions may interpret the single
-comma-separated provider filter as OR, the backend applies a final local
-all-label check.
+narrowest safe provider query because exact body-substring search is not part of
+the supported Forgejo API contract. Ordinary `IssueQuery.labels` and
+`PullRequestQuery.labels` remain portable all-of filters: although Forgejo may
+interpret the single comma-separated provider filter as OR, the backend applies
+a final local all-label check.
 
 Consolidated candidate reads use Forgejo's provider-side any-label search, with
-one request shape per lifecycle bucket. Forgejo 15's repository-scoped
-`/repos/{owner}/{repo}/issues` endpoint actually applies multiple label names as
-all-of even though its API description says any-of. Consequently, a candidate
+one request shape per lifecycle bucket. The repository-scoped
+`/repos/{owner}/{repo}/issues` endpoint may apply multiple label names as all-of
+even though its API description says any-of. Consequently, a candidate
 bucket with multiple interest labels uses the owner-scoped
 `/repos/issues/search?owner=...&labels=...` index and locally rejects rows whose
 embedded repository identity is not the requested repository. Single-label and
@@ -192,8 +192,8 @@ Both issue and PR dependency methods use
 Reads return the items the source is blocked by, sorted and deduplicated.
 
 Add/remove bodies must include the target repository coordinate:
-`{ "index": <target>, "owner": <owner>, "repo": <repo> }`. On Forgejo 7.0.12,
-omitting owner/repo resolves against an empty repository and fails.
+`{ "index": <target>, "owner": <owner>, "repo": <repo> }`. Omitting owner/repo
+can resolve against an empty repository and fail.
 
 A dependency read `404` is treated as an empty list for compatibility with
 providers lacking the endpoint. Add/remove first verify the target exists;
@@ -316,7 +316,8 @@ is best-effort on this backend.
 
 ### CI uses Forgejo 16 per-run jobs APIs
 
-Forgejo 16.0.1 is the minimum supported release. The backend lists workflow
+Forgejo 16.0.1 is the minimum supported release for every Temper Forgejo
+integration, not only CI. The backend lists workflow
 runs through `/repos/{owner}/{repo}/actions/runs`, strictly matches them to the
 requested pull request and/or commit, and expands every match through:
 
@@ -355,3 +356,14 @@ the portable repository and PR IDs name the same repository, then fails closed
 without guessing an endpoint or mutating a commit/ref. Operators should use a
 configured read-only interruption diagnostic when available; otherwise Temper
 parks the PR with exact head/run/attempt evidence for manual retriggering.
+
+## Persistent-service upgrade boundary
+
+The API-only binary must not be deployed against an older Forgejo service. Prove
+the Bench-owned 16.0.1 fixture and merge the API-only feature first; an operator
+then backs up, rehearses, migrates, and proves the persistent service while the
+previous compatible Temper deployment remains running. Only after the jobs
+endpoint is proven may the operator remove the obsolete `ci_user` key from the
+deployed configuration and restart into the API-only binary. Repository tests
+and scripts never perform that persistent migration. Follow the complete
+[Forgejo 16 migration runbook](../how-to/migrate-forgejo-16-api-ci.md).

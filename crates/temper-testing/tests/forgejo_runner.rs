@@ -115,9 +115,8 @@ fn runner_runs_failing_job_and_reports_failure() {
 /// Creates an admin user, then mints a fully-scoped access token for it via the
 /// server CLI and returns the raw token.
 ///
-/// Two steps because `admin user create --access-token` yields a **scopeless**
-/// token on Forgejo 7.0.x (REST calls 403 with "token does not have ... scope");
-/// `generate-access-token --scopes all --raw` mints a usable one.
+/// Two steps ensure `generate-access-token --scopes all --raw` mints a token
+/// with the complete API scope required by this live test.
 fn create_admin_token(server: &ForgejoServer) -> String {
     server
         .run_cli(&[

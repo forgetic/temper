@@ -60,8 +60,8 @@ pub(super) const TOKEN_SCOPES: &[&str] = &[
 /// The path the CI workflow is committed to. `runs-on: host` (Phase 1b runner).
 pub(super) const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 
-/// A neutral grey label color. Forgejo 7.0.12 requires a non-empty color on
-/// label create/update; the workflow declares none, so every label gets this.
+/// Forgejo requires a non-empty color on label create/update; the workflow
+/// declares none, so every label gets this.
 const LABEL_COLOR: &str = "#ededed";
 
 /// The commit-message marker the CI workflow gates on. A head whose latest
@@ -369,7 +369,7 @@ pub async fn provision_role_identities(
         debug_assert_eq!(
             binding.user.id.as_str(),
             binding.user.handle,
-            "forgejo role users need id == handle so one login serves assignment and web-UI login",
+            "forgejo role users need id == handle so one identity serves assignment and token minting",
         );
         let login = binding.user.handle.clone();
         let email = format!("{login}@example.invalid");
@@ -440,10 +440,10 @@ pub async fn provision_repository(
 }
 
 /// Creates a non-reserved admin user and mints an `all`-scoped token via the
-/// server CLI. Two steps because `admin user create --access-token` yields a
-/// **scopeless** token on 7.0.x; `generate-access-token --scopes all --raw`
-/// mints a usable one (findings-phase-0b). Tolerates a pre-existing admin so a
-/// re-provision against the same instance does not fail.
+/// server CLI. The explicit `generate-access-token --scopes all --raw` step
+/// guarantees a fully scoped token instead of relying on user-creation defaults.
+/// Tolerates a pre-existing admin so a re-provision against the same instance
+/// does not fail.
 pub fn bootstrap_admin(server: &ForgejoServer) -> Result<String> {
     // Create may fail if the user already exists; tolerate that one case.
     if let Err(err) = server.run_cli(&[
@@ -523,8 +523,8 @@ async fn upsert_labels(
                 &repo.id,
                 UpsertLabel {
                     name: label.id.to_string(),
-                    // Forgejo 7.0.12 *requires* a color (`[Color]: Required`),
-                    // unlike the filesystem backend where `None` is fine. The
+                    // Forgejo requires a color (`[Color]: Required`), unlike
+                    // the filesystem backend where `None` is fine. The
                     // workflow declares no per-label color, so use one neutral
                     // grey for every label — the e2e cares about presence, not
                     // appearance.

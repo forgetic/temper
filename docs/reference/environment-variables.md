@@ -221,7 +221,7 @@ or the single provider-credentials JSON instead.
 | `TEMPER_CONFIG` | `--config` flag, plus the `~/.config/temper` default location. No environment variable selects the config files. |
 | `TEMPER_FORGE_URL`, `FORGEJO_URL` | `[forge] url` in `temper.toml`. |
 | `TEMPER_FORGE_TOKEN`, `FORGEJO_ACCESS_TOKEN` | A `token` under `[forge.users.<admin>]` in `credentials.toml` (with `[forge] admin` naming the admin). |
-| `FORGEJO_USERNAME`, `FORGEJO_PASSWORD` | Web-UI / per-role credentials in `credentials.toml`. |
+| `FORGEJO_USERNAME`, `FORGEJO_PASSWORD` | Removed. Runtime Forge and CI reads use token entries under `[forge.users.*]`; no password-authenticated CI scraping replacement exists. Provisioning fixtures may still create passwords solely to mint user tokens. |
 | `TEMPER_WORKFLOW` | `[engine]` workflow settings in `temper.toml`. |
 | `TEMPER_ENGINE_BIND`, `TEMPER_ENGINE_PORT` | `[engine]` bind/port settings in `temper.toml`. |
 | `TEMPER_DAEMON_URL`, `TEMPER_WORKSPACE` | Worker daemon URL / workspace settings in `temper.toml`. |

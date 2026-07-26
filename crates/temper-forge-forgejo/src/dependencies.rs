@@ -261,8 +261,9 @@ fn dependencies_path(repo: &RepoCoord, number: ItemNumber) -> String {
 ///
 /// Forgejo (Gitea) resolves the dependency target by `(owner, repo, index)`, not
 /// by `index` alone: omitting `owner`/`repo` makes the server resolve against an
-/// empty repository and return `404 IsErrRepoNotExist` (verified live on 7.0.12).
-/// The target shares the source's repository here, so both come from `repo`.
+/// empty repository and return `404 IsErrRepoNotExist`. The supported Forgejo
+/// contract requires all three coordinates. The target shares the source's
+/// repository here, so both come from `repo`.
 fn dependency_payload(repo: &RepoCoord, target: ItemNumber) -> String {
     serde_json::json!({
         "index": target.get(),

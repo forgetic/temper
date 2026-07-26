@@ -34,7 +34,14 @@ temper --config examples/systemd/config.example.toml \
   --secrets examples/systemd/credentials.example.toml apply --yes
 ```
 
-In production, use the selected service unit for the final `serve` step.
+In production, use the selected service unit for the final `serve` step. Forgejo
+16.0.1 is the minimum supported release, and engine/standalone CI observation
+uses the configured token only. Existing persistent services must complete the
+operator-owned
+[Forgejo 16 migration runbook](../../docs/how-to/migrate-forgejo-16-api-ci.md)
+before this API-only binary starts: prove the fixture and feature, migrate and
+prove Forgejo with the previous compatible deployment, then remove `ci_user`
+from deployed configuration and restart.
 
 ## Files and configuration contract
 
@@ -47,7 +54,7 @@ In production, use the selected service unit for the final `serve` step.
   reviewed bundle is also compatible with standalone selection.
 - `workflow.example.yaml` — config-relative workflow selected by `[workflow]`.
 - `credentials.example.toml` — parseable placeholders for every named secret,
-  plus Forge/provider identities retained for migration fallbacks.
+  plus token-only Forge/provider identities retained for migration fallbacks.
 
 The config pins `deployment.standalone_shutdown_budget_secs = 30`. It is one
 absolute interval measured from SIGINT/SIGTERM receipt, not a fresh timeout per

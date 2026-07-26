@@ -7,9 +7,10 @@
 //!    webhook route, role-token routing) plus the deterministic wire-protocol
 //!    worker converge one seeded intake issue into a merged, engineer-authored
 //!    implementation PR with green real CI and a closed source issue.
-//! 2. **Ambiguous CI failure** — real Forgejo 7 Actions returns a status-only
-//!    terminal failure; the dedicated CI poll keeps the gate red without
-//!    dispatching writable repair or advancing the PR head.
+//! 2. **Ambiguous CI failure** — real Forgejo 16.0.1 Actions returns a
+//!    status-only terminal failure through the provider-run jobs API; the
+//!    dedicated CI poll keeps the gate red without dispatching writable repair
+//!    or advancing the PR head.
 //!
 //! Each ignored test owns its Forgejo server, host-mode runner, daemon, worker,
 //! and scenario repository; drop cleanup kills children on panic.

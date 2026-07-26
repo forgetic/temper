@@ -32,7 +32,7 @@ use crate::DaemonRunConfig;
 pub struct EngineConfig {
     /// The parsed daemon runtime config (bind, repos, roles, cadences, …).
     pub daemon: DaemonRunConfig,
-    /// The default forge client config (URL + admin token + CI web-UI creds).
+    /// The default token-authenticated Forgejo API client config.
     pub forge: ForgejoConfig,
     /// Role id -> REST token, for the per-role routing applier. Absent roles fall
     /// back to the default (admin) identity. Tokens stay wrapped in
