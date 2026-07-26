@@ -28,6 +28,7 @@ impl ValidatorResult {
         for (label, value) in [
             ("Feature", self.feature.as_deref()),
             ("Plan", self.plan.as_deref()),
+            ("Mapping identity", self.mapping_id.as_deref()),
             ("Mapped scenario", self.scenario_name.as_deref()),
             ("Scenario path", self.scenario_path.as_deref()),
             ("Source branch", self.source_branch.as_deref()),

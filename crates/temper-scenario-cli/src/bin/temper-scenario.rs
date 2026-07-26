@@ -6,12 +6,16 @@ mod manifest_executor;
 mod manifest_runner;
 #[path = "temper-scenario/promote.rs"]
 mod promote;
+#[path = "temper-scenario/resolve_feature.rs"]
+mod resolve_feature;
 #[path = "temper-scenario/run_context.rs"]
 mod run_context;
 #[path = "temper-scenario/run_evidence.rs"]
 mod run_evidence;
 #[path = "temper-scenario/runner_registry.rs"]
 mod runner_registry;
+#[path = "temper-scenario/scaffold.rs"]
+mod scaffold;
 #[path = "temper-scenario/validate.rs"]
 mod validate;
 #[path = "temper-scenario/validate_pr.rs"]
@@ -33,14 +37,16 @@ const EX_USAGE: u8 = 64;
 const RUN_EVIDENCE_FILE: &str = "run-evidence.json";
 
 const USAGE: &str = "\
-temper-scenario: list, check, run, validate, and draft Temper scenario artifacts
+temper-scenario: list, check, scaffold, resolve, run, and validate Temper scenario artifacts
 
 Usage: temper-scenario <COMMAND> [OPTIONS]
 
 Commands:
   list         List scenario directories and stable manifest metadata
-  check        Validate one scenario path or all scenarios under a scenarios directory
-  run          Run a supported scenario at an explicit confidence tier
+  check            Validate one scenario path or all scenarios under a scenarios directory
+  scaffold         Create a minimal inherited feature scenario with local Jig data
+  resolve-feature  Resolve one active feature-mapped scenario and emit deterministic JSON
+  run              Run a supported scenario at an explicit confidence tier
   validate     Run a scenario bundle and render validation artifacts from structured evidence
   validate-pr  Write a temporary post-merge PR validation Markdown report
   promote      Draft an optional scenario-promotion candidate from validation artifacts
@@ -117,6 +123,8 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
         }
         "list" => list_command(rest),
         "check" => check_command(rest),
+        "scaffold" => scaffold::command(rest),
+        "resolve-feature" => resolve_feature::command(rest),
         "run" => run_command(rest),
         "validate" => validate::command(rest),
         "validate-pr" => validate_pr::command(rest),

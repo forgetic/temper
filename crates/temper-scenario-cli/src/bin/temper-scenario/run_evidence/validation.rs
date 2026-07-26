@@ -61,6 +61,16 @@ impl RunEvidenceArtifact {
                     diagnostics.push(format!("run evidence {field} is missing for version 2"));
                 }
             }
+            if self.scenario.feature.is_some()
+                && self
+                    .scenario
+                    .mapping_id
+                    .as_deref()
+                    .is_none_or(str::is_empty)
+            {
+                diagnostics
+                    .push("feature-mapped run evidence is missing scenario.mapping_id".to_string());
+            }
             if self.verdict == RunEvidenceVerdict::Passed && self.scenario.source == "checked_in" {
                 for (field, value) in [
                     (

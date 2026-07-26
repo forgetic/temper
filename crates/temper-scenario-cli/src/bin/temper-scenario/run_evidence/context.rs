@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use sha2::{Digest, Sha256};
-use temper_scenario_core::{CheckReport, ScenarioTopology, load_resolved_manifest_toml};
+use temper_scenario_core::{CheckReport, ScenarioTopology, scenario_content_digest};
 
 use crate::run_context::ScenarioRunFacts;
 use crate::runner_registry::SelectedRunner;
@@ -58,6 +56,7 @@ impl RunEvidenceContext {
                 manifest_path: manifest_path.display().to_string(),
                 feature: identity.feature,
                 plan: identity.plan,
+                mapping_id: identity.mapping_id,
                 mapped_scenario: Some(scenario_name),
                 source_branch: identity.source_branch,
                 checkout_head_sha: identity.checkout_head_sha,
@@ -174,121 +173,44 @@ fn push_unique_path(paths: &mut Vec<String>, path: String) {
 struct ScenarioIdentity {
     feature: Option<String>,
     plan: Option<String>,
+    mapping_id: Option<String>,
     source_branch: Option<String>,
     checkout_head_sha: Option<String>,
     resolved_content_digest: Option<String>,
 }
 
 fn scenario_identity(manifest_path: &Path, check_report: &CheckReport) -> ScenarioIdentity {
-    let resolved = load_resolved_manifest_toml(manifest_path).ok();
-    let validation = resolved
+    let mapping = check_report
+        .manifest
         .as_ref()
-        .and_then(|manifest| manifest.get("validation"))
-        .and_then(toml::Value::as_table);
-    let feature = validation
-        .and_then(|table| table.get("feature"))
-        .and_then(toml::Value::as_str)
-        .map(str::to_string);
-    let plan = validation
-        .and_then(|table| table.get("plan"))
-        .and_then(toml::Value::as_str)
-        .map(str::to_string);
-    let resolved_content_digest = resolved_content_digest(
-        manifest_path,
-        resolved.as_ref(),
-        check_report.manifest.as_ref(),
-    );
+        .and_then(|manifest| manifest.feature_mapping.as_ref());
+    let feature = mapping.map(|mapping| mapping.feature.to_string());
+    let plan = mapping
+        .and_then(|mapping| mapping.plan.as_ref())
+        .map(ToString::to_string);
+    let mapping_id = mapping.and_then(|mapping| {
+        check_report
+            .manifest
+            .as_ref()
+            .map(|manifest| mapping.identity(&manifest.name))
+    });
     let checkout = find_checkout_root(manifest_path);
     ScenarioIdentity {
         feature,
         plan,
-        source_branch: checkout
-            .as_deref()
-            .and_then(|root| git_output(root, &["rev-parse", "--abbrev-ref", "HEAD"])),
+        mapping_id,
+        source_branch: mapping
+            .map(|mapping| mapping.source_branch.clone())
+            .or_else(|| {
+                checkout
+                    .as_deref()
+                    .and_then(|root| git_output(root, &["rev-parse", "--abbrev-ref", "HEAD"]))
+            }),
         checkout_head_sha: checkout
             .as_deref()
             .and_then(|root| git_output(root, &["rev-parse", "HEAD"])),
-        resolved_content_digest,
+        resolved_content_digest: scenario_content_digest(check_report).ok(),
     }
-}
-
-fn resolved_content_digest(
-    manifest_path: &Path,
-    resolved: Option<&toml::Value>,
-    manifest: Option<&temper_scenario_core::ScenarioManifest>,
-) -> Option<String> {
-    let mut source = resolved
-        .and_then(|manifest| toml::to_string(manifest).ok())
-        .or_else(|| fs::read_to_string(manifest_path).ok())?;
-    let mut references = manifest
-        .map(|manifest| manifest.path_references.clone())
-        .unwrap_or_default();
-    references.sort_by(|left, right| {
-        left.field
-            .cmp(&right.field)
-            .then(left.value.cmp(&right.value))
-            .then(left.resolved_path.cmp(&right.resolved_path))
-    });
-
-    // Resolved manifests carry absolute checkout paths so executors can open
-    // inherited fixtures. Replace those machine-local strings before hashing;
-    // fixture bytes are added separately below.
-    for reference in &references {
-        source = source.replace(
-            &reference.resolved_path.display().to_string(),
-            &format!("$resolved:{}:{}", reference.field, reference.value),
-        );
-    }
-
-    let mut digest = Sha256::new();
-    digest.update(b"temper.scenario.resolved-content.v1\0");
-    digest.update(source.as_bytes());
-    for reference in &references {
-        digest.update(b"\0reference\0");
-        digest.update(reference.field.as_bytes());
-        digest.update(b"\0");
-        digest.update(reference.value.as_bytes());
-        if hash_fixture_tree(
-            &mut digest,
-            &reference.resolved_path,
-            &reference.resolved_path,
-        )
-        .is_err()
-        {
-            return None;
-        }
-    }
-    Some(format!("sha256:{:x}", digest.finalize()))
-}
-
-fn hash_fixture_tree(digest: &mut Sha256, root: &Path, path: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|error| format!("stat resolved fixture {}: {error}", path.display()))?;
-    let relative = path.strip_prefix(root).unwrap_or(path);
-    if metadata.is_dir() {
-        let mut entries = fs::read_dir(path)
-            .map_err(|error| format!("read resolved fixture dir {}: {error}", path.display()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("read resolved fixture dir entry: {error}"))?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            hash_fixture_tree(digest, root, &entry.path())?;
-        }
-    } else if metadata.is_file() {
-        digest.update(b"\0file\0");
-        digest.update(relative.to_string_lossy().as_bytes());
-        digest.update(b"\0");
-        digest.update(
-            fs::read(path)
-                .map_err(|error| format!("read resolved fixture {}: {error}", path.display()))?,
-        );
-    } else {
-        return Err(format!(
-            "resolved fixture is not a regular file or directory: {}",
-            path.display()
-        ));
-    }
-    Ok(())
 }
 
 fn find_checkout_root(path: &Path) -> Option<std::path::PathBuf> {

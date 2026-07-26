@@ -49,6 +49,7 @@ impl ManifestExecutionPlan {
             let action = parse_action(&action_name, table, index)?;
             steps.push(ManifestStep { id, action });
         }
+        apply_jig_script_override(manifest, &mut steps)?;
         validate_required_actions(&steps)?;
         validate_action_links(manifest, &steps, &agents)?;
         validate_action_order(&steps, &agents)?;
@@ -339,6 +340,25 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             "{field}.action `{other}` is not supported by the live manifest executor"
         )),
     }
+}
+
+fn apply_jig_script_override(
+    manifest: &TomlValue,
+    steps: &mut [ManifestStep],
+) -> Result<(), String> {
+    let Some(jig) = manifest.get("jig") else {
+        return Ok(());
+    };
+    let table = jig
+        .as_table()
+        .ok_or_else(|| "jig must be a table".to_string())?;
+    let path = PathBuf::from(required_table_string(table, "script_path", "jig")?);
+    for step in steps {
+        if let ManifestAction::StartJig { script_path, .. } = &mut step.action {
+            *script_path = path.clone();
+        }
+    }
+    Ok(())
 }
 
 fn validate_stimulus_placement(steps: &[ManifestStep]) -> Result<(), String> {
