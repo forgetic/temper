@@ -37,14 +37,24 @@ ci_seed_path = "repo/.forgejo/workflows/ci.yml"
 ci_target = ".forgejo/workflows/ci.yml"
 
 [[issues]]
-id = "source"
+id = "create"
 repo = "service"
 kind = "code"
-title = "Verify implementation PR handoff"
+title = "Verify implementation PR handoff (create authored handoff)"
 body = "config/source-issue.md"
 author = "site_admin"
 labels = ["code", "ready"]
 created_after = "standalone_ready"
+
+[[issues]]
+id = "refresh"
+repo = "service"
+kind = "code"
+title = "Verify implementation PR handoff (refresh existing handoff)"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "create implementation PR observed"
 
 [handoff]
 summary = "scripted coding workspace summary"
@@ -80,13 +90,6 @@ action = "forgejo_runner.ready"
 description = "Register and require the real host forgejo-runner / Actions CI worker."
 
 [[steps]]
-id = "seed-service-repo"
-action = "repo.seed"
-repo = "service"
-seed_path = "repo"
-ci_source = "config/ci.yml"
-
-[[steps]]
 id = "configure-jig-engineer-create-response"
 action = "jig.fake_llm"
 role = "engineer"
@@ -113,9 +116,16 @@ config = "config/workflow.json"
 requires_observability = true
 
 [[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
 id = "seed-create-source-issue"
 action = "issue.seed"
-issue_id = "source"
+issue_id = "create"
 bind = "create"
 repo = "service"
 after = "temper.launch_standalone"
@@ -123,9 +133,10 @@ after = "temper.launch_standalone"
 [[steps]]
 id = "seed-refresh-source-issue"
 action = "issue.seed"
-issue_id = "source"
+issue_id = "refresh"
 bind = "refresh"
 repo = "service"
+after_pr_binding = "create"
 after = "create implementation PR observed"
 
 [[steps]]

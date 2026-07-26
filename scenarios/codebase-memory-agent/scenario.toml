@@ -71,13 +71,6 @@ action = "forgejo_runner.ready"
 description = "Register and require the real host forgejo-runner / Actions CI worker."
 
 [[steps]]
-id = "seed-demo-repo"
-action = "repo.seed"
-repo = "service"
-seed_path = "repo"
-ci_source = "config/ci.yml"
-
-[[steps]]
 id = "start-fake-codebase-memory-mcp"
 action = "mcp.fake_codebase_memory.start"
 project = "actual-demo-project"
@@ -107,6 +100,13 @@ id = "launch-standalone-temper"
 action = "temper.launch_standalone"
 config = "config/workflow.json"
 requires_observability = true
+
+[[steps]]
+id = "seed-demo-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
 
 [[steps]]
 id = "seed-source-issue"

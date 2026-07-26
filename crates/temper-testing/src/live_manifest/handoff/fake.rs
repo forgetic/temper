@@ -10,7 +10,7 @@ use super::REFRESH_FAKE_TIMEOUT;
 
 const REFRESH_TITLE_NEEDLE: &str = "refresh existing handoff";
 
-pub(super) struct HandoffFake {
+pub(crate) struct HandoffFake {
     fake: FakeLlm,
     state: Arc<(Mutex<FakeState>, Condvar)>,
     engineer_requests: Arc<AtomicUsize>,
@@ -23,7 +23,7 @@ struct FakeState {
 }
 
 impl HandoffFake {
-    pub(super) fn start(script_path: &Path) -> Result<Self, String> {
+    pub(crate) fn start(script_path: &Path) -> Result<Self, String> {
         let script = ScriptFile::load(script_path)
             .map_err(|error| {
                 format!(
@@ -77,15 +77,15 @@ impl HandoffFake {
         })
     }
 
-    pub(super) fn base_url(&self) -> String {
+    pub(crate) fn base_url(&self) -> String {
         self.fake.base_url()
     }
 
-    pub(super) fn engineer_requests(&self) -> usize {
+    pub(crate) fn engineer_requests(&self) -> usize {
         self.engineer_requests.load(Ordering::SeqCst)
     }
 
-    pub(super) fn wait_for_refresh_started(&self, timeout: Duration) -> Result<(), String> {
+    pub(crate) fn wait_for_refresh_started(&self, timeout: Duration) -> Result<(), String> {
         let deadline = Instant::now() + timeout;
         let (lock, cvar) = &*self.state;
         let mut state = lock.lock().expect("fake state lock");
@@ -111,14 +111,14 @@ impl HandoffFake {
         Ok(())
     }
 
-    pub(super) fn allow_refresh_continue(&self) {
+    pub(crate) fn allow_refresh_continue(&self) {
         let (lock, cvar) = &*self.state;
         let mut state = lock.lock().expect("fake state lock");
         state.refresh_pr_seeded = true;
         cvar.notify_all();
     }
 
-    pub(super) fn log_tail(&self) -> String {
+    pub(crate) fn log_tail(&self) -> String {
         let requests = self.fake.requests();
         if requests.is_empty() {
             return "<fake LLM received no requests>".to_string();

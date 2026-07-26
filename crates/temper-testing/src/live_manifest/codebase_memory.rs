@@ -16,236 +16,58 @@ use temper_workflow::{CiStatus, parse_metadata_block};
 use toml::Value as TomlValue;
 
 use super::convergence::{
-    admin_forge, ci_diagnostics, completed_ci_jobs, issue_evidence, poll_until, pr_evidence,
-    reject_labels, repository, require_labels, seed_intake,
+    completed_ci_jobs, issue_evidence, poll_until, pr_evidence, reject_labels, require_labels,
 };
-use super::process::{
-    TemperInitRequest, assert_init_workflow_yaml_matches, convergence_timeout, free_port,
-    mint_site_admin_token, populate_repo, read_tail, run_temper_init, spawn_temper_standalone,
-    tune_init_config, wait_for_standalone, write_snapshot,
-};
-use super::{
-    ENGINEER, FakeLlmEvidence, FinalStateEvidence, LiveCodebaseMemoryEvidence, LiveLogPaths,
-    LiveManifestEvidence, LiveManifestHarness,
-};
-use crate::forgejo_runtime::RunWorkspace;
-use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
+use super::{ENGINEER, FinalStateEvidence, LiveCodebaseMemoryEvidence};
 
-const ACTUAL_PROJECT: &str = "actual-demo-project";
 const MEMORY_FILE: &str = "MEMORY_NOTES.md";
 const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_SEARCH_RESULT";
 const ENGINEER_SUMMARY: &str = "Used codebase memory search result before writing MEMORY_NOTES.md.";
 
-pub(super) fn run_tool_augmented_pull_request(
-    harness: &LiveManifestHarness,
-) -> Result<LiveManifestEvidence, String> {
-    let started = Instant::now();
-    harness.scenario.validate_workflow()?;
-
-    let cached = start_cached_bare_admin_server(
-        &harness.admin_user,
-        &harness.admin_password,
-        &harness.admin_email,
-    )
-    .map_err(|error| format!("cached bare-admin Forgejo starts: {error}"))?;
-    let server = cached.server;
-    let mut runner = ForgejoRunner::register(&server)
-        .map_err(|error| format!("forgejo-runner registers: {error}"))?;
-    if !runner.is_running() {
-        return Err(format!(
-            "forgejo-runner exited immediately\n--- runner log ---\n{}",
-            runner.log_tail()
-        ));
-    }
-    let admin_token = mint_site_admin_token(&server, &harness.admin_user)?;
-
-    let fake = CodebaseMemoryFake::start(harness.scenario.jig_script_path())?;
-    let scenario_run_id = super::scenario_run_id(&harness.scenario);
-    let workspace = RunWorkspace::new(&harness.workspace_prefix);
-    let bundle_dir = workspace.dir("bundle");
-    let workspaces_dir = workspace.dir("workspaces");
-    let logs = LiveLogPaths {
-        workspace_root: workspace.path().to_path_buf(),
-        init_log: workspace.join("logs/init.log"),
-        repo_populate_log: workspace.join("logs/repo-populate.log"),
-        standalone_log: workspace.join("logs/standalone.log"),
-        fake_llm_log: workspace.join("logs/fake-llm.log"),
-        ci_diagnostics_log: workspace.join("logs/ci-diagnostics.log"),
-    };
-    let fake_mcp = write_fake_mcp(workspace.path())?;
-
-    let bind_port = free_port()?;
-    run_temper_init(TemperInitRequest {
-        temper: &harness.temper,
-        server: &server,
-        scenario: &harness.scenario,
-        bundle_dir: &bundle_dir,
-        workspaces_dir: &workspaces_dir,
-        bind_port,
-        fake_llm_url: &fake.base_url(),
-        log: &logs.init_log,
-        admin_user: &harness.admin_user,
-        admin_password: &harness.admin_password,
-        scenario_run_id: &scenario_run_id,
-    })?;
-    assert_init_workflow_yaml_matches(&bundle_dir.join("workflow.yaml"), &harness.scenario)?;
-    tune_init_config(
-        &bundle_dir.join("config.toml"),
-        harness.scenario.poll_backstop.as_secs(),
-        harness.scenario.mechanical_cadence.as_secs(),
+pub(super) fn converge(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+    admin_user: &str,
+    standalone: &mut super::process::ChildGuard,
+    timeout: Duration,
+    fake: &CodebaseMemoryFake,
+    mcp: &FakeMcpServer,
+) -> Result<(FinalStateEvidence, LiveCodebaseMemoryEvidence), String> {
+    let final_state = drive_codebase_memory_convergence(
+        forge, repository, issue, admin_user, standalone, timeout,
     )?;
-    tune_codebase_memory_config(&bundle_dir.join("config.toml"), &fake_mcp)?;
-
-    populate_repo(
-        server.base_url(),
-        &admin_token,
-        workspace.path(),
-        &harness.scenario.repo,
-        &logs.repo_populate_log,
-    )?;
-
-    let mut standalone = spawn_temper_standalone(
-        &harness.temper,
-        &bundle_dir,
-        &logs.standalone_log,
-        &harness.scenario.observability,
-        &scenario_run_id,
-    )?;
-    wait_for_standalone(&mut standalone)?;
-
-    let forge = admin_forge(server.base_url(), &admin_token, &harness.scenario.repo);
-    let repository = super::process::engine_block_on(repository(&forge, &harness.scenario.repo))?;
-    let issue = super::process::engine_block_on(seed_intake(
-        &forge,
-        &repository,
-        &harness.scenario.intake,
-    ))?;
-    let stimuli = super::stimuli::execute_live_stimuli(
-        &harness.scenario.execution.stimuli,
-        super::stimuli::LiveStimulusResources {
-            scenario: &harness.scenario,
-            server: &server,
-            runner: &mut runner,
-            temper: &harness.temper,
-            bundle_dir: &bundle_dir,
-            logs: &logs,
-            scenario_run_id: &scenario_run_id,
-            standalone: &mut standalone,
-            forge: &forge,
-            repository: &repository,
-            issue,
-        },
-    )
-    .map_err(|failure| {
-        workspace.retain_on_drop();
-        retain_failure_logs(&logs, &fake_mcp, &fake, &forge, &repository);
-        format!(
-            "declared live stimulus failed: {}\nstandalone log: {}\nCI diagnostics: {}",
-            failure.diagnostic(),
-            logs.standalone_log.display(),
-            logs.ci_diagnostics_log.display()
-        )
-    })?;
-
-    let timeout = convergence_timeout(harness.scenario.timeout);
-    let convergence_start = Instant::now();
-    let final_state = match drive_codebase_memory_convergence(
-        &forge,
-        &repository,
-        issue,
-        &harness.admin_user,
-        &mut standalone,
-        timeout,
-    ) {
-        Ok(final_state) => final_state,
-        Err(error) => {
-            workspace.retain_on_drop();
-            retain_failure_logs(&logs, &fake_mcp, &fake, &forge, &repository);
-            return Err(failure_report(
-                timeout,
-                &error,
-                server.base_url(),
-                &harness.scenario.repo.slug,
-                runner.is_running(),
-                &runner,
-                &standalone,
-                &logs,
-                &fake_mcp,
-                &fake,
-                &forge,
-                &repository,
-            ));
-        }
-    };
-    let convergence = convergence_start.elapsed();
-
-    validate_mcp_contract(&fake_mcp.log_path).inspect_err(|_| {
-        workspace.retain_on_drop();
-    })?;
-    fake.validate_observations().inspect_err(|_| {
-        workspace.retain_on_drop();
-    })?;
+    validate_mcp_contract(mcp)?;
+    fake.validate_observations()?;
     if fake.engineer_requests() < 4 {
-        workspace.retain_on_drop();
         return Err(format!(
             "fake LLM did not complete the codebase-memory engineer tool loop\n{}",
             fake.log_tail()
         ));
     }
-
-    write_snapshot(&logs.fake_llm_log, &fake.log_tail());
-    write_snapshot(
-        &logs.ci_diagnostics_log,
-        &ci_diagnostics(&forge, &repository),
-    );
-
-    standalone.kill();
-    Ok(LiveManifestEvidence {
-        _workspace: workspace,
-        scenario_path: harness.scenario.scenario_path.clone(),
-        manifest_path: harness.scenario.manifest_path.clone(),
-        scenario_run_id,
-        temper_log_format: harness.scenario.observability.log_format.clone(),
-        rust_log: harness.scenario.observability.rust_log.clone(),
-        temper_binary: harness.temper.binary().to_path_buf(),
-        forge_url: server.base_url().to_string(),
-        repo_slug: harness.scenario.repo.slug.clone(),
-        repo_id: harness.scenario.repo.id.clone(),
-        repo_default_branch: harness.scenario.repo.default_branch.clone(),
-        forge_cache_hit: cached.cache_hit,
-        runner_running: runner.is_running(),
-        startup: started.elapsed().saturating_sub(convergence),
-        convergence,
-        total_elapsed: started.elapsed(),
-        poll_backstop: harness.scenario.poll_backstop,
-        fake_llm: FakeLlmEvidence {
-            base_url: fake.base_url(),
-            architect_requests: 0,
-            engineer_requests: fake.engineer_requests(),
-            tester_requests: 0,
-            log_path: logs.fake_llm_log.clone(),
-        },
+    let search_calls = logged_tool_calls(&mcp.log_path)?
+        .iter()
+        .filter(|call| call.name == "search_code")
+        .count();
+    Ok((
         final_state,
-        handoff: None,
-        codebase_memory: Some(LiveCodebaseMemoryEvidence {
+        LiveCodebaseMemoryEvidence {
             produced_file: MEMORY_FILE.to_string(),
             expected_result: MEMORY_RESULT_NEEDLE.to_string(),
-            fake_mcp_log: fake_mcp.log_path,
-            mcp_search_calls: 1,
-            safe_tools: vec![
-                "codebase_memory_search_code".to_string(),
-                "codebase_memory_list_projects".to_string(),
-                "codebase_memory_index_status".to_string(),
-            ],
-            hidden_tools: vec![
-                "codebase_memory_index_repository".to_string(),
-                "codebase_memory_delete_project".to_string(),
-            ],
-        }),
-        plan_feature: None,
-        stimuli,
-        logs,
-    })
+            fake_mcp_log: mcp.log_path.clone(),
+            mcp_search_calls: search_calls,
+            safe_tools: mcp
+                .safe_tools
+                .iter()
+                .map(|tool| format!("codebase_memory_{tool}"))
+                .collect(),
+            hidden_tools: mcp
+                .hidden_tools
+                .iter()
+                .map(|tool| format!("codebase_memory_{tool}"))
+                .collect(),
+        },
+    ))
 }
 
 fn drive_codebase_memory_convergence(
@@ -462,7 +284,18 @@ fn verify_metadata(pr: &PullRequest, issue: ItemNumber) -> Result<(), String> {
     Ok(())
 }
 
-fn tune_codebase_memory_config(config_path: &Path, fake_mcp: &FakeMcpServer) -> Result<(), String> {
+pub(super) struct ToolConfiguration {
+    pub(super) role: String,
+    pub(super) tool: String,
+    pub(super) mode: String,
+    pub(super) index: String,
+}
+
+pub(super) fn tune_codebase_memory_config(
+    config_path: &Path,
+    fake_mcp: &FakeMcpServer,
+    configuration: &ToolConfiguration,
+) -> Result<(), String> {
     let text = fs::read_to_string(config_path)
         .map_err(|error| format!("read {}: {error}", config_path.display()))?;
     let mut doc: TomlValue = text
@@ -484,7 +317,7 @@ fn tune_codebase_memory_config(config_path: &Path, fake_mcp: &FakeMcpServer) -> 
     let mut codebase = toml::map::Map::new();
     codebase.insert(
         "mode".to_string(),
-        TomlValue::String("required".to_string()),
+        TomlValue::String(configuration.mode.clone()),
     );
     codebase.insert(
         "command".to_string(),
@@ -497,20 +330,28 @@ fn tune_codebase_memory_config(config_path: &Path, fake_mcp: &FakeMcpServer) -> 
             TomlValue::String(fake_mcp.script_path.display().to_string()),
             TomlValue::String(fake_mcp.log_path.display().to_string()),
             TomlValue::String("demo".to_string()),
-            TomlValue::String(ACTUAL_PROJECT.to_string()),
+            TomlValue::String(fake_mcp.project.clone()),
+            TomlValue::String(
+                serde_json::to_string(&fake_mcp.safe_tools)
+                    .map_err(|error| format!("serialize declared safe MCP tools: {error}"))?,
+            ),
+            TomlValue::String(
+                serde_json::to_string(&fake_mcp.hidden_tools)
+                    .map_err(|error| format!("serialize declared hidden MCP tools: {error}"))?,
+            ),
         ]),
     );
     codebase.insert(
         "roles".to_string(),
-        TomlValue::Array(vec![TomlValue::String("engineer".to_string())]),
+        TomlValue::Array(vec![TomlValue::String(configuration.role.clone())]),
     );
     codebase.insert(
         "index".to_string(),
-        TomlValue::String("blocking".to_string()),
+        TomlValue::String(configuration.index.clone()),
     );
     codebase.insert("startup_timeout_secs".to_string(), TomlValue::Integer(2));
     codebase.insert("index_timeout_secs".to_string(), TomlValue::Integer(3));
-    tools.insert("codebase_memory".to_string(), TomlValue::Table(codebase));
+    tools.insert(configuration.tool.clone(), TomlValue::Table(codebase));
     fs::write(
         config_path,
         toml::to_string_pretty(&doc).map_err(|error| format!("serialize tuned config: {error}"))?,
@@ -518,12 +359,20 @@ fn tune_codebase_memory_config(config_path: &Path, fake_mcp: &FakeMcpServer) -> 
     .map_err(|error| format!("write tuned config {}: {error}", config_path.display()))
 }
 
-struct FakeMcpServer {
-    script_path: PathBuf,
-    log_path: PathBuf,
+pub(super) struct FakeMcpServer {
+    pub(super) script_path: PathBuf,
+    pub(super) log_path: PathBuf,
+    pub(super) project: String,
+    pub(super) safe_tools: Vec<String>,
+    pub(super) hidden_tools: Vec<String>,
 }
 
-fn write_fake_mcp(root: &Path) -> Result<FakeMcpServer, String> {
+pub(super) fn write_fake_mcp(
+    root: &Path,
+    project: &str,
+    safe_tools: &[String],
+    hidden_tools: &[String],
+) -> Result<FakeMcpServer, String> {
     let script_path = root.join("fake-codebase-memory-mcp.py");
     let log_path = root.join("logs/fake-codebase-memory-mcp.jsonl");
     fs::write(&script_path, FAKE_MCP_SCRIPT)
@@ -537,11 +386,14 @@ fn write_fake_mcp(root: &Path) -> Result<FakeMcpServer, String> {
     Ok(FakeMcpServer {
         script_path,
         log_path,
+        project: project.to_string(),
+        safe_tools: safe_tools.to_vec(),
+        hidden_tools: hidden_tools.to_vec(),
     })
 }
 
-fn validate_mcp_contract(log_path: &Path) -> Result<(), String> {
-    let calls = logged_tool_calls(log_path)?;
+fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
+    let calls = logged_tool_calls(&mcp.log_path)?;
     let search = calls
         .iter()
         .filter(|call| call.name == "search_code")
@@ -550,18 +402,18 @@ fn validate_mcp_contract(log_path: &Path) -> Result<(), String> {
         return Err(format!(
             "expected one search_code MCP call, found {} in {}",
             search.len(),
-            log_path.display()
+            mcp.log_path.display()
         ));
     }
     if search[0]
         .arguments
         .get("project")
         .and_then(JsonValue::as_str)
-        != Some(ACTUAL_PROJECT)
+        != Some(mcp.project.as_str())
     {
         return Err(format!(
-            "search_code did not receive defaulted project {ACTUAL_PROJECT}: {:?}",
-            search[0].arguments
+            "search_code did not receive declared project {}: {:?}",
+            mcp.project, search[0].arguments
         ));
     }
     let index = calls
@@ -597,63 +449,7 @@ fn logged_tool_calls(path: &Path) -> Result<Vec<McpToolCallEvidence>, String> {
         .collect())
 }
 
-fn retain_failure_logs(
-    logs: &LiveLogPaths,
-    fake_mcp: &FakeMcpServer,
-    fake: &CodebaseMemoryFake,
-    forge: &ForgejoForge,
-    repository: &RepositoryId,
-) {
-    write_snapshot(&logs.fake_llm_log, &fake.log_tail());
-    write_snapshot(&logs.ci_diagnostics_log, &ci_diagnostics(forge, repository));
-    let _ = fs::copy(
-        &fake_mcp.log_path,
-        logs.workspace_root.join("fake-codebase-memory-mcp.jsonl"),
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn failure_report(
-    timeout: Duration,
-    error: &str,
-    forge_url: &str,
-    repo_slug: &str,
-    runner_running: bool,
-    runner: &ForgejoRunner,
-    standalone: &super::process::ChildGuard,
-    logs: &LiveLogPaths,
-    fake_mcp: &FakeMcpServer,
-    fake: &CodebaseMemoryFake,
-    forge: &ForgejoForge,
-    repository: &RepositoryId,
-) -> String {
-    format!(
-        "live codebase-memory-agent did not converge within {timeout:?}: {error}\n\
-         forge_url={forge_url} repo={repo_slug} runner_running={runner_running}\n\
-         runner log tail:\n{}\n\
-         --- init log ({}) ---\n{}\n\
-         --- repo populate log ({}) ---\n{}\n\
-         --- standalone daemon/worker/agent log ({}) ---\n{}\n\
-         --- fake LLM request tail ({}) ---\n{}\n\
-         --- fake MCP call log ({}) ---\n{}\n\
-         --- CI diagnostics ({}) ---\n{}",
-        runner.log_tail(),
-        logs.init_log.display(),
-        read_tail(&logs.init_log, 120),
-        logs.repo_populate_log.display(),
-        read_tail(&logs.repo_populate_log, 120),
-        logs.standalone_log.display(),
-        standalone.log_tail(),
-        logs.fake_llm_log.display(),
-        fake.log_tail(),
-        fake_mcp.log_path.display(),
-        read_tail(&fake_mcp.log_path, 80),
-        logs.ci_diagnostics_log.display(),
-        ci_diagnostics(forge, repository),
-    )
-}
-
-struct CodebaseMemoryFake {
+pub(super) struct CodebaseMemoryFake {
     fake: FakeLlm,
     engineer_requests: Arc<AtomicUsize>,
     observations: Arc<Mutex<ModelObservations>>,
@@ -666,7 +462,7 @@ struct ModelObservations {
 }
 
 impl CodebaseMemoryFake {
-    fn start(script_path: &Path) -> Result<Self, String> {
+    pub(super) fn start(script_path: &Path) -> Result<Self, String> {
         let script = ScriptFile::load(script_path)
             .map_err(|error| {
                 format!(
@@ -706,11 +502,11 @@ impl CodebaseMemoryFake {
         })
     }
 
-    fn base_url(&self) -> String {
+    pub(super) fn base_url(&self) -> String {
         self.fake.base_url()
     }
 
-    fn engineer_requests(&self) -> usize {
+    pub(super) fn engineer_requests(&self) -> usize {
         self.engineer_requests.load(Ordering::SeqCst)
     }
 
@@ -740,7 +536,7 @@ impl CodebaseMemoryFake {
         Ok(())
     }
 
-    fn log_tail(&self) -> String {
+    pub(super) fn log_tail(&self) -> String {
         let requests = self.fake.requests();
         let observations = self.observations.lock().expect("observations lock");
         let mut lines = vec![format!(

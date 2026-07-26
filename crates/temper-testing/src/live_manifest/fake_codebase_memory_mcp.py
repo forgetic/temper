@@ -4,6 +4,8 @@ import sys
 LOG_PATH = sys.argv[1]
 REPO_ROOT = sys.argv[2]
 ACTUAL_PROJECT = sys.argv[3]
+SAFE_TOOLS = set(json.loads(sys.argv[4]))
+HIDDEN_TOOLS = set(json.loads(sys.argv[5]))
 
 TOOLS = [
     {
@@ -39,6 +41,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}
     }
 ]
+TOOLS = [tool for tool in TOOLS if tool["name"] in SAFE_TOOLS | HIDDEN_TOOLS]
 
 
 def send(value):

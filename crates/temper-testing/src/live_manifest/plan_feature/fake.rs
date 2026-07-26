@@ -5,7 +5,7 @@ use jig_server::FakeLlm;
 
 use super::RolePromptEvidence;
 
-pub(super) struct PlanFeatureFake {
+pub(crate) struct PlanFeatureFake {
     fake: FakeLlm,
     architect_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     engineer_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -54,7 +54,7 @@ const GUIDANCE_CONTRACTS: &[GuidanceContract] = &[
 ];
 
 impl PlanFeatureFake {
-    pub(super) fn start(script_path: &Path) -> Result<Self, String> {
+    pub(crate) fn start(script_path: &Path) -> Result<Self, String> {
         let script = ScriptFile::load(script_path)
             .map_err(|error| {
                 format!(
@@ -90,26 +90,26 @@ impl PlanFeatureFake {
         })
     }
 
-    pub(super) fn base_url(&self) -> String {
+    pub(crate) fn base_url(&self) -> String {
         self.fake.base_url()
     }
 
-    pub(super) fn architect_requests(&self) -> usize {
+    pub(crate) fn architect_requests(&self) -> usize {
         self.architect_requests
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub(super) fn engineer_requests(&self) -> usize {
+    pub(crate) fn engineer_requests(&self) -> usize {
         self.engineer_requests
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub(super) fn tester_requests(&self) -> usize {
+    pub(crate) fn tester_requests(&self) -> usize {
         self.tester_requests
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub(super) fn prompt_guidance_evidence(&self) -> Result<Vec<RolePromptEvidence>, String> {
+    pub(crate) fn prompt_guidance_evidence(&self) -> Result<Vec<RolePromptEvidence>, String> {
         let requests = self.fake.requests();
         GUIDANCE_CONTRACTS
             .iter()
@@ -153,7 +153,7 @@ impl PlanFeatureFake {
             .collect()
     }
 
-    pub(super) fn log_tail(&self) -> String {
+    pub(crate) fn log_tail(&self) -> String {
         let requests = self.fake.requests();
         if requests.is_empty() {
             return "<fake LLM received no requests>".to_string();

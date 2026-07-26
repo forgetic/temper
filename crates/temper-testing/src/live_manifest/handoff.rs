@@ -4,31 +4,17 @@ use std::time::{Duration, Instant};
 
 use temper_forge_forgejo::ForgejoForge;
 use temper_forge_model::{
-    BranchRef, CommitFile, CreateBranch, CreateIssue, CreatePullRequest, Forge, ForgeContent,
-    ItemNumber, PullRequest, PullRequestQuery, PullRequestState, RepositoryId, UpdateIssue,
-    UpdatePullRequest,
+    BranchRef, CommitFile, CreateBranch, CreatePullRequest, Forge, ForgeContent, ItemNumber,
+    PullRequest, PullRequestQuery, PullRequestState, RepositoryId, UpdateIssue, UpdatePullRequest,
 };
 use temper_workflow::{
     ArtifactKindId, ArtifactRef, WorkflowMetadata, parse_metadata_block, render_metadata_block,
 };
 use toml::Value as TomlValue;
 
-use super::convergence::{admin_forge, ci_diagnostics, repository};
-use super::process::{
-    TemperInitRequest, assert_init_workflow_yaml_matches, convergence_timeout, free_port,
-    mint_site_admin_token, populate_repo, read_tail, run_temper_init, spawn_temper_standalone,
-    tune_init_config, wait_for_standalone, write_snapshot,
-};
-use super::{
-    FakeLlmEvidence, FinalStateEvidence, IssueEvidence, LiveLogPaths, LiveManifestEvidence,
-    LiveManifestHarness, PullRequestEvidence,
-};
-use crate::forgejo_runtime::RunWorkspace;
-use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
+use super::{FinalStateEvidence, IssueEvidence, LiveManifestHarness, PullRequestEvidence};
 
-mod fake;
-
-use fake::HandoffFake;
+pub(super) mod fake;
 
 const REFRESH_FAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const ASSERT_POLL: Duration = Duration::from_millis(500);
@@ -57,378 +43,93 @@ pub struct LiveHandoffCaseEvidence {
 
 #[derive(Clone, Debug)]
 struct HandoffFixture {
-    create_issue: IssueFixture,
-    refresh_issue: IssueFixture,
+    create_issue_title: String,
     create_title: String,
     create_body: String,
     refresh_title: String,
     refresh_body: String,
-    stale_title: String,
     stale_body: String,
 }
 
-#[derive(Clone, Debug)]
-struct IssueFixture {
-    title: String,
-    body: String,
-    labels: Vec<String>,
-}
-
-pub(super) fn run_authored_pr_create_refresh(
+pub(super) fn converge(
     harness: &LiveManifestHarness,
-) -> Result<LiveManifestEvidence, String> {
-    let started = Instant::now();
-    harness.scenario.validate_workflow()?;
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    standalone: &mut super::process::ChildGuard,
+    timeout: Duration,
+    issues: &std::collections::BTreeMap<String, ItemNumber>,
+) -> Result<(FinalStateEvidence, LiveHandoffEvidence), String> {
     let fixture = HandoffFixture::load(
         &harness.scenario.scenario_path,
         &harness.scenario.resolved_manifest,
     )?;
-
-    let cached = start_cached_bare_admin_server(
-        &harness.admin_user,
-        &harness.admin_password,
-        &harness.admin_email,
-    )
-    .map_err(|error| format!("cached bare-admin Forgejo starts: {error}"))?;
-    let server = cached.server;
-    let mut runner = ForgejoRunner::register(&server)
-        .map_err(|error| format!("forgejo-runner registers: {error}"))?;
-    if !runner.is_running() {
-        return Err(format!(
-            "forgejo-runner exited immediately\n--- runner log ---\n{}",
-            runner.log_tail()
-        ));
-    }
-    let admin_token = mint_site_admin_token(&server, &harness.admin_user)?;
-
-    let fake = HandoffFake::start(harness.scenario.jig_script_path())?;
-    let scenario_run_id = super::scenario_run_id(&harness.scenario);
-    let workspace = RunWorkspace::new(&harness.workspace_prefix);
-    let bundle_dir = workspace.dir("bundle");
-    let workspaces_dir = workspace.dir("workspaces");
-    let logs = LiveLogPaths {
-        workspace_root: workspace.path().to_path_buf(),
-        init_log: workspace.join("logs/init.log"),
-        repo_populate_log: workspace.join("logs/repo-populate.log"),
-        standalone_log: workspace.join("logs/standalone.log"),
-        fake_llm_log: workspace.join("logs/fake-llm.log"),
-        ci_diagnostics_log: workspace.join("logs/ci-diagnostics.log"),
-    };
-
-    let bind_port = free_port()?;
-    run_temper_init(TemperInitRequest {
-        temper: &harness.temper,
-        server: &server,
-        scenario: &harness.scenario,
-        bundle_dir: &bundle_dir,
-        workspaces_dir: &workspaces_dir,
-        bind_port,
-        fake_llm_url: &fake.base_url(),
-        log: &logs.init_log,
-        admin_user: &harness.admin_user,
-        admin_password: &harness.admin_password,
-        scenario_run_id: &scenario_run_id,
-    })?;
-    assert_init_workflow_yaml_matches(&bundle_dir.join("workflow.yaml"), &harness.scenario)?;
-    tune_init_config(
-        &bundle_dir.join("config.toml"),
-        harness.scenario.poll_backstop.as_secs(),
-        harness.scenario.mechanical_cadence.as_secs(),
-    )?;
-
-    populate_repo(
-        server.base_url(),
-        &admin_token,
-        workspace.path(),
-        &harness.scenario.repo,
-        &logs.repo_populate_log,
-    )?;
-
-    let mut standalone = spawn_temper_standalone(
-        &harness.temper,
-        &bundle_dir,
-        &logs.standalone_log,
-        &harness.scenario.observability,
-        &scenario_run_id,
-    )?;
-    wait_for_standalone(&mut standalone)?;
-
-    let forge = admin_forge(server.base_url(), &admin_token, &harness.scenario.repo);
-    let repository = super::process::engine_block_on(repository(&forge, &harness.scenario.repo))?;
-    let timeout = convergence_timeout(harness.scenario.timeout);
+    let create_issue = issues
+        .get("create")
+        .copied()
+        .ok_or_else(|| "handoff convergence requires issue binding `create`".to_string())?;
+    let refresh_issue = issues
+        .get("refresh")
+        .copied()
+        .ok_or_else(|| "handoff convergence requires issue binding `refresh`".to_string())?;
     let deadline = Instant::now() + timeout;
-
-    let create_issue = super::process::engine_block_on(seed_issue(
-        &forge,
-        &repository,
-        &fixture.create_issue,
-        "create authored handoff",
-        true,
-    ))?;
-    let stimuli = super::stimuli::execute_live_stimuli(
-        &harness.scenario.execution.stimuli,
-        super::stimuli::LiveStimulusResources {
-            scenario: &harness.scenario,
-            server: &server,
-            runner: &mut runner,
-            temper: &harness.temper,
-            bundle_dir: &bundle_dir,
-            logs: &logs,
-            scenario_run_id: &scenario_run_id,
-            standalone: &mut standalone,
-            forge: &forge,
-            repository: &repository,
-            issue: create_issue,
-        },
-    )
-    .map_err(|failure| {
-        workspace.retain_on_drop();
-        retain_failure_logs(&logs, &fake, &forge, &repository);
-        format!(
-            "declared live stimulus failed: {}\nstandalone log: {}\nCI diagnostics: {}",
-            failure.diagnostic(),
-            logs.standalone_log.display(),
-            logs.ci_diagnostics_log.display()
-        )
-    })?;
-    let create = match poll_handoff_case(
+    let create = poll_handoff_case(
         deadline,
-        &mut standalone,
-        &forge,
-        &repository,
+        standalone,
+        forge,
+        repository,
         &harness.scenario.repo.slug,
         create_issue,
         &fixture.create_title,
         &fixture.create_body,
         None,
-    ) {
-        Ok(case) => case,
-        Err(error) => {
-            workspace.retain_on_drop();
-            retain_failure_logs(&logs, &fake, &forge, &repository);
-            return Err(failure_report(
-                "create handoff did not converge",
-                timeout,
-                &error,
-                server.base_url(),
-                &harness.scenario.repo.slug,
-                runner.is_running(),
-                &runner,
-                &standalone,
-                &logs,
-                &fake,
-                &forge,
-                &repository,
-            ));
-        }
-    };
-
-    let refresh_issue = super::process::engine_block_on(seed_issue(
-        &forge,
-        &repository,
-        &fixture.refresh_issue,
-        "refresh existing handoff",
-        false,
-    ))?;
-    let seeded = super::process::engine_block_on(seed_existing_pr(
-        &forge,
-        &repository,
-        &harness.scenario.repo.default_branch,
-        refresh_issue,
-        &fixture,
-    ))?;
-    super::process::engine_block_on(mark_issue_ready(
-        &forge,
-        &harness.scenario.repo.slug,
-        refresh_issue,
-    ))?;
-    fake.wait_for_refresh_started(REFRESH_FAKE_TIMEOUT)?;
-    super::process::engine_block_on(mark_stale_pr_as_implementation(&forge, &seeded))?;
-    fake.allow_refresh_continue();
-    let refresh = match poll_handoff_case(
+    )?;
+    let refresh = poll_handoff_case(
         deadline,
-        &mut standalone,
-        &forge,
-        &repository,
+        standalone,
+        forge,
+        repository,
         &harness.scenario.repo.slug,
         refresh_issue,
         &fixture.refresh_title,
         &fixture.refresh_body,
         Some(&fixture.stale_body),
-    ) {
-        Ok(case) => case,
-        Err(error) => {
-            workspace.retain_on_drop();
-            retain_failure_logs(&logs, &fake, &forge, &repository);
-            return Err(failure_report(
-                "refresh handoff did not converge",
-                timeout,
-                &error,
-                server.base_url(),
-                &harness.scenario.repo.slug,
-                runner.is_running(),
-                &runner,
-                &standalone,
-                &logs,
-                &fake,
-                &forge,
-                &repository,
-            ));
-        }
-    };
-    if refresh.pr_number != seeded.number.get() {
-        return Err(format!(
-            "refresh opened PR #{} instead of updating existing PR #{}",
-            refresh.pr_number, seeded.number
-        ));
-    }
+    )?;
     super::process::engine_block_on(assert_no_duplicate_for_branch(
-        &forge,
-        &repository,
+        forge,
+        repository,
         &branch_name(refresh_issue),
     ))?;
-
-    write_snapshot(&logs.fake_llm_log, &fake.log_tail());
-    write_snapshot(
-        &logs.ci_diagnostics_log,
-        &ci_diagnostics(&forge, &repository),
-    );
-
-    let convergence = started.elapsed();
-    standalone.kill();
-    Ok(LiveManifestEvidence {
-        _workspace: workspace,
-        scenario_path: harness.scenario.scenario_path.clone(),
-        manifest_path: harness.scenario.manifest_path.clone(),
-        scenario_run_id,
-        temper_log_format: harness.scenario.observability.log_format.clone(),
-        rust_log: harness.scenario.observability.rust_log.clone(),
-        temper_binary: harness.temper.binary().to_path_buf(),
-        forge_url: server.base_url().to_string(),
-        repo_slug: harness.scenario.repo.slug.clone(),
-        repo_id: harness.scenario.repo.id.clone(),
-        repo_default_branch: harness.scenario.repo.default_branch.clone(),
-        forge_cache_hit: cached.cache_hit,
-        runner_running: runner.is_running(),
-        startup: started.elapsed().saturating_sub(convergence),
-        convergence,
-        total_elapsed: started.elapsed(),
-        poll_backstop: harness.scenario.poll_backstop,
-        fake_llm: FakeLlmEvidence {
-            base_url: fake.base_url(),
-            architect_requests: 0,
-            engineer_requests: fake.engineer_requests(),
-            tester_requests: 0,
-            log_path: logs.fake_llm_log.clone(),
+    let final_state = FinalStateEvidence {
+        issue: IssueEvidence {
+            number: create.issue_number,
+            title: fixture.create_issue_title.clone(),
+            state: "open".to_string(),
+            labels: vec!["code".to_string(), "in-progress".to_string()],
         },
-        final_state: FinalStateEvidence {
-            issue: IssueEvidence {
-                number: create.issue_number,
-                title: fixture.create_issue.title.clone(),
-                state: "open".to_string(),
-                labels: vec!["code".to_string(), "in-progress".to_string()],
-            },
-            pull_request: PullRequestEvidence {
-                number: create.pr_number,
-                title: create.title.clone(),
-                state: create.pr_state.clone(),
-                labels: create.labels.clone(),
-                author: super::ENGINEER.to_string(),
-                merged_by: None,
-                head_branch: create.head_branch.clone(),
-                head_sha: create.head_sha.clone(),
-                merged_sha: None,
-            },
-            ci_jobs: Vec::new(),
+        pull_request: PullRequestEvidence {
+            number: create.pr_number,
+            title: create.title.clone(),
+            state: create.pr_state.clone(),
+            labels: create.labels.clone(),
+            author: super::ENGINEER.to_string(),
+            merged_by: None,
+            head_branch: create.head_branch.clone(),
+            head_sha: create.head_sha.clone(),
+            merged_sha: None,
         },
-        handoff: Some(LiveHandoffEvidence {
+        ci_jobs: Vec::new(),
+    };
+    Ok((
+        final_state,
+        LiveHandoffEvidence {
             create,
             refresh,
             stale_body: fixture.stale_body,
-        }),
-        codebase_memory: None,
-        plan_feature: None,
-        stimuli,
-        logs,
-    })
+        },
+    ))
 }
 
-fn retain_failure_logs(
-    logs: &LiveLogPaths,
-    fake: &HandoffFake,
-    forge: &ForgejoForge,
-    repository: &RepositoryId,
-) {
-    write_snapshot(&logs.fake_llm_log, &fake.log_tail());
-    write_snapshot(&logs.ci_diagnostics_log, &ci_diagnostics(forge, repository));
-}
-
-#[allow(clippy::too_many_arguments)]
-fn failure_report(
-    phase: &str,
-    timeout: Duration,
-    error: &str,
-    forge_url: &str,
-    repo_slug: &str,
-    runner_running: bool,
-    runner: &ForgejoRunner,
-    standalone: &super::process::ChildGuard,
-    logs: &LiveLogPaths,
-    fake: &HandoffFake,
-    forge: &ForgejoForge,
-    repository: &RepositoryId,
-) -> String {
-    format!(
-        "live implementation-pr-handoff {phase} within {timeout:?}: {error}\n\
-         forge_url={forge_url} repo={repo_slug} runner_running={runner_running}\n\
-         runner log tail:\n{}\n\
-         --- init log ({}) ---\n{}\n\
-         --- repo populate log ({}) ---\n{}\n\
-         --- standalone daemon/worker/agent log ({}) ---\n{}\n\
-         --- fake LLM request tail ({}) ---\n{}\n\
-         --- CI diagnostics ({}) ---\n{}",
-        runner.log_tail(),
-        logs.init_log.display(),
-        read_tail(&logs.init_log, 120),
-        logs.repo_populate_log.display(),
-        read_tail(&logs.repo_populate_log, 120),
-        logs.standalone_log.display(),
-        standalone.log_tail(),
-        logs.fake_llm_log.display(),
-        fake.log_tail(),
-        logs.ci_diagnostics_log.display(),
-        ci_diagnostics(forge, repository),
-    )
-}
-
-async fn seed_issue(
-    forge: &impl Forge,
-    repository: &RepositoryId,
-    fixture: &IssueFixture,
-    suffix: &str,
-    ready: bool,
-) -> Result<ItemNumber, String> {
-    let mut labels = fixture.labels.clone();
-    push_unique(&mut labels, "code");
-    if ready {
-        push_unique(&mut labels, "ready");
-    }
-    forge
-        .create_issue(
-            repository,
-            CreateIssue {
-                title: format!("{} ({suffix})", fixture.title),
-                body: fixture.body.clone(),
-                labels,
-                assignees: Vec::new(),
-            },
-        )
-        .await
-        .map(|issue| issue.number)
-        .map_err(|error| format!("create {suffix} source issue failed: {error}"))
-}
-
-async fn mark_issue_ready(
+pub(super) async fn mark_issue_ready(
     forge: &impl Forge,
     repo_slug: &str,
     issue: ItemNumber,
@@ -448,7 +149,7 @@ async fn mark_issue_ready(
         .map_err(|error| format!("mark refresh issue #{issue} ready failed: {error}"))
 }
 
-async fn mark_stale_pr_as_implementation(
+pub(super) async fn mark_stale_pr_as_implementation(
     forge: &impl Forge,
     pull_request: &PullRequest,
 ) -> Result<(), String> {
@@ -470,12 +171,14 @@ async fn mark_stale_pr_as_implementation(
         })
 }
 
-async fn seed_existing_pr(
+pub(super) async fn seed_existing_pr(
     forge: &(impl Forge + ForgeContent),
     repository: &RepositoryId,
     default_branch: &str,
     issue: ItemNumber,
-    fixture: &HandoffFixture,
+    title: &str,
+    body: &str,
+    metadata_kind: &str,
 ) -> Result<PullRequest, String> {
     let branch = branch_name(issue);
     forge
@@ -493,7 +196,7 @@ async fn seed_existing_pr(
             repository,
             CommitFile {
                 path: "HANDOFF_REFRESH_STALE.md".to_string(),
-                contents: fixture.stale_body.as_bytes().to_vec(),
+                contents: body.as_bytes().to_vec(),
                 message: "seed stale implementation PR handoff".to_string(),
                 branch: branch.clone(),
             },
@@ -502,7 +205,7 @@ async fn seed_existing_pr(
         .map_err(|error| format!("commit stale refresh fixture on {branch}: {error}"))?;
 
     let metadata = WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("implementation_pr")),
+        kind: Some(ArtifactKindId::new(metadata_kind)),
         parents: vec![ArtifactRef::same_repo(issue)],
         correlation_key: Some(correlation_key(issue)),
         ..WorkflowMetadata::default()
@@ -511,12 +214,8 @@ async fn seed_existing_pr(
         .create_pull_request(
             repository,
             CreatePullRequest {
-                title: fixture.stale_title.clone(),
-                body: format!(
-                    "{}\n\n{}",
-                    fixture.stale_body.trim(),
-                    render_metadata_block(&metadata)
-                ),
+                title: title.to_string(),
+                body: format!("{}\n\n{}", body.trim(), render_metadata_block(&metadata)),
                 source: BranchRef {
                     repository_id: repository.clone(),
                     branch,
@@ -689,11 +388,11 @@ async fn verify_handoff_case(
 
 impl HandoffFixture {
     fn load(scenario_path: &Path, manifest: &TomlValue) -> Result<Self, String> {
-        let source = source_issue_fixture(scenario_path, manifest)?;
-        let create_issue =
-            issue_fixture(scenario_path, manifest, "create")?.unwrap_or_else(|| source.clone());
-        let refresh_issue =
-            issue_fixture(scenario_path, manifest, "refresh")?.unwrap_or_else(|| source.clone());
+        let create_issue_title = issue_title(manifest, "create")?
+            .or(issue_title(manifest, "source")?)
+            .ok_or_else(|| {
+                "implementation-pr-handoff manifest has no create/source issue".to_string()
+            })?;
         let handoff = manifest
             .get("handoff")
             .and_then(TomlValue::as_table)
@@ -701,81 +400,33 @@ impl HandoffFixture {
                 "implementation-pr-handoff manifest has no [handoff] section".to_string()
             })?;
         Ok(Self {
-            create_issue,
-            refresh_issue,
+            create_issue_title,
             create_title: required_string(handoff, "create_title")?,
             create_body: read_path_field(scenario_path, handoff, "create_body_path")?,
             refresh_title: required_string(handoff, "refresh_title")?,
             refresh_body: read_path_field(scenario_path, handoff, "refresh_body_path")?,
-            stale_title: required_string(handoff, "stale_title")?,
             stale_body: required_string(handoff, "stale_body")?,
         })
     }
 }
 
-fn source_issue_fixture(
-    scenario_path: &Path,
-    manifest: &TomlValue,
-) -> Result<IssueFixture, String> {
-    if let Some(issue) = issue_fixture(scenario_path, manifest, "source")? {
-        return Ok(issue);
-    }
-    if let Some(issue) = issue_fixture(scenario_path, manifest, "create")? {
-        return Ok(issue);
-    }
-    Err("implementation-pr-handoff manifest has no source/create issue".to_string())
-}
-
-fn issue_fixture(
-    scenario_path: &Path,
-    manifest: &TomlValue,
-    id: &str,
-) -> Result<Option<IssueFixture>, String> {
-    let Some(issue) = manifest
+fn issue_title(manifest: &TomlValue, id: &str) -> Result<Option<String>, String> {
+    let issue = manifest
         .get("issues")
         .and_then(TomlValue::as_array)
-        .and_then(|issues| {
-            issues
-                .iter()
-                .filter_map(TomlValue::as_table)
-                .find(|issue| issue.get("id").and_then(TomlValue::as_str) == Some(id))
+        .into_iter()
+        .flatten()
+        .filter_map(TomlValue::as_table)
+        .find(|issue| issue.get("id").and_then(TomlValue::as_str) == Some(id));
+    issue
+        .map(|issue| {
+            issue
+                .get("title")
+                .and_then(TomlValue::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| format!("issue `{id}` is missing `title`"))
         })
-    else {
-        return Ok(None);
-    };
-    let title = issue
-        .get("title")
-        .and_then(TomlValue::as_str)
-        .ok_or_else(|| format!("issue `{id}` is missing `title`"))?
-        .to_string();
-    let body_ref = issue
-        .get("body")
-        .and_then(TomlValue::as_str)
-        .ok_or_else(|| format!("issue `{id}` is missing `body`"))?;
-    let body_path = scenario_path.join(body_ref);
-    let body = fs::read_to_string(&body_path)
-        .map_err(|error| format!("read issue `{id}` body {}: {error}", body_path.display()))?;
-    let labels = issue
-        .get("labels")
-        .and_then(TomlValue::as_array)
-        .map(|labels| {
-            labels
-                .iter()
-                .map(|label| {
-                    label
-                        .as_str()
-                        .map(str::to_string)
-                        .ok_or_else(|| format!("issue `{id}` labels must be strings"))
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-    Ok(Some(IssueFixture {
-        title,
-        body,
-        labels,
-    }))
+        .transpose()
 }
 
 fn required_string(table: &toml::Table, field: &str) -> Result<String, String> {
@@ -814,11 +465,5 @@ fn pr_state_evidence(state: PullRequestState) -> &'static str {
         PullRequestState::Open => "open",
         PullRequestState::Closed => "closed",
         PullRequestState::Merged => "merged",
-    }
-}
-
-fn push_unique(labels: &mut Vec<String>, label: &str) {
-    if !labels.iter().any(|candidate| candidate == label) {
-        labels.push(label.to_string());
     }
 }
