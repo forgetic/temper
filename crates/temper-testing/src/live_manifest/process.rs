@@ -359,19 +359,32 @@ pub(super) fn spawn_temper_standalone(
 }
 
 pub(super) fn wait_for_standalone(child: &mut ChildGuard) -> Result<(), String> {
+    wait_for_standalone_with_timeout(child, STANDALONE_READY_TIMEOUT)
+}
+
+pub(super) fn wait_for_standalone_with_timeout(
+    child: &mut ChildGuard,
+    timeout: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
     for needle in [
         "webhook listener up",
         "worker:  capacity:",
         "ready -- watching",
     ] {
         let log = child.log.clone();
-        wait_for_log_line(&log, needle, child)?;
+        wait_for_log_line(&log, needle, child, deadline, timeout)?;
     }
     Ok(())
 }
 
-fn wait_for_log_line(log: &Path, needle: &str, child: &mut ChildGuard) -> Result<(), String> {
-    let deadline = Instant::now() + STANDALONE_READY_TIMEOUT;
+fn wait_for_log_line(
+    log: &Path,
+    needle: &str,
+    child: &mut ChildGuard,
+    deadline: Instant,
+    timeout: Duration,
+) -> Result<(), String> {
     loop {
         let contents = fs::read_to_string(log).unwrap_or_default();
         if contents.contains(needle) {
@@ -386,7 +399,7 @@ fn wait_for_log_line(log: &Path, needle: &str, child: &mut ChildGuard) -> Result
         }
         if Instant::now() >= deadline {
             return Err(format!(
-                "{} did not emit readiness line {needle:?} within {STANDALONE_READY_TIMEOUT:?}\n--- log ---\n{}",
+                "{} did not emit readiness line {needle:?} within {timeout:?}\n--- log ---\n{}",
                 child.label,
                 child.log_tail()
             ));
@@ -461,6 +474,16 @@ impl ChildGuard {
 
     pub(super) fn kill(&mut self) {
         let _ = self.child.kill();
+    }
+
+    pub(super) fn kill_and_wait(&mut self) -> Result<(), String> {
+        self.child
+            .kill()
+            .map_err(|error| format!("{} kill failed: {error}", self.label))?;
+        self.child
+            .wait()
+            .map(|_| ())
+            .map_err(|error| format!("{} wait after kill failed: {error}", self.label))
     }
 }
 

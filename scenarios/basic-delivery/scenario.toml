@@ -116,12 +116,14 @@ merged_pull_requests = 1
 closed_parent_issues = 1
 
 [[expect.checks]]
+required = true
 id = "intake-triaged-and-finalized"
 artifact = "issue:intake"
 state = "closed"
 labels = ["code"]
 
 [[expect.checks]]
+required = true
 id = "implementation-pr-landed"
 artifact = "pull_request"
 state = "merged"
@@ -129,18 +131,21 @@ labels_cleared = ["landing"]
 ci = "passed"
 
 [[expect.checks]]
+required = true
 id = "default-branch-updated"
 artifact = "repo:service"
 branch = "main"
 contains_engineer_diff = true
 
 [[expect.events]]
+required = true
 id = "triage-transition-observed"
 event = "transition.applied"
 artifact_ref = "$source_artifact"
 transition = "triage_intake_to_code"
 
 [[expect.events]]
+required = true
 id = "implementation-pr-opened-event"
 event = "pr.opened"
 source_artifact = "$source_artifact"
@@ -148,6 +153,7 @@ kind = "implementation"
 for_issue_number = "$provider.issue_number"
 
 [[expect.sequence]]
+required = true
 id = "basic-delivery-converges-by-events"
 scope = "source_artifact"
 events = [
@@ -159,6 +165,7 @@ events = [
 ]
 
 [[expect.count]]
+required = true
 id = "no-duplicate-implementation-prs-by-source"
 event = "pr.opened"
 group_by = ["source_artifact"]

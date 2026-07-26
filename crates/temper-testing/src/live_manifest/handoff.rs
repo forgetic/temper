@@ -165,6 +165,32 @@ pub(super) fn run_authored_pr_create_refresh(
         "create authored handoff",
         true,
     ))?;
+    let stimuli = super::stimuli::execute_live_stimuli(
+        &harness.scenario.execution.stimuli,
+        super::stimuli::LiveStimulusResources {
+            scenario: &harness.scenario,
+            server: &server,
+            runner: &mut runner,
+            temper: &harness.temper,
+            bundle_dir: &bundle_dir,
+            logs: &logs,
+            scenario_run_id: &scenario_run_id,
+            standalone: &mut standalone,
+            forge: &forge,
+            repository: &repository,
+            issue: create_issue,
+        },
+    )
+    .map_err(|failure| {
+        workspace.retain_on_drop();
+        retain_failure_logs(&logs, &fake, &forge, &repository);
+        format!(
+            "declared live stimulus failed: {}\nstandalone log: {}\nCI diagnostics: {}",
+            failure.diagnostic(),
+            logs.standalone_log.display(),
+            logs.ci_diagnostics_log.display()
+        )
+    })?;
     let create = match poll_handoff_case(
         deadline,
         &mut standalone,
@@ -178,6 +204,7 @@ pub(super) fn run_authored_pr_create_refresh(
     ) {
         Ok(case) => case,
         Err(error) => {
+            workspace.retain_on_drop();
             retain_failure_logs(&logs, &fake, &forge, &repository);
             return Err(failure_report(
                 "create handoff did not converge",
@@ -231,6 +258,7 @@ pub(super) fn run_authored_pr_create_refresh(
     ) {
         Ok(case) => case,
         Err(error) => {
+            workspace.retain_on_drop();
             retain_failure_logs(&logs, &fake, &forge, &repository);
             return Err(failure_report(
                 "refresh handoff did not converge",
@@ -320,6 +348,7 @@ pub(super) fn run_authored_pr_create_refresh(
         }),
         codebase_memory: None,
         plan_feature: None,
+        stimuli,
         logs,
     })
 }

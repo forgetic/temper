@@ -12,6 +12,7 @@ impl RunEvidenceArtifact {
         let mut details = vec![
             format!("run evidence artifact: `{}`", path.display()),
             format!("schema: `{}` version {}", self.schema, self.version),
+            format!("verdict: `{}`", self.verdict.as_str()),
             format!("scenario: `{}`", self.scenario.name),
             format!("source: {}", self.scenario.source_description),
             format!("manifest: `{}`", self.scenario.manifest_path),
@@ -21,6 +22,39 @@ impl RunEvidenceArtifact {
             ),
             self.scenario.runner_selection.clone(),
         ];
+        for (field, value) in [
+            ("feature", self.scenario.feature.as_deref()),
+            ("plan", self.scenario.plan.as_deref()),
+            ("mapped_scenario", self.scenario.mapped_scenario.as_deref()),
+            ("source_branch", self.scenario.source_branch.as_deref()),
+            (
+                "checkout_head_sha",
+                self.scenario.checkout_head_sha.as_deref(),
+            ),
+            (
+                "resolved_content_digest",
+                self.scenario.resolved_content_digest.as_deref(),
+            ),
+        ] {
+            if let Some(value) = value {
+                details.push(format!("scenario {field}: `{value}`"));
+            }
+        }
+        if let Some(binary) = &self.binary {
+            details.push(format!(
+                "standalone binary: `{}` sha256={} size_bytes={}",
+                binary.path, binary.sha256, binary.size_bytes
+            ));
+        }
+        if let Some(execution) = &self.execution {
+            details.push(format!(
+                "execution: status={} total_duration_ms={}",
+                execution.status, execution.total_duration_ms
+            ));
+            if let Some(failure) = execution.failure.as_deref() {
+                details.push(format!("execution failure: {failure}"));
+            }
+        }
         if self.scenario.topology.is_empty() {
             details.push("manifest topology: not declared".to_string());
         } else {
@@ -56,6 +90,29 @@ impl RunEvidenceArtifact {
         }
         for line in &self.evidence_lines {
             details.push(format!("runner evidence: {line}"));
+        }
+        for stimulus in &self.stimuli {
+            details.push(format!(
+                "stimulus `{}`: action={} status={} attempts={} timeout_ms={} duration_ms={}",
+                stimulus.id,
+                stimulus.action,
+                stimulus.status,
+                stimulus.attempts,
+                stimulus.timeout_ms,
+                stimulus.duration_ms
+            ));
+            details.extend(
+                stimulus
+                    .details
+                    .iter()
+                    .map(|detail| format!("stimulus `{}` detail: {detail}", stimulus.id)),
+            );
+        }
+        for limitation in &self.limitations {
+            details.push(format!("limitation: {limitation}"));
+        }
+        if let Some(intent) = self.follow_up_intent.as_deref() {
+            details.push(format!("follow-up intent: {intent}"));
         }
         if let Some(assertions) = &self.assertions {
             details.extend(assertions.report_details());
@@ -184,6 +241,7 @@ fn provider_details(provider: &ProviderEvidence) -> Vec<String> {
         ("merged_sha", provider.merged_sha.as_deref()),
         ("temper_binary", provider.temper_binary.as_deref()),
         ("fake_llm_url", provider.fake_llm_url.as_deref()),
+        ("request_log_path", provider.request_log_path.as_deref()),
     ] {
         if let Some(value) = value {
             details.push(format!("provider {field}: `{value}`"));
@@ -194,6 +252,15 @@ fn provider_details(provider: &ProviderEvidence) -> Vec<String> {
     }
     if let Some(pr_number) = provider.pr_number {
         details.push(format!("provider pr_number: #{pr_number}"));
+    }
+    if let Some(request_count) = provider.request_count {
+        details.push(format!("provider Jig request_count: {request_count}"));
+    }
+    for (role, count) in &provider.request_counts_by_role {
+        details.push(format!("provider Jig requests: role={role} count={count}"));
+    }
+    for script in &provider.jig_script_paths {
+        details.push(format!("provider Jig script: `{script}`"));
     }
     details
 }
@@ -211,6 +278,10 @@ fn observability_details(observability: &ObservabilityEvidence) -> Vec<String> {
         format!(
             "observability event log: `{}`",
             observability.event_log_path
+        ),
+        format!(
+            "observability retained event logs: {:?}",
+            observability.event_log_paths
         ),
         format!(
             "observability events captured: {}",

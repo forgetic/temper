@@ -55,7 +55,7 @@ pub use validator_context_sections::{
 };
 pub use validator_result::{
     RelatedPullRequest, ScenarioPromotionIntent, StructuredEvidenceEntry, VALIDATOR_RESULT_SCHEMA,
-    ValidationAssertion, ValidatorResult, ValidatorResultTarget,
+    ValidationAssertion, ValidatorBinaryIdentity, ValidatorResult, ValidatorResultTarget,
 };
 
 /// Default directory scanned by the CLI when no scenario root is supplied.

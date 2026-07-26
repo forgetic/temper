@@ -27,7 +27,9 @@ pub(super) fn evaluate_pull_request_check(
     let SelectedPullRequest { pull_request, note } = match selected {
         Ok(selected) => selected,
         Err(SelectionProblem::Failed(message)) => return builder.failed(message).build(),
-        Err(SelectionProblem::Unsupported(message)) => return builder.unsupported(message).build(),
+        Err(SelectionProblem::MissingFact(message)) => {
+            return builder.missing_fact(message).build();
+        }
     };
     if let Some(note) = note {
         builder = builder.passed(note);
@@ -128,7 +130,7 @@ fn evaluate_title(
             "expected pull request #{} title `{expected}`, observed `{actual}`",
             pull_request.number
         )),
-        None => builder.unsupported(format!(
+        None => builder.missing_fact(format!(
             "run evidence has no title fact for pull request #{}",
             pull_request.number
         )),
@@ -141,7 +143,7 @@ fn evaluate_body_prefix(
     pull_request: &PullRequestStateEvidence,
 ) -> ResultBuilder {
     let Some(body) = pull_request.body.as_deref() else {
-        return builder.unsupported(format!(
+        return builder.missing_fact(format!(
             "run evidence has no body fact for pull request #{}",
             pull_request.number
         ));
@@ -180,7 +182,7 @@ fn evaluate_stale_body_absent(
     pull_request: &PullRequestStateEvidence,
 ) -> ResultBuilder {
     let Some(body) = pull_request.body.as_deref() else {
-        return builder.unsupported(format!(
+        return builder.missing_fact(format!(
             "run evidence has no body fact for pull request #{}",
             pull_request.number
         ));
@@ -205,7 +207,7 @@ fn evaluate_metadata_kind(
     pull_request: &PullRequestStateEvidence,
 ) -> ResultBuilder {
     let Some(metadata) = pull_request_metadata(pull_request) else {
-        return builder.unsupported(format!(
+        return builder.missing_fact(format!(
             "run evidence has no parseable workflow metadata body for pull request #{}",
             pull_request.number
         ));
@@ -231,13 +233,13 @@ fn evaluate_metadata_parent(
     artifact: &RunEvidenceArtifact,
 ) -> ResultBuilder {
     let Some(metadata) = pull_request_metadata(pull_request) else {
-        return builder.unsupported(format!(
+        return builder.missing_fact(format!(
             "run evidence has no parseable workflow metadata body for pull request #{}",
             pull_request.number
         ));
     };
     let Some(parent) = expected_parent_ref(expected, artifact) else {
-        return builder.failed(format!("could not resolve metadata_parent `{expected}`"));
+        return builder.missing_fact(format!("could not resolve metadata_parent `{expected}`"));
     };
     if metadata
         .parents
@@ -263,7 +265,7 @@ fn evaluate_correlation_key(
     artifact: &RunEvidenceArtifact,
 ) -> ResultBuilder {
     let Some(metadata) = pull_request_metadata(pull_request) else {
-        return builder.unsupported(format!(
+        return builder.missing_fact(format!(
             "run evidence has no parseable workflow metadata body for pull request #{}",
             pull_request.number
         ));
@@ -342,7 +344,7 @@ fn evaluate_ci(
 ) -> ResultBuilder {
     let jobs = ci_jobs_for_pull_request(artifact, pull_request);
     if jobs.is_empty() {
-        return builder.unsupported(format!(
+        return builder.missing_fact(format!(
             "run evidence has no CI job conclusion facts for pull request #{}",
             pull_request.number
         ));
@@ -353,7 +355,7 @@ fn evaluate_ci(
         .filter_map(|job| job.conclusion.as_deref())
         .collect::<Vec<_>>();
     if conclusions.is_empty() {
-        return builder.unsupported(format!(
+        return builder.missing_fact(format!(
             "CI jobs for pull request #{} do not include conclusion facts",
             pull_request.number
         ));

@@ -2,7 +2,8 @@
 
 use crate::{
     AcceptanceCriterion, EvidenceEntry, EvidenceKind, FollowUpIssueIntent, ValidatedClaim,
-    ValidationReport, ValidationStatus, ValidationVerdict, ValidatorContext, ValidatorResult,
+    ValidationReport, ValidationStatus, ValidationVerdict, ValidatorBinaryIdentity,
+    ValidatorContext, ValidatorResult, ValidatorResultTarget,
 };
 
 #[test]
@@ -160,6 +161,77 @@ fn validator_result_json_fixtures_round_trip_and_render() {
             "- Fixture notes:\n",
             "> Use a two-child epic fixture with both produced PRs merged.\n"
         )
+    );
+}
+
+#[test]
+fn strict_validator_contract_rejects_missing_or_unproven_required_evidence() {
+    let mut result = ValidatorResult::new(
+        ValidatorResultTarget::new("feature", "ai/temper", crate::ArtifactReference::issue(778)),
+        ValidationVerdict::Passed,
+    );
+    result.feature = Some("ai/temper#778".to_string());
+    result.plan = Some("ai/temper#779".to_string());
+    result.scenario_name = Some("exact-head-feature-validation".to_string());
+    result.scenario_path = Some("scenarios/exact-head-feature-validation".to_string());
+    result.source_branch = Some("feature/778-exact-head-validation".to_string());
+    result.exact_head_sha = Some("deadbeef".to_string());
+    result.resolved_content_digest = Some("sha256:cafebabe".to_string());
+    result.standalone_binary = Some(ValidatorBinaryIdentity {
+        path: "target/debug/temper".to_string(),
+        sha256: "012345".to_string(),
+        size_bytes: 42,
+    });
+    result.duration_ms = Some(1200);
+    result.retained_paths = vec!["artifacts/run-evidence.json".to_string()];
+    result.evidence.push(crate::StructuredEvidenceEntry::new(
+        "run-evidence",
+        EvidenceKind::ScenarioRun,
+        "Exact-head live scenario evidence was retained.",
+    ));
+    result
+        .acceptance_criteria
+        .push(crate::ValidationAssertion::new(
+            "Exact-head assertion passed.",
+            ValidationStatus::Satisfied,
+        ));
+    assert!(result.validate_contract().is_empty());
+
+    result
+        .acceptance_criteria
+        .push(crate::ValidationAssertion::new(
+            "Required structured fact was absent.",
+            ValidationStatus::Unproven,
+        ));
+    let diagnostics = result.validate_contract();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("required assertion did not pass")),
+        "{diagnostics:?}"
+    );
+
+    result
+        .acceptance_criteria
+        .last_mut()
+        .expect("optional assertion")
+        .required = false;
+    assert!(result.validate_contract().is_empty());
+}
+
+#[test]
+fn legacy_validator_result_remains_readable_but_cannot_authorize_passing() {
+    let legacy_json = VALIDATOR_RESULT_AGGREGATE_JSON.replace(
+        crate::VALIDATOR_RESULT_SCHEMA,
+        crate::validator_result::LEGACY_VALIDATOR_RESULT_SCHEMA,
+    );
+    let legacy: ValidatorResult = serde_json::from_str(&legacy_json).expect("v1 result parses");
+    assert!(legacy.acceptance_criteria.iter().all(|item| item.required));
+    assert!(
+        legacy
+            .validate_contract()
+            .iter()
+            .any(|diagnostic| diagnostic.contains("requires validator result v2"))
     );
 }
 

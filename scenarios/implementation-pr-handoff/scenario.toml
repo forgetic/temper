@@ -152,6 +152,7 @@ refreshed_pull_requests = 1
 closed_parent_issues = 0
 
 [[expect.checks]]
+required = true
 id = "create-final-state-uses-authored-handoff"
 artifact = "pull_request:create"
 state = "open"
@@ -163,6 +164,7 @@ metadata_parent = "issue:create"
 correlation_key = "$correlation:create"
 
 [[expect.checks]]
+required = true
 id = "refresh-final-state-keeps-existing-pr-and-metadata"
 artifact = "pull_request:refresh"
 state = "open"
@@ -175,6 +177,7 @@ correlation_key = "$correlation:refresh"
 stale_body_absent = "Old report that must be replaced."
 
 [[expect.events]]
+required = true
 id = "create-pr-opened-observed"
 event = "pr.opened"
 action = "created"
@@ -187,6 +190,7 @@ fields."metadata.parent.ref" = "$issue:create"
 fields."correlation.key" = "$correlation:create"
 
 [[expect.events]]
+required = true
 id = "refresh-pr-updated-observed"
 event = "pr.updated"
 action = "refreshed"
@@ -199,6 +203,7 @@ fields."metadata.parent.ref" = "$issue:refresh"
 fields."correlation.key" = "$correlation:refresh"
 
 [[expect.sequence]]
+required = true
 id = "handoff-create-then-refresh"
 scope = "source_artifact"
 events = [
@@ -207,12 +212,14 @@ events = [
 ]
 
 [[expect.count]]
+required = true
 id = "one-created-handoff-event"
 event = "pr.opened"
 action = "created"
 exactly = 1
 
 [[expect.count]]
+required = true
 id = "one-refreshed-handoff-event"
 event = "pr.updated"
 action = "refreshed"

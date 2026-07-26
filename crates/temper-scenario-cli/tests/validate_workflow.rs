@@ -75,7 +75,11 @@ fn validate_workflow_live_with_missing_temper_bin_fails_clearly() {
         !output.status.success(),
         "missing live temper binary should fail"
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(
+        stdout.contains("run evidence:") && stdout.contains("validation result:"),
+        "failure artifacts should be reported: {stdout}"
+    );
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
     assert!(
         stderr.contains("live manifest runner --temper-bin path does not exist"),
@@ -83,6 +87,38 @@ fn validate_workflow_live_with_missing_temper_bin_fails_clearly() {
     );
     assert!(stderr.contains("missing-temper"), "{stderr}");
     assert!(output_dir.is_dir(), "artifact directory should be retained");
+    assert!(output_dir.join("run-evidence.json").is_file());
+    let evidence: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(output_dir.join("run-evidence.json")).expect("read failure evidence"),
+    )
+    .expect("failure evidence JSON");
+    assert_eq!(evidence["version"], 2);
+    assert_eq!(evidence["verdict"], "failed");
+    assert!(
+        evidence["execution"]["failure"]
+            .as_str()
+            .is_some_and(|failure| failure.contains("missing-temper"))
+    );
+    assert!(
+        evidence["assertions"]["blocked_required"]
+            .as_u64()
+            .is_some_and(|blocked| blocked > 0)
+    );
+    assert!(
+        std::fs::read_dir(&output_dir)
+            .expect("read retained artifact directory")
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .path()
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("validation-pr-") && name.ends_with(".json")
+                    })
+            }),
+        "validator JSON should be retained"
+    );
 }
 
 #[test]

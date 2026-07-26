@@ -120,6 +120,32 @@ pub(super) fn run_tool_augmented_pull_request(
         &repository,
         &harness.scenario.intake,
     ))?;
+    let stimuli = super::stimuli::execute_live_stimuli(
+        &harness.scenario.execution.stimuli,
+        super::stimuli::LiveStimulusResources {
+            scenario: &harness.scenario,
+            server: &server,
+            runner: &mut runner,
+            temper: &harness.temper,
+            bundle_dir: &bundle_dir,
+            logs: &logs,
+            scenario_run_id: &scenario_run_id,
+            standalone: &mut standalone,
+            forge: &forge,
+            repository: &repository,
+            issue,
+        },
+    )
+    .map_err(|failure| {
+        workspace.retain_on_drop();
+        retain_failure_logs(&logs, &fake_mcp, &fake, &forge, &repository);
+        format!(
+            "declared live stimulus failed: {}\nstandalone log: {}\nCI diagnostics: {}",
+            failure.diagnostic(),
+            logs.standalone_log.display(),
+            logs.ci_diagnostics_log.display()
+        )
+    })?;
 
     let timeout = convergence_timeout(harness.scenario.timeout);
     let convergence_start = Instant::now();
@@ -133,6 +159,7 @@ pub(super) fn run_tool_augmented_pull_request(
     ) {
         Ok(final_state) => final_state,
         Err(error) => {
+            workspace.retain_on_drop();
             retain_failure_logs(&logs, &fake_mcp, &fake, &forge, &repository);
             return Err(failure_report(
                 timeout,
@@ -152,9 +179,14 @@ pub(super) fn run_tool_augmented_pull_request(
     };
     let convergence = convergence_start.elapsed();
 
-    validate_mcp_contract(&fake_mcp.log_path)?;
-    fake.validate_observations()?;
+    validate_mcp_contract(&fake_mcp.log_path).inspect_err(|_| {
+        workspace.retain_on_drop();
+    })?;
+    fake.validate_observations().inspect_err(|_| {
+        workspace.retain_on_drop();
+    })?;
     if fake.engineer_requests() < 4 {
+        workspace.retain_on_drop();
         return Err(format!(
             "fake LLM did not complete the codebase-memory engineer tool loop\n{}",
             fake.log_tail()
@@ -211,6 +243,7 @@ pub(super) fn run_tool_augmented_pull_request(
             ],
         }),
         plan_feature: None,
+        stimuli,
         logs,
     })
 }

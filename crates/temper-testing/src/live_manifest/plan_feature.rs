@@ -193,6 +193,32 @@ pub(super) fn run_feature_branch_aggregate_landing(
         &repository,
         &harness.scenario.intake,
     ))?;
+    let stimuli = super::stimuli::execute_live_stimuli(
+        &harness.scenario.execution.stimuli,
+        super::stimuli::LiveStimulusResources {
+            scenario: &harness.scenario,
+            server: &server,
+            runner: &mut runner,
+            temper: &harness.temper,
+            bundle_dir: &bundle_dir,
+            logs: &logs,
+            scenario_run_id: &scenario_run_id,
+            standalone: &mut standalone,
+            forge: &forge,
+            repository: &repository,
+            issue: feature_issue,
+        },
+    )
+    .map_err(|failure| {
+        workspace.retain_on_drop();
+        retain_failure_logs(&logs, &fake, &forge, &repository);
+        format!(
+            "declared live stimulus failed: {}\nstandalone log: {}\nCI diagnostics: {}",
+            failure.diagnostic(),
+            logs.standalone_log.display(),
+            logs.ci_diagnostics_log.display()
+        )
+    })?;
 
     let timeout = convergence_timeout(harness.scenario.timeout);
     let convergence_start = Instant::now();
@@ -212,6 +238,7 @@ pub(super) fn run_feature_branch_aggregate_landing(
     ) {
         Ok(evidence) => evidence,
         Err(error) => {
+            workspace.retain_on_drop();
             retain_failure_logs(&logs, &fake, &forge, &repository);
             return Err(failure_report(
                 timeout,
@@ -235,6 +262,7 @@ pub(super) fn run_feature_branch_aggregate_landing(
         ("tester", fake.tester_requests(), 4),
     ] {
         if actual < minimum {
+            workspace.retain_on_drop();
             return Err(format!(
                 "fake LLM served only {actual} {role} requests; expected at least {minimum}\n{}",
                 fake.log_tail()
@@ -327,6 +355,7 @@ pub(super) fn run_feature_branch_aggregate_landing(
         handoff: None,
         codebase_memory: None,
         plan_feature: Some(plan_feature),
+        stimuli,
         logs,
     })
 }

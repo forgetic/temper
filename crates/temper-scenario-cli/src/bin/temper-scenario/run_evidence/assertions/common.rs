@@ -27,7 +27,7 @@ pub(super) fn evaluate_state(
     fallback_name: &str,
 ) -> ResultBuilder {
     let Some(actual) = actual else {
-        return builder.unsupported(format!("{kind} state fact is missing"));
+        return builder.missing_fact(format!("{kind} state fact is missing"));
     };
     let display = id.unwrap_or(fallback_name);
     if same_normalized(actual, expected) {

@@ -4,6 +4,7 @@
 //! test a unique workspace for mutable files and starts webhook triggers from an
 //! already-bound listener so there is no free-port handoff gap.
 
+use std::cell::Cell;
 use std::io;
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ static NEXT_WORKSPACE: AtomicU64 = AtomicU64::new(0);
 /// is removed recursively on drop.
 pub struct RunWorkspace {
     path: PathBuf,
+    retain_on_drop: Cell<bool>,
 }
 
 impl RunWorkspace {
@@ -30,7 +32,12 @@ impl RunWorkspace {
             let id = NEXT_WORKSPACE.fetch_add(1, Ordering::SeqCst);
             let path = std::env::temp_dir().join(format!("{prefix}-{}-{id}", std::process::id()));
             match std::fs::create_dir(&path) {
-                Ok(()) => return Self { path },
+                Ok(()) => {
+                    return Self {
+                        path,
+                        retain_on_drop: Cell::new(false),
+                    };
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => panic!("creating run workspace {} failed: {error}", path.display()),
             }
@@ -67,11 +74,18 @@ impl RunWorkspace {
             .unwrap_or_else(|error| panic!("writing {} failed: {error}", path.display()));
         path
     }
+    /// Preserve this workspace when its owner returns a failure whose evidence
+    /// cites files below it.
+    pub fn retain_on_drop(&self) {
+        self.retain_on_drop.set(true);
+    }
 }
 
 impl Drop for RunWorkspace {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        if !self.retain_on_drop.get() {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
     }
 }
 
@@ -201,6 +215,22 @@ mod tests {
         let paths = paths.lock().expect("paths lock");
         let unique = paths.iter().cloned().collect::<HashSet<_>>();
         assert_eq!(unique.len(), threads * per_thread);
+    }
+
+    #[test]
+    fn retained_failure_workspace_survives_drop_for_evidence_collection() {
+        let path;
+        {
+            let workspace = RunWorkspace::new("temper-retained-failure");
+            path = workspace.path().to_path_buf();
+            workspace.write_file("logs/failure.log", "actionable failure\n");
+            workspace.retain_on_drop();
+        }
+        assert_eq!(
+            std::fs::read_to_string(path.join("logs/failure.log")).expect("retained log reads"),
+            "actionable failure\n"
+        );
+        std::fs::remove_dir_all(path).expect("retained test workspace cleans up");
     }
 
     #[test]
