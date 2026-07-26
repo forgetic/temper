@@ -22,6 +22,8 @@ scenarios/basic-delivery/
 │   ├── workflow.json
 │   ├── ci.yml
 │   └── intake-issue.md
+├── jig/
+│   └── basic-delivery.json
 └── repo/
     ├── README.md
     └── .forgejo/workflows/ci.yml
@@ -31,6 +33,8 @@ scenarios/basic-delivery/
   the example.
 - `config/ci.yml` is the CI workflow the example installs into the demo repo.
 - `config/intake-issue.md` is the deliberately thin seed intake body.
+- `jig/basic-delivery.json` owns every architect, engineer, and CI-repair fake
+  response selected by the manifest's `jig.fake_llm` action.
 - `repo/` is the minimal default-branch seed a runner can copy into `acme/service`
   before it files the intake issue. The CI workflow is present under its final
   repository path so the seed is self-contained.

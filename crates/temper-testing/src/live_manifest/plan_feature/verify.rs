@@ -12,7 +12,7 @@ use super::{
     LANDING_TITLE, LivePlanFeatureEvidence, PLAN_TITLE, PullRequestCiJobEvidence,
     PullRequestStateEvidence, SECOND_CODE_TITLE, VALIDATION_SUMMARY,
 };
-use crate::live_basic_delivery::convergence::{ci_job_evidence, completed_ci_jobs};
+use crate::live_manifest::convergence::{ci_job_evidence, completed_ci_jobs};
 
 #[derive(Default)]
 struct Observations {

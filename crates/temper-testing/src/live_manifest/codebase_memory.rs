@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use jig_core::{Reply, RequestView, Script, StopReason, Turn};
+use jig_core::{Reply, RequestView, Script, ScriptFile};
 use jig_server::FakeLlm;
-use serde_json::{Value as JsonValue, json};
+use serde_json::Value as JsonValue;
 use temper_forge_forgejo::ForgejoForge;
 use temper_forge_model::{
     CiJobConclusion, IssueState, ItemNumber, PullRequest, PullRequestQuery, PullRequestState,
@@ -25,23 +25,22 @@ use super::process::{
     tune_init_config, wait_for_standalone, write_snapshot,
 };
 use super::{
-    ENGINEER, FakeLlmEvidence, FinalStateEvidence, LiveBasicDeliveryEvidence,
-    LiveBasicDeliveryHarness, LiveCodebaseMemoryEvidence, LiveLogPaths,
+    ENGINEER, FakeLlmEvidence, FinalStateEvidence, LiveCodebaseMemoryEvidence, LiveLogPaths,
+    LiveManifestEvidence, LiveManifestHarness,
 };
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
 
 const ACTUAL_PROJECT: &str = "actual-demo-project";
-const MEMORY_QUERY: &str = "WidgetService";
 const MEMORY_FILE: &str = "MEMORY_NOTES.md";
 const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_SEARCH_RESULT";
 const ENGINEER_SUMMARY: &str = "Used codebase memory search result before writing MEMORY_NOTES.md.";
 
-pub(super) fn run_live_codebase_memory_agent(
-    harness: &LiveBasicDeliveryHarness,
-) -> Result<LiveBasicDeliveryEvidence, String> {
+pub(super) fn run_tool_augmented_pull_request(
+    harness: &LiveManifestHarness,
+) -> Result<LiveManifestEvidence, String> {
     let started = Instant::now();
-    harness.scenario.assert_workflow_matches_reference()?;
+    harness.scenario.validate_workflow()?;
 
     let cached = start_cached_bare_admin_server(
         &harness.admin_user,
@@ -60,7 +59,7 @@ pub(super) fn run_live_codebase_memory_agent(
     }
     let admin_token = mint_site_admin_token(&server, &harness.admin_user)?;
 
-    let fake = CodebaseMemoryFake::start();
+    let fake = CodebaseMemoryFake::start(harness.scenario.jig_script_path())?;
     let scenario_run_id = super::scenario_run_id(&harness.scenario);
     let workspace = RunWorkspace::new(&harness.workspace_prefix);
     let bundle_dir = workspace.dir("bundle");
@@ -169,7 +168,7 @@ pub(super) fn run_live_codebase_memory_agent(
     );
 
     standalone.kill();
-    Ok(LiveBasicDeliveryEvidence {
+    Ok(LiveManifestEvidence {
         _workspace: workspace,
         scenario_path: harness.scenario.scenario_path.clone(),
         manifest_path: harness.scenario.manifest_path.clone(),
@@ -634,7 +633,15 @@ struct ModelObservations {
 }
 
 impl CodebaseMemoryFake {
-    fn start() -> Self {
+    fn start(script_path: &Path) -> Result<Self, String> {
+        let script = ScriptFile::load(script_path)
+            .map_err(|error| {
+                format!(
+                    "load scenario Jig script {}: {error}",
+                    script_path.display()
+                )
+            })?
+            .into_script();
         let engineer_requests = Arc::new(AtomicUsize::new(0));
         let request_count = Arc::clone(&engineer_requests);
         let observations = Arc::new(Mutex::new(ModelObservations::default()));
@@ -644,14 +651,26 @@ impl CodebaseMemoryFake {
                 return Reply::text("unexpected codebase-memory fake-LLM request");
             }
             request_count.fetch_add(1, Ordering::SeqCst);
-            codebase_memory_reply(view, &observations_for_rule)
+            if messages_contain(view, "CODEBASE MEMORY") {
+                observations_for_rule
+                    .lock()
+                    .expect("observations lock")
+                    .prompt_guidance_seen = true;
+            }
+            if messages_contain(view, MEMORY_RESULT_NEEDLE) {
+                observations_for_rule
+                    .lock()
+                    .expect("observations lock")
+                    .memory_result_seen = true;
+            }
+            script.next_reply(view)
         }))
-        .expect("start codebase-memory fake LLM");
-        Self {
+        .map_err(|error| format!("start scenario Jig fake LLM: {error}"))?;
+        Ok(Self {
             fake,
             engineer_requests,
             observations,
-        }
+        })
     }
 
     fn base_url(&self) -> String {
@@ -722,82 +741,10 @@ impl CodebaseMemoryFake {
     }
 }
 
-fn codebase_memory_reply(
-    view: &RequestView,
-    observations: &Arc<Mutex<ModelObservations>>,
-) -> Reply {
-    match view.prior_tool_results {
-        0 => {
-            if messages_contain(view, "CODEBASE MEMORY") {
-                observations
-                    .lock()
-                    .expect("observations lock")
-                    .prompt_guidance_seen = true;
-            }
-            Reply {
-                turns: vec![Turn::ToolCall {
-                    id: "call_memory_search".to_string(),
-                    name: "codebase_memory_search_code".to_string(),
-                    args: json!({ "query": MEMORY_QUERY }),
-                }],
-                usage: Default::default(),
-                stop: StopReason::ToolCalls,
-            }
-        }
-        1 => {
-            let memory_line = memory_result_line(view).unwrap_or_else(|| "missing memory".into());
-            if memory_line.contains(MEMORY_RESULT_NEEDLE) {
-                observations
-                    .lock()
-                    .expect("observations lock")
-                    .memory_result_seen = true;
-            }
-            Reply {
-                turns: vec![Turn::ToolCall {
-                    id: "call_write_memory_notes".to_string(),
-                    name: "write".to_string(),
-                    args: json!({
-                        "path": format!("demo/{MEMORY_FILE}"),
-                        "content": format!("memory-guided notes\n{memory_line}\n"),
-                    }),
-                }],
-                usage: Default::default(),
-                stop: StopReason::ToolCalls,
-            }
-        }
-        2 => Reply {
-            turns: vec![Turn::ToolCall {
-                id: "call_submit_memory_notes".to_string(),
-                name: "submit_for_pr".to_string(),
-                args: json!({ "summary": ENGINEER_SUMMARY }),
-            }],
-            usage: Default::default(),
-            stop: StopReason::ToolCalls,
-        },
-        _ => Reply::text(
-            json!({
-                "title": "Use codebase memory result",
-                "body": "# Implementation report\nWrote MEMORY_NOTES.md from the fake codebase-memory search result.",
-                "summary": ENGINEER_SUMMARY,
-            })
-            .to_string(),
-        ),
-    }
-}
-
 fn messages_contain(view: &RequestView, needle: &str) -> bool {
     view.messages
         .iter()
         .any(|message| message.content.contains(needle))
-}
-
-fn memory_result_line(view: &RequestView) -> Option<String> {
-    view.messages
-        .iter()
-        .filter(|message| message.role == "tool")
-        .flat_map(|message| message.content.lines())
-        .find(|line| line.contains(MEMORY_RESULT_NEEDLE))
-        .map(str::to_string)
 }
 
 fn snippet(text: &str, max: usize) -> String {

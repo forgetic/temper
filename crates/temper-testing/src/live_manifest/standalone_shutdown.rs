@@ -183,7 +183,7 @@ struct ForgeSnapshot {
 pub fn run_standalone_shutdown_acceptance(
     request: StandaloneShutdownRequest,
 ) -> Result<StandaloneShutdownEvidence, String> {
-    request.scenario.assert_workflow_matches_reference()?;
+    request.scenario.validate_workflow()?;
     require_executable(&request.descendant_fixture, "standalone descendant fixture")?;
 
     let cached = start_cached_bare_admin_server(

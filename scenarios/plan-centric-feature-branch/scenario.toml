@@ -95,19 +95,19 @@ ci_source = "repo/.forgejo/workflows/ci.yml"
 id = "configure-jig-architect-response"
 action = "jig.fake_llm"
 role = "architect"
-script = "plan-centric-feature-branch"
+script_path = "jig/plan-centric-feature-branch.json"
 
 [[steps]]
 id = "configure-jig-engineer-response"
 action = "jig.fake_llm"
 role = "engineer"
-script = "plan-centric-feature-branch"
+script_path = "jig/plan-centric-feature-branch.json"
 
 [[steps]]
 id = "configure-jig-tester-response"
 action = "jig.fake_llm"
 role = "tester"
-script = "plan-centric-feature-branch"
+script_path = "jig/plan-centric-feature-branch.json"
 
 [[steps]]
 id = "launch-standalone-temper"
@@ -126,6 +126,7 @@ after = "temper.launch_standalone"
 [[steps]]
 id = "wait-for-plan-centric-convergence"
 action = "workflow.wait_convergence"
+strategy = "plan-feature-landing"
 until = "three implementation PRs merged only to the derived feature branch, then one CI-green aggregate landing PR merged to main and feature plus plan issues closed"
 
 [expect]

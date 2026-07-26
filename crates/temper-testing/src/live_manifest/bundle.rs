@@ -4,29 +4,33 @@ use std::time::Duration;
 
 use toml::Value as TomlValue;
 
+pub use super::execution_plan::{
+    AgentFixture, ConvergenceStrategy, ManifestAction, ManifestExecutionPlan, ManifestStep,
+};
+
 use super::{
     DEFAULT_CONVERGENCE_SECS, DEFAULT_DAEMON_POLL_BACKSTOP_SECS, DEFAULT_MECHANICAL_CADENCE_SECS,
 };
 
-/// Scenario-bundle fixtures needed by the live basic-delivery topology.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Resolved fixtures and typed actions needed by the live manifest topology.
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScenarioBundle {
     pub scenario_path: PathBuf,
     pub manifest_path: PathBuf,
-    pub workflow_name: String,
     pub workflow_path: PathBuf,
     pub workflow_text: String,
+    pub execution: ManifestExecutionPlan,
+    pub resolved_manifest: TomlValue,
     pub repo: RepoFixture,
     pub intake: IntakeFixture,
     pub timeout: Duration,
     pub poll_backstop: Duration,
     pub mechanical_cadence: Duration,
     pub observability: ObservabilityFixture,
-    pub codebase_memory_contract: bool,
 }
 
 impl ScenarioBundle {
-    /// Loads a basic-delivery scenario directory (or its manifest file) and the
+    /// Loads a live scenario directory (or its manifest file) and the
     /// referenced workflow, repository seed, CI, intake, timeout, and live
     /// backstop settings.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
@@ -45,11 +49,12 @@ impl ScenarioBundle {
             let manifest_path = scenario_path.join("scenario.toml");
             (scenario_path, manifest_path)
         };
-        let manifest = load_manifest_toml(&manifest_path)?;
+        let manifest = temper_scenario_core::load_resolved_manifest_toml(&manifest_path)
+            .map_err(|error| error.to_string())?;
         Self::from_manifest(scenario_path, manifest_path, manifest)
     }
 
-    /// Builds a live basic-delivery bundle from an already-resolved manifest.
+    /// Builds a live manifest bundle from an already-resolved manifest.
     /// Callers that support fixture inheritance can pass a manifest whose local
     /// path strings have already been rewritten to the files that declared them.
     pub fn from_manifest(
@@ -57,9 +62,10 @@ impl ScenarioBundle {
         manifest_path: PathBuf,
         manifest: TomlValue,
     ) -> Result<Self, String> {
-        let (workflow_name, workflow_path, workflow_text) =
-            workflow_fixture(&scenario_path, &manifest)?;
+        let execution = ManifestExecutionPlan::from_manifest(&manifest)?;
+        let (workflow_path, workflow_text) = workflow_fixture(&scenario_path, &manifest)?;
         let repo = repo_fixture(&scenario_path, &manifest)?;
+        validate_fixture_actions(&execution, &workflow_path, &repo)?;
         let intake = intake_fixture(&scenario_path, &manifest)?;
         let timeout = manifest_duration(
             &manifest,
@@ -77,78 +83,39 @@ impl ScenarioBundle {
             Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS),
         )?;
         let observability = observability_fixture(&manifest)?;
-        let codebase_memory_contract = manifest.get("codebase_memory").is_some();
 
         Ok(Self {
             scenario_path,
             manifest_path,
-            workflow_name,
             workflow_path,
             workflow_text,
+            execution,
+            resolved_manifest: manifest,
             repo,
             intake,
             timeout,
             poll_backstop,
             mechanical_cadence,
             observability,
-            codebase_memory_contract,
         })
     }
 
-    pub fn is_implementation_pr_handoff(&self) -> bool {
-        self.workflow_name == "implementation-pr-handoff"
-            || self
-                .scenario_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name == "implementation-pr-handoff")
-    }
-
-    pub fn declares_codebase_memory_contract(&self) -> bool {
-        self.codebase_memory_contract
-    }
-
-    pub fn is_plan_centric_feature_branch(&self) -> bool {
-        self.workflow_name == "plan-centric-feature-delivery"
-            || self
-                .scenario_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name == "plan-centric-feature-branch")
-    }
-
-    /// Validates that the scenario workflow fixture is the canonical bundled
-    /// basic-delivery workflow. This preserves the live proof's contract with
-    /// `temper init --workflow basic-delivery` while letting the harness load the
-    /// bytes from the scenario bundle.
-    pub fn assert_workflow_matches_reference(&self) -> Result<(), String> {
-        let spec = temper_reference_delivery::parse_workflow_spec(
-            &self.workflow_path,
-            &self.workflow_text,
-        )
-        .map_err(|error| error.to_string())?;
-        let validated = spec.validate().map_err(|errors| {
-            format!(
-                "scenario workflow {} is invalid: {errors}",
-                self.workflow_path.display()
-            )
-        })?;
-        if self.workflow_name == "basic-delivery" {
-            let reference = temper_reference_delivery::basic_delivery_workflow();
-            if validated != reference {
-                return Err(format!(
-                    "scenario workflow {} no longer validates to the canonical basic-delivery workflow",
+    /// Parses and validates the workflow fixture selected by resolved bundle data.
+    pub fn validate_workflow(&self) -> Result<(), String> {
+        temper_reference_delivery::parse_workflow_spec(&self.workflow_path, &self.workflow_text)
+            .map_err(|error| error.to_string())?
+            .validate()
+            .map(|_| ())
+            .map_err(|errors| {
+                format!(
+                    "scenario workflow {} is invalid: {errors}",
                     self.workflow_path.display()
-                ));
-            }
-            if self.workflow_text != temper_reference_delivery::basic_delivery_workflow_json() {
-                return Err(format!(
-                    "scenario workflow {} must stay byte-equal to the embedded basic-delivery fixture",
-                    self.workflow_path.display()
-                ));
-            }
-        }
-        Ok(())
+                )
+            })
+    }
+
+    pub fn jig_script_path(&self) -> &Path {
+        &self.execution.jig_script_path
     }
 }
 
@@ -192,27 +159,58 @@ impl Default for ObservabilityFixture {
     }
 }
 
-fn load_manifest_toml(manifest_path: &Path) -> Result<TomlValue, String> {
-    let source = fs::read_to_string(manifest_path)
-        .map_err(|error| format!("read {}: {error}", manifest_path.display()))?;
-    source
-        .parse::<TomlValue>()
-        .map_err(|error| format!("parse {}: {error}", manifest_path.display()))
+fn validate_fixture_actions(
+    execution: &ManifestExecutionPlan,
+    workflow_path: &Path,
+    repository: &RepoFixture,
+) -> Result<(), String> {
+    let launch_paths = execution
+        .steps
+        .iter()
+        .filter_map(|step| match &step.action {
+            ManifestAction::LaunchTemper { workflow_path } => Some(workflow_path),
+            _ => None,
+        });
+    for declared in launch_paths {
+        if declared != workflow_path {
+            return Err(format!(
+                "temper.launch_standalone config {} does not match workflow.path {}",
+                declared.display(),
+                workflow_path.display()
+            ));
+        }
+    }
+    let seed = execution.steps.iter().find_map(|step| match &step.action {
+        ManifestAction::SeedRepository {
+            repo_id,
+            seed_path,
+            ci_source_path,
+        } if repo_id == &repository.id => Some((seed_path, ci_source_path)),
+        _ => None,
+    });
+    let Some((seed_path, ci_source_path)) = seed else {
+        return Err(format!(
+            "resolved repository `{}` has no matching repo.seed action",
+            repository.id
+        ));
+    };
+    if seed_path != &repository.seed_path || ci_source_path != &repository.ci_source_path {
+        return Err(format!(
+            "repo.seed action for `{}` must use the resolved repository seed_path and ci_source",
+            repository.id
+        ));
+    }
+    Ok(())
 }
 
 fn workflow_fixture(
     scenario_path: &Path,
     manifest: &TomlValue,
-) -> Result<(String, PathBuf, String), String> {
+) -> Result<(PathBuf, String), String> {
     let workflow = manifest
         .get("workflow")
         .and_then(TomlValue::as_table)
-        .ok_or_else(|| "basic-delivery manifest is missing [workflow]".to_string())?;
-    let name = workflow
-        .get("name")
-        .and_then(TomlValue::as_str)
-        .unwrap_or("basic-delivery")
-        .to_string();
+        .ok_or_else(|| "live manifest is missing [workflow]".to_string())?;
     let path = workflow
         .get("path")
         .and_then(TomlValue::as_str)
@@ -220,20 +218,20 @@ fn workflow_fixture(
     let workflow_path = scenario_path.join(path);
     let workflow_text = fs::read_to_string(&workflow_path)
         .map_err(|error| format!("read workflow {}: {error}", workflow_path.display()))?;
-    Ok((name, workflow_path, workflow_text))
+    Ok((workflow_path, workflow_text))
 }
 
 fn repo_fixture(scenario_path: &Path, manifest: &TomlValue) -> Result<RepoFixture, String> {
     let repos = manifest
         .get("repos")
         .and_then(TomlValue::as_array)
-        .ok_or_else(|| "basic-delivery manifest is missing [[repos]]".to_string())?;
+        .ok_or_else(|| "live manifest is missing [[repos]]".to_string())?;
     let repo = repos
         .iter()
         .filter_map(TomlValue::as_table)
         .find(|repo| repo.get("id").and_then(TomlValue::as_str) == Some("service"))
         .or_else(|| repos.iter().filter_map(TomlValue::as_table).next())
-        .ok_or_else(|| "basic-delivery manifest has no repository fixture".to_string())?;
+        .ok_or_else(|| "live manifest has no repository fixture".to_string())?;
     let id = repo
         .get("id")
         .and_then(TomlValue::as_str)
@@ -242,7 +240,7 @@ fn repo_fixture(scenario_path: &Path, manifest: &TomlValue) -> Result<RepoFixtur
     let slug = repo
         .get("slug")
         .and_then(TomlValue::as_str)
-        .ok_or_else(|| "basic-delivery repository fixture is missing `slug`".to_string())?
+        .ok_or_else(|| "live repository fixture is missing `slug`".to_string())?
         .to_string();
     let (owner, name) = split_repo_slug(&slug)?;
     let default_branch = repo
@@ -338,12 +336,12 @@ fn intake_fixture(scenario_path: &Path, manifest: &TomlValue) -> Result<IntakeFi
     let title = issue
         .get("title")
         .and_then(TomlValue::as_str)
-        .ok_or_else(|| "basic-delivery intake issue is missing `title`".to_string())?
+        .ok_or_else(|| "live intake issue is missing `title`".to_string())?
         .to_string();
     let body_ref = issue
         .get("body")
         .and_then(TomlValue::as_str)
-        .ok_or_else(|| "basic-delivery intake issue is missing `body`".to_string())?;
+        .ok_or_else(|| "live intake issue is missing `body`".to_string())?;
     let body_path = scenario_path.join(body_ref);
     let body = fs::read_to_string(&body_path)
         .map_err(|error| format!("read intake body {}: {error}", body_path.display()))?;
@@ -354,9 +352,10 @@ fn intake_fixture(scenario_path: &Path, manifest: &TomlValue) -> Result<IntakeFi
             labels
                 .iter()
                 .map(|label| {
-                    label.as_str().map(str::to_string).ok_or_else(|| {
-                        "basic-delivery intake issue labels must be strings".to_string()
-                    })
+                    label
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| "live intake issue labels must be strings".to_string())
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
@@ -472,10 +471,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_checked_in_live_basic_delivery_bundle() {
+    fn loads_checked_in_live_manifest_bundle() {
         let bundle = ScenarioBundle::load(default_basic_delivery_scenario_path())
-            .expect("checked-in basic-delivery scenario bundle loads");
-        assert_eq!(bundle.workflow_name, "basic-delivery");
+            .expect("checked-in live manifest bundle loads");
+        assert_eq!(
+            bundle.execution.convergence,
+            ConvergenceStrategy::SinglePullRequest
+        );
+        assert!(
+            bundle
+                .jig_script_path()
+                .ends_with("jig/basic-delivery.json")
+        );
         assert_eq!(bundle.repo.slug, "acme/service");
         assert_eq!(bundle.repo.default_branch, "main");
         assert_eq!(
@@ -505,16 +512,82 @@ mod tests {
             bundle.repo.ci_source,
             fs::read_to_string(&bundle.repo.ci_seed_path).unwrap()
         );
+        jig_core::ScriptFile::load(bundle.jig_script_path())
+            .expect("scenario-owned Jig script parses");
         bundle
-            .assert_workflow_matches_reference()
+            .validate_workflow()
             .expect("scenario workflow remains canonical");
     }
 
-    fn default_basic_delivery_scenario_path() -> PathBuf {
+    #[test]
+    fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
+        for (name, convergence) in [
+            ("basic-delivery", ConvergenceStrategy::SinglePullRequest),
+            ("codebase-memory-agent", ConvergenceStrategy::CodebaseMemory),
+            (
+                "implementation-pr-handoff",
+                ConvergenceStrategy::ImplementationPrHandoff,
+            ),
+            (
+                "plan-centric-feature-branch",
+                ConvergenceStrategy::PlanFeatureLanding,
+            ),
+        ] {
+            let bundle = ScenarioBundle::load(scenarios_root().join(name))
+                .unwrap_or_else(|error| panic!("load {name}: {error}"));
+            assert_eq!(bundle.execution.convergence, convergence, "{name}");
+            assert!(
+                bundle
+                    .jig_script_path()
+                    .starts_with(scenarios_root().join(name)),
+                "{name} must own its Jig script: {}",
+                bundle.jig_script_path().display()
+            );
+            jig_core::ScriptFile::load(bundle.jig_script_path())
+                .unwrap_or_else(|error| panic!("parse {name} Jig script: {error}"));
+            assert!(
+                bundle
+                    .execution
+                    .steps
+                    .iter()
+                    .any(|step| matches!(step.action, ManifestAction::SeedIssue { .. })),
+                "{name} has a typed issue seed"
+            );
+        }
+    }
+
+    #[test]
+    fn convergence_strategy_is_required_instead_of_inferred_from_bundle_identity() {
+        let path = scenarios_root().join("implementation-pr-handoff/scenario.toml");
+        let mut manifest = temper_scenario_core::load_resolved_manifest_toml(path)
+            .expect("resolved handoff manifest");
+        let wait = manifest
+            .get_mut("steps")
+            .and_then(TomlValue::as_array_mut)
+            .and_then(|steps| {
+                steps.iter_mut().find(|step| {
+                    step.get("action").and_then(TomlValue::as_str)
+                        == Some("workflow.wait_convergence")
+                })
+            })
+            .and_then(TomlValue::as_table_mut)
+            .expect("wait step");
+        wait.remove("strategy");
+
+        let error = ManifestExecutionPlan::from_manifest(&manifest)
+            .expect_err("identity must not supply convergence behavior");
+        assert!(error.contains("strategy is required"), "{error}");
+    }
+
+    fn scenarios_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
             .expect("temper-testing lives under crates/temper-testing")
-            .join("scenarios/basic-delivery")
+            .join("scenarios")
+    }
+
+    fn default_basic_delivery_scenario_path() -> PathBuf {
+        scenarios_root().join("basic-delivery")
     }
 }

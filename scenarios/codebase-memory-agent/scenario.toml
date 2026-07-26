@@ -97,7 +97,7 @@ server = "$step:start-fake-codebase-memory-mcp"
 id = "configure-jig-fake-llm"
 action = "jig.fake_llm"
 role = "engineer"
-script = "codebase-memory-agent"
+script_path = "jig/codebase-memory-agent.json"
 first_tool = "codebase_memory_search_code"
 expected_result = "FAKE_MCP_SEARCH_RESULT"
 expected_output_name = "MEMORY_NOTES.md"
@@ -118,6 +118,7 @@ after = "temper.launch_standalone"
 [[steps]]
 id = "wait-for-convergence"
 action = "workflow.wait_convergence"
+strategy = "codebase-memory"
 until = "engineer PR writes MEMORY_NOTES.md, CI passes, and the source issue closes"
 
 [expect]

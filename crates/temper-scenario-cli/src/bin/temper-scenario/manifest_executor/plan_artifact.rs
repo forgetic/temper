@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use temper_testing::live_basic_delivery::{LiveBasicDeliveryEvidence, LivePlanFeatureEvidence};
+use temper_testing::live_manifest::{LiveManifestEvidence, LivePlanFeatureEvidence};
 
 use crate::run_evidence;
 
@@ -84,7 +84,7 @@ pub(super) fn evidence_lines(plan: &LivePlanFeatureEvidence) -> Vec<String> {
 }
 
 pub(super) fn final_state(
-    evidence: &LiveBasicDeliveryEvidence,
+    evidence: &LiveManifestEvidence,
     plan: &LivePlanFeatureEvidence,
 ) -> run_evidence::FinalStateEvidence {
     run_evidence::FinalStateEvidence {
@@ -136,7 +136,7 @@ pub(super) fn final_state(
 
 fn issue(
     id: &str,
-    issue: &temper_testing::live_basic_delivery::PlanIssueState,
+    issue: &temper_testing::live_manifest::PlanIssueState,
 ) -> run_evidence::IssueStateEvidence {
     run_evidence::IssueStateEvidence {
         number: issue.number,
@@ -149,7 +149,7 @@ fn issue(
 
 fn pull_request(
     id: &str,
-    pull: &temper_testing::live_basic_delivery::PlanPullRequestStateEvidence,
+    pull: &temper_testing::live_manifest::PlanPullRequestStateEvidence,
 ) -> run_evidence::PullRequestStateEvidence {
     run_evidence::PullRequestStateEvidence {
         number: pull.number,
