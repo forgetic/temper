@@ -1,45 +1,32 @@
 // SPDX-License-Identifier: MPL-2.0
 //! CI job listing and lookup for the Forgejo backend.
 //!
-//! Forgejo Actions exposes workflow *runs* and *tasks*. This module adapts that
-//! surface to the portable [`CiJob`] model: it matches runs to a pull request or
-//! commit (see [`crate::ci_match`]), groups a run's tasks into attempts (the
-//! latest attempt wins), and maps each task into a job. Log fetching is
-//! intentionally out of scope; the portable trait only needs structured status.
-//!
-//! These are inherent methods on [`ForgejoForge`] matching the
-//! [`temper_forge_model::Forge`] CI signatures; the trait is assembled once every
-//! phase's methods exist. See `docs/reference/forgejo-backend.md`.
-//!
-//! The orchestration (REST-then-web-UI fallback) lives here; the REST list/path
-//! helpers are in [`fetch`] and the run/task → [`CiJob`] mapping and sorting in
-//! [`jobs`].
+//! Forgejo 16 exposes workflow runs and each run's jobs through token-authenticated
+//! JSON APIs. Runs are first matched strictly to the requested pull/commit; every
+//! matched run is then expanded through
+//! `GET /repos/{owner}/{repo}/actions/runs/{provider_run_id}/jobs`. Provider run,
+//! job, attempt, and task coordinates form the opaque identity. No repository-wide
+//! tasks, HTML, login, live-view, or response-order fallback participates.
 
 mod fetch;
 mod jobs;
 
-use crate::ci_match::{Target, match_run, run_index, sort_runs};
+use crate::ci_match::{Target, match_run, sort_runs};
 use crate::ids::{
-    CiJobCoord, RepoCoord, format_repository_id, parse_ci_job_id, parse_pull_request_id,
-    parse_repository_id,
+    format_repository_id, parse_ci_job_id, parse_pull_request_id, parse_repository_id,
 };
-use crate::types::{ActionRunDto, ActionTaskDto};
+use crate::types::ActionRunDto;
 use crate::{ForgejoForge, HttpClient};
 use temper_forge_model::{
     CiJob, CiJobId, CiJobListing, CiJobQuery, CiRetryOutcome, CiRetryRejection, CiRetryRequest,
-    ForgeError, ForgeResult, RepositoryId,
+    ForgeResult, RepositoryId,
 };
 
 pub(crate) use jobs::map_status_evidence;
-use jobs::{latest_attempt, sort_jobs, task_to_job};
+use jobs::{job_to_ci_job, sort_jobs};
 
 impl<C: HttpClient> ForgejoForge<C> {
     /// Lists CI jobs for a repository, filtered by [`CiJobQuery`].
-    ///
-    /// When `query.pull_request_id` is set, the pull request is fetched first to
-    /// learn its head SHA/ref before matching runs. Runs are matched to the
-    /// query target, expanded to their latest attempt's tasks, mapped to jobs,
-    /// then filtered by status and sorted.
     pub async fn list_ci_jobs(
         &self,
         repo_id: &RepositoryId,
@@ -51,7 +38,8 @@ impl<C: HttpClient> ForgejoForge<C> {
             .into_jobs())
     }
 
-    /// Lists CI jobs while preserving matching run presence before task assignment.
+    /// Lists CI jobs while preserving matching provider-run presence before job
+    /// assignment.
     pub async fn list_ci_jobs_with_presence(
         &self,
         repo_id: &RepositoryId,
@@ -68,27 +56,17 @@ impl<C: HttpClient> ForgejoForge<C> {
                 target.pr_head_ref = head.1;
             }
         }
-        if let Some(commit) = query.commit_sha.as_deref() {
-            if !commit.is_empty() {
-                target.commit_sha = Some(commit.to_string());
-            }
+        if let Some(commit) = query
+            .commit_sha
+            .as_deref()
+            .filter(|commit| !commit.is_empty())
+        {
+            target.commit_sha = Some(commit.to_string());
         }
 
-        // Prefer the REST Actions endpoint (richer, used by newer servers). On a
-        // server that does not serve it (Forgejo 7.0.x → 404), or when REST is
-        // available but lists no matching run, fall back to the password/web-UI
-        // read path when credentials are configured (ADR 0019).
-        let runs: Vec<ActionRunDto> = match self
-            .try_fetch_actions_array("list Forgejo Actions runs", &fetch::runs_path(&repo))
-            .await?
-        {
-            Some(runs) => runs,
-            None => {
-                return self
-                    .list_ci_jobs_via_web_ui(repo_id, &repo, &target, &query)
-                    .await;
-            }
-        };
+        let runs: Vec<ActionRunDto> = self
+            .fetch_actions_runs("list Forgejo Actions runs", &fetch::runs_path(&repo))
+            .await?;
         let mut matched: Vec<ActionRunDto> = if target.has_filter() {
             runs.into_iter()
                 .filter(|run| match_run(run, &target).is_some())
@@ -97,34 +75,18 @@ impl<C: HttpClient> ForgejoForge<C> {
             runs
         };
         if matched.is_empty() {
-            // REST works but found no run with provider evidence for this
-            // target. Try the web UI when configured; otherwise the truthful
-            // result is an empty (still-pending) read, not a backend failure.
-            if self.config().web_ui.is_some() {
-                return self
-                    .list_ci_jobs_via_web_ui(repo_id, &repo, &target, &query)
-                    .await;
-            }
             return Ok(CiJobListing::new(Vec::new(), false));
         }
         sort_runs(&mut matched);
 
-        let tasks: Vec<ActionTaskDto> = self
-            .fetch_actions_array("list Forgejo Actions tasks", &fetch::tasks_path(&repo))
-            .await?;
         let mut jobs = Vec::new();
         for run in &matched {
-            let attempt = latest_attempt(&tasks, run_index(run));
-            for (index, task) in attempt.tasks.into_iter().enumerate() {
-                if let Some(job) = task_to_job(
-                    &repo,
-                    repo_id,
-                    run,
-                    &task,
-                    index as u64,
-                    attempt.ordinal,
-                    &target,
-                ) {
+            // `run.id` is the provider database id required by Forgejo 16. The
+            // display coordinates (`index_in_repo`/`run_number`) are never used
+            // in the jobs route or opaque identity.
+            let dtos = self.fetch_run_jobs(&repo, run.id).await?;
+            for dto in dtos {
+                if let Some(job) = job_to_ci_job(&repo, repo_id, run, &dto, &target) {
                     jobs.push(job);
                 }
             }
@@ -137,68 +99,9 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(CiJobListing::new(jobs, true))
     }
 
-    /// Reads CI jobs through the web UI, applying the query's status/sort.
-    ///
-    /// When no web-UI credentials are configured this keeps the existing hard
-    /// `Backend` error rather than fabricating a verdict (matching the REST path
-    /// when Actions is unavailable).
-    async fn list_ci_jobs_via_web_ui(
-        &self,
-        repo_id: &RepositoryId,
-        repo: &RepoCoord,
-        target: &Target,
-        query: &CiJobQuery,
-    ) -> ForgeResult<CiJobListing> {
-        let Some(credentials) = self.config().web_ui.as_ref() else {
-            return Err(ForgeError::Backend(
-                "list Forgejo Actions runs: Forgejo Actions unavailable over REST and no \
-                 web-UI credentials configured for the CI read fallback"
-                    .to_string(),
-            ));
-        };
-
-        // Idle-read gate (ADR 0019 cost mitigation): when this target's CI was
-        // last read as terminal at the same head SHA, reuse it and skip the
-        // expensive login+scrape. A non-terminal or changed-SHA read misses and
-        // falls through to the live read below. The raw (pre status-filter) jobs
-        // are what is cached, so the query's status filter/sort still applies.
-        let cache_key = crate::ci_cache::CiReadKey::from_target(repo_id, target);
-        if let Some(key) = cache_key.as_ref() {
-            if let Some(cached) = self.ci_read_cache().get_terminal(key) {
-                let mut jobs = cached;
-                if let Some(status) = query.status {
-                    jobs.retain(|job| job.status == status);
-                }
-                sort_jobs(&mut jobs, query);
-                return Ok(CiJobListing::new(jobs, true));
-            }
-        }
-
-        log_web_ui_ci_read(
-            self.config().ci_diagnostics,
-            repo,
-            target,
-            "read_ci_jobs_via_web_ui",
-        );
-        let raw = crate::ci_ui::read_ci_jobs(self, credentials, repo, repo_id, target).await?;
-        let matching_ci_present = raw.matching_ci_present();
-        if let Some(key) = cache_key {
-            self.ci_read_cache().store(key, raw.jobs().to_vec());
-        }
-        let mut jobs = raw.into_jobs();
-        if let Some(status) = query.status {
-            jobs.retain(|job| job.status == status);
-        }
-        sort_jobs(&mut jobs, query);
-        Ok(CiJobListing::new(jobs, matching_ci_present))
-    }
-
     /// Reports exact-attempt retry as unsupported for Forgejo.
     ///
-    /// Forgejo Actions rerun endpoints and attempt semantics vary by release,
-    /// while the supported web-UI surface is read-only and version-sensitive.
-    /// We still validate repository/PR coordinates locally, then fail closed;
-    /// no source mutation or guessed HTTP endpoint is used.
+    /// No source mutation or guessed HTTP endpoint is used.
     pub async fn retry_ci_attempt(&self, request: CiRetryRequest) -> ForgeResult<CiRetryOutcome> {
         let repo = parse_repository_id(request.repo_id())?;
         let (pull_repo, _) = parse_pull_request_id(request.pull_request_id())?;
@@ -210,103 +113,30 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(CiRetryOutcome::Unsupported)
     }
 
-    /// Looks up a single CI job through the web-UI read path (REST fallback).
-    async fn get_ci_job_via_web_ui(
-        &self,
-        coord: &CiJobCoord,
-        repo_id: &RepositoryId,
-    ) -> ForgeResult<Option<CiJob>> {
-        let Some(credentials) = self.config().web_ui.as_ref() else {
-            return Err(ForgeError::Backend(
-                "list Forgejo Actions runs: Forgejo Actions unavailable over REST and no \
-                 web-UI credentials configured for the CI read fallback"
-                    .to_string(),
-            ));
-        };
-        log_web_ui_ci_read(
-            self.config().ci_diagnostics,
-            &coord.repo,
-            &Target::default(),
-            "read_ci_job_via_web_ui",
-        );
-        crate::ci_ui::read_ci_job(self, credentials, coord, repo_id).await
-    }
-
-    /// Looks up a single CI job by its encoded id.
+    /// Looks up one job by its provider-backed opaque identity.
     ///
-    /// The repository coordinate is parsed out of the id (there is no repo
-    /// parameter), so the caller needs only the opaque [`CiJobId`].
+    /// The run list supplies the same ownership/timestamp/URL evidence as list;
+    /// the exact provider run is then read through its per-run jobs endpoint.
     pub async fn get_ci_job(&self, id: &CiJobId) -> ForgeResult<Option<CiJob>> {
         let coord = parse_ci_job_id(id)?;
         let repo_id = format_repository_id(&coord.repo);
-
-        let runs: Vec<ActionRunDto> = match self
-            .try_fetch_actions_array("list Forgejo Actions runs", &fetch::runs_path(&coord.repo))
-            .await?
-        {
-            Some(runs) => runs,
-            None => return self.get_ci_job_via_web_ui(&coord, &repo_id).await,
-        };
-        let Some(run) = runs.into_iter().find(|run| run_index(run) == coord.run) else {
+        let runs: Vec<ActionRunDto> = self
+            .fetch_actions_runs("list Forgejo Actions runs", &fetch::runs_path(&coord.repo))
+            .await?;
+        let Some(run) = runs.into_iter().find(|run| run.id == coord.run_id) else {
             return Ok(None);
         };
 
-        let tasks: Vec<ActionTaskDto> = self
-            .fetch_actions_array(
-                "list Forgejo Actions tasks",
-                &fetch::tasks_path(&coord.repo),
-            )
-            .await?;
-        let latest = latest_attempt(&tasks, coord.run);
+        let jobs = self.fetch_run_jobs(&coord.repo, run.id).await?;
+        let Some(job) = jobs.into_iter().find(|job| {
+            job.id == coord.job_id
+                && job.run_id == coord.run_id
+                && job.attempt == coord.attempt
+                && job.task_id == coord.task_id
+        }) else {
+            return Ok(None);
+        };
         let target = Target::default();
-
-        // Prefer an exact index + task-id match; fall back to the task id alone
-        // in case the attempt enumeration shifted between calls.
-        if let Some(task) = latest.tasks.get(coord.job_index as usize) {
-            if task.id == coord.task_id {
-                return Ok(task_to_job(
-                    &coord.repo,
-                    &repo_id,
-                    &run,
-                    task,
-                    coord.job_index,
-                    latest.ordinal,
-                    &target,
-                ));
-            }
-        }
-        for (index, task) in latest.tasks.iter().enumerate() {
-            if task.id == coord.task_id {
-                return Ok(task_to_job(
-                    &coord.repo,
-                    &repo_id,
-                    &run,
-                    task,
-                    index as u64,
-                    latest.ordinal,
-                    &target,
-                ));
-            }
-        }
-        Ok(None)
+        Ok(job_to_ci_job(&coord.repo, &repo_id, &run, &job, &target))
     }
-}
-
-fn log_web_ui_ci_read(diagnostics: bool, repo: &RepoCoord, target: &Target, operation: &str) {
-    if !diagnostics {
-        return;
-    }
-    tracing::debug!(
-        target: "temper_forge_forgejo",
-        operation = %operation,
-        repo_owner = %repo.owner,
-        repo_name = %repo.name,
-        pr = %target
-            .pr_number
-            .map(|number| number.to_string())
-            .unwrap_or_else(|| "-".to_string()),
-        head_ref = %target.pr_head_ref.as_deref().unwrap_or("-"),
-        commit = %target.commit_sha.as_deref().unwrap_or("-"),
-        "ci read"
-    );
 }

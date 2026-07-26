@@ -12,7 +12,7 @@
 //! - comment: `forgejo:{owner}/{repo}:comment:{id}`
 //! - review: `forgejo:{owner}/{repo}:review:{id}`
 //! - label: `forgejo:{owner}/{repo}:label:{id}`
-//! - CI job: `forgejo:{owner}/{repo}:actions:{run}:{job_index}:{task_id}`
+//! - CI job: `forgejo:{owner}/{repo}:actions:{run_id}:{job_id}:{attempt}:{task_id}`
 //! - user: the Forgejo login, unprefixed
 //!
 //! Owner and repository names cannot contain `:` or `/` on Forgejo, so splitting
@@ -51,8 +51,9 @@ impl RepoCoord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CiJobCoord {
     pub repo: RepoCoord,
-    pub run: u64,
-    pub job_index: u64,
+    pub run_id: u64,
+    pub job_id: u64,
+    pub attempt: u64,
     pub task_id: u64,
 }
 
@@ -168,10 +169,11 @@ pub(crate) fn parse_label_id(id: &LabelId) -> ForgeResult<(RepoCoord, u64)> {
 
 pub(crate) fn format_ci_job_id(coord: &CiJobCoord) -> CiJobId {
     CiJobId::new(format!(
-        "{SCHEME}:{}:actions:{}:{}:{}",
+        "{SCHEME}:{}:actions:{}:{}:{}:{}",
         coord.repo.path_segment(),
-        coord.run,
-        coord.job_index,
+        coord.run_id,
+        coord.job_id,
+        coord.attempt,
         coord.task_id
     ))
 }
@@ -179,24 +181,22 @@ pub(crate) fn format_ci_job_id(coord: &CiJobCoord) -> CiJobId {
 pub(crate) fn parse_ci_job_id(id: &CiJobId) -> ForgeResult<CiJobCoord> {
     let raw = id.as_str();
     let parts: Vec<&str> = raw.split(':').collect();
-    if parts.len() != 6 || parts[0] != SCHEME || parts[2] != "actions" {
+    if parts.len() != 7 || parts[0] != SCHEME || parts[2] != "actions" {
         return Err(invalid_id("ci job", raw));
     }
     let repo = parse_repo_segment(parts[1], "ci job", raw)?;
-    let run = parts[3]
-        .parse::<u64>()
-        .map_err(|_| invalid_id("ci job", raw))?;
-    let job_index = parts[4]
-        .parse::<u64>()
-        .map_err(|_| invalid_id("ci job", raw))?;
-    let task_id = parts[5]
-        .parse::<u64>()
-        .map_err(|_| invalid_id("ci job", raw))?;
+    let parse_identity = |part: &str| part.parse::<u64>().map_err(|_| invalid_id("ci job", raw));
+    let run_id = parse_identity(parts[3])?;
+    let job_id = parse_identity(parts[4])?;
+    if run_id == 0 || job_id == 0 {
+        return Err(invalid_id("ci job", raw));
+    }
     Ok(CiJobCoord {
         repo,
-        run,
-        job_index,
-        task_id,
+        run_id,
+        job_id,
+        attempt: parse_identity(parts[5])?,
+        task_id: parse_identity(parts[6])?,
     })
 }
 
@@ -262,13 +262,30 @@ mod tests {
     fn ci_job_id_round_trips() {
         let coord = CiJobCoord {
             repo: repo(),
-            run: 12,
-            job_index: 1,
+            run_id: 900,
+            job_id: 31,
+            attempt: 2,
             task_id: 345,
         };
         let id = format_ci_job_id(&coord);
-        assert_eq!(id.as_str(), "forgejo:acme/widgets:actions:12:1:345");
+        assert_eq!(id.as_str(), "forgejo:acme/widgets:actions:900:31:2:345");
         assert_eq!(parse_ci_job_id(&id).unwrap(), coord);
+    }
+
+    #[test]
+    fn ci_job_id_preserves_unassigned_provider_values() {
+        let coord = CiJobCoord {
+            repo: repo(),
+            run_id: 900,
+            job_id: 31,
+            attempt: 0,
+            task_id: 0,
+        };
+        let id = format_ci_job_id(&coord);
+        assert_eq!(id.as_str(), "forgejo:acme/widgets:actions:900:31:0:0");
+        assert_eq!(parse_ci_job_id(&id).unwrap(), coord);
+        assert!(parse_ci_job_id(&CiJobId::new("forgejo:acme/widgets:actions:0:31:0:0")).is_err());
+        assert!(parse_ci_job_id(&CiJobId::new("forgejo:acme/widgets:actions:900:0:0:0")).is_err());
     }
 
     #[test]

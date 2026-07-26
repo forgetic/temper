@@ -1,4 +1,4 @@
-//! Forgejo Actions DTOs (workflow runs and their tasks).
+//! Forgejo Actions DTOs for workflow runs and per-run jobs.
 
 use crate::ci_time::deserialize_flexible_opt_datetime;
 use chrono::{DateTime, Utc};
@@ -19,6 +19,7 @@ pub(crate) struct ActionRunDto {
     #[serde(default)]
     pub run_number: u64,
     #[serde(default, alias = "run_attempt", alias = "attempt_number")]
+    #[allow(dead_code)]
     pub attempt: u64,
     #[serde(default)]
     pub status: String,
@@ -55,49 +56,19 @@ pub(crate) struct ActionRunDto {
     pub updated: Option<DateTime<Utc>>,
 }
 
-/// Forgejo Actions task (a single job within a run).
+/// Forgejo 16 Actions job returned by a provider-run jobs endpoint.
 ///
-/// Returned by `GET /repos/{owner}/{repo}/actions/tasks` (also wrapped under a
-/// `workflow_runs` array). `run_number` ties a task to its run's repo-stable
-/// index. Timestamps use the same tolerant decoding as [`ActionRunDto`].
-#[derive(Clone, Debug, Default, Deserialize)]
-pub(crate) struct ActionTaskDto {
-    #[serde(default)]
+/// All six fields are required by the v16 contract. In particular, none of the
+/// identity coordinates default to zero: a missing field must fail decoding
+/// rather than silently turning response order into identity.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct ActionJobDto {
     pub id: u64,
-    #[serde(default)]
-    pub run_number: u64,
-    #[serde(default, alias = "run_attempt", alias = "attempt_number")]
+    pub run_id: u64,
     pub attempt: u64,
-    #[serde(default)]
+    pub task_id: u64,
     pub name: String,
-    #[serde(default)]
     pub status: String,
-    #[serde(default)]
-    pub conclusion: String,
-    #[serde(default, alias = "failure_reason", alias = "status_reason")]
-    pub reason: String,
-    #[serde(default)]
-    pub commit_sha: String,
-    #[serde(default)]
-    pub head_sha: String,
-    #[serde(default)]
-    pub url: String,
-    #[serde(default)]
-    pub html_url: String,
-    #[serde(default, deserialize_with = "deserialize_flexible_opt_datetime")]
-    pub created_at: Option<DateTime<Utc>>,
-    #[serde(default, deserialize_with = "deserialize_flexible_opt_datetime")]
-    pub created: Option<DateTime<Utc>>,
-    #[serde(default, deserialize_with = "deserialize_flexible_opt_datetime")]
-    pub updated_at: Option<DateTime<Utc>>,
-    #[serde(default, deserialize_with = "deserialize_flexible_opt_datetime")]
-    pub updated: Option<DateTime<Utc>>,
-    #[serde(default, deserialize_with = "deserialize_flexible_opt_datetime")]
-    pub run_started_at: Option<DateTime<Utc>>,
-    #[serde(default, deserialize_with = "deserialize_flexible_opt_datetime")]
-    pub started: Option<DateTime<Utc>>,
-    #[serde(default, deserialize_with = "deserialize_flexible_opt_datetime")]
-    pub stopped: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]
@@ -108,6 +79,7 @@ mod tests {
     fn deserializes_action_run_with_string_and_integer_timestamps() {
         let run: ActionRunDto = serde_json::from_str(
             r##"{
+                "id": 900,
                 "index_in_repo": 10,
                 "run_number": 10,
                 "run_attempt": 2,
@@ -124,6 +96,7 @@ mod tests {
             }"##,
         )
         .unwrap();
+        assert_eq!(run.id, 900);
         assert_eq!(run.index_in_repo, 10);
         assert_eq!(run.attempt, 2);
         assert_eq!(run.conclusion, "runner_lost");
@@ -135,24 +108,24 @@ mod tests {
     }
 
     #[test]
-    fn deserializes_action_task_with_defaults() {
-        let task: ActionTaskDto = serde_json::from_str(
-            r#"{
-                "id": 3,
-                "run_number": 10,
-                "name": "build",
-                "status": "success",
-                "head_sha": "abcdef1234567",
-                "created_at": "2024-01-02T03:04:05Z"
-            }"#,
+    fn per_run_job_requires_the_v16_identity_shape() {
+        let response: Vec<ActionJobDto> = serde_json::from_str(
+            r#"[{"id":31,"run_id":900,"attempt":2,"task_id":44,
+                "name":"build","status":"success"}]"#,
         )
         .unwrap();
-        assert_eq!(task.id, 3);
-        assert_eq!(task.run_number, 10);
-        assert_eq!(task.name, "build");
-        assert_eq!(task.commit_sha, "");
-        assert_eq!(task.attempt, 0);
-        assert!(task.created_at.is_some());
-        assert_eq!(task.stopped, None);
+        assert_eq!(response[0].id, 31);
+        assert_eq!(response[0].run_id, 900);
+        assert_eq!(response[0].attempt, 2);
+        assert_eq!(response[0].task_id, 44);
+
+        assert!(serde_json::from_str::<Vec<ActionJobDto>>(r#"{}"#).is_err());
+        assert!(serde_json::from_str::<Vec<ActionJobDto>>(r#"{"jobs":[]}"#).is_err());
+        assert!(
+            serde_json::from_str::<Vec<ActionJobDto>>(
+                r#"[{"id":31,"run_id":900,"attempt":2,"name":"build","status":"success"}]"#
+            )
+            .is_err()
+        );
     }
 }

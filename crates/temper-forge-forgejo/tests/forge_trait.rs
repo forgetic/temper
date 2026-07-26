@@ -35,7 +35,7 @@ fn ci_retry_fails_closed_without_guessing_a_forgejo_endpoint() {
     let backend = forge(client.clone());
     let now = chrono::DateTime::UNIX_EPOCH;
     let job = CiJob {
-        id: CiJobId::new("forgejo:acme/widgets:actions:12:0:300"),
+        id: CiJobId::new("forgejo:acme/widgets:actions:12:300:2:300"),
         repo_id: repo_id(),
         pull_request_id: Some(pull_id(5)),
         commit_sha: "abc123".into(),

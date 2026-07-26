@@ -8,7 +8,7 @@
 //!
 //! The DTOs are grouped into submodules by domain ([`items`] for the shared
 //! user/repo/label/comment building blocks, [`issues`] for issue rows,
-//! [`pulls`] for pull requests and reviews, [`actions`] for CI runs/tasks) and
+//! [`pulls`] for pull requests and reviews, [`actions`] for CI runs/jobs) and
 //! re-exported here so callers use a single `crate::types::*` surface.
 
 mod actions;
@@ -18,7 +18,7 @@ mod pulls;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-pub(crate) use actions::{ActionRunDto, ActionTaskDto};
+pub(crate) use actions::{ActionJobDto, ActionRunDto};
 pub(crate) use issues::{DependencyRefDto, IssueDto, PullRequestMarkerDto};
 pub(crate) use pulls::{PrBranchDto, PrRepoDto, PullRequestDto, ReviewDto};
 
