@@ -393,8 +393,8 @@ fn correlation_lookup_uses_labelled_state_queries_and_client_side_body_filtering
     );
     for request in issue_lists {
         assert!(has_query(request, "labels", "code"));
-        // Forgejo 7.0.x has no reliable exact body search. The backend keeps
-        // the provider request narrowed by state+labels and applies the portable
+        // The backend does not rely on provider exact body search. It keeps
+        // the request narrowed by state+labels and applies the portable
         // body_contains filter client-side.
         assert!(query_value(request, "q").is_none());
         assert!(query_value(request, "body").is_none());
