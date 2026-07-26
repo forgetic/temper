@@ -1,11 +1,11 @@
-//! Mapping Forgejo runs/tasks into portable [`CiJob`]s, plus attempt grouping
-//! and the query-driven job sort.
+//! Mapping Forgejo provider runs/jobs into portable [`CiJob`]s and applying
+//! query-driven deterministic sorting.
 
 use crate::ci_match::{
-    Target, payload_pr_head_sha, run_created, run_index, run_pr_number, run_updated, sha_matches,
+    Target, payload_pr_head_sha, run_created, run_pr_number, run_updated, sha_matches,
 };
 use crate::ids::{CiJobCoord, RepoCoord, format_ci_job_id, format_pull_request_id};
-use crate::types::{ActionRunDto, ActionTaskDto};
+use crate::types::{ActionJobDto, ActionRunDto};
 use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
 use temper_forge_model::{
@@ -13,54 +13,7 @@ use temper_forge_model::{
     RepositoryId, SortDirection, sanitize_ci_provider_evidence,
 };
 
-/// Latest task set plus its one-based attempt ordinal.
-pub(super) struct LatestAttempt {
-    pub(super) tasks: Vec<ActionTaskDto>,
-    pub(super) ordinal: u64,
-}
-
-/// Returns the latest attempt's tasks for a run, ordered by canonical task id.
-///
-/// Tasks are tied to a run by `run_number == run_index`, sorted by monotonic id,
-/// then split into attempts: a repeated task name starts a new attempt.
-pub(super) fn latest_attempt(tasks: &[ActionTaskDto], run: u64) -> LatestAttempt {
-    let run_tasks: Vec<ActionTaskDto> = tasks
-        .iter()
-        .filter(|task| task.run_number == run)
-        .cloned()
-        .collect();
-    let mut attempts = group_attempts(run_tasks);
-    let ordinal = attempts.len() as u64;
-    LatestAttempt {
-        tasks: attempts.pop().unwrap_or_default(),
-        ordinal,
-    }
-}
-
-/// Groups a run's tasks into attempts; a repeated task name starts a new one.
-fn group_attempts(mut tasks: Vec<ActionTaskDto>) -> Vec<Vec<ActionTaskDto>> {
-    tasks.sort_by_key(|task| task.id);
-    let mut attempts: Vec<Vec<ActionTaskDto>> = Vec::new();
-    let mut current: Vec<ActionTaskDto> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-    for task in tasks {
-        if seen.contains(&task.name) {
-            attempts.push(std::mem::take(&mut current));
-            seen.clear();
-        }
-        seen.push(task.name.clone());
-        current.push(task);
-    }
-    if !current.is_empty() {
-        attempts.push(current);
-    }
-    attempts
-}
-
 /// Maps a Forgejo status string to a portable status/conclusion pair.
-///
-/// Shared with the web-UI CI read path ([`crate::ci_ui`]) so both surfaces map
-/// the same provider status vocabulary identically.
 #[cfg(test)]
 pub(crate) fn map_status(status: &str) -> (CiJobStatus, Option<CiJobConclusion>) {
     map_status_evidence(status, "", "", "", "", "")
@@ -68,12 +21,11 @@ pub(crate) fn map_status(status: &str) -> (CiJobStatus, Option<CiJobConclusion>)
 
 /// Maps separate job and run state/conclusion/reason fields.
 ///
-/// Job-specific terminal evidence wins. An explicit job conclusion is trusted,
-/// but Forgejo's bare `failure` status is ambiguous: the provider also uses it
-/// when execution infrastructure disappears. A terminal run makes an absent or
-/// unrecognized job state terminal too, but a run-level ordinary failure is
-/// likewise projected as `Unknown`. Explicit infrastructure categories can be
-/// retained without guessing from provider prose or quiet logs.
+/// Forgejo 16 jobs expose only `status`; they do not expose a detailed job
+/// conclusion or reason. A status-only `failure` therefore remains terminal
+/// `Unknown`, preserving the interrupted-run recovery behavior. Aggregate run
+/// evidence may terminalize a generic/absent job state but cannot turn an
+/// ambiguous failure into ordinary source/test failure.
 pub(crate) fn map_status_evidence(
     status: &str,
     conclusion: &str,
@@ -120,8 +72,7 @@ pub(crate) fn map_status_evidence(
         );
     }
 
-    // Forgejo has accumulated several provider spellings across versions. An
-    // unrecognized, non-terminal value is conservatively still waiting.
+    // An unrecognized, non-terminal value is conservatively still waiting.
     (CiJobStatus::Queued, None)
 }
 
@@ -139,29 +90,21 @@ fn category_from_evidence(status: &str, conclusion: &str, reason: &str) -> Optio
         )
     });
     match primary {
-        // A broad explicit conclusion plus a machine-readable terminal reason
-        // can retain the provider's more specific category. Arbitrary human
-        // prose never enters this map.
         Some(CiJobConclusion::Failure | CiJobConclusion::Unknown) if explicit_conclusion => {
             specific_reason.or(primary)
         }
-        // A status-only failure is not ordinary source/test-failure evidence.
-        // Forgejo used this exact payload when run #591 lost its runner, so it
-        // must enter recovery rather than writable repair.
+        // A bare failure is not ordinary source/test-failure evidence. Forgejo
+        // used this exact shape when run #591 lost its runner.
         Some(CiJobConclusion::Failure | CiJobConclusion::Unknown) => {
             specific_reason.or(Some(CiJobConclusion::Unknown))
         }
         Some(_) => primary,
-        // An unrecognized explicit conclusion does not fall back to status.
-        // Only a recognized, specific machine reason may refine it.
         None => specific_reason,
     }
 }
 
 fn conservative_parent_category(category: Option<CiJobConclusion>) -> CiJobConclusion {
     match category {
-        // A run-level failure is aggregate evidence only. It does not say which
-        // job, if any, supplied ordinary source/test-failure evidence.
         Some(CiJobConclusion::Failure) | None => CiJobConclusion::Unknown,
         Some(category) => category,
     }
@@ -192,103 +135,72 @@ fn normalize(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
-/// Builds a portable job from a run/task pair at a given attempt index.
-pub(super) fn task_to_job(
+/// Builds a portable job from a strictly validated provider run/job pair.
+///
+/// Commit, pull, timestamp, and URL evidence comes only from `run`. The query
+/// target is used solely to re-check explicit commit ownership; its values are
+/// never copied into the returned job.
+pub(super) fn job_to_ci_job(
     repo: &RepoCoord,
     repo_id: &RepositoryId,
     run: &ActionRunDto,
-    task: &ActionTaskDto,
-    job_index: u64,
-    attempt_ordinal: u64,
+    job: &ActionJobDto,
     target: &Target,
 ) -> Option<CiJob> {
     let (status, conclusion) = map_status_evidence(
-        &task.status,
-        &task.conclusion,
-        &task.reason,
+        &job.status,
+        "",
+        "",
         &run.status,
         &run.conclusion,
         &run.reason,
     );
-    let commit_sha = provider_commit_sha(task, run, target)?;
+    let commit_sha = provider_commit_sha(run, target)?;
+    let pull_request_id: Option<PullRequestId> =
+        run_pr_number(run).map(|number| format_pull_request_id(repo, ItemNumber::new(number)));
+    let url = first_non_empty(&[&run.html_url, &run.url]);
 
-    let pull_request_id: Option<PullRequestId> = target.pr_id.clone().or_else(|| {
-        run_pr_number(run).map(|number| format_pull_request_id(repo, ItemNumber::new(number)))
-    });
-
-    let name = if task.name.is_empty() {
-        format!("job-{job_index}")
-    } else {
-        task.name.clone()
-    };
-    let url = first_non_empty(&[&task.html_url, &task.url, &run.html_url, &run.url]);
-
-    let created_at = task
-        .created_at
-        .or(task.created)
-        .or_else(|| run_created(run))
-        .unwrap_or_else(epoch);
-    let updated_at = task
-        .updated_at
-        .or(task.updated)
-        .or_else(|| run_updated(run))
-        .unwrap_or(created_at);
-    let started_at = task.run_started_at.or(task.started);
-    let completed_at = task
-        .stopped
-        .or_else(|| (status == CiJobStatus::Completed).then_some(updated_at));
-
-    let coord = CiJobCoord {
-        repo: repo.clone(),
-        run: run_index(run),
-        job_index,
-        task_id: task.id,
-    };
+    let created_at = run_created(run).unwrap_or_else(epoch);
+    let updated_at = run_updated(run).unwrap_or(created_at);
+    let completed_at = (status == CiJobStatus::Completed).then_some(updated_at);
     let provider_conclusion = (status == CiJobStatus::Completed)
-        .then(|| terminal_evidence(task, run))
+        .then(|| terminal_evidence(job, run))
         .flatten();
     let provider_reason = (status == CiJobStatus::Completed)
-        .then(|| first_evidence(&[&task.reason, &run.reason]))
+        .then(|| sanitize_ci_provider_evidence(&run.reason))
         .flatten();
-    let provider_run = if run.id > 0 { run.id } else { run_index(run) };
-    let provider_attempt = [task.attempt, run.attempt, attempt_ordinal]
-        .into_iter()
-        .find(|value| *value > 0);
 
     Some(CiJob {
-        id: format_ci_job_id(&coord),
+        id: format_ci_job_id(&CiJobCoord {
+            repo: repo.clone(),
+            run_id: run.id,
+            job_id: job.id,
+            attempt: job.attempt,
+            task_id: job.task_id,
+        }),
         repo_id: repo_id.clone(),
         pull_request_id,
         commit_sha,
-        name,
+        name: job.name.clone(),
         status,
         conclusion,
         provider_conclusion,
         provider_reason,
-        run_id: (provider_run > 0).then(|| provider_run.to_string()),
-        attempt: provider_attempt.map(|attempt| attempt.to_string()),
+        run_id: Some(run.id.to_string()),
+        attempt: Some(job.attempt.to_string()),
         url,
         created_at,
-        started_at,
+        started_at: None,
         completed_at,
         updated_at,
     })
 }
 
-fn terminal_evidence(task: &ActionTaskDto, run: &ActionRunDto) -> Option<String> {
-    let task_status = (!matches!(
-        normalize(&task.status).as_str(),
-        "completed" | "complete" | "done" | "finished"
-    ))
-    .then_some(task.status.as_str())
-    .unwrap_or_default();
-    first_evidence(&[
-        &task.conclusion,
-        task_status,
-        &run.conclusion,
-        &run.status,
-        &task.status,
-    ])
+fn terminal_evidence(job: &ActionJobDto, run: &ActionRunDto) -> Option<String> {
+    let job_status = (!generic_terminal(&normalize(&job.status)))
+        .then_some(job.status.as_str())
+        .unwrap_or_default();
+    first_evidence(&[job_status, &run.conclusion, &run.status, &job.status])
 }
 
 fn first_evidence(values: &[&str]) -> Option<String> {
@@ -297,20 +209,10 @@ fn first_evidence(values: &[&str]) -> Option<String> {
         .find_map(|value| sanitize_ci_provider_evidence(value))
 }
 
-/// Selects provider-supplied commit evidence for a mapped task.
-///
-/// Task fields are preferred for PR-only diagnostics. With an explicit commit,
-/// any task/run/payload SHA may prove ownership, but one must safely match the
-/// query; target values are never copied into a job as synthetic evidence.
-fn provider_commit_sha(
-    task: &ActionTaskDto,
-    run: &ActionRunDto,
-    target: &Target,
-) -> Option<String> {
+/// Selects commit evidence from the already-matched provider run.
+fn provider_commit_sha(run: &ActionRunDto, target: &Target) -> Option<String> {
     let payload_sha = payload_pr_head_sha(run);
     let candidates = [
-        task.commit_sha.as_str(),
-        task.head_sha.as_str(),
         run.commit_sha.as_str(),
         run.head_sha.as_str(),
         payload_sha.as_deref().unwrap_or_default(),
@@ -331,12 +233,11 @@ fn first_non_empty(values: &[&str]) -> Option<String> {
         .map(|value| value.to_string())
 }
 
-/// The unix epoch, used as a deterministic fallback for absent timestamps.
 fn epoch() -> DateTime<Utc> {
     DateTime::<Utc>::from_timestamp(0, 0).expect("unix epoch is a valid timestamp")
 }
 
-/// Sorts jobs by the requested order, mirroring the reference backends.
+/// Sorts jobs by the requested order, then stable provider-backed opaque id.
 pub(super) fn sort_jobs(jobs: &mut [CiJob], query: &CiJobQuery) {
     jobs.sort_by(|left, right| compare_jobs(left, right, query));
 }
@@ -365,43 +266,6 @@ fn compare_jobs(left: &CiJob, right: &CiJob, query: &CiJobQuery) -> Ordering {
 mod tests {
     use super::*;
 
-    fn task(id: u64, run_number: u64, name: &str, status: &str) -> ActionTaskDto {
-        ActionTaskDto {
-            id,
-            run_number,
-            name: name.to_string(),
-            status: status.to_string(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn group_attempts_splits_on_repeated_name() {
-        let tasks = vec![
-            task(1, 1, "build", "success"),
-            task(2, 1, "test", "success"),
-            task(3, 1, "build", "success"),
-            task(4, 1, "test", "failure"),
-        ];
-        let attempts = group_attempts(tasks);
-        assert_eq!(attempts.len(), 2);
-        assert_eq!(attempts[1][0].id, 3);
-        assert_eq!(attempts[1][1].id, 4);
-    }
-
-    #[test]
-    fn latest_attempt_filters_by_run_and_returns_last() {
-        let tasks = vec![
-            task(1, 10, "build", "success"),
-            task(2, 10, "build", "failure"),
-            task(3, 11, "lint", "success"),
-        ];
-        let latest = latest_attempt(&tasks, 10);
-        assert_eq!(latest.ordinal, 2);
-        assert_eq!(latest.tasks.len(), 1);
-        assert_eq!(latest.tasks[0].id, 2);
-    }
-
     #[test]
     fn status_mapping_covers_every_terminal_category_conservatively() {
         let cases = [
@@ -429,10 +293,6 @@ mod tests {
             "a bare Forgejo failure status is ambiguous"
         );
         assert_eq!(
-            map_status("failed"),
-            (CiJobStatus::Completed, Some(CiJobConclusion::Unknown))
-        );
-        assert_eq!(
             map_status_evidence("failure", "failure", "", "", "", ""),
             (CiJobStatus::Completed, Some(CiJobConclusion::Failure)),
             "an explicit provider conclusion preserves ordinary failure"
@@ -446,28 +306,44 @@ mod tests {
         );
         assert_eq!(
             map_status_evidence("", "", "", "completed", "runner_lost", ""),
-            (CiJobStatus::Completed, Some(CiJobConclusion::RunnerLost)),
-            "an explicit run-wide infrastructure result terminalizes an absent job result"
+            (CiJobStatus::Completed, Some(CiJobConclusion::RunnerLost))
         );
         assert_eq!(
             map_status_evidence("", "", "", "failure", "", ""),
-            (CiJobStatus::Completed, Some(CiJobConclusion::Unknown)),
-            "an aggregate run failure does not invent ordinary job-failure evidence"
+            (CiJobStatus::Completed, Some(CiJobConclusion::Unknown))
+        );
+    }
+
+    #[test]
+    fn mapping_uses_only_provider_run_ownership_and_identity() {
+        let repo = RepoCoord::new("acme", "widgets");
+        let repo_id = RepositoryId::new("forgejo:acme/widgets");
+        let run = ActionRunDto {
+            id: 900,
+            prettyref: "#7".to_string(),
+            head_sha: "provider-sha".to_string(),
+            status: "success".to_string(),
+            ..Default::default()
+        };
+        let job = ActionJobDto {
+            id: 31,
+            run_id: 900,
+            attempt: 2,
+            task_id: 44,
+            name: "build".to_string(),
+            status: "success".to_string(),
+        };
+        let mapped = job_to_ci_job(&repo, &repo_id, &run, &job, &Target::default()).unwrap();
+        assert_eq!(mapped.commit_sha, "provider-sha");
+        assert_eq!(
+            mapped.id.as_str(),
+            "forgejo:acme/widgets:actions:900:31:2:44"
         );
         assert_eq!(
-            map_status_evidence("failure", "mystery", "", "", "", ""),
-            (CiJobStatus::Completed, Some(CiJobConclusion::Unknown)),
-            "an explicit unrecognized result cannot become ordinary failure"
+            mapped.pull_request_id.unwrap().as_str(),
+            "forgejo:acme/widgets:pull:7"
         );
-        assert_eq!(
-            map_status_evidence("failure", "", "runner_lost", "", "", ""),
-            (CiJobStatus::Completed, Some(CiJobConclusion::RunnerLost)),
-            "a machine-readable provider reason refines a broad failure"
-        );
-        assert_eq!(
-            map_status_evidence("completed", "", "failure", "", "", ""),
-            (CiJobStatus::Completed, Some(CiJobConclusion::Unknown)),
-            "a broad reason is not explicit ordinary-failure evidence"
-        );
+        assert_eq!(mapped.run_id.as_deref(), Some("900"));
+        assert_eq!(mapped.attempt.as_deref(), Some("2"));
     }
 }

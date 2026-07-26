@@ -24,9 +24,9 @@
 //!
 //! The daemon's role and broad mechanical backstops are deliberately long.
 //! Webhooks drive ordinary Forge events, while a short dedicated CI-status poll
-//! detects terminal results that Forgejo 7.0.x does not webhook. Convergence
-//! before either broad deadline therefore proves the exact CI wake path, not a
-//! general role scan or broad mechanical tick.
+//! detects terminal results that the exercised Forgejo 16.0.1 fixture does not
+//! webhook. Convergence before either broad deadline therefore proves the exact
+//! CI wake path, not a general role scan or broad mechanical tick.
 
 #[path = "daemon_scenario/convergence.rs"]
 mod convergence;
@@ -181,7 +181,7 @@ pub fn run_daemon_variant(variant: Variant) {
 
     let timeout = convergence_timeout();
     let convergence_start = Instant::now();
-    let forge = convergence::admin_forge(&server, &provisioned, &engineer);
+    let forge = convergence::admin_forge(&server, &provisioned);
 
     let converged =
         convergence::drive_variant(&variant, &provisioned, &engineer, &forge, issue, timeout);

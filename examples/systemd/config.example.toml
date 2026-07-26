@@ -20,10 +20,9 @@ workspace_dir = "/var/lib/temper/workspace"
 [forge]
 type = "forgejo"
 url = "https://forge.example.com"
-# These legacy identity keys remain during migration for provisioning, role Git
-# identities, and the Forgejo web-UI CI fallback.
+# This legacy identity key remains during migration for provisioning and as the
+# fallback engine token source.
 admin = "bot"
-ci_user = "bot"
 
 [engine]
 bind = "0.0.0.0:4000"

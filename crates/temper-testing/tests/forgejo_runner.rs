@@ -14,8 +14,8 @@
 //! [`ForgejoRunner`] (never cached), and polls the head commit's status API until
 //! the real runner reports `state: "failure"`. That a real verdict appears
 //! confirms the runner picked up and executed the queued job on this host.
-//! (Reading CI via the web-UI live-view JSON is Phase 3b; commit status is the
-//! cheap confirmation.)
+//! The backend's Actions jobs API contract is covered separately; commit status
+//! remains the cheapest runner-only confirmation here.
 //!
 //! Provisioning here is raw HTTP via an admin token created with the server CLI;
 //! full role/identity provisioning is Phase 2.
@@ -115,9 +115,8 @@ fn runner_runs_failing_job_and_reports_failure() {
 /// Creates an admin user, then mints a fully-scoped access token for it via the
 /// server CLI and returns the raw token.
 ///
-/// Two steps because `admin user create --access-token` yields a **scopeless**
-/// token on Forgejo 7.0.x (REST calls 403 with "token does not have ... scope");
-/// `generate-access-token --scopes all --raw` mints a usable one.
+/// Two steps ensure `generate-access-token --scopes all --raw` mints a token
+/// with the complete API scope required by this live test.
 fn create_admin_token(server: &ForgejoServer) -> String {
     server
         .run_cli(&[

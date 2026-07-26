@@ -72,7 +72,7 @@ fn write_apply_bundle(dir: &Path, repos: &[&str]) -> (PathBuf, PathBuf) {
     std::fs::write(
             &config_path,
             format!(
-                "schema_version = 1\n\n[deployment]\nname = \"local-dev\"\ntopology = \"standalone\"\n\n[workflow]\nfile = \"workflow.yaml\"\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\nci_user = \"bot\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nrepos = [{repos}]\nroles = [\"architect\", \"engineer\"]\nwebhook_secret_file = \"webhook-secret\"\n"
+                "schema_version = 1\n\n[deployment]\nname = \"local-dev\"\ntopology = \"standalone\"\n\n[workflow]\nfile = \"workflow.yaml\"\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nrepos = [{repos}]\nroles = [\"architect\", \"engineer\"]\nwebhook_secret_file = \"webhook-secret\"\n"
             ),
         )
         .expect("config");
@@ -481,7 +481,7 @@ fn run_apply_loads_target_init_bundle_and_mints_named_forge_secret() {
     std::fs::write(&workflow_path, workflow_yaml).expect("workflow");
     std::fs::write(
         &config_path,
-        "schema_version = 1\n\n[deployment]\ntopology = \"standalone\"\n\n[workflow]\nfile = \"workflow.yaml\"\n\n[paths]\nworkspace_dir = \"workspace\"\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\nci_user = \"bot\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nworkflow = \"workflow.yaml\"\nrepos = [\"acme/service\"]\nroles = [\"architect\", \"engineer\"]\nforge_token = \"forge-engine-token\"\nwebhook_secret = \"webhook-secret\"\nwebhook_secret_file = \"webhook-secret\"\n\n[worker]\nworkspace = \"workspace\"\n\n[[worker.pools]]\nname = \"local\"\nroles = [\"architect\", \"engineer\"]\nrepos = [\"acme/service\"]\nmax_concurrent_jobs = 1\nworker_token = \"worker-local-token\"\n",
+        "schema_version = 1\n\n[deployment]\ntopology = \"standalone\"\n\n[workflow]\nfile = \"workflow.yaml\"\n\n[paths]\nworkspace_dir = \"workspace\"\n\n[forge]\ntype = \"forgejo\"\nurl = \"http://forge.local:3000\"\nadmin = \"root\"\n\n[engine]\nbind = \"127.0.0.1:38100\"\nworkflow = \"workflow.yaml\"\nrepos = [\"acme/service\"]\nroles = [\"architect\", \"engineer\"]\nforge_token = \"forge-engine-token\"\nwebhook_secret = \"webhook-secret\"\nwebhook_secret_file = \"webhook-secret\"\n\n[worker]\nworkspace = \"workspace\"\n\n[[worker.pools]]\nname = \"local\"\nroles = [\"architect\", \"engineer\"]\nrepos = [\"acme/service\"]\nmax_concurrent_jobs = 1\nworker_token = \"worker-local-token\"\n",
     )
     .expect("config");
     std::fs::write(

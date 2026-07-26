@@ -25,6 +25,14 @@ temper --config ./deploy apply --yes
 `temper plan` is read-only; `temper apply` is Forge-mutating. Production
 automation should keep check, plan, and apply separate.
 
+Forgejo 16.0.1 is the minimum supported release. For an existing persistent
+service, do not deploy this API-only binary as an ordinary application restart:
+follow the [Forgejo 16 migration runbook](migrate-forgejo-16-api-ci.md). Prove
+the Bench fixture and merge first; an operator then backs up, rehearses,
+migrates, and proves the persistent service with the previous compatible Temper
+deployment. Only afterward remove the obsolete `ci_user` setting and restart the
+new binary. No repository command in this guide migrates the provider service.
+
 ## 2. Use systemd credentials for secrets
 
 Install non-secret config and workflow files under `/etc/temper`. Keep secrets

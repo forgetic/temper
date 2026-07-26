@@ -43,10 +43,9 @@ const ADMIN_EMAIL: &str = "e2eadmin@example.invalid";
 /// real; it is never logged.
 const ADMIN_PASSWORD: &str = "Adm1n-Phase2-e2e!";
 
-/// The shared, known password every provisioned role user gets. It is reused as
-/// the Phase 3b web-UI CI-read credential (findings-phase-0c), so it is returned
-/// in the role map. Throwaway, never logged. `pub(super)` so the REST helpers in
-/// `provision_rest` can authenticate with it.
+/// The shared, known password every provisioned role user gets. Provisioning
+/// uses it to mint each user's token over basic auth. Throwaway, never logged.
+/// `pub(super)` so the REST helpers can authenticate with it.
 pub(super) const ROLE_PASSWORD: &str = "R0le-Phase2-e2e!";
 
 /// Token scopes that worked in the spike (findings-phase-0 §3). `all` also
@@ -61,8 +60,8 @@ pub(super) const TOKEN_SCOPES: &[&str] = &[
 /// The path the CI workflow is committed to. `runs-on: host` (Phase 1b runner).
 pub(super) const WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 
-/// A neutral grey label color. Forgejo 7.0.12 requires a non-empty color on
-/// label create/update; the workflow declares none, so every label gets this.
+/// Forgejo requires a non-empty color on label create/update; the workflow
+/// declares none, so every label gets this.
 const LABEL_COLOR: &str = "#ededed";
 
 /// The commit-message marker the CI workflow gates on. A head whose latest
@@ -129,8 +128,8 @@ jobs:
 /// Identity for one workflow role on the real Forgejo backend.
 ///
 /// `user`/`token` are what a role worker needs to build a `ForgejoForge` handle
-/// whose `current_user` resolves to this role; `password` is the web-UI CI-read
-/// credential reused by Phase 3b. None of these are ever logged.
+/// whose `current_user` resolves to this role. `password` is retained inside the
+/// fixture for provisioning/basic-auth setup only. None are ever logged.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct RoleIdentity {
     /// Forgejo login (matches the `RunnerConfig` role binding's user handle).
@@ -139,7 +138,7 @@ pub struct RoleIdentity {
     pub email: String,
     /// Personal access token minted via the user's own basic-auth.
     pub token: String,
-    /// The user's known password (web-UI CI-read credential).
+    /// The user's known provisioning password.
     pub password: String,
 }
 
@@ -370,7 +369,7 @@ pub async fn provision_role_identities(
         debug_assert_eq!(
             binding.user.id.as_str(),
             binding.user.handle,
-            "forgejo role users need id == handle so one login serves assignment and web-UI login",
+            "forgejo role users need id == handle so one identity serves assignment and token minting",
         );
         let login = binding.user.handle.clone();
         let email = format!("{login}@example.invalid");
@@ -441,10 +440,10 @@ pub async fn provision_repository(
 }
 
 /// Creates a non-reserved admin user and mints an `all`-scoped token via the
-/// server CLI. Two steps because `admin user create --access-token` yields a
-/// **scopeless** token on 7.0.x; `generate-access-token --scopes all --raw`
-/// mints a usable one (findings-phase-0b). Tolerates a pre-existing admin so a
-/// re-provision against the same instance does not fail.
+/// server CLI. The explicit `generate-access-token --scopes all --raw` step
+/// guarantees a fully scoped token instead of relying on user-creation defaults.
+/// Tolerates a pre-existing admin so a re-provision against the same instance
+/// does not fail.
 pub fn bootstrap_admin(server: &ForgejoServer) -> Result<String> {
     // Create may fail if the user already exists; tolerate that one case.
     if let Err(err) = server.run_cli(&[
@@ -524,8 +523,8 @@ async fn upsert_labels(
                 &repo.id,
                 UpsertLabel {
                     name: label.id.to_string(),
-                    // Forgejo 7.0.12 *requires* a color (`[Color]: Required`),
-                    // unlike the filesystem backend where `None` is fine. The
+                    // Forgejo requires a color (`[Color]: Required`), unlike
+                    // the filesystem backend where `None` is fine. The
                     // workflow declares no per-label color, so use one neutral
                     // grey for every label — the e2e cares about presence, not
                     // appearance.

@@ -178,11 +178,10 @@ pub fn user(id: &str, handle: &str) -> User {
 
 pub fn actor_user(role: &str) -> User {
     // The user id and handle are intentionally the **same** string. On real
-    // Forgejo the role's single login must serve three things at once: the access
-    // token's `current_user`, the assignee the workflow sends (`set_assignee`
-    // binds `user.id`), and the web-UI CI-read login (which authenticates by
-    // handle). Keeping id == handle lets one provisioned account satisfy all
-    // three; the filesystem/memory backends are unaffected (identity there is a
+    // Forgejo the role's single login must serve both the access token's
+    // `current_user` and the assignee the workflow sends (`set_assignee` binds
+    // `user.id`). Keeping id == handle lets one provisioned account satisfy both;
+    // the filesystem/memory backends are unaffected (identity there is a
     // free relabel).
     user(role, role)
 }

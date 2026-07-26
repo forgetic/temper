@@ -183,16 +183,12 @@ pub struct ForgeConfig {
     /// becomes the daemon's default forge identity and drives provisioning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin: Option<String>,
-    /// The user whose web-UI password authenticates CI status reads (ADR 0019).
-    /// Defaults to `"bot"` when present in the credentials file.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ci_user: Option<String>,
 }
 
 impl ForgeConfig {
     /// `true` when every field is unset, so the section can be omitted entirely.
     fn is_empty(&self) -> bool {
-        self.kind.is_none() && self.url.is_none() && self.admin.is_none() && self.ci_user.is_none()
+        self.kind.is_none() && self.url.is_none() && self.admin.is_none()
     }
 }
 
@@ -718,8 +714,8 @@ pub(crate) fn file_name_secret_name(path: &Path) -> Option<String> {
 #[serde(deny_unknown_fields)]
 pub struct ForgeCredentials {
     /// Per-user forge credentials, keyed by user name. The key doubles as the
-    /// role name for per-role identities, and is referenced by `forge.admin` /
-    /// `forge.ci_user` in the config file.
+    /// role name for per-role identities, and may be referenced by
+    /// `forge.admin` in the config file.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub users: BTreeMap<String, ForgeUser>,
 }
@@ -741,7 +737,7 @@ pub struct ForgeUser {
     /// Git commit email. Defaults to `<user>@noreply.localhost`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    /// Web-UI password (used for CI reads and provisioning).
+    /// Password used by provisioning and explicit basic-auth login flows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     /// REST API token.

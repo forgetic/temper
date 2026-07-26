@@ -47,7 +47,7 @@ support.
 | `crates/temper-forge/` | Top-level Forge facade: re-exports the model and owns backend factory helpers. This is the only non-test crate that should depend directly on concrete backends. |
 | `crates/temper-forge-memory/` | Fast in-memory reference backend for deterministic workflow tests and local scenarios. |
 | `crates/temper-forge-filesystem/` | Persistent local reference backend for fixtures, local stores, concurrency tests, and multi-process/process-split rehearsals. |
-| `crates/temper-forge-forgejo/` | Forgejo HTTP backend, provider-specific DTO/mapping code, CI/web-UI scraping support, provisioning helpers, offline mock-contract tests, and optional live tests. |
+| `crates/temper-forge-forgejo/` | Forgejo HTTP backend, provider-specific DTO/mapping code, token-authenticated Forgejo 16 Actions run/job reads, provisioning helpers, offline mock-contract tests, and optional live tests. |
 | `crates/temper-forge-github/` | GitHub HTTP backend, provider-specific DTO/mapping code, and hermetic mock-contract tests. |
 
 ## Workflow, engine, and control-plane runtime
@@ -96,7 +96,7 @@ support.
 | `scenarios/` | Checked-in declarative validation corpus: scenario manifests, fixture inputs, minimal repo seeds, and authoring guidance for promoted post-merge validation cases. |
 | `benchmarks/` | Separate [agent-session benchmark corpus](../../benchmarks/README.md): fixed direct-agent fixtures and manifests for repetition, structural measurement, and performance reporting. |
 | `.cargo/config.toml` | Developer Cargo aliases (`dev-check`, `dev-test-quick`, `dev-test-full`, `dev-benchmark-harness`, `dev-doc`) and local sibling-repo patch guidance. |
-| `.forgejo/workflows/ci.yml` | Forgejo CI workflow for Rust validation and the web UI lane. |
+| `.forgejo/workflows/ci.yml` | Forgejo CI workflow for Rust validation and repository-required checks. |
 | `docs/adr/` | Architecture decision records. Start here for historical rationale behind backend boundaries, workflow semantics, triggering, native Forge state, and multi-repo work. |
 | `docs/explanation/` | Conceptual explanations like this map, the domain model, agentic workflows, process split, Forgejo topology, logging/observability, and IO engine architecture. |
 | `docs/reference/` | Contract/reference material: Forge interface, workflow layer/runtime/spec, worker-daemon protocol, interactive protocol, backends, testing inventory, and environment variables. |

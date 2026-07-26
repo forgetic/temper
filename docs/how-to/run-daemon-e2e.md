@@ -73,15 +73,16 @@ The test target lives in the root package (it spawns the root
   and the source issue closes through the provider's native close-on-merge
   keyword.
 - `daemon_forgejo_bare_failure_requires_recovery` — the worker's first head
-  omits the CI sentinel so real CI fails, but Forgejo 7's web-UI payload carries
+  omits the CI sentinel so real CI fails, but Forgejo 16.0.1's jobs API carries
   only bare `status: failure`. The dedicated CI-status poll keeps the exact-head
   gate red as recovery-required without assigning `pr_ci_failed`, pushing a new
   head, or landing the PR.
 
 The fixture sets `ci_poll_cadence_secs = 1` and keeps both
 `poll_cadence_secs` and `mechanical_cadence_secs` at 600 seconds, beyond the
-300-second convergence budget. Forgejo 7.0.x emits no Actions-completion
-repository webhooks, so completing before those broad fallback deadlines proves
+300-second convergence budget. The exercised fixture emits no
+Actions-completion repository webhook, so completing before those broad
+fallback deadlines proves
 that the dedicated CI cadence found green landing or retained ambiguous red
 without writable repair.
 

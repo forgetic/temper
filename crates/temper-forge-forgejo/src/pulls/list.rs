@@ -133,9 +133,9 @@ impl<C: HttpClient> ForgejoForge<C> {
         let mut pulls = Vec::new();
         for dto in dtos {
             let pull = if dto.merged && dto.merged_by.is_none() {
-                // Forgejo 15 omits `merged_by` from `/pulls` list rows even
-                // though `/pulls/{number}` includes it. Re-fetch only those
-                // merged summaries so automation/audit callers do not mistake
+                // Some Forgejo `/pulls` list rows omit `merged_by` even though
+                // `/pulls/{number}` includes it. Re-fetch only those merged
+                // summaries so automation/audit callers do not mistake
                 // the PR author for the merger via the DTO mapper's last-ditch
                 // fallback.
                 self.fetch_pull_request(repo, ItemNumber::new(dto.number))

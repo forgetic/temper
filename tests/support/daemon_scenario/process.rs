@@ -13,7 +13,7 @@ use super::{
     DAEMON_CI_POLL_CADENCE_SECS, DAEMON_MECHANICAL_CADENCE_SECS, DAEMON_POLL_CADENCE_SECS, ENGINEER,
 };
 
-/// The CI-status cadence is deliberately short because Forgejo 7.0.x does not
+/// The CI-status cadence is deliberately short because the fixture does not
 /// emit Actions-completion repository webhooks. Both broad fallbacks remain at
 /// 600s, beyond the scenario timeout, so green landing and ambiguous-red
 /// suppression can only arrive through exact synthetic CI hints.
@@ -32,8 +32,8 @@ pub(super) fn spawn_daemon(
 ) -> ChildGuard {
     // The new CLI is config-file driven: write the engine's deployment settings
     // to a config file and run `temper --config … --secrets … daemon --service
-    // engine`. Secrets (forge admin token, CI web-UI creds, the engineer's
-    // per-role identity) go in a companion `credentials.toml` passed via the
+    // engine`. Secrets (forge admin token and the engineer's per-role identity)
+    // go in a companion `credentials.toml` passed via the
     // top-level `--secrets`; the deployment env overrides have been removed
     // from `temper-config`.
     let config_dir = log.parent().expect("daemon log has a parent dir");
@@ -44,7 +44,6 @@ pub(super) fn spawn_daemon(
          type = \"forgejo\"\n\
          url = \"{base_url}\"\n\
          admin = \"admin\"\n\
-         ci_user = \"{ENGINEER}\"\n\
          [engine]\n\
          bind = \"127.0.0.1:{port}\"\n\
          repos = [\"{owner}/{name}\"]\n\
@@ -66,11 +65,8 @@ pub(super) fn spawn_daemon(
     );
     std::fs::write(&config_path, config).expect("write daemon config");
 
-    // Credentials file: the forge admin token (keyed by `[forge] admin`), the
-    // web-UI CI-read pair (keyed by `[forge] ci_user`), and the engineer's
-    // per-role identity (keyed by the role name). These were previously injected
-    // through FORGEJO_ACCESS_TOKEN / FORGEJO_USERNAME / FORGEJO_PASSWORD /
-    // TEMPER_FORGEJO_TOKEN_ENGINEER, which `temper-config` no longer reads.
+    // Credentials file: the forge admin token (keyed by `[forge] admin`) and
+    // the engineer's token-backed per-role identity (keyed by the role name).
     let credentials_path = config_dir.join("daemon-credentials.toml");
     let credentials = format!(
         "schema_version = 1\n\
@@ -78,11 +74,9 @@ pub(super) fn spawn_daemon(
          token = \"{admin_token}\"\n\
          [forge.users.{ENGINEER}]\n\
          user = \"{eng_user}\"\n\
-         password = \"{eng_password}\"\n\
          token = \"{eng_token}\"\n",
         admin_token = provisioned.admin_token,
         eng_user = engineer.user,
-        eng_password = engineer.password,
         eng_token = engineer.token,
     );
     std::fs::write(&credentials_path, credentials).expect("write daemon credentials");

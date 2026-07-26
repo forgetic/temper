@@ -11,19 +11,19 @@
 //! cargo test -p temper-forge-forgejo --test live -- --ignored
 //! ```
 
-mod live_support;
-
+use async_trait::async_trait;
 use base64::Engine;
-use bench_forgejo::{ForgejoRunner, ForgejoServer, ForgejoState, ServerError};
-use live_support::{RestRuns404Client, cookie_value, exchange, request_header};
+use bench_forgejo::{ForgejoRunner, ForgejoServer, ForgejoState, ServerError, download};
 use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use temper_engine_io::http::{HttpCall, HttpResponseData, http_call};
 use temper_forge_forgejo::{
-    EngineHttpClient, ForgejoConfig, ForgejoForge, HttpClient, HttpMethod, HttpRequest,
+    EngineHttpClient, ForgejoConfig, ForgejoForge, HttpClient, HttpError, HttpMethod, HttpRequest,
+    HttpResponse,
 };
 use temper_forge_model::{
-    CandidateLabelSelection, CandidateLifecycle, CiJobConclusion, CiJobQuery, CiJobStatus,
+    CandidateLabelSelection, CandidateLifecycle, CiJob, CiJobConclusion, CiJobQuery, CiJobStatus,
     CreateIssue, IssueCandidateQuery, IssueQuery, IssueState, PullRequestQuery, RepositoryId,
     RepositoryPath, UpdateIssue, UpsertLabel,
 };
@@ -34,25 +34,74 @@ const ADMIN_EMAIL: &str = "liveadmin@example.invalid";
 const REPO: &str = "forgejo-live-smoke";
 const CI_WORKFLOW_PATH: &str = ".forgejo/workflows/ci.yml";
 
-const CI_WORKFLOW: &str = r#"name: ci
+const CI_WORKFLOW: &str = r#"name: api-only-ci
 on: [push]
 jobs:
-  build:
+  successful_job:
     runs-on: host
     steps:
-      - run: echo temper forgejo live smoke
+      - run: echo temper forgejo API-only success
+  intentionally_failing_job:
+    runs-on: host
+    steps:
+      - run: exit 1
 "#;
-const REST_TOKEN_SENTINEL: &str = "rest-token-must-not-reach-web-ui";
 
 #[derive(serde::Deserialize, serde::Serialize)]
 struct LiveMetadata {
     admin_token: String,
+    head_sha: String,
+}
+
+#[derive(Clone)]
+struct RecordingHttpClient {
+    inner: EngineHttpClient,
+    requests: Arc<Mutex<Vec<HttpRequest>>>,
+}
+
+impl RecordingHttpClient {
+    fn new(base_url: &str) -> Self {
+        Self {
+            inner: EngineHttpClient::new(base_url),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn clear(&self) {
+        self.requests.lock().expect("request recorder").clear();
+    }
+
+    fn recorded(&self) -> Vec<HttpRequest> {
+        self.requests.lock().expect("request recorder").clone()
+    }
+}
+
+impl std::fmt::Debug for RecordingHttpClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RecordingHttpClient")
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl HttpClient for RecordingHttpClient {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        self.requests
+            .lock()
+            .expect("request recorder")
+            .push(request.clone());
+        self.inner.execute(request).await
+    }
 }
 
 struct LiveWorld {
     _server: ForgejoServer,
     _runner: ForgejoRunner,
-    forge: ForgejoForge<EngineHttpClient>,
+    forge: ForgejoForge<RecordingHttpClient>,
+    recorder: RecordingHttpClient,
+    admin_token: String,
+    head_sha: String,
     repo_id: RepositoryId,
     repo_path: RepositoryPath,
 }
@@ -111,247 +160,15 @@ fn live_smoke_suite_against_throwaway_forgejo() {
 
         candidate_label_filter_is_any_of(&world).await;
         create_and_close_issue(&world).await;
-        wait_for_ci_success(&cx, &world).await;
-    });
-}
-
-#[test]
-#[ignore = "boots local Forgejo 15.0.3 + host-mode runner; run with --ignored"]
-fn forgejo_15_0_3_web_ui_ci_contract() {
-    temper_engine_io::block_on_with(move |cx, _handle| async move {
-        let world = boot_world().await;
-
-        // First prove the fixture's host-mode runner has produced a real,
-        // terminal job. This backend uses Forgejo 15's healthy REST endpoint;
-        // the contract backend below then reads that same provider job with
-        // only REST run discovery forced unavailable.
-        wait_for_ci_success(&cx, &world).await;
-
-        let base_url = world._server.base_url().to_string();
-        let rest_runs_path = format!("/api/v1/repos/{ADMIN_USER}/{REPO}/actions/runs");
-        let client = RestRuns404Client::new(&base_url, rest_runs_path.clone());
-        let version_response = client
-            .execute(HttpRequest {
-                method: HttpMethod::Get,
-                path: "/api/v1/version".to_string(),
-                query: Vec::new(),
-                headers: vec![("Accept".to_string(), "application/json".to_string())],
-                body: None,
-            })
-            .await
-            .expect("Forgejo version request sends");
-        assert_eq!(version_response.status, 200);
-        let version: Value =
-            serde_json::from_str(&version_response.body).expect("version response is JSON");
-        assert!(
-            version["version"].as_str().is_some_and(
-                |version| version.starts_with(bench_forgejo::download::FORGEJO_VERSION)
-            ),
-            "the live contract must run against the pinned Forgejo fixture"
-        );
-
-        let fallback = ForgejoForge::with_client(
-            ForgejoConfig::new(&base_url, REST_TOKEN_SENTINEL)
-                .with_default_repo(ADMIN_USER, REPO)
-                .with_web_ui_credentials(ADMIN_USER, ADMIN_PASSWORD),
-            client.clone(),
-        );
-        let jobs = fallback
-            .list_ci_jobs(&world.repo_id, CiJobQuery::default())
-            .await
-            .expect("password-authenticated CI fallback reads the real job");
-        assert_eq!(
-            jobs.len(),
-            1,
-            "the fixture workflow contains one runner job"
-        );
-        let job = &jobs[0];
-        assert_eq!(job.name, "build");
-        assert_eq!(job.status, CiJobStatus::Completed);
-        assert_eq!(job.conclusion, Some(CiJobConclusion::Success));
-
-        let exchanges = client.exchanges();
-        let rest_runs = exchange(&exchanges, HttpMethod::Get, &rest_runs_path);
-        assert_eq!(rest_runs.response.status, 404);
-        assert_eq!(
-            rest_runs.request.query,
-            vec![("limit".to_string(), "200".to_string())]
-        );
-        assert_eq!(
-            exchanges
-                .iter()
-                .filter(|exchange| exchange.response.status == 404)
-                .count(),
-            1,
-            "only REST Actions-run discovery is forced to 404"
-        );
-
-        let login_get = exchange(&exchanges, HttpMethod::Get, "/user/login");
-        assert_eq!(login_get.response.status, 200);
-        let login_post = exchange(&exchanges, HttpMethod::Post, "/user/login");
-        assert_eq!(login_post.response.status, 303);
-        assert_eq!(login_post.response.header("location"), Some("/"));
-        let login_body = login_post
-            .request
-            .body
-            .as_deref()
-            .expect("login POST carries a form body");
-        assert!(login_body.contains("user_name=liveadmin"));
-        assert!(login_body.contains("remember=on"));
-        assert!(!login_body.contains("_csrf="));
-        assert!(!login_get.response.body.contains("name=\"_csrf\""));
-        assert_eq!(
-            request_header(&login_post.request, "cookie")
-                .and_then(|header| cookie_value(header, "_csrf")),
-            None
-        );
-
-        let actions_path = format!("/{ADMIN_USER}/{REPO}/actions");
-        let actions = exchange(&exchanges, HttpMethod::Get, &actions_path);
-        assert_eq!(actions.response.status, 200);
-        assert_eq!(actions.response.header("location"), None);
-
-        let live_prefix = format!("/{ADMIN_USER}/{REPO}/actions/runs/");
-        let live = exchanges
-            .iter()
-            .find(|exchange| {
-                exchange.request.method == HttpMethod::Post
-                    && exchange.request.path.starts_with(&live_prefix)
-                    && exchange.request.path.ends_with("/jobs/0/attempt/1")
-            })
-            .cloned()
-            .expect("live-view POST was delegated to Forgejo");
-        let coordinate = live
-            .request
-            .path
-            .strip_prefix(&live_prefix)
-            .expect("live-view route prefix");
-        let mut coordinate = coordinate.split('/');
-        let run: u64 = coordinate
-            .next()
-            .expect("run coordinate")
-            .parse()
-            .expect("numeric run coordinate");
-        assert_eq!(coordinate.next(), Some("jobs"));
-        assert_eq!(coordinate.next(), Some("0"));
-        assert_eq!(coordinate.next(), Some("attempt"));
-        assert_eq!(coordinate.next(), Some("1"));
-        assert_eq!(coordinate.next(), None);
-        assert_eq!(
-            job.id.as_str(),
-            format!("forgejo:{ADMIN_USER}/{REPO}:actions:{run}:0:{run}")
-        );
-        assert_eq!(live.request.body.as_deref(), Some("{\"logCursors\":[]}"));
-        assert_eq!(live.response.status, 200);
-        assert_eq!(live.response.header("location"), None);
-        assert!(
-            live.response
-                .header("content-type")
-                .is_some_and(|value| value.starts_with("application/json"))
-        );
-
-        let cookie = request_header(&live.request, "cookie").expect("live-view cookie header");
-        assert!(cookie_value(cookie, "persistent").is_some());
-        assert!(cookie_value(cookie, "session").is_some());
-        assert_eq!(cookie_value(cookie, "_csrf"), None);
-        assert_eq!(request_header(&live.request, "x-csrf-token"), None);
-        assert_eq!(request_header(&live.request, "authorization"), None);
-
-        let live_json: Value =
-            serde_json::from_str(&live.response.body).expect("live view is JSON");
-        let live_run = &live_json["state"]["run"];
-        assert_eq!(live_run["status"], "success");
-        assert_eq!(live_run["jobs"].as_array().map(Vec::len), Some(1));
-        assert_eq!(live_run["jobs"][0]["name"], "build");
-        assert_eq!(live_run["jobs"][0]["status"], "success");
-        let short_sha = live_run["commit"]["shortSHA"]
-            .as_str()
-            .expect("live view carries commit.shortSHA");
-        assert_eq!(live_run["commit"]["branch"]["name"], "main");
-        assert!(live_json["logs"].is_object());
-        assert_eq!(job.commit_sha, short_sha);
-
-        // The deployed-failure diagnostic used this HTML route for the same
-        // run/job coordinate. Forward it with the authenticated cookie and
-        // prove it remains a healthy page alongside the live-view JSON.
-        let attempt_path = live.request.path.clone();
-        let attempt_response = client
-            .execute(HttpRequest {
-                method: HttpMethod::Get,
-                path: attempt_path.clone(),
-                query: Vec::new(),
-                headers: vec![
-                    ("Accept".to_string(), "text/html".to_string()),
-                    ("Cookie".to_string(), cookie.to_string()),
-                ],
-                body: None,
-            })
-            .await
-            .expect("healthy attempt page request sends");
-        assert_eq!(attempt_response.status, live.response.status);
-        assert_eq!(attempt_response.status, 200);
-        assert_eq!(attempt_response.header("location"), None);
-        assert!(
-            attempt_response
-                .header("content-type")
-                .is_some_and(|value| value.starts_with("text/html"))
-        );
-        assert!(
-            attempt_response
-                .body
-                .contains("data-initial-post-response=")
-        );
-        assert!(
-            attempt_response
-                .body
-                .contains("&#34;name&#34;:&#34;build&#34;")
-        );
-        assert!(
-            attempt_response
-                .body
-                .contains("&#34;status&#34;:&#34;success&#34;")
-        );
-        assert!(
-            attempt_response
-                .body
-                .contains(&format!("&#34;shortSHA&#34;:&#34;{short_sha}&#34;"))
-        );
-        let attempt = exchange(&client.exchanges(), HttpMethod::Get, &attempt_path);
-        assert_eq!(request_header(&attempt.request, "cookie"), Some(cookie));
-
-        // Portable output and provider responses must not reveal either web-UI
-        // credentials or the REST-token sentinel. (The login request itself
-        // necessarily carries the password over the local HTTP fixture.)
-        let portable = format!("{job:?}");
-        for secret in [ADMIN_PASSWORD, REST_TOKEN_SENTINEL] {
-            assert!(!portable.contains(secret));
-            assert!(!live.response.body.contains(secret));
-            assert!(!attempt_response.body.contains(secret));
-            assert!(
-                exchanges
-                    .iter()
-                    .all(|exchange| !exchange.response.body.contains(secret))
-            );
-        }
-        for web_path in [
-            "/user/login",
-            actions_path.as_str(),
-            live.request.path.as_str(),
-        ] {
-            for observed in exchanges
-                .iter()
-                .filter(|exchange| exchange.request.path == web_path)
-            {
-                assert_eq!(request_header(&observed.request, "authorization"), None);
-            }
-        }
+        validate_api_only_ci_contract(&cx, &world).await;
     });
 }
 
 async fn boot_world() -> LiveWorld {
     let state = ForgejoState::new(json!({
         "kind": "forgejo-backend-live-smoke",
-        "version": 2,
+        "version": 3,
+        "forgejo_version": download::FORGEJO_VERSION,
         "admin": ADMIN_USER,
         "repo": REPO,
         "ci_workflow_path": CI_WORKFLOW_PATH,
@@ -367,8 +184,11 @@ async fn boot_world() -> LiveWorld {
             temper_engine_io::block_on(async move {
                 create_initialized_repo(&base, &admin_token).await;
                 enable_repo_actions(&base, &admin_token).await;
-                put_workflow_file(&base, &admin_token).await;
-                Ok::<LiveMetadata, String>(LiveMetadata { admin_token })
+                let head_sha = put_workflow_file(&base, &admin_token).await;
+                Ok::<LiveMetadata, String>(LiveMetadata {
+                    admin_token,
+                    head_sha,
+                })
             })
         })
     })
@@ -376,16 +196,20 @@ async fn boot_world() -> LiveWorld {
     .expect("cached Forgejo state starts");
     let server = cached.server;
     let base = server.base_url().to_string();
-    let admin_token = cached.metadata.admin_token;
+    let LiveMetadata {
+        admin_token,
+        head_sha,
+    } = cached.metadata;
+    assert_fixture_version(&base, &admin_token).await;
 
     let mut runner = ForgejoRunner::register(&server).expect("forgejo-runner registers");
     assert!(runner.is_running(), "runner daemon exited immediately");
 
     let repo_path = RepositoryPath::new(ADMIN_USER, REPO);
-    let forge = ForgejoForge::new(
-        ForgejoConfig::new(&base, &admin_token)
-            .with_default_repo(ADMIN_USER, REPO)
-            .with_web_ui_credentials(ADMIN_USER, ADMIN_PASSWORD),
+    let recorder = RecordingHttpClient::new(&base);
+    let forge = ForgejoForge::with_client(
+        ForgejoConfig::new(&base, &admin_token).with_default_repo(ADMIN_USER, REPO),
+        recorder.clone(),
     );
     let repo_id = forge
         .get_repository_by_path(&repo_path)
@@ -398,6 +222,9 @@ async fn boot_world() -> LiveWorld {
         _server: server,
         _runner: runner,
         forge,
+        recorder,
+        admin_token,
+        head_sha,
         repo_id,
         repo_path,
     }
@@ -431,7 +258,12 @@ fn bootstrap_admin(server: &ForgejoServer) -> Result<String, ServerError> {
 }
 
 /// Send one authorized JSON request through the engine HTTP client.
-async fn api_json(method: &str, url: String, token: &str, body: &Value) -> HttpResponseData {
+async fn api_json(
+    method: &str,
+    url: String,
+    token: &str,
+    body: Option<&Value>,
+) -> HttpResponseData {
     let client = temper_engine_io::http::build_http_client();
     http_call(
         &client,
@@ -441,12 +273,35 @@ async fn api_json(method: &str, url: String, token: &str, body: &Value) -> HttpR
             headers: vec![
                 ("Authorization".to_string(), format!("token {token}")),
                 ("Content-Type".to_string(), "application/json".to_string()),
+                ("Accept".to_string(), "application/json".to_string()),
             ],
-            body: body.to_string().into_bytes(),
+            body: body
+                .map(Value::to_string)
+                .map(String::into_bytes)
+                .unwrap_or_default(),
         },
     )
     .await
     .expect("api request sends")
+}
+
+async fn assert_fixture_version(base: &str, token: &str) {
+    assert_eq!(
+        download::FORGEJO_VERSION,
+        "16.0.1",
+        "the merged Bench fixture must remain pinned to the minimum supported Forgejo release"
+    );
+    let response = api_json("GET", format!("{base}/api/v1/version"), token, None).await;
+    let body = assert_success_json(&response, "read fixture version");
+    let reported = body["version"]
+        .as_str()
+        .unwrap_or_else(|| panic!("version response has no string version: {body}"));
+    assert!(
+        reported == download::FORGEJO_VERSION
+            || reported.starts_with(&format!("{}+", download::FORGEJO_VERSION)),
+        "fixture reported Forgejo {reported}, expected {}",
+        download::FORGEJO_VERSION
+    );
 }
 
 async fn create_initialized_repo(base: &str, token: &str) {
@@ -454,12 +309,12 @@ async fn create_initialized_repo(base: &str, token: &str) {
         "POST",
         format!("{base}/api/v1/user/repos"),
         token,
-        &json!({
+        Some(&json!({
             "name": REPO,
             "auto_init": true,
             "default_branch": "main",
             "private": false,
-        }),
+        })),
     )
     .await;
     assert_success(&response, "create repo");
@@ -470,7 +325,7 @@ async fn enable_repo_actions(base: &str, token: &str) {
         "PATCH",
         format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}"),
         token,
-        &json!({ "has_actions": true }),
+        Some(&json!({ "has_actions": true })),
     )
     .await;
     assert_success(&response, "enable actions");
@@ -482,11 +337,11 @@ async fn put_workflow_file(base: &str, token: &str) -> String {
         "POST",
         format!("{base}/api/v1/repos/{ADMIN_USER}/{REPO}/contents/{CI_WORKFLOW_PATH}"),
         token,
-        &json!({
+        Some(&json!({
             "content": content,
-            "message": "add CI workflow",
+            "message": "add API-only CI workflow",
             "branch": "main",
-        }),
+        })),
     )
     .await;
     let body = assert_success_json(&response, "put workflow");
@@ -595,28 +450,177 @@ async fn create_and_close_issue(world: &LiveWorld) {
     assert_eq!(closed.state, IssueState::Closed);
 }
 
-async fn wait_for_ci_success(cx: &temper_engine_io::Cx, world: &LiveWorld) {
+async fn validate_api_only_ci_contract(cx: &temper_engine_io::Cx, world: &LiveWorld) {
+    world.recorder.clear();
+    let jobs = wait_for_terminal_ci(cx, world).await;
+
+    assert_eq!(jobs.len(), 2, "the live workflow must expose both jobs");
+    assert!(
+        jobs.iter().all(|job| job.status == CiJobStatus::Completed),
+        "both runner jobs must be terminal: {jobs:?}"
+    );
+    assert_eq!(
+        jobs.iter()
+            .filter(|job| job.conclusion == Some(CiJobConclusion::Success))
+            .count(),
+        1,
+        "the successful runner job must stay distinguishable: {jobs:?}"
+    );
+    assert_eq!(
+        jobs.iter()
+            .filter(|job| job.conclusion == Some(CiJobConclusion::Unknown))
+            .count(),
+        1,
+        "the status-only failing job must map conservatively to recovery-required Unknown: {jobs:?}"
+    );
+
+    let provider_run = jobs[0]
+        .run_id
+        .as_deref()
+        .expect("live job carries provider run identity");
+    assert!(
+        provider_run.parse::<u64>().is_ok_and(|id| id > 0),
+        "provider run identity must be a non-zero database id"
+    );
+    assert!(
+        jobs.iter()
+            .all(|job| job.run_id.as_deref() == Some(provider_run)),
+        "both workflow jobs must retain their shared provider run identity"
+    );
+    assert!(jobs.iter().all(|job| {
+        job.attempt
+            .as_deref()
+            .and_then(|attempt| attempt.parse::<u64>().ok())
+            .is_some_and(|attempt| attempt > 0)
+    }));
+    assert_ne!(
+        jobs[0].id, jobs[1].id,
+        "provider jobs need stable distinct ids"
+    );
+    assert!(jobs.iter().all(|job| {
+        job.id
+            .as_str()
+            .contains(&format!(":actions:{provider_run}:"))
+    }));
+
+    let repeated = world
+        .forge
+        .list_ci_jobs(
+            &world.repo_id,
+            CiJobQuery {
+                commit_sha: Some(world.head_sha.clone()),
+                ..CiJobQuery::default()
+            },
+        )
+        .await
+        .expect("completed jobs can be observed again");
+    assert_eq!(
+        repeated.iter().map(|job| &job.id).collect::<Vec<_>>(),
+        jobs.iter().map(|job| &job.id).collect::<Vec<_>>(),
+        "provider run/job identity must remain stable across observations"
+    );
+
+    for expected in &jobs {
+        let round_tripped = world
+            .forge
+            .get_ci_job(&expected.id)
+            .await
+            .expect("provider-identified job lookup succeeds")
+            .expect("listed provider job round-trips");
+        assert_eq!(&round_tripped, expected);
+    }
+
+    assert_api_only_ci_requests(&world.recorder.recorded(), &world.admin_token);
+}
+
+async fn wait_for_terminal_ci(cx: &temper_engine_io::Cx, world: &LiveWorld) -> Vec<CiJob> {
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         let observation = match world
             .forge
-            .list_ci_jobs(&world.repo_id, CiJobQuery::default())
+            .list_ci_jobs_with_presence(
+                &world.repo_id,
+                CiJobQuery {
+                    commit_sha: Some(world.head_sha.clone()),
+                    ..CiJobQuery::default()
+                },
+            )
             .await
         {
-            Ok(jobs) => {
-                if jobs.iter().any(|job| {
-                    job.status == CiJobStatus::Completed
-                        && job.conclusion == Some(CiJobConclusion::Success)
-                }) {
-                    return;
-                }
-                format!("jobs={jobs:?}")
+            Ok(listing)
+                if listing.matching_ci_present()
+                    && listing.jobs().len() == 2
+                    && listing
+                        .jobs()
+                        .iter()
+                        .all(|job| job.status == CiJobStatus::Completed) =>
+            {
+                return listing.into_jobs();
             }
+            Ok(listing) => format!(
+                "matching_ci_present={}, jobs={:?}",
+                listing.matching_ci_present(),
+                listing.jobs()
+            ),
             Err(error) => error.to_string(),
         };
         if Instant::now() >= deadline {
-            panic!("CI success was not observed within 180s; last observation: {observation}");
+            panic!(
+                "successful and intentionally failing CI jobs were not observed within 180s; last observation: {observation}"
+            );
         }
         temper_engine_io::runtime::sleep_for(cx, Duration::from_secs(2)).await;
+    }
+}
+
+fn assert_api_only_ci_requests(requests: &[HttpRequest], token: &str) {
+    let runs_path = format!("/api/v1/repos/{ADMIN_USER}/{REPO}/actions/runs");
+    assert!(!requests.is_empty(), "CI observation recorded no requests");
+    assert!(
+        requests.iter().any(|request| {
+            request
+                .path
+                .strip_prefix(&format!("{runs_path}/"))
+                .and_then(|suffix| suffix.strip_suffix("/jobs"))
+                .and_then(|run_id| run_id.parse::<u64>().ok())
+                .is_some_and(|run_id| run_id > 0)
+        }),
+        "CI observation never called the provider-run jobs endpoint; paths={:?}",
+        requests
+            .iter()
+            .map(|request| request.path.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    for request in requests {
+        assert_eq!(request.method, HttpMethod::Get, "path={}", request.path);
+        assert!(
+            request.path == runs_path
+                || request
+                    .path
+                    .strip_prefix(&format!("{runs_path}/"))
+                    .and_then(|suffix| suffix.strip_suffix("/jobs"))
+                    .and_then(|run_id| run_id.parse::<u64>().ok())
+                    .is_some_and(|run_id| run_id > 0),
+            "CI observation used a non-run/jobs API route: {} {}",
+            request.method,
+            request.path
+        );
+        assert!(
+            request.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("authorization") && value == &format!("token {token}")
+            }),
+            "CI request did not carry token authentication: {}",
+            request.path
+        );
+        assert!(
+            request.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("accept") && value == "application/json"
+            }),
+            "CI request did not require JSON: {}",
+            request.path
+        );
+        assert!(!request.path.contains("/user/login"));
+        assert!(!request.path.contains("/actions/tasks"));
     }
 }

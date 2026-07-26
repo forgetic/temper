@@ -30,8 +30,7 @@ pub fn configured_role_forges(
             let role = role.as_str().to_string();
             let token = role_tokens.get(&role)?;
             // I/O boundary: the per-role token is handed to its Forgejo client.
-            // Preserve all non-token defaults from the deployment Forgejo
-            // config, especially the web-UI CI fallback credentials.
+            // Preserve every non-token setting from the deployment config.
             let forge: Arc<dyn Forge> =
                 temper_forge::factory::new_forgejo(role_forgejo_config(forge_config, token));
             Some((role, forge))
@@ -140,13 +139,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn role_forgejo_config_preserves_ci_web_ui_and_replaces_only_token() {
+    fn role_forgejo_config_preserves_settings_and_replaces_only_token() {
         let base = ForgejoConfig::new("https://forge.example/", "admin-token")
             .with_default_repo("acme", "widgets")
             .with_page_limit(7)
-            .with_cas_mode(temper_forge::config::ForgejoCasMode::Strict)
-            .with_web_ui_credentials("ci-reader", "s3cret")
-            .with_ci_diagnostics(true);
+            .with_cas_mode(temper_forge::config::ForgejoCasMode::Strict);
 
         let role = role_forgejo_config(&base, &Secret::from("role-token"));
         let mut expected = base.clone();
@@ -154,9 +151,6 @@ mod tests {
 
         assert_eq!(role, expected);
         assert_eq!(base.token, "admin-token");
-        let web_ui = role.web_ui.expect("web-ui credentials preserved");
-        assert_eq!(web_ui.username, "ci-reader");
-        assert_eq!(web_ui.password, "s3cret");
     }
 
     #[test]

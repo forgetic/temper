@@ -52,7 +52,7 @@ pub(crate) struct IssueRepositoryDto {
 /// Marker object Forgejo attaches to a PR-as-issue row's `pull_request` field.
 ///
 /// Its presence (a non-null object) distinguishes a pull request from a genuine
-/// issue. Forgejo 7.0.x also exposes merge-state hints here, which let labelled
+/// issue. Forgejo also exposes merge-state hints here, which let labelled
 /// summary scans separate portable `closed` from `merged` without rendering the
 /// expensive pull-request detail endpoint.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]

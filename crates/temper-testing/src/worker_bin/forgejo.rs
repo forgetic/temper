@@ -14,11 +14,9 @@
 //!    [`block_on`](crate::block_on) cannot drive them. We run them on a
 //!    current-thread Tokio runtime instead.
 //!
-//! CI is produced by the real `forgejo-runner` and read via the Phase 3b web-UI
-//! path, so there is no fake `--kind ci` worker here; `--kind ci` is rejected
-//! for this backend at parse time. The web-UI username/password (when present)
-//! are carried in [`ForgejoArgs`] for that read path; this module only needs the
-//! token to construct the handle.
+//! CI is produced by the real `forgejo-runner` and read through Forgejo's
+//! token-authenticated Actions APIs, so there is no fake `--kind ci` worker here;
+//! `--kind ci` is rejected for this backend at parse time.
 
 use std::sync::Arc;
 
@@ -155,25 +153,14 @@ async fn run_async(
     }
 }
 
-/// Builds a [`ForgejoForge`] from the connection details and per-role token.
+/// Builds a token-authenticated [`ForgejoForge`] for one role.
 ///
-/// When the worker was given web-UI credentials (the optional
-/// [`FORGEJO_USERNAME_ENV`](crate::worker_bin::args::FORGEJO_USERNAME_ENV) /
-/// [`FORGEJO_PASSWORD_ENV`](crate::worker_bin::args::FORGEJO_PASSWORD_ENV)), they
-/// are wired into the config so the Phase 3b CI read path can fall back to the
-/// password/web-UI live-view JSON when Forgejo 7.0.x does not serve `actions/runs`
-/// over REST (ADR 0019). Without them, `list_ci_jobs` is REST-only and hard-errors
-/// on that version — so any role that observes a CI gate must be given them.
-///
-/// The token and password never appear in logs or errors; only the base URL is
-/// echoed.
+/// The token never appears in logs or errors; only the base URL is echoed.
 fn build_forge(forgejo: &ForgejoArgs) -> ForgejoForge {
-    let mut config = ForgejoConfig::new(forgejo.base_url.clone(), forgejo.token.clone())
-        .with_ci_diagnostics(forgejo.ci_diagnostics);
-    if let (Some(username), Some(password)) = (&forgejo.username, &forgejo.password) {
-        config = config.with_web_ui_credentials(username, password);
-    }
-    ForgejoForge::new(config)
+    ForgejoForge::new(ForgejoConfig::new(
+        forgejo.base_url.clone(),
+        forgejo.token.clone(),
+    ))
 }
 
 /// Builds the shared fake registry, then swaps the **engineer** entry for the

@@ -36,15 +36,19 @@ the engineer PR and bot landing.
 
 - Rust workspace build tools.
 - `curl`, `git`, `mkfifo`, and Python 3.
-- Pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries in
-  `.cache/forgejo/`.
+- The Bench-pinned Forgejo `16.0.1` and `forgejo-runner` `12.12.0`
+  Linux-amd64 fixtures. The launcher resolves them through `bench-forgejo`,
+  downloading and checksum-verifying missing files in `.cache/forgejo/`.
 - A host where the runner may execute host-mode jobs directly. No containers.
 - A local jig checkout at `~/src/rust/jig` with
   `fixtures/reference-delivery.json` only if you run `./run.sh single-repo`.
 
 `run.sh start` builds the development-profile `temper` binary plus the in-tree
 `temper-testing-worker` binary and does not use jig. `run.sh single-repo` builds
-`temper` and the local jig binary.
+`temper` and the local jig binary. Both paths build the small
+`temper-forgejo-fixture` resolver, obtain their binary paths and versions from
+the merged Bench fixture revision, and require `/api/v1/version` to report the
+resolved `16.0.1` release before registering the runner.
 
 ## Layout
 

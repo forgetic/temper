@@ -53,7 +53,6 @@ pub(super) fn write_bundle(root: &Path, repos: &[&str]) -> PathBuf {
              [forge]\n\
              url = \"http://forge.local:3000\"\n\
              admin = \"root\"\n\
-             ci_user = \"bot\"\n\
              [engine]\n\
              bind = \"127.0.0.1:38100\"\n\
              repos = [{repos}]\n\

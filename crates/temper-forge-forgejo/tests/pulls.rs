@@ -4,9 +4,7 @@
 
 mod support;
 
-use support::{
-    MockHttpClient, OWNER, REPO, block_on, body_json, forge, forge_with_web_ui, pull_id, repo_id,
-};
+use support::{MockHttpClient, OWNER, REPO, block_on, body_json, forge, pull_id, repo_id};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
 use temper_forge_model::{
     BranchRef, CreateComment, CreatePullRequest, Forge, ItemListDetails, ItemNumber, ItemSort,
@@ -86,7 +84,7 @@ fn pull_request_limit_bounds_page_size_and_stops_when_satisfied() {
 fn unlabelled_open_pull_request_query_does_not_fetch_closed_history() {
     let client = MockHttpClient::new();
     client.push_response(200, "[]");
-    let forge = forge_with_web_ui(client.clone());
+    let forge = forge(client.clone());
 
     let query = PullRequestQuery {
         state: Some(PullRequestState::Open),
@@ -108,12 +106,6 @@ fn unlabelled_open_pull_request_query_does_not_fetch_closed_history() {
         !request
             .query
             .contains(&("state".to_string(), "all".to_string()))
-    );
-    assert!(
-        !client
-            .recorded()
-            .iter()
-            .any(|request| request.path.contains("/user/login"))
     );
 }
 

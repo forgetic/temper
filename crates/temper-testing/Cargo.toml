@@ -14,6 +14,10 @@ path = "src/bin/temper-testing-worker.rs"
 name = "temper-testing-daemon-worker"
 path = "src/bin/temper-testing-daemon-worker.rs"
 
+[[bin]]
+name = "temper-forgejo-fixture"
+path = "src/bin/temper-forgejo-fixture.rs"
+
 # Compiled process fixture and custom early-main driver for the Linux
 # descendant-containment acceptance matrix. The driver dispatches the private
 # supervisor helper before running production APIs; no test invokes Cargo.
@@ -52,7 +56,7 @@ toml.workspace = true
 temper-forge-model = { path = "../temper-forge-model" }
 temper-forge-filesystem = { path = "../temper-forge-filesystem" }
 temper-forge-forgejo = { path = "../temper-forge-forgejo" }
-bench-forgejo = { git = "https://git.ekanayaka.io/ai/bench.git", rev = "1ca9f7a" }
+bench-forgejo = { git = "https://git.ekanayaka.io/ai/bench.git", rev = "174d0d7a8eddc0c68f39bb9c34b79c70f6657554" }
 temper-forge-memory = { path = "../temper-forge-memory" }
 # Hermetic real-stack fixture builders compose the real daemon, in-process
 # daemon transport, worker loop, CodingExecutor, and native agent behind a Jig

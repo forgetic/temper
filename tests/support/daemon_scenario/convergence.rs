@@ -28,9 +28,10 @@ pub(super) fn drive_variant(
             block_on(assert_converged(forge, provisioned, engineer, issue, 1))
         }),
         "deferred" => {
-            // Forgejo 7 reports the runner-produced red job only as bare
-            // `status: failure`. The dedicated CI poll must retain that as
-            // recovery-required without dispatching writable repair or landing.
+            // Forgejo 16 reports the runner-produced red job only as bare
+            // `status: failure` through the jobs API. The dedicated CI poll
+            // must retain that as recovery-required without dispatching
+            // writable repair or landing.
             poll_until(deadline, || {
                 block_on(assert_ambiguous_failure_observed(
                     forge,
@@ -248,17 +249,12 @@ async fn completed_ci_jobs(
     Ok(jobs)
 }
 
-/// Admin-token forge handle with the engineer's web-UI credentials attached for
-/// the ADR 0019 CI reads, mirroring the daemon binary's own environment.
-pub(super) fn admin_forge(
-    server: &ForgejoServer,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-) -> ForgejoForge {
+/// Admin-token API-only Forgejo handle, mirroring the daemon binary's resolved
+/// token identity.
+pub(super) fn admin_forge(server: &ForgejoServer, provisioned: &Provisioned) -> ForgejoForge {
     ForgejoForge::new(
         ForgejoConfig::new(server.base_url(), &provisioned.admin_token)
-            .with_default_repo(&provisioned.owner, &provisioned.name)
-            .with_web_ui_credentials(&engineer.user, &engineer.password),
+            .with_default_repo(&provisioned.owner, &provisioned.name),
     )
 }
 

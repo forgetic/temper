@@ -69,9 +69,6 @@ fn forgejo_drive_hint_wake_bypasses_idle_backoff() {
         backend: Backend::Forgejo(ForgejoArgs {
             base_url: "http://127.0.0.1:1".into(),
             token: "token".into(),
-            username: None,
-            password: None,
-            ci_diagnostics: false,
         }),
         root: root.clone(),
         owner: "acme".into(),

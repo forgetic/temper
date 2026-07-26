@@ -45,12 +45,17 @@ alone.
 - `curl`, `git`, `mkfifo`, and Python 3.
 - A local jig checkout at `~/src/rust/jig` with
   `fixtures/basic-delivery.json`.
-- Pinned Forgejo `7.0.12` and `forgejo-runner` `3.5.1` binaries in
-  `.cache/forgejo/`.
+- The Bench-pinned Forgejo `16.0.1` and `forgejo-runner` `12.12.0`
+  Linux-amd64 fixtures. The launcher resolves them through `bench-forgejo`,
+  downloading and checksum-verifying missing files in `.cache/forgejo/`.
 - A host where the runner may execute host-mode jobs directly. No containers.
 
-`run.sh` always builds the development-profile `temper` binary and the local jig
-binary before starting.
+`run.sh` builds the development-profile `temper` binary and the local jig
+binary before starting. It also builds the small in-tree
+`temper-forgejo-fixture` resolver, which obtains both binary paths and versions
+from the merged Bench fixture revision. Startup then requires
+`/api/v1/version` to report the resolved `16.0.1` release before registering
+the runner.
 
 ## Layout
 

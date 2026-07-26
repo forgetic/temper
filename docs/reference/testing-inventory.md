@@ -119,7 +119,8 @@ snapshot.
   server-error retry/requeue in the same hermetic real-stack suite.
 - **Manual/all-e2e live tests** hold the remaining ignored scenarios: extra root
   Forgejo stories, provider/OAuth probes, lower-level Forgejo fixture smokes,
-  provisioning edge cases, CI web-UI checks, and diagnostic/preflight coverage.
+  provisioning edge cases, Forgejo 16 API-only CI checks, and
+  diagnostic/preflight coverage.
   These scenarios are not deleted or deprecated by the slim full lane; they are
   explicit because they are slower, environment-sensitive, redundant with
   hermetic coverage, or useful mainly when debugging the live fixture stack.
@@ -144,9 +145,11 @@ snapshot.
 - `tests/init_forgejo_e2e.rs` — `temper init --apply` local artifacts,
   live Forgejo state, idempotency, and daemon boot (default capstone lane).
 - `crates/temper-testing/tests/forgejo_*.rs` — server, runner, provision,
-  PR-prep, CI web-UI, and parallel-fixture preflights (manual/all-e2e lane).
+  PR-prep, and parallel-fixture preflights (manual/all-e2e lane).
 - `crates/temper-forge-forgejo/tests/live.rs` — provider smoke against a live
-  Forgejo fixture (manual/all-e2e lane).
+  Forgejo 16.0.1 fixture, including successful and intentionally failing jobs
+  observed through recorded token-authenticated run/jobs API requests only
+  (manual/all-e2e lane).
 - `crates/temper-provision-forgejo-cli/tests/existing_repo_access.rs` — live
   existing-repository provisioning cases (manual/all-e2e lane).
 - `crates/temper-agent/tests/*oauth_live.rs` and

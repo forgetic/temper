@@ -165,19 +165,6 @@ pub enum ClockKind {
 /// Phase 4 spawner sets this per child. Read only for `--backend forgejo`.
 pub const FORGEJO_TOKEN_ENV: &str = "TEMPER_FORGEJO_TOKEN";
 
-/// Environment variable carrying the web-UI login username for CI reads.
-///
-/// Optional: only the CI-reading role(s) need it (the Phase 3b password/web-UI
-/// CI read path logs in with username + password). Other roles act through the
-/// token alone.
-pub const FORGEJO_USERNAME_ENV: &str = "TEMPER_FORGEJO_USERNAME";
-
-/// Environment variable carrying the web-UI login password for CI reads.
-///
-/// Optional, paired with [`FORGEJO_USERNAME_ENV`]; same rationale as the token —
-/// passed via env, never argv.
-pub const FORGEJO_PASSWORD_ENV: &str = "TEMPER_FORGEJO_PASSWORD";
-
 /// Environment variable carrying the workflow document path (`--workflow`).
 ///
 /// Mirrors the production worker's `TEMPER_WORKFLOW_FILE` (see
@@ -194,14 +181,6 @@ pub const WORKFLOW_FILE_ENV: &str = "TEMPER_WORKFLOW_FILE";
 /// `temper-wake` itself never reads the environment. An absent, blank,
 /// unparseable, or zero value falls back to [`temper_wake::DEFAULT_WAKE_DEBOUNCE`].
 pub const WAKE_DEBOUNCE_MS_ENV: &str = "TEMPER_WAKE_DEBOUNCE_MS";
-
-/// When set to a non-blank value, the Forgejo backend logs web-UI CI fallback
-/// reads to stderr.
-///
-/// Read here, at the process boundary, and passed explicitly into
-/// [`temper_forge::config::ForgejoConfig::with_ci_diagnostics`]; the backend
-/// never reads the environment itself.
-pub const FORGEJO_CI_DIAGNOSTICS_ENV: &str = "TEMPER_FORGEJO_CI_DIAGNOSTICS";
 
 /// Which Forge backend a worker process builds its handle against (`--backend`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
@@ -228,26 +207,15 @@ impl BackendKind {
 
 /// Forgejo connection details for `--backend forgejo`.
 ///
-/// The base URL is the only piece that arrives on argv; every credential is read
-/// from the environment ([`FORGEJO_TOKEN_ENV`], [`FORGEJO_USERNAME_ENV`],
-/// [`FORGEJO_PASSWORD_ENV`]) so it never appears in a process command line. The
-/// [`std::fmt::Debug`] impl redacts the secrets.
+/// The base URL is the only piece that arrives on argv; the token is read from
+/// [`FORGEJO_TOKEN_ENV`] so it never appears in a process command line. The
+/// [`std::fmt::Debug`] impl redacts it.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ForgejoArgs {
     /// Forgejo base URL, e.g. `http://127.0.0.1:3000`.
     pub base_url: String,
     /// Per-role access token (from [`FORGEJO_TOKEN_ENV`]); REST identity.
     pub token: String,
-    /// Optional web-UI login username (from [`FORGEJO_USERNAME_ENV`]) for the
-    /// Phase 3b CI read path; `None` for roles that do not read CI.
-    pub username: Option<String>,
-    /// Optional web-UI login password (from [`FORGEJO_PASSWORD_ENV`]); paired
-    /// with [`Self::username`].
-    pub password: Option<String>,
-    /// Whether the backend logs web-UI CI fallback reads (from
-    /// [`FORGEJO_CI_DIAGNOSTICS_ENV`]). Resolved at the process boundary and
-    /// passed explicitly into the backend config.
-    pub ci_diagnostics: bool,
 }
 
 impl fmt::Debug for ForgejoArgs {
@@ -256,9 +224,6 @@ impl fmt::Debug for ForgejoArgs {
             .debug_struct("ForgejoArgs")
             .field("base_url", &self.base_url)
             .field("token", &Redacted(self.token.is_empty()))
-            .field("username", &self.username)
-            .field("password", &Redacted(self.password.is_none()))
-            .field("ci_diagnostics", &self.ci_diagnostics)
             .finish()
     }
 }

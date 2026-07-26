@@ -15,6 +15,16 @@ work. A `ci_failed` queue matches only after every latest-per-name job for the
 current PR head is terminal; a visible failure mixed with queued/running work
 remains pending.
 
+Forgejo 16.0.1 is the minimum supported Forgejo release. The engine reads CI
+with its resolved Forge token through Actions run discovery and
+`/api/v1/repos/{owner}/{repo}/actions/runs/{provider_run_id}/jobs`; workers need
+no Forgejo CI username or password. A status-only `failure` remains
+recovery-required `Unknown`, not an ordinary source failure. Existing persistent
+services must follow the operator-owned
+[Forgejo 16 migration runbook](../how-to/migrate-forgejo-16-api-ci.md): prove the
+fixture and merge first, migrate and prove the service with the previous Temper
+deployment next, then remove `ci_user` and restart the API-only binary.
+
 Forgejo webhooks are posted to the
 engine/standalone HTTP surface at `POST /forgejo/webhook` when `[engine]
 webhook_secret` or `webhook_secret_file` is configured; there is no separate
@@ -353,8 +363,4 @@ Mechanical workers also emit `mechanical_reconciliation_summary` with `mode`,
 `snapshot_count`, `finding_count`, and applied/advisory action counts. Normal
 mechanical ticks emit `mechanical_automation_execution` per automated item and
 `mechanical_automation_summary` with candidate, applied, unchanged,
-gate-not-satisfied, and error counts. When `TEMPER_FORGEJO_CI_DIAGNOSTICS` is set
-to a non-blank value, Forgejo web-UI CI fallback reads are logged as
-`read_ci_jobs_via_web_ui`; non-CI role ticks should not produce them. The worker
-binary reads this env var at startup and sets the backend's `ci_diagnostics`
-config flag explicitly (the backend never reads the environment).
+gate-not-satisfied, and error counts.

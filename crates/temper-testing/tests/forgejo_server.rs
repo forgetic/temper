@@ -8,7 +8,7 @@
 //! ```
 //!
 //! The first run downloads the pinned Forgejo binary into `.cache/forgejo/`
-//! (checksum-verified); later runs reuse it. Point `TEMPER_FORGEJO_BINARY` at a
+//! (checksum-verified); later runs reuse it. Point `BENCH_FORGEJO_BINARY` at a
 //! pre-downloaded binary to skip the download.
 //!
 //! This test deliberately reaches the server with a **blocking** HTTP client
@@ -41,7 +41,20 @@ fn server_boots_serves_version_and_tears_down() {
         .send("GET", version_url.as_str(), None, None)
         .map(|response| String::from_utf8_lossy(&response.body).into_owned())
         .expect("version endpoint responds");
-    assert!(body.contains("version"), "unexpected /version body: {body}");
+    let version: serde_json::Value =
+        serde_json::from_str(&body).expect("version endpoint returns JSON");
+    let reported = version["version"]
+        .as_str()
+        .expect("version endpoint includes a string version");
+    assert!(
+        reported == temper_testing::forgejo_server::download::FORGEJO_VERSION
+            || reported.starts_with(&format!(
+                "{}+",
+                temper_testing::forgejo_server::download::FORGEJO_VERSION
+            )),
+        "fixture reported {reported}, expected the Bench-pinned Forgejo {} release",
+        temper_testing::forgejo_server::download::FORGEJO_VERSION
+    );
 
     // Dropping the server kills the process and removes the data dir; the port
     // should stop answering shortly after.

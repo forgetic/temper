@@ -78,8 +78,8 @@ pub use resolved::{
     CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
     ForgeSettings, GitIdentity, ObservabilitySettings, PathSettings, ProviderCredential,
     ProviderKind, ProviderSettings, RepoPath, Resolved, STANDALONE_FINAL_KILL_ALLOWANCE,
-    STANDALONE_HTTP_DRAIN_ALLOWANCE, SecretReference, WebUiCreds, WorkerLivenessLimits,
-    WorkerPoolSettings, WorkerSettings,
+    STANDALONE_HTTP_DRAIN_ALLOWANCE, SecretReference, WorkerLivenessLimits, WorkerPoolSettings,
+    WorkerSettings,
 };
 pub use schema::{
     AgentConfig, AgentCredentials, AgentDeadlineConfig, AgentProfileConfig, AgentProviderConfig,
@@ -346,13 +346,6 @@ pub fn lint(resolved: &Resolved) -> Vec<Finding> {
     if resolved.engine.roles.is_empty() {
         findings.push(Finding::error("no roles configured (`[engine] roles`)"));
     }
-    if resolved.forge.web_ui.is_none() {
-        findings.push(Finding::note(
-            "no CI-reader web-UI credentials (`[forge] ci_user` + that user's \
-             password); CI status reads will fail on a REST-less Forgejo (ADR 0019)",
-        ));
-    }
-
     // Every capability role should have a resolvable git identity (the worker
     // needs a push token), or it cannot run that role's jobs.
     for capability in &resolved.worker.capabilities {

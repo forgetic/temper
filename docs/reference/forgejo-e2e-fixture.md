@@ -33,11 +33,22 @@ local and gitignored.
 
 ## Pinned binaries
 
-The pinned Forgejo server and `forgejo-runner` asset constants are owned by
-`bench-forgejo`. Run bench's fixture command (for example, `bench forgejo
-download`) or the bench crate's own tests (for example, `cargo test -p
-bench-forgejo ...` from the bench checkout) when you need to pre-stage or verify
-generic fixture downloads outside Temper.
+The merged Bench fixture pins checksum-verified Linux-amd64 assets for Forgejo
+`16.0.1` and `forgejo-runner` `12.12.0`. Temper's two delivery launchers invoke
+the in-tree resolver backed by those constants rather than defining their own
+versions. To pre-stage both assets from a Temper checkout and print their
+resolved paths, run:
+
+```sh
+cargo run -p temper-testing --bin temper-forgejo-fixture
+```
+
+The resolver downloads missing assets into `.cache/forgejo/` and prints
+`forgejo_version`, `forgejo_runner_version`, `forgejo`, and `forgejo_runner`
+entries. The launchers additionally reject startup unless `/api/v1/version`
+reports the resolved server release. Bench's own `bench forgejo download`
+command provides the equivalent generic fixture operation from a Bench
+checkout.
 
 Both assets are `linux-amd64`; the server is SQLite and statically linked.
 Partial downloads are never published. Offline machines should point binary
@@ -79,8 +90,9 @@ token, repository, and per-role identities. On cache miss it:
 5. upserts compiled workflow labels through the async `ForgejoForge` backend;
 6. enables Actions and commits `.forgejo/workflows/ci.yml`.
 
-Tokens and passwords are redacted from debug output and travel to workers by
-environment, never argv.
+Tokens are redacted from debug output and travel to workers by environment,
+never argv. Generated passwords are used only during fixture provisioning to
+mint each user's token; they are not engine, worker, or CI-observation inputs.
 
 ## CI pass/fail mechanism
 
@@ -91,9 +103,9 @@ SHA. This avoids `actions/checkout`. The daemon live capstone intentionally
 leaves the status-only failing head unchanged; explicit fail-then-pass routing
 is covered against the hermetic forge, which can supply a typed conclusion.
 
-Forgejo 7.0.x does not emit Actions-completion repository webhooks. The daemon
-fixture therefore sets `ci_poll_cadence_secs = 1` while retaining deliberately
-long 600-second `poll_cadence_secs` and `mechanical_cadence_secs` values. The
+The exercised Forgejo 16.0.1 fixture does not emit an Actions-completion
+repository webhook. The daemon fixture therefore sets
+`ci_poll_cadence_secs = 1` while retaining deliberately long 600-second `poll_cadence_secs` and `mechanical_cadence_secs` values. The
 short dedicated monitor emits exact PR CI hints: explicit terminal failure may
 evaluate `pr_ci_failed`, terminal green runs targeted mechanical landing, and
 status-only failure remains recovery-required. Convergence before either broad
@@ -105,6 +117,13 @@ cadence alone does not discover role-owned work. The CI aggregate is
 latest-per-name for the current head, so `ci_failed` requires explicit ordinary
 failure evidence after every latest job is terminal; a terminal job mixed with
 queued or running work stays pending.
+
+The live backend contract in `temper-forge-forgejo/tests/live.rs` records every
+CI read. It requires only token-authenticated `/api/v1/.../actions/runs` and
+`/api/v1/.../actions/runs/{provider_run_id}/jobs` requests, round-trips provider
+run/job/attempt/task identity, and observes one success plus one status-only
+failure mapped to `Unknown`. It rejects any login, repository Actions HTML,
+live-view POST, or repository-wide tasks request.
 
 ## PR head preparation
 

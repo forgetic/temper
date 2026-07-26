@@ -14,10 +14,9 @@ use temper_forge::RepositoryPath;
 use temper_forge::config::ForgejoConfig;
 use temper_workflow::{CompiledWorkflow, RoleId};
 
-/// Builds the Forgejo backend config from the resolved forge settings.
+/// Builds the token-authenticated Forgejo backend config from resolved settings.
 ///
-/// Requires a forge URL and an admin token; applies the optional CI-reader
-/// web-UI credentials (ADR 0019).
+/// Requires a forge URL and an admin token.
 pub fn forgejo_config(resolved: &Resolved) -> Result<ForgejoConfig, String> {
     let url = resolved
         .forge
@@ -28,14 +27,7 @@ pub fn forgejo_config(resolved: &Resolved) -> Result<ForgejoConfig, String> {
         .require_admin_token()
         .map_err(|error| error.to_string())?;
     // I/O boundary: the token is handed to the Forgejo HTTP client.
-    let mut config = ForgejoConfig::new(url, token.expose_secret());
-    if let Some(web) = &resolved.forge.web_ui {
-        config = config.with_web_ui_credentials(
-            web.username.clone(),
-            web.password.expose_secret().to_string(),
-        );
-    }
-    Ok(config)
+    Ok(ForgejoConfig::new(url, token.expose_secret()))
 }
 
 /// Builds the daemon runtime config from the resolved engine settings.

@@ -91,11 +91,6 @@ pub(super) fn assert_local_artifacts(
         resolved.forge.admin_token.is_some(),
         "resolved deployment must have an admin token from credentials"
     );
-    assert!(
-        resolved.forge.web_ui.is_some(),
-        "resolved deployment must have CI web-UI credentials (bot)"
-    );
-
     let repos: Vec<String> = resolved.engine.repos.iter().map(|r| r.display()).collect();
     assert_eq!(
         repos,

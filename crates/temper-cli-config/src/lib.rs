@@ -28,7 +28,7 @@ use temper_cli_common::{
 };
 use temper_config::{
     ConfigError, LoadInputs, LoadedPaths, ProviderCredential, Resolved, SecretReference,
-    WebUiCreds, config_template, credentials_template, lint, load_explicit_with_secret_validation,
+    config_template, credentials_template, lint, load_explicit_with_secret_validation,
 };
 
 pub use check::{CheckInputs, check};
@@ -244,14 +244,6 @@ fn render(resolved: &Resolved) -> String {
         out,
         "  admin_token  = {}",
         present(&resolved.forge.admin_token)
-    );
-    let _ = writeln!(
-        out,
-        "  web_ui       = {}",
-        match &resolved.forge.web_ui {
-            Some(WebUiCreds { username, .. }) => format!("set (user {username})"),
-            None => "unset".to_string(),
-        }
     );
     let roles_with_identity: Vec<&String> = resolved.forge.role_identities.keys().collect();
     let _ = writeln!(out, "  role tokens  = {}", resolved.forge.role_tokens.len());

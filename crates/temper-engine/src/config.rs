@@ -39,8 +39,8 @@ pub const USAGE: &str = concat!(
     "[--mechanical-cadence-secs <n>] ",
     "[--lease-ttl-secs <n>] ",
     "[--webhook-secret-file <path>] [--daemon-id <id>]\n",
-    "  Forgejo connection settings (URL, admin token, optional CI web-UI ",
-    "credentials) come from the resolved temper config, translated by ",
+    "  Forgejo connection settings (URL and token-authenticated API identity) ",
+    "come from the resolved temper config, translated by ",
     "temper-engine-service's forgejo_config adapter"
 );
 

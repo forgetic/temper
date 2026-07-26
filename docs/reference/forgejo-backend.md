@@ -23,8 +23,6 @@ adapter, supplying:
 | `base_url` | required Forgejo base URL; trailing slashes are stripped |
 | `token` | required REST token, sent as `Authorization: token <token>` |
 | `default_owner` / `default_name` (`with_default_repo`) | optional `owner/repo` default |
-| `web_ui` (`with_web_ui_credentials`) | optional web-UI login used only for the CI fallback |
-| `ci_diagnostics` (`with_ci_diagnostics`) | when set, web-UI CI fallback reads are logged to stderr |
 
 REST requests are sent under `/api/v1`, JSON typed, paginated with
 `limit`/`page`, and capped internally. Credentials are redacted from `Debug` and
@@ -49,7 +47,7 @@ IDs are backend-owned opaque strings; workflow code must not parse them.
 | Comment | `forgejo:{owner}/{repo}:comment:{id}` |
 | Review | `forgejo:{owner}/{repo}:review:{id}` |
 | Label | `forgejo:{owner}/{repo}:label:{id}` |
-| CI job | `forgejo:{owner}/{repo}:actions:{run}:{job_index}:{task_id}` |
+| CI job | `forgejo:{owner}/{repo}:actions:{provider_run_id}:{job_id}:{attempt}:{task_id}` |
 | User | the raw Forgejo login |
 
 ## Coverage and error shape
@@ -63,7 +61,7 @@ areas are:
 - merge payload fields are best-effort Gitea/Forgejo shape;
 - native dependency add/remove payloads are Forgejo/Gitea-specific;
 - optimistic concurrency is not provider-atomic;
-- CI is REST-first with a version-sensitive web-UI fallback for Forgejo 7.0.x;
+- CI requires Forgejo 16.0.1 and uses token-authenticated run/job JSON APIs only;
 - Forgejo-only surfaces such as teams, branch protection policy, and raw CI logs
   stay outside the portable trait.
 
@@ -90,16 +88,16 @@ Forgejo models pull requests as issues. Consequences:
   index, not `/pulls`.
 
 `body_contains`, author, and assignee filters are applied client-side after the
-narrowest safe provider query. Forgejo 7.0.x has no reliable exact body-substring
-search. Ordinary `IssueQuery.labels` and `PullRequestQuery.labels` remain portable
-all-of filters: although Forgejo versions may interpret the single
-comma-separated provider filter as OR, the backend applies a final local
-all-label check.
+narrowest safe provider query because exact body-substring search is not part of
+the supported Forgejo API contract. Ordinary `IssueQuery.labels` and
+`PullRequestQuery.labels` remain portable all-of filters: although Forgejo may
+interpret the single comma-separated provider filter as OR, the backend applies
+a final local all-label check.
 
 Consolidated candidate reads use Forgejo's provider-side any-label search, with
-one request shape per lifecycle bucket. Forgejo 15's repository-scoped
-`/repos/{owner}/{repo}/issues` endpoint actually applies multiple label names as
-all-of even though its API description says any-of. Consequently, a candidate
+one request shape per lifecycle bucket. The repository-scoped
+`/repos/{owner}/{repo}/issues` endpoint may apply multiple label names as all-of
+even though its API description says any-of. Consequently, a candidate
 bucket with multiple interest labels uses the owner-scoped
 `/repos/issues/search?owner=...&labels=...` index and locally rejects rows whose
 embedded repository identity is not the requested repository. Single-label and
@@ -194,8 +192,8 @@ Both issue and PR dependency methods use
 Reads return the items the source is blocked by, sorted and deduplicated.
 
 Add/remove bodies must include the target repository coordinate:
-`{ "index": <target>, "owner": <owner>, "repo": <repo> }`. On Forgejo 7.0.12,
-omitting owner/repo resolves against an empty repository and fails.
+`{ "index": <target>, "owner": <owner>, "repo": <repo> }`. Omitting owner/repo
+can resolve against an empty repository and fail.
 
 A dependency read `404` is treated as an empty list for compatibility with
 providers lacking the endpoint. Add/remove first verify the target exists;
@@ -316,94 +314,56 @@ With no validator, `CasMode::Strict` rejects the conditional write as
 is not atomic and `updated_at` has one-second granularity, so lease race safety
 is best-effort on this backend.
 
-### CI is REST-first, web-UI fallback on Forgejo 7.0.x
+### CI uses Forgejo 16 per-run jobs APIs
 
-Newer Forgejo/Gitea Actions REST endpoints are used when available:
-`/actions/runs` plus `/actions/tasks`. For PR-only queries, runs are matched by
-PR ref, provider head SHA, event payload PR data, or PR head branch so historical
-same-branch diagnostics remain visible. Tasks are grouped into the latest
-attempt and mapped to portable `CiJob`s. REST task conclusion/reason fields and
-the run plus latest-attempt identities are retained when present.
-Machine-readable task/run reasons can refine a broad failure into an explicit
-infrastructure category; arbitrary reason prose is retained for diagnostics but
-never guessed into a category. An explicit task `conclusion: failure` is the
-trustworthy evidence required for ordinary source/test `failure`. Forgejo also
-uses a status-only `failure` when execution is terminalized after runner loss,
-including the captured run #591/task 3385 shape, so bare `status: failure`
-without a conclusion or specific machine reason maps to terminal `unknown` and
-requires recovery rather than writable repair. Success, cancellation,
-interruption, timeout, runner loss, startup failure, action-required, neutral,
-and skipped retain their explicit categories. A task known to be terminal
-through a completed task or run but carrying an unrecognized result likewise
-maps to terminal `unknown`; the parent run's failure does not manufacture an
-ordinary job failure. Logs and output cadence are not classification evidence.
-Printable raw evidence is control-sanitized and bounded to 256 UTF-8 bytes.
+Forgejo 16.0.1 is the minimum supported release for every Temper Forgejo
+integration, not only CI. The backend lists workflow
+runs through `/repos/{owner}/{repo}/actions/runs`, strictly matches them to the
+requested pull request and/or commit, and expands every match through:
 
-A non-empty `CiJobQuery.commit_sha` changes this to strict commit ownership,
-including when `pull_request_id` is also present. The run must expose a matching
-provider SHA in its run fields or pull-request event payload; PR numbers, refs,
-branches, and the separately fetched PR head cannot widen the query. Exact SHAs
-and full/abbreviated pairs of at least seven characters match. Missing provider
-SHA evidence is conservative: the run/job is omitted, and the query SHA is never
-copied into a job to manufacture ownership. A matching current run contributes
-queued or running tasks with its provider commit SHA. A registered run with no
-tasks contributes no jobs but sets `CiJobListing::matching_ci_present`, so the
-gate remains pending without the missing-CI monitor mistaking runner queueing
-for an absent run.
+```text
+GET /repos/{owner}/{repo}/actions/runs/{provider_run_id}/jobs
+```
 
-Forgejo 7.0.x lacks those REST run/task endpoints. If web-UI credentials are
-configured, the backend logs in with the version-appropriate cookie/CSRF
-handshake, scrapes at most 20 newest-first run ids from
-`/{owner}/{repo}/actions`, and reads live-view JSON from
-`POST /{owner}/{repo}/actions/runs/{run}/jobs/{job}/attempt/1` with
-`{"logCursors":[]}`. Forgejo 15.0.3 uses that attempt-qualified route and
-password cookies without CSRF; a `404` falls back to Forgejo 7's unqualified
-`…/jobs/{job}` route, whose cookie jar includes `_csrf` and whose request sends
-`X-Csrf-Token`. This path bypasses `/api/v1`, never sends the REST token, and is
-isolated in `ci_ui` / `ci_ui_parse` because the HTML/JSON shapes are
-version-sensitive. The fallback retains each run id and explicit attempt
-coordinate along with any job/run conclusion and reason fields present in the
-live payload. It applies the same conservative terminal-category mapping and
-bounded evidence sanitization as REST.
+`provider_run_id` is the run database `id`, not a repository-local display
+number. Every job must provide `id`, `run_id`, `attempt`, `task_id`, `name`, and
+`status`; those provider coordinates form the portable opaque job id. The
+backend selects the largest provider-reported attempt per stable job id. It
+never infers attempts from names or response order.
 
-A live-view `500` triggers one fresh login and one retry of the same route with
-rebuilt cookies and CSRF headers. Persistent non-authentication HTTP failures
-become typed per-run unreadable outcomes; login, Actions-page discovery,
-transport, and persistent authentication failures remain hard. An exact
-`get_ci_job` has no alternate ordered evidence, so an unreadable result remains
-a detailed, secret-free `Backend` error after that retry.
+A non-empty `CiJobQuery.commit_sha` requires matching provider SHA evidence from
+the run or pull-request event payload. PR numbers, refs, branches, and the
+separately fetched PR head cannot widen that ownership check, and query values
+are never copied into returned jobs. A matching run with no jobs sets
+`CiJobListing::matching_ci_present`, keeping the gate pending while a runner is
+assigned.
 
-List aggregation continues across the full bounded window but treats the first
-unreadable run as a newest-first trust boundary. Matching jobs already read on
-the newer side remain usable (including a newer success followed only by broken
-older history). Matching evidence on the older side is omitted because the
-unreadable run could supersede it. If the boundary appears before the first
-readable target match, or every recent run is unreadable, the result is
-`Ok([])`: the gate stays pending rather than accepting potentially stale green
-CI. Empty degraded reads are non-terminal in the existing CI cache and are
-therefore fetched again.
+Missing, unauthorized, unsupported, malformed, cross-run, duplicate, or
+zero-identity job responses fail closed as provider unavailability. There is no
+repository-wide tasks, HTML, login, or live-view fallback. Status filtering and
+sorting remain deterministic, and `get_ci_job` re-reads the encoded provider run
+and exact provider job/attempt/task identity.
 
-Each degraded list read emits one bounded warning with a safe representative
-repository/run/job/status/retry count, total unreadable and omitted diagnostic
-counts, and `continued` or `pending` outcome in structured fields and the
-operator message. Cookies, CSRF values, credentials, and response bodies are
-never retained in that diagnostic.
+Forgejo 16 job rows expose status but no separate detailed conclusion/reason. A
+bare `failure` therefore remains terminal `unknown` and recovery-required; it is
+not reinterpreted as ordinary source/test failure. Explicit success,
+cancellation, interruption, timeout, runner loss, startup failure,
+action-required, neutral, and skipped statuses retain their portable categories.
+Provider evidence is control-sanitized and bounded before it is exposed.
 
-The fallback otherwise preserves strict explicit commit ownership: PR branch
-and pseudo-ref widening is used only when no commit filter was supplied,
-preserving PR-only fail-then-pass history across different heads. Query status
-filtering and sorting remain in the common list path, and cancelled superseded
-runs are dropped. Empty and queued/running reads are never eligible for terminal
-cache reuse; cached ownership uses the same safe SHA comparison. See
-[ADR 0019](../adr/0019-forgejo-ci-read-via-web-ui.md).
+Exact-attempt retry remains `unsupported` on Forgejo. The backend validates that
+the portable repository and PR IDs name the same repository, then fails closed
+without guessing an endpoint or mutating a commit/ref. Operators should use a
+configured read-only interruption diagnostic when available; otherwise Temper
+parks the PR with exact head/run/attempt evidence for manual retriggering.
 
-Exact-attempt retry is deliberately `unsupported` on Forgejo. Actions rerun
-routes and attempt semantics vary across supported releases, and the 7.0.x
-web-UI fallback is a version-sensitive read surface rather than a verified
-mutation contract. The backend validates that the portable repository and PR
-IDs name the same Forgejo repository, then fails closed without HTTP. It never
-guesses a REST/UI endpoint and never writes a commit or ref to trigger CI.
-Operators should configure the workflow's `pull_request_read_only` interruption
-diagnostic when available; otherwise Temper parks the PR with the exact
-head/run/attempt, provider evidence, URLs, timestamps, and unsupported retry
-outcome required for a safe manual retrigger.
+## Persistent-service upgrade boundary
+
+The API-only binary must not be deployed against an older Forgejo service. Prove
+the Bench-owned 16.0.1 fixture and merge the API-only feature first; an operator
+then backs up, rehearses, migrates, and proves the persistent service while the
+previous compatible Temper deployment remains running. Only after the jobs
+endpoint is proven may the operator remove the obsolete `ci_user` key from the
+deployed configuration and restart into the API-only binary. Repository tests
+and scripts never perform that persistent migration. Follow the complete
+[Forgejo 16 migration runbook](../how-to/migrate-forgejo-16-api-ci.md).

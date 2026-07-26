@@ -152,14 +152,12 @@ daemon.
 | --- | --- |
 | `TEMPER_FORGEJO_ADMIN_TOKEN` | Admin token for `temper provision-forgejo` / the testing provisioner; required, non-empty, never on argv. |
 | `TEMPER_FORGEJO_TOKEN` | Forgejo token required by `validate-reference-delivery` and by `temper-testing-worker --backend forgejo`. |
-| `TEMPER_FORGEJO_USERNAME` / `TEMPER_FORGEJO_PASSWORD` | Testing-worker Forgejo web-UI credential pair (optional). |
 | `TEMPER_WORKFLOW_FILE` | Workflow-file fallback for the provisioning/testing workers (`--workflow` wins; empty ignored). |
 | `TEMPER_WAKE_DEBOUNCE_MS` | Testing-worker local wake-debounce override. |
-| `TEMPER_FORGEJO_CI_DIAGNOSTICS` | Testing-worker Forgejo CI web-UI diagnostics (any non-blank value enables). |
 
 `provision-forgejo --out` writes a mode-0600 `credentials.toml` file in the same
 schema the daemon and validator read. It contains generated `[forge.users.*]`
-entries for workflow roles and `bot` (user/email/password/token). Durable values
+entries for workflow roles and `bot` (user/email/token). Durable values
 belong in the credentials file / secret manager; launchers should pass the file
 with `--secrets` or read short-lived child-process env from it rather than
 checking generated tokens into source control.
@@ -176,9 +174,7 @@ snippets).
 `config/temper.env` or local secret files. Its normal `start` path sets the same
 child-process implementation variables as the basic demo, plus the local jig
 process wiring used by the reviewer-gated reference workflow. Its `multi-repo`
-path additionally sets per-process `TEMPER_FORGEJO_TOKEN`,
-`TEMPER_FORGEJO_USERNAME`, `TEMPER_FORGEJO_PASSWORD`, and
-`TEMPER_FORGEJO_CI_DIAGNOSTICS` while launching deterministic
+path additionally sets per-process `TEMPER_FORGEJO_TOKEN` while launching deterministic
 `temper-testing-worker --backend forgejo` role/mechanical workers. Those values
 come from the run-local `credentials.toml` written by demo provisioning and are
 not operator configuration knobs.
@@ -225,7 +221,7 @@ or the single provider-credentials JSON instead.
 | `TEMPER_CONFIG` | `--config` flag, plus the `~/.config/temper` default location. No environment variable selects the config files. |
 | `TEMPER_FORGE_URL`, `FORGEJO_URL` | `[forge] url` in `temper.toml`. |
 | `TEMPER_FORGE_TOKEN`, `FORGEJO_ACCESS_TOKEN` | A `token` under `[forge.users.<admin>]` in `credentials.toml` (with `[forge] admin` naming the admin). |
-| `FORGEJO_USERNAME`, `FORGEJO_PASSWORD` | Web-UI / per-role credentials in `credentials.toml`. |
+| `FORGEJO_USERNAME`, `FORGEJO_PASSWORD` | Removed. Runtime Forge and CI reads use token entries under `[forge.users.*]`; no password-authenticated CI scraping replacement exists. Provisioning fixtures may still create passwords solely to mint user tokens. |
 | `TEMPER_WORKFLOW` | `[engine]` workflow settings in `temper.toml`. |
 | `TEMPER_ENGINE_BIND`, `TEMPER_ENGINE_PORT` | `[engine]` bind/port settings in `temper.toml`. |
 | `TEMPER_DAEMON_URL`, `TEMPER_WORKSPACE` | Worker daemon URL / workspace settings in `temper.toml`. |

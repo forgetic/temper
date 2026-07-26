@@ -1,615 +1,579 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Offline tests for Forgejo CI (Actions) job listing and lookup.
-//!
-//! These drive the backend through the recording mock HTTP client with canned
-//! Actions runs/tasks JSON. No test touches the network.
+//! Offline contracts for Forgejo 16 per-provider-run Actions job reads.
 mod support;
 
-use serde_json::json;
+use serde_json::{Value, json};
 use support::{MockHttpClient, block_on, forge, pull_id, repo_id};
+use temper_forge_forgejo::{HttpMethod, HttpRequest};
 use temper_forge_model::{
-    CiJobConclusion, CiJobId, CiJobQuery, CiJobSort, CiJobSortField, CiJobStatus, SortDirection,
+    CiJobConclusion, CiJobId, CiJobQuery, CiJobSort, CiJobSortField, CiJobStatus, ForgeError,
+    SortDirection,
 };
 
-/// Builds a task JSON object with the fields the adapter consumes.
-fn task(id: u64, run_number: u64, name: &str, status: &str) -> serde_json::Value {
-    task_with_head(id, run_number, name, status, "abcdef1234567")
-}
+const HEAD: &str = "abcdef1234567";
 
-fn task_with_head(
-    id: u64,
-    run_number: u64,
-    name: &str,
-    status: &str,
-    head_sha: &str,
-) -> serde_json::Value {
-    let mut task = json!({
+fn run(id: u64, display: u64, prettyref: &str, branch: &str, sha: &str, status: &str) -> Value {
+    json!({
         "id": id,
-        "run_number": run_number,
-        "name": name,
         "status": status,
-        "head_sha": head_sha,
-        "html_url": "https://forge.example.com/acme/widgets/actions/runs/10/jobs/0",
-        "created_at": "2024-01-02T03:04:05Z",
-    });
-    if status == "failure" {
-        // Ordinary failure fixtures carry the provider's explicit result. A
-        // status-only failure is covered separately by the captured run #591
-        // payload and must remain ambiguous.
-        task["conclusion"] = json!("failure");
+        "prettyref": prettyref,
+        "head_branch": branch,
+        "head_sha": sha,
+        "html_url": format!("https://forge.example.com/acme/widgets/actions/runs/{display}"),
+        "created_at": "2024-01-02T00:00:00Z",
+        "updated_at": "2024-01-02T00:05:00Z"
+    })
+}
+
+fn job(id: u64, run_id: u64, attempt: u64, task_id: u64, name: &str, status: &str) -> Value {
+    json!({
+        "id": id,
+        "run_id": run_id,
+        "attempt": attempt,
+        "task_id": task_id,
+        "name": name,
+        "status": status
+    })
+}
+
+fn runs(rows: Vec<Value>) -> String {
+    json!({ "workflow_runs": rows }).to_string()
+}
+
+fn jobs(rows: Vec<Value>) -> String {
+    Value::Array(rows).to_string()
+}
+
+fn pull(number: u64, head_ref: &str, head_sha: &str) -> String {
+    json!({
+        "number": number,
+        "state": "open",
+        "user": { "login": "author" },
+        "head": { "ref": head_ref, "sha": head_sha },
+        "base": { "ref": "main" },
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-01T00:00:00Z"
+    })
+    .to_string()
+}
+
+fn assert_api_only(requests: &[HttpRequest]) {
+    for request in requests {
+        assert_eq!(request.method, HttpMethod::Get);
+        assert!(request.path.starts_with("/api/v1/"), "{}", request.path);
+        assert!(
+            request
+                .headers
+                .iter()
+                .any(|(name, value)| name == "Authorization" && value == "token test-token")
+        );
+        assert!(
+            request
+                .headers
+                .iter()
+                .any(|(name, value)| name == "Accept" && value == "application/json")
+        );
+        assert!(!request.path.contains("/actions/tasks"));
+        assert!(!request.path.contains("/user/login"));
+        assert!(!request.path.ends_with("/acme/widgets/actions"));
+        assert_ne!(request.method, HttpMethod::Post);
     }
-    task
 }
 
 #[test]
-fn list_by_pull_request_matches_ref_and_returns_latest_attempt() {
+fn list_uses_provider_run_route_and_provider_job_attempt_task_identity() {
     let client = MockHttpClient::new();
-    // 1) PR detail (head ref/sha resolution).
+    client.push_response(200, pull(7, "feature", HEAD));
     client.push_response(
         200,
-        json!({
-            "number": 7,
-            "state": "open",
-            "user": { "login": "author" },
-            "head": { "ref": "feature", "sha": "abcdef1234567" },
-            "base": { "ref": "main" },
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z"
-        })
-        .to_string(),
+        runs(vec![
+            run(900, 10, "#7", "feature", HEAD, "failure"),
+            run(901, 11, "#8", "other", "9999999999999", "success"),
+        ]),
     );
-    // 2) Runs (object-wrapped): run #7 matches; the push run does not.
+    // Repeated names and response order do not infer attempts. Each provider
+    // job carries its own latest attempt, so jobs at lower attempts remain
+    // visible; provider identity, not an array index, forms each id.
     client.push_response(
         200,
-        json!({
-            "workflow_runs": [
-                {
-                    "index_in_repo": 10,
-                    "run_number": 10,
-                    "status": "success",
-                    "event": "pull_request",
-                    "prettyref": "#7",
-                    "head_branch": "feature",
-                    "head_sha": "abcdef1234567",
-                    "html_url": "https://forge.example.com/acme/widgets/actions/runs/10",
-                    "created_at": "2024-01-02T00:00:00Z"
-                },
-                {
-                    "index_in_repo": 11,
-                    "run_number": 11,
-                    "status": "success",
-                    "event": "push",
-                    "prettyref": "#8",
-                    "head_branch": "other",
-                    "head_sha": "9999999999",
-                    "created_at": "2024-01-03T00:00:00Z"
-                }
-            ]
-        })
-        .to_string(),
-    );
-    // 3) Tasks: two attempts for run 10, plus an unrelated run 11 task.
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                task(1, 10, "build", "success"),
-                task(2, 10, "test", "success"),
-                task(3, 10, "build", "success"),
-                task(4, 10, "test", "failure"),
-                task(5, 11, "lint", "success")
-            ]
-        })
-        .to_string(),
+        jobs(vec![
+            job(44, 900, 2, 504, "test", "failure"),
+            job(11, 900, 1, 501, "build", "success"),
+            job(33, 900, 2, 503, "build", "success"),
+            job(22, 900, 1, 502, "test", "success"),
+        ]),
     );
 
-    let forge = forge(client);
-    let query = CiJobQuery {
-        pull_request_id: Some(pull_id(7)),
-        ..Default::default()
-    };
-    let jobs = block_on(forge.list_ci_jobs(&repo_id(), query)).unwrap();
-
-    // Only the latest attempt of the matched run is returned, sorted by name.
-    assert_eq!(jobs.len(), 2);
-    assert_eq!(jobs[0].name, "build");
-    assert_eq!(jobs[0].status, CiJobStatus::Completed);
-    assert_eq!(jobs[0].conclusion, Some(CiJobConclusion::Success));
-    assert_eq!(jobs[1].name, "test");
-    assert_eq!(jobs[1].conclusion, Some(CiJobConclusion::Failure));
-    // The encoded ids come from the latest attempt (task ids 3, 4).
-    assert_eq!(jobs[0].id.as_str(), "forgejo:acme/widgets:actions:10:0:3");
-    assert_eq!(jobs[1].id.as_str(), "forgejo:acme/widgets:actions:10:1:4");
-    // Pull request and commit are carried onto each job.
-    assert_eq!(jobs[0].pull_request_id, Some(pull_id(7)));
-    assert_eq!(jobs[0].repo_id, repo_id());
-    assert_eq!(jobs[0].commit_sha, "abcdef1234567");
-}
-
-#[test]
-fn list_by_pull_request_keeps_prior_push_run_on_same_head_branch() {
-    let client = MockHttpClient::new();
-    client.push_response(
-        200,
-        json!({
-            "number": 7,
-            "state": "open",
-            "user": { "login": "author" },
-            "head": { "ref": "feature", "sha": "newhead1234567" },
-            "base": { "ref": "main" },
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z"
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                {
-                    "index_in_repo": 2,
-                    "run_number": 2,
-                    "status": "success",
-                    "event": "push",
-                    "prettyref": "feature",
-                    "head_branch": "",
-                    "head_sha": "newhead1234567",
-                    "created_at": "2024-01-03T00:00:00Z"
-                },
-                {
-                    "index_in_repo": 1,
-                    "run_number": 1,
-                    "status": "failure",
-                    "event": "push",
-                    "prettyref": "feature",
-                    "head_branch": "",
-                    "head_sha": "oldhead1234567",
-                    "created_at": "2024-01-02T00:00:00Z"
-                }
-            ]
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                task_with_head(1, 1, "build", "failure", "oldhead1234567"),
-                task_with_head(2, 2, "build", "success", "newhead1234567")
-            ]
-        })
-        .to_string(),
-    );
-
-    let forge = forge(client);
-    let jobs = block_on(forge.list_ci_jobs(
+    let listing = block_on(forge(client.clone()).list_ci_jobs_with_presence(
         &repo_id(),
         CiJobQuery {
             pull_request_id: Some(pull_id(7)),
-            status: Some(CiJobStatus::Completed),
-            ..Default::default()
-        },
-    ))
-    .unwrap();
-
-    let conclusions: Vec<_> = jobs.iter().map(|job| job.conclusion).collect();
-    assert_eq!(
-        conclusions,
-        vec![
-            Some(CiJobConclusion::Failure),
-            Some(CiJobConclusion::Success)
-        ]
-    );
-    assert_eq!(jobs[0].commit_sha, "oldhead1234567");
-    assert_eq!(jobs[1].commit_sha, "newhead1234567");
-}
-
-#[test]
-fn combined_pr_and_commit_returns_only_current_queued_rest_jobs() {
-    let client = MockHttpClient::new();
-    client.push_response(
-        200,
-        json!({
-            "number": 7,
-            "state": "open",
-            "user": { "login": "author" },
-            "head": { "ref": "feature", "sha": "bbbbbbb2222222" },
-            "base": { "ref": "main" },
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z"
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                {
-                    "index_in_repo": 3,
-                    "run_number": 3,
-                    "status": "skipped",
-                    "event": "pull_request",
-                    "prettyref": "#8",
-                    "head_branch": "feature",
-                    "head_sha": "bbbbbbb2222222",
-                    "event_payload": "{\"pull_request\":{\"number\":8,\"head\":{\"sha\":\"bbbbbbb2222222\"}}}",
-                    "created_at": "2024-01-04T00:00:00Z"
-                },
-                {
-                    "index_in_repo": 2,
-                    "run_number": 2,
-                    "status": "queued",
-                    "event": "pull_request",
-                    "prettyref": "#7",
-                    "head_branch": "feature",
-                    "head_sha": "bbbbbbb2222222",
-                    "created_at": "2024-01-03T00:00:00Z"
-                },
-                {
-                    "index_in_repo": 1,
-                    "run_number": 1,
-                    "status": "success",
-                    "event": "pull_request",
-                    "prettyref": "#7",
-                    "head_branch": "feature",
-                    "head_sha": "aaaaaaa1111111",
-                    "created_at": "2024-01-02T00:00:00Z"
-                }
-            ]
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                task_with_head(1, 1, "build", "success", "aaaaaaa1111111"),
-                task_with_head(2, 2, "build", "queued", "bbbbbbb2222222"),
-                task_with_head(
-                    3,
-                    3,
-                    "basic-delivery validation report",
-                    "skipped",
-                    "bbbbbbb2222222"
-                )
-            ]
-        })
-        .to_string(),
-    );
-
-    let jobs = block_on(forge(client).list_ci_jobs(
-        &repo_id(),
-        CiJobQuery {
-            pull_request_id: Some(pull_id(7)),
-            commit_sha: Some("bbbbbbb2222222".to_string()),
-            ..Default::default()
-        },
-    ))
-    .unwrap();
-
-    assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].status, CiJobStatus::Queued);
-    assert_eq!(jobs[0].conclusion, None);
-    assert_eq!(jobs[0].commit_sha, "bbbbbbb2222222");
-}
-
-#[test]
-fn combined_pr_and_commit_preserves_registered_run_without_tasks() {
-    let client = MockHttpClient::new();
-    client.push_response(
-        200,
-        json!({
-            "number": 7,
-            "state": "open",
-            "user": { "login": "author" },
-            "head": { "ref": "feature", "sha": "bbbbbbb2222222" },
-            "base": { "ref": "main" },
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-01T00:00:00Z"
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                {
-                    "index_in_repo": 2,
-                    "run_number": 2,
-                    "status": "queued",
-                    "event": "pull_request",
-                    "prettyref": "#7",
-                    "head_branch": "feature",
-                    "head_sha": "bbbbbbb2222222",
-                    "created_at": "2024-01-03T00:00:00Z"
-                },
-                {
-                    "index_in_repo": 1,
-                    "run_number": 1,
-                    "status": "success",
-                    "event": "pull_request",
-                    "prettyref": "#7",
-                    "head_branch": "feature",
-                    "head_sha": "aaaaaaa1111111",
-                    "created_at": "2024-01-02T00:00:00Z"
-                }
-            ]
-        })
-        .to_string(),
-    );
-    // The old run has a terminal task, but the registered current run has none.
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                task_with_head(1, 1, "build", "success", "aaaaaaa1111111")
-            ]
-        })
-        .to_string(),
-    );
-
-    let listing = block_on(forge(client).list_ci_jobs_with_presence(
-        &repo_id(),
-        CiJobQuery {
-            pull_request_id: Some(pull_id(7)),
-            commit_sha: Some("bbbbbbb2222222".to_string()),
             ..Default::default()
         },
     ))
     .unwrap();
 
     assert!(listing.matching_ci_present());
-    assert!(
-        listing.jobs().is_empty(),
-        "a taskless current run remains pending"
+    let listed = listing.jobs();
+    assert_eq!(listed.len(), 4);
+    assert_eq!(listed[0].name, "build");
+    assert_eq!(
+        listed[0].id.as_str(),
+        "forgejo:acme/widgets:actions:900:11:1:501"
     );
+    assert_eq!(listed[1].name, "build");
+    assert_eq!(
+        listed[1].id.as_str(),
+        "forgejo:acme/widgets:actions:900:33:2:503"
+    );
+    assert_eq!(listed[2].name, "test");
+    assert_eq!(
+        listed[2].id.as_str(),
+        "forgejo:acme/widgets:actions:900:22:1:502"
+    );
+    assert_eq!(listed[3].name, "test");
+    assert_eq!(
+        listed[3].id.as_str(),
+        "forgejo:acme/widgets:actions:900:44:2:504"
+    );
+    assert_eq!(listed[0].run_id.as_deref(), Some("900"));
+    assert_eq!(listed[0].attempt.as_deref(), Some("1"));
+    assert_eq!(listed[1].attempt.as_deref(), Some("2"));
+    assert_eq!(listed[0].pull_request_id, Some(pull_id(7)));
+    assert_eq!(listed[0].commit_sha, HEAD);
+    assert_eq!(
+        listed[0].url.as_deref(),
+        Some("https://forge.example.com/acme/widgets/actions/runs/10")
+    );
+    assert_eq!(listed[3].conclusion, Some(CiJobConclusion::Unknown));
+
+    let recorded = client.recorded();
+    assert_eq!(
+        recorded[2].path,
+        "/api/v1/repos/acme/widgets/actions/runs/900/jobs"
+    );
+    assert!(recorded[2].query.is_empty());
+    assert_api_only(&recorded);
 }
 
 #[test]
-fn list_by_commit_filters_status_and_sorts_by_name() {
+fn every_matched_run_gets_its_own_jobs_request_and_pr_history_is_preserved() {
     let client = MockHttpClient::new();
-    // No PR detail call: the query targets a commit only.
+    client.push_response(200, pull(7, "feature", "newhead1234567"));
     client.push_response(
         200,
-        json!({
-            "workflow_runs": [
-                {
-                    "index_in_repo": 20,
-                    "run_number": 20,
-                    "status": "success",
-                    "event": "push",
-                    "prettyref": "main",
-                    "head_branch": "main",
-                    "head_sha": "abcdef1234567",
-                    "created_at": "2024-02-01T00:00:00Z"
-                }
-            ]
-        })
-        .to_string(),
+        runs(vec![
+            run(701, 1, "feature", "", "oldhead1234567", "failure"),
+            run(702, 2, "feature", "", "newhead1234567", "success"),
+        ]),
     );
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                task(1, 20, "zebra", "success"),
-                task(2, 20, "alpha", "failure"),
-                task(3, 20, "mid", "running")
-            ]
-        })
-        .to_string(),
-    );
+    // Runs have equal timestamps in this fixture, so the provider display index
+    // orders 702 first. Each response is still scoped by database id.
+    client.push_response(200, jobs(vec![job(72, 702, 1, 82, "build", "success")]));
+    client.push_response(200, jobs(vec![job(71, 701, 1, 81, "build", "failure")]));
 
-    let forge = forge(client);
-    let query = CiJobQuery {
-        commit_sha: Some("abcdef1234567".to_string()),
-        status: Some(CiJobStatus::Completed),
-        sort: Some(CiJobSort {
-            field: CiJobSortField::Name,
-            direction: SortDirection::Asc,
-        }),
-        ..Default::default()
-    };
-    let jobs = block_on(forge.list_ci_jobs(&repo_id(), query)).unwrap();
-
-    // The running task is filtered out; the rest are sorted by name.
-    assert_eq!(jobs.len(), 2);
-    assert_eq!(jobs[0].name, "alpha");
-    assert_eq!(jobs[0].conclusion, Some(CiJobConclusion::Failure));
-    assert_eq!(jobs[1].name, "zebra");
-    assert_eq!(jobs[1].conclusion, Some(CiJobConclusion::Success));
-    assert_eq!(jobs[0].commit_sha, "abcdef1234567");
-    // No pull request could be derived from a push run.
-    assert_eq!(jobs[0].pull_request_id, None);
-}
-
-#[test]
-fn list_sort_by_name_descending() {
-    let client = MockHttpClient::new();
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                {
-                    "index_in_repo": 21,
-                    "run_number": 21,
-                    "status": "success",
-                    "event": "push",
-                    "head_branch": "main",
-                    "head_sha": "abcdef1234567",
-                    "created_at": "2024-02-01T00:00:00Z"
-                }
-            ]
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                task(1, 21, "alpha", "success"),
-                task(2, 21, "zebra", "success")
-            ]
-        })
-        .to_string(),
-    );
-
-    let forge = forge(client);
-    let query = CiJobQuery {
-        commit_sha: Some("abcdef1234567".to_string()),
-        sort: Some(CiJobSort {
-            field: CiJobSortField::Name,
-            direction: SortDirection::Desc,
-        }),
-        ..Default::default()
-    };
-    let jobs = block_on(forge.list_ci_jobs(&repo_id(), query)).unwrap();
-    assert_eq!(jobs.len(), 2);
-    assert_eq!(jobs[0].name, "zebra");
-    assert_eq!(jobs[1].name, "alpha");
-}
-
-#[test]
-fn list_with_empty_query_returns_all_runs() {
-    let client = MockHttpClient::new();
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                {
-                    "index_in_repo": 30,
-                    "run_number": 30,
-                    "status": "success",
-                    "event": "push",
-                    "head_branch": "main",
-                    "head_sha": "abcdef1234567",
-                    "created_at": "2024-03-01T00:00:00Z"
-                }
-            ]
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({ "workflow_runs": [ task(1, 30, "build", "success") ] }).to_string(),
-    );
-
-    let forge = forge(client);
-    let jobs = block_on(forge.list_ci_jobs(&repo_id(), CiJobQuery::default())).unwrap();
-    assert_eq!(jobs.len(), 1);
-    assert_eq!(jobs[0].id.as_str(), "forgejo:acme/widgets:actions:30:0:1");
-}
-
-#[test]
-fn get_ci_job_parses_id_and_returns_job() {
-    let client = MockHttpClient::new();
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [
-                {
-                    "index_in_repo": 30,
-                    "run_number": 30,
-                    "status": "success",
-                    "event": "push",
-                    "head_branch": "main",
-                    "head_sha": "abcdef1234567",
-                    "created_at": "2024-03-01T00:00:00Z"
-                }
-            ]
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({ "workflow_runs": [ task(1, 30, "build", "success") ] }).to_string(),
-    );
-
-    let forge = forge(client);
-    let id = CiJobId::new("forgejo:acme/widgets:actions:30:0:1");
-    let job = block_on(forge.get_ci_job(&id)).unwrap().unwrap();
-    assert_eq!(job.id, id);
-    assert_eq!(job.name, "build");
-    assert_eq!(job.repo_id, repo_id());
-    assert_eq!(job.status, CiJobStatus::Completed);
-    assert_eq!(job.conclusion, Some(CiJobConclusion::Success));
-}
-
-#[test]
-fn get_ci_job_returns_none_for_unknown_run() {
-    let client = MockHttpClient::new();
-    client.push_response(200, json!({ "workflow_runs": [] }).to_string());
-
-    let forge = forge(client);
-    let id = CiJobId::new("forgejo:acme/widgets:actions:99:0:1");
-    assert!(block_on(forge.get_ci_job(&id)).unwrap().is_none());
-}
-
-#[test]
-fn actions_unavailable_is_an_error() {
-    let client = MockHttpClient::new();
-    // The runs endpoint is unavailable: CI must surface an error, never "passed".
-    client.push_response(404, json!({ "message": "Not Found" }).to_string());
-
-    let forge = forge(client);
-    let result = block_on(forge.list_ci_jobs(&repo_id(), CiJobQuery::default()));
-    assert!(result.is_err());
-}
-
-#[test]
-fn terminal_evidence_is_typed_bounded_and_attempt_identified() {
-    let client = MockHttpClient::new();
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [{
-                "id": 900,
-                "index_in_repo": 40,
-                "run_number": 40,
-                "run_attempt": 3,
-                "status": "completed",
-                "conclusion": "runner_lost",
-                "event": "push",
-                "head_sha": "abcdef1234567",
-                "created_at": "2024-03-01T00:00:00Z"
-            }]
-        })
-        .to_string(),
-    );
-    client.push_response(
-        200,
-        json!({
-            "workflow_runs": [{
-                "id": 901,
-                "run_number": 40,
-                "run_attempt": 4,
-                "name": "build",
-                "status": "completed",
-                "conclusion": "RUNNER_LOST",
-                "failure_reason": format!("runner disconnected\n{}", "x".repeat(400)),
-                "head_sha": "abcdef1234567",
-                "created_at": "2024-03-01T00:00:00Z"
-            }]
-        })
-        .to_string(),
-    );
-
-    let jobs = block_on(forge(client).list_ci_jobs(
+    let result = block_on(forge(client.clone()).list_ci_jobs(
         &repo_id(),
         CiJobQuery {
-            commit_sha: Some("abcdef1234567".to_string()),
-            ..CiJobQuery::default()
+            pull_request_id: Some(pull_id(7)),
+            sort: Some(CiJobSort {
+                field: CiJobSortField::CreatedAt,
+                direction: SortDirection::Asc,
+            }),
+            ..Default::default()
         },
     ))
     .unwrap();
 
-    let job = &jobs[0];
-    assert_eq!(job.conclusion, Some(CiJobConclusion::RunnerLost));
-    assert_eq!(job.provider_conclusion.as_deref(), Some("RUNNER_LOST"));
-    assert!(
-        job.provider_reason.as_ref().unwrap().len()
-            <= temper_forge_model::MAX_CI_PROVIDER_EVIDENCE_BYTES
+    assert_eq!(result.len(), 2);
+    assert_eq!(
+        result
+            .iter()
+            .map(|job| job.commit_sha.as_str())
+            .collect::<Vec<_>>(),
+        ["oldhead1234567", "newhead1234567"]
     );
-    assert!(!job.provider_reason.as_ref().unwrap().contains('\n'));
-    assert_eq!(job.run_id.as_deref(), Some("900"));
-    assert_eq!(job.attempt.as_deref(), Some("4"));
+    let recorded = client.recorded();
+    assert_eq!(
+        recorded[2].path,
+        "/api/v1/repos/acme/widgets/actions/runs/702/jobs"
+    );
+    assert_eq!(
+        recorded[3].path,
+        "/api/v1/repos/acme/widgets/actions/runs/701/jobs"
+    );
+    assert_api_only(&recorded);
+}
+
+#[test]
+fn explicit_empty_jobs_keeps_matching_ci_presence() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        runs(vec![run(900, 10, "main", "main", HEAD, "queued")]),
+    );
+    client.push_response(200, "[]");
+
+    let listing = block_on(forge(client.clone()).list_ci_jobs_with_presence(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some(HEAD.to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert!(listing.matching_ci_present());
+    assert!(listing.jobs().is_empty());
+    assert_api_only(&client.recorded());
+}
+
+#[test]
+fn unassigned_queued_job_preserves_provider_values_and_round_trips() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        runs(vec![run(900, 10, "main", "main", HEAD, "queued")]),
+    );
+    client.push_response(200, jobs(vec![job(31, 900, 0, 0, "build", "waiting")]));
+    client.push_response(
+        200,
+        runs(vec![run(900, 10, "main", "main", HEAD, "queued")]),
+    );
+    client.push_response(200, jobs(vec![job(31, 900, 0, 0, "build", "waiting")]));
+
+    let forge = forge(client.clone());
+    let listing = block_on(forge.list_ci_jobs_with_presence(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some(HEAD.to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert!(listing.matching_ci_present());
+    assert_eq!(listing.jobs().len(), 1);
+    let listed = &listing.jobs()[0];
+    assert_eq!(listed.status, CiJobStatus::Queued);
+    assert_eq!(listed.attempt.as_deref(), Some("0"));
+    assert_eq!(
+        listed.id.as_str(),
+        "forgejo:acme/widgets:actions:900:31:0:0"
+    );
+
+    let found = block_on(forge.get_ci_job(&listed.id)).unwrap().unwrap();
+    assert_eq!(found.id, listed.id);
+    assert_eq!(found.status, CiJobStatus::Queued);
+    assert_eq!(found.attempt.as_deref(), Some("0"));
+    assert_api_only(&client.recorded());
+}
+
+#[test]
+fn query_values_are_not_synthetic_job_evidence() {
+    let client = MockHttpClient::new();
+    client.push_response(200, pull(7, "feature", HEAD));
+    // This push run matches the strict head/ref target but has no provider PR
+    // identity. The query PR may not be copied onto its job.
+    client.push_response(
+        200,
+        runs(vec![run(900, 10, "feature", "feature", HEAD, "success")]),
+    );
+    client.push_response(200, jobs(vec![job(31, 900, 1, 41, "build", "success")]));
+
+    let listed = block_on(forge(client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            pull_request_id: Some(pull_id(7)),
+            commit_sha: Some(HEAD.to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].commit_sha, HEAD);
+    assert_eq!(listed[0].pull_request_id, None);
+}
+
+#[test]
+fn explicit_commit_requires_provider_run_sha_and_skips_job_reads_without_it() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        runs(vec![run(
+            900,
+            10,
+            "#7",
+            "feature",
+            "different1234567",
+            "success",
+        )]),
+    );
+
+    let listing = block_on(forge(client.clone()).list_ci_jobs_with_presence(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some(HEAD.to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert!(!listing.matching_ci_present());
+    assert!(listing.jobs().is_empty());
+    assert_eq!(client.call_count(), 1);
+}
+
+#[test]
+fn status_filter_and_sort_are_deterministic() {
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        runs(vec![run(900, 10, "main", "main", HEAD, "success")]),
+    );
+    client.push_response(
+        200,
+        jobs(vec![
+            job(33, 900, 1, 43, "zebra", "success"),
+            job(11, 900, 1, 41, "alpha", "failure"),
+            job(22, 900, 1, 42, "mid", "running"),
+        ]),
+    );
+
+    let listed = block_on(forge(client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some(HEAD.to_string()),
+            status: Some(CiJobStatus::Completed),
+            sort: Some(CiJobSort {
+                field: CiJobSortField::Name,
+                direction: SortDirection::Desc,
+            }),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(
+        listed
+            .iter()
+            .map(|job| job.name.as_str())
+            .collect::<Vec<_>>(),
+        ["zebra", "alpha"]
+    );
+    assert_eq!(listed[1].conclusion, Some(CiJobConclusion::Unknown));
+}
+
+#[test]
+fn list_id_round_trips_exactly_through_get() {
+    let list_client = MockHttpClient::new();
+    list_client.push_response(
+        200,
+        runs(vec![run(900, 10, "#7", "feature", HEAD, "success")]),
+    );
+    list_client.push_response(200, jobs(vec![job(31, 900, 3, 41, "build", "success")]));
+    let listed = block_on(forge(list_client).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some(HEAD.to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+    let expected = listed[0].clone();
+
+    let get_client = MockHttpClient::new();
+    get_client.push_response(
+        200,
+        runs(vec![run(900, 10, "#7", "feature", HEAD, "success")]),
+    );
+    get_client.push_response(
+        200,
+        jobs(vec![
+            job(30, 900, 2, 40, "build", "failure"),
+            job(31, 900, 3, 41, "build", "success"),
+        ]),
+    );
+    let found = block_on(forge(get_client.clone()).get_ci_job(&expected.id))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(found.id, expected.id);
+    assert_eq!(found.name, expected.name);
+    assert_eq!(found.commit_sha, expected.commit_sha);
+    assert_eq!(found.run_id, expected.run_id);
+    assert_eq!(found.attempt, expected.attempt);
+    assert_eq!(found.pull_request_id, expected.pull_request_id);
+    assert_eq!(
+        get_client.recorded()[1].path,
+        "/api/v1/repos/acme/widgets/actions/runs/900/jobs"
+    );
+    assert_api_only(&get_client.recorded());
+}
+
+#[test]
+fn get_requires_exact_run_job_attempt_and_task_identity() {
+    for id in [
+        "forgejo:acme/widgets:actions:900:32:2:41",
+        "forgejo:acme/widgets:actions:900:31:3:41",
+        "forgejo:acme/widgets:actions:900:31:2:42",
+    ] {
+        let client = MockHttpClient::new();
+        client.push_response(
+            200,
+            runs(vec![run(900, 10, "main", "main", HEAD, "success")]),
+        );
+        client.push_response(200, jobs(vec![job(31, 900, 2, 41, "build", "success")]));
+        assert!(
+            block_on(forge(client).get_ci_job(&CiJobId::new(id)))
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn get_returns_none_for_unknown_provider_run_without_fetching_jobs() {
+    let client = MockHttpClient::new();
+    client.push_response(200, runs(vec![]));
+    let id = CiJobId::new("forgejo:acme/widgets:actions:999:31:1:41");
+    assert!(
+        block_on(forge(client.clone()).get_ci_job(&id))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(client.call_count(), 1);
+}
+
+#[test]
+fn malformed_or_missing_jobs_shape_fails_closed() {
+    for body in [
+        "",
+        "{",
+        "{}",
+        r#"{"jobs":null}"#,
+        r#"{"jobs":[]}"#,
+        r#"{"tasks":[]}"#,
+    ] {
+        let client = MockHttpClient::new();
+        client.push_response(
+            200,
+            runs(vec![run(900, 10, "main", "main", HEAD, "success")]),
+        );
+        client.push_response(200, body);
+        let error = block_on(forge(client.clone()).list_ci_jobs(
+            &repo_id(),
+            CiJobQuery {
+                commit_sha: Some(HEAD.to_string()),
+                ..Default::default()
+            },
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(error, ForgeError::Backend(_)),
+            "body {body:?}: {error}"
+        );
+        assert_api_only(&client.recorded());
+    }
+}
+
+#[test]
+fn jobs_transport_auth_missing_and_unexpected_statuses_fail_closed_without_fallback() {
+    for status in [401, 403, 404, 418] {
+        let client = MockHttpClient::new();
+        client.push_response(
+            200,
+            runs(vec![run(900, 10, "main", "main", HEAD, "success")]),
+        );
+        client.push_response(status, json!({ "message": "unavailable" }).to_string());
+        let result = block_on(forge(client.clone()).list_ci_jobs(
+            &repo_id(),
+            CiJobQuery {
+                commit_sha: Some(HEAD.to_string()),
+                ..Default::default()
+            },
+        ));
+        assert!(
+            matches!(result, Err(ForgeError::Backend(_))),
+            "status {status}"
+        );
+        assert_eq!(client.call_count(), 2);
+        assert_api_only(&client.recorded());
+    }
+
+    let client = MockHttpClient::new();
+    client.push_response(
+        200,
+        runs(vec![run(900, 10, "main", "main", HEAD, "success")]),
+    );
+    client.push_transport_error("connection reset");
+    let result = block_on(forge(client.clone()).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some(HEAD.to_string()),
+            ..Default::default()
+        },
+    ));
+    assert!(matches!(result, Err(ForgeError::Backend(_))));
+    assert_api_only(&client.recorded());
+}
+
+#[test]
+fn invalid_or_mismatched_provider_identity_fails_closed() {
+    let invalid = [
+        job(0, 900, 1, 41, "build", "success"),
+        job(31, 0, 1, 41, "build", "success"),
+        job(31, 901, 1, 41, "build", "success"),
+        job(31, 900, 1, 41, "", "success"),
+        job(31, 900, 1, 41, "build", ""),
+    ];
+    for row in invalid {
+        let client = MockHttpClient::new();
+        client.push_response(
+            200,
+            runs(vec![run(900, 10, "main", "main", HEAD, "success")]),
+        );
+        client.push_response(200, jobs(vec![row]));
+        assert!(
+            block_on(forge(client).list_ci_jobs(
+                &repo_id(),
+                CiJobQuery {
+                    commit_sha: Some(HEAD.to_string()),
+                    ..Default::default()
+                },
+            ))
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn zero_provider_run_id_is_rejected_instead_of_using_display_coordinate() {
+    let client = MockHttpClient::new();
+    client.push_response(200, runs(vec![run(0, 77, "main", "main", HEAD, "success")]));
+    let error = block_on(forge(client.clone()).list_ci_jobs(
+        &repo_id(),
+        CiJobQuery {
+            commit_sha: Some(HEAD.to_string()),
+            ..Default::default()
+        },
+    ))
+    .unwrap_err();
+    assert!(matches!(error, ForgeError::Backend(_)));
+    assert_eq!(client.call_count(), 1);
+}
+
+#[test]
+fn malformed_opaque_identity_is_rejected_before_http() {
+    for id in [
+        "forgejo:acme/widgets:actions:900:31:41",
+        "forgejo:acme/widgets:actions:0:31:1:41",
+        "forgejo:acme/widgets:actions:900:0:1:41",
+    ] {
+        let client = MockHttpClient::new();
+        let result = block_on(forge(client.clone()).get_ci_job(&CiJobId::new(id)));
+        assert!(matches!(result, Err(ForgeError::InvalidRequest(_))));
+        assert_eq!(client.call_count(), 0);
+    }
 }

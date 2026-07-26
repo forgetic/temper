@@ -18,7 +18,7 @@ Current ADRs:
 - [ADR 0016: Model native pull-request reviews portably](0016-native-pull-request-reviews.md)
 - [ADR 0017: Retire testing labels in favor of native CI status](0017-retire-testing-labels-for-native-ci-status.md)
 - [ADR 0018: Filesystem backend cross-process concurrency via advisory locking](0018-filesystem-cross-process-concurrency.md)
-- [ADR 0019: Read Forgejo CI status through the password-authenticated web UI](0019-forgejo-ci-read-via-web-ui.md)
+- [ADR 0019 (Superseded): Read Forgejo CI status through the password-authenticated web UI](0019-forgejo-ci-read-via-web-ui.md)
 - [ADR 0021: Use repo-qualified artifact references for workflow links](0021-repo-qualified-artifact-references.md)
 - [ADR 0022: Generalize role work into a sandboxed workspace with verdict routing](0022-workspace-executor-and-verdict-routing.md)
 - [ADR 0023: Multi-repo co-development jobs](0023-multi-repo-co-development-jobs.md)

@@ -5,7 +5,7 @@
 //! runs the server-agnostic [`provision_world`](crate::forgejo_server::provision_world)
 //! step, seeds one intake issue
 //! ([`seed_intake_issue`](crate::forgejo_server::seed_intake_issue)), and writes
-//! the per-role `{user, token, password}` to a POSIX-sourceable secrets file the
+//! the per-role `{user, token}` to a POSIX-sourceable secrets file the
 //! launch script reads.
 //!
 //! It deliberately reuses the existing provisioning library rather than
@@ -15,8 +15,8 @@
 //! # Secrets discipline
 //!
 //! The admin token arrives via the environment ([`ADMIN_TOKEN_ENV`]), never on
-//! argv. Per-role tokens and passwords are written **only** to the `--out` file
-//! (with `0600` permissions on Unix) and are never printed to stdout/stderr;
+//! argv. Per-role tokens are written **only** to the `--out` file (with `0600`
+//! permissions on Unix) and are never printed to stdout/stderr;
 //! status output names only non-secret facts (repo, role count, issue number).
 
 use crate::forgejo_server::{ProvisionError, Provisioned, provision_world, seed_intake_issue};
@@ -238,9 +238,9 @@ pub fn run(args: &ProvisionArgs) -> Result<String, RunError> {
 
 /// Formats the per-role secrets as a POSIX-sourceable env file.
 ///
-/// Each role contributes `TEMPER_FORGEJO_USER_<ROLE>`,
-/// `TEMPER_FORGEJO_TOKEN_<ROLE>`, and `TEMPER_FORGEJO_PASSWORD_<ROLE>` (role id
-/// uppercased, non-alphanumerics replaced with `_`). Owner/repo are emitted for
+/// Each role contributes `TEMPER_FORGEJO_USER_<ROLE>` and
+/// `TEMPER_FORGEJO_TOKEN_<ROLE>` (role id uppercased, non-alphanumerics replaced
+/// with `_`). Owner/repo are emitted for
 /// the script's convenience. Values are single-quoted (with embedded quotes
 /// escaped) so they source safely under `sh`. The admin token is **not** written
 /// — the launch script owns it.
@@ -265,10 +265,6 @@ pub fn format_secrets_env(provisioned: &Provisioned) -> String {
         out.push_str(&format!(
             "TEMPER_FORGEJO_TOKEN_{key}={}\n",
             sh_quote(&identity.token)
-        ));
-        out.push_str(&format!(
-            "TEMPER_FORGEJO_PASSWORD_{key}={}\n",
-            sh_quote(&identity.password)
         ));
     }
     out
@@ -375,13 +371,6 @@ mod tests {
             !env.contains("admin-secret"),
             "admin token must not be written to the secrets file",
         );
-    }
-
-    #[test]
-    fn secrets_env_escapes_single_quotes_in_values() {
-        let env = format_secrets_env(&sample_provisioned());
-        // A literal single quote in a password becomes the `'\''` sequence.
-        assert!(env.contains(r"TEMPER_FORGEJO_PASSWORD_ENGINEER='pw-with-'\''-quote'"));
     }
 
     #[test]
