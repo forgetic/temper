@@ -6,6 +6,14 @@ use toml::Value as TomlValue;
 
 use super::stimuli::{StimulusKind, StimulusSpec};
 
+#[path = "execution_links.rs"]
+mod execution_links;
+#[path = "execution_order.rs"]
+mod execution_order;
+
+use execution_links::validate_action_links;
+use execution_order::validate_action_order;
+
 /// Typed, ordered live actions resolved from a scenario manifest.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ManifestExecutionPlan {
@@ -43,6 +51,7 @@ impl ManifestExecutionPlan {
         }
         validate_required_actions(&steps)?;
         validate_action_links(manifest, &steps, &agents)?;
+        validate_action_order(&steps, &agents)?;
         validate_stimulus_placement(&steps)?;
         let stimuli = steps
             .iter()
@@ -103,7 +112,8 @@ impl ManifestExecutionPlan {
         self.steps.iter().any(|step| {
             matches!(
                 step.action,
-                ManifestAction::StartCodebaseMemoryMcp | ManifestAction::ConfigureAgentTools
+                ManifestAction::StartCodebaseMemoryMcp { .. }
+                    | ManifestAction::ConfigureAgentTools { .. }
             )
         })
     }
@@ -133,14 +143,30 @@ pub enum ManifestAction {
     },
     SeedIssue {
         issue_id: String,
+        repo_id: String,
         binding: Option<String>,
+        after_pr_binding: Option<String>,
     },
     SeedPullRequest {
         repo_id: String,
         source_issue_id: String,
+        title: String,
+        body: String,
+        metadata_kind: String,
+        correlation_key: String,
     },
-    StartCodebaseMemoryMcp,
-    ConfigureAgentTools,
+    StartCodebaseMemoryMcp {
+        project: String,
+        safe_tools: Vec<String>,
+        hidden_tools: Vec<String>,
+    },
+    ConfigureAgentTools {
+        role: String,
+        tool: String,
+        mode: String,
+        index: String,
+        server_step: String,
+    },
     WaitForConvergence {
         strategy: ConvergenceStrategy,
     },
@@ -157,8 +183,8 @@ impl ManifestAction {
             Self::LaunchTemper { .. } => "temper.launch_standalone",
             Self::SeedIssue { .. } => "issue.seed",
             Self::SeedPullRequest { .. } => "pr.seed_existing",
-            Self::StartCodebaseMemoryMcp => "mcp.fake_codebase_memory.start",
-            Self::ConfigureAgentTools => "agent.tools.configure",
+            Self::StartCodebaseMemoryMcp { .. } => "mcp.fake_codebase_memory.start",
+            Self::ConfigureAgentTools { .. } => "agent.tools.configure",
             Self::WaitForConvergence { .. } => "workflow.wait_convergence",
             Self::Stimulus(stimulus) => stimulus.action(),
         }
@@ -269,14 +295,30 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
         }),
         "issue.seed" => Ok(ManifestAction::SeedIssue {
             issue_id: required_table_string(table, "issue_id", &field)?,
+            repo_id: required_table_string(table, "repo", &field)?,
             binding: optional_table_string(table, "bind", &field)?,
+            after_pr_binding: optional_table_string(table, "after_pr_binding", &field)?,
         }),
         "pr.seed_existing" => Ok(ManifestAction::SeedPullRequest {
             repo_id: required_table_string(table, "repo", &field)?,
             source_issue_id: required_table_string(table, "source_issue_id", &field)?,
+            title: required_table_string(table, "title", &field)?,
+            body: required_table_string(table, "stale_body", &field)?,
+            metadata_kind: required_table_string(table, "metadata_kind", &field)?,
+            correlation_key: required_table_string(table, "correlation_key", &field)?,
         }),
-        "mcp.fake_codebase_memory.start" => Ok(ManifestAction::StartCodebaseMemoryMcp),
-        "agent.tools.configure" => Ok(ManifestAction::ConfigureAgentTools),
+        "mcp.fake_codebase_memory.start" => Ok(ManifestAction::StartCodebaseMemoryMcp {
+            project: required_table_string(table, "project", &field)?,
+            safe_tools: string_array(table, "advertises_safe_tools", &field)?,
+            hidden_tools: string_array(table, "advertises_hidden_tools", &field)?,
+        }),
+        "agent.tools.configure" => Ok(ManifestAction::ConfigureAgentTools {
+            role: required_table_string(table, "role", &field)?,
+            tool: required_table_string(table, "tool", &field)?,
+            mode: required_table_string(table, "mode", &field)?,
+            index: required_table_string(table, "index", &field)?,
+            server_step: required_table_string(table, "server", &field)?,
+        }),
         "workflow.wait_convergence" => {
             let raw = required_table_string(table, "strategy", &field)?;
             let strategy = ConvergenceStrategy::parse(&raw).ok_or_else(|| {
@@ -443,10 +485,10 @@ fn validate_strategy_actions(
 ) -> Result<(), String> {
     let has_mcp = steps
         .iter()
-        .any(|step| matches!(step.action, ManifestAction::StartCodebaseMemoryMcp));
+        .any(|step| matches!(step.action, ManifestAction::StartCodebaseMemoryMcp { .. }));
     let has_tool_config = steps
         .iter()
-        .any(|step| matches!(step.action, ManifestAction::ConfigureAgentTools));
+        .any(|step| matches!(step.action, ManifestAction::ConfigureAgentTools { .. }));
     let has_pr_seed = steps
         .iter()
         .any(|step| matches!(step.action, ManifestAction::SeedPullRequest { .. }));
@@ -460,112 +502,6 @@ fn validate_strategy_actions(
         ),
         _ => Ok(()),
     }
-}
-
-fn validate_action_links(
-    manifest: &TomlValue,
-    steps: &[ManifestStep],
-    agents: &[AgentFixture],
-) -> Result<(), String> {
-    let repository_ids = manifest
-        .get("repos")
-        .and_then(TomlValue::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(TomlValue::as_table)
-        .filter_map(|repo| repo.get("id").and_then(TomlValue::as_str))
-        .collect::<BTreeSet<_>>();
-    let issue_ids = manifest
-        .get("issues")
-        .and_then(TomlValue::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(TomlValue::as_table)
-        .filter_map(|issue| issue.get("id").and_then(TomlValue::as_str))
-        .collect::<BTreeSet<_>>();
-    let issue_bindings = steps
-        .iter()
-        .filter_map(|step| match &step.action {
-            ManifestAction::SeedIssue { binding, .. } => binding.as_deref(),
-            _ => None,
-        })
-        .collect::<BTreeSet<_>>();
-    let agent_roles = agents
-        .iter()
-        .map(|agent| agent.role.as_str())
-        .collect::<BTreeSet<_>>();
-
-    for step in steps {
-        match &step.action {
-            ManifestAction::SeedRepository { repo_id, .. }
-            | ManifestAction::SeedPullRequest { repo_id, .. }
-                if !repository_ids.contains(repo_id.as_str()) =>
-            {
-                return Err(format!(
-                    "step `{}` references unknown repository id `{repo_id}`",
-                    step.id
-                ));
-            }
-            ManifestAction::Stimulus(StimulusSpec {
-                kind:
-                    StimulusKind::CiFailure { repo_id, .. } | StimulusKind::CiRecovery { repo_id, .. },
-                ..
-            }) if !repository_ids.contains(repo_id.as_str()) => {
-                return Err(format!(
-                    "stimulus step `{}` references unknown repository id `{repo_id}`",
-                    step.id
-                ));
-            }
-            ManifestAction::Stimulus(StimulusSpec {
-                kind: StimulusKind::RepeatDelivery { artifact, .. },
-                ..
-            }) => {
-                let Some(issue_id) = artifact.strip_prefix("issue:") else {
-                    return Err(format!(
-                        "stimulus step `{}` delivery.repeat artifact must use issue:<id>, got `{artifact}`",
-                        step.id
-                    ));
-                };
-                if !issue_ids.contains(issue_id) && !issue_bindings.contains(issue_id) {
-                    return Err(format!(
-                        "stimulus step `{}` references unknown issue id or binding `{issue_id}`",
-                        step.id
-                    ));
-                }
-            }
-            ManifestAction::SeedIssue { issue_id, .. }
-                if !issue_ids.contains(issue_id.as_str()) =>
-            {
-                return Err(format!(
-                    "step `{}` references unknown issue id `{issue_id}`",
-                    step.id
-                ));
-            }
-            ManifestAction::SeedPullRequest {
-                source_issue_id, ..
-            } if !issue_ids.contains(source_issue_id.as_str())
-                && !issue_bindings.contains(source_issue_id.as_str()) =>
-            {
-                return Err(format!(
-                    "step `{}` references unknown issue id or binding `{source_issue_id}`",
-                    step.id
-                ));
-            }
-            ManifestAction::StartJig { roles, .. } => {
-                if let Some(role) = roles
-                    .iter()
-                    .find(|role| !agent_roles.contains(role.as_str()))
-                {
-                    return Err(format!(
-                        "step `{}` configures Jig for undeclared agent role `{role}`",
-                        step.id
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 fn required_step_string(table: &toml::Table, key: &str, index: usize) -> Result<String, String> {

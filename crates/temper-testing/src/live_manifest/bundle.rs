@@ -22,6 +22,7 @@ pub struct ScenarioBundle {
     pub execution: ManifestExecutionPlan,
     pub resolved_manifest: TomlValue,
     pub repo: RepoFixture,
+    pub issues: Vec<IssueFixture>,
     pub intake: IntakeFixture,
     pub timeout: Duration,
     pub poll_backstop: Duration,
@@ -66,7 +67,8 @@ impl ScenarioBundle {
         let (workflow_path, workflow_text) = workflow_fixture(&scenario_path, &manifest)?;
         let repo = repo_fixture(&scenario_path, &manifest)?;
         validate_fixture_actions(&execution, &workflow_path, &repo)?;
-        let intake = intake_fixture(&scenario_path, &manifest)?;
+        let issues = issue_fixtures(&scenario_path, &manifest)?;
+        let intake = intake_fixture(&issues)?;
         let timeout = manifest_duration(
             &manifest,
             "timeout",
@@ -92,6 +94,7 @@ impl ScenarioBundle {
             execution,
             resolved_manifest: manifest,
             repo,
+            issues,
             intake,
             timeout,
             poll_backstop,
@@ -117,6 +120,13 @@ impl ScenarioBundle {
     pub fn jig_script_path(&self) -> &Path {
         &self.execution.jig_script_path
     }
+
+    pub fn issue(&self, id: &str) -> Result<&IssueFixture, String> {
+        self.issues
+            .iter()
+            .find(|issue| issue.id == id)
+            .ok_or_else(|| format!("resolved manifest has no issue fixture `{id}`"))
+    }
 }
 
 /// Repository fixture declared by the scenario manifest.
@@ -132,6 +142,17 @@ pub struct RepoFixture {
     pub ci_seed_path: PathBuf,
     pub ci_target: PathBuf,
     pub ci_source: String,
+}
+
+/// Issue fixture selected by an `issue.seed` action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IssueFixture {
+    pub id: String,
+    pub repo_id: String,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    pub labels: Vec<String>,
 }
 
 /// Intake issue fixture declared by the scenario manifest.
@@ -311,60 +332,82 @@ fn split_repo_slug(slug: &str) -> Result<(String, String), String> {
     Ok((owner.to_string(), name.to_string()))
 }
 
-fn intake_fixture(scenario_path: &Path, manifest: &TomlValue) -> Result<IntakeFixture, String> {
+fn issue_fixtures(scenario_path: &Path, manifest: &TomlValue) -> Result<Vec<IssueFixture>, String> {
     let issues = manifest
         .get("issues")
         .and_then(TomlValue::as_array)
         .ok_or_else(|| "manifest is missing [[issues]]".to_string())?;
+    issues
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let issue = value
+                .as_table()
+                .ok_or_else(|| format!("issues[{index}] must be a table"))?;
+            let required = |field: &str| {
+                issue
+                    .get(field)
+                    .and_then(TomlValue::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("issues[{index}].{field} is required"))
+            };
+            let body_ref = required("body")?;
+            let body_path = scenario_path.join(&body_ref);
+            let body = fs::read_to_string(&body_path).map_err(|error| {
+                format!(
+                    "read issue fixture {} body {}: {error}",
+                    issue
+                        .get("id")
+                        .and_then(TomlValue::as_str)
+                        .unwrap_or("<unknown>"),
+                    body_path.display()
+                )
+            })?;
+            let labels = issue
+                .get("labels")
+                .and_then(TomlValue::as_array)
+                .map(|labels| {
+                    labels
+                        .iter()
+                        .map(|label| {
+                            label.as_str().map(str::to_string).ok_or_else(|| {
+                                format!("issues[{index}].labels must contain only strings")
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
+            Ok(IssueFixture {
+                id: required("id")?,
+                repo_id: required("repo")?,
+                kind: required("kind")?,
+                title: required("title")?,
+                body,
+                labels,
+            })
+        })
+        .collect()
+}
+
+fn intake_fixture(issues: &[IssueFixture]) -> Result<IntakeFixture, String> {
     let issue = issues
         .iter()
-        .filter_map(TomlValue::as_table)
         .find(|issue| {
-            issue.get("kind").and_then(TomlValue::as_str) == Some("intake")
-                || issue.get("id").and_then(TomlValue::as_str) == Some("intake")
-                || issue.get("kind").and_then(TomlValue::as_str) == Some("feature")
-                || issue.get("id").and_then(TomlValue::as_str) == Some("feature")
+            matches!(issue.kind.as_str(), "intake" | "feature")
+                || matches!(issue.id.as_str(), "intake" | "feature")
         })
         .or_else(|| {
-            issues.iter().filter_map(TomlValue::as_table).find(|issue| {
-                issue.get("id").and_then(TomlValue::as_str) == Some("source")
-                    || issue.get("id").and_then(TomlValue::as_str) == Some("create")
-                    || issue.get("kind").and_then(TomlValue::as_str) == Some("code")
+            issues.iter().find(|issue| {
+                matches!(issue.id.as_str(), "source" | "create") || issue.kind == "code"
             })
         })
         .ok_or_else(|| "manifest has no intake/source issue fixture".to_string())?;
-    let title = issue
-        .get("title")
-        .and_then(TomlValue::as_str)
-        .ok_or_else(|| "live intake issue is missing `title`".to_string())?
-        .to_string();
-    let body_ref = issue
-        .get("body")
-        .and_then(TomlValue::as_str)
-        .ok_or_else(|| "live intake issue is missing `body`".to_string())?;
-    let body_path = scenario_path.join(body_ref);
-    let body = fs::read_to_string(&body_path)
-        .map_err(|error| format!("read intake body {}: {error}", body_path.display()))?;
-    let labels = issue
-        .get("labels")
-        .and_then(TomlValue::as_array)
-        .map(|labels| {
-            labels
-                .iter()
-                .map(|label| {
-                    label
-                        .as_str()
-                        .map(str::to_string)
-                        .ok_or_else(|| "live intake issue labels must be strings".to_string())
-                })
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
     Ok(IntakeFixture {
-        title,
-        body,
-        labels,
+        title: issue.title.clone(),
+        body: issue.body.clone(),
+        labels: issue.labels.clone(),
     })
 }
 
@@ -467,127 +510,5 @@ fn parse_duration_literal(raw: &str) -> Result<Duration, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn loads_checked_in_live_manifest_bundle() {
-        let bundle = ScenarioBundle::load(default_basic_delivery_scenario_path())
-            .expect("checked-in live manifest bundle loads");
-        assert_eq!(
-            bundle.execution.convergence,
-            ConvergenceStrategy::SinglePullRequest
-        );
-        assert!(
-            bundle
-                .jig_script_path()
-                .ends_with("jig/basic-delivery.json")
-        );
-        assert_eq!(bundle.repo.slug, "acme/service");
-        assert_eq!(bundle.repo.default_branch, "main");
-        assert_eq!(
-            bundle.intake.title,
-            "Service banner should identify the environment"
-        );
-        assert_eq!(bundle.timeout, Duration::from_secs(600));
-        assert_eq!(
-            bundle.poll_backstop,
-            Duration::from_secs(DEFAULT_DAEMON_POLL_BACKSTOP_SECS)
-        );
-        assert_eq!(
-            bundle.mechanical_cadence,
-            Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS)
-        );
-        assert_eq!(bundle.observability.log_format, "json");
-        assert_eq!(bundle.observability.rust_log, "temper=debug");
-        assert!(bundle.repo.seed_path.join("README.md").is_file());
-        assert!(
-            bundle
-                .repo
-                .seed_path
-                .join(".forgejo/workflows/ci.yml")
-                .is_file()
-        );
-        assert_eq!(
-            bundle.repo.ci_source,
-            fs::read_to_string(&bundle.repo.ci_seed_path).unwrap()
-        );
-        jig_core::ScriptFile::load(bundle.jig_script_path())
-            .expect("scenario-owned Jig script parses");
-        bundle
-            .validate_workflow()
-            .expect("scenario workflow remains canonical");
-    }
-
-    #[test]
-    fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
-        for (name, convergence) in [
-            ("basic-delivery", ConvergenceStrategy::SinglePullRequest),
-            ("codebase-memory-agent", ConvergenceStrategy::CodebaseMemory),
-            (
-                "implementation-pr-handoff",
-                ConvergenceStrategy::ImplementationPrHandoff,
-            ),
-            (
-                "plan-centric-feature-branch",
-                ConvergenceStrategy::PlanFeatureLanding,
-            ),
-        ] {
-            let bundle = ScenarioBundle::load(scenarios_root().join(name))
-                .unwrap_or_else(|error| panic!("load {name}: {error}"));
-            assert_eq!(bundle.execution.convergence, convergence, "{name}");
-            assert!(
-                bundle
-                    .jig_script_path()
-                    .starts_with(scenarios_root().join(name)),
-                "{name} must own its Jig script: {}",
-                bundle.jig_script_path().display()
-            );
-            jig_core::ScriptFile::load(bundle.jig_script_path())
-                .unwrap_or_else(|error| panic!("parse {name} Jig script: {error}"));
-            assert!(
-                bundle
-                    .execution
-                    .steps
-                    .iter()
-                    .any(|step| matches!(step.action, ManifestAction::SeedIssue { .. })),
-                "{name} has a typed issue seed"
-            );
-        }
-    }
-
-    #[test]
-    fn convergence_strategy_is_required_instead_of_inferred_from_bundle_identity() {
-        let path = scenarios_root().join("implementation-pr-handoff/scenario.toml");
-        let mut manifest = temper_scenario_core::load_resolved_manifest_toml(path)
-            .expect("resolved handoff manifest");
-        let wait = manifest
-            .get_mut("steps")
-            .and_then(TomlValue::as_array_mut)
-            .and_then(|steps| {
-                steps.iter_mut().find(|step| {
-                    step.get("action").and_then(TomlValue::as_str)
-                        == Some("workflow.wait_convergence")
-                })
-            })
-            .and_then(TomlValue::as_table_mut)
-            .expect("wait step");
-        wait.remove("strategy");
-
-        let error = ManifestExecutionPlan::from_manifest(&manifest)
-            .expect_err("identity must not supply convergence behavior");
-        assert!(error.contains("strategy is required"), "{error}");
-    }
-
-    fn scenarios_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("temper-testing lives under crates/temper-testing")
-            .join("scenarios")
-    }
-
-    fn default_basic_delivery_scenario_path() -> PathBuf {
-        scenarios_root().join("basic-delivery")
-    }
-}
+#[path = "bundle_tests.rs"]
+mod tests;

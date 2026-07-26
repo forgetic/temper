@@ -85,13 +85,6 @@ id = "wait-for-forgejo-runner"
 action = "forgejo_runner.ready"
 
 [[steps]]
-id = "seed-service-repo"
-action = "repo.seed"
-repo = "service"
-seed_path = "repo"
-ci_source = "repo/.forgejo/workflows/ci.yml"
-
-[[steps]]
 id = "configure-jig-architect-response"
 action = "jig.fake_llm"
 role = "architect"
@@ -114,6 +107,13 @@ id = "launch-standalone-temper"
 action = "temper.launch_standalone"
 config = "config/workflow.json"
 requires_observability = true
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "repo/.forgejo/workflows/ci.yml"
 
 [[steps]]
 id = "seed-feature-issue"

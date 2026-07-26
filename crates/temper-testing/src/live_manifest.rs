@@ -15,6 +15,10 @@ mod fake_llm;
 mod handoff;
 mod plan_feature;
 mod process;
+mod runtime;
+mod runtime_fake;
+#[cfg(test)]
+mod runtime_tests;
 #[cfg(target_os = "linux")]
 mod standalone_shutdown;
 mod stimuli;
@@ -23,29 +27,18 @@ mod stimulus_manifest_tests;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::forgejo_runtime::RunWorkspace;
-use crate::forgejo_server::{ForgejoRunner, start_cached_bare_admin_server};
-
 pub use bundle::{
     AgentFixture, ConvergenceStrategy, IntakeFixture, ManifestAction, ManifestExecutionPlan,
     ManifestStep, ObservabilityFixture, RepoFixture, ScenarioBundle,
 };
-use convergence::{
-    admin_forge, ci_diagnostics, drive_single_pull_request_convergence, repository, seed_intake,
-};
-use fake_llm::SinglePullRequestFake;
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
 pub use plan_feature::{
     IssueState as PlanIssueState, LivePlanFeatureEvidence,
     PullRequestCiJobEvidence as PlanCiJobEvidence,
     PullRequestStateEvidence as PlanPullRequestStateEvidence,
-};
-use process::{
-    TemperInitRequest, assert_init_workflow_yaml_matches, convergence_timeout, free_port,
-    mint_site_admin_token, populate_repo, read_tail, run_temper_init, spawn_temper_standalone,
-    tune_init_config, wait_for_standalone, write_snapshot,
 };
 #[cfg(target_os = "linux")]
 pub use standalone_shutdown::{
@@ -123,237 +116,7 @@ impl LiveManifestHarness {
     /// paths named in the evidence remain readable long enough for callers to
     /// print or archive them.
     pub fn run(&self) -> Result<LiveManifestEvidence, String> {
-        match self.scenario.execution.convergence {
-            ConvergenceStrategy::ImplementationPrHandoff => {
-                return handoff::run_authored_pr_create_refresh(self);
-            }
-            ConvergenceStrategy::CodebaseMemory => {
-                return codebase_memory::run_tool_augmented_pull_request(self);
-            }
-            ConvergenceStrategy::PlanFeatureLanding => {
-                return plan_feature::run_feature_branch_aggregate_landing(self);
-            }
-            ConvergenceStrategy::SinglePullRequest => {}
-        }
-
-        let started = Instant::now();
-        self.scenario.validate_workflow()?;
-
-        let cached = start_cached_bare_admin_server(
-            &self.admin_user,
-            &self.admin_password,
-            &self.admin_email,
-        )
-        .map_err(|error| format!("cached bare-admin Forgejo starts: {error}"))?;
-        let server = cached.server;
-        let mut runner = ForgejoRunner::register(&server)
-            .map_err(|error| format!("forgejo-runner registers: {error}"))?;
-        if !runner.is_running() {
-            return Err(format!(
-                "forgejo-runner exited immediately\n--- runner log ---\n{}",
-                runner.log_tail()
-            ));
-        }
-        let admin_token = mint_site_admin_token(&server, &self.admin_user)?;
-
-        let fake = SinglePullRequestFake::start(self.scenario.jig_script_path())?;
-        let scenario_run_id = scenario_run_id(&self.scenario);
-        let workspace = RunWorkspace::new(&self.workspace_prefix);
-        let bundle_dir = workspace.dir("bundle");
-        let workspaces_dir = workspace.dir("workspaces");
-        let logs = LiveLogPaths {
-            workspace_root: workspace.path().to_path_buf(),
-            init_log: workspace.join("logs/init.log"),
-            repo_populate_log: workspace.join("logs/repo-populate.log"),
-            standalone_log: workspace.join("logs/standalone.log"),
-            fake_llm_log: workspace.join("logs/fake-llm.log"),
-            ci_diagnostics_log: workspace.join("logs/ci-diagnostics.log"),
-        };
-
-        let bind_port = free_port()?;
-        run_temper_init(TemperInitRequest {
-            temper: &self.temper,
-            server: &server,
-            scenario: &self.scenario,
-            bundle_dir: &bundle_dir,
-            workspaces_dir: &workspaces_dir,
-            bind_port,
-            fake_llm_url: &fake.base_url(),
-            log: &logs.init_log,
-            admin_user: &self.admin_user,
-            admin_password: &self.admin_password,
-            scenario_run_id: &scenario_run_id,
-        })?;
-        assert_init_workflow_yaml_matches(&bundle_dir.join("workflow.yaml"), &self.scenario)?;
-        tune_init_config(
-            &bundle_dir.join("config.toml"),
-            self.scenario.poll_backstop.as_secs(),
-            self.scenario.mechanical_cadence.as_secs(),
-        )?;
-
-        populate_repo(
-            server.base_url(),
-            &admin_token,
-            workspace.path(),
-            &self.scenario.repo,
-            &logs.repo_populate_log,
-        )?;
-
-        let mut standalone = spawn_temper_standalone(
-            &self.temper,
-            &bundle_dir,
-            &logs.standalone_log,
-            &self.scenario.observability,
-            &scenario_run_id,
-        )?;
-        wait_for_standalone(&mut standalone)?;
-
-        let forge = admin_forge(server.base_url(), &admin_token, &self.scenario.repo);
-        let repository = process::engine_block_on(repository(&forge, &self.scenario.repo))?;
-        let issue =
-            process::engine_block_on(seed_intake(&forge, &repository, &self.scenario.intake))?;
-        let stimuli = stimuli::execute_live_stimuli(
-            &self.scenario.execution.stimuli,
-            stimuli::LiveStimulusResources {
-                scenario: &self.scenario,
-                server: &server,
-                runner: &mut runner,
-                temper: &self.temper,
-                bundle_dir: &bundle_dir,
-                logs: &logs,
-                scenario_run_id: &scenario_run_id,
-                standalone: &mut standalone,
-                forge: &forge,
-                repository: &repository,
-                issue,
-            },
-        )
-        .map_err(|failure| {
-            workspace.retain_on_drop();
-            write_snapshot(&logs.fake_llm_log, &fake.log_tail());
-            write_snapshot(
-                &logs.ci_diagnostics_log,
-                &ci_diagnostics(&forge, &repository),
-            );
-            format!(
-                "declared live stimulus failed: {}\nstandalone log: {}\nCI diagnostics: {}",
-                failure.diagnostic(),
-                logs.standalone_log.display(),
-                logs.ci_diagnostics_log.display()
-            )
-        })?;
-
-        let timeout = convergence_timeout(self.scenario.timeout);
-        let convergence_start = Instant::now();
-        let final_state = match drive_single_pull_request_convergence(
-            &forge,
-            &repository,
-            issue,
-            &self.admin_user,
-            &mut standalone,
-            timeout,
-        ) {
-            Ok(final_state) => final_state,
-            Err(error) => {
-                workspace.retain_on_drop();
-                write_snapshot(&logs.fake_llm_log, &fake.log_tail());
-                write_snapshot(
-                    &logs.ci_diagnostics_log,
-                    &ci_diagnostics(&forge, &repository),
-                );
-                return Err(format!(
-                    "live manifest did not converge within {timeout:?}: {error}\n\
-                     forge_url={} repo={} intake_issue=#{} runner_running={}\n\
-                     runner log tail:\n{}\n\
-                     --- init log ({}) ---\n{}\n\
-                     --- repo populate log ({}) ---\n{}\n\
-                     --- standalone daemon/worker/agent log ({}) ---\n{}\n\
-                     --- fake LLM request tail ({}) ---\n{}\n\
-                     --- CI diagnostics ({}) ---\n{}\n\
-                     --- Forgejo web log ---\n{}",
-                    server.base_url(),
-                    self.scenario.repo.slug,
-                    issue,
-                    runner.is_running(),
-                    runner.log_tail(),
-                    logs.init_log.display(),
-                    read_tail(&logs.init_log, 120),
-                    logs.repo_populate_log.display(),
-                    read_tail(&logs.repo_populate_log, 120),
-                    logs.standalone_log.display(),
-                    standalone.log_tail(),
-                    logs.fake_llm_log.display(),
-                    fake.log_tail(),
-                    logs.ci_diagnostics_log.display(),
-                    ci_diagnostics(&forge, &repository),
-                    read_tail(&server.data_dir().join("web.log"), 80),
-                ));
-            }
-        };
-        let convergence = convergence_start.elapsed();
-
-        if convergence >= self.scenario.poll_backstop {
-            workspace.retain_on_drop();
-            return Err(format!(
-                "converged in {convergence:?}, not before the long poll backstop {:?}; raw webhooks should wake the standalone engine\n--- standalone log ---\n{}",
-                self.scenario.poll_backstop,
-                standalone.log_tail()
-            ));
-        }
-        if fake.architect_requests() < 2 {
-            workspace.retain_on_drop();
-            return Err(format!(
-                "fake LLM never served the architect tool loop\n{}",
-                fake.log_tail()
-            ));
-        }
-        if fake.engineer_requests() < 2 {
-            workspace.retain_on_drop();
-            return Err(format!(
-                "fake LLM never served the engineer tool loop\n{}",
-                fake.log_tail()
-            ));
-        }
-
-        write_snapshot(&logs.fake_llm_log, &fake.log_tail());
-        write_snapshot(
-            &logs.ci_diagnostics_log,
-            &ci_diagnostics(&forge, &repository),
-        );
-
-        standalone.kill();
-        Ok(LiveManifestEvidence {
-            _workspace: workspace,
-            scenario_path: self.scenario.scenario_path.clone(),
-            manifest_path: self.scenario.manifest_path.clone(),
-            scenario_run_id,
-            temper_log_format: self.scenario.observability.log_format.clone(),
-            rust_log: self.scenario.observability.rust_log.clone(),
-            temper_binary: self.temper.binary.clone(),
-            forge_url: server.base_url().to_string(),
-            repo_slug: self.scenario.repo.slug.clone(),
-            repo_id: self.scenario.repo.id.clone(),
-            repo_default_branch: self.scenario.repo.default_branch.clone(),
-            forge_cache_hit: cached.cache_hit,
-            runner_running: runner.is_running(),
-            startup: started.elapsed().saturating_sub(convergence),
-            convergence,
-            total_elapsed: started.elapsed(),
-            poll_backstop: self.scenario.poll_backstop,
-            fake_llm: FakeLlmEvidence {
-                base_url: fake.base_url(),
-                architect_requests: fake.architect_requests(),
-                engineer_requests: fake.engineer_requests(),
-                tester_requests: 0,
-                log_path: logs.fake_llm_log.clone(),
-            },
-            final_state,
-            handoff: None,
-            codebase_memory: None,
-            plan_feature: None,
-            stimuli,
-            logs,
-        })
+        runtime::execute(self)
     }
 }
 
