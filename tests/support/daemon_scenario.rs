@@ -181,7 +181,7 @@ pub fn run_daemon_variant(variant: Variant) {
 
     let timeout = convergence_timeout();
     let convergence_start = Instant::now();
-    let forge = convergence::admin_forge(&server, &provisioned, &engineer);
+    let forge = convergence::admin_forge(&server, &provisioned);
 
     let converged =
         convergence::drive_variant(&variant, &provisioned, &engineer, &forge, issue, timeout);

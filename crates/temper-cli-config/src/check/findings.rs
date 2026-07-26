@@ -73,14 +73,6 @@ fn add_engine_findings(resolved: &Resolved, findings: &mut Vec<CheckFinding>) {
         resolved.observability.agent_traces.read_token.as_ref(),
         findings,
     );
-    if resolved.forge.web_ui.is_none() {
-        findings.push(CheckFinding::offline_note(
-            "engine",
-            CheckCategory::Forge,
-            "no CI-reader web-UI credentials (`[forge] ci_user` + that user's password); \
-             CI status reads will fail on a REST-less Forgejo (ADR 0019)",
-        ));
-    }
 }
 
 fn add_worker_findings(resolved: &Resolved, pool: Option<&str>, findings: &mut Vec<CheckFinding>) {

@@ -320,8 +320,6 @@ mod tests {
         let repo_id = RepositoryId::new("forgejo:acme/widgets");
         let run = ActionRunDto {
             id: 900,
-            index_in_repo: 10,
-            run_number: 10,
             prettyref: "#7".to_string(),
             head_sha: "provider-sha".to_string(),
             status: "success".to_string(),

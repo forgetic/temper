@@ -16,7 +16,6 @@ fn sample_config_inputs() -> ConfigInputs {
         workflow_path: Some("/wf.json".to_string()),
         webhook_addr: Some("0.0.0.0:4000".to_string()),
         admin_user: Some("agent".to_string()),
-        ci_user: Some("bot".to_string()),
         provider: Some("anthropic".to_string()),
         provider_url: None,
         workspace: Some("~/.local/state/temper/workspace".to_string()),
@@ -174,7 +173,6 @@ fn forge_users_from_provisioned_drops_redundant_user_key() {
             // user == key → dropped (the key is the default).
             user: Some("engineer".to_string()),
             email: Some("eng@noreply.localhost".to_string()),
-            password: Some("pw".to_string()),
             token: Some("tok".to_string()),
         },
     );
@@ -184,7 +182,6 @@ fn forge_users_from_provisioned_drops_redundant_user_key() {
             // user != key → kept verbatim.
             user: Some("automation-bot".to_string()),
             email: None,
-            password: Some("bot-pw".to_string()),
             token: Some("bot-tok".to_string()),
         },
     );

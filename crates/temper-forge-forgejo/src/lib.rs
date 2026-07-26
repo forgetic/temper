@@ -13,16 +13,8 @@
 
 mod candidate_index;
 mod ci;
-// Kept only for the dependency-ordered compatibility/configuration cleanup.
-// Public CI reads no longer reference these modules.
-#[allow(dead_code)]
-mod ci_cache;
 mod ci_match;
 mod ci_time;
-#[allow(dead_code)]
-mod ci_ui;
-#[allow(dead_code)]
-mod ci_ui_parse;
 mod client;
 mod config;
 mod dependencies;
@@ -41,7 +33,7 @@ mod types;
 mod version;
 
 pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
-pub use config::{CasMode, DEFAULT_PAGE_LIMIT, ForgejoConfig, WebUiCredentials};
+pub use config::{CasMode, DEFAULT_PAGE_LIMIT, ForgejoConfig};
 pub use provision::{ROLE_PASSWORD, admin_token_via_basic_auth};
 pub use read_only_basic::ReadOnlyBasicAuthClient;
 
@@ -66,10 +58,6 @@ pub struct ForgejoForge<C = EngineHttpClient> {
     /// issue endpoints require numeric ids, while the portable surface uses
     /// names. Shared across clones and invalidated after label upserts.
     label_ids: Arc<Mutex<HashMap<String, HashMap<String, u64>>>>,
-    /// Memo retained only until the dependency-ordered web-UI cleanup removes
-    /// its configuration and source.
-    #[allow(dead_code)]
-    ci_reads: Arc<ci_cache::CiReadCache>,
 }
 
 impl ForgejoForge<EngineHttpClient> {
@@ -132,7 +120,6 @@ impl<C: HttpClient> ForgejoForge<C> {
             versions: Arc::new(VersionCache::default()),
             provider_requests: Arc::new(AtomicU64::new(0)),
             label_ids: Arc::new(Mutex::new(HashMap::new())),
-            ci_reads: Arc::new(ci_cache::CiReadCache::default()),
         }
     }
 
@@ -148,18 +135,7 @@ impl<C: HttpClient> ForgejoForge<C> {
     }
 
     /// Returns the underlying HTTP client.
-    ///
-    /// The CI web-UI read path ([`crate::ci_ui`]) builds raw [`HttpRequest`]s
-    /// (no `/api/v1` prefix, cookie auth, form bodies) that bypass
-    /// [`client::build_request`], so it issues them through this seam directly.
     pub(crate) fn http_client(&self) -> &C {
         &self.client
-    }
-
-    /// The retained web-UI CI read memo; unreachable from public CI reads and
-    /// removed by the dependency-ordered compatibility cleanup.
-    #[allow(dead_code)]
-    pub(crate) fn ci_read_cache(&self) -> &ci_cache::CiReadCache {
-        &self.ci_reads
     }
 }

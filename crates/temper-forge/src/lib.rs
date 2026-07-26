@@ -39,13 +39,11 @@ pub use temper_forge_model::*;
 /// helpers), not forge *behavior*: they describe how to build a backend, while
 /// the resulting [`Forge`] is always handed back abstractly by [`factory`]. They
 /// are re-exported here so wiring crates can express backend options (default
-/// repo, web-UI CI credentials, …) without depending on a backend crate.
+/// repo, conditional-write mode, …) without depending on a backend crate.
 pub mod config {
     /// Forgejo backend configuration ([`new`](ForgejoConfig::new) plus
-    /// `with_*` builder options) and CAS/credential helpers.
-    pub use temper_forge_forgejo::{
-        CasMode as ForgejoCasMode, ForgejoConfig, WebUiCredentials as ForgejoWebUiCredentials,
-    };
+    /// `with_*` builder options) and conditional-write mode.
+    pub use temper_forge_forgejo::{CasMode as ForgejoCasMode, ForgejoConfig};
     /// GitHub backend configuration.
     pub use temper_forge_github::{CasMode as GitHubCasMode, GitHubConfig};
 
@@ -87,7 +85,7 @@ pub mod factory {
     /// Build a Forgejo-backed [`Forge`] from a [`ForgejoConfig`].
     ///
     /// Construct the config with [`crate::config::ForgejoConfig::new`] and the
-    /// `with_*` builders (default repo, web-UI CI credentials, …).
+    /// `with_*` builders (default repo, page limit, conditional-write mode).
     pub fn new_forgejo(config: ForgejoConfig) -> Arc<dyn Forge> {
         Arc::new(temper_forge_forgejo::ForgejoForge::new(config))
     }

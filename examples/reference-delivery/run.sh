@@ -619,7 +619,6 @@ start_role_worker() {
     _role=$1
     _token=$(credential_field "$_role" token) || die "cannot read token for role $_role"
     _username=$(credential_field "$_role" user) || die "cannot read username for role $_role"
-    _password=$(credential_field "$_role" password) || die "cannot read password for role $_role"
     _log="$LOG_DIR/worker-$_role.log"
     : >"$_log"
     _architect_args=
@@ -627,9 +626,6 @@ start_role_worker() {
     log "starting multi-repo $_role worker ..."
     (
         TEMPER_FORGEJO_TOKEN="$_token" \
-        TEMPER_FORGEJO_USERNAME="$_username" \
-        TEMPER_FORGEJO_PASSWORD="$_password" \
-        TEMPER_FORGEJO_CI_DIAGNOSTICS=1 \
             "$WORKER_BIN" \
                 --kind role \
                 --role "$_role" \
@@ -654,16 +650,11 @@ start_role_worker() {
 
 start_mechanical_worker() {
     _token=$(credential_field bot token) || die 'cannot read token for bot'
-    _username=$(credential_field bot user) || die 'cannot read username for bot'
-    _password=$(credential_field bot password) || die 'cannot read password for bot'
     _log="$LOG_DIR/worker-mechanical.log"
     : >"$_log"
     log 'starting multi-repo mechanical worker ...'
     (
         TEMPER_FORGEJO_TOKEN="$_token" \
-        TEMPER_FORGEJO_USERNAME="$_username" \
-        TEMPER_FORGEJO_PASSWORD="$_password" \
-        TEMPER_FORGEJO_CI_DIAGNOSTICS=1 \
             "$WORKER_BIN" \
                 --kind mechanical \
                 --backend forgejo \

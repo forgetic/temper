@@ -179,7 +179,7 @@ pub fn write_bundle(
     std::fs::write(
         bundle.join("config.toml"),
         format!(
-            "schema_version = 1\n[deployment]\nname = \"local-dev\"\ntopology = \"standalone\"\n{workflow}[forge]\nurl = \"{forge_url}\"\nadmin = \"root\"\nci_user = \"bot\"\n[engine]\nbind = \"127.0.0.1:38100\"\nrepos = [{repos}]\nroles = [\"architect\", \"engineer\"]\nwebhook_secret_file = \"webhook-secret\"\n"
+            "schema_version = 1\n[deployment]\nname = \"local-dev\"\ntopology = \"standalone\"\n{workflow}[forge]\nurl = \"{forge_url}\"\nadmin = \"root\"\n[engine]\nbind = \"127.0.0.1:38100\"\nrepos = [{repos}]\nroles = [\"architect\", \"engineer\"]\nwebhook_secret_file = \"webhook-secret\"\n"
         ),
     )
     .expect("config");

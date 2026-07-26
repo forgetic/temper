@@ -16,8 +16,7 @@ pub mod run;
 
 pub use args::{
     AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind,
-    ClockKind, FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV, FORGEJO_USERNAME_ENV, ForgejoArgs,
-    ParseOutcome, ProfileKind, ReviewerKind, RoleBehavior, USAGE, WORKFLOW_FILE_ENV, WorkerArgs,
-    WorkerKind, parse, parse_with_env,
+    ClockKind, FORGEJO_TOKEN_ENV, ForgejoArgs, ParseOutcome, ProfileKind, ReviewerKind,
+    RoleBehavior, USAGE, WORKFLOW_FILE_ENV, WorkerArgs, WorkerKind, parse, parse_with_env,
 };
 pub use run::{RunError, run};

@@ -260,7 +260,7 @@ fn offline_engine_and_every_pool_check_pass_and_redact_secrets() {
     let mut placeholders = Vec::new();
     collect_placeholders(&parsed_credentials, &mut placeholders);
     assert!(
-        placeholders.len() >= 15,
+        placeholders.len() >= 14,
         "unexpected placeholder coverage: {placeholders:?}"
     );
     for secret in placeholders {

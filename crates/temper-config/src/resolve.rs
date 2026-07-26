@@ -32,7 +32,7 @@ use crate::resolved::{
     AgentSettings, AgentToolSettings, Capability, CodebaseMemoryIndex, CodebaseMemoryMode,
     CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
     ForgeSettings, GitIdentity, PathSettings, ProviderKind, ProviderSettings, RepoPath, Resolved,
-    WebUiCreds, WorkerSettings,
+    WorkerSettings,
 };
 use crate::schema::{Config, Credentials};
 use crate::secret_refs::{EngineSecretReferences, resolve_engine_secret_references};
@@ -65,7 +65,6 @@ const DEFAULT_WORKSPACE_ROOT_FALLBACK: &str = ".temper/workspace";
 const DEFAULT_MAX_CONCURRENT_JOBS: u32 = 1;
 const DEFAULT_POLL_WAIT_MS: u64 = 30_000;
 const DEFAULT_HEARTBEAT_MS: u64 = 10_000;
-const DEFAULT_CI_USER: &str = "bot";
 /// Mirrors `temper_agent::DEFAULT_MAX_ITERATIONS`; kept here so this crate stays
 /// free of any runtime-crate dependency. A drift test in the binary asserts they
 /// agree.
@@ -208,10 +207,6 @@ fn resolve_forge(
         .map(SecretString::from);
     let admin_token = named_admin_token.or(legacy_admin_token);
 
-    let ci_user =
-        trimmed(config.forge.ci_user.as_deref()).unwrap_or_else(|| DEFAULT_CI_USER.to_string());
-    let web_ui = resolve_web_ui(credentials, &ci_user);
-
     let mut role_tokens = BTreeMap::new();
     let mut role_identities = BTreeMap::new();
     for role in roles {
@@ -234,22 +229,9 @@ fn resolve_forge(
         kind: ForgeKind::Forgejo,
         url,
         admin_token,
-        web_ui,
         role_tokens,
         role_identities,
     }
-}
-
-fn resolve_web_ui(credentials: &Credentials, ci_user: &str) -> Option<WebUiCreds> {
-    let user = credentials.forge.users.get(ci_user);
-    let username = user
-        .and_then(|u| trimmed(u.user.as_deref()))
-        .unwrap_or_else(|| ci_user.to_string());
-    let password = user.and_then(|u| trimmed(u.password.as_deref()))?;
-    Some(WebUiCreds {
-        username,
-        password: SecretString::from(password),
-    })
 }
 
 fn role_token(credentials: &Credentials, role: &str) -> Option<String> {

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, ROLE_PASSWORD as FORGEJO_ROLE_PASSWORD};
+use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
 use temper_forge_model::{
     CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, Issue, IssueState, ItemNumber,
     PullRequest, PullRequestQuery, PullRequestState, RepositoryId, RepositoryPath, UserId,
@@ -18,9 +18,7 @@ const ASSERT_POLL: Duration = Duration::from_secs(1);
 
 pub(super) fn admin_forge(base_url: &str, admin_token: &str, repo: &RepoFixture) -> ForgejoForge {
     ForgejoForge::new(
-        ForgejoConfig::new(base_url, admin_token)
-            .with_default_repo(&repo.owner, &repo.name)
-            .with_web_ui_credentials(ENGINEER, FORGEJO_ROLE_PASSWORD),
+        ForgejoConfig::new(base_url, admin_token).with_default_repo(&repo.owner, &repo.name),
     )
 }
 

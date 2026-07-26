@@ -148,7 +148,6 @@ pub(crate) fn assert_redacted(rendered: &str) {
     for secret in [
         "fixture-root-password",
         "fixture-root-token",
-        "fixture-bot-password",
         "fixture-bot-token",
         "fixture-architect-token",
         "fixture-engineer-token",

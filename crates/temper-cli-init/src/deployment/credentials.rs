@@ -76,7 +76,6 @@ fn role_and_bot_users(provisioned: &Provisioned) -> BTreeMap<String, temper_conf
             ProvisionedForgeUser {
                 user: Some(identity.user.clone()),
                 email: Some(identity.email.clone()),
-                password: Some(identity.password.clone()),
                 token: Some(identity.token.clone()),
             },
         );
@@ -87,7 +86,6 @@ fn role_and_bot_users(provisioned: &Provisioned) -> BTreeMap<String, temper_conf
         ProvisionedForgeUser {
             user: Some(bot.user.clone()),
             email: Some(bot.email.clone()),
-            password: Some(bot.password.clone()),
             token: Some(bot.token.clone()),
         },
     );

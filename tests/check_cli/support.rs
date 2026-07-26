@@ -162,7 +162,6 @@ pub fn write_online_engine_bundle(root: &Path, forge_url: &str) -> PathBuf {
              [forge]\n\
              url = \"{forge_url}\"\n\
              admin = \"engineer\"\n\
-             ci_user = \"engineer\"\n\
              [engine]\n\
              repos = [\"ai/temper\"]\n\
              roles = [\"engineer\"]\n"
@@ -175,7 +174,6 @@ pub fn write_online_engine_bundle(root: &Path, forge_url: &str) -> PathBuf {
         "schema_version = 1\n\
          [forge.users.engineer]\n\
          token = \"forge-token\"\n\
-         password = \"forge-password\"\n\
          [agent.providers.anthropic]\n\
          type = \"api-key\"\n\
          key = \"provider-key\"\n",
@@ -201,7 +199,6 @@ pub fn write_valid_bundle(root: &Path) -> PathBuf {
          [forge]\n\
          url = \"http://localhost:3000\"\n\
          admin = \"engineer\"\n\
-         ci_user = \"engineer\"\n\
          [engine]\n\
          repos = [\"ai/temper\"]\n\
          roles = [\"engineer\"]\n",
@@ -220,7 +217,6 @@ pub fn write_valid_credentials(bundle: &Path) {
         "schema_version = 1\n\
          [forge.users.engineer]\n\
          token = \"forge-token\"\n\
-         password = \"forge-password\"\n\
          [agent.providers.anthropic]\n\
          type = \"api-key\"\n\
          key = \"provider-key\"\n",

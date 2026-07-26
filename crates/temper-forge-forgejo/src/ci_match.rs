@@ -55,17 +55,6 @@ impl Target {
     }
 }
 
-/// A run's repo-stable index: `index_in_repo`, then `run_number`, then `id`.
-pub(crate) fn run_index(run: &ActionRunDto) -> u64 {
-    if run.index_in_repo > 0 {
-        run.index_in_repo
-    } else if run.run_number > 0 {
-        run.run_number
-    } else {
-        run.id
-    }
-}
-
 /// Decides whether a run matches a query target, returning the first reason.
 pub(crate) fn match_run(run: &ActionRunDto, target: &Target) -> Option<MatchReason> {
     // A query commit is authoritative. PR refs/numbers/branches and the fetched
@@ -175,13 +164,13 @@ pub(crate) fn sha_matches(left: &str, right: &str) -> bool {
     left[..min] == right[..min]
 }
 
-/// Sorts runs newest first: created desc, then updated desc, then index desc.
+/// Sorts runs newest first: created desc, then updated desc, then provider id desc.
 pub(crate) fn sort_runs(runs: &mut [ActionRunDto]) {
     runs.sort_by(|a, b| {
         run_created(b)
             .cmp(&run_created(a))
             .then(run_updated(b).cmp(&run_updated(a)))
-            .then(run_index(b).cmp(&run_index(a)))
+            .then(b.id.cmp(&a.id))
     });
 }
 
@@ -199,8 +188,6 @@ mod tests {
 
     fn run(prettyref: &str, head_branch: &str, head_sha: &str, event: &str) -> ActionRunDto {
         ActionRunDto {
-            index_in_repo: 5,
-            run_number: 5,
             status: "success".to_string(),
             event: event.to_string(),
             prettyref: prettyref.to_string(),
@@ -208,18 +195,6 @@ mod tests {
             head_sha: head_sha.to_string(),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn run_index_prefers_index_in_repo() {
-        let mut run = run("#7", "feature", "abc", "push");
-        assert_eq!(run_index(&run), 5);
-        run.index_in_repo = 0;
-        run.run_number = 9;
-        assert_eq!(run_index(&run), 9);
-        run.run_number = 0;
-        run.id = 13;
-        assert_eq!(run_index(&run), 13);
     }
 
     #[test]
