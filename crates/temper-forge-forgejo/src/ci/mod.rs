@@ -22,7 +22,6 @@ use temper_forge_model::{
     ForgeResult, RepositoryId,
 };
 
-pub(crate) use jobs::map_status_evidence;
 use jobs::{job_to_ci_job, sort_jobs};
 
 impl<C: HttpClient> ForgejoForge<C> {
@@ -81,9 +80,8 @@ impl<C: HttpClient> ForgejoForge<C> {
 
         let mut jobs = Vec::new();
         for run in &matched {
-            // `run.id` is the provider database id required by Forgejo 16. The
-            // display coordinates (`index_in_repo`/`run_number`) are never used
-            // in the jobs route or opaque identity.
+            // `run.id` is the provider database id required by Forgejo 16 and
+            // the only run coordinate used by the jobs route or opaque identity.
             let dtos = self.fetch_run_jobs(&repo, run.id).await?;
             for dto in dtos {
                 if let Some(job) = job_to_ci_job(&repo, repo_id, run, &dto, &target) {

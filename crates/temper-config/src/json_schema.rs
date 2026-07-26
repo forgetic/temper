@@ -200,12 +200,6 @@ fn forge_config_schema() -> Value {
                 "admin",
                 string_schema("Default forge user key from credentials.toml."),
             ),
-            (
-                "ci_user",
-                string_schema(
-                    "Forge user key whose web UI credentials authenticate CI status reads.",
-                ),
-            ),
         ],
     )
 }

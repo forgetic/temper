@@ -99,7 +99,6 @@ pub fn build_artifacts(answers: &Answers, opts: &InitOptions) -> Result<InitArti
         workflow_path: Some(WORKFLOW_FILE.to_string()),
         webhook_addr: Some(bind_addr(&answers.webhook_addr)),
         admin_user: Some(answers.admin_user.clone()),
-        ci_user: Some(temper_provision::BOT_USER.to_string()),
         provider: active_provider_name(answers),
         provider_url: answers.provider_url.clone(),
         workspace: Some(workspace.clone()),

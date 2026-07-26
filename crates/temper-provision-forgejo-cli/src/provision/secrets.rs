@@ -2,7 +2,7 @@
 //!
 //! The demo provision-forgejo CLI writes the provisioned secrets in the same
 //! `credentials.toml` format the runtime actually reads (`[forge.users.<role>]`
-//! with `user`/`email`/`password`/`token`, plus a `bot` automation user). This
+//! with `user`/`email`/`token`, plus a `bot` automation user). This
 //! is the file the daemon loads via `--secrets`; there is no separate env file.
 //! `temper init` writes its own `credentials.toml` and never touches this.
 
@@ -19,7 +19,8 @@ use super::{ProvisionError, Provisioned, Result};
 
 /// Builds the `credentials.toml` document for a provisioning result: each role
 /// identity under `[forge.users.<role>]`, plus the automation account under its
-/// own login (`[forge.users.bot]`), so `[forge] ci_user = "bot"` resolves to it.
+/// own login (`[forge.users.bot]`). Runtime output includes tokens, not the
+/// throwaway passwords used internally while provisioning users and tokens.
 pub fn credentials_document(provisioned: &Provisioned) -> Credentials {
     let mut provisioned_users: BTreeMap<String, ProvisionedForgeUser> = BTreeMap::new();
     for (role, identity) in &provisioned.roles {
@@ -28,20 +29,17 @@ pub fn credentials_document(provisioned: &Provisioned) -> Credentials {
             ProvisionedForgeUser {
                 user: Some(identity.user.clone()),
                 email: Some(identity.email.clone()),
-                password: Some(identity.password.clone()),
                 token: Some(identity.token.clone()),
             },
         );
     }
-    // The automation (bot) identity, keyed by its login so the daemon's
-    // `[forge] ci_user` (set to `bot`) resolves to it.
+    // The automation (bot) identity is keyed by its login.
     let bot = &provisioned.automation;
     provisioned_users.insert(
         bot.user.clone(),
         ProvisionedForgeUser {
             user: Some(bot.user.clone()),
             email: Some(bot.email.clone()),
-            password: Some(bot.password.clone()),
             token: Some(bot.token.clone()),
         },
     );
@@ -168,7 +166,7 @@ mod tests {
             .expect("reviewer user present");
         assert_eq!(reviewer.user.as_deref(), Some("reviewer"));
         assert_eq!(reviewer.token.as_deref(), Some("tok"));
-        assert_eq!(reviewer.password.as_deref(), Some("pw"));
+        assert_eq!(reviewer.password, None);
 
         let bot = document
             .forge
@@ -176,7 +174,7 @@ mod tests {
             .get(BOT_USER)
             .expect("bot user present");
         assert_eq!(bot.token.as_deref(), Some("bot-tok"));
-        assert_eq!(bot.password.as_deref(), Some("bot-pw"));
+        assert_eq!(bot.password, None);
 
         // The serialized form is real `credentials.toml` the runtime reads.
         let text = toml::to_string(&document).expect("serializes");

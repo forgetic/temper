@@ -43,10 +43,9 @@ const ADMIN_EMAIL: &str = "e2eadmin@example.invalid";
 /// real; it is never logged.
 const ADMIN_PASSWORD: &str = "Adm1n-Phase2-e2e!";
 
-/// The shared, known password every provisioned role user gets. It is reused as
-/// the Phase 3b web-UI CI-read credential (findings-phase-0c), so it is returned
-/// in the role map. Throwaway, never logged. `pub(super)` so the REST helpers in
-/// `provision_rest` can authenticate with it.
+/// The shared, known password every provisioned role user gets. Provisioning
+/// uses it to mint each user's token over basic auth. Throwaway, never logged.
+/// `pub(super)` so the REST helpers can authenticate with it.
 pub(super) const ROLE_PASSWORD: &str = "R0le-Phase2-e2e!";
 
 /// Token scopes that worked in the spike (findings-phase-0 §3). `all` also
@@ -129,8 +128,8 @@ jobs:
 /// Identity for one workflow role on the real Forgejo backend.
 ///
 /// `user`/`token` are what a role worker needs to build a `ForgejoForge` handle
-/// whose `current_user` resolves to this role; `password` is the web-UI CI-read
-/// credential reused by Phase 3b. None of these are ever logged.
+/// whose `current_user` resolves to this role. `password` is retained inside the
+/// fixture for provisioning/basic-auth setup only. None are ever logged.
 #[derive(Clone, Deserialize, Serialize)]
 pub struct RoleIdentity {
     /// Forgejo login (matches the `RunnerConfig` role binding's user handle).
@@ -139,7 +138,7 @@ pub struct RoleIdentity {
     pub email: String,
     /// Personal access token minted via the user's own basic-auth.
     pub token: String,
-    /// The user's known password (web-UI CI-read credential).
+    /// The user's known provisioning password.
     pub password: String,
 }
 

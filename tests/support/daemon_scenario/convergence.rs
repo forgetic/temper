@@ -250,15 +250,10 @@ async fn completed_ci_jobs(
 
 /// Admin-token forge handle with the engineer's web-UI credentials attached for
 /// the ADR 0019 CI reads, mirroring the daemon binary's own environment.
-pub(super) fn admin_forge(
-    server: &ForgejoServer,
-    provisioned: &Provisioned,
-    engineer: &RoleIdentity,
-) -> ForgejoForge {
+pub(super) fn admin_forge(server: &ForgejoServer, provisioned: &Provisioned) -> ForgejoForge {
     ForgejoForge::new(
         ForgejoConfig::new(server.base_url(), &provisioned.admin_token)
-            .with_default_repo(&provisioned.owner, &provisioned.name)
-            .with_web_ui_credentials(&engineer.user, &engineer.password),
+            .with_default_repo(&provisioned.owner, &provisioned.name),
     )
 }
 

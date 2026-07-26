@@ -8,8 +8,7 @@
 
 use super::args::{
     AgentsKind, ArchitectKind, ArgsError, Backend, BackendKind, CiPolicyKind, CiSentinelKind,
-    ClockKind, FORGEJO_CI_DIAGNOSTICS_ENV, FORGEJO_PASSWORD_ENV, FORGEJO_TOKEN_ENV,
-    FORGEJO_USERNAME_ENV, ForgejoArgs, ProfileKind, ReviewerKind, RoleBehavior,
+    ClockKind, FORGEJO_TOKEN_ENV, ForgejoArgs, ProfileKind, ReviewerKind, RoleBehavior,
     WAKE_DEBOUNCE_MS_ENV, WORKFLOW_FILE_ENV, WorkerArgs, WorkerKind,
 };
 use chrono::Duration;
@@ -42,8 +41,7 @@ pub const USAGE: &str = concat!(
     "[--poll-ms <n>] [--idle-poll-max-ms <n mechanical idle cap>] [--audit-ms <n deep-audit, 0 disables>] ",
     "[--stop-file <path>] [--run-secs <max>] [--clock <deterministic|wall>] [--wake-socket <path>] [--wake-secret-file <path>]\n",
     "  forgejo secrets come from the environment, never argv: ",
-    "TEMPER_FORGEJO_TOKEN (required), TEMPER_FORGEJO_USERNAME/TEMPER_FORGEJO_PASSWORD ",
-    "(optional, for the CI-reading role's web-UI login); ",
+    "TEMPER_FORGEJO_TOKEN (required); ",
     "the workflow file may also come from TEMPER_WORKFLOW_FILE, defaulting to ",
     "the bundled reference-delivery workflow when unset",
 );
@@ -215,9 +213,8 @@ impl RawArgs {
                 Backend::Filesystem
             }
             BackendKind::Forgejo => {
-                // CI on Forgejo is produced by the real `forgejo-runner` and read
-                // via the Phase 3b web-UI path; there is no fake CI producer on
-                // this backend (findings-phase-0b).
+                // CI on Forgejo is produced by the real `forgejo-runner`; there
+                // is no fake CI producer on this backend.
                 if matches!(kind, WorkerKind::Ci { .. }) {
                     return Err(ArgsError::new(
                         "--kind ci is not supported with --backend forgejo: CI is produced by \
@@ -237,16 +234,7 @@ impl RawArgs {
                 let base_url =
                     require(self.base_url, "--base-url (required for --backend forgejo)")?;
                 let token = require_env(env, FORGEJO_TOKEN_ENV)?;
-                let username = non_empty_env(env, FORGEJO_USERNAME_ENV);
-                let password = non_empty_env(env, FORGEJO_PASSWORD_ENV);
-                let ci_diagnostics = non_empty_env(env, FORGEJO_CI_DIAGNOSTICS_ENV).is_some();
-                Backend::Forgejo(ForgejoArgs {
-                    base_url,
-                    token,
-                    username,
-                    password,
-                    ci_diagnostics,
-                })
+                Backend::Forgejo(ForgejoArgs { base_url, token })
             }
         };
 

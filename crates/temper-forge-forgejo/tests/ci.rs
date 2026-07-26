@@ -3,7 +3,7 @@
 mod support;
 
 use serde_json::{Value, json};
-use support::{MockHttpClient, block_on, forge, forge_with_web_ui, pull_id, repo_id};
+use support::{MockHttpClient, block_on, forge, pull_id, repo_id};
 use temper_forge_forgejo::{HttpMethod, HttpRequest};
 use temper_forge_model::{
     CiJobConclusion, CiJobId, CiJobQuery, CiJobSort, CiJobSortField, CiJobStatus, ForgeError,
@@ -15,8 +15,6 @@ const HEAD: &str = "abcdef1234567";
 fn run(id: u64, display: u64, prettyref: &str, branch: &str, sha: &str, status: &str) -> Value {
     json!({
         "id": id,
-        "index_in_repo": display,
-        "run_number": display,
         "status": status,
         "prettyref": prettyref,
         "head_branch": branch,
@@ -489,7 +487,7 @@ fn jobs_transport_auth_missing_and_unexpected_statuses_fail_closed_without_fallb
             runs(vec![run(900, 10, "main", "main", HEAD, "success")]),
         );
         client.push_response(status, json!({ "message": "unavailable" }).to_string());
-        let result = block_on(forge_with_web_ui(client.clone()).list_ci_jobs(
+        let result = block_on(forge(client.clone()).list_ci_jobs(
             &repo_id(),
             CiJobQuery {
                 commit_sha: Some(HEAD.to_string()),
@@ -510,7 +508,7 @@ fn jobs_transport_auth_missing_and_unexpected_statuses_fail_closed_without_fallb
         runs(vec![run(900, 10, "main", "main", HEAD, "success")]),
     );
     client.push_transport_error("connection reset");
-    let result = block_on(forge_with_web_ui(client.clone()).list_ci_jobs(
+    let result = block_on(forge(client.clone()).list_ci_jobs(
         &repo_id(),
         CiJobQuery {
             commit_sha: Some(HEAD.to_string()),

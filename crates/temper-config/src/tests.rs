@@ -78,11 +78,6 @@ fn resolves_full_deployment() {
     // forge: trailing slash stripped, admin token from the admin user.
     assert_eq!(resolved.forge.url.as_deref(), Some("http://localhost:3000"));
     assert_eq!(exposed(&resolved.forge.admin_token), Some("agent-tok"));
-    // web-ui from the default ci_user "bot".
-    let web = resolved.forge.web_ui.as_ref().expect("web ui");
-    assert_eq!(web.username, "bot");
-    assert_eq!(web.password.expose_secret(), "bot-pw");
-
     // engine
     assert_eq!(resolved.engine.bind.to_string(), "127.0.0.1:4000");
     assert_eq!(resolved.engine.repos.len(), 2);
@@ -157,6 +152,17 @@ fn resolves_full_deployment() {
         }
         other => panic!("expected inline oauth, got {other:?}"),
     }
+}
+
+#[test]
+fn removed_ci_user_is_rejected() {
+    let error = Config::parse(
+        "schema_version = 1\n[forge]\nci_user = \"bot\"\n",
+        std::path::Path::new("config.toml"),
+        FileKind::Config,
+    )
+    .expect_err("removed CI scraping config must be rejected");
+    assert!(error.to_string().contains("ci_user"), "{error}");
 }
 
 #[test]
@@ -293,10 +299,6 @@ fn deployment_env_vars_are_ignored() {
     // forge url + admin token come from the files, not the env.
     assert_eq!(resolved.forge.url.as_deref(), Some("http://localhost:3000"));
     assert_eq!(exposed(&resolved.forge.admin_token), Some("agent-tok"));
-    // web-ui creds come from the `bot` credentials user, not FORGEJO_USERNAME/PASSWORD.
-    let web = resolved.forge.web_ui.as_ref().expect("web ui");
-    assert_eq!(web.username, "bot");
-    assert_eq!(web.password.expose_secret(), "bot-pw");
     // engine bind/port + workflow come from the file (`port = 4000`, `workflow = /wf.json`).
     assert_eq!(resolved.engine.bind.to_string(), "127.0.0.1:4000");
     assert_eq!(
@@ -769,8 +771,6 @@ fn redacts_secrets_in_debug() {
         rendered.contains("[REDACTED]"),
         "no redaction marker: {rendered}"
     );
-    let web = format!("{:?}", resolved.forge.web_ui);
-    assert!(!web.contains("bot-pw"), "web-ui password leaked: {web}");
 }
 
 /// Anti-leak golden test: a full `Debug` of `Resolved` must contain none of the

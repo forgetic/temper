@@ -54,7 +54,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         // the CI need before reading — this is the dominant idle cost, since
         // historical PRs keep their workflow labels and are re-listed as
         // reconciliation candidates every mechanical tick, each triggering an
-        // expensive web-UI CI read (ADR 0019). This narrows ONLY the scanner's
+        // unnecessary provider CI read. This narrows ONLY the scanner's
         // read; `execute`/`plan` still read CI for terminal targets so the merge
         // effect's own stale/closed detection is unchanged.
         let needs = match &loaded {

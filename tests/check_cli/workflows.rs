@@ -59,7 +59,6 @@ fn check_json_succeeds_for_config_relative_yaml_workflow() {
          [forge]\n\
          url = \"http://localhost:3000\"\n\
          admin = \"engineer\"\n\
-         ci_user = \"engineer\"\n\
          [engine]\n\
          repos = [\"ai/temper\"]\n\
          roles = [\"engineer\"]\n",
@@ -103,7 +102,6 @@ fn check_json_fails_for_missing_workflow_file_with_path() {
          [forge]\n\
          url = \"http://localhost:3000\"\n\
          admin = \"engineer\"\n\
-         ci_user = \"engineer\"\n\
          [engine]\n\
          repos = [\"ai/temper\"]\n\
          roles = [\"engineer\"]\n",
@@ -144,7 +142,6 @@ fn check_json_fails_for_invalid_yaml_workflow_with_format() {
          [forge]\n\
          url = \"http://localhost:3000\"\n\
          admin = \"engineer\"\n\
-         ci_user = \"engineer\"\n\
          [engine]\n\
          repos = [\"ai/temper\"]\n\
          roles = [\"engineer\"]\n",
@@ -193,7 +190,6 @@ fn check_json_fails_for_static_workflow_validation_error() {
          [forge]\n\
          url = \"http://localhost:3000\"\n\
          admin = \"engineer\"\n\
-         ci_user = \"engineer\"\n\
          [engine]\n\
          repos = [\"ai/temper\"]\n\
          roles = [\"engineer\"]\n",

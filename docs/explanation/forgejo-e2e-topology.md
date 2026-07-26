@@ -16,10 +16,9 @@ in-process HTTP. The e2e suite exists for exactly the residual real-wiring
 value the hermetic suite cannot give:
 
 1. **Real-wiring proof**: real Forgejo API behavior, real webhook delivery,
-   real git push auth, and the real `temper-daemon` binary's
-   env→config→composition (`FORGEJO_*`, `TEMPER_FORGEJO_TOKEN_<ROLE>`,
-   CLI flags).
-2. **Ambiguous real CI failure**: a status-only Forgejo 7 failure keeps the
+   real git push auth, and the real `temper-daemon` binary's config/credentials
+   composition.
+2. **Ambiguous real CI failure**: a status-only Forgejo 16 failure keeps the
    current-head gate red without entering `pr_ci_failed`, advancing the PR head,
    or manufacturing a source/test verdict. Explicit ordinary-failure repair
    routing remains covered by the hermetic restart suite.
@@ -33,7 +32,7 @@ Two ignored tests; each owns the live world for one scenario:
 ```text
   ┌────────────────────────────────────────────────────────────┐
   │ Forgejo server (SQLite, ephemeral port, kill-on-drop)      │
-  │   REST /api/v1 · web UI (CI reads) · Actions               │
+  │   REST /api/v1 (including CI reads) · Actions              │
   └────────────────────────────────────────────────────────────┘
      ▲ API (daemon only)   │ webhooks        ▲ git push       ▲ runs CI
      │                     ▼                 │ (role token)   │
@@ -53,9 +52,8 @@ Two ignored tests; each owns the live world for one scenario:
 - **Daemon**: the real root-package `temper-daemon` binary on an ephemeral
   port. It is the only component holding Forge API credentials: forge URL and
   admin/bot token from its config/credentials files (`[forge] url` and the
-  `[forge.users.<admin>]` token), web-UI credentials for the ADR 0019 CI reads,
-  and the provisioned engineer token via `TEMPER_FORGEJO_TOKEN_ENGINEER` for
-  role-attributed applies.
+  `[forge.users.<admin>]` token), plus the provisioned engineer token from the
+  same credentials file for role-attributed applies and token-only CI reads.
 - **Worker**: `temper-testing-daemon-worker`, a deterministic Worker/Daemon
   Wire Protocol v1 client that stands in for `smith-worker`. It long-polls the
   daemon, and on assignment clones/fetches the repo over the real git remote,
@@ -119,11 +117,10 @@ commit carries the marker: `present` gives the happy path an immediately green
 head; `deferred` gives the ambiguous-failure scenario a real status-only red
 head that must remain unchanged.
 
-**Reading.** Forgejo 7.0.12 lacks Actions run/task REST endpoints, so
-`list_ci_jobs` is REST-first with a **password/web-UI fallback** (ADR 0019).
-The dedicated CI-status monitor performs these reads with the web-UI
-credentials passed through the daemon's environment, exactly as the production
-launcher wires them. Its terminal transitions enter the bounded wake
+**Reading.** Forgejo 16.0.1 exposes Actions runs and each provider run's jobs
+through token-authenticated JSON APIs. `list_ci_jobs` strictly matches runs to
+the current PR/head, then reads `/actions/runs/{provider_run_id}/jobs`; there is
+no HTML or password fallback. Its terminal transitions enter the bounded wake
 coordinator as exact PR-scoped CI hints; the fresh targeted path evaluates
 mechanical queues for green and retains status-only red as recovery-required.
 
@@ -131,8 +128,8 @@ mechanical queues for green and retains status-only red as recovery-required.
 
 Ordinary scenario progress is webhook-driven: real Forgejo posts to the
 daemon's webhook route and every verified delivery wake-scans fresh Forge state.
-CI completion is the exception on Forgejo 7.0.x, which does not surface Actions
-completion as a repository webhook. The fixture therefore configures a short
+CI completion is not a repository webhook in the exercised fixture, so the
+fixture configures a short
 1-second `ci_poll_cadence_secs` and deliberately long 600-second
 `poll_cadence_secs` and `mechanical_cadence_secs`. Convergence before the
 300-second test deadline proves green landing and ambiguous-red suppression
@@ -143,7 +140,7 @@ bounds webhook-less detection for terminal CI. `poll_cadence_secs` remains the
 full correctness/liveness backstop. `mechanical_cadence_secs` runs automated
 queues, but alone cannot discover role-owned work. The monitored aggregate is
 current-head and latest-per-job-name: only explicit ordinary `Failure` satisfies
-`ci_failed`; Forgejo 7's bare `status: failure` remains recovery-required. A
+`ci_failed`; Forgejo's bare `status: failure` remains recovery-required. A
 visible terminal result alongside any queued or running latest job remains
 pending.
 
@@ -160,8 +157,7 @@ exercised is covered hermetically (`crates/temper-daemon/tests/`, the
 launcher-static tests, and `basic_delivery_fakes`); the topology they exercised
 is obsolete after the daemon/worker consolidation. The topology-agnostic fixture
 proofs (`forgejo_server`, `forgejo_runner`, `forgejo_provision`,
-`forgejo_pr_prep`, `forgejo_ci_web_ui`, `forgejo_workspace_pr`,
-`forgejo_parallel`) remain.
+`forgejo_pr_prep`, `forgejo_workspace_pr`, `forgejo_parallel`) remain.
 
 ## Why it stays `#[ignore]`d
 

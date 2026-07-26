@@ -59,8 +59,6 @@ pub struct ConfigInputs {
     /// `[forge] admin` — the credentials-file user key whose token is the
     /// daemon's default identity.
     pub admin_user: Option<String>,
-    /// `[forge] ci_user` — the user whose web-UI password reads CI status.
-    pub ci_user: Option<String>,
     /// `[agent] provider` — the active provider profile name.
     pub provider: Option<String>,
     /// `[agent.providers.<provider>].url` — base URL override for the active
@@ -72,7 +70,7 @@ pub struct ConfigInputs {
     pub workspace: Option<String>,
 }
 
-/// A provisioned forge identity, in plain data.
+/// A provisioned forge identity to persist for token-authenticated runtime use.
 ///
 /// This is the *seam* that keeps `temper-config` free of any provision/forge
 /// dependency: it mirrors the fields a provisioning run yields for one user
@@ -86,8 +84,6 @@ pub struct ProvisionedForgeUser {
     pub user: Option<String>,
     /// Git commit email.
     pub email: Option<String>,
-    /// Web-UI password.
-    pub password: Option<String>,
     /// REST API token.
     pub token: Option<String>,
 }
@@ -113,7 +109,7 @@ pub enum ProviderSecretInput {
 #[derive(Debug, Clone)]
 pub struct CredentialInputs {
     /// Per-user forge credentials, keyed by user name (the key doubles as the
-    /// role name and is referenced by `forge.admin` / `forge.ci_user`).
+    /// role name and may be referenced by `forge.admin`).
     pub forge_users: BTreeMap<String, ForgeUser>,
     /// The active provider's name and secret (matching `[agent] provider`).
     /// `None` omits legacy provider credentials, used by init bundles created
@@ -138,7 +134,6 @@ pub fn build_config(inputs: &ConfigInputs) -> Config {
         kind: inputs.forge_kind.clone(),
         url: inputs.forge_url.clone(),
         admin: inputs.admin_user.clone(),
-        ci_user: inputs.ci_user.clone(),
     };
 
     let engine = EngineConfig {
@@ -264,7 +259,7 @@ pub fn forge_users_from_provisioned(
                 ForgeUser {
                     user,
                     email: identity.email.clone(),
-                    password: identity.password.clone(),
+                    password: None,
                     token: identity.token.clone(),
                 },
             )

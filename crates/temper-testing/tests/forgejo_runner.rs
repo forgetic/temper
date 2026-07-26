@@ -14,8 +14,8 @@
 //! [`ForgejoRunner`] (never cached), and polls the head commit's status API until
 //! the real runner reports `state: "failure"`. That a real verdict appears
 //! confirms the runner picked up and executed the queued job on this host.
-//! (Reading CI via the web-UI live-view JSON is Phase 3b; commit status is the
-//! cheap confirmation.)
+//! The backend's Actions jobs API contract is covered separately; commit status
+//! remains the cheapest runner-only confirmation here.
 //!
 //! Provisioning here is raw HTTP via an admin token created with the server CLI;
 //! full role/identity provisioning is Phase 2.

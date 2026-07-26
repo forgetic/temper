@@ -15,13 +15,6 @@ pub(crate) struct ActionRunDto {
     #[serde(default)]
     pub id: u64,
     #[serde(default)]
-    pub index_in_repo: u64,
-    #[serde(default)]
-    pub run_number: u64,
-    #[serde(default, alias = "run_attempt", alias = "attempt_number")]
-    #[allow(dead_code)]
-    pub attempt: u64,
-    #[serde(default)]
     pub status: String,
     #[serde(default)]
     pub conclusion: String,
@@ -80,9 +73,6 @@ mod tests {
         let run: ActionRunDto = serde_json::from_str(
             r##"{
                 "id": 900,
-                "index_in_repo": 10,
-                "run_number": 10,
-                "run_attempt": 2,
                 "status": "completed",
                 "conclusion": "runner_lost",
                 "failure_reason": "runner disconnected",
@@ -97,8 +87,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(run.id, 900);
-        assert_eq!(run.index_in_repo, 10);
-        assert_eq!(run.attempt, 2);
         assert_eq!(run.conclusion, "runner_lost");
         assert_eq!(run.reason, "runner disconnected");
         assert_eq!(run.prettyref, "#7");

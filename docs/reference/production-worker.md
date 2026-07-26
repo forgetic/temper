@@ -353,8 +353,4 @@ Mechanical workers also emit `mechanical_reconciliation_summary` with `mode`,
 `snapshot_count`, `finding_count`, and applied/advisory action counts. Normal
 mechanical ticks emit `mechanical_automation_execution` per automated item and
 `mechanical_automation_summary` with candidate, applied, unchanged,
-gate-not-satisfied, and error counts. When `TEMPER_FORGEJO_CI_DIAGNOSTICS` is set
-to a non-blank value, Forgejo web-UI CI fallback reads are logged as
-`read_ci_jobs_via_web_ui`; non-CI role ticks should not produce them. The worker
-binary reads this env var at startup and sets the backend's `ci_diagnostics`
-config flag explicitly (the backend never reads the environment).
+gate-not-satisfied, and error counts.

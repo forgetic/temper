@@ -15,7 +15,6 @@ workspace_dir = "workspace"
 type = "forgejo"
 url = "http://forge.example.invalid"
 admin = "root"
-ci_user = "bot"
 
 [engine]
 bind = "127.0.0.1:38100"

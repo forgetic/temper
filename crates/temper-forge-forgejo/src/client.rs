@@ -154,11 +154,8 @@ impl std::fmt::Debug for EngineHttpClient {
 impl EngineHttpClient {
     /// Builds a client targeting `base_url`, stripping any trailing slashes.
     ///
-    /// Redirects are **not** auto-followed. The REST API returns terminal
-    /// `2xx`/`4xx` directly, while the web-UI CI read path ([`crate::ci_ui`])
-    /// follows redirects itself and must observe the raw `3xx` — in particular a
-    /// successful login is a `303` to `/`, which an auto-following policy would
-    /// silently chase to a `200` homepage and make the login look failed.
+    /// Redirects are not auto-followed. Forgejo API operations interpret the
+    /// provider's direct response status at the backend boundary.
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),

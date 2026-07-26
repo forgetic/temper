@@ -139,9 +139,6 @@ pub struct ForgeSettings {
     pub url: Option<String>,
     /// The admin/default REST token. `None` if the admin user has no token.
     pub admin_token: Option<SecretString>,
-    /// Web-UI credentials for CI status reads (ADR 0019), if a `ci_user` with a
-    /// password is configured.
-    pub web_ui: Option<WebUiCreds>,
     /// Role → REST token, for the engine's per-role routing applier. Absent roles
     /// fall back to the admin token.
     pub role_tokens: BTreeMap<String, SecretString>,
@@ -161,14 +158,6 @@ pub struct GitIdentity {
     pub user: String,
     pub email: String,
     pub token: SecretString,
-}
-
-/// Web-UI login used only for the CI read fallback. The password is a
-/// [`SecretString`], so the derived `Debug` prints it as `[REDACTED]`.
-#[derive(Debug, Clone)]
-pub struct WebUiCreds {
-    pub username: String,
-    pub password: SecretString,
 }
 
 /// A resolved secret-name reference for inspection output.

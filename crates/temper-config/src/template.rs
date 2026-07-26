@@ -11,7 +11,7 @@
 pub fn config_template() -> String {
     "\
 # temper config — non-secret deployment settings.
-# Secrets (forge tokens/passwords, LLM credentials) live in the credentials file.
+# Secrets (forge tokens, provisioning passwords, LLM credentials) live in the credentials file.
 schema_version = 1
 
 [deployment]
@@ -38,9 +38,6 @@ url = \"http://localhost:3000\"
 # The admin/default user: the key into [forge.users.<admin>] in the credentials
 # file whose token becomes the engine's default forge identity.
 admin = \"bot\"
-# The user whose web-UI password authenticates CI status reads (ADR 0019).
-ci_user = \"bot\"
-
 [engine]
 # Bind address for the engine HTTP surface. `port` is shorthand for
 # 127.0.0.1:<port>; set `bind` for a non-loopback host.
@@ -129,19 +126,17 @@ pub fn credentials_template() -> String {
 schema_version = 1
 
 # One [forge.users.<name>] block per forge identity. The block key doubles as
-# the role name for per-role git identities, and is referenced by
-# `forge.admin` / `forge.ci_user` in the config file.
+# the role name for per-role git identities and may be referenced by
+# `forge.admin` in the config file. Passwords are needed only by provisioning
+# or an explicit basic-auth inspection flow, not by the token-authenticated runtime.
 [forge.users.agent]
 # user = \"agent\"   # forge login; defaults to the block key
-password = \"<agent-password>\"
 token = \"<agent-rest-token>\"
 
 [forge.users.engineer]
-password = \"<engineer-password>\"
 token = \"<engineer-rest-token>\"
 
 [forge.users.bot]
-password = \"<bot-password>\"
 token = \"<bot-rest-token>\"
 
 # Optional target-era named secrets for local development. Directory secret

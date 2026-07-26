@@ -14,8 +14,6 @@ fn run_591_status_only_failure_remains_ambiguous_and_recovery_required() {
         json!({
             "workflow_runs": [{
                 "id": 591,
-                "index_in_repo": 27,
-                "run_number": 27,
                 "status": "failure",
                 "event": "push",
                 "head_sha": "c456eec18b00",
