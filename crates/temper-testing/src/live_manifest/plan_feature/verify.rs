@@ -10,14 +10,20 @@ use super::audit::{ValidationAuditExpectation, validation_audit_evidence};
 use super::{
     ASSERT_POLL, FIRST_CODE_TITLE, FOLLOWUP_CODE_TITLE, FOLLOWUP_VALIDATION_SUMMARY, IssueState,
     LANDING_TITLE, LivePlanFeatureEvidence, PLAN_TITLE, PullRequestCiJobEvidence,
-    PullRequestStateEvidence, SECOND_CODE_TITLE, VALIDATION_SUMMARY,
+    PullRequestStateEvidence, SCENARIO_TITLE, SECOND_CODE_TITLE, VALIDATION_SUMMARY,
 };
+#[path = "verify/lifecycle.rs"]
+mod lifecycle;
+
 use crate::live_manifest::convergence::{ci_job_evidence, completed_ci_jobs};
+use lifecycle::{require_merge_topology, require_terminal_state, require_validation_order};
 
 #[derive(Default)]
 struct Observations {
     second_blocked: bool,
     second_unblocked_after_first_closed: bool,
+    scenario_blocked: bool,
+    scenario_unblocked_after_products_closed: bool,
     landing_open_with_parents_open: bool,
     main_sha_before_landing: Option<String>,
 }
@@ -109,9 +115,10 @@ async fn verify_plan_feature(
     let plan = issue_by_label_and_title(&issues, "plan", PLAN_TITLE)?;
     let first = issue_by_label_and_title(&issues, "code", FIRST_CODE_TITLE)?;
     let second = issue_by_label_and_title(&issues, "code", SECOND_CODE_TITLE)?;
+    let scenario = issue_by_label_and_title(&issues, "validation", SCENARIO_TITLE)?;
     let followup = issue_by_label_and_title(&issues, "code", FOLLOWUP_CODE_TITLE)
         .map_err(|error| format!("{error}\n{}", describe_state(&issues, &pulls)))?;
-    for issue in [plan, first, second, followup] {
+    for issue in [plan, first, second, scenario, followup] {
         require_issue_target(issue, &expected_branch)?;
     }
 
@@ -132,6 +139,26 @@ async fn verify_plan_feature(
     for pull in [first_pr, second_pr, followup_pr] {
         require_pr_target(pull, &expected_branch)?;
     }
+
+    let scenario_prs = pulls
+        .iter()
+        .filter(|pull| has_pr_label(pull, "scenario"))
+        .collect::<Vec<_>>();
+    if scenario_prs.len() != 1 {
+        return Err(format!(
+            "expected exactly one scenario PR, found {}\n{}",
+            scenario_prs.len(),
+            describe_state(&issues, &pulls)
+        ));
+    }
+    let scenario_pr = scenario_prs[0];
+    if scenario_pr.title != SCENARIO_TITLE {
+        return Err(format!(
+            "scenario PR title mismatch: expected {SCENARIO_TITLE:?}, got {:?}",
+            scenario_pr.title
+        ));
+    }
+    require_pr_target(scenario_pr, &expected_branch)?;
 
     let landing_prs = pulls
         .iter()
@@ -156,7 +183,9 @@ async fn verify_plan_feature(
         feature,
         plan,
         [first, second, followup],
+        scenario,
         [first_pr, second_pr, followup_pr],
+        scenario_pr,
         landing_pr,
         observations,
     )?;
@@ -166,12 +195,19 @@ async fn verify_plan_feature(
         [first_pr, second_pr, followup_pr],
         landing_pr,
     )?;
-    require_validation_order([first_pr, second_pr], followup, followup_pr, landing_pr)?;
+    require_validation_order(
+        [first_pr, second_pr],
+        scenario,
+        scenario_pr,
+        followup,
+        followup_pr,
+        landing_pr,
+    )?;
 
     let (ci_jobs, ci_green_before_merge) = merged_pr_ci_evidence(
         forge,
         repository,
-        &[first_pr, second_pr, followup_pr, landing_pr],
+        &[first_pr, second_pr, scenario_pr, followup_pr, landing_pr],
     )
     .await?;
     let validation_audits = validation_audit_evidence(
@@ -198,9 +234,11 @@ async fn verify_plan_feature(
         plan_issue: issue_state(plan)?,
         first_code_issue: issue_state(first)?,
         second_code_issue: issue_state(second)?,
+        scenario_issue: issue_state(scenario)?,
         followup_code_issue: issue_state(followup)?,
         first_pr: pr_state(first_pr),
         second_pr: pr_state(second_pr),
+        scenario_pr: pr_state(scenario_pr),
         followup_pr: pr_state(followup_pr),
         landing_pr: pr_state(landing_pr),
         ci_jobs,
@@ -214,6 +252,8 @@ async fn verify_plan_feature(
         final_main_sha: String::new(),
         observed_second_blocked: observations.second_blocked,
         observed_second_unblocked: observations.second_unblocked_after_first_closed,
+        observed_scenario_blocked: observations.scenario_blocked,
+        observed_scenario_unblocked: observations.scenario_unblocked_after_products_closed,
         observed_landing_open_with_parents_open: observations.landing_open_with_parents_open,
         validation_waited_for_implementations: true,
         ci_green_before_merge,
@@ -233,12 +273,22 @@ fn observe_progress(
     let plan = optional_issue(issues, "plan", PLAN_TITLE);
     let first = optional_issue(issues, "code", FIRST_CODE_TITLE);
     let second = optional_issue(issues, "code", SECOND_CODE_TITLE);
+    let scenario = optional_issue(issues, "validation", SCENARIO_TITLE);
 
     if second.is_some_and(|issue| has_label(issue, "blocked")) {
         observations.second_blocked = true;
     }
     if first.is_some_and(issue_closed) && second.is_some_and(|issue| !has_label(issue, "blocked")) {
         observations.second_unblocked_after_first_closed = true;
+    }
+    if scenario.is_some_and(|issue| has_label(issue, "blocked")) {
+        observations.scenario_blocked = true;
+    }
+    if first.is_some_and(issue_closed)
+        && second.is_some_and(issue_closed)
+        && scenario.is_some_and(|issue| !has_label(issue, "blocked"))
+    {
+        observations.scenario_unblocked_after_products_closed = true;
     }
 
     let landing_prs = pulls
@@ -281,122 +331,6 @@ fn observe_progress(
         {
             observations.landing_open_with_parents_open = true;
         }
-    }
-    Ok(())
-}
-
-fn require_terminal_state(
-    feature: &Issue,
-    plan: &Issue,
-    code_issues: [&Issue; 3],
-    implementation_prs: [&PullRequest; 3],
-    landing: &PullRequest,
-    observations: &Observations,
-) -> Result<(), String> {
-    if !observations.second_blocked || !observations.second_unblocked_after_first_closed {
-        return Err("sequential dependency block/unblock was not fully observed".to_string());
-    }
-    if !code_issues.into_iter().all(issue_closed) {
-        return Err("implementation issues are not all closed yet".to_string());
-    }
-    if !implementation_prs
-        .into_iter()
-        .all(|pull| matches!(pull.state, PullRequestState::Merged))
-    {
-        return Err("implementation PRs are not all merged yet".to_string());
-    }
-    if !matches!(landing.state, PullRequestState::Merged) {
-        return Err("feature landing PR is not merged yet".to_string());
-    }
-    if !issue_closed(feature) || !issue_closed(plan) {
-        return Err("feature and plan issues are not both closed yet".to_string());
-    }
-    if !observations.landing_open_with_parents_open {
-        return Err(
-            "feature and plan were not observed open while the aggregate landing PR was open"
-                .to_string(),
-        );
-    }
-    let landing_merged_at = landing
-        .merge
-        .as_ref()
-        .map(|merge| merge.merged_at)
-        .ok_or_else(|| "landing PR has no merge record".to_string())?;
-    for issue in [feature, plan] {
-        if issue
-            .closed_at
-            .is_none_or(|closed| closed < landing_merged_at)
-        {
-            return Err(format!(
-                "{} #{} closed before aggregate landing merged",
-                issue.title, issue.number
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn require_merge_topology(
-    initial_main_sha: &str,
-    observations: &Observations,
-    implementations: [&PullRequest; 3],
-    landing: &PullRequest,
-) -> Result<(), String> {
-    let merge_shas = [
-        merge_sha(implementations[0])?,
-        merge_sha(implementations[1])?,
-        merge_sha(implementations[2])?,
-    ];
-    if merge_shas.iter().any(|sha| *sha == initial_main_sha)
-        || merge_shas[0] == merge_shas[1]
-        || merge_shas[1] == merge_shas[2]
-        || merge_shas[0] == merge_shas[2]
-    {
-        return Err(format!(
-            "implementation merges did not advance the feature branch in three distinct steps: {merge_shas:?}"
-        ));
-    }
-    require_sha(
-        landing.head_sha.as_deref(),
-        merge_shas[2],
-        "aggregate landing head",
-    )?;
-    require_sha(
-        observations.main_sha_before_landing.as_deref(),
-        initial_main_sha,
-        "main before aggregate landing",
-    )?;
-    Ok(())
-}
-
-fn require_validation_order(
-    initial: [&PullRequest; 2],
-    followup: &Issue,
-    followup_pr: &PullRequest,
-    landing: &PullRequest,
-) -> Result<(), String> {
-    for pull in initial {
-        let merged_at = pull
-            .merge
-            .as_ref()
-            .map(|merge| merge.merged_at)
-            .ok_or_else(|| format!("implementation PR #{} has no merge time", pull.number))?;
-        if followup.created_at < merged_at {
-            return Err(format!(
-                "validation follow-up #{} was created before implementation PR #{} merged",
-                followup.number, pull.number
-            ));
-        }
-    }
-    let followup_merged_at = followup_pr
-        .merge
-        .as_ref()
-        .map(|merge| merge.merged_at)
-        .ok_or_else(|| "follow-up implementation PR has no merge time".to_string())?;
-    if landing.created_at < followup_merged_at {
-        return Err(
-            "aggregate landing was created before the validation follow-up merged".to_string(),
-        );
     }
     Ok(())
 }

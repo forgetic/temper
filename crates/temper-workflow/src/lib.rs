@@ -172,15 +172,17 @@ pub use reconcile::{
 pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
 pub use spec::{
-    RawArtifactKind, RawEffect, RawExternalTool, RawGate, RawGateCondition, RawIntakeAuthor,
-    RawLabel, RawQueue, RawQueueAction, RawQueueAutomation, RawQueueLabelSet, RawRelation, RawRole,
-    RawRolePrompt, RawState, RawStateDimension, RawTransition, RawValidationBinding,
-    RawValidationBindingDetail, RawWorkflowSpec, TargetBranchPolicy,
+    RawArtifactKind, RawChildKindRequirement, RawEffect, RawExternalTool, RawGate,
+    RawGateCondition, RawIntakeAuthor, RawLabel, RawQueue, RawQueueAction, RawQueueAutomation,
+    RawQueueLabelSet, RawRelation, RawRole, RawRolePrompt, RawState, RawStateDimension,
+    RawTransition, RawValidationBinding, RawValidationBindingDetail, RawWorkflowSpec,
+    TargetBranchPolicy,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAction, QueueAutomation,
-    QueueLabelSet, RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
-    ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
-    ValidatedValidationBinding, ValidatedWorkflow, ValidationBindingDetail,
+    ChildKindRequirement, Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor,
+    QueueAction, QueueAutomation, QueueLabelSet, RolePromptExtension, ValidatedArtifactKind,
+    ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole, ValidatedState,
+    ValidatedStateDimension, ValidatedTransition, ValidatedValidationBinding, ValidatedWorkflow,
+    ValidationBindingDetail,
 };

@@ -27,7 +27,7 @@
           "stop": "tool_calls"
         },
         {
-          "text": "{\"verdict\":\"children_ready\",\"children\":[{\"slug\":\"foundation\",\"kind\":\"code\",\"title\":\"Implement plan foundation slice\",\"body\":\"Implement the first feature-branch slice by adding the foundation fixture file. Keep the change small and self-contained.\"},{\"slug\":\"validation-landing\",\"kind\":\"code\",\"title\":\"Implement validation and landing slice\",\"body\":\"Implement the validation and landing slice after the foundation slice has landed.\",\"labels\":[\"blocked\"],\"depends_on\":[\"foundation\"]}]}"
+          "text": "{\"verdict\":\"children_ready\",\"children\":[{\"slug\":\"foundation\",\"kind\":\"code\",\"title\":\"Implement plan foundation slice\",\"body\":\"Implement the first feature-branch slice by adding the foundation fixture file. Keep the change small and self-contained.\"},{\"slug\":\"validation-landing\",\"kind\":\"code\",\"title\":\"Implement validation and landing slice\",\"body\":\"Implement the validation and landing slice after the foundation slice has landed.\",\"depends_on\":[\"foundation\"]},{\"slug\":\"feature-scenario\",\"kind\":\"validation\",\"title\":\"Author the plan-centric feature scenario\",\"body\":\"Author the required checked-in feature scenario after every product child lands.\",\"depends_on\":[\"foundation\",\"validation-landing\"]}]}"
         }
       ]
     },
@@ -58,7 +58,7 @@
           "stop": "tool_calls"
         },
         {
-          "text": "{\"verdict\":\"needs_plan\",\"children\":[{\"slug\":\"plan\",\"kind\":\"plan\",\"title\":\"Plan plan-centric dogfood delivery\",\"body\":\"Plan for Ship plan-centric dogfood feature branch delivery.\\n\\nTemper derives the non-default feature branch from the source feature number; this plan intentionally does not select a branch.\\n\\nImplementation DAG:\\n1. `Implement plan foundation slice`.\\n2. `Implement validation and landing slice` after the first child lands.\\n\\nValidation: tester confirms both implementation PRs landed, exercises a follow-up, then opens the aggregate landing PR.\\n\\n<!-- temper:workflow\\n{\\n  \\\"kind\\\": \\\"plan\\\"\\n}\\n-->\"}]}"
+          "text": "{\"verdict\":\"needs_plan\",\"children\":[{\"slug\":\"plan\",\"kind\":\"plan\",\"title\":\"Plan plan-centric dogfood delivery\",\"body\":\"Plan for Ship plan-centric dogfood feature branch delivery.\\n\\nTemper derives the non-default feature branch from the source feature number; this plan intentionally does not select a branch.\\n\\nImplementation DAG:\\n1. `Implement plan foundation slice`.\\n2. `Implement validation and landing slice` after the first child lands.\\n3. `Author the plan-centric feature scenario` after every product child lands.\\n\\nValidation: the read-only tester runs only after the scenario PR merges, may request a branch-local follow-up, then opens the aggregate landing PR.\\n\\n<!-- temper:workflow\\n{\\n  \\\"kind\\\": \\\"plan\\\"\\n}\\n-->\"}]}"
         }
       ]
     },
@@ -171,6 +171,52 @@
       ]
     },
     {
+      "name": "scenario-author-feature-proof",
+      "when": {
+        "messages_contain": [
+          "Author the plan-centric feature scenario"
+        ],
+        "any_message_contains": [
+          "ROLE: scenario_author",
+          "Role: scenario_author"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_write_scenario",
+                "name": "write",
+                "args": {
+                  "path": "service/FEATURE_SCENARIO.md",
+                  "content": "checked-in plan-centric feature scenario\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_submit_scenario",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "Authored the plan-centric feature scenario."
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Author the plan-centric feature scenario\",\"body\":\"Added the checked-in feature scenario after all product children landed.\",\"summary\":\"Authored the plan-centric feature scenario.\"}"
+        }
+      ]
+    },
+    {
       "name": "tester-after-followup",
       "when": {
         "messages_contain": [
@@ -228,7 +274,7 @@
           "stop": "tool_calls"
         },
         {
-          "text": "{\"verdict\":\"needs_followup\",\"summary\":\"Requested one implementation follow-up before aggregate landing.\",\"children\":[{\"slug\":\"validation-followup-regression\",\"kind\":\"code\",\"title\":\"Implement validation follow-up regression\",\"body\":\"Add the validation follow-up fixture without selecting a target branch; Temper must inherit the plan feature branch.\"}]}"
+          "text": "{\"verdict\":\"needs_followup\",\"summary\":\"Requested one implementation follow-up before aggregate landing.\",\"children\":[{\"slug\":\"validation-followup-regression\",\"kind\":\"code\",\"title\":\"Implement validation follow-up regression\",\"body\":\"Add the validation follow-up fixture without selecting a target branch; Temper must inherit the plan feature branch.\",\"labels\":[\"observability\"]}]}"
         }
       ]
     }

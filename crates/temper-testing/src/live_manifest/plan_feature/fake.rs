@@ -9,6 +9,7 @@ pub(crate) struct PlanFeatureFake {
     fake: FakeLlm,
     architect_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     engineer_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    scenario_author_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     tester_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -42,13 +43,23 @@ const GUIDANCE_CONTRACTS: &[GuidanceContract] = &[
         ],
     },
     GuidanceContract {
+        role: "scenario_author",
+        role_guidance: "Author the plan's required checked-in feature scenario",
+        prompt_guidance: "scenario PR must target that branch, never the repository default",
+        tool_guidance: "Use this only for author_scenario",
+        constraints: &[
+            "Only touch the checked-out repository workspace",
+            "Keep generated runtime evidence out of the checked-in scenario corpus",
+        ],
+    },
+    GuidanceContract {
         role: "tester",
         role_guidance: "Validate completed feature plans",
         prompt_guidance: "Use validate_plan only after reading",
         tool_guidance: "Use this from validate_plan.",
         constraints: &[
-            "Do not mutate Forge state directly",
-            "Tie validation evidence to the current feature branch head",
+            "Final validation is read-only",
+            "Tie validation evidence to the current feature branch head and merged scenario",
         ],
     },
 ];
@@ -65,13 +76,17 @@ impl PlanFeatureFake {
             .into_script();
         let architect_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let engineer_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let scenario_author_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let tester_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let architect_seen = std::sync::Arc::clone(&architect_requests);
         let engineer_seen = std::sync::Arc::clone(&engineer_requests);
+        let scenario_author_seen = std::sync::Arc::clone(&scenario_author_requests);
         let tester_seen = std::sync::Arc::clone(&tester_requests);
         let fake = FakeLlm::start(Script::rule(move |view| {
             if request_role_is(view, "tester") {
                 tester_seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            } else if request_role_is(view, "scenario_author") {
+                scenario_author_seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             } else if request_role_is(view, "engineer") {
                 engineer_seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             } else if request_role_is(view, "architect") {
@@ -86,6 +101,7 @@ impl PlanFeatureFake {
             fake,
             architect_requests,
             engineer_requests,
+            scenario_author_requests,
             tester_requests,
         })
     }
@@ -101,6 +117,11 @@ impl PlanFeatureFake {
 
     pub(crate) fn engineer_requests(&self) -> usize {
         self.engineer_requests
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn scenario_author_requests(&self) -> usize {
+        self.scenario_author_requests
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -224,6 +245,8 @@ fn request_role_is(view: &RequestView, role: &str) -> bool {
 fn role_hint(view: &RequestView) -> &'static str {
     if request_role_is(view, "tester") {
         "tester"
+    } else if request_role_is(view, "scenario_author") {
+        "scenario_author"
     } else if request_role_is(view, "engineer") {
         "engineer"
     } else if request_role_is(view, "architect") {

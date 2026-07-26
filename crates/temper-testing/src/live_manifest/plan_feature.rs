@@ -22,6 +22,7 @@ use super::{
 const PLAN_TITLE: &str = "Plan plan-centric dogfood delivery";
 const FIRST_CODE_TITLE: &str = "Implement plan foundation slice";
 const SECOND_CODE_TITLE: &str = "Implement validation and landing slice";
+const SCENARIO_TITLE: &str = "Author the plan-centric feature scenario";
 const FOLLOWUP_CODE_TITLE: &str = "Implement validation follow-up regression";
 const LANDING_TITLE: &str = "Land plan-centric dogfood feature branch";
 const FOLLOWUP_VALIDATION_SUMMARY: &str =
@@ -37,9 +38,11 @@ pub struct LivePlanFeatureEvidence {
     pub plan_issue: IssueState,
     pub first_code_issue: IssueState,
     pub second_code_issue: IssueState,
+    pub scenario_issue: IssueState,
     pub followup_code_issue: IssueState,
     pub first_pr: PullRequestStateEvidence,
     pub second_pr: PullRequestStateEvidence,
+    pub scenario_pr: PullRequestStateEvidence,
     pub followup_pr: PullRequestStateEvidence,
     pub landing_pr: PullRequestStateEvidence,
     pub ci_jobs: Vec<PullRequestCiJobEvidence>,
@@ -50,6 +53,8 @@ pub struct LivePlanFeatureEvidence {
     pub final_main_sha: String,
     pub observed_second_blocked: bool,
     pub observed_second_unblocked: bool,
+    pub observed_scenario_blocked: bool,
+    pub observed_scenario_unblocked: bool,
     pub observed_landing_open_with_parents_open: bool,
     pub validation_waited_for_implementations: bool,
     pub ci_green_before_merge: bool,
@@ -126,6 +131,7 @@ pub(super) fn converge(
     for (role, actual, minimum) in [
         ("architect", fake.architect_requests(), 4),
         ("engineer", fake.engineer_requests(), 9),
+        ("scenario_author", fake.scenario_author_requests(), 3),
         ("tester", fake.tester_requests(), 4),
     ] {
         if actual < minimum {

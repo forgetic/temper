@@ -59,8 +59,47 @@ pub(crate) fn create_pull_request_target_branch_policy(
     Ok(first)
 }
 
-/// The identifying labels of the `implementation_pr` artifact kind — the labels
-/// an existing implementation PR is looked up by.
+/// Resolves the pull-request artifact kind produced by a writable issue action.
+/// Legacy untyped `create_pull_request` effects continue to produce
+/// `implementation_pr`; an explicitly typed effect enables distinct products
+/// such as a scenario-authoring PR.
+pub(crate) fn success_pull_request_artifact_kind(
+    workflow: &ValidatedWorkflow,
+    transition: &TransitionId,
+) -> Result<ArtifactKindId, String> {
+    let Some(transition) = workflow
+        .transitions()
+        .iter()
+        .find(|candidate| candidate.id == *transition)
+    else {
+        return Err(format!("workflow transition `{transition}` does not exist"));
+    };
+    let kinds = transition
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::CreatePullRequest { artifact_kind, .. } => Some(
+                artifact_kind
+                    .clone()
+                    .unwrap_or_else(|| ArtifactKindId::new("implementation_pr")),
+            ),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let Some(first) = kinds.first() else {
+        return Ok(ArtifactKindId::new("implementation_pr"));
+    };
+    if kinds.iter().any(|kind| kind != first) {
+        return Err(format!(
+            "workflow transition `{}` creates conflicting pull-request artifact kinds",
+            transition.id
+        ));
+    }
+    Ok(first.clone())
+}
+
+/// The identifying labels of the legacy implementation PR kind used by feed
+/// suppression when a code issue already produced an open PR.
 pub(crate) fn implementation_pr_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
     workflow
         .artifact_kind(&ArtifactKindId::new("implementation_pr"))
@@ -71,11 +110,6 @@ pub(crate) fn implementation_pr_labels(workflow: &ValidatedWorkflow) -> Vec<Stri
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Labels a freshly-created implementation PR must carry at final handoff.
-pub(crate) fn implementation_pr_create_labels(workflow: &ValidatedWorkflow) -> Vec<String> {
-    artifact_kind_create_labels(workflow, "implementation_pr")
 }
 
 /// Labels a freshly-created child issue of `kind_id` must carry. The artifact

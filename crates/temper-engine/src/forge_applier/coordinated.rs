@@ -27,6 +27,7 @@ pub(super) struct CoordinatedSet<'a> {
     pub(super) create_labels: &'a [String],
     pub(super) depends_on: &'a BTreeMap<String, Vec<String>>,
     pub(super) base_branches: &'a BTreeMap<String, String>,
+    pub(super) pull_request_kind: &'a ArtifactKindId,
 }
 
 impl CoordinatedSet<'_> {
@@ -178,10 +179,11 @@ pub(super) fn coordinated_pr_pull_request_input(
     labels: Vec<String>,
     coordination_key: &str,
     dependencies: Vec<temper_workflow::ArtifactRef>,
+    pull_request_kind: &ArtifactKindId,
 ) -> CreatePullRequest {
     let gated = !dependencies.is_empty();
     let metadata = temper_workflow::WorkflowMetadata {
-        kind: Some(ArtifactKindId::new("implementation_pr")),
+        kind: Some(pull_request_kind.clone()),
         parents: vec![coordinating],
         // Cross-repo dependency links encoding the coordinated landing order:
         // this PR's `dependency_gate` stays closed until each target PR merges

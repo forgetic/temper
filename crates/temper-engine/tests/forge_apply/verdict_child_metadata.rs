@@ -143,11 +143,22 @@ fn inherited_policy_stamps_omission_and_rejects_an_explicit_override() {
                     )
                 },
             );
+            let mut scenario = job_child(
+                "scenario",
+                "Author scenario",
+                "Author the checked-in feature scenario.",
+                &[],
+            );
+            scenario.kind = Some("validation".to_string());
+            scenario.depends_on = vec!["child".to_string()];
             let result = verdict_result_with_children(
                 "worker-a",
                 &job.job_id,
                 "children_ready",
-                vec![job_child("child", "Implement child", &child_body, &[])],
+                vec![
+                    job_child("child", "Implement child", &child_body, &[]),
+                    scenario,
+                ],
             );
             let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
 
@@ -155,7 +166,7 @@ fn inherited_policy_stamps_omission_and_rejects_an_explicit_override() {
 
             let issues = list_issues(&forge, &repo).await;
             if explicit.is_none() {
-                assert_eq!(issues.len(), 2);
+                assert_eq!(issues.len(), 3);
                 let child = issue_by_slug(&issues, "child");
                 let metadata = parse_metadata_block(&child.body)
                     .expect("child metadata parses")

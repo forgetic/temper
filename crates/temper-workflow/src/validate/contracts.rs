@@ -280,6 +280,84 @@ pub(super) fn check_create_issues_cardinality(
     }
 }
 
+pub(super) fn check_create_issues_child_kind_requirements(
+    spec: &RawWorkflowSpec,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let artifacts = spec
+        .artifact_kinds
+        .iter()
+        .map(|artifact| (artifact.id.as_str(), artifact.target))
+        .collect::<HashMap<_, _>>();
+    for transition in &spec.transitions {
+        for effect in &transition.effects {
+            let RawEffect::CreateIssues {
+                child_kind_requirements,
+                ..
+            } = effect
+            else {
+                continue;
+            };
+            let mut seen = HashSet::new();
+            let required_kinds = child_kind_requirements
+                .iter()
+                .map(|requirement| requirement.kind.as_str())
+                .collect::<HashSet<_>>();
+            for requirement in child_kind_requirements {
+                let kind = requirement.kind.trim();
+                let reason = if kind.is_empty() {
+                    Some("kind must not be blank".to_string())
+                } else if !seen.insert(kind) {
+                    Some("kind is required more than once".to_string())
+                } else if requirement.min_children == 0
+                    || requirement
+                        .max_children
+                        .is_some_and(|max| max < requirement.min_children)
+                {
+                    Some("cardinality must require at least one child and max_children must be >= min_children".to_string())
+                } else if artifacts.get(kind) != Some(&crate::ArtifactTarget::Issue) {
+                    Some("kind must name a declared issue artifact".to_string())
+                } else if !spec.relations.iter().any(|relation| {
+                    relation.kind == crate::RelationKind::Parent
+                        && relation.source == kind
+                        && relation.target == transition.artifact
+                }) {
+                    Some(format!(
+                        "workflow must declare a parent relation from `{kind}` to `{}`",
+                        transition.artifact
+                    ))
+                } else if requirement
+                    .depends_on_all_kinds
+                    .iter()
+                    .any(|dependency| dependency == kind)
+                {
+                    Some(
+                        "depends_on_all_kinds cannot contain the requirement's own kind"
+                            .to_string(),
+                    )
+                } else if let Some(unknown) = requirement
+                    .depends_on_all_kinds
+                    .iter()
+                    .find(|dependency| !required_kinds.contains(dependency.as_str()))
+                {
+                    Some(format!(
+                        "depends_on_all_kinds references non-required kind `{unknown}`"
+                    ))
+                } else {
+                    None
+                };
+                if let Some(reason) = reason {
+                    diagnostics.push(Diagnostic::InvalidChildKindRequirement {
+                        transition: transition.id.clone(),
+                        kind: requirement.kind.clone(),
+                        reason,
+                    });
+                }
+            }
+        }
+    }
+}
+
 /// Checks semantic consistency of per-transition outcome routing (the
 /// workspace-verdict path for assigned actions).
 pub(super) fn check_transition_outcome_contract(
