@@ -3,6 +3,26 @@
 use crate::assertions::*;
 use crate::breakdown_child_kind::plan_centric_workflow;
 use crate::support::*;
+use temper_runner::{MechanicalWorker, Worker};
+use temper_workflow::InMemoryJournal;
+
+async fn close_issue(forge: &MemoryForge, repo: &RepositoryId, number: ItemNumber) {
+    let issue = forge
+        .get_issue_by_number(repo, number)
+        .await
+        .expect("issue lookup succeeds")
+        .expect("issue exists");
+    forge
+        .update_issue(
+            &issue.id,
+            UpdateIssue {
+                state: Some(temper_forge::IssueState::Closed),
+                ..UpdateIssue::default()
+            },
+        )
+        .await
+        .expect("issue closes");
+}
 
 async fn create_ready_plan(forge: &MemoryForge, repo: &RepositoryId) -> ItemNumber {
     forge
@@ -127,12 +147,13 @@ fn validation_child_must_depend_on_every_product_before_forge_mutation() {
 }
 
 #[test]
-fn valid_validation_child_inherits_branch_and_starts_blocked() {
+fn validation_child_waits_for_every_product_and_unblocks_once() {
     temper_engine_io::block_on_with(move |_cx, _handle| async move {
         let forge = Arc::new(MemoryForge::new());
         let repo = new_repo(&forge, "main").await;
         let plan = create_ready_plan(&forge, &repo).await;
-        let applier = ForgeApplier::new(forge.clone(), Arc::new(plan_centric_workflow()));
+        let workflow = plan_centric_workflow();
+        let applier = ForgeApplier::new(forge.clone(), Arc::new(workflow.clone()));
         let job = decompose_plan_job("acme/service", plan);
         let result = verdict_result_with_children(
             "worker-a",
@@ -145,6 +166,9 @@ fn valid_validation_child_inherits_branch_and_starts_blocked() {
 
         let issues = list_issues(&forge, &repo).await;
         assert_eq!(issues.len(), 4);
+        let scenario_number = issue_by_slug(&issues, "feature-scenario").number;
+        let api = issue_by_slug(&issues, "api").number;
+        let ui = issue_by_slug(&issues, "ui").number;
         let scenario = issue_by_slug(&issues, "feature-scenario");
         assert!(has_label(&scenario.labels, "validation"));
         assert!(has_label(&scenario.labels, "blocked"));
@@ -152,7 +176,10 @@ fn valid_validation_child_inherits_branch_and_starts_blocked() {
         let metadata = parse_metadata_block(&scenario.body)
             .expect("scenario metadata parses")
             .expect("scenario metadata exists");
-        assert_eq!(metadata.dependencies.len(), 2);
+        assert_eq!(
+            metadata.dependencies,
+            vec![ArtifactRef::same_repo(api), ArtifactRef::same_repo(ui)]
+        );
         assert_eq!(metadata.kind, Some(ArtifactKindId::new("validation")));
         assert_eq!(
             metadata.target_branch.as_deref(),
@@ -161,5 +188,38 @@ fn valid_validation_child_inherits_branch_and_starts_blocked() {
         let (_, plan_labels) = issue_body_and_labels(&forge, &repo, plan).await;
         assert!(has_label(&plan_labels, "in-progress"));
         assert!(!has_label(&plan_labels, "needs-validation"));
+
+        let journal = InMemoryJournal::new();
+        let worker = MechanicalWorker::new(&workflow, forge.as_ref(), &repo, &journal, policy());
+        assert_eq!(
+            worker.tick(ts("2026-05-29T00:00:00Z")).await.unwrap(),
+            temper_runner::Progress::unchanged(),
+            "both open products keep scenario authorship blocked"
+        );
+
+        close_issue(&forge, &repo, api).await;
+        assert_eq!(
+            worker.tick(ts("2026-05-29T00:00:01Z")).await.unwrap(),
+            temper_runner::Progress::unchanged(),
+            "one landed product cannot satisfy the complete dependency gate"
+        );
+        let labels = issue_labels(&forge, &repo, scenario_number).await;
+        assert!(has_label(&labels, "blocked"));
+        assert!(!has_label(&labels, "ready"));
+        assert!(!has_label(&labels, "needs-human"));
+
+        close_issue(&forge, &repo, ui).await;
+        let progress = worker.tick(ts("2026-05-29T00:00:02Z")).await.unwrap();
+        assert!(progress.changed, "all landed products unblock the scenario");
+        let labels = issue_labels(&forge, &repo, scenario_number).await;
+        assert!(!has_label(&labels, "blocked"));
+        assert!(has_label(&labels, "ready"));
+        assert!(!has_label(&labels, "needs-human"));
+
+        assert_eq!(
+            worker.tick(ts("2026-05-29T00:00:03Z")).await.unwrap(),
+            temper_runner::Progress::unchanged(),
+            "the ready scenario is not unblocked a second time"
+        );
     })
 }

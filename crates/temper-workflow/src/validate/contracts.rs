@@ -344,7 +344,21 @@ pub(super) fn check_create_issues_child_kind_requirements(
                         "depends_on_all_kinds references non-required kind `{unknown}`"
                     ))
                 } else {
-                    None
+                    requirement
+                        .depends_on_all_kinds
+                        .iter()
+                        .find(|dependency| {
+                            !spec.relations.iter().any(|relation| {
+                                relation.kind == crate::RelationKind::Dependency
+                                    && relation.source == kind
+                                    && relation.target == dependency.as_str()
+                            })
+                        })
+                        .map(|dependency| {
+                            format!(
+                                "workflow must declare a dependency relation from `{kind}` to `{dependency}`"
+                            )
+                        })
                 };
                 if let Some(reason) = reason {
                     diagnostics.push(Diagnostic::InvalidChildKindRequirement {

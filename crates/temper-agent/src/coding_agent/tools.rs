@@ -17,7 +17,7 @@ use temper_protocol_agent::WorkspaceContext;
 
 /// Builds the tool registry for a capability, scoped to `cwd`.
 ///
-/// The engineer (writable) capability gets the full edit toolset; the read-only
+/// Writable coding capabilities get the full edit toolset; the read-only
 /// capabilities get inspection tools plus bash (so they can `git diff`,
 /// `git log`, inspect CI artifacts, etc.) but no file-writing tools.
 pub fn tool_registry(capability: Capability, cwd: &Path) -> ToolRegistry {
@@ -26,7 +26,7 @@ pub fn tool_registry(capability: Capability, cwd: &Path) -> ToolRegistry {
 }
 
 /// Builds the tool registry for a concrete workspace context, optionally adding
-/// the host-controlled `submit_for_pr` relay for writable engineer sessions.
+/// the host-controlled `submit_for_pr` relay for writable coding sessions.
 #[cfg(test)]
 pub(crate) fn tool_registry_for_context(
     capability: Capability,
@@ -66,7 +66,7 @@ pub(crate) fn tool_registry_for_context_with_containment(
 }
 
 /// The base tool list for a capability (read-only inspection tools for everyone,
-/// plus edit/write for the writable engineer). Returned as a `Vec` so callers
+/// plus edit/write for writable coding roles). Returned as a `Vec` so callers
 /// can append extra tools (e.g. a sub-agent tool) before building the registry.
 fn coding_tools_vec(
     capability: Capability,

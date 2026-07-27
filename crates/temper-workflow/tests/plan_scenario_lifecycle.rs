@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use temper_workflow::{Diagnostic, Effect, RawEffect, RawWorkflowSpec, TargetBranchPolicy};
+use temper_workflow::{
+    Diagnostic, Effect, RawEffect, RawWorkflowSpec, RelationKind, TargetBranchPolicy,
+};
 
 const PLAN_CENTRIC: &str =
     include_str!("../../../scenarios/plan-centric-feature-branch/config/workflow.json");
@@ -74,6 +76,28 @@ fn workflow_validation_rejects_impossible_child_kind_requirement() {
         diagnostic,
         Diagnostic::InvalidChildKindRequirement { transition, kind, .. }
             if transition == "plan_children_created" && kind == "validation"
+    )));
+}
+
+#[test]
+fn workflow_validation_requires_declared_scenario_product_dependency_relation() {
+    let mut spec: RawWorkflowSpec =
+        serde_json::from_str(PLAN_CENTRIC).expect("workflow JSON parses");
+    spec.relations.retain(|relation| {
+        !(relation.kind == RelationKind::Dependency
+            && relation.source == "validation"
+            && relation.target == "code")
+    });
+
+    let errors = spec
+        .validate()
+        .expect_err("unclassifiable scenario dependency contract is rejected");
+    assert!(errors.diagnostics().iter().any(|diagnostic| matches!(
+        diagnostic,
+        Diagnostic::InvalidChildKindRequirement { transition, kind, reason }
+            if transition == "plan_children_created"
+                && kind == "validation"
+                && reason.contains("dependency relation from `validation` to `code`")
     )));
 }
 

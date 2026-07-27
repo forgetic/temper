@@ -136,5 +136,10 @@ runtime marker check.
 
 `Planner::dependency_unblocks` produces actor-less mechanical plans for blocked
 artifacts with declared dependency relations whose dependencies have all landed.
-A dependency-gated artifact with no dependency relations is diagnosed rather
-than auto-unblocked.
+The same non-empty rule applies when queue conditions and direct transitions
+evaluate `dependencies_resolved` for blocked artifacts: missing relation
+projection fails closed, so an automated unblock queue cannot bypass the
+reconciler's diagnostic. Empty dependencies remain resolved for optional gates
+on non-blocked roots, such as the first implementation PR in a dependency chain.
+A dependency-gated blocked artifact with no dependency relations is diagnosed
+rather than auto-unblocked.
