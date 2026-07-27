@@ -410,7 +410,8 @@ fn check_condition(
         | RawGateCondition::CiFailed
         | RawGateCondition::CiRecoveryRequired
         | RawGateCondition::ReviewApproved
-        | RawGateCondition::ReviewChangesRequested => {}
+        | RawGateCondition::ReviewChangesRequested
+        | RawGateCondition::ExactHeadValidation => {}
     }
 }
 

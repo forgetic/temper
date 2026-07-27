@@ -3,8 +3,10 @@ use crate::ClassifiedArtifact;
 use crate::classify::ArtifactSource;
 use crate::dependency_state;
 use crate::plan::{CiStatus, GateSignals, ReviewStatus, SignalNeeds};
+use crate::{ExactHeadValidationAuthority, parse_metadata_block, replace_metadata_block};
 use temper_forge::{
-    CiJobQuery, Forge, Issue, PullRequest, PullRequestReviewStatus, PullRequestState, RepositoryId,
+    CiJobQuery, Forge, ForgeError, Issue, ItemNumber, PullRequest, PullRequestReviewStatus,
+    PullRequestState, RepositoryId, UpdateIssue, UpdatePullRequest,
 };
 
 impl<'a, F: Forge + ?Sized> Executor<'a, F> {
@@ -12,7 +14,9 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
     ///
     /// Loads and classifies the artifact, then derives the same dependency, CI,
     /// and review signal bundle that `execute` and `plan` use before planning.
-    /// It performs no mutation.
+    /// Ordinary signal reads are mutation-free. A stale Temper-issued exact-head
+    /// authority is the deliberate exception: evaluation durably fences that
+    /// authority, requeues its plan, and clears it before returning `false`.
     pub async fn read_gate_signals(
         &self,
         repo_id: &RepositoryId,
@@ -114,6 +118,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             merged: pull_request.state == PullRequestState::Merged,
             terminal,
             head_sha: pull_request.head_sha.clone(),
+            source_branch: pull_request.source.branch.clone(),
             requested_reviewers: pull_request.requested_reviewers.clone(),
             classified: classified.clone(),
         };
@@ -150,9 +155,35 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             Loaded::PullRequest {
                 id,
                 head_sha,
+                source_branch,
                 requested_reviewers,
+                classified,
                 ..
             } => {
+                if needs.exact_head_validation {
+                    let authority = classified.metadata.exact_head_validation.as_ref();
+                    let authority_current = if let Some(authority) = authority {
+                        let branch_head =
+                            self.forge.get_branch_head(repo_id, source_branch).await?;
+                        authority.authorizes(source_branch, branch_head.as_deref())
+                            && head_sha.as_deref() == branch_head.as_deref()
+                    } else {
+                        false
+                    };
+                    if !authority_current {
+                        if let Some(authority) = authority.cloned() {
+                            // Keep the rare CAS invalidation state machine off
+                            // the hot gate future's stack.
+                            Box::pin(
+                                self.invalidate_exact_head_validation(
+                                    repo_id, classified, &authority,
+                                ),
+                            )
+                            .await?;
+                        }
+                    }
+                    signals = signals.with_exact_head_validation(authority_current);
+                }
                 if needs.ci {
                     let query = CiJobQuery {
                         pull_request_id: Some(id.clone()),
@@ -173,4 +204,199 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
             }
         }
     }
+
+    pub(super) async fn invalidate_exact_head_validation(
+        &self,
+        repo_id: &RepositoryId,
+        classified: &ClassifiedArtifact,
+        expected: &ExactHeadValidationAuthority,
+    ) -> Result<(), ExecutionError> {
+        let ArtifactSource::PullRequest { number } = classified.source else {
+            return Ok(());
+        };
+        let Some(marked) = self
+            .mark_exact_head_authority_invalidated(repo_id, number, expected)
+            .await?
+        else {
+            return Ok(());
+        };
+        self.requeue_exact_head_plan(repo_id, &marked).await?;
+        self.clear_invalidated_exact_head_authority(repo_id, number, &marked)
+            .await
+    }
+
+    async fn mark_exact_head_authority_invalidated(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        expected: &ExactHeadValidationAuthority,
+    ) -> Result<Option<ExactHeadValidationAuthority>, ExecutionError> {
+        for _ in 0..3 {
+            let pull = self
+                .forge
+                .get_pull_request_by_number(repo_id, number)
+                .await?
+                .ok_or(ExecutionError::TargetMissing {
+                    target: ArtifactSource::PullRequest { number },
+                })?;
+            let mut metadata = parse_metadata_block(&pull.body)
+                .map_err(|error| ExecutionError::Backend {
+                    message: format!(
+                        "invalid landing PR metadata during validation invalidation: {error}"
+                    ),
+                })?
+                .unwrap_or_default();
+            let Some(current) = metadata.exact_head_validation.as_mut() else {
+                return Ok(None);
+            };
+            if !same_validation_attempt(current, expected) {
+                return Ok(None);
+            }
+            if current.invalidated {
+                return Ok(Some(current.clone()));
+            }
+            current.invalidated = true;
+            let marked = current.clone();
+            let body = replace_metadata_block(&pull.body, &metadata).map_err(|error| {
+                ExecutionError::Backend {
+                    message: format!("mark exact-head authority invalidated: {error}"),
+                }
+            })?;
+            match self
+                .forge
+                .update_pull_request(
+                    &pull.id,
+                    UpdatePullRequest {
+                        body: Some(body),
+                        expected_version: Some(pull.version),
+                        ..UpdatePullRequest::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return Ok(Some(marked)),
+                Err(ForgeError::Conflict(_)) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(ExecutionError::Backend {
+            message: "could not fence stale exact-head authority after concurrent updates"
+                .to_string(),
+        })
+    }
+
+    async fn requeue_exact_head_plan(
+        &self,
+        repo_id: &RepositoryId,
+        authority: &ExactHeadValidationAuthority,
+    ) -> Result<(), ExecutionError> {
+        let number = authority
+            .plan
+            .rsplit_once('#')
+            .and_then(|(_, number)| number.parse::<u64>().ok())
+            .filter(|number| *number > 0)
+            .map(ItemNumber::new)
+            .ok_or_else(|| ExecutionError::Backend {
+                message: "exact-head authority has an invalid plan identity".to_string(),
+            })?;
+        for _ in 0..3 {
+            let issue = self
+                .forge
+                .get_issue_by_number(repo_id, number)
+                .await?
+                .ok_or(ExecutionError::TargetMissing {
+                    target: ArtifactSource::Issue { number },
+                })?;
+            if issue.labels.iter().any(|label| label == "needs-validation")
+                && !issue.labels.iter().any(|label| label == "validated")
+            {
+                return Ok(());
+            }
+            match self
+                .forge
+                .update_issue(
+                    &issue.id,
+                    UpdateIssue {
+                        add_labels: vec!["needs-validation".to_string()],
+                        remove_labels: vec!["validated".to_string()],
+                        expected_version: Some(issue.version),
+                        ..UpdateIssue::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(ForgeError::Conflict(_)) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(ExecutionError::Backend {
+            message: "could not requeue stale exact-head plan after concurrent updates".to_string(),
+        })
+    }
+
+    async fn clear_invalidated_exact_head_authority(
+        &self,
+        repo_id: &RepositoryId,
+        number: ItemNumber,
+        expected: &ExactHeadValidationAuthority,
+    ) -> Result<(), ExecutionError> {
+        for _ in 0..3 {
+            let pull = self
+                .forge
+                .get_pull_request_by_number(repo_id, number)
+                .await?
+                .ok_or(ExecutionError::TargetMissing {
+                    target: ArtifactSource::PullRequest { number },
+                })?;
+            let mut metadata = parse_metadata_block(&pull.body)
+                .map_err(|error| ExecutionError::Backend {
+                    message: format!(
+                        "invalid landing PR metadata while clearing validation authority: {error}"
+                    ),
+                })?
+                .unwrap_or_default();
+            let Some(current) = metadata.exact_head_validation.as_ref() else {
+                return Ok(());
+            };
+            if !current.invalidated || !same_validation_attempt(current, expected) {
+                return Ok(());
+            }
+            metadata.exact_head_validation = None;
+            let body = replace_metadata_block(&pull.body, &metadata).map_err(|error| {
+                ExecutionError::Backend {
+                    message: format!("clear stale exact-head authority: {error}"),
+                }
+            })?;
+            match self
+                .forge
+                .update_pull_request(
+                    &pull.id,
+                    UpdatePullRequest {
+                        body: Some(body),
+                        expected_version: Some(pull.version),
+                        ..UpdatePullRequest::default()
+                    },
+                )
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(ForgeError::Conflict(_)) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(ExecutionError::Backend {
+            message: "could not clear stale exact-head authority after concurrent updates"
+                .to_string(),
+        })
+    }
+}
+
+fn same_validation_attempt(
+    left: &ExactHeadValidationAuthority,
+    right: &ExactHeadValidationAuthority,
+) -> bool {
+    left.binding_id == right.binding_id
+        && left.attempt_id == right.attempt_id
+        && left.evidence_sha256 == right.evidence_sha256
 }

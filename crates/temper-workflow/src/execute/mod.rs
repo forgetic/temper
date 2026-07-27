@@ -143,6 +143,8 @@ enum Loaded {
         /// Head commit SHA, when the backend records one. Scopes the CI signal
         /// to the pull request's head commit (see [`Executor::gate_signals`]).
         head_sha: Option<String>,
+        /// Fresh source branch from the provider's exact PR representation.
+        source_branch: String,
         /// Users whose native review has been requested.
         requested_reviewers: Vec<UserId>,
         classified: ClassifiedArtifact,
@@ -369,6 +371,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     PullRequestState::Merged | PullRequestState::Closed
                 );
                 let head_sha = pull_request.head_sha.clone();
+                let source_branch = pull_request.source.branch.clone();
                 let requested_reviewers = pull_request.requested_reviewers.clone();
                 let classified = classifier
                     .classify_pull_request(&pull_request)
@@ -378,6 +381,7 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
                     merged,
                     terminal,
                     head_sha,
+                    source_branch,
                     requested_reviewers,
                     classified,
                 })

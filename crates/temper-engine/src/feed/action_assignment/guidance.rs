@@ -354,6 +354,7 @@ fn condition_token(condition: &GateCondition) -> Option<String> {
         GateCondition::CiRecoveryRequired => "ci_recovery_required",
         GateCondition::ReviewApproved => "review_approved",
         GateCondition::ReviewChangesRequested => "review_changes_requested",
+        GateCondition::ExactHeadValidation => "exact_head_validation",
         GateCondition::DependenciesResolved
         | GateCondition::LabelPresent(_)
         | GateCondition::StateEquals { .. } => return None,

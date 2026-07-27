@@ -227,7 +227,8 @@ fn condition_label<'a>(
         | GateCondition::CiFailed
         | GateCondition::CiRecoveryRequired
         | GateCondition::ReviewApproved
-        | GateCondition::ReviewChangesRequested => None,
+        | GateCondition::ReviewChangesRequested
+        | GateCondition::ExactHeadValidation => None,
     }
 }
 

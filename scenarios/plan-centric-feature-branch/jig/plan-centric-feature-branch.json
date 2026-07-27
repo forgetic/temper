@@ -226,7 +226,7 @@
       "when": {
         "messages_contain": [
           "Implement validation follow-up regression",
-          "Run final read-only validation"
+          "Own final feature-validation policy."
         ],
         "any_message_contains": [
           "ROLE: tester",
@@ -258,7 +258,7 @@
       "when": {
         "messages_contain": [
           "Plan plan-centric dogfood delivery",
-          "Run final read-only validation"
+          "Own final feature-validation policy."
         ],
         "any_message_contains": [
           "ROLE: tester",

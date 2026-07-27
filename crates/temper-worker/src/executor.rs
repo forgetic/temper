@@ -38,6 +38,8 @@ pub enum JobOutcome {
         body: Option<String>,
         summary: Option<String>,
         children: Vec<JobChild>,
+        /// Worker-owned structured metadata for daemon-side verdict gates.
+        details: Option<Value>,
     },
     Failure {
         class: FailureClass,
@@ -242,6 +244,7 @@ pub fn job_result_for_attempt(
             body,
             summary,
             children,
+            details,
         } => JobResult {
             status: ResultStatus::Success,
             verdict: Some(verdict),
@@ -249,6 +252,7 @@ pub fn job_result_for_attempt(
             body,
             children,
             summary,
+            details,
             ..base
         },
         JobOutcome::Failure {
@@ -453,6 +457,7 @@ mod tests {
                 body: Some("rewritten issue body".to_string()),
                 summary: Some("triaged".to_string()),
                 children: Vec::new(),
+                details: None,
             },
         );
 
@@ -485,6 +490,7 @@ mod tests {
                 body: Some("# Validation report".to_string()),
                 summary: Some("validated".to_string()),
                 children: Vec::new(),
+                details: None,
             },
         );
 
@@ -528,6 +534,7 @@ mod tests {
                 body: None,
                 summary: Some("planned breakdown".to_string()),
                 children: children.clone(),
+                details: None,
             },
         );
 

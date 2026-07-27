@@ -236,4 +236,7 @@ pub enum RawGateCondition {
     ReviewApproved,
     /// Some reviewer's latest native review decision must request changes.
     ReviewChangesRequested,
+    /// The landing PR carries complete Temper-issued evidence authority whose
+    /// source branch and exact head match the freshly loaded pull request.
+    ExactHeadValidation,
 }

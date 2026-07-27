@@ -9,11 +9,13 @@ const DEFAULT_REPO: &str = "ai/temper";
 pub(super) const USAGE: &str = "\
 Run a validation bundle and render final PR validation artifacts from structured evidence.
 
-Usage: temper-scenario validate --pr <N> --sha <SHA> --scenario <PATH> --output-dir <DIR> [--tier <live|hermetic>] [--temper-bin <PATH>] [--repo <OWNER/NAME>]
+Usage: temper-scenario validate --pr <N> --sha <SHA> --scenario <PATH> --output-dir <DIR> [--tier <live|hermetic>] [--temper-bin <PATH>] [--repo <OWNER/NAME>] [--target-kind <KIND> --target-issue <N>]
 
 Options:
-  --pr <N>               Pull request number under validation
-  --sha <SHA>            Merged/main commit SHA under validation
+  --pr <N>               Pull request/report number under validation
+  --sha <SHA>            Exact commit SHA under validation
+  --target-kind <KIND>   Workflow artifact kind for an issue validation target
+  --target-issue <N>     Workflow issue number paired with --target-kind
   --scenario <PATH>      Scenario directory or manifest file to run
   --tier <live|hermetic> Confidence tier to run (default: live)
   --temper-bin <PATH>    Standalone `temper` binary for live runners; when omitted, live runners resolve an existing binary or build `cargo build --bin temper`
@@ -40,6 +42,8 @@ pub(super) struct Args {
     pub(super) temper_bin: Option<PathBuf>,
     pub(super) output_dir: PathBuf,
     pub(super) repo: String,
+    pub(super) target_kind: Option<String>,
+    pub(super) target_issue: Option<u64>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -63,6 +67,8 @@ pub(super) fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
     let mut temper_bin = None;
     let mut output_dir = None;
     let mut repo = None;
+    let mut target_kind = None;
+    let mut target_issue = None;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -149,6 +155,28 @@ pub(super) fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
             index += 1;
             continue;
         }
+        if arg == "--target-kind" {
+            let value = flag_value(args, index, "--target-kind")?;
+            set_target_kind(&mut target_kind, value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = inline_flag_value(arg, "--target-kind") {
+            set_target_kind(&mut target_kind, value)?;
+            index += 1;
+            continue;
+        }
+        if arg == "--target-issue" {
+            let value = flag_value(args, index, "--target-issue")?;
+            set_target_issue(&mut target_issue, value)?;
+            index += 2;
+            continue;
+        }
+        if let Some(value) = inline_flag_value(arg, "--target-issue") {
+            set_target_issue(&mut target_issue, value)?;
+            index += 1;
+            continue;
+        }
         eprintln!("temper-scenario validate: unexpected argument `{arg}`\n\n{USAGE}");
         return Err(());
     }
@@ -170,6 +198,13 @@ pub(super) fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         return Err(());
     };
 
+    if target_kind.is_some() != target_issue.is_some() {
+        eprintln!(
+            "temper-scenario validate: --target-kind and --target-issue must be provided together\n\n{USAGE}"
+        );
+        return Err(());
+    }
+
     let tier_explicit = tier.is_some();
     Ok(ParseResult::Args(Args {
         pr_number,
@@ -180,6 +215,8 @@ pub(super) fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         temper_bin,
         output_dir,
         repo: repo.unwrap_or_else(|| DEFAULT_REPO.to_string()),
+        target_kind,
+        target_issue,
     }))
 }
 
@@ -251,6 +288,34 @@ fn set_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
     Ok(())
 }
 
+fn set_target_kind(target_kind: &mut Option<String>, value: &str) -> Result<(), ()> {
+    let value = value.trim();
+    if value.is_empty() {
+        eprintln!("temper-scenario validate: --target-kind must not be empty\n\n{USAGE}");
+        return Err(());
+    }
+    if target_kind.replace(value.to_string()).is_some() {
+        eprintln!("temper-scenario validate: duplicate --target-kind option\n\n{USAGE}");
+        return Err(());
+    }
+    Ok(())
+}
+
+fn set_target_issue(target_issue: &mut Option<u64>, value: &str) -> Result<(), ()> {
+    let parsed = value.parse::<u64>().ok().filter(|number| *number > 0);
+    let Some(parsed) = parsed else {
+        eprintln!(
+            "temper-scenario validate: --target-issue must be a positive integer: {value}\n\n{USAGE}"
+        );
+        return Err(());
+    };
+    if target_issue.replace(parsed).is_some() {
+        eprintln!("temper-scenario validate: duplicate --target-issue option\n\n{USAGE}");
+        return Err(());
+    }
+    Ok(())
+}
+
 fn set_repo(repo: &mut Option<String>, value: &str) -> Result<(), ()> {
     if value.trim().is_empty() {
         eprintln!("temper-scenario validate: --repo must not be empty\n\n{USAGE}");
@@ -261,4 +326,39 @@ fn set_repo(repo: &mut Option<String>, value: &str) -> Result<(), ()> {
         return Err(());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn required_args() -> Vec<String> {
+        [
+            "--pr",
+            "7",
+            "--sha",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--scenario",
+            "scenarios/exact-head",
+            "--output-dir",
+            "target/evidence",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn workflow_issue_target_is_typed_and_requires_both_flags() {
+        let mut args = required_args();
+        args.extend(["--target-kind".to_string(), "plan".to_string()]);
+        assert!(parse_args(&args).is_err());
+
+        args.extend(["--target-issue".to_string(), "7".to_string()]);
+        let ParseResult::Args(parsed) = parse_args(&args).expect("target parses") else {
+            panic!("expected parsed arguments");
+        };
+        assert_eq!(parsed.target_kind.as_deref(), Some("plan"));
+        assert_eq!(parsed.target_issue, Some(7));
+    }
 }

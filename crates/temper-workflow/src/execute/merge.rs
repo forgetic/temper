@@ -36,13 +36,35 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         if !merge {
             return Ok(());
         }
-        let Loaded::PullRequest { id, merged, .. } = loaded else {
+        let Loaded::PullRequest {
+            id,
+            merged,
+            source_branch,
+            head_sha,
+            classified,
+            ..
+        } = loaded
+        else {
             return Err(ExecutionError::UnsupportedEffect {
                 effect: WorkflowEffect::MergePullRequest,
             });
         };
         if *merged {
             return Ok(());
+        }
+        if let Some(authority) = classified.metadata.exact_head_validation.as_ref() {
+            let current_head = self.forge.get_branch_head(repo_id, source_branch).await?;
+            if !authority.authorizes(source_branch, current_head.as_deref())
+                || head_sha.as_deref() != current_head.as_deref()
+            {
+                self.invalidate_exact_head_validation(repo_id, classified, authority)
+                    .await?;
+                return Err(ExecutionError::TargetStale {
+                    target: loaded.classified().source,
+                    message: "exact-head validation authority changed immediately before merge"
+                        .to_string(),
+                });
+            }
         }
         let target = loaded.classified().source;
         let input = MergePullRequest {

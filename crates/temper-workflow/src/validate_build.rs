@@ -241,6 +241,7 @@ fn build_gate_condition(condition: &RawGateCondition) -> GateCondition {
         RawGateCondition::CiRecoveryRequired => GateCondition::CiRecoveryRequired,
         RawGateCondition::ReviewApproved => GateCondition::ReviewApproved,
         RawGateCondition::ReviewChangesRequested => GateCondition::ReviewChangesRequested,
+        RawGateCondition::ExactHeadValidation => GateCondition::ExactHeadValidation,
         RawGateCondition::StateEquals { dimension, state } => GateCondition::StateEquals {
             dimension: StateDimensionId::new(dimension),
             state: StateId::new(state),

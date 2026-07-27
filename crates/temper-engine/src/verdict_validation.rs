@@ -124,6 +124,40 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 return reason;
             }
         }
+        if crate::forge_applier::exact_head_validation::requires_exact_head_validation(&context)
+            && verdict == "validated"
+        {
+            let evidence =
+                match crate::forge_applier::exact_head_validation::parsed_validator_result(
+                    &context, result,
+                ) {
+                    Ok(Some(evidence)) => evidence,
+                    Ok(None) => {
+                        return VerdictCheck::Rejected(
+                            "validated exact-head outcome omitted validator evidence".to_string(),
+                        );
+                    }
+                    Err(reason) => return VerdictCheck::Rejected(reason),
+                };
+            let source_branch = evidence.source_branch.as_deref().expect("contract checked");
+            let evidence_head = evidence
+                .exact_head_sha
+                .as_deref()
+                .expect("contract checked");
+            match self
+                .forge
+                .get_branch_head(&fresh.repository.id, source_branch)
+                .await
+            {
+                Ok(Some(current_head)) if current_head == evidence_head => {}
+                Ok(Some(_)) | Ok(None) => return VerdictCheck::Stale,
+                Err(error) => {
+                    return VerdictCheck::Retryable(format!(
+                        "read feature branch head immediately before landing PR creation: {error}"
+                    ));
+                }
+            }
+        }
         VerdictCheck::Valid
     }
 

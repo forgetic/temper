@@ -7,6 +7,13 @@ use crate::agent_runner::AgentRunner;
 use crate::executor::{JobExecutionContext, JobExecutor, JobOutcome};
 
 impl<R: AgentRunner + 'static> CodingExecutor<R> {
+    /// Overrides the worker-owned exact-head validator command.
+    #[doc(hidden)]
+    pub fn with_native_validator_command(mut self, command: super::NativeValidatorCommand) -> Self {
+        self.native_validator_command = command;
+        self
+    }
+
     /// Overrides process containment for worker-owned git and pre-push
     /// commands. Production composition leaves this unset and retains automatic
     /// cgroup/supervisor selection; hermetic process tests use it to select an
@@ -30,6 +37,7 @@ impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
         let config = self.config.clone();
         let runner = Arc::clone(&self.runner);
         let pr_freshness_guard = self.pr_freshness_guard.clone();
+        let native_validator_command = self.native_validator_command.clone();
         let containment_factory = self.containment_factory.clone();
         async move {
             let attempt_id = execution.attempt.id.clone();
@@ -52,7 +60,15 @@ impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
                 .cancellation
                 .install_containment_factory(containment_factory);
             let cancellation = execution.cancellation.clone();
-            let outcome = execute(config, runner, pr_freshness_guard, assign, execution).await;
+            let outcome = execute(
+                config,
+                runner,
+                pr_freshness_guard,
+                native_validator_command,
+                assign,
+                execution,
+            )
+            .await;
             // Direct callers receive the same joined process-owner guarantee
             // as WorkerShell across workspace, fingerprint, and gate commands.
             cancellation.wait_for_process_owners().await;

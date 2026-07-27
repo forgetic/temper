@@ -100,7 +100,7 @@ temper-provision = ["temper-forge", "temper-runner", "temper-workflow"]
 temper-provision-forgejo-cli = ["temper-config", "temper-forge", "temper-provision", "temper-engine-io", "temper-reference-delivery", "temper-runner", "temper-workflow"]
 # The engine itself: serves the worker/daemon wire protocol. Touches only engine
 # crates + the worker-protocol/worker-registry it owns. No worker/agent impls.
-temper-engine = ["temper-forge", "temper-engine-io", "temper-log", "temper-runner", "temper-protocol-activity", "temper-protocol-context", "temper-protocol-worker", "temper-verdict", "temper-worker-registry", "temper-workflow"]
+temper-engine = ["temper-forge", "temper-engine-io", "temper-log", "temper-runner", "temper-protocol-activity", "temper-protocol-context", "temper-protocol-worker", "temper-scenario-core", "temper-verdict", "temper-worker-registry", "temper-workflow"]
 
 # ===========================================================================
 # WORKER layer (formerly smith). Long-polls the daemon and speaks ONLY the
@@ -109,7 +109,7 @@ temper-engine = ["temper-forge", "temper-engine-io", "temper-log", "temper-runne
 # ===========================================================================
 temper-worker-io = []
 temper-process-containment = []
-temper-worker = ["temper-process-containment", "temper-protocol-activity", "temper-protocol-worker", "temper-worker-io", "temper-protocol-agent", "temper-verdict"]
+temper-worker = ["temper-process-containment", "temper-protocol-activity", "temper-protocol-worker", "temper-worker-io", "temper-protocol-agent", "temper-scenario-core", "temper-verdict"]
 
 # ===========================================================================
 # AGENT layer (formerly anvil). Consumes the worker-exposed agent protocol.

@@ -94,6 +94,9 @@ pub(crate) fn create_pull_request(
     inner.state.require_repository(repo_id)?;
     let now = inner.state.next_timestamp()?;
     let author_id = forge.effective_user(&inner).id;
+    let head_sha = inner
+        .state
+        .branch_head(&input.source.repository_id, &input.source.branch);
     let pull_requests = inner.state.pull_requests_mut(repo_id);
     let number = next_item_number(pull_requests.iter().map(|pr| pr.number))?;
     let pull_request = PullRequest {
@@ -106,7 +109,7 @@ pub(crate) fn create_pull_request(
         author_id,
         source: input.source,
         target: input.target,
-        head_sha: None,
+        head_sha,
         base_sha: None,
         labels: normalize_string_set(input.labels),
         assignees: normalize_user_set(input.assignees),

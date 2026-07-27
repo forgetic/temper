@@ -13,6 +13,7 @@ pub(super) async fn verdict_only_outcome(
     result: WorkspaceResult,
     allowed_verdicts: &[String],
     correlation_key: &str,
+    details: Option<serde_json::Value>,
     fence: &AttemptFence,
 ) -> JobOutcome {
     if !fence.is_open() {
@@ -71,5 +72,6 @@ pub(super) async fn verdict_only_outcome(
         body: body.or(review_body),
         summary: summary.or_else(|| Some(format!("implemented {correlation_key}"))),
         children,
+        details,
     }
 }

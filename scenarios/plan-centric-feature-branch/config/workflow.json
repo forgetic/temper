@@ -80,20 +80,20 @@
     },
     {
       "id": "tester",
-      "charter": "Run final read-only validation of completed feature plans only after the checked-in scenario PR has merged, and open the aggregate feature landing PR when evidence is sufficient.",
+      "charter": "Own final feature-validation policy. The validate_plan binding is executed by Temper's constrained native runner, not by a model-authored shell command or verdict.",
       "prompt": {
-        "guidance": "Use validate_plan only after reading the feature issue, plan, product children, merged implementation PRs, the merged validation/scenario child and PR, and scenario expectations. Return verdict validated with a concise landing PR title/body containing validation evidence when the feature branch is ready to land. Return needs_followup with branch-local children of kind code; use the product, observability, or scenario-harness label to identify the gap."
+        "guidance": "validate_plan is worker-owned: Temper resolves the one mapped scenario, runs the checked-out temper-scenario validator at the exact feature head without Forge mutation credentials, validates its typed result and retained artifacts, and derives validated or needs_followup. No model-authored command or validated assertion has landing authority."
       },
       "external_tools": [
         {
           "id": "triage_workspace",
-          "description": "Read plan context and validation evidence, then return a validate_plan verdict.",
+          "description": "Documents the read-only validation workspace used by Temper's native validate_plan runner; no model process is invoked for a bound validation job.",
           "required": false,
           "constraints": [
             "Final validation is read-only and must not receive Forge mutation credentials.",
             "Tie validation evidence to the current feature branch head and merged scenario."
           ],
-          "guidance": "Use this from validate_plan. If unavailable, fail the assigned validation job with a structured unavailable-workspace result."
+          "guidance": "The native validate_plan runner owns execution, typed result ingestion, and failure routing. This declaration grants no shell or Forge mutation authority."
         }
       ],
       "concurrency": 1,
@@ -174,6 +174,19 @@
       "target": "pull_request",
       "identifying_labels": ["feature-landing"],
       "initial_labels": ["landing"]
+    }
+  ],
+  "validation_bindings": [
+    {
+      "id": "validate_exact_feature_head",
+      "role": "tester",
+      "action": "validate_plan",
+      "target_artifact": "plan",
+      "trigger": { "kind": "plan_needs_validation" },
+      "readiness": { "all": ["product_children_landed", "scenario_child_landed"] },
+      "target_selection": { "kind": "mapped_feature_scenario" },
+      "aggregation": { "include": ["feature", "plan", "scenario_mapping", "exact_head"] },
+      "idempotency_key": "validator:{binding_id}:plan:{issue_number}:head:{exact_head_sha}"
     }
   ],
   "relations": [
@@ -658,7 +671,7 @@
       "id": "land_feature_pr",
       "artifact": "feature_landing_pr",
       "roles": ["mechanical"],
-      "requires_gates": ["ci_gate", "dependency_gate"],
+      "requires_gates": ["ci_gate", "dependency_gate", "exact_head_validation_gate"],
       "effects": [
         { "kind": "merge_pull_request" },
         { "kind": "remove_label", "label": "landing" },
@@ -668,6 +681,7 @@
   ],
   "gates": [
     { "id": "dependency_gate", "condition": { "kind": "dependencies_resolved" } },
-    { "id": "ci_gate", "condition": { "kind": "ci_passed" } }
+    { "id": "ci_gate", "condition": { "kind": "ci_passed" } },
+    { "id": "exact_head_validation_gate", "condition": { "kind": "exact_head_validation" } }
   ]
 }

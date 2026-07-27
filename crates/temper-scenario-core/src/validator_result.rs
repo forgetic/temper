@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+mod contract;
+
 use crate::{
     AcceptanceCriterion, ArtifactReference, EvidenceEntry, EvidenceKind, FollowUpIssueIntent,
     ValidatedClaim, ValidationReport, ValidationStatus, ValidationVerdict,
@@ -16,6 +18,7 @@ pub const LEGACY_VALIDATOR_RESULT_SCHEMA: &str = "temper.validator.result.v1";
 /// The target is generalized beyond pull requests while related PR entries keep
 /// PR-level merge and source-issue facts available for aggregate validations.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidatorResult {
     /// Stable schema id, currently [`VALIDATOR_RESULT_SCHEMA`].
     pub schema: String,
@@ -180,83 +183,11 @@ impl ValidatorResult {
             scenario_promotion: None,
         }
     }
-
-    /// Validate the strict exact-head evidence contract independently of a
-    /// workflow gate. Legacy v1 payloads remain readable but cannot authorize a
-    /// passing exact-head validation.
-    pub fn validate_contract(&self) -> Vec<String> {
-        let mut diagnostics = Vec::new();
-        if !matches!(
-            self.schema.as_str(),
-            VALIDATOR_RESULT_SCHEMA | LEGACY_VALIDATOR_RESULT_SCHEMA
-        ) {
-            diagnostics.push(format!(
-                "unsupported validator result schema `{}`",
-                self.schema
-            ));
-        }
-        if self.verdict != ValidationVerdict::Passed {
-            return diagnostics;
-        }
-        if self.schema != VALIDATOR_RESULT_SCHEMA {
-            diagnostics
-                .push("passing exact-head validation requires validator result v2".to_string());
-        }
-        for (field, value) in [
-            ("feature", self.feature.as_deref()),
-            ("plan", self.plan.as_deref()),
-            ("mapping_id", self.mapping_id.as_deref()),
-            ("scenario_name", self.scenario_name.as_deref()),
-            ("scenario_path", self.scenario_path.as_deref()),
-            ("source_branch", self.source_branch.as_deref()),
-            ("exact_head_sha", self.exact_head_sha.as_deref()),
-            (
-                "resolved_content_digest",
-                self.resolved_content_digest.as_deref(),
-            ),
-        ] {
-            if value.is_none_or(str::is_empty) {
-                diagnostics.push(format!("passing validator result is missing `{field}`"));
-            }
-        }
-        if self.standalone_binary.is_none() {
-            diagnostics.push("passing validator result is missing `standalone_binary`".to_string());
-        }
-        if self.duration_ms.is_none() {
-            diagnostics.push("passing validator result is missing `duration_ms`".to_string());
-        }
-        if self.retained_paths.is_empty() {
-            diagnostics.push("passing validator result has no retained paths".to_string());
-        }
-        let required_assertions = self
-            .validated_claims
-            .iter()
-            .chain(self.acceptance_criteria.iter())
-            .filter(|assertion| assertion.required)
-            .collect::<Vec<_>>();
-        if required_assertions.is_empty() {
-            diagnostics.push("passing validator result has no required assertions".to_string());
-        }
-        if self.evidence.is_empty() {
-            diagnostics.push("passing validator result has no structured evidence".to_string());
-        }
-        for assertion in required_assertions {
-            if !matches!(
-                assertion.status,
-                ValidationStatus::Satisfied | ValidationStatus::Observed
-            ) {
-                diagnostics.push(format!(
-                    "required assertion did not pass: {} ({})",
-                    assertion.description, assertion.status
-                ));
-            }
-        }
-        diagnostics
-    }
 }
 
 /// Content-addressed standalone binary used by an exact-head validation.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidatorBinaryIdentity {
     pub path: String,
     pub sha256: String,
@@ -265,6 +196,7 @@ pub struct ValidatorBinaryIdentity {
 
 /// Generalized selected target for a structured validator result.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidatorResultTarget {
     /// Workflow-defined kind, such as `implementation_pr`, `issue`, or `epic`.
     pub kind: String,
@@ -308,6 +240,7 @@ impl ValidatorResultTarget {
 
 /// Pull request facts related to a structured validator result.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RelatedPullRequest {
     /// Pull request number.
     pub pr_number: u64,
@@ -330,6 +263,7 @@ pub struct RelatedPullRequest {
 
 /// Claim or acceptance criterion status plus evidence references.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidationAssertion {
     /// Claim or criterion text.
     pub description: String,
@@ -388,6 +322,7 @@ impl ValidationAssertion {
 
 /// Structured evidence entry cited by validation assertions.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StructuredEvidenceEntry {
     /// Stable evidence id unique within the result.
     pub id: String,
@@ -441,6 +376,7 @@ fn is_true(value: &bool) -> bool {
 
 /// Intent to turn validation knowledge into a checked-in scenario.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScenarioPromotionIntent {
     /// Proposed scenario name or slug.
     pub scenario_name: String,

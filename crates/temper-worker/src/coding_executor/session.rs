@@ -354,6 +354,7 @@ mod tests {
                 body: Some("blocked".to_string()),
                 summary: None,
                 children: Vec::new(),
+                details: None,
             };
 
             let outcome =

@@ -8,8 +8,9 @@ use std::process::{Command, ExitCode};
 use std::time::Instant;
 
 use temper_scenario_core::{
-    EvidenceKind, StructuredEvidenceEntry, ValidationAssertion, ValidationStatus,
-    ValidationVerdict, ValidatorBinaryIdentity, ValidatorResult, check_scenario,
+    ArtifactReference, EvidenceKind, StructuredEvidenceEntry, ValidationAssertion,
+    ValidationStatus, ValidationVerdict, ValidatorBinaryIdentity, ValidatorResult,
+    ValidatorResultTarget, check_scenario,
 };
 
 use super::run_context::ScenarioRunFacts;
@@ -413,6 +414,13 @@ fn write_validation_artifacts(
 
     let json_path = markdown_path.with_extension("json");
     let mut result = ValidatorResult::from_validation_report(report.clone(), args.repo.clone());
+    if let (Some(kind), Some(issue)) = (args.target_kind.as_deref(), args.target_issue) {
+        result.target =
+            ValidatorResultTarget::new(kind, args.repo.clone(), ArtifactReference::issue(issue));
+        // `--pr` remains the compatibility report/artifact number. It must not
+        // become a false related-PR claim when the workflow target is an issue.
+        result.related_prs.clear();
+    }
     enrich_validator_result(&mut result, evidence_path)?;
     write_json_result(&json_path, &result)?;
 

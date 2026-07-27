@@ -216,8 +216,24 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             Ok(audit) => audit,
             Err(outcome) => return outcome,
         };
+        let exact_head_validation =
+            match crate::forge_applier::exact_head_validation::authority_for_result(
+                job,
+                job_context,
+                &result,
+            ) {
+                Ok(authority) => authority,
+                Err(reason) => return rejected(reason),
+            };
         let result_title = result.title.clone();
-        let result_body = result.body.clone();
+        let result_body = match crate::forge_applier::exact_head_validation::parsed_validator_result(
+            job_context,
+            &result,
+        ) {
+            Ok(Some(evidence)) => Some(evidence.render_markdown()),
+            Ok(None) => result.body.clone(),
+            Err(reason) => return rejected(reason),
+        };
         let result_children = result.children;
         let mut context = verdict_execution_context(
             self.forge.as_ref(),
@@ -259,6 +275,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             number,
             title: result_title.as_deref(),
             body: result_body.as_deref(),
+            exact_head_validation,
             context: &mut context,
         }) {
             return rejected("could not bind routed pull-request product inputs");

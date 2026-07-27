@@ -457,4 +457,7 @@ pub enum GateCondition {
     ReviewApproved,
     /// Satisfied when a latest native review decision requests changes.
     ReviewChangesRequested,
+    /// Satisfied only when Temper-issued validation authority is complete and
+    /// bound to the freshly loaded pull-request source branch and head.
+    ExactHeadValidation,
 }

@@ -120,6 +120,10 @@ pub struct WorkflowMetadata {
     /// must not make the pull request eligible to land.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repaired_head: Option<String>,
+    /// Temper-issued authority for an aggregate landing PR. Mechanical merge
+    /// re-checks this compact record against the freshly loaded PR head.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_head_validation: Option<ExactHeadValidationAuthority>,
     /// Durable marker distinguishing interrupted missing-CI parking from unrelated attention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub missing_ci_recovery: Option<MissingCiRecoveryState>,
@@ -143,6 +147,61 @@ impl WorkflowMetadata {
     /// Returns `true` when no metadata field is populated.
     pub fn is_empty(&self) -> bool {
         self == &WorkflowMetadata::default()
+    }
+}
+
+/// Compact, durable landing authority derived from one validated evidence payload.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactHeadValidationAuthority {
+    pub binding_id: String,
+    pub attempt_id: String,
+    pub feature: String,
+    pub plan: String,
+    pub mapping_id: String,
+    pub scenario_name: String,
+    pub scenario_path: String,
+    pub source_branch: String,
+    pub exact_head_sha: String,
+    pub resolved_content_digest: String,
+    pub binary_sha256: String,
+    pub evidence_sha256: String,
+    /// Durable invalidation fence set before the plan is requeued. Retaining the
+    /// identity while invalidation converges makes retries exact-attempt safe.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub invalidated: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_paths: Vec<String>,
+}
+
+impl ExactHeadValidationAuthority {
+    /// Whether every identity field is present and this authority still names
+    /// the freshly loaded landing PR source branch and head.
+    pub fn authorizes(&self, source_branch: &str, head_sha: Option<&str>) -> bool {
+        [
+            self.binding_id.as_str(),
+            self.attempt_id.as_str(),
+            self.feature.as_str(),
+            self.plan.as_str(),
+            self.mapping_id.as_str(),
+            self.scenario_name.as_str(),
+            self.scenario_path.as_str(),
+            self.source_branch.as_str(),
+            self.exact_head_sha.as_str(),
+            self.resolved_content_digest.as_str(),
+            self.binary_sha256.as_str(),
+            self.evidence_sha256.as_str(),
+        ]
+        .iter()
+        .all(|value| !value.trim().is_empty())
+            && !self.invalidated
+            && !self.retained_paths.is_empty()
+            && self
+                .retained_paths
+                .iter()
+                .all(|path| !path.trim().is_empty())
+            && self.source_branch == source_branch
+            && head_sha == Some(self.exact_head_sha.as_str())
     }
 }
 

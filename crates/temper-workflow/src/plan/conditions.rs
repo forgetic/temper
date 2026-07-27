@@ -40,5 +40,6 @@ pub(super) fn gate_condition_satisfied(
         GateCondition::CiRecoveryRequired => signals.ci().is_recovery_required(),
         GateCondition::ReviewApproved => signals.review().is_approved(),
         GateCondition::ReviewChangesRequested => signals.review().has_changes_requested(),
+        GateCondition::ExactHeadValidation => signals.exact_head_validation(),
     }
 }
