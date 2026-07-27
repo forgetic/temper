@@ -38,9 +38,11 @@ The script runs these commands in order and stops on the first failure:
 8. Drop linked test binaries from `target/debug` before linting
 9. `cargo dev-clippy`
 
-Run `cargo dev-scenario-check` or the live `cargo dev-scenario-run` separately
-when your change touches scenario manifests, scenario execution, Forgejo/CI
-convergence, or post-merge validation evidence.
+Run `cargo dev-scenario-check` or an explicit live run such as
+`cargo dev-scenario-run scenarios/<name>` separately when your change touches
+scenario manifests, scenario execution, Forgejo/CI convergence, or validation
+evidence. Aggregate feature heads use `cargo dev-scenario-validate-feature` as
+documented in `docs/how-to/run-focused-feature-validation.md`.
 
 The full `cargo dev-test-e2e-all` lane is intentionally left to CI (or an
 explicit manual local run) so the default pre-PR check stays cheap.

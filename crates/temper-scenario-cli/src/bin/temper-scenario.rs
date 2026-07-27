@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#[path = "temper-scenario/focused_validation.rs"]
+mod focused_validation;
 #[path = "temper-scenario/manifest_executor.rs"]
 mod manifest_executor;
 #[path = "temper-scenario/manifest_runner.rs"]
@@ -42,14 +44,15 @@ temper-scenario: list, check, scaffold, resolve, run, and validate Temper scenar
 Usage: temper-scenario <COMMAND> [OPTIONS]
 
 Commands:
-  list         List scenario directories and stable manifest metadata
-  check            Validate one scenario path or all scenarios under a scenarios directory
-  scaffold         Create a minimal inherited feature scenario with local Jig data
-  resolve-feature  Resolve one active feature-mapped scenario and emit deterministic JSON
-  run              Run a supported scenario at an explicit confidence tier
-  validate     Run a scenario bundle and render validation artifacts from structured evidence
-  validate-pr  Write a temporary post-merge PR validation Markdown report
-  promote      Draft an optional scenario-promotion candidate from validation artifacts
+  list              List scenario directories and stable manifest metadata
+  check             Validate one scenario path or all scenarios under a scenarios directory
+  scaffold          Create a minimal inherited feature scenario with local Jig data
+  resolve-feature   Resolve one active feature-mapped scenario and emit deterministic JSON
+  run               Run a supported scenario at an explicit confidence tier
+  validate          Run a scenario bundle and render validation artifacts from structured evidence
+  validate-feature  Resolve and run one mapped scenario at an exact feature-landing head
+  validate-pr       Write a temporary post-merge PR validation Markdown report
+  promote           Draft an optional scenario-promotion candidate from validation artifacts
 
 Options:
   -h, --help  Print help
@@ -97,13 +100,8 @@ stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM. It is
 live-only and rejects hermetic, MemoryForge, or in-process substitutes instead
 of falling back.
 
-For live manifest scenarios, pass --temper-bin <PATH>, set
-TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling target-dir `temper` binary.
-`cargo dev-scenario-run` builds and delegates to the live lane.
-
-Supported runner ids: `manifest` (live only). Manifests must select it with
-`[runner] uses = \"manifest\"`; when that selector is absent, `run` fails clearly
-because the legacy manifest `name` fallback has been removed.";
+For live manifests, pass --temper-bin <PATH>, set TEMPER_SCENARIO_TEMPER_BIN,
+or prebuild a sibling target-dir `temper`; `cargo dev-scenario-run <path>` builds it.\nManifests must select `[runner] uses = \"manifest\"`; the legacy manifest `name` fallback has been removed.";
 
 fn main() -> ExitCode {
     run(env::args().skip(1))
@@ -127,6 +125,7 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
         "resolve-feature" => resolve_feature::command(rest),
         "run" => run_command(rest),
         "validate" => validate::command(rest),
+        "validate-feature" => focused_validation::command(rest),
         "validate-pr" => validate_pr::command(rest),
         "promote" => promote::command(rest),
         other => {

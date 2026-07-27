@@ -106,6 +106,66 @@ fn repository_ci_runs_e2e_from_repaired_captured_binaries() {
 }
 
 #[test]
+fn repository_ci_runs_one_mapped_scenario_from_exact_feature_head() {
+    let focused_job = CI_WORKFLOW
+        .split_once("  focused-feature-validation:\n")
+        .expect("CI declares focused feature validation")
+        .1
+        .split_once("  # The temper-web TypeScript UI")
+        .expect("focused validation precedes web")
+        .0;
+
+    assert!(
+        focused_job.contains(
+            "if: ${{ github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'feature/') }}"
+        ),
+        "focused validation must select aggregate feature-landing PRs only"
+    );
+    assert!(
+        focused_job.contains("ref: ${{ github.event.pull_request.head.sha }}")
+            && focused_job.contains("fetch-depth: 0"),
+        "focused validation must check out the exact head with its landing base available"
+    );
+    let run_step = focused_job
+        .split_once("      - name: Resolve and run one mapped feature scenario\n")
+        .expect("focused job resolves and runs a mapping")
+        .1
+        .split_once("      - name: Upload focused exact-head evidence\n")
+        .expect("focused run precedes artifact upload")
+        .0;
+    assert!(
+        run_step.contains("cargo dev-scenario-validate-feature")
+            && run_step.contains("--landing-base \"$FEATURE_LANDING_BASE_SHA\"")
+            && run_step.contains("--sha \"$FEATURE_HEAD_SHA\"")
+            && !run_step.contains("--scenario"),
+        "CI must resolve the sole mapped scenario instead of naming or defaulting one"
+    );
+}
+
+#[test]
+fn repository_ci_preserves_focused_evidence_on_failure_and_broad_coverage() {
+    let focused_job = CI_WORKFLOW
+        .split_once("  focused-feature-validation:\n")
+        .expect("CI declares focused feature validation")
+        .1
+        .split_once("  # The temper-web TypeScript UI")
+        .expect("focused validation precedes web")
+        .0;
+    let upload = focused_job
+        .split_once("      - name: Upload focused exact-head evidence\n")
+        .expect("focused job uploads evidence")
+        .1
+        .split_once("      - name: Cleanup focused scratch directory\n")
+        .expect("upload precedes cleanup")
+        .0;
+    assert!(upload.contains("if: ${{ always() }}"));
+    assert!(upload.contains("path: ${{ env.FOCUSED_ARTIFACT_DIR }}/"));
+
+    assert!(CI_WORKFLOW.contains("run: cargo dev-scenario-check"));
+    assert!(CI_WORKFLOW.contains("scripts/run-nextest-quick.sh --run-ignored only -P e2e"));
+}
+
+#[test]
 fn repository_ci_installs_locked_web_dependencies_without_advisory_network_calls() {
     let install_step = CI_WORKFLOW
         .split_once("      - name: Install (npm ci)\n")

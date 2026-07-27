@@ -1,9 +1,15 @@
-# Workflow-native post-merge validator handoff
+# Workflow-native validator handoff
 
-This page is a design/schema slice for routing post-merge validation as normal
-workflow work. It is not implemented yet. The current manual bridge,
-`temper-scenario validate-pr`, remains temporary operator tooling and is not the
-final architecture.
+Temper implements the plan-centric exact-head validator and landing gate for
+mapped feature scenarios. The broader post-merge binding model on this page is a
+general design slice for workflows that validate other PR or aggregate targets.
+The current manual `temper-scenario validate-pr` bridge remains compatibility
+tooling and is not landing authority.
+
+Focused feature CI emits a compatible `ValidatorResult` from the checked-out
+landing PR head, but Temper revalidates the workflow-native evidence binding
+before authorizing landing. See
+[Run focused feature validation](../how-to/run-focused-feature-validation.md).
 
 Validation firing policy is workflow-defined. Temper must not hard-code a global
 rule such as "validate after every implementation PR merges." One workflow may

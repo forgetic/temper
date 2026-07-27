@@ -10,6 +10,7 @@ Current guides:
 - [Run the reference delivery end-to-end scenarios](run-reference-delivery-end-to-end.md)
 - [Run the cross-repo reference-delivery demo](run-cross-repo-reference-delivery-demo.md)
 - [Run the daemon end-to-end fixture](run-daemon-e2e.md)
+- [Run focused feature validation](run-focused-feature-validation.md)
 - [Find a post-merge validation report](post-merge-validation-report.md)
 - [Verify implementation PR handoff end to end](verify-implementation-pr-handoff.md)
 - [Configure Smith LLM responders from Temper](use-chatgpt-oauth-auth.md)

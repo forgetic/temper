@@ -55,7 +55,7 @@ scenarios/basic-delivery/
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/basic-delivery
-cargo dev-scenario-run                      # live validation-grade manifest lane
+cargo dev-scenario-run scenarios/basic-delivery # live validation-grade manifest lane
 ```
 
 Direct live invocation is also supported when the standalone binary is already

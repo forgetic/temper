@@ -222,6 +222,164 @@ fn resolve_feature_emits_identical_stdout_and_ci_json() {
     );
 }
 
+#[test]
+fn validate_feature_rejects_stale_head_and_retains_mapping_audit() {
+    let repo = tempfile::tempdir().expect("repo");
+    git(repo.path(), &["init", "-q"]);
+    git(
+        repo.path(),
+        &["config", "user.email", "tests@example.invalid"],
+    );
+    git(repo.path(), &["config", "user.name", "Temper Tests"]);
+    fs::create_dir(repo.path().join("scenarios")).expect("scenarios");
+    git(
+        repo.path(),
+        &["commit", "-q", "--allow-empty", "-m", "base"],
+    );
+    let base = git_output(repo.path(), &["rev-parse", "HEAD"]);
+    write_mapped_scenario(repo.path());
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-q", "-m", "scenario"]);
+
+    let output_dir = repo.path().join("artifacts/focused");
+    let output = command(
+        repo.path(),
+        &[
+            "validate-feature",
+            "--feature",
+            "ai/temper#778",
+            "--landing-base",
+            &base,
+            "--source-branch",
+            "feature/778-exact-head-validation",
+            "--pr",
+            "42",
+            "--sha",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--output-dir",
+            &output_dir.to_string_lossy(),
+        ],
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("evidence would be stale"), "{stderr}");
+    let mapping: Value = serde_json::from_slice(
+        &fs::read(output_dir.join("feature-scenario-mapping.json")).expect("mapping artifact"),
+    )
+    .expect("mapping JSON");
+    assert_eq!(mapping["scenario_path"], "scenarios/proof");
+    assert_eq!(
+        mapping["head_sha"],
+        git_output(repo.path(), &["rev-parse", "HEAD"])
+    );
+    assert!(output_dir.join("focused-validation-failure.txt").is_file());
+    assert!(!output_dir.join("run-evidence.json").exists());
+}
+
+#[test]
+fn validate_feature_runs_resolved_scenario_and_retains_failed_evidence() {
+    let repo = tempfile::tempdir().expect("repo");
+    git(repo.path(), &["init", "-q"]);
+    git(
+        repo.path(),
+        &["config", "user.email", "tests@example.invalid"],
+    );
+    git(repo.path(), &["config", "user.name", "Temper Tests"]);
+    fs::create_dir(repo.path().join("scenarios")).expect("scenarios");
+    git(
+        repo.path(),
+        &["commit", "-q", "--allow-empty", "-m", "base"],
+    );
+    let base = git_output(repo.path(), &["rev-parse", "HEAD"]);
+    write_mapped_scenario(repo.path());
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-q", "-m", "scenario"]);
+    let head = git_output(repo.path(), &["rev-parse", "HEAD"]);
+    let output_dir = repo.path().join("artifacts/focused");
+
+    let output = command(
+        repo.path(),
+        &[
+            "validate-feature",
+            "--feature",
+            "ai/temper#778",
+            "--landing-base",
+            &base,
+            "--source-branch",
+            "feature/778-exact-head-validation",
+            "--pr",
+            "42",
+            "--sha",
+            &head,
+            "--output-dir",
+            &output_dir.to_string_lossy(),
+            "--temper-bin",
+            &repo.path().join("missing-temper").to_string_lossy(),
+        ],
+    );
+
+    assert!(!output.status.success());
+    let audit: Value = serde_json::from_slice(
+        &fs::read(output_dir.join("focused-validation-audit.json")).expect("focused audit"),
+    )
+    .expect("audit JSON");
+    assert_eq!(audit["status"], "failed");
+    assert_eq!(audit["mapping"]["scenario_path"], "scenarios/proof");
+    assert_eq!(
+        audit["validator_result"]["mapping_id"],
+        "ai/temper#778:proof"
+    );
+    assert_eq!(audit["validator_result"]["exact_head_sha"], head);
+    assert_eq!(audit["validator_result"]["verdict"], "failed");
+    assert!(output_dir.join("run-evidence.json").is_file());
+}
+
+#[test]
+fn validate_feature_retains_failure_when_mapping_is_missing() {
+    let repo = tempfile::tempdir().expect("repo");
+    git(repo.path(), &["init", "-q"]);
+    git(
+        repo.path(),
+        &["config", "user.email", "tests@example.invalid"],
+    );
+    git(repo.path(), &["config", "user.name", "Temper Tests"]);
+    fs::create_dir(repo.path().join("scenarios")).expect("scenarios");
+    git(
+        repo.path(),
+        &["commit", "-q", "--allow-empty", "-m", "base"],
+    );
+    let head = git_output(repo.path(), &["rev-parse", "HEAD"]);
+    let output_dir = repo.path().join("artifacts/focused");
+
+    let output = command(
+        repo.path(),
+        &[
+            "validate-feature",
+            "--feature",
+            "ai/temper#778",
+            "--landing-base",
+            &head,
+            "--source-branch",
+            "feature/778-exact-head-validation",
+            "--pr",
+            "42",
+            "--sha",
+            &head,
+            "--output-dir",
+            &output_dir.to_string_lossy(),
+        ],
+    );
+
+    assert!(!output.status.success());
+    let failure = fs::read_to_string(output_dir.join("focused-validation-failure.txt"))
+        .expect("retained mapping failure");
+    assert!(
+        failure.contains("no scenario explicitly maps feature"),
+        "{failure}"
+    );
+}
+
 fn write_mapped_scenario(root: &Path) {
     let scenario = root.join("scenarios/proof");
     fs::create_dir_all(scenario.join("jig")).expect("scenario");

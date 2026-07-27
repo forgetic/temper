@@ -27,9 +27,10 @@ on:
 #      kache cannot cache, but that leaf cost is small. The scenario manifest
 #      check and deterministic benchmark harness below are checked-in CLI lanes
 #      after the build step, so they do not change that cache choreography. The
-#      validation-grade live scenario lane is `cargo dev-scenario-run`; PR CI
-#      already exercises live coverage in the ignored e2e lane. Benchmark live
-#      mode remains explicit and credential-gated, never part of PR CI.
+#      validation-grade live scenario lane requires an explicit scenario path;
+#      aggregate feature PRs use the separate focused mapping job below. PR CI
+#      also preserves broad live coverage in the ignored e2e lane. Benchmark
+#      live mode remains explicit and credential-gated, never part of PR CI.
 jobs:
   validate:
     runs-on: host
@@ -119,6 +120,90 @@ jobs:
       - name: Lint
         run: cargo dev-clippy
       - name: Cleanup scratch directory
+        if: ${{ always() }}
+        run: |
+          if [ -n "${TEMPER_CI_SCRATCH_DIR:-}" ]; then
+            rm -rf -- "$TEMPER_CI_SCRATCH_DIR"
+          fi
+
+  focused-feature-validation:
+    name: focused feature validation
+    runs-on: host
+    # Implementation PRs into a feature branch keep the ordinary CI lanes only.
+    # The additional live proof belongs to the aggregate feature PR into main.
+    if: ${{ github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'feature/') }}
+    env:
+      CARGO_BUILD_JOBS: "2"
+      FEATURE_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+      FEATURE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      FEATURE_LANDING_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      FEATURE_PR_NUMBER: ${{ github.event.pull_request.number }}
+      FEATURE_REPOSITORY: ${{ github.repository }}
+      FOCUSED_ARTIFACT_DIR: validation-artifacts/focused-pr-${{ github.event.pull_request.number }}
+    steps:
+      - name: Checkout exact feature head
+        uses: https://github.com/actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Reclaim shared build cache
+        run: kache gc
+      - name: Prepare focused validation artifacts
+        run: |
+          scratch_dir="$(mktemp -d /var/tmp/tf.XXXXXX)"
+          {
+            echo "TMPDIR=$scratch_dir"
+            echo "TEMPER_CI_SCRATCH_DIR=$scratch_dir"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$FOCUSED_ARTIFACT_DIR"
+      - name: Resolve and run one mapped feature scenario
+        run: |
+          set -uo pipefail
+          feature_number="$(printf '%s\n' "$FEATURE_HEAD_BRANCH" | sed -n 's#^feature/\([1-9][0-9]*\)\(-.*\)\?$#\1#p')"
+          if [ -z "$feature_number" ]; then
+            echo "feature landing branch must match feature/<issue>-<slug>: $FEATURE_HEAD_BRANCH" \
+              | tee "$FOCUSED_ARTIFACT_DIR/ci-audit.log" >&2
+            exit 1
+          fi
+          feature_ref="${FEATURE_REPOSITORY}#${feature_number}"
+          set +e
+          cargo dev-scenario-validate-feature \
+            --feature "$feature_ref" \
+            --landing-base "$FEATURE_LANDING_BASE_SHA" \
+            --source-branch "$FEATURE_HEAD_BRANCH" \
+            --pr "$FEATURE_PR_NUMBER" \
+            --sha "$FEATURE_HEAD_SHA" \
+            --output-dir "$FOCUSED_ARTIFACT_DIR" \
+            2>&1 | tee "$FOCUSED_ARTIFACT_DIR/ci-audit.log"
+          focused_status=${PIPESTATUS[0]}
+          set -e
+          for audit in \
+            "$FOCUSED_ARTIFACT_DIR/feature-scenario-mapping.json" \
+            "$FOCUSED_ARTIFACT_DIR/focused-validation-audit.json"; do
+            if [ -f "$audit" ]; then
+              echo "::group::$(basename "$audit")"
+              cat "$audit"
+              echo "::endgroup::"
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                {
+                  echo "## $(basename "$audit")"
+                  echo '```json'
+                  cat "$audit"
+                  echo '```'
+                } >> "$GITHUB_STEP_SUMMARY"
+              fi
+            fi
+          done
+          exit "$focused_status"
+      - name: Upload focused exact-head evidence
+        id: upload_focused_evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v3
+        with:
+          name: focused-feature-validation-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ env.FOCUSED_ARTIFACT_DIR }}/
+          if-no-files-found: error
+      - name: Cleanup focused scratch directory
         if: ${{ always() }}
         run: |
           if [ -n "${TEMPER_CI_SCRATCH_DIR:-}" ]; then
