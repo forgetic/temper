@@ -122,6 +122,27 @@ fn get_repository_by_path_404_is_none() {
 }
 
 #[test]
+fn branch_head_uses_native_encoded_ref_and_maps_absence() {
+    let client = MockHttpClient::new();
+    client.push_response(200, r#"{"commit":{"id":"abc123"}}"#);
+    client.push_response(404, r#"{"message":"not found"}"#);
+    let forge = forge(client.clone());
+
+    assert_eq!(
+        block_on(forge.get_branch_head(&repo_id(), "feature/exact-head")).unwrap(),
+        Some("abc123".to_string())
+    );
+    assert_eq!(
+        client.recorded()[0].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/branches/feature%2Fexact-head")
+    );
+    assert_eq!(
+        block_on(forge.get_branch_head(&repo_id(), "missing")).unwrap(),
+        None
+    );
+}
+
+#[test]
 fn get_repository_by_id_delegates_to_path_lookup() {
     let client = MockHttpClient::new();
     client.push_response(

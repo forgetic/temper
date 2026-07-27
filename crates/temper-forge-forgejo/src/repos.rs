@@ -72,6 +72,30 @@ impl<C: HttpClient> ForgejoForge<C> {
             .await
     }
 
+    /// Reads a branch through Forgejo's native branch endpoint.
+    pub async fn get_branch_head(
+        &self,
+        repo_id: &RepositoryId,
+        branch: &str,
+    ) -> ForgeResult<Option<String>> {
+        let repo = parse_repository_id(repo_id)?;
+        let branch = encode_ref_path(branch);
+        let path = format!("/repos/{}/branches/{branch}", repo.path_segment());
+        let Some(response) = self
+            .request_optional("get branch head", HttpMethod::Get, &path, Vec::new(), None)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let value: serde_json::Value = Self::decode("get branch head", &response)?;
+        Ok(value
+            .get("commit")
+            .and_then(|commit| commit.get("id").or_else(|| commit.get("sha")))
+            .and_then(serde_json::Value::as_str)
+            .filter(|sha| !sha.is_empty())
+            .map(str::to_string))
+    }
+
     /// Lists repositories visible to the client (`GET /user/repos`).
     ///
     /// Forgejo's listing order is not contractual, so the requested sort is
@@ -214,6 +238,18 @@ impl<C: HttpClient> ForgejoForge<C> {
         let path = format!("/repos/{}/labels", repo.path_segment());
         self.list_all("list labels", &path, Vec::new()).await
     }
+}
+
+fn encode_ref_path(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 /// Orders repositories by the requested sort, then owner/name, then id.

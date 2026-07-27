@@ -54,9 +54,9 @@ const GUIDANCE_CONTRACTS: &[GuidanceContract] = &[
     },
     GuidanceContract {
         role: "tester",
-        role_guidance: "Run final read-only validation",
-        prompt_guidance: "Use validate_plan only after reading",
-        tool_guidance: "Use this from validate_plan.",
+        role_guidance: "Own final feature-validation policy.",
+        prompt_guidance: "validate_plan is worker-owned",
+        tool_guidance: "native validate_plan runner owns execution",
         constraints: &[
             "Final validation is read-only",
             "Tie validation evidence to the current feature branch head and merged scenario",

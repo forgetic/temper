@@ -57,6 +57,7 @@ pub(crate) struct State {
     webhooks: BTreeMap<String, Vec<WebhookSpec>>,
     ci_enabled: BTreeSet<String>,
     branches: BTreeMap<String, BTreeSet<String>>,
+    branch_heads: BTreeMap<(String, String), String>,
     files: BTreeMap<(String, String), BTreeMap<String, Vec<u8>>>,
 }
 
@@ -84,6 +85,7 @@ impl State {
             webhooks: BTreeMap::new(),
             ci_enabled: BTreeSet::new(),
             branches: BTreeMap::new(),
+            branch_heads: BTreeMap::new(),
             files: BTreeMap::new(),
         }
     }
@@ -417,6 +419,22 @@ impl State {
             .entry(repo_id.as_str().to_string())
             .or_default()
             .insert(branch.to_string());
+    }
+
+    /// Sets the exact commit identity for a recorded branch.
+    pub(crate) fn set_branch_head(&mut self, repo_id: &RepositoryId, branch: &str, sha: &str) {
+        self.create_branch(repo_id, branch);
+        self.branch_heads.insert(
+            (repo_id.as_str().to_string(), branch.to_string()),
+            sha.to_string(),
+        );
+    }
+
+    /// Returns the exact recorded branch commit, when one has been seeded.
+    pub(crate) fn branch_head(&self, repo_id: &RepositoryId, branch: &str) -> Option<String> {
+        self.branch_heads
+            .get(&(repo_id.as_str().to_string(), branch.to_string()))
+            .cloned()
     }
 
     /// Reports whether `branch` is recorded on `repo_id`.

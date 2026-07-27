@@ -1,21 +1,24 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use temper_protocol_worker::{Assign, FailureClass, JobContext, WorkspaceManifest, WorkspaceRepo};
+use temper_protocol_worker::{Assign, FailureClass, JobContext};
 
 use crate::agent_runner::{AgentRunOutput, AgentRunRequest, AgentRunner, JobProgressReporter};
 use crate::executor::{JobExecutionContext, JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
-use crate::workspace::{
-    PreparationOutcome, QuarantineManifest, RecoveryContext, RoleGitIdentity, Workspace,
-    WorkspaceError, forgejo_remote_url, scoped_workspace_root,
-};
+use crate::workspace::{RoleGitIdentity, WorkspaceError, scoped_workspace_root};
 
 mod context;
 mod execution;
 mod failure;
+mod native_validation;
 mod outcome;
+mod preparation;
+
+pub use native_validation::NativeValidatorCommand;
+pub(super) use preparation::PreparedRepo;
+use preparation::{PrepareRequest, prepare_repos};
 mod session;
 mod verdict;
 
@@ -52,6 +55,7 @@ pub struct CodingExecutor<R: AgentRunner> {
     runner: Arc<R>,
     /// Optional host-provided guard for PR-head freshness checks before pushes.
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
+    native_validator_command: NativeValidatorCommand,
     /// Instance-scoped process containment override for worker-owned commands.
     containment_factory: Option<temper_process_containment::ContainmentFactory>,
     progress_reporter_factory: ProgressReporterFactory,
@@ -63,6 +67,7 @@ impl<R: AgentRunner + 'static> CodingExecutor<R> {
             config,
             runner,
             pr_freshness_guard: None,
+            native_validator_command: NativeValidatorCommand::cargo(),
             containment_factory: None,
             progress_reporter_factory: Arc::new(|_job_id, attempt_id| {
                 JobProgressReporter::noop(attempt_id.to_string())
@@ -104,6 +109,7 @@ async fn execute<R: AgentRunner>(
     config: CodingExecutorConfig,
     runner: Arc<R>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
+    native_validator_command: NativeValidatorCommand,
     assign: Assign,
     execution: JobExecutionContext,
 ) -> JobOutcome {
@@ -134,7 +140,7 @@ async fn execute<R: AgentRunner>(
         checkout_capability,
         allowed_verdicts,
         verdict_contracts,
-        source_metadata,
+        mut source_metadata,
         guidance,
         structured_guidance,
         pull_request_freshness,
@@ -226,6 +232,69 @@ async fn execute<R: AgentRunner>(
         Ok(prepared) => prepared,
         Err(outcome) => return outcome,
     };
+    let landing_base = manifest
+        .repos
+        .first()
+        .map(|repo| repo.default_branch.as_str())
+        .unwrap_or("main");
+    if let Err(outcome) = native_validation::bind_resolved_mapping(
+        &mut source_metadata,
+        mode,
+        &prepared[0],
+        landing_base,
+    )
+    .await
+    {
+        return outcome;
+    }
+    if native_validation::configured(&source_metadata) {
+        if !execution.fence.is_open() {
+            return cancelled_attempt();
+        }
+        let credential_roles = config.role_identities.keys().cloned().collect::<Vec<_>>();
+        let result = match native_validation::run(
+            &native_validator_command,
+            &source_metadata,
+            &prepared[0],
+            &prepared[0].repo,
+            artifact.number,
+            &credential_roles,
+            &execution.cancellation,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(outcome) => return outcome,
+        };
+        let (result, details) = match native_validation::normalize(
+            result,
+            &source_metadata,
+            mode,
+            &prepared[0],
+        )
+        .await
+        {
+            Ok(normalized) => normalized,
+            Err(outcome) => return outcome,
+        };
+        if let Err(error) =
+            temper_verdict::validate_verdict_result(&result, &verdict_contracts, &source_metadata)
+        {
+            return failure(
+                FailureClass::Protocol,
+                format!("native validator result violates its workflow contract: {error}"),
+            );
+        }
+        return verdict_only_outcome(
+            &prepared[0].workspace,
+            result,
+            &allowed_verdicts,
+            &coordination_key,
+            details,
+            &execution.fence,
+        )
+        .await;
+    }
 
     let mut workspace_context = build_workspace_context(
         &role,
@@ -308,6 +377,11 @@ async fn execute<R: AgentRunner>(
     if !execution.fence.is_open() {
         return cancelled_attempt();
     }
+    let (result, native_validation_details) =
+        match native_validation::normalize(result, &source_metadata, mode, &prepared[0]).await {
+            Ok(normalized) => normalized,
+            Err(outcome) => return outcome,
+        };
     if let Err(error) =
         temper_verdict::validate_verdict_result(&result, &verdict_contracts, &source_metadata)
     {
@@ -349,6 +423,7 @@ async fn execute<R: AgentRunner>(
                 result,
                 &allowed_verdicts,
                 &coordination_key,
+                native_validation_details,
                 &execution.fence,
             )
             .await
@@ -367,209 +442,6 @@ async fn execute<R: AgentRunner>(
         return cancelled_attempt();
     }
     outcome
-}
-
-/// One prepared sibling checkout plus its manifest entry.
-pub(super) struct PreparedRepo {
-    pub(super) repo: String,
-    pub(super) writable: bool,
-    pub(super) branch_hint: Option<String>,
-    /// The commit checked out before the agent ran. PR-head repair jobs use this
-    /// as their product-diff baseline: an existing implementation PR already
-    /// differs from its base branch, so a clean no-op turn must not be counted
-    /// as a successful CI fix merely because the PR branch contains prior work.
-    pub(super) start_head_sha: String,
-    pub(super) workspace: Workspace,
-}
-
-struct PrepareRequest<'a> {
-    git_base_url: &'a str,
-    identity: &'a RoleGitIdentity,
-    workspace_root: &'a Path,
-    manifest: &'a WorkspaceManifest,
-    artifact_number: u64,
-    mode: JobMode,
-    coordination_key: &'a str,
-    job_id: &'a str,
-    cancellation: &'a crate::executor::JobCancellation,
-}
-
-async fn prepare_repos(request: PrepareRequest<'_>) -> Result<Vec<PreparedRepo>, JobOutcome> {
-    let mut prepared = Vec::new();
-    for repo_spec in &request.manifest.repos {
-        prepared.push(prepare_repo(&request, repo_spec).await?);
-
-        // PR-scoped jobs (review or in-place fix) act on the single PR head;
-        // don't assemble siblings for them.
-        if matches!(
-            request.mode,
-            JobMode::PullRequestReadOnly | JobMode::PullRequestWritable
-        ) {
-            break;
-        }
-    }
-    Ok(prepared)
-}
-
-async fn prepare_repo(
-    request: &PrepareRequest<'_>,
-    repo_spec: &WorkspaceRepo,
-) -> Result<PreparedRepo, JobOutcome> {
-    let remote_url = forgejo_remote_url(request.git_base_url, &repo_spec.repo)
-        .map_err(|error| workspace_failure("construct git remote URL", error))?;
-    let base_branch = normalize_manifest_branch(&repo_spec.base_branch);
-    let default_branch = normalize_manifest_branch(&repo_spec.default_branch);
-    let checkout_path = request.workspace_root.join(&repo_spec.dir);
-    let workspace = Workspace::at(
-        checkout_path,
-        base_branch,
-        request.identity.clone(),
-        remote_url,
-    )
-    .with_recovery_context(RecoveryContext {
-        job_id: request.job_id.to_string(),
-        correlation_key: request.coordination_key.to_string(),
-        repository: repo_spec.repo.clone(),
-    })
-    .with_attempt_cancellation(request.cancellation.clone());
-
-    prepare_workspace(&workspace, request, repo_spec, &default_branch).await?;
-    let start_head_sha = workspace
-        .head_sha()
-        .await
-        .map_err(|error| workspace_failure("inspect prepared workspace head", error))?;
-    Ok(PreparedRepo {
-        repo: repo_spec.repo.clone(),
-        writable: repo_spec.is_writable(),
-        branch_hint: repo_spec.branch_hint.clone(),
-        start_head_sha,
-        workspace,
-    })
-}
-
-fn normalize_manifest_branch(branch: &str) -> String {
-    if branch.trim().is_empty() {
-        "main".to_string()
-    } else {
-        branch.to_string()
-    }
-}
-
-async fn prepare_workspace(
-    workspace: &Workspace,
-    request: &PrepareRequest<'_>,
-    repo_spec: &WorkspaceRepo,
-    default_branch: &str,
-) -> Result<(), JobOutcome> {
-    let result = match request.mode {
-        JobMode::PullRequestReadOnly => {
-            let branch_hint = repo_spec
-                .branch_hint
-                .clone()
-                .unwrap_or_else(|| format!("agent/{}", request.coordination_key));
-            workspace
-                .prepare_pull_request_head(request.artifact_number, &branch_hint)
-                .await
-        }
-        // In-place PR fix: check out the PR's own head branch as a writable work
-        // branch (the feed sets `branch_hint` to the PR head ref). `prepare`
-        // resumes from the existing remote branch, so the agent's fix commits on
-        // top of the PR head and the success path pushes it back, re-running CI.
-        JobMode::PullRequestWritable => {
-            return prepare_writable(workspace, repo_spec, None).await;
-        }
-        JobMode::Writable if repo_spec.is_writable() => {
-            return prepare_writable(workspace, repo_spec, Some(default_branch)).await;
-        }
-        // A read-only issue job may still be pointed at a feature branch from
-        // workflow metadata (for example architect plan decomposition). Create
-        // that branch from the repository default when it is missing, then check
-        // it out read-only so the later implementation jobs inherit an existing
-        // target branch.
-        JobMode::ReadOnly => {
-            workspace
-                .prepare_read_only_from_default(default_branch)
-                .await
-        }
-        // Read-only sibling in a writable job: the feed gives read-only repos
-        // their repository default branch, so no target-branch materialization is
-        // required.
-        JobMode::Writable => workspace.prepare_read_only().await,
-    };
-    match result {
-        Ok(PreparationOutcome::Quarantined(manifest)) => Err(quarantine_failure(&manifest)),
-        Ok(PreparationOutcome::CleanReuse { .. })
-        | Ok(PreparationOutcome::RecoveredLocalWork { .. }) => Ok(()),
-        Err(error) => Err(workspace_failure("prepare workspace", error)),
-    }
-}
-
-async fn prepare_writable(
-    workspace: &Workspace,
-    repo_spec: &WorkspaceRepo,
-    default_branch: Option<&str>,
-) -> Result<(), JobOutcome> {
-    let Some(branch_hint) = repo_spec.branch_hint.clone() else {
-        return Err(failure(
-            FailureClass::Protocol,
-            format!(
-                "writable workspace repo {} is missing a branch hint",
-                repo_spec.repo
-            ),
-        ));
-    };
-    let outcome = match default_branch {
-        Some(default_branch) => {
-            workspace
-                .prepare_from_default(default_branch, &branch_hint)
-                .await
-        }
-        None => workspace.prepare(&branch_hint).await,
-    };
-    match outcome {
-        Ok(PreparationOutcome::Quarantined(manifest)) => {
-            return Err(quarantine_failure(&manifest));
-        }
-        Ok(PreparationOutcome::CleanReuse { .. })
-        | Ok(PreparationOutcome::RecoveredLocalWork { .. }) => {}
-        Err(error) => return Err(workspace_failure("prepare workspace", error)),
-    }
-    // Persist the role's git author identity + push credential into this
-    // writable checkout's local `.git/config`; the worker owns the final branch
-    // push after the agent leaves a product diff.
-    workspace
-        .configure_local_identity()
-        .await
-        .map_err(|error| workspace_failure("configure workspace git identity", error))
-}
-
-fn quarantine_failure(manifest: &QuarantineManifest) -> JobOutcome {
-    const COMMANDS_BEGIN: &str = "--- BEGIN RUNNABLE RECOVERY COMMANDS ---";
-    const COMMANDS_END: &str = "--- END RUNNABLE RECOVERY COMMANDS ---";
-
-    let mut message = format!(
-        "workspace {} quarantined during {} at {}\nunderlying failure: {}\nrecovery notes:",
-        manifest.repository, manifest.failure_phase, manifest.quarantine_path, manifest.failure
-    );
-    if manifest.recovery_notes.is_empty() {
-        message.push_str(" (none recorded in manifest)");
-    } else {
-        for note in &manifest.recovery_notes {
-            message.push_str("\n- ");
-            message.push_str(note);
-        }
-    }
-
-    message.push('\n');
-    message.push_str(COMMANDS_BEGIN);
-    message.push('\n');
-    if !manifest.recovery_commands.is_empty() {
-        message.push_str(&manifest.recovery_commands.join("\n"));
-        message.push('\n');
-    }
-    message.push_str(COMMANDS_END);
-
-    failure(FailureClass::Permanent, message)
 }
 
 fn require_enriched_field<T>(field: Option<T>, name: &str) -> Result<T, JobOutcome> {

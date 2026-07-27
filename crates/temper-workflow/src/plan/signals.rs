@@ -37,6 +37,8 @@ pub struct SignalNeeds {
     pub ci: bool,
     /// Whether native pull-request reviews are needed.
     pub review: bool,
+    /// Whether Temper-issued exact-head authority must be checked freshly.
+    pub exact_head_validation: bool,
 }
 
 impl SignalNeeds {
@@ -46,6 +48,7 @@ impl SignalNeeds {
             dependencies,
             ci,
             review,
+            exact_head_validation: false,
         }
     }
 
@@ -56,21 +59,36 @@ impl SignalNeeds {
 
     /// Every runtime signal family is needed.
     pub const fn all() -> Self {
-        Self::new(true, true, true)
+        Self {
+            dependencies: true,
+            ci: true,
+            review: true,
+            exact_head_validation: true,
+        }
+    }
+
+    const fn exact_head_validation() -> Self {
+        Self {
+            dependencies: false,
+            ci: false,
+            review: false,
+            exact_head_validation: true,
+        }
     }
 
     /// Returns whether no runtime signal families are requested.
     pub const fn is_empty(self) -> bool {
-        !self.dependencies && !self.ci && !self.review
+        !self.dependencies && !self.ci && !self.review && !self.exact_head_validation
     }
 
     /// Returns the union of two interest sets.
     pub const fn union(self, other: Self) -> Self {
-        Self::new(
-            self.dependencies || other.dependencies,
-            self.ci || other.ci,
-            self.review || other.review,
-        )
+        Self {
+            dependencies: self.dependencies || other.dependencies,
+            ci: self.ci || other.ci,
+            review: self.review || other.review,
+            exact_head_validation: self.exact_head_validation || other.exact_head_validation,
+        }
     }
 
     /// Returns the runtime signals needed to evaluate a gate/queue condition.
@@ -83,6 +101,7 @@ impl SignalNeeds {
             GateCondition::ReviewApproved | GateCondition::ReviewChangesRequested => {
                 Self::new(false, false, true)
             }
+            GateCondition::ExactHeadValidation => Self::exact_head_validation(),
             GateCondition::LabelPresent(_) | GateCondition::StateEquals { .. } => Self::none(),
         }
     }
@@ -470,6 +489,7 @@ pub struct GateSignals {
     dependencies: DependencyStatus,
     ci: CiStatus,
     review: ReviewStatus,
+    exact_head_validation: bool,
 }
 
 impl GateSignals {
@@ -496,6 +516,12 @@ impl GateSignals {
         self
     }
 
+    /// Sets exact-head landing authority from a fresh pull-request read.
+    pub fn with_exact_head_validation(mut self, authorized: bool) -> Self {
+        self.exact_head_validation = authorized;
+        self
+    }
+
     /// Returns the dependency status.
     pub fn dependencies(&self) -> &DependencyStatus {
         &self.dependencies
@@ -509,5 +535,10 @@ impl GateSignals {
     /// Returns the review status.
     pub fn review(&self) -> &ReviewStatus {
         &self.review
+    }
+
+    /// Whether Temper-issued validation authority matches the current PR head.
+    pub fn exact_head_validation(&self) -> bool {
+        self.exact_head_validation
     }
 }

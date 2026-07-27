@@ -102,6 +102,17 @@ fn workflow_validation_requires_declared_scenario_product_dependency_relation() 
 }
 
 #[test]
+fn aggregate_landing_requests_a_fresh_exact_head_signal() {
+    let workflow = workflow();
+    let needs = workflow
+        .signal_needs_for_transition(&temper_workflow::TransitionId::new("land_feature_pr"));
+    assert!(needs.dependencies);
+    assert!(needs.ci);
+    assert!(!needs.review);
+    assert!(needs.exact_head_validation);
+}
+
+#[test]
 fn scenario_author_and_final_validator_have_distinct_checkout_capabilities() {
     let workflow = workflow();
     let scenario_queue = workflow

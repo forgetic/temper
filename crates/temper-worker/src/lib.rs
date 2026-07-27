@@ -48,7 +48,7 @@ pub use agent_session::{
     AGENT_SESSION_STORE_VERSION, AgentSessionLedger, AgentSessionStore, AgentSessionStoreError,
     PriorAgentSessionRecord,
 };
-pub use coding_executor::{CodingExecutor, CodingExecutorConfig};
+pub use coding_executor::{CodingExecutor, CodingExecutorConfig, NativeValidatorCommand};
 pub use config::{
     AgentProviderChoice, AgentSurface, AnvilNativeAgentSurface, CapabilitySpec, CodingSurface,
     ExecutorSelection, ParseOutcome, USAGE, WorkerAgentTraceConfig, WorkerConfig,

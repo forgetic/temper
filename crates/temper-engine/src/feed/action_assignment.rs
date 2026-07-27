@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+mod exact_head;
 mod guidance;
 
 use self::guidance::pull_request_writable_guidance;
@@ -47,6 +48,7 @@ pub(super) fn enrich_job_context_from_workflow(
         },
     )
     .map_err(invalid_workflow_scan)?;
+    exact_head::bind(workflow, item, selected.tool, &checkout, context)?;
     context.checkout_capability = Some(checkout);
     context.set_guidance(guidance);
     Ok(())
@@ -473,6 +475,7 @@ fn condition_token(condition: &GateCondition) -> Option<String> {
         GateCondition::CiRecoveryRequired => "ci_recovery_required",
         GateCondition::ReviewApproved => "review_approved",
         GateCondition::ReviewChangesRequested => "review_changes_requested",
+        GateCondition::ExactHeadValidation => "exact_head_validation",
         GateCondition::DependenciesResolved
         | GateCondition::LabelPresent(_)
         | GateCondition::StateEquals { .. } => return None,

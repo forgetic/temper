@@ -6,6 +6,8 @@ mod assertions;
 mod breakdown;
 #[path = "forge_apply/breakdown_child_kind.rs"]
 mod breakdown_child_kind;
+#[path = "forge_apply/exact_head_validation.rs"]
+mod exact_head_validation;
 #[path = "forge_apply/failure.rs"]
 mod failure;
 #[path = "forge_apply/handoff.rs"]

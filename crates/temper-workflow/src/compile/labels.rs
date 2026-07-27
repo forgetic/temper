@@ -214,7 +214,9 @@ fn gate_condition_label<'a>(
         GateCondition::CiPassed | GateCondition::CiFailed | GateCondition::CiRecoveryRequired => {
             None
         }
-        GateCondition::ReviewApproved | GateCondition::ReviewChangesRequested => None,
+        GateCondition::ReviewApproved
+        | GateCondition::ReviewChangesRequested
+        | GateCondition::ExactHeadValidation => None,
     }
 }
 

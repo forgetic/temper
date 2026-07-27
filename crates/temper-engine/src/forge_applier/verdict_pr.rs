@@ -24,6 +24,7 @@ pub(super) struct VerdictPullRequestBinding<'a> {
     pub(super) number: ItemNumber,
     pub(super) title: Option<&'a str>,
     pub(super) body: Option<&'a str>,
+    pub(super) exact_head_validation: Option<temper_workflow::ExactHeadValidationAuthority>,
     pub(super) context: &'a mut ExecutionContext,
 }
 
@@ -181,6 +182,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             let metadata = WorkflowMetadata {
                 kind: Some(artifact_kind.clone()),
                 parents: landing_pr_parents(binding.number, &source_parents),
+                exact_head_validation: binding.exact_head_validation.clone(),
                 ..WorkflowMetadata::default()
             };
             let input = CreatePullRequest {

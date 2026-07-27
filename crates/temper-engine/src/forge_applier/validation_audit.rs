@@ -108,6 +108,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             "<!-- temper:comment-key=plan-validation:{} -->",
             assignment_marker_key(&job.job_id, job.attempt_id.as_deref())
         );
+        let evidence =
+            crate::forge_applier::exact_head_validation::authority_for_result(job, context, result)
+                .map_err(|reason| ApplyOutcome::Rejected {
+                    class: temper_protocol_worker::FailureClass::Protocol,
+                    reason,
+                })?;
         let body = render_validation_audit(
             &marker,
             outcome,
@@ -120,6 +126,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             routed.as_str(),
             &correlation_key,
             scope,
+            evidence.as_ref(),
         );
 
         Ok(Some(ValidationAudit {
@@ -150,6 +157,7 @@ fn render_validation_audit(
     transition: &str,
     correlation_key: &str,
     scope: &[ArtifactSummary],
+    evidence: Option<&temper_workflow::ExactHeadValidationAuthority>,
 ) -> String {
     let summary = if summary_preview.is_empty() {
         "(not provided)".to_string()
@@ -196,6 +204,29 @@ fn render_validation_audit(
         while body.ends_with('\n') {
             body.pop();
         }
+    }
+    if let Some(evidence) = evidence {
+        body.push_str("\n\n### Structured exact-head evidence\n");
+        body.push_str(&format!(
+            "- Binding: `{}`\n- Feature: `{}`\n- Plan: `{}`\n- Mapping: `{}`\n- Scenario: `{}` (`{}`)\n- Source: `{}` at `{}`\n- Content digest: `{}`\n- Binary SHA-256: `{}`\n- Evidence SHA-256: `{}`\n- Retained artifacts: {}",
+            bounded_inline(&evidence.binding_id),
+            bounded_inline(&evidence.feature),
+            bounded_inline(&evidence.plan),
+            bounded_inline(&evidence.mapping_id),
+            bounded_inline(&evidence.scenario_name),
+            bounded_inline(&evidence.scenario_path),
+            bounded_inline(&evidence.source_branch),
+            bounded_inline(&evidence.exact_head_sha),
+            bounded_inline(&evidence.resolved_content_digest),
+            bounded_inline(&evidence.binary_sha256),
+            bounded_inline(&evidence.evidence_sha256),
+            evidence
+                .retained_paths
+                .iter()
+                .map(|path| format!("`{}`", bounded_inline(path)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     body.push_str("\n\n");
     body.push_str(marker);

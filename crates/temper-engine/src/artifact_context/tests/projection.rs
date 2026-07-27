@@ -78,6 +78,7 @@ fn large_bookkeeping_metadata(
             ..Default::default()
         }),
         repaired_head: Some(payload.into()),
+        exact_head_validation: None,
         missing_ci_recovery: None,
         interrupted_ci_recovery: None,
         staged: true,
