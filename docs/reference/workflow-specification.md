@@ -153,7 +153,7 @@ as workflow labels:
 
 | Condition | Meaning |
 | --- | --- |
-| `dependencies_resolved` | Every dependency relation target has landed. |
+| `dependencies_resolved` | Every declared dependency target has landed. A blocked artifact must declare at least one dependency; missing projection fails closed. Empty dependencies remain valid for optional gates such as a root implementation PR. |
 | `ci_passed` | Every latest current-head CI job is terminal with explicit success. |
 | `ci_failed` | Every latest current-head job is terminal and at least one has explicit ordinary `failure` evidence suitable for source repair. |
 | `ci_recovery_required` | Every latest current-head job is terminal and red, but none has ordinary failure evidence; cancellation, interruption, timeout, runner loss, startup failure, action-required, neutral/skipped, and unknown results use this route. |

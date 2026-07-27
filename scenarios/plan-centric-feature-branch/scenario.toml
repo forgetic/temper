@@ -147,6 +147,20 @@ until = "two product PRs merge to the derived feature branch, the dependent scen
 outcome = "Repository-default feature metadata is replaced by an engine-derived branch, inherited through validation follow-up work, and landed through exactly one CI-gated aggregate PR."
 closed_parent_issues = 6
 
+[[expect.checks]]
+required = true
+id = "scenario-child-finalized"
+artifact = "issue:scenario"
+state = "closed"
+
+[[expect.checks]]
+required = true
+id = "scenario-pr-landed"
+artifact = "pull_request:scenario-implementation"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
 [change_policy]
 validation_report_required = true
 promotion_artifact = "checked-in"

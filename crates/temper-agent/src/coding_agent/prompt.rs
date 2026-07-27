@@ -34,6 +34,20 @@ pub fn system_prompt_with_contracts(
     allowed_verdicts: &[String],
     verdict_contracts: &VerdictContracts,
 ) -> String {
+    let role = match capability {
+        Capability::CodingWorkspace => "engineer",
+        Capability::TriageWorkspace => "architect",
+        Capability::ReviewWorkspace => "reviewer",
+    };
+    system_prompt_with_contracts_for_role(capability, role, allowed_verdicts, verdict_contracts)
+}
+
+fn system_prompt_with_contracts_for_role(
+    capability: Capability,
+    role: &str,
+    allowed_verdicts: &[String],
+    verdict_contracts: &VerdictContracts,
+) -> String {
     let mut prompt = String::from(
         "You are Anvil, an autonomous software engineering agent running one \
          workspace turn inside a Temper workflow. You operate on a real Git \
@@ -45,8 +59,8 @@ pub fn system_prompt_with_contracts(
     );
 
     match capability {
-        Capability::CodingWorkspace => prompt.push_str(
-            "ROLE: engineer (coding_workspace capability).\n\
+        Capability::CodingWorkspace => prompt.push_str(&format!(
+            "ROLE: {role} (coding_workspace capability).\n\
              - Implement the work item as specified, leaving a real, \
              non-bookkeeping product diff in the working tree.\n\
              - Edit and create real source/docs/test files. Do NOT create \
@@ -63,23 +77,23 @@ pub fn system_prompt_with_contracts(
              - For PR repair runs (`pull_request_writable` checkout), preserve and \
              update the current implementation PR handoff from the context: on \
              success emit an updated PR `title`, a compact implementation-report \
-             `body`, and a short `summary`.\n",
-        ),
-        Capability::TriageWorkspace => prompt.push_str(
-            "ROLE: architect (triage_workspace capability).\n\
+             `body`, and a short `summary`.\n"
+        )),
+        Capability::TriageWorkspace => prompt.push_str(&format!(
+            "ROLE: {role} (triage_workspace capability).\n\
              - Read-only analysis: inspect the repository, but make NO edits to \
              the working tree.\n\
              - Analyze the work item and repository evidence carefully enough to \
-             produce the workflow outcome requested below.\n",
-        ),
-        Capability::ReviewWorkspace => prompt.push_str(
-            "ROLE: reviewer (review_workspace capability).\n\
+             produce the workflow outcome requested below.\n"
+        )),
+        Capability::ReviewWorkspace => prompt.push_str(&format!(
+            "ROLE: {role} (review_workspace capability).\n\
              - Read-only review: inspect the actual diff and CI result, not just \
              the PR summary. Make NO edits to the working tree.\n\
              - The working tree is checked out at the pull request's head. Compare \
              against the base branch from the context file (git diff \
-             origin/<base_branch>...HEAD, git log origin/<base_branch>..HEAD).\n",
-        ),
+             origin/<base_branch>...HEAD, git log origin/<base_branch>..HEAD).\n"
+        )),
     }
 
     if allowed_verdicts.is_empty() {
@@ -166,11 +180,17 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
 /// registry that will be sent to the provider.
 pub(crate) fn system_prompt_with_registry(
     capability: Capability,
+    role: &str,
     allowed_verdicts: &[String],
     verdict_contracts: &VerdictContracts,
     registry: &ToolRegistry,
 ) -> String {
-    let mut prompt = system_prompt_with_contracts(capability, allowed_verdicts, verdict_contracts);
+    let mut prompt = system_prompt_with_contracts_for_role(
+        capability,
+        role,
+        allowed_verdicts,
+        verdict_contracts,
+    );
 
     if registry_has_tool(registry, "submit_for_pr") {
         prompt.push_str(

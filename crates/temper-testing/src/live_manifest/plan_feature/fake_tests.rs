@@ -2,6 +2,42 @@ use super::*;
 
 const WORKFLOW_FIXTURE: &str =
     include_str!("../../../../../scenarios/plan-centric-feature-branch/config/workflow.json");
+const JIG_FIXTURE: &str = include_str!(
+    "../../../../../scenarios/plan-centric-feature-branch/jig/plan-centric-feature-branch.json"
+);
+
+#[test]
+fn live_jig_phase_matching_includes_current_role_charter() {
+    let jig: serde_json::Value =
+        serde_json::from_str(JIG_FIXTURE).expect("plan-centric Jig fixture parses");
+    let phases = jig["phases"]
+        .as_array()
+        .expect("Jig fixture declares phases");
+    for (phase_name, role) in [
+        ("architect-decompose-plan", "architect"),
+        ("architect-plan-feature", "architect"),
+        ("engineer-feature-slices", "engineer"),
+        ("scenario-author-feature-proof", "scenario_author"),
+        ("tester-after-followup", "tester"),
+        ("tester-request-followup", "tester"),
+    ] {
+        let phase = phases
+            .iter()
+            .find(|phase| phase["name"].as_str() == Some(phase_name))
+            .unwrap_or_else(|| panic!("Jig fixture declares phase {phase_name:?}"));
+        let messages = phase["when"]["messages_contain"]
+            .as_array()
+            .expect("phase declares required messages");
+        let contract = contract_for_role(role).expect("role guidance contract exists");
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.as_str() == Some(contract.role_guidance)),
+            "phase {phase_name:?} must require current {role} charter excerpt {:?} so related-artifact context cannot select the wrong role sequence",
+            contract.role_guidance
+        );
+    }
+}
 
 #[test]
 fn live_guidance_contracts_match_the_workflow_fixture() {

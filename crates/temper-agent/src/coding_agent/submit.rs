@@ -19,6 +19,8 @@ use tongs::error::{Error, Result};
 use tongs::model::{ContentBlock, TextContent};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
+use super::Capability;
+
 /// Agent-side callback invoked by the tool. Native in-process hosts bind this
 /// from a host callback; the out-of-process agent binds it to the worker-owned
 /// local side channel.
@@ -60,7 +62,7 @@ pub fn bind_submit_for_pr_host(
 
 /// Whether this workspace turn is allowed to expose `submit_for_pr`.
 pub fn submit_for_pr_available(context: &WorkspaceContext) -> bool {
-    context.work_item.role == "engineer"
+    Capability::for_role(&context.work_item.role).is_writable()
         && context.repos.iter().any(|repo| repo.is_writable())
         && !matches!(
             context.checkout.as_deref(),
@@ -224,9 +226,11 @@ mod tests {
     use temper_protocol_agent::{WorkspaceRepository, WorkspaceWorkItem};
 
     #[test]
-    fn availability_requires_writable_engineer_session() {
+    fn availability_requires_writable_coding_session() {
         let writable_engineer = context("engineer", "writable", "writable");
         assert!(submit_for_pr_available(&writable_engineer));
+        let writable_scenario_author = context("scenario_author", "writable", "writable");
+        assert!(submit_for_pr_available(&writable_scenario_author));
 
         let read_only_engineer = context("engineer", "writable", "read_only");
         assert!(!submit_for_pr_available(&read_only_engineer));

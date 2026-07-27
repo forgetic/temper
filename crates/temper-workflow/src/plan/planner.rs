@@ -115,8 +115,9 @@ impl<'a> Planner<'a> {
     /// satisfied, and the result would not create an impossible exclusive state.
     /// Otherwise returns a [`PlanError`] collecting every problem.
     ///
-    /// Gate signals are empty, so dependency gates are open only for artifacts
-    /// with no dependency relations and CI gates stay closed. Use
+    /// Gate signals are empty, so CI gates and dependency gates on blocked
+    /// artifacts stay closed. Optional dependency gates on non-blocked artifacts
+    /// with no dependency relations remain resolved. Use
     /// [`Planner::plan_transition_with`] when the runtime knows which
     /// prerequisites have landed and the current CI aggregate.
     pub fn plan_transition(
@@ -224,6 +225,53 @@ impl<'a> Planner<'a> {
         }
     }
 
+    /// Returns dependency-gated transitions that would otherwise be applicable
+    /// to an artifact whose dependency relation projection is empty.
+    ///
+    /// Reconciliation uses this narrow probe to preserve its named
+    /// missing-dependency diagnostic now that ordinary dependency gate
+    /// evaluation fails closed. Other gates, preconditions, and resulting-state
+    /// checks still apply exactly as they do during normal planning.
+    pub(crate) fn transitions_blocked_only_by_missing_dependencies(
+        &self,
+        artifact: &ClassifiedArtifact,
+    ) -> Vec<TransitionId> {
+        if artifact
+            .relations
+            .iter()
+            .any(|relation| relation.kind == RelationKind::Dependency)
+        {
+            return Vec::new();
+        }
+        let labels: HashSet<&str> = artifact.labels.iter().map(String::as_str).collect();
+        let signals = GateSignals::default();
+        self.workflow
+            .transitions()
+            .iter()
+            .filter(|transition| transition.artifact == artifact.kind)
+            .filter(|transition| self.requires_dependency_gate(transition))
+            .filter_map(|transition| {
+                let mut diagnostics = Vec::new();
+                self.check_preconditions(transition, &labels, &mut diagnostics);
+                self.check_non_dependency_gates(
+                    transition,
+                    artifact,
+                    &labels,
+                    &signals,
+                    &mut diagnostics,
+                );
+                state::check_resulting_states(
+                    self.workflow,
+                    transition,
+                    artifact,
+                    &labels,
+                    &mut diagnostics,
+                );
+                diagnostics.is_empty().then(|| transition.id.clone())
+            })
+            .collect()
+    }
+
     /// Returns the mechanical (actor-less) unblock plans an artifact admits
     /// under the given dependency status.
     ///
@@ -231,9 +279,9 @@ impl<'a> Planner<'a> {
     /// kind, (b) requires a `DependenciesResolved` gate, and (c) has all its
     /// label preconditions, gates, and resulting-state checks satisfied. The
     /// artifact must declare at least one `dependency` relation, so a blocked
-    /// artifact with no recorded dependency is never auto-unblocked even though
-    /// the gate would be vacuously satisfied. The reconciler uses this to clear
-    /// `blocked` once every prerequisite has landed.
+    /// artifact with no recorded dependency is never auto-unblocked. The
+    /// reconciler uses this to clear `blocked` once every prerequisite has
+    /// landed.
     pub fn dependency_unblocks(
         &self,
         artifact: &ClassifiedArtifact,
@@ -282,12 +330,37 @@ impl<'a> Planner<'a> {
 
     /// Returns whether the transition requires a `DependenciesResolved` gate.
     fn requires_dependency_gate(&self, transition: &ValidatedTransition) -> bool {
-        transition.requires_gates.iter().any(|gate_id| {
-            self.workflow.gates().iter().any(|gate| {
-                &gate.id == gate_id
-                    && matches!(gate.condition, Some(GateCondition::DependenciesResolved))
-            })
+        transition
+            .requires_gates
+            .iter()
+            .any(|gate_id| self.is_dependency_gate(gate_id))
+    }
+
+    fn is_dependency_gate(&self, gate_id: &GateId) -> bool {
+        self.workflow.gates().iter().any(|gate| {
+            &gate.id == gate_id
+                && matches!(gate.condition, Some(GateCondition::DependenciesResolved))
         })
+    }
+
+    fn check_non_dependency_gates(
+        &self,
+        transition: &ValidatedTransition,
+        artifact: &ClassifiedArtifact,
+        labels: &HashSet<&str>,
+        signals: &GateSignals,
+        diagnostics: &mut Vec<PlanDiagnostic>,
+    ) {
+        for gate in &transition.requires_gates {
+            if !self.is_dependency_gate(gate)
+                && !self.gate_satisfied(gate, artifact, labels, signals)
+            {
+                diagnostics.push(PlanDiagnostic::GateNotSatisfied {
+                    transition: transition.id.clone(),
+                    gate: gate.clone(),
+                });
+            }
+        }
     }
 
     /// Checks that every required gate is satisfied by current labels.

@@ -191,6 +191,7 @@
     { "kind": "dependency", "source": "plan", "target": "code" },
     { "kind": "dependency", "source": "plan", "target": "validation" },
     { "kind": "dependency", "source": "code", "target": "code" },
+    { "kind": "dependency", "source": "validation", "target": "code" },
     { "kind": "dependency", "source": "implementation_pr", "target": "implementation_pr" }
   ],
   "state_dimensions": [

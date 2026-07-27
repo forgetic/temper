@@ -4,7 +4,8 @@
       "name": "architect-decompose-plan",
       "when": {
         "messages_contain": [
-          "Plan plan-centric dogfood delivery"
+          "Plan plan-centric dogfood delivery",
+          "Own product feature shaping."
         ],
         "any_message_contains": [
           "ROLE: architect",
@@ -35,7 +36,8 @@
       "name": "architect-plan-feature",
       "when": {
         "messages_contain": [
-          "Ship plan-centric dogfood feature branch delivery"
+          "Ship plan-centric dogfood feature branch delivery",
+          "Own product feature shaping."
         ],
         "any_message_contains": [
           "ROLE: architect",
@@ -65,7 +67,9 @@
     {
       "name": "engineer-feature-slices",
       "when": {
-        "messages_contain": [],
+        "messages_contain": [
+          "Claim ready code issues"
+        ],
         "any_message_contains": [
           "ROLE: engineer",
           "Role: engineer"
@@ -174,7 +178,8 @@
       "name": "scenario-author-feature-proof",
       "when": {
         "messages_contain": [
-          "Author the plan-centric feature scenario"
+          "Author the plan-centric feature scenario",
+          "Author the plan's required checked-in feature scenario"
         ],
         "any_message_contains": [
           "ROLE: scenario_author",
@@ -220,7 +225,8 @@
       "name": "tester-after-followup",
       "when": {
         "messages_contain": [
-          "Implement validation follow-up regression"
+          "Implement validation follow-up regression",
+          "Run final read-only validation"
         ],
         "any_message_contains": [
           "ROLE: tester",
@@ -251,7 +257,8 @@
       "name": "tester-request-followup",
       "when": {
         "messages_contain": [
-          "Plan plan-centric dogfood delivery"
+          "Plan plan-centric dogfood delivery",
+          "Run final read-only validation"
         ],
         "any_message_contains": [
           "ROLE: tester",

@@ -11,29 +11,36 @@ pub(super) fn evidence_lines(plan: &LivePlanFeatureEvidence) -> Vec<String> {
             plan.feature_branch, plan.feature_issue.number, plan.plan_issue.number
         ),
         format!(
-            "issue target branches: feature={:?} plan={:?} first={:?} second={:?} followup={:?}",
+            "issue target branches: feature={:?} plan={:?} first={:?} second={:?} scenario={:?} followup={:?}",
             plan.feature_issue.target_branch,
             plan.plan_issue.target_branch,
             plan.first_code_issue.target_branch,
             plan.second_code_issue.target_branch,
+            plan.scenario_issue.target_branch,
             plan.followup_code_issue.target_branch
         ),
         format!(
-            "sequential children: first #{} closed, second #{} closed, followup #{} closed, observed_blocked={} observed_unblocked={}",
+            "sequential children: first #{} closed, second #{} closed, scenario #{} closed, followup #{} closed, code_blocked={} code_unblocked={} scenario_blocked={} scenario_unblocked={}",
             plan.first_code_issue.number,
             plan.second_code_issue.number,
+            plan.scenario_issue.number,
             plan.followup_code_issue.number,
             plan.observed_second_blocked,
-            plan.observed_second_unblocked
+            plan.observed_second_unblocked,
+            plan.observed_scenario_blocked,
+            plan.observed_scenario_unblocked
         ),
         format!(
-            "implementation PR targets: #{} {}->{}, #{} {}->{}, #{} {}->{}",
+            "implementation PR targets: #{} {}->{}, #{} {}->{}, #{} {}->{}, #{} {}->{}",
             plan.first_pr.number,
             plan.first_pr.source_branch,
             plan.first_pr.target_branch,
             plan.second_pr.number,
             plan.second_pr.source_branch,
             plan.second_pr.target_branch,
+            plan.scenario_pr.number,
+            plan.scenario_pr.source_branch,
+            plan.scenario_pr.target_branch,
             plan.followup_pr.number,
             plan.followup_pr.source_branch,
             plan.followup_pr.target_branch
@@ -93,11 +100,13 @@ pub(super) fn final_state(
             issue("plan", &plan.plan_issue),
             issue("first-code", &plan.first_code_issue),
             issue("second-code", &plan.second_code_issue),
+            issue("scenario", &plan.scenario_issue),
             issue("validation-followup", &plan.followup_code_issue),
         ],
         pull_requests: vec![
             pull_request("first-implementation", &plan.first_pr),
             pull_request("second-implementation", &plan.second_pr),
+            pull_request("scenario-implementation", &plan.scenario_pr),
             pull_request("followup-implementation", &plan.followup_pr),
             pull_request("feature-landing", &plan.landing_pr),
         ],

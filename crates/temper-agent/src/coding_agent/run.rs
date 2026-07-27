@@ -425,11 +425,11 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
         );
     }
 
-    // Compose both prompt turns only after the provider registry is final. All
-    // optional named guidance is derived from this exact registry, which is
-    // moved unchanged into SubAgent below.
+    // Compose both prompt turns only after the provider registry is final; named
+    // guidance derives from this registry, moved unchanged into SubAgent below.
     let mut role_prompt = system_prompt_with_registry(
         capability,
+        &context.work_item.role,
         &context.allowed_verdicts,
         &context.verdict_contracts,
         &tools,

@@ -137,6 +137,23 @@ fn same_number_open_issue_prevents_pr_collision_from_satisfying_dependency() {
 }
 
 #[test]
+fn missing_dependency_target_is_not_a_false_unblock() {
+    let forge = MemoryForge::new();
+    let workflow = support::workflow();
+    let policy = DefaultRecoveryPolicy;
+    let journal = InMemoryJournal::new();
+    let repo = create_repo(&forge, "missing-target");
+    let body = dependency_body(vec![ArtifactRef::same_repo(ItemNumber::new(999))]);
+    create_issue(&forge, &repo, "blocked parent", &["code", "blocked"], &body);
+
+    let report = reconcile(&forge, &workflow, &policy, &repo, &journal);
+    assert!(
+        report.is_clean(),
+        "a dependency reference whose issue and PR are both missing stays unresolved"
+    );
+}
+
+#[test]
 fn transient_child_repo_read_failure_is_not_a_false_unblock() {
     let forge = MemoryForge::new();
     let workflow = support::workflow();

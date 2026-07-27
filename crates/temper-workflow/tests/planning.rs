@@ -607,9 +607,28 @@ fn ci_gate_requires_runtime_ci_signal_before_merge_plans() {
 }
 
 #[test]
-fn dependency_gate_uses_native_dependency_relations() {
+fn dependency_gate_requires_declared_relations_and_landed_targets() {
     let workflow = fixture_workflow();
     let planner = workflow.planner();
+    let missing = classify_issue(&workflow, 39, &["code", "blocked"]);
+
+    let error = planner
+        .plan_transition_with(
+            &TransitionId::new("mark_code_ready"),
+            &RoleId::new("architect"),
+            &missing,
+            &GateSignals::new(),
+        )
+        .expect_err("an empty dependency set must fail closed");
+    assert!(
+        error
+            .diagnostics()
+            .contains(&PlanDiagnostic::GateNotSatisfied {
+                transition: TransitionId::new("mark_code_ready"),
+                gate: temper_workflow::GateId::new("dependency_gate"),
+            })
+    );
+
     let blocked = classify_issue_with_dependencies(&workflow, 40, &["code", "blocked"], &[41]);
 
     assert!(

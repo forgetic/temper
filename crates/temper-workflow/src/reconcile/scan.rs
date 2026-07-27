@@ -12,12 +12,10 @@ use crate::artifact::requires_human_attention;
 use crate::classify::{
     ArtifactSource, ClassificationDiagnostic, ClassificationError, ClassifiedArtifact, Classifier,
 };
-use crate::ids::TransitionId;
 use crate::journal::CommandRecord;
 use crate::metadata::parse_metadata_block;
-use crate::plan::{DependencyStatus, GateSignals, Planner, Postcondition, WorkflowEffect};
+use crate::plan::{DependencyStatus, Planner, Postcondition, WorkflowEffect};
 use crate::relation::RelationKind;
-use crate::validated::{GateCondition, ValidatedTransition};
 use std::collections::HashSet;
 
 impl<P: RecoveryPolicy> Reconciler<'_, P> {
@@ -159,7 +157,7 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         report: &mut ReconcileReport,
     ) {
         let planner = Planner::new(self.workflow);
-        for transition in self.blocked_without_dependency_transitions(artifact, &planner) {
+        for transition in planner.transitions_blocked_only_by_missing_dependencies(artifact) {
             let dependency_count = dependency_relation_count(artifact);
             let relation_count = artifact.relations.len();
             let action = self.policy.on_blocked_without_dependencies(
@@ -192,38 +190,6 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
                 action,
             );
         }
-    }
-
-    fn blocked_without_dependency_transitions(
-        &self,
-        artifact: &ClassifiedArtifact,
-        planner: &Planner<'_>,
-    ) -> Vec<TransitionId> {
-        if dependency_relation_count(artifact) > 0 {
-            return Vec::new();
-        }
-        self.workflow
-            .transitions()
-            .iter()
-            .filter(|transition| transition.artifact == artifact.kind)
-            .filter(|transition| self.requires_dependency_gate(transition))
-            .filter_map(|transition| {
-                let role = transition.roles.first()?;
-                planner
-                    .plan_transition_with(&transition.id, role, artifact, &GateSignals::default())
-                    .is_ok()
-                    .then(|| transition.id.clone())
-            })
-            .collect()
-    }
-
-    fn requires_dependency_gate(&self, transition: &ValidatedTransition) -> bool {
-        transition.requires_gates.iter().any(|gate_id| {
-            self.workflow.gates().iter().any(|gate| {
-                &gate.id == gate_id
-                    && matches!(gate.condition, Some(GateCondition::DependenciesResolved))
-            })
-        })
     }
 
     /// Classifies an incomplete journal command against current artifact state.

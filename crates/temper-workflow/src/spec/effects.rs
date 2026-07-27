@@ -215,9 +215,11 @@ pub enum RawGateCondition {
     /// The artifact must occupy `state` within `dimension`.
     StateEquals { dimension: String, state: String },
     /// Every `dependency` relation target of the artifact must have landed
-    /// (its prerequisite work merged). Which targets have landed is supplied by
-    /// the runtime as an external signal; the condition references relations by
-    /// kind, so it carries no payload.
+    /// (its prerequisite work merged). A blocked artifact must have at least one
+    /// such relation, while a non-blocked artifact may use the condition as an
+    /// optional empty gate. Which targets have landed is supplied by the runtime
+    /// as an external signal; the condition references relations by kind, so it
+    /// carries no payload.
     DependenciesResolved,
     /// The artifact's native CI must have passed. Whether CI passed is supplied
     /// by the runtime as a signal computed from the Forge's `CiJob`
