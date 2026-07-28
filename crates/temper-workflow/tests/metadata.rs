@@ -3,7 +3,8 @@
 use chrono::{DateTime, Utc};
 use temper_forge::{ItemNumber, RepositoryId};
 use temper_workflow::{
-    ArtifactKindId, ArtifactRef, DurableAssignment, Lease, MetadataError, RoleId, WorkflowMetadata,
+    ArtifactKindId, ArtifactRef, DurableAssignment, Lease, MetadataError, ProviderRecovery,
+    ProviderRecoveryDisposition, ProviderRecoveryFacts, RoleId, WorkflowMetadata,
     global_child_correlation_key, inspect_metadata_blocks, is_heartbeat_only_body_change,
     parse_metadata_block, render_metadata_block, replace_metadata_block, split_metadata_block,
 };
@@ -50,6 +51,65 @@ fn full_metadata() -> WorkflowMetadata {
         assignment: None,
         ..WorkflowMetadata::default()
     }
+}
+
+#[test]
+fn provider_recovery_metadata_is_bounded_and_round_trips() {
+    let marker = ProviderRecovery {
+        workstream_id: "pr-for-code-810".to_string(),
+        failure_epoch: 2,
+        disposition: ProviderRecoveryDisposition::Unknown,
+        facts: ProviderRecoveryFacts {
+            provider: "openai-codex".to_string(),
+            model: "gpt-5".to_string(),
+            category: "redacted_unknown".to_string(),
+            boundary: "sse".to_string(),
+            event_kind: "stream_error".to_string(),
+            status_present: false,
+            code_present: false,
+            http_status: None,
+            provider_request_id: Some("req-810".to_string()),
+            provider_error_code: None,
+        },
+        cumulative_failure_count: 3,
+        deferral_count: 1,
+        deferral_limit: 3,
+        generation: 1,
+        not_before: ts("2026-05-29T00:05:00Z"),
+        epoch_started_at: ts("2026-05-29T00:00:00Z"),
+        elapsed_ms: 60_000,
+        slo_deadline: ts("2026-05-29T02:00:00Z"),
+        idempotency_key: "a".repeat(64),
+        source_attempt_id: "attempt-810".to_string(),
+        due_assignment_attempt_id: None,
+        health_event_id: None,
+    };
+    marker.validate().expect("bounded marker validates");
+    let mut typed_http_unknown = marker.clone();
+    typed_http_unknown.facts.status_present = true;
+    typed_http_unknown.facts.http_status = Some(404);
+    typed_http_unknown
+        .validate()
+        .expect("durable projection follows the canonical diagnostic disposition");
+    let metadata = WorkflowMetadata {
+        provider_recovery: Some(Box::new(marker.clone())),
+        ..WorkflowMetadata::default()
+    };
+    assert_eq!(
+        parse_metadata_block(&render_metadata_block(&metadata))
+            .unwrap()
+            .unwrap()
+            .provider_recovery,
+        Some(Box::new(marker.clone()))
+    );
+
+    let mut corrupt = marker;
+    corrupt.generation = 0;
+    assert!(corrupt.validate().unwrap_err().contains("positive"));
+
+    corrupt.generation = 1;
+    corrupt.failure_epoch = temper_workflow::MAX_PROVIDER_RECOVERY_COUNT + 1;
+    assert!(corrupt.validate().unwrap_err().contains("durable bound"));
 }
 
 #[test]

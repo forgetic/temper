@@ -66,6 +66,7 @@ pub(crate) async fn enqueue_scanned_roles_wake<F: Forge + ?Sized>(
             daemon.artifact_context.as_deref(),
             Some(repository),
             None,
+            Some(now),
         )
         .await
         {
@@ -99,6 +100,7 @@ pub(crate) async fn enqueue_scanned_roles_wake<F: Forge + ?Sized>(
             Ok(
                 outcome @ (EnrichOutcome::SkipTerminalArtifact
                 | EnrichOutcome::SkipAttentionArtifact
+                | EnrichOutcome::SkipProviderDeferred
                 | EnrichOutcome::SkipExistingPullRequest),
             ) => tracing::debug!("{}", skip_log_line(&repo_label, &item.role, item, outcome)),
             Err(error) => tracing::debug!(

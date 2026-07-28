@@ -114,13 +114,24 @@ pub(super) enum ResultDisposition {
 pub(super) fn result_disposition(result: &JobResult) -> ResultDisposition {
     match result.status {
         ResultStatus::Success => ResultDisposition::Apply,
-        ResultStatus::Failure => match result.failure.as_ref().map(|failure| failure.class) {
-            Some(FailureClass::Transient | FailureClass::Canceled) => {
-                ResultDisposition::DropForRescan
-            }
-            Some(FailureClass::Permanent | FailureClass::Protocol) | None => {
+        ResultStatus::Failure => match result.failure.as_ref() {
+            Some(failure)
+                if failure.session_recovery.as_ref().is_some_and(|recovery| {
+                    recovery.action
+                        == temper_protocol_worker::SessionRecoveryActionV1::ProviderDeferred
+                }) =>
+            {
                 ResultDisposition::Apply
             }
+            Some(failure)
+                if matches!(
+                    failure.class,
+                    FailureClass::Transient | FailureClass::Canceled
+                ) =>
+            {
+                ResultDisposition::DropForRescan
+            }
+            Some(_) | None => ResultDisposition::Apply,
         },
     }
 }
@@ -262,6 +273,24 @@ mod tests {
             result_disposition(&result_for_disposition(ResultStatus::Success, None)),
             ResultDisposition::Apply
         );
+    }
+
+    #[test]
+    fn result_disposition_applies_provider_deferral_before_rescan() {
+        let mut result =
+            result_for_disposition(ResultStatus::Failure, Some(FailureClass::Transient));
+        result.failure.as_mut().unwrap().session_recovery = Some(
+            serde_json::from_value(json!({
+                "attempt_id": "attempt-1",
+                "failure_epoch": 1,
+                "failure_count": 2,
+                "action": "provider_deferred",
+                "current_session_id": "session-2",
+                "evidence_location": ".temper-agent-session/state.json"
+            }))
+            .unwrap(),
+        );
+        assert_eq!(result_disposition(&result), ResultDisposition::Apply);
     }
 
     #[test]

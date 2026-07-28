@@ -61,8 +61,51 @@ impl LoadedLease {
     fn metadata_with_diagnostic_job(
         &self,
         assignment: &DurableAssignment,
+        now: DateTime<Utc>,
     ) -> Result<WorkflowMetadata, LeaseError> {
         let mut metadata = self.metadata().clone();
+        if let Some(recovery) = metadata.provider_recovery.as_mut() {
+            recovery
+                .validate()
+                .map_err(|reason| LeaseError::MalformedMetadata {
+                    reason: format!("corrupt provider recovery state: {reason}"),
+                })?;
+            if assignment.coordination_key.as_deref() != Some(recovery.workstream_id.as_str()) {
+                return Err(LeaseError::MalformedMetadata {
+                    reason: "provider recovery workstream does not match the assignment"
+                        .to_string(),
+                });
+            }
+            if recovery.slo_expired(now) {
+                return Err(LeaseError::MalformedMetadata {
+                    reason: "provider recovery SLO expired; park for operator repair".to_string(),
+                });
+            }
+            if !recovery.is_due(now) {
+                return Err(LeaseError::AssignmentConflict {
+                    job_id: format!(
+                        "provider-recovery-generation-{}-not-due",
+                        recovery.generation
+                    ),
+                });
+            }
+            let attempt_id = assignment
+                .attempt_id
+                .as_deref()
+                .filter(|attempt| !attempt.trim().is_empty())
+                .ok_or_else(|| LeaseError::MalformedMetadata {
+                    reason: "provider recovery due claim requires an attempt id".to_string(),
+                })?;
+            match recovery.due_assignment_attempt_id.as_deref() {
+                Some(current) if current != attempt_id => {
+                    return Err(LeaseError::AssignmentConflict {
+                        job_id: format!("provider-recovery-attempt-{current}"),
+                    });
+                }
+                Some(_) => {}
+                None => recovery.due_assignment_attempt_id = Some(attempt_id.to_string()),
+            }
+        }
         let Some(recovery) = metadata.interrupted_ci_recovery.as_mut() else {
             return Ok(metadata);
         };
@@ -97,11 +140,26 @@ impl LoadedLease {
         Ok(metadata)
     }
 
-    fn metadata_with_rolled_back_diagnostic(
+    fn metadata_with_released_provider_attempt(
         &self,
         expected: &DurableAssignment,
     ) -> WorkflowMetadata {
         let mut metadata = self.metadata().clone();
+        if metadata.provider_recovery.as_ref().is_some_and(|recovery| {
+            recovery.due_assignment_attempt_id.as_ref() == expected.attempt_id.as_ref()
+        }) {
+            if let Some(recovery) = metadata.provider_recovery.as_mut() {
+                recovery.due_assignment_attempt_id = None;
+            }
+        }
+        metadata
+    }
+
+    fn metadata_with_rolled_back_diagnostic(
+        &self,
+        expected: &DurableAssignment,
+    ) -> WorkflowMetadata {
+        let mut metadata = self.metadata_with_released_provider_attempt(expected);
         if let Some(diagnostic) = metadata
             .interrupted_ci_recovery
             .as_mut()
@@ -393,15 +451,23 @@ impl<'a, F: Forge + ?Sized> LeaseManager<'a, F> {
         mutation: AssignmentMutation,
         target: ArtifactSource,
     ) -> Result<(), LeaseError> {
-        self.write_assignment_with_metadata(
-            loaded,
-            loaded.metadata().clone(),
-            assignment,
-            lease,
-            mutation,
-            target,
-        )
-        .await
+        let mut metadata = loaded.metadata().clone();
+        if assignment.is_none()
+            && metadata.provider_recovery.as_ref().is_some_and(|recovery| {
+                recovery.due_assignment_attempt_id.as_ref()
+                    == loaded
+                        .metadata()
+                        .assignment
+                        .as_ref()
+                        .and_then(|current| current.attempt_id.as_ref())
+            })
+        {
+            if let Some(recovery) = metadata.provider_recovery.as_mut() {
+                recovery.due_assignment_attempt_id = None;
+            }
+        }
+        self.write_assignment_with_metadata(loaded, metadata, assignment, lease, mutation, target)
+            .await
     }
 
     async fn write_assignment_with_metadata(

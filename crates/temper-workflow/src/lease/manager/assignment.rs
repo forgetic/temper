@@ -53,7 +53,7 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
             .collect();
         request.assignment.assigned_at = Some(now);
         request.assignment.expires_at = Some(lease.expires_at);
-        let metadata = loaded.metadata_with_diagnostic_job(&request.assignment)?;
+        let metadata = loaded.metadata_with_diagnostic_job(&request.assignment, now)?;
         self.write_assignment_with_metadata(
             &loaded,
             metadata,
@@ -100,6 +100,54 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
         }
         self.write_assignment(&loaded, None, None, AssignmentMutation::default(), target)
             .await
+    }
+
+    /// Clears a successful exact assignment and, when it is the provider-recovery
+    /// due attempt, clears that marker in the same Forge CAS.
+    pub async fn release_successful_assignment(
+        &self,
+        repo_id: &RepositoryId,
+        target: ArtifactSource,
+        expected: &DurableAssignment,
+    ) -> Result<(), LeaseError> {
+        let loaded = self.load(repo_id, target).await?;
+        let Some(current) = loaded.metadata().assignment.as_ref() else {
+            return Ok(());
+        };
+        if !assignment_identity_matches(current, expected) {
+            return Err(LeaseError::AssignmentConflict {
+                job_id: current.job_id.clone().unwrap_or_default(),
+            });
+        }
+        let mut metadata = loaded.metadata().clone();
+        if let Some(recovery) = metadata.provider_recovery.as_ref() {
+            recovery
+                .validate()
+                .map_err(|reason| LeaseError::MalformedMetadata {
+                    reason: format!("corrupt provider recovery state: {reason}"),
+                })?;
+            if expected.coordination_key.as_deref() != Some(recovery.workstream_id.as_str()) {
+                return Err(LeaseError::AssignmentConflict {
+                    job_id: "provider recovery workstream does not match successful assignment"
+                        .to_string(),
+                });
+            }
+            if !recovery.authorizes_attempt(expected.attempt_id.as_deref()) {
+                return Err(LeaseError::AssignmentConflict {
+                    job_id: "provider recovery does not authorize successful attempt".to_string(),
+                });
+            }
+            metadata.provider_recovery = None;
+        }
+        self.write_assignment_with_metadata(
+            &loaded,
+            metadata,
+            None,
+            None,
+            AssignmentMutation::default(),
+            target,
+        )
+        .await
     }
 
     /// Rolls an unpublished assignment back to its captured pre-claim
@@ -182,7 +230,7 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
         // reached a worker before its lease expired, so retain the durable job
         // id and let recovery park rather than dispatching it again.
         let metadata = if snapshot_match {
-            loaded.metadata().clone()
+            loaded.metadata_with_released_provider_attempt(expected)
         } else {
             loaded.metadata_with_rolled_back_diagnostic(expected)
         };

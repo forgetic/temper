@@ -111,7 +111,7 @@ use crate::classify::{ArtifactSource, ClassifiedArtifact, Classifier};
 use crate::context::ExecutionContext;
 use crate::ids::{RoleId, TransitionId};
 use crate::plan::TransitionPlan;
-use crate::validated::ValidatedWorkflow;
+use crate::validated::{Effect, ValidatedWorkflow};
 use async_trait::async_trait;
 use error::classify_plan_error;
 use std::sync::Arc;
@@ -265,6 +265,23 @@ impl<'a, F: Forge + ?Sized> Executor<'a, F> {
         let loaded = self
             .load_with_issue_details(repo_id, target, issue_details)
             .await?;
+        // A recovery marker fences the whole landing transition, not just the
+        // merge call. Executor pre-effects include comments, PR creates,
+        // reviews, and parent updates, so waiting until `apply_merge` would
+        // permit partial publication before refusing the landing.
+        let is_landing = self.workflow.transitions().iter().any(|candidate| {
+            &candidate.id == transition
+                && candidate
+                    .effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::MergePullRequest))
+        });
+        if is_landing && loaded.classified().metadata.provider_recovery.is_some() {
+            return Err(ExecutionError::TargetStale {
+                target,
+                message: "provider recovery is deferred; mechanical landing is fenced".to_string(),
+            });
+        }
         let signals = self
             .gate_signals_with_needs(repo_id, &loaded, needs)
             .await?;
