@@ -89,6 +89,13 @@ fn worker_settings_with_capacity(max_concurrent_jobs: u32) -> WorkerSettings {
             graceful_cancellation_grace: Duration::from_secs(10),
             forced_termination_grace: Duration::from_secs(5),
         },
+        session_recovery: temper_config::SessionRecoverySettings {
+            session_failure_limit: 1,
+            fresh_session_limit: 1,
+            provider_deferral_limit: 3,
+            provider_deferral_delay: Duration::from_secs(300),
+            recovery_slo: Duration::from_secs(7_200),
+        },
         capabilities: Vec::new(),
         pools: Vec::new(),
         worker_pool_tokens: BTreeMap::new(),

@@ -5,7 +5,7 @@ use temper_protocol_agent::{AgentSessionState, WorkspaceContext};
 use temper_protocol_worker::{FailureClass, SessionRecoveryActionV1, SessionRecoveryEvidenceV1};
 
 use crate::agent_runner::AgentRunError;
-use crate::agent_session::{AgentSessionLedger, AgentSessionStore};
+use crate::agent_session::{AgentSessionLedger, AgentSessionStore, SessionRecoveryPolicy};
 use crate::executor::{AttemptFence, JobCancellation, JobOutcome};
 
 use super::{
@@ -25,6 +25,7 @@ pub(super) async fn attach_agent_session(
     role: &str,
     coordination_key: &str,
     mode: JobMode,
+    recovery_policy: SessionRecoveryPolicy,
     cancellation: &JobCancellation,
 ) -> Result<Option<AgentSessionBinding>, JobOutcome> {
     if !session_enabled(role, mode) {
@@ -38,6 +39,7 @@ pub(super) async fn attach_agent_session(
                 format!("invalid agent session store path: {error}"),
             )
         })?;
+    let store = store.with_recovery_policy(recovery_policy);
     let ledger = match store.load_ledger_controlled(cancellation).await {
         Ok(Some(ledger)) => {
             tracing::debug!(
@@ -46,8 +48,11 @@ pub(super) async fn attach_agent_session(
                 coordination_key,
                 session_id = %ledger.active_session.session_id,
                 failure_epoch = ledger.failure_epoch,
-                failure_count = ledger.consecutive_terminal_count,
-                rotation_consumed = ledger.rotation_consumed,
+                cumulative_failure_count = ledger.cumulative_terminal_failures,
+                session_failure_count = ledger.session_terminal_failures,
+                session_number = ledger.current_session_number,
+                fresh_sessions_used = ledger.fresh_sessions_used,
+                deferral_generation = ledger.deferral_generation,
                 "resuming saved agent session ledger"
             );
             ledger
@@ -68,7 +73,7 @@ pub(super) async fn attach_agent_session(
                     "starting a new agent session"
                 );
             }
-            let ledger = AgentSessionLedger::new(new_session_state());
+            let ledger = AgentSessionLedger::new_with_policy(new_session_state(), recovery_policy);
             // Persist the identity before the agent starts. A watchdog timeout
             // must preserve the same coordination-scoped session.
             store
@@ -234,8 +239,8 @@ fn recovery_outcome(diagnostic: ModelFailureV1, decision: SessionRecoveryEvidenc
                 "terminal model failure `{}` on session `{}` (run {} of {}); retrying the same session; durable evidence: {}",
                 diagnostic.category.as_str(),
                 decision.current_session_id,
-                decision.failure_count,
-                RETRYABLE_RUN_LIMIT,
+                decision.session_failure_count,
+                decision.configured_session_failure_limit,
                 decision.evidence_location,
             ),
         ),
@@ -256,13 +261,27 @@ fn recovery_outcome(diagnostic: ModelFailureV1, decision: SessionRecoveryEvidenc
                 ),
             )
         }
+        SessionRecoveryActionV1::ProviderDeferred => (
+            FailureClass::Transient,
+            format!(
+                "terminal model failure `{}` exhausted automatic session recovery after {} cumulative failure(s); provider recovery generation {} is deferred until {}; durable evidence: {}",
+                diagnostic.category.as_str(),
+                decision.failure_count,
+                decision.deferral_generation,
+                decision
+                    .not_before_unix_ms
+                    .map_or_else(|| "unknown".to_string(), |value| value.to_string()),
+                decision.evidence_location,
+            ),
+        ),
         SessionRecoveryActionV1::ParkForHuman => (
             FailureClass::Permanent,
             format!(
-                "terminal model failure `{}` exhausted bounded recovery on session `{}` after {} run(s); prior session: {}; workspace and durable evidence preserved at {}",
+                "terminal model failure `{}` requires operator action after {} cumulative failure(s) on session {} (session failure count {}); prior session: {}; workspace and durable evidence preserved at {}",
                 diagnostic.category.as_str(),
-                decision.current_session_id,
                 decision.failure_count,
+                decision.session_number,
+                decision.session_failure_count,
                 decision.prior_session_id.as_deref().unwrap_or("none"),
                 decision.evidence_location,
             ),
@@ -270,8 +289,6 @@ fn recovery_outcome(diagnostic: ModelFailureV1, decision: SessionRecoveryEvidenc
     };
     failure_with_recovery(class, message, Some(diagnostic), Some(decision))
 }
-
-const RETRYABLE_RUN_LIMIT: u32 = 3;
 
 fn session_enabled(role: &str, mode: JobMode) -> bool {
     role == "engineer" && matches!(mode, JobMode::Writable | JobMode::PullRequestWritable)
@@ -325,8 +342,8 @@ mod tests {
             }
             let unchanged = store.load_ledger_sync().unwrap().unwrap();
             assert_eq!(unchanged.active_session.session_id, "session-old");
-            assert_eq!(unchanged.consecutive_terminal_count, 0);
-            assert!(!unchanged.rotation_consumed);
+            assert_eq!(unchanged.cumulative_terminal_failures, 0);
+            assert_eq!(unchanged.fresh_sessions_used, 0);
         });
     }
 
@@ -371,7 +388,7 @@ mod tests {
 
             let unchanged = store.load_ledger_sync().unwrap().unwrap();
             assert_eq!(unchanged.failure_epoch, 1);
-            assert_eq!(unchanged.consecutive_terminal_count, 0);
+            assert_eq!(unchanged.cumulative_terminal_failures, 0);
         });
     }
 }

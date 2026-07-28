@@ -34,6 +34,17 @@ fn deadline_and_liveness_defaults_apply_without_new_toml() {
         Duration::from_secs(900)
     );
     assert_eq!(resolved.worker.liveness_limits.max_run, None);
+    assert_eq!(resolved.worker.session_recovery.session_failure_limit, 1);
+    assert_eq!(resolved.worker.session_recovery.fresh_session_limit, 1);
+    assert_eq!(resolved.worker.session_recovery.provider_deferral_limit, 3);
+    assert_eq!(
+        resolved.worker.session_recovery.provider_deferral_delay,
+        Duration::from_secs(300)
+    );
+    assert_eq!(
+        resolved.worker.session_recovery.recovery_slo,
+        Duration::from_secs(7_200)
+    );
     assert_eq!(
         resolved.worker.liveness_limits.graceful_cancellation_grace,
         Duration::from_secs(10)
@@ -56,6 +67,11 @@ fn config_template_resolves_the_documented_liveness_contract() {
         "max_no_progress_secs = 900",
         "graceful_cancellation_grace_secs = 10",
         "forced_termination_grace_secs = 5",
+        "session_failure_limit = 1",
+        "fresh_session_limit = 1",
+        "provider_deferral_limit = 3",
+        "provider_deferral_delay_secs = 300",
+        "model_recovery_slo_secs = 7200",
         "tool_timeout_secs = 600",
         "model_connect_timeout_secs = 120",
         "model_idle_timeout_secs = 120",
@@ -152,6 +168,42 @@ max_run_secs = 0
 }
 
 #[test]
+fn durable_session_recovery_policy_resolves_and_rejects_unbounded_values() {
+    let resolved = resolve_text(
+        r#"
+schema_version = 1
+[worker]
+session_failure_limit = 2
+fresh_session_limit = 0
+provider_deferral_limit = 4
+provider_deferral_delay_secs = 30
+model_recovery_slo_secs = 90
+"#,
+    )
+    .expect("custom durable recovery policy resolves");
+    let policy = resolved.worker.session_recovery;
+    assert_eq!(policy.session_failure_limit, 2);
+    assert_eq!(policy.fresh_session_limit, 0);
+    assert_eq!(policy.provider_deferral_limit, 4);
+    assert_eq!(policy.provider_deferral_delay, Duration::from_secs(30));
+    assert_eq!(policy.recovery_slo, Duration::from_secs(90));
+
+    for (body, expected) in [
+        ("session_failure_limit = 33", "session_failure_limit"),
+        ("fresh_session_limit = 33", "fresh_session_limit"),
+        ("provider_deferral_limit = 33", "provider_deferral_limit"),
+        (
+            "provider_deferral_delay_secs = 91\nmodel_recovery_slo_secs = 90",
+            "must not exceed",
+        ),
+    ] {
+        let error =
+            resolve_text(&format!("schema_version = 1\n[worker]\n{body}\n")).expect_err(expected);
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn invalid_liveness_orderings_are_rejected() {
     let cases = [
         (
@@ -205,6 +257,10 @@ fn every_new_duration_rejects_zero() {
         ("worker", "max_no_progress_secs"),
         ("worker", "graceful_cancellation_grace_secs"),
         ("worker", "forced_termination_grace_secs"),
+        ("worker", "session_failure_limit"),
+        ("worker", "provider_deferral_limit"),
+        ("worker", "provider_deferral_delay_secs"),
+        ("worker", "model_recovery_slo_secs"),
         ("agent.deadlines", "tool_timeout_secs"),
         ("agent.deadlines", "model_connect_timeout_secs"),
         ("agent.deadlines", "model_idle_timeout_secs"),

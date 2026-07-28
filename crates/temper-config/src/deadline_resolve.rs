@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::error::ConfigError;
 use crate::resolved::{
     AgentModelRetryLimits, AgentOperationLimits, AgentSettings, STANDALONE_FINAL_KILL_ALLOWANCE,
-    STANDALONE_HTTP_DRAIN_ALLOWANCE, WorkerLivenessLimits,
+    STANDALONE_HTTP_DRAIN_ALLOWANCE, SessionRecoverySettings, WorkerLivenessLimits,
 };
 use crate::schema::{AgentDeadlineConfig, Config};
 
@@ -23,6 +23,76 @@ const DEFAULT_MODEL_RETRY_MAX_ATTEMPTS: u32 = 7;
 const DEFAULT_MODEL_RETRY_BASE_DELAY_MS: u64 = 500;
 const DEFAULT_MODEL_RETRY_MAX_DELAY_MS: u64 = 8_000;
 const DEFAULT_MODEL_RETRY_JITTER_PERCENT: u8 = 20;
+const DEFAULT_SESSION_FAILURE_LIMIT: u32 = 1;
+const DEFAULT_FRESH_SESSION_LIMIT: u32 = 1;
+const DEFAULT_PROVIDER_DEFERRAL_LIMIT: u32 = 3;
+const DEFAULT_PROVIDER_DEFERRAL_DELAY_SECS: u64 = 300;
+const DEFAULT_MODEL_RECOVERY_SLO_SECS: u64 = 7_200;
+
+pub(crate) fn resolve_session_recovery_policy(
+    config: &Config,
+) -> Result<SessionRecoverySettings, ConfigError> {
+    let bounded_count = |value: u32, field: &str, allow_zero: bool| {
+        if value > 32 || (!allow_zero && value == 0) {
+            let range = if allow_zero { "0 and 32" } else { "1 and 32" };
+            Err(ConfigError::invalid(format!(
+                "{field} must be between {range}"
+            )))
+        } else {
+            Ok(value)
+        }
+    };
+    let session_failure_limit = bounded_count(
+        config
+            .worker
+            .session_failure_limit
+            .unwrap_or(DEFAULT_SESSION_FAILURE_LIMIT),
+        "worker.session_failure_limit",
+        false,
+    )?;
+    let fresh_session_limit = bounded_count(
+        config
+            .worker
+            .fresh_session_limit
+            .unwrap_or(DEFAULT_FRESH_SESSION_LIMIT),
+        "worker.fresh_session_limit",
+        true,
+    )?;
+    let provider_deferral_limit = bounded_count(
+        config
+            .worker
+            .provider_deferral_limit
+            .unwrap_or(DEFAULT_PROVIDER_DEFERRAL_LIMIT),
+        "worker.provider_deferral_limit",
+        false,
+    )?;
+    let provider_deferral_delay = positive_duration_secs(
+        config
+            .worker
+            .provider_deferral_delay_secs
+            .unwrap_or(DEFAULT_PROVIDER_DEFERRAL_DELAY_SECS),
+        "worker.provider_deferral_delay_secs",
+    )?;
+    let recovery_slo = positive_duration_secs(
+        config
+            .worker
+            .model_recovery_slo_secs
+            .unwrap_or(DEFAULT_MODEL_RECOVERY_SLO_SECS),
+        "worker.model_recovery_slo_secs",
+    )?;
+    if provider_deferral_delay > recovery_slo {
+        return Err(ConfigError::invalid(
+            "worker.provider_deferral_delay_secs must not exceed worker.model_recovery_slo_secs",
+        ));
+    }
+    Ok(SessionRecoverySettings {
+        session_failure_limit,
+        fresh_session_limit,
+        provider_deferral_limit,
+        provider_deferral_delay,
+        recovery_slo,
+    })
+}
 
 pub(crate) fn resolve_worker_liveness_limits(
     config: &Config,

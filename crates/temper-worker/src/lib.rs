@@ -46,7 +46,7 @@ pub use agent_runner::{
 };
 pub use agent_session::{
     AGENT_SESSION_STORE_VERSION, AgentSessionLedger, AgentSessionStore, AgentSessionStoreError,
-    PriorAgentSessionRecord,
+    PriorAgentSessionRecord, SessionRecoveryPolicy,
 };
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig, NativeValidatorCommand};
 pub use config::{

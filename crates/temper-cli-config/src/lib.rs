@@ -381,6 +381,19 @@ fn render(resolved: &Resolved) -> String {
     );
     let _ = writeln!(
         out,
+        "  session_recovery = {} run(s)/session, {} fresh session(s), {} deferral(s), {}s delay, {}s SLO",
+        resolved.worker.session_recovery.session_failure_limit,
+        resolved.worker.session_recovery.fresh_session_limit,
+        resolved.worker.session_recovery.provider_deferral_limit,
+        resolved
+            .worker
+            .session_recovery
+            .provider_deferral_delay
+            .as_secs(),
+        resolved.worker.session_recovery.recovery_slo.as_secs()
+    );
+    let _ = writeln!(
+        out,
         "  capabilities = [{}]",
         resolved
             .worker

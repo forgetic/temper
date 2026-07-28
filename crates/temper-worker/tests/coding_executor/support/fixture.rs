@@ -69,6 +69,10 @@ impl Fixture {
             },
             Arc::new(runner),
         )
+        .with_session_recovery_policy(temper_worker::SessionRecoveryPolicy {
+            session_failure_limit: 3,
+            ..temper_worker::SessionRecoveryPolicy::default()
+        })
     }
 
     pub fn seed_pr_head_branch(&self, branch: &str) -> String {

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use temper_protocol_worker::{Assign, FailureClass, JobContext};
 
 use crate::agent_runner::{AgentRunOutput, AgentRunRequest, AgentRunner, JobProgressReporter};
+use crate::agent_session::SessionRecoveryPolicy;
 use crate::executor::{JobExecutionContext, JobExecutor, JobOutcome};
 use crate::pr_freshness::PrFreshnessGuard;
 use crate::workspace::{RoleGitIdentity, WorkspaceError, scoped_workspace_root};
@@ -59,6 +60,7 @@ pub struct CodingExecutor<R: AgentRunner> {
     /// Instance-scoped process containment override for worker-owned commands.
     containment_factory: Option<temper_process_containment::ContainmentFactory>,
     progress_reporter_factory: ProgressReporterFactory,
+    session_recovery_policy: SessionRecoveryPolicy,
 }
 
 impl<R: AgentRunner + 'static> CodingExecutor<R> {
@@ -72,12 +74,20 @@ impl<R: AgentRunner + 'static> CodingExecutor<R> {
             progress_reporter_factory: Arc::new(|_job_id, attempt_id| {
                 JobProgressReporter::noop(attempt_id.to_string())
             }),
+            session_recovery_policy: SessionRecoveryPolicy::default(),
         }
     }
 
     /// Installs the PR-head freshness guard used before final pushes.
     pub fn with_pr_freshness_guard(mut self, guard: Arc<dyn PrFreshnessGuard>) -> Self {
         self.pr_freshness_guard = Some(guard);
+        self
+    }
+
+    /// Installs the worker-resolved durable session and provider-deferral policy.
+    #[must_use]
+    pub fn with_session_recovery_policy(mut self, policy: SessionRecoveryPolicy) -> Self {
+        self.session_recovery_policy = policy;
         self
     }
 
@@ -110,6 +120,7 @@ async fn execute<R: AgentRunner>(
     runner: Arc<R>,
     pr_freshness_guard: Option<Arc<dyn PrFreshnessGuard>>,
     native_validator_command: NativeValidatorCommand,
+    session_recovery_policy: SessionRecoveryPolicy,
     assign: Assign,
     execution: JobExecutionContext,
 ) -> JobOutcome {
@@ -322,6 +333,7 @@ async fn execute<R: AgentRunner>(
         &role,
         &coordination_key,
         mode,
+        session_recovery_policy,
         &execution.cancellation,
     )
     .await

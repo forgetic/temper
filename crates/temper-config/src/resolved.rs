@@ -235,6 +235,8 @@ pub struct WorkerSettings {
     pub poll_wait: Duration,
     pub heartbeat_interval: Duration,
     pub liveness_limits: WorkerLivenessLimits,
+    /// Durable model-session rotation, provider-deferral, and failure-epoch SLO policy.
+    pub session_recovery: SessionRecoverySettings,
     pub capabilities: Vec<Capability>,
     /// Target-era named worker pools available for runtime selection.
     pub pools: Vec<WorkerPoolSettings>,
@@ -255,6 +257,16 @@ pub struct WorkerLivenessLimits {
     pub max_run: Option<Duration>,
     pub graceful_cancellation_grace: Duration,
     pub forced_termination_grace: Duration,
+}
+
+/// Resolved worker-owned durable model-recovery policy.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct SessionRecoverySettings {
+    pub session_failure_limit: u32,
+    pub fresh_session_limit: u32,
+    pub provider_deferral_limit: u32,
+    pub provider_deferral_delay: Duration,
+    pub recovery_slo: Duration,
 }
 
 /// A target-era `[[worker.pools]]` capability class.

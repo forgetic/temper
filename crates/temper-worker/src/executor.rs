@@ -258,25 +258,31 @@ pub fn job_result_for_attempt(
         JobOutcome::Failure {
             class,
             message,
-            mut model_failure,
+            model_failure,
             session_recovery,
         } => {
-            if let Some(model_failure) = &mut model_failure {
-                model_failure.normalize();
+            let mut failure = Failure {
+                class,
+                message,
+                model_failure,
+                session_recovery,
+            };
+            failure.normalize_evidence(base.attempt_id.as_deref());
+            if let Some(recovery) = &failure.session_recovery {
+                failure.class = match recovery.action {
+                    temper_protocol_worker::SessionRecoveryActionV1::RetryCurrentSession
+                    | temper_protocol_worker::SessionRecoveryActionV1::RotateSession
+                    | temper_protocol_worker::SessionRecoveryActionV1::ProviderDeferred => {
+                        FailureClass::Transient
+                    }
+                    temper_protocol_worker::SessionRecoveryActionV1::ParkForHuman => {
+                        FailureClass::Permanent
+                    }
+                };
             }
-            let session_recovery = session_recovery.filter(|evidence| {
-                evidence
-                    .validate_for_attempt(base.attempt_id.as_deref())
-                    .is_ok()
-            });
             JobResult {
                 status: ResultStatus::Failure,
-                failure: Some(Failure {
-                    class,
-                    message,
-                    model_failure,
-                    session_recovery,
-                }),
+                failure: Some(failure),
                 ..base
             }
         }
@@ -588,6 +594,19 @@ mod tests {
             attempt_id: "attempt-748".to_string(),
             failure_epoch: 1,
             failure_count: 1,
+            session_number: 0,
+            session_failure_count: 0,
+            epoch_started_unix_ms: None,
+            epoch_elapsed_ms: 0,
+            disposition: None,
+            immediate_retry_exhausted: false,
+            configured_session_failure_limit: 0,
+            configured_fresh_session_limit: 0,
+            configured_deferral_limit: 0,
+            deferral_count: 0,
+            deferral_generation: 0,
+            not_before_unix_ms: None,
+            slo_deadline_unix_ms: None,
             action: SessionRecoveryActionV1::RotateSession,
             current_session_id: "session-old".to_string(),
             prior_session_id: None,
@@ -609,6 +628,72 @@ mod tests {
         let failure = result.failure.expect("failure evidence");
         assert_eq!(failure.model_failure, Some(model_failure));
         assert_eq!(failure.session_recovery, Some(session_recovery));
+    }
+
+    #[test]
+    fn typed_recovery_action_normalizes_failure_class_without_text_authority() {
+        let evidence: SessionRecoveryEvidenceV1 = serde_json::from_value(json!({
+            "attempt_id": "attempt-deferred",
+            "failure_epoch": 1,
+            "failure_count": 2,
+            "session_number": 2,
+            "session_failure_count": 1,
+            "epoch_started_unix_ms": 1000,
+            "epoch_elapsed_ms": 100,
+            "disposition": "unknown",
+            "immediate_retry_exhausted": true,
+            "configured_session_failure_limit": 1,
+            "configured_fresh_session_limit": 1,
+            "configured_deferral_limit": 3,
+            "deferral_count": 1,
+            "deferral_generation": 1,
+            "not_before_unix_ms": 1200,
+            "slo_deadline_unix_ms": 5000,
+            "action": "provider_deferred",
+            "current_session_id": "session-current",
+            "prior_session_id": "session-prior",
+            "evidence_location": ".temper-agent-session/state.json"
+        }))
+        .unwrap();
+        let result = job_result_for_attempt(
+            "worker-1",
+            "job-deferred",
+            Some("attempt-deferred".to_string()),
+            JobOutcome::Failure {
+                class: FailureClass::Permanent,
+                message: "untrusted generic text says permanent".to_string(),
+                model_failure: None,
+                session_recovery: Some(evidence.clone()),
+            },
+        );
+        assert_eq!(result.failure.unwrap().class, FailureClass::Transient);
+
+        let known_failure: temper_protocol_activity::ModelFailureV1 =
+            serde_json::from_value(json!({
+                "provider": "fixture-provider",
+                "model": "fixture-model",
+                "category": "authentication",
+                "retryable": false,
+                "http_status": 401,
+                "provider_error_code": "invalid_api_key",
+                "message": "Provider authentication failed.",
+                "detail_redacted": false
+            }))
+            .unwrap();
+        let contradictory = job_result_for_attempt(
+            "worker-1",
+            "job-deferred",
+            Some("attempt-deferred".to_string()),
+            JobOutcome::Failure {
+                class: FailureClass::Permanent,
+                message: "typed diagnostic says actionable".to_string(),
+                model_failure: Some(known_failure),
+                session_recovery: Some(evidence),
+            },
+        );
+        let contradictory = contradictory.failure.unwrap();
+        assert_eq!(contradictory.class, FailureClass::Permanent);
+        assert!(contradictory.session_recovery.is_none());
     }
 
     #[test]

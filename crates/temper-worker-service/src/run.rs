@@ -79,7 +79,10 @@ async fn run_async(
         role_identities: worker_config.role_identities.clone(),
     };
 
-    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+    let executor = Arc::new(
+        CodingExecutor::new(executor_config, runner)
+            .with_session_recovery_policy(adapt::session_recovery_policy(resolved)?),
+    );
     let mut sigint = skein::signal::sigint()
         .map_err(|error| format!("failed to register SIGINT handler: {error}"))?;
     let mut sigterm = skein::signal::sigterm()

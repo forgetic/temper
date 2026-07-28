@@ -58,11 +58,14 @@ impl Failure {
         if let Some(model_failure) = &mut self.model_failure {
             model_failure.normalize();
         }
-        if self
-            .session_recovery
-            .as_ref()
-            .is_some_and(|evidence| evidence.validate_for_attempt(expected_attempt_id).is_err())
-        {
+        let invalid_recovery = self.session_recovery.as_ref().is_some_and(|evidence| {
+            evidence.validate_for_attempt(expected_attempt_id).is_err()
+                || matches!(
+                    (evidence.disposition, self.model_failure.as_ref()),
+                    (Some(recovery), Some(model)) if recovery != model.disposition
+                )
+        });
+        if invalid_recovery {
             self.session_recovery = None;
         }
     }
