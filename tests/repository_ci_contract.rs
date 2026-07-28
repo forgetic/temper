@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 const CI_WORKFLOW: &str = include_str!("../.forgejo/workflows/ci.yml");
+const FOCUSED_WORKFLOW: &str = include_str!("../.forgejo/workflows/focused-feature-validation.yml");
 
 #[test]
 fn repository_ci_accepts_feature_branch_pull_request_targets() {
@@ -107,20 +108,22 @@ fn repository_ci_runs_e2e_from_repaired_captured_binaries() {
 
 #[test]
 fn repository_ci_runs_one_mapped_scenario_from_exact_feature_head() {
-    let focused_job = CI_WORKFLOW
+    let trigger = FOCUSED_WORKFLOW
+        .split_once("  pull_request:\n")
+        .expect("focused validation declares a pull_request trigger")
+        .1
+        .split_once("jobs:\n")
+        .expect("focused validation trigger precedes jobs")
+        .0;
+    assert!(
+        trigger.lines().any(|line| line.trim() == "- main"),
+        "focused validation must select aggregate PRs targeting main"
+    );
+    let focused_job = FOCUSED_WORKFLOW
         .split_once("  focused-feature-validation:\n")
         .expect("CI declares focused feature validation")
-        .1
-        .split_once("  # The temper-web TypeScript UI")
-        .expect("focused validation precedes web")
-        .0;
+        .1;
 
-    assert!(
-        focused_job.contains(
-            "if: ${{ github.event.pull_request.base.ref == 'main' && startsWith(github.event.pull_request.head.ref, 'feature/') }}"
-        ),
-        "focused validation must select aggregate feature-landing PRs only"
-    );
     assert!(
         focused_job.contains("ref: ${{ github.event.pull_request.head.sha }}")
             && focused_job.contains("fetch-depth: 0"),
@@ -144,13 +147,10 @@ fn repository_ci_runs_one_mapped_scenario_from_exact_feature_head() {
 
 #[test]
 fn repository_ci_preserves_focused_evidence_on_failure_and_broad_coverage() {
-    let focused_job = CI_WORKFLOW
+    let focused_job = FOCUSED_WORKFLOW
         .split_once("  focused-feature-validation:\n")
         .expect("CI declares focused feature validation")
-        .1
-        .split_once("  # The temper-web TypeScript UI")
-        .expect("focused validation precedes web")
-        .0;
+        .1;
     let upload = focused_job
         .split_once("      - name: Upload focused exact-head evidence\n")
         .expect("focused job uploads evidence")
