@@ -38,6 +38,7 @@ impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
         let runner = Arc::clone(&self.runner);
         let pr_freshness_guard = self.pr_freshness_guard.clone();
         let native_validator_command = self.native_validator_command.clone();
+        let session_recovery_policy = self.session_recovery_policy;
         let containment_factory = self.containment_factory.clone();
         async move {
             let attempt_id = execution.attempt.id.clone();
@@ -65,6 +66,7 @@ impl<R: AgentRunner + 'static> JobExecutor for CodingExecutor<R> {
                 runner,
                 pr_freshness_guard,
                 native_validator_command,
+                session_recovery_policy,
                 assign,
                 execution,
             )

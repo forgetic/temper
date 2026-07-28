@@ -322,6 +322,35 @@ fn worker_config_schema() -> Value {
                 positive_integer_schema("Forced termination grace period in seconds."),
             ),
             (
+                "session_failure_limit",
+                bounded_positive_integer_schema(
+                    "Terminal agent runs allowed in one durable model session.",
+                    32,
+                ),
+            ),
+            (
+                "fresh_session_limit",
+                integer_schema(
+                    "Fresh sessions allowed in one model-failure epoch.",
+                    Some(32),
+                ),
+            ),
+            (
+                "provider_deferral_limit",
+                bounded_positive_integer_schema(
+                    "Provider deferrals allowed before human parking.",
+                    32,
+                ),
+            ),
+            (
+                "provider_deferral_delay_secs",
+                positive_integer_schema("Delay before automatic provider recovery."),
+            ),
+            (
+                "model_recovery_slo_secs",
+                positive_integer_schema("Wall-clock SLO for one model-failure epoch."),
+            ),
+            (
                 "capabilities",
                 string_array_schema("Explicit owner/name:role capabilities."),
             ),

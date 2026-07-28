@@ -150,6 +150,15 @@ crates/temper-worker/src/trace/full_path_tests.rs
 crates/temper-worker/src/worker_machine.rs
 crates/temper-worker/src/worker_machine/watchdog.rs
 
+# Durable agent-session accounting keeps atomic replacement, exact-attempt replay,
+# success reset, and cancellation-controlled adapters at one file-backed state owner;
+# version migration and semantic validation are split into focused modules.
+crates/temper-worker/src/agent_session.rs
+
+# Worker result construction and its contract tests share the one normalization
+# boundary that derives failure class from typed recovery evidence rather than text.
+crates/temper-worker/src/executor.rs
+
 # The out-of-process run owner keeps process cleanup, endpoint joins, side-channel
 # fencing, and result-file acceptance in one auditable quiescence sequence.
 crates/temper-worker/src/out_of_process_runner/managed_run.rs

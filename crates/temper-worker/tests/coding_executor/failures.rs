@@ -105,7 +105,7 @@ fn transient_agent_error_maps_to_transient_failure_without_consuming_model_budge
         .load_ledger_sync()
         .unwrap()
         .unwrap();
-        assert_eq!(ledger.consecutive_terminal_count, 0);
+        assert_eq!(ledger.cumulative_terminal_failures, 0);
         assert_eq!(ledger.accounted_attempt_id, None);
     });
 }
@@ -150,8 +150,9 @@ fn writable_engineer_verdict_resets_recovery_before_the_workstream_is_requeued()
 
         let before_verdict = store.load_ledger_sync().unwrap().unwrap();
         assert_eq!(before_verdict.failure_epoch, 1);
-        assert_eq!(before_verdict.consecutive_terminal_count, 2);
-        assert!(!before_verdict.rotation_consumed);
+        assert_eq!(before_verdict.cumulative_terminal_failures, 2);
+        assert_eq!(before_verdict.session_terminal_failures, 2);
+        assert_eq!(before_verdict.fresh_sessions_used, 0);
         let active_session = before_verdict.active_session.session_id.clone();
 
         let verdict_executor = fixture.executor(AgentBehavior::WritableVerdict.runner(), true);
@@ -169,8 +170,8 @@ fn writable_engineer_verdict_resets_recovery_before_the_workstream_is_requeued()
 
         let after_verdict = store.load_ledger_sync().unwrap().unwrap();
         assert_eq!(after_verdict.failure_epoch, 2);
-        assert_eq!(after_verdict.consecutive_terminal_count, 0);
-        assert!(!after_verdict.rotation_consumed);
+        assert_eq!(after_verdict.cumulative_terminal_failures, 0);
+        assert_eq!(after_verdict.fresh_sessions_used, 0);
         assert_eq!(after_verdict.accounted_attempt_id, None);
         assert_eq!(after_verdict.recovery_decision, None);
         assert_eq!(after_verdict.active_session.session_id, active_session);
@@ -207,14 +208,15 @@ fn writable_engineer_verdict_resets_recovery_before_the_workstream_is_requeued()
 
         let after_full_budget = store.load_ledger_sync().unwrap().unwrap();
         assert_eq!(after_full_budget.failure_epoch, 2);
-        assert_eq!(after_full_budget.consecutive_terminal_count, 0);
-        assert!(after_full_budget.rotation_consumed);
+        assert_eq!(after_full_budget.cumulative_terminal_failures, 3);
+        assert_eq!(after_full_budget.session_terminal_failures, 0);
+        assert_eq!(after_full_budget.fresh_sessions_used, 1);
         assert_eq!(
             after_full_budget
                 .prior_session
                 .as_ref()
                 .unwrap()
-                .consecutive_terminal_count,
+                .session_terminal_failures,
             3
         );
         assert_ne!(after_full_budget.active_session.session_id, active_session);
@@ -222,102 +224,70 @@ fn writable_engineer_verdict_resets_recovery_before_the_workstream_is_requeued()
 }
 
 #[test]
-fn non_retryable_model_failures_rotate_once_then_park_without_losing_workspace() {
+fn actionable_non_retryable_model_failure_parks_directly_without_losing_workspace() {
     temper_worker_io::block_on(async {
         let fixture = Fixture::new();
         let branch = "agent/pr-for-code-7";
-        let coordination_key = "bounded-model-recovery";
+        let coordination_key = "actionable-model-recovery";
         let runner = AgentBehavior::NonRetryableModelError.runner();
         let executor = fixture.executor(runner.clone(), true);
-        let initial_head = git_output([
-            "-C",
-            path_str(&fixture.origin),
-            "rev-parse",
-            "refs/heads/main",
-        ]);
-        let mut first_assign = assign(branch, coordination_key);
-        first_assign.attempt_id = Some("attempt-model-first".to_string());
+        let mut assignment = assign(branch, coordination_key);
+        assignment.attempt_id = Some("attempt-model-actionable".to_string());
 
-        let first_outcome = executor.execute(first_assign).await;
-        let (first_message, first_recovery) = match first_outcome {
+        let outcome = executor.execute(assignment.clone()).await;
+        let replay_expected = outcome.clone();
+        let recovery = match outcome {
             JobOutcome::Failure {
                 class,
                 model_failure: Some(model_failure),
                 session_recovery: Some(recovery),
-                message,
+                ..
             } => {
-                assert_eq!(class, FailureClass::Transient);
-                assert!(!model_failure.retryable);
-                (message, recovery)
+                assert_eq!(class, FailureClass::Permanent);
+                assert_eq!(
+                    model_failure.disposition,
+                    temper_protocol_activity::ModelFailureDispositionV1::NonRetryable
+                );
+                recovery
             }
-            other => panic!("expected typed rotation failure, got {other:?}"),
+            other => panic!("expected typed actionable park, got {other:?}"),
         };
         assert_eq!(
-            first_recovery.action,
-            temper_protocol_worker::SessionRecoveryActionV1::RotateSession
+            recovery.action,
+            temper_protocol_worker::SessionRecoveryActionV1::ParkForHuman
         );
-        let new_session = first_recovery
-            .new_session_id
-            .clone()
-            .expect("rotation creates one new session");
-        assert_ne!(first_recovery.current_session_id, new_session);
-        assert!(first_message.contains(&first_recovery.current_session_id));
-        assert!(first_message.contains(&new_session));
-        assert_eq!(
-            runner
-                .captured_context()
-                .agent_session
-                .expect("first session")
-                .session_id,
-            first_recovery.current_session_id
-        );
+        assert_eq!(recovery.failure_count, 1);
+        assert_eq!(recovery.session_number, 1);
+        assert_eq!(recovery.new_session_id, None);
+        assert_eq!(recovery.prior_session_id, None);
 
         let checkout = fixture
             .workspace_root
             .join("engineer")
             .join(coordination_key)
             .join("service");
-        let assert_dirty_work_preserved = || {
-            assert_eq!(
-                fs::read_to_string(checkout.join("README.md")).unwrap(),
-                "# seed\nvaluable tracked work\n"
-            );
-            assert_eq!(
-                fs::read_to_string(checkout.join("model-untracked.txt")).unwrap(),
-                "valuable untracked work\n"
-            );
-            let status = git_output([
-                "-C",
-                path_str(&checkout),
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=all",
-            ]);
-            assert!(
-                status.contains(" M README.md"),
-                "tracked work missing: {status}"
-            );
-            assert!(
-                status.contains("?? model-untracked.txt"),
-                "untracked work missing: {status}"
-            );
-        };
-        assert_dirty_work_preserved();
         assert_eq!(
-            git_output(["-C", path_str(&checkout), "stash", "list"]),
-            "",
-            "the ledger rotation itself must not stash workspace changes"
+            fs::read_to_string(checkout.join("README.md")).unwrap(),
+            "# seed\nvaluable tracked work\n"
         );
         assert_eq!(
-            git_output(["-C", path_str(&checkout), "rev-parse", "HEAD"]),
-            initial_head,
-            "the ledger rotation itself must not commit or reset workspace changes"
+            fs::read_to_string(checkout.join("model-untracked.txt")).unwrap(),
+            "valuable untracked work\n"
+        );
+        let status = git_output([
+            "-C",
+            path_str(&checkout),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ]);
+        assert!(
+            status.contains(" M README.md"),
+            "tracked work missing: {status}"
         );
         assert!(
-            !checkout
-                .with_file_name("service.temper-quarantine")
-                .exists(),
-            "the ledger rotation itself must not quarantine the checkout"
+            status.contains("?? model-untracked.txt"),
+            "untracked work missing: {status}"
         );
 
         let store = temper_worker::AgentSessionStore::for_workspace_root(
@@ -326,61 +296,20 @@ fn non_retryable_model_failures_rotate_once_then_park_without_losing_workspace()
             coordination_key,
         )
         .unwrap();
-        let after_rotation = store.load_ledger_sync().unwrap().unwrap();
-        assert_eq!(after_rotation.active_session.session_id, new_session);
+        let ledger = store.load_ledger_sync().unwrap().unwrap();
         assert_eq!(
-            after_rotation
-                .prior_session
-                .as_ref()
-                .unwrap()
-                .session
-                .session_id,
-            first_recovery.current_session_id
+            ledger.active_session.session_id,
+            recovery.current_session_id
         );
+        assert_eq!(ledger.fresh_sessions_used, 0);
+        assert!(ledger.prior_session.is_none());
 
-        let mut second_assign = assign(branch, coordination_key);
-        second_assign.attempt_id = Some("attempt-model-second".to_string());
-        let second_outcome = executor.execute(second_assign.clone()).await;
-        let replay_expected = second_outcome.clone();
-        let second_recovery = match second_outcome {
-            JobOutcome::Failure {
-                class,
-                model_failure: Some(model_failure),
-                session_recovery: Some(recovery),
-                message,
-            } => {
-                assert_eq!(class, FailureClass::Permanent);
-                assert!(!model_failure.retryable);
-                assert!(message.contains(&new_session));
-                recovery
-            }
-            other => panic!("expected typed park failure, got {other:?}"),
-        };
-        assert_eq!(
-            second_recovery.action,
-            temper_protocol_worker::SessionRecoveryActionV1::ParkForHuman
-        );
-        assert_eq!(second_recovery.current_session_id, new_session);
-        assert_eq!(
-            second_recovery.prior_session_id.as_deref(),
-            Some(first_recovery.current_session_id.as_str())
-        );
-        assert_eq!(second_recovery.new_session_id, None);
-        assert_dirty_work_preserved();
-
-        // The exact same daemon attempt is answered from the durable boundary;
-        // the panic runner proves no third model session is invoked.
+        // Exact-attempt replay comes from the typed durable decision and does
+        // not invoke a second model session or alter preserved work.
         let replay = fixture
             .executor(AgentBehavior::UnexpectedRun.runner(), true)
-            .execute(second_assign)
+            .execute(assignment)
             .await;
         assert_eq!(replay, replay_expected);
-        let after_replay = store.load_ledger_sync().unwrap().unwrap();
-        assert_eq!(after_replay.active_session.session_id, new_session);
-        assert_eq!(
-            after_replay.prior_session.unwrap().session.session_id,
-            first_recovery.current_session_id
-        );
-        assert_dirty_work_preserved();
     });
 }

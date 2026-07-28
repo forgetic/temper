@@ -274,11 +274,9 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             .session_recovery
             .as_ref()
             .expect("retryable terminal is durably accounted");
-        assert_eq!(
-            recovery.action,
-            SessionRecoveryActionV1::RetryCurrentSession
-        );
+        assert_eq!(recovery.action, SessionRecoveryActionV1::RotateSession);
         assert_eq!(recovery.failure_count, 1);
+        assert!(recovery.new_session_id.is_some());
         assert!(
             provider_errors.load(Ordering::SeqCst) >= 3,
             "fake provider should see the initial HTTP 500 plus configured stream retries"

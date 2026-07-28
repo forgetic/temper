@@ -359,6 +359,7 @@ async fn run_async(
             },
             runner,
         )
+        .with_session_recovery_policy(temper_worker_service::session_recovery_policy(resolved)?)
         .with_pr_freshness_guard(pr_freshness_guard),
     );
 

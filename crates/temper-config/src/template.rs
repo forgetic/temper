@@ -87,6 +87,13 @@ max_no_progress_secs = 900
 # Cooperative cancellation is followed by bounded forced process termination.
 graceful_cancellation_grace_secs = 10
 forced_termination_grace_secs = 5
+# Durable model-recovery policy. Same-turn request retries are configured below;
+# these limits govern terminal session rotation and delayed provider recovery.
+session_failure_limit = 1
+fresh_session_limit = 1
+provider_deferral_limit = 3
+provider_deferral_delay_secs = 300
+model_recovery_slo_secs = 7200
 
 [agent]
 provider = \"anthropic\"
