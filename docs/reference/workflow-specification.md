@@ -73,14 +73,26 @@ The conventional `coding_workspace` provider prepares a checkout and branch for
 engineering work. It feeds `CreatePullRequest` runtime context, but workflow
 state and Forge mutation still happen through `RoleTools` and the executor. A
 `create_pull_request` effect may optionally declare `artifact_kind`; when set,
-validation requires that kind to exist and target `pull_request`, allowing
-verdict-driven runtimes to derive labels and metadata for PR artifacts such as a
-feature-branch landing PR without requiring a worker-produced diff.
+validation requires that kind to exist and target `pull_request`. Both
+verdict-driven and writable workspace success paths then derive labels and
+managed metadata from that kind, allowing dedicated products such as scenario
+PRs and feature-branch landing PRs instead of collapsing every writable result
+into `implementation_pr`.
 
 A `create_issues` effect creates one or more child issues from the workspace
 result. It accepts `min_children` (default `1`) and optional `max_children` to
 declare product cardinality; `max_children: 1` expresses an exact one-child
 handoff. Validation rejects a zero minimum or a maximum below the minimum.
+`child_kind_requirements` optionally constrains a heterogeneous product set.
+Each entry names an issue artifact `kind`, `min_children`, optional
+`max_children`, and optional `depends_on_all_kinds`. For example, a plan can
+require one-or-more `code` children and exactly one `validation` child whose
+`depends_on` list covers every code-child slug. Required kinds must have a
+parent relation to the transition artifact; malformed cardinality, duplicate
+kinds, self-dependency requirements, and dependency kinds outside the required
+set fail workflow compilation. The resolved constraints are included in the
+worker/agent verdict contract and are enforced before Forge mutation.
+
 `required_child_metadata` optionally lists non-blank workflow metadata that
 every authored child body must carry; the currently supported key is
 `target_branch`. This requirement is included in the worker/agent verdict
@@ -141,7 +153,7 @@ as workflow labels:
 
 | Condition | Meaning |
 | --- | --- |
-| `dependencies_resolved` | Every dependency relation target has landed. |
+| `dependencies_resolved` | Every declared dependency target has landed. A blocked artifact must declare at least one dependency; missing projection fails closed. Empty dependencies remain valid for optional gates such as a root implementation PR. |
 | `ci_passed` | Every latest current-head CI job is terminal with explicit success. |
 | `ci_failed` | Every latest current-head job is terminal and at least one has explicit ordinary `failure` evidence suitable for source repair. |
 | `ci_recovery_required` | Every latest current-head job is terminal and red, but none has ordinary failure evidence; cancellation, interruption, timeout, runner loss, startup failure, action-required, neutral/skipped, and unknown results use this route. |

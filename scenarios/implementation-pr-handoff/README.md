@@ -23,11 +23,15 @@ scenarios/implementation-pr-handoff/
 │   ├── source-issue.md
 │   ├── create-handoff.md
 │   └── refresh-handoff.md
+├── jig/
+│   └── implementation-pr-handoff.json
 └── repo/
     ├── README.md
     └── .forgejo/workflows/ci.yml
 ```
 
+- `jig/implementation-pr-handoff.json` owns the create and refresh coding
+  workspace responses; the executor does not select them from the bundle name.
 - `config/workflow.json` is the workflow fixture loaded by `temper init`.
 - `config/ci.yml` is copied into the repo seed so the live stack provisions
   Forgejo Actions/runner state; it is intentionally manual so the PRs remain

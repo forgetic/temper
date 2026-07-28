@@ -37,14 +37,24 @@ ci_seed_path = "repo/.forgejo/workflows/ci.yml"
 ci_target = ".forgejo/workflows/ci.yml"
 
 [[issues]]
-id = "source"
+id = "create"
 repo = "service"
 kind = "code"
-title = "Verify implementation PR handoff"
+title = "Verify implementation PR handoff (create authored handoff)"
 body = "config/source-issue.md"
 author = "site_admin"
 labels = ["code", "ready"]
 created_after = "standalone_ready"
+
+[[issues]]
+id = "refresh"
+repo = "service"
+kind = "code"
+title = "Verify implementation PR handoff (refresh existing handoff)"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "create implementation PR observed"
 
 [handoff]
 summary = "scripted coding workspace summary"
@@ -80,17 +90,10 @@ action = "forgejo_runner.ready"
 description = "Register and require the real host forgejo-runner / Actions CI worker."
 
 [[steps]]
-id = "seed-service-repo"
-action = "repo.seed"
-repo = "service"
-seed_path = "repo"
-ci_source = "config/ci.yml"
-
-[[steps]]
 id = "configure-jig-engineer-create-response"
 action = "jig.fake_llm"
 role = "engineer"
-script = "implementation-pr-handoff"
+script_path = "jig/implementation-pr-handoff.json"
 case = "create"
 title = "Implement durable PR handoff"
 body_path = "config/create-handoff.md"
@@ -100,7 +103,7 @@ summary = "scripted coding workspace summary"
 id = "configure-jig-engineer-refresh-response"
 action = "jig.fake_llm"
 role = "engineer"
-script = "implementation-pr-handoff"
+script_path = "jig/implementation-pr-handoff.json"
 case = "refresh"
 title = "Implement refreshed handoff"
 body_path = "config/refresh-handoff.md"
@@ -113,9 +116,16 @@ config = "config/workflow.json"
 requires_observability = true
 
 [[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
 id = "seed-create-source-issue"
 action = "issue.seed"
-issue_id = "source"
+issue_id = "create"
 bind = "create"
 repo = "service"
 after = "temper.launch_standalone"
@@ -123,9 +133,10 @@ after = "temper.launch_standalone"
 [[steps]]
 id = "seed-refresh-source-issue"
 action = "issue.seed"
-issue_id = "source"
+issue_id = "refresh"
 bind = "refresh"
 repo = "service"
+after_pr_binding = "create"
 after = "create implementation PR observed"
 
 [[steps]]
@@ -142,6 +153,7 @@ after = "refresh engineer job claimed"
 [[steps]]
 id = "wait-for-handoff-convergence"
 action = "workflow.wait_convergence"
+strategy = "implementation-pr-handoff"
 until = "create PR opened and existing refresh PR updated with authored handoff"
 
 [expect]
@@ -151,6 +163,7 @@ refreshed_pull_requests = 1
 closed_parent_issues = 0
 
 [[expect.checks]]
+required = true
 id = "create-final-state-uses-authored-handoff"
 artifact = "pull_request:create"
 state = "open"
@@ -162,6 +175,7 @@ metadata_parent = "issue:create"
 correlation_key = "$correlation:create"
 
 [[expect.checks]]
+required = true
 id = "refresh-final-state-keeps-existing-pr-and-metadata"
 artifact = "pull_request:refresh"
 state = "open"
@@ -174,6 +188,7 @@ correlation_key = "$correlation:refresh"
 stale_body_absent = "Old report that must be replaced."
 
 [[expect.events]]
+required = true
 id = "create-pr-opened-observed"
 event = "pr.opened"
 action = "created"
@@ -186,6 +201,7 @@ fields."metadata.parent.ref" = "$issue:create"
 fields."correlation.key" = "$correlation:create"
 
 [[expect.events]]
+required = true
 id = "refresh-pr-updated-observed"
 event = "pr.updated"
 action = "refreshed"
@@ -198,6 +214,7 @@ fields."metadata.parent.ref" = "$issue:refresh"
 fields."correlation.key" = "$correlation:refresh"
 
 [[expect.sequence]]
+required = true
 id = "handoff-create-then-refresh"
 scope = "source_artifact"
 events = [
@@ -206,12 +223,14 @@ events = [
 ]
 
 [[expect.count]]
+required = true
 id = "one-created-handoff-event"
 event = "pr.opened"
 action = "created"
 exactly = 1
 
 [[expect.count]]
+required = true
 id = "one-refreshed-handoff-event"
 event = "pr.updated"
 action = "refreshed"

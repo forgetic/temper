@@ -6,6 +6,13 @@ events and its job is guarded so it continues only when the pull request was
 merged. Opening, synchronizing, or reopening a pull request still uses the
 separate PR CI workflow in `.forgejo/workflows/ci.yml`.
 
+This is a broad post-merge regression report, not feature-landing authority.
+Aggregate `feature/*` pull requests run one mapped scenario before merge as
+documented in
+[Run focused feature validation](run-focused-feature-validation.md). That lane
+binds evidence to the exact feature head and digest; the workflow-native
+validator gate decides landing.
+
 The post-merge job checks out the merged `main` commit for the close event,
 runs the validation-grade live manifest lane for `scenarios/basic-delivery`,
 and writes a Markdown
@@ -93,7 +100,12 @@ to the printed Markdown contents. In that fallback mode the file is retained
 only in the job workspace for the life of the run, so the log is the durable
 record.
 
-## Re-run locally
+To inspect the separate focused pre-merge artifact, open the aggregate feature
+PR's `focused feature validation` job. Its artifact is named
+`focused-feature-validation-pr-<pr>-<head-sha>` and retains both mapping and
+exact-head evidence even when the focused lane fails.
+
+## Re-run the broad post-merge report locally
 
 Check out the commit that was validated, then run:
 
@@ -108,8 +120,10 @@ cargo run -p temper-scenario-cli -- validate \
 ```
 
 Use the merged `main` SHA from the Forgejo run or PR page when reproducing an
-older report. The temporary report bridge records the supplied PR number and
-SHA; it does not fetch live Forgejo PR context or prove that the SHA is still
-the current tip of `main`. The scenario command has no validation-grade
-hermetic substitute; use focused Rust tests for fast local coverage and reserve
-post-merge reports for the live manifest stack.
+older broad regression report. The temporary report bridge records the supplied
+PR number and SHA; it does not fetch live Forgejo PR context or grant landing
+authority. The scenario command has no validation-grade hermetic substitute;
+use focused Rust tests for fast local coverage and reserve this report for the
+live manifest stack. A changed feature head must instead rerun the mapped
+pre-merge command; post-merge `basic-delivery` output cannot refresh stale
+feature evidence.

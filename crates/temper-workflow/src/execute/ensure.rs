@@ -9,7 +9,7 @@ use std::task::{Context, Poll, Waker};
 use temper_forge::{
     CreateIssue, CreatePullRequest, Forge, ForgeError, Issue, IssueId, IssueQuery, IssueState,
     ItemListDetails, PullRequest, PullRequestId, PullRequestQuery, PullRequestState, RepositoryId,
-    UpdateIssue,
+    UpdateIssue, UpdatePullRequest,
 };
 
 impl<F: Forge + ?Sized> Executor<'_, F> {
@@ -163,6 +163,9 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .await?
         {
             validate_pull_request_topology(&existing, &input.source, &input.target)?;
+            let existing = self
+                .refresh_exact_head_validation_authority(existing, correlation_key, &input)
+                .await?;
             return Ok(EnsureOutcome::Existing(existing));
         }
 
@@ -173,6 +176,48 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             .create_pull_request(repo_id, CreatePullRequest { body, ..input })
             .await?;
         Ok(EnsureOutcome::Created(created))
+    }
+
+    /// Refreshes an existing aggregate PR only when a new exact-head attempt
+    /// carries different Temper-issued authority. Ordinary idempotent creates
+    /// remain unchanged, while a revalidated feature head reuses one landing PR
+    /// and replaces its stale evidence atomically under the provider version.
+    async fn refresh_exact_head_validation_authority(
+        &self,
+        existing: PullRequest,
+        correlation_key: &str,
+        input: &CreatePullRequest,
+    ) -> Result<PullRequest, ExecutionError> {
+        let expected = parse_metadata_block(&input.body)
+            .map_err(|error| ExecutionError::Backend {
+                message: format!("invalid exact-head pull request metadata: {error}"),
+            })?
+            .and_then(|metadata| metadata.exact_head_validation);
+        let Some(expected) = expected else {
+            return Ok(existing);
+        };
+        let current = parse_metadata_block(&existing.body)
+            .map_err(|error| ExecutionError::Backend {
+                message: format!("invalid existing pull request metadata: {error}"),
+            })?
+            .and_then(|metadata| metadata.exact_head_validation);
+        if current.as_ref() == Some(&expected) {
+            return Ok(existing);
+        }
+        let body = body_with_correlation_key(&input.body, correlation_key)
+            .map_err(|message| ExecutionError::Backend { message })?;
+        Ok(self
+            .forge
+            .update_pull_request(
+                &existing.id,
+                UpdatePullRequest {
+                    title: Some(input.title.clone()),
+                    body: Some(body),
+                    expected_version: Some(existing.version),
+                    ..UpdatePullRequest::default()
+                },
+            )
+            .await?)
     }
 
     /// Finds an issue whose metadata block carries the correlation key.

@@ -5,14 +5,20 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Instant;
 
-use temper_scenario_core::{ValidationVerdict, ValidatorResult, check_scenario};
+use temper_scenario_core::{
+    EvidenceKind, StructuredEvidenceEntry, ValidationAssertion, ValidationStatus,
+    ValidationVerdict, ValidatorBinaryIdentity, ValidatorResult, check_scenario,
+};
 
 use super::run_context::ScenarioRunFacts;
 use super::{run_evidence, runner_registry, validate_pr};
 
 #[path = "validate/args.rs"]
 mod args;
+#[path = "validate/exact_head.rs"]
+mod exact_head;
 
 use args::{Args, ParseResult};
 
@@ -81,6 +87,9 @@ pub(super) fn command(args: &[String]) -> ExitCode {
     println!("validation report: {}", validation.markdown_path.display());
     println!("validation result: {}", validation.json_path.display());
 
+    if let Some(failure) = run_outcome.execution_failure.as_deref() {
+        eprintln!("temper-scenario validate: scenario execution failed: {failure}");
+    }
     if run_outcome.assertions_failed {
         eprintln!(
             "temper-scenario validate: scenario assertions failed; evidence and validation report were retained"
@@ -98,6 +107,7 @@ pub(super) fn command(args: &[String]) -> ExitCode {
 struct RunOutcome {
     evidence_path: PathBuf,
     assertions_failed: bool,
+    execution_failure: Option<String>,
 }
 
 #[derive(Debug)]
@@ -132,41 +142,71 @@ fn run_scenario_evidence(args: &Args, evidence_path: &Path) -> Result<RunOutcome
 
     let evidence_context =
         run_evidence::RunEvidenceContext::from_check_report(&report, &facts, &selected_runner);
-    let mut artifact = selected_runner
-        .run_and_print(
-            &report.scenario_path,
-            manifest_path,
-            &facts,
-            args.tier,
-            temper_bin.as_deref(),
-            &evidence_context,
-        )
-        .map_err(RunError::Message)?;
+    let started = Instant::now();
+    let mut artifact = match selected_runner.run_and_print(
+        &report.scenario_path,
+        manifest_path,
+        &facts,
+        args.tier,
+        temper_bin.as_deref(),
+        &evidence_context,
+    ) {
+        Ok(artifact) => artifact,
+        Err(message) => {
+            let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            evidence_context.failure_artifact(message, elapsed)
+        }
+    };
+    let execution_failed = artifact.verdict == run_evidence::RunEvidenceVerdict::Failed;
+    let execution_failure = artifact
+        .execution
+        .as_ref()
+        .and_then(|execution| execution.failure.clone());
 
     let assertion_evidence =
         run_evidence::evaluate_manifest_assertions(manifest_path, &artifact)
             .map_err(|error| RunError::Message(format!("evaluate manifest assertions: {error}")))?;
     if let Some(assertions) = assertion_evidence {
-        artifact.assertions = Some(assertions);
+        artifact.record_assertions(assertions);
     }
 
-    run_evidence::append_script_assertions(manifest_path, &mut artifact, &args.output_dir)
-        .map_err(|error| RunError::Message(format!("evaluate script assertions: {error}")))?;
+    if !execution_failed {
+        run_evidence::append_script_assertions(manifest_path, &mut artifact, &args.output_dir)
+            .map_err(|error| RunError::Message(format!("evaluate script assertions: {error}")))?;
+    } else {
+        artifact.limitations.push(
+            "After-convergence script assertions were not executed because convergence did not complete."
+                .to_string(),
+        );
+    }
 
-    let assertions_failed = artifact
-        .assertions
-        .as_ref()
-        .is_some_and(|assertions| assertions.has_failures());
+    let assertions_failed = execution_failed
+        || artifact
+            .assertions
+            .as_ref()
+            .is_some_and(|assertions| assertions.has_failures());
     if let Some(assertions) = artifact.assertions.as_ref() {
         run_evidence::print_assertions(assertions);
     }
 
+    if !artifact
+        .artifacts
+        .artifact_paths
+        .iter()
+        .any(|path| path == &evidence_path.display().to_string())
+    {
+        artifact
+            .artifacts
+            .artifact_paths
+            .push(evidence_path.display().to_string());
+    }
     let evidence_path = artifact
         .write_to_path(evidence_path)
         .map_err(RunError::Message)?;
     Ok(RunOutcome {
         evidence_path,
         assertions_failed,
+        execution_failure,
     })
 }
 
@@ -374,7 +414,11 @@ fn write_validation_artifacts(
     validate_pr::write_report(&markdown_path, &report).map_err(ValidationError::Write)?;
 
     let json_path = markdown_path.with_extension("json");
-    let result = ValidatorResult::from_validation_report(report.clone(), args.repo.clone());
+    let mut result = ValidatorResult::from_validation_report(report.clone(), args.repo.clone());
+    enrich_validator_result(&mut result, evidence_path)?;
+    if let (Some(kind), Some(issue)) = (args.target_kind.as_deref(), args.target_issue) {
+        exact_head::apply_issue_target(&mut result, kind, issue, &args.repo);
+    }
     write_json_result(&json_path, &result)?;
 
     Ok(ValidationArtifacts {
@@ -382,6 +426,113 @@ fn write_validation_artifacts(
         json_path,
         report,
     })
+}
+
+fn enrich_validator_result(
+    result: &mut ValidatorResult,
+    evidence_path: &Path,
+) -> Result<(), ValidationError> {
+    let loaded =
+        run_evidence::load_run_evidence(evidence_path).map_err(ValidationError::RunEvidence)?;
+    let artifact = loaded.artifact;
+    result.feature = artifact.scenario.feature.clone();
+    result.plan = artifact.scenario.plan.clone();
+    result.mapping_id = artifact.scenario.mapping_id.clone();
+    result.scenario_name = artifact
+        .scenario
+        .mapped_scenario
+        .clone()
+        .or_else(|| Some(artifact.scenario.name.clone()));
+    result.scenario_path = Some(artifact.scenario.scenario_path.clone());
+    result.source_branch = artifact.scenario.source_branch.clone();
+    result.exact_head_sha = artifact.scenario.checkout_head_sha.clone();
+    result.resolved_content_digest = artifact.scenario.resolved_content_digest.clone();
+    result.standalone_binary = artifact
+        .binary
+        .as_ref()
+        .map(|binary| ValidatorBinaryIdentity {
+            path: binary.path.clone(),
+            sha256: binary.sha256.clone(),
+            size_bytes: binary.size_bytes,
+        });
+    result.duration_ms = artifact
+        .execution
+        .as_ref()
+        .map(|execution| execution.total_duration_ms)
+        .or_else(|| {
+            artifact
+                .convergence
+                .as_ref()
+                .and_then(|convergence| convergence.total_elapsed_ms)
+        });
+
+    push_unique_string(
+        &mut result.retained_paths,
+        loaded.path.display().to_string(),
+    );
+    for path in artifact
+        .artifacts
+        .log_paths
+        .iter()
+        .chain(artifact.artifacts.artifact_paths.iter())
+    {
+        push_unique_string(&mut result.retained_paths, path.clone());
+    }
+    for limitation in &artifact.limitations {
+        push_unique_string(&mut result.limitations, limitation.clone());
+    }
+    result.follow_up_intent = artifact.follow_up_intent.clone();
+
+    result.verdict = match artifact.verdict {
+        run_evidence::RunEvidenceVerdict::Failed => ValidationVerdict::Failed,
+        run_evidence::RunEvidenceVerdict::Inconclusive
+            if result.verdict != ValidationVerdict::Failed =>
+        {
+            ValidationVerdict::Inconclusive
+        }
+        _ => result.verdict,
+    };
+
+    if let Some(assertions) = artifact.assertions {
+        for assertion in assertions.results {
+            let evidence_id = format!("assertion:{}", assertion.id);
+            let status = match assertion.status.as_str() {
+                "passed" => ValidationStatus::Satisfied,
+                "failed" | "timed_out" => ValidationStatus::Failed,
+                _ => ValidationStatus::Unproven,
+            };
+            let mut evidence = StructuredEvidenceEntry::new(
+                evidence_id.clone(),
+                EvidenceKind::ScenarioRun,
+                format!(
+                    "Scenario assertion `{}` completed with status `{}`.",
+                    assertion.id, assertion.status
+                ),
+            );
+            if !assertion.details.is_empty() {
+                evidence.details = Some(assertion.details.join("\n"));
+            }
+            evidence.artifact_path = assertion
+                .status_path
+                .clone()
+                .or(assertion.context_path.clone())
+                .or(assertion.stdout_path.clone());
+            result.evidence.push(evidence);
+            result.acceptance_criteria.push(ValidationAssertion {
+                description: assertion.description,
+                required: assertion.required,
+                status,
+                evidence_refs: vec![evidence_id],
+            });
+        }
+    }
+    Ok(())
+}
+
+fn push_unique_string(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
 }
 
 fn write_json_result(path: &Path, result: &ValidatorResult) -> Result<(), ValidationError> {

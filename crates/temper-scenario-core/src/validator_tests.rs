@@ -2,7 +2,8 @@
 
 use crate::{
     AcceptanceCriterion, EvidenceEntry, EvidenceKind, FollowUpIssueIntent, ValidatedClaim,
-    ValidationReport, ValidationStatus, ValidationVerdict, ValidatorContext, ValidatorResult,
+    ValidationReport, ValidationStatus, ValidationVerdict, ValidatorBinaryIdentity,
+    ValidatorContext, ValidatorResult, ValidatorResultTarget,
 };
 
 #[test]
@@ -160,6 +161,129 @@ fn validator_result_json_fixtures_round_trip_and_render() {
             "- Fixture notes:\n",
             "> Use a two-child epic fixture with both produced PRs merged.\n"
         )
+    );
+}
+
+#[test]
+fn strict_validator_contract_rejects_missing_or_unproven_required_evidence() {
+    let mut result = ValidatorResult::new(
+        ValidatorResultTarget::new("feature", "ai/temper", crate::ArtifactReference::issue(778)),
+        ValidationVerdict::Passed,
+    );
+    result.feature = Some("ai/temper#778".to_string());
+    result.plan = Some("ai/temper#779".to_string());
+    result.mapping_id = Some("ai/temper#778:exact-head-feature-validation".to_string());
+    result.scenario_name = Some("exact-head-feature-validation".to_string());
+    result.scenario_path = Some("scenarios/exact-head-feature-validation".to_string());
+    result.source_branch = Some("feature/778-exact-head-validation".to_string());
+    result.exact_head_sha = Some("d".repeat(40));
+    result.resolved_content_digest = Some(format!("sha256:{}", "c".repeat(64)));
+    result.standalone_binary = Some(ValidatorBinaryIdentity {
+        path: "target/debug/temper".to_string(),
+        sha256: "0".repeat(64),
+        size_bytes: 42,
+    });
+    result.duration_ms = Some(1200);
+    result.retained_paths = vec!["artifacts/run-evidence.json".to_string()];
+    result.evidence.push(crate::StructuredEvidenceEntry::new(
+        "run-evidence",
+        EvidenceKind::ScenarioRun,
+        "Exact-head live scenario evidence was retained.",
+    ));
+    result.acceptance_criteria.push(
+        crate::ValidationAssertion::new(
+            "Exact-head assertion passed.",
+            ValidationStatus::Satisfied,
+        )
+        .with_evidence_ref("run-evidence"),
+    );
+    assert!(result.validate_contract().is_empty());
+
+    result.acceptance_criteria.push(
+        crate::ValidationAssertion::new(
+            "Required structured fact was absent.",
+            ValidationStatus::Unproven,
+        )
+        .with_evidence_ref("run-evidence"),
+    );
+    let diagnostics = result.validate_contract();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("required assertion did not pass")),
+        "{diagnostics:?}"
+    );
+
+    result
+        .acceptance_criteria
+        .last_mut()
+        .expect("optional assertion")
+        .required = false;
+    assert!(result.validate_contract().is_empty());
+}
+
+#[test]
+fn validator_result_schema_rejects_unknown_nested_fields_and_invalid_identities() {
+    let unknown = r#"{
+        "schema":"temper.validator.result.v2",
+        "target":{"kind":"plan","repo":"ai/temper","ref":{"issue_number":779},"unexpected":true},
+        "verdict":"failed"
+    }"#;
+    let error = serde_json::from_str::<ValidatorResult>(unknown)
+        .expect_err("unknown nested schema fields must fail");
+    assert!(error.to_string().contains("unknown field `unexpected`"));
+
+    let mut result = ValidatorResult::new(
+        ValidatorResultTarget::new("plan", "ai/temper", crate::ArtifactReference::issue(779)),
+        ValidationVerdict::Passed,
+    );
+    result.feature = Some("ai/temper#778".to_string());
+    result.plan = Some("ai/temper#779".to_string());
+    result.mapping_id = Some("ai/temper#778:proof".to_string());
+    result.scenario_name = Some("proof".to_string());
+    result.scenario_path = Some("scenarios/proof".to_string());
+    result.source_branch = Some("feature/778-proof".to_string());
+    result.exact_head_sha = Some("not-a-git-sha".to_string());
+    result.resolved_content_digest = Some("sha256:short".to_string());
+    result.standalone_binary = Some(ValidatorBinaryIdentity {
+        path: "target/debug/temper".to_string(),
+        sha256: "uppercaseA".repeat(7),
+        size_bytes: 1,
+    });
+    result.duration_ms = Some(1);
+    result.retained_paths.push("evidence.json".to_string());
+    result.evidence.push(crate::StructuredEvidenceEntry::new(
+        "run",
+        EvidenceKind::ScenarioRun,
+        "run",
+    ));
+    result.acceptance_criteria.push(
+        crate::ValidationAssertion::new("proof", ValidationStatus::Satisfied)
+            .with_evidence_ref("run"),
+    );
+
+    let diagnostics = result.validate_contract().join("\n");
+    assert!(diagnostics.contains("exact_head_sha"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("resolved_content_digest"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("standalone_binary"), "{diagnostics}");
+}
+
+#[test]
+fn legacy_validator_result_remains_readable_but_cannot_authorize_passing() {
+    let legacy_json = VALIDATOR_RESULT_AGGREGATE_JSON.replace(
+        crate::VALIDATOR_RESULT_SCHEMA,
+        crate::validator_result::LEGACY_VALIDATOR_RESULT_SCHEMA,
+    );
+    let legacy: ValidatorResult = serde_json::from_str(&legacy_json).expect("v1 result parses");
+    assert!(legacy.acceptance_criteria.iter().all(|item| item.required));
+    assert!(
+        legacy
+            .validate_contract()
+            .iter()
+            .any(|diagnostic| diagnostic.contains("requires validator result v2"))
     );
 }
 

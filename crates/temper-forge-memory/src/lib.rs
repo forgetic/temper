@@ -200,6 +200,15 @@ impl MemoryForge {
         Ok(updated)
     }
 
+    /// Sets a branch's exact current head for exact-head workflow simulations.
+    pub fn set_branch_head(&self, repo: &RepositoryId, branch: &str, sha: &str) -> ForgeResult<()> {
+        let mut inner = self.lock();
+        inner.state.require_repository(repo)?;
+        inner.state.set_branch_head(repo, branch, sha);
+        inner.publish_repo_hint(repo, temper_forge_model::ChangeKind::Unknown);
+        Ok(())
+    }
+
     /// Returns every user provisioned via
     /// [`ForgeAdmin::ensure_user`](temper_forge_model::ForgeAdmin::ensure_user),
     /// ordered by login.

@@ -414,6 +414,7 @@ fn load_manifest_accepts_checked_in_basic_delivery_shape() {
         "repos[0].ci_source",
         "repos[0].ci_seed_path",
         "issues[0].body",
+        "steps[2].script_path",
     ] {
         assert!(
             path_fields.contains(&field),

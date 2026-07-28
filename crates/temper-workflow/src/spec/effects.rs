@@ -10,6 +10,29 @@ use temper_forge::ReviewDecision;
 
 use crate::metadata::WorkflowMetadataKey;
 
+/// Per-artifact-kind requirements for one `create_issues` product set.
+///
+/// These constraints complement the total child cardinality. They let a
+/// workflow require heterogeneous fan-out (for example, product children plus
+/// one final scenario-authoring child) without splitting one atomic verdict
+/// across multiple effects.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawChildKindRequirement {
+    /// Required issue artifact kind.
+    pub kind: String,
+    /// Minimum number of children of this kind.
+    #[serde(default = "default_min_children")]
+    pub min_children: usize,
+    /// Optional maximum number of children of this kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_children: Option<usize>,
+    /// Every child of `kind` must depend on every authored child whose kind is
+    /// named here. This is evaluated against sibling slugs before Forge mutation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on_all_kinds: Vec<String>,
+}
+
 /// Declarative policy for resolving or validating an effect's target branch.
 ///
 /// The policy is intentionally separate from artifact metadata. An omitted
@@ -158,6 +181,10 @@ pub enum RawEffect {
         /// enforce. Empty preserves existing workflow behavior.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_child_metadata: Vec<WorkflowMetadataKey>,
+        /// Per-kind cardinality and dependency requirements for heterogeneous
+        /// child sets. Empty preserves the legacy total-cardinality contract.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        child_kind_requirements: Vec<RawChildKindRequirement>,
         /// Workflow-owned child target-branch production. `derived_feature_branch`
         /// derives `agent/pr-for-feature-<source-number>`, `inherit` copies the
         /// validated source branch, and `repository_default` explicitly selects
@@ -188,9 +215,11 @@ pub enum RawGateCondition {
     /// The artifact must occupy `state` within `dimension`.
     StateEquals { dimension: String, state: String },
     /// Every `dependency` relation target of the artifact must have landed
-    /// (its prerequisite work merged). Which targets have landed is supplied by
-    /// the runtime as an external signal; the condition references relations by
-    /// kind, so it carries no payload.
+    /// (its prerequisite work merged). A blocked artifact must have at least one
+    /// such relation, while a non-blocked artifact may use the condition as an
+    /// optional empty gate. Which targets have landed is supplied by the runtime
+    /// as an external signal; the condition references relations by kind, so it
+    /// carries no payload.
     DependenciesResolved,
     /// The artifact's native CI must have passed. Whether CI passed is supplied
     /// by the runtime as a signal computed from the Forge's `CiJob`
@@ -207,4 +236,7 @@ pub enum RawGateCondition {
     ReviewApproved,
     /// Some reviewer's latest native review decision must request changes.
     ReviewChangesRequested,
+    /// The landing PR carries complete Temper-issued evidence authority whose
+    /// source branch and exact head match the freshly loaded pull request.
+    ExactHeadValidation,
 }

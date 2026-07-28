@@ -1,5 +1,5 @@
 {
-  "schema": "temper.validator.result.v1",
+  "schema": "temper.validator.result.v2",
   "target": {
     "kind": "implementation_pr",
     "repo": "ai/temper",

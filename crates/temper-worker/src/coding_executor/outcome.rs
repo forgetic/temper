@@ -230,6 +230,7 @@ async fn writable_verdict_outcome(
             .summary
             .or_else(|| Some(format!("implemented {coordination_key}"))),
         children,
+        details: None,
     }
 }
 

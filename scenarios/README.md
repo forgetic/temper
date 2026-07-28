@@ -37,16 +37,18 @@ manifest topology before the verdict. Bundles under this repository's
 outside that corpus are labeled `ephemeral validation bundle`. Live manifest
 output also includes the Forgejo URL, issue/PR numbers, CI job
 evidence when applicable, convergence timing, fake LLM request counts, structured
-Temper event facts, and log/artifact paths. Use `cargo dev-scenario-run` for the
-live lane
-(it builds and passes the standalone `temper` binary).
+Temper event facts, and log/artifact paths. Use
+`cargo dev-scenario-run scenarios/<name>` for an explicit manual live lane (it
+builds and passes the standalone `temper` binary). The command intentionally has
+no default scenario.
 
 ### Single validator workflow command
 
-Use `temper-scenario validate` when you want the complete author-and-run UX for a
-focused validation bundle. It runs the bundle, writes `run-evidence.json`, runs
-the `validate-pr` report builder against that evidence, and leaves Markdown plus
-JSON validation output in one artifact directory:
+Use `temper-scenario validate` when you want the complete run-and-report UX for
+an explicitly supplied validation bundle. It runs the bundle, writes
+`run-evidence.json`, runs the `validate-pr` report builder against that evidence,
+and leaves Markdown plus JSON validation output in one artifact directory. It
+does not resolve a feature mapping or grant landing authority:
 
 ```sh
 cargo run -p temper-scenario-cli -- validate \
@@ -187,11 +189,12 @@ evidence:
   `transition`, `action`, handoff metadata/title/body-source fields, and CI
   `conclusion`.
 
-Unsupported or missing-fact declarations are diagnostics, not failures: the
-result is recorded with `status = "unsupported"` and the run still succeeds if no
-supported assertion failed. Use this for provider-only facts that are not yet in
-structured run evidence; add production observability or a generic probe before
-turning such facts into hard declarative assertions.
+Unsupported or missing-fact declarations remain visible diagnostics. Assertions
+are required by default, so any failed, missing, timed-out, or unsupported
+required result blocks the run. Set `required = false` only for deliberately
+informational evidence; an optional unsupported result remains visible without
+blocking. Add production observability or a generic probe before making a
+provider-only fact required.
 
 ### Script assertion hooks
 
@@ -253,6 +256,91 @@ report pass. Operators can use `temper-scenario promote` to draft a promotion
 candidate from a validation report or artifact directory, but that command is
 only a prompt scaffold: it does not create Forgejo issues or PRs, and it does
 not replace the required validation report.
+
+## Feature scenario scaffold and deterministic mapping
+
+Use `scaffold` for feature/plan work instead of the Markdown-only `promote`
+prompt. It creates a small inherited bundle with a local Jig script, a bounded
+runtime, typed feature/plan mapping, and an explicit claim → stimulus →
+observable → assertion contract:
+
+```sh
+cargo run -p temper-scenario-cli -- scaffold \
+  --feature ai/temper#778 \
+  --plan ai/temper#779 \
+  --source-branch feature/778-exact-head-validation \
+  --name exact-head-feature-validation
+```
+
+The command refuses to overwrite an existing scenario path and writes only
+`scenario.toml`, `README.md`, and `jig/<name>.json`. It does not emit
+credentials, logs, caches, evidence, or other runtime state. The generated
+manifest inherits `scenarios/basic-delivery` by default and uses `[jig]` to
+replace the inherited fake-LLM script without copying the workflow, repo, or CI
+fixtures. Authors should replace the scaffold Jig responses and narrow the
+required assertions while preserving the inherited validation-grade topology.
+
+Mapped scenarios declare both typed authoring metadata sections:
+
+```toml
+[validation]
+feature = "ai/temper#778"
+plan = "ai/temper#779"
+source_branch = "feature/778-exact-head-validation"
+change = "new" # use "updated" when the scenario exists at the landing base
+
+[feature_contract]
+claim = "The feature enforces exact-head validation."
+stimulus = "Exercise one stale and one current validation attempt."
+observable = "Structured head, digest, assertion, and landing-gate facts."
+assertion = "Only current passing evidence authorizes landing."
+runtime_budget_seconds = 600
+jig_script_path = "jig/exact-head-feature-validation.json"
+```
+
+Resolve a feature mapping at the checked-out head before a focused CI or
+validator run:
+
+```sh
+cargo run -p temper-scenario-cli -- resolve-feature \
+  --feature ai/temper#778 \
+  --landing-base origin/main \
+  --json-out target/feature-scenario-mapping.json
+```
+
+Resolution selects exactly one active explicit mapping and rejects missing,
+duplicate, inactive, unsafe, dirty, unchanged, or digest-mismatched scenarios.
+It compares the mapped path and prior feature mapping against the supplied
+landing base, so copied or renamed directories do not acquire an implicit
+mapping. Successful stdout and `--json-out` content are identical
+`temper.scenario.feature-mapping.v1` JSON. They include the stable mapping id,
+feature and plan, repo-relative scenario and manifest paths, declared source
+branch, exact checkout head, resolved landing-base SHA, change classification,
+and a SHA-256 digest.
+
+For the cohesive pre-merge run, use the mapping-aware command instead of copying
+the resolved path into a second command:
+
+```sh
+cargo dev-scenario-validate-feature \
+  --feature ai/temper#778 \
+  --landing-base origin/main \
+  --source-branch feature/778-exact-head-validation \
+  --pr <landing-pr-number> \
+  --sha "$(git rev-parse HEAD)" \
+  --output-dir target/focused-validation
+```
+
+It verifies that mapping, branch, and head still agree, executes only the mapped
+live scenario, and retains a joined audit payload. See
+[Run focused feature validation](../docs/how-to/run-focused-feature-validation.md).
+
+The digest canonicalizes the resolved inherited manifest, hashes referenced
+fixture content, and hashes all files owned by the mapped scenario in sorted
+order. Absolute checkout paths and directory enumeration order do not affect it.
+The same mapping fields are represented in `ScenarioMetadataContext`, run
+evidence, and `ValidatorResult` so validator handoffs and Forge audit rendering
+can carry the identity without scraping CLI prose.
 
 ## Authoring model
 
@@ -385,20 +473,20 @@ the explicitly extended base. Prefer duplicating small fixture files over
 depending on paths in `examples/` so validation can run from the checked-in
 corpus alone.
 
-## Relationship to post-merge validation
+## Relationship to landing and post-merge validation
 
-Post-merge validation should cite a scenario by `name` and repo commit when
-it uses this corpus. The [post-merge validator handoff][validator-handoff]
-specifies the workflow-native architecture: it treats
-`temper-scenario validate-pr` as a temporary/manual bridge, not the final
-validator workflow. The validation report remains the required artifact; the
-scenario is the reusable input that made the run reproducible. When an ad-hoc
-post-merge run uncovers a useful regression shape, promotion remains a separate
-follow-up from validation: start from the report, preserve only stable intended
-behavior, and add or edit a scenario in a normal PR with the validation report
-linked from the PR or issue that justifies the promotion. The temporary
-`temper-scenario promote` command can create a deterministic Markdown draft for
-that review, but it deliberately stops before generating a scenario or opening
-Forgejo work.
+Focused feature validation resolves and executes one mapped scenario before an
+aggregate feature PR lands. Its CI evidence is retained and compatible with the
+workflow-native validator contract, but the workflow-native exact-head gate is
+the landing authority. Any feature-head change makes an older attempt stale.
+See [Run focused feature validation][focused-validation].
 
+The broad post-merge workflow remains a regression report and may still run
+`basic-delivery`; it is not the focused feature selector or landing authority.
+The [post-merge validator handoff][validator-handoff] describes the generic
+workflow architecture. `temper-scenario validate-pr` remains a temporary/manual
+report bridge. Scenario promotion also stays a separate follow-up from
+validation.
+
+[focused-validation]: ../docs/how-to/run-focused-feature-validation.md
 [validator-handoff]: ../docs/reference/post-merge-validator-handoff.md

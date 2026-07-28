@@ -32,6 +32,20 @@ pub struct TargetBranchRequirement {
     pub allow_omission: bool,
 }
 
+/// A required subset of child products with optional dependency coverage.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ChildKindRequirement {
+    pub kind: String,
+    #[serde(default)]
+    pub min_children: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_children: Option<usize>,
+    /// Every child of [`Self::kind`] must depend on every sibling whose kind is
+    /// listed here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on_all_kinds: Vec<String>,
+}
+
 /// Requirements for one workflow-declared verdict's terminal result.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct VerdictContract {
@@ -44,6 +58,9 @@ pub struct VerdictContract {
     /// Non-blank workflow metadata keys required in every authored child body.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_child_metadata: Vec<String>,
+    /// Per-kind cardinality/dependency requirements within the total child set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_kind_requirements: Vec<ChildKindRequirement>,
     /// Exact child branch resolved by the engine from a typed workflow policy.
     /// Absence preserves the legacy metadata contract.
     #[serde(default, skip_serializing_if = "Option::is_none")]

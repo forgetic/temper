@@ -95,6 +95,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
     contracts::check_create_pull_request_artifact_kind_targets(spec, &mut diagnostics);
     contracts::check_target_branch_policy_contract(spec, &mut diagnostics);
     contracts::check_create_issues_cardinality(spec, &mut diagnostics);
+    contracts::check_create_issues_child_kind_requirements(spec, &mut diagnostics);
     contracts::check_transition_outcome_contract(spec, &mut diagnostics);
 
     if diagnostics.is_empty() {

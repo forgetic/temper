@@ -4,9 +4,9 @@
   "roles": [
     {
       "id": "architect",
-      "charter": "Own product feature shaping. Classify feature issues as config-only or hard-code work; for hard-code work create a durable plan issue, then decompose that plan into dependency-linked code issues targeting a feature branch.",
+      "charter": "Own product feature shaping. Classify feature issues as config-only or hard-code work; for hard-code work create a durable plan issue, then decompose that plan into dependency-linked product issues plus one scenario-authoring issue targeting the feature branch.",
       "prompt": {
-        "guidance": "For feature_planning, decide whether the request is config-only or requires repository hard-code changes. Use verdict config_only only when no repository code PR is required. Use verdict needs_plan for hard-code work and create exactly one child issue of kind plan. The plan body must preserve the product context and should omit target_branch so Temper can stamp the deterministic agent/pr-for-feature-<feature-number> branch declared by the workflow policy; never select the repository default from artifact metadata. For decompose_plan, use verdict children_ready and create engineer-sized child issues of kind code. Put dependency slugs in depends_on for sequential work; blocked children should carry the blocked label and depend on earlier slugs. Child code issue bodies should normally omit target_branch so Temper inherits it from the plan. Do not create hard-code work directly from the feature issue; route it through the plan issue."
+        "guidance": "For feature_planning, decide whether the request is config-only or requires repository hard-code changes. Use verdict config_only only when no repository code PR is required. Use verdict needs_plan for hard-code work and create exactly one child issue of kind plan. The plan body must preserve the product context and should omit target_branch so Temper can stamp the deterministic agent/pr-for-feature-<feature-number> branch declared by the workflow policy; never select the repository default from artifact metadata. For decompose_plan, use verdict children_ready and create one or more engineer-sized children of kind code plus exactly one final child of kind validation. The validation child authors the feature scenario: it must depend on every code child and should omit target_branch so Temper inherits the plan branch. Put dependency slugs in depends_on; dependency-bearing children start blocked automatically. Do not create hard-code work directly from the feature issue; route it through the plan issue."
       },
       "external_tools": [
         {
@@ -54,21 +54,46 @@
       ]
     },
     {
-      "id": "tester",
-      "charter": "Validate completed feature plans against the current feature branch head and, when evidence is sufficient, open the aggregate feature landing PR from the feature branch to main.",
+      "id": "scenario_author",
+      "charter": "Author the plan's required checked-in feature scenario after all product children land, and publish a dedicated scenario PR into the inherited feature branch.",
       "prompt": {
-        "guidance": "Use validate_plan only after reading the feature issue, plan, child code issues, merged implementation PRs, and scenario expectations. Return verdict validated with a concise landing PR title/body containing validation evidence when the feature branch is ready to land. Return needs_followup with child code issues if validation finds gaps."
+        "guidance": "Use author_scenario only for the ready validation child. Add focused scenario fixtures, generic harness support, or structured observability needed by the scenario. The writable checkout is based on the inherited feature branch; the scenario PR must target that branch, never the repository default."
+      },
+      "external_tools": [
+        {
+          "id": "coding_workspace",
+          "description": "Prepare a writable feature-branch checkout, author checked-in scenario work, and report a dedicated scenario PR handoff.",
+          "required": false,
+          "constraints": [
+            "Only touch the checked-out repository workspace.",
+            "Keep generated runtime evidence out of the checked-in scenario corpus."
+          ],
+          "guidance": "Use this only for author_scenario and writable scenario PR repair actions."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "validation_ready",
+        "scenario_pr_ci_failed",
+        "scenario_pr_merge_conflict"
+      ]
+    },
+    {
+      "id": "tester",
+      "charter": "Own final feature-validation policy. The validate_plan binding is executed by Temper's constrained native runner, not by a model-authored shell command or verdict.",
+      "prompt": {
+        "guidance": "validate_plan is worker-owned: Temper resolves the one mapped scenario, runs the checked-out temper-scenario validator at the exact feature head without Forge mutation credentials, validates its typed result and retained artifacts, and derives validated or needs_followup. No model-authored command or validated assertion has landing authority."
       },
       "external_tools": [
         {
           "id": "triage_workspace",
-          "description": "Read plan context and validation evidence, then return a validate_plan verdict.",
+          "description": "Documents the read-only validation workspace used by Temper's native validate_plan runner; no model process is invoked for a bound validation job.",
           "required": false,
           "constraints": [
-            "Do not mutate Forge state directly.",
-            "Tie validation evidence to the current feature branch head when available."
+            "Final validation is read-only and must not receive Forge mutation credentials.",
+            "Tie validation evidence to the current feature branch head and merged scenario."
           ],
-          "guidance": "Use this from validate_plan. If unavailable, fail the assigned validation job with a structured unavailable-workspace result."
+          "guidance": "The native validate_plan runner owns execution, typed result ingestion, and failure routing. This declaration grants no shell or Forge mutation authority."
         }
       ],
       "concurrency": 1,
@@ -99,6 +124,10 @@
     { "id": "planned", "description": "feature has an associated plan issue" },
     { "id": "config-only", "description": "feature was classified as config-only and does not require code PRs" },
     { "id": "implementation", "description": "identifies an implementation pull request" },
+    { "id": "scenario", "description": "identifies a checked-in scenario-authoring pull request" },
+    { "id": "product", "description": "validation follow-up requires product behavior changes" },
+    { "id": "observability", "description": "validation follow-up requires structured observability" },
+    { "id": "scenario-harness", "description": "validation follow-up requires generic scenario tooling" },
     { "id": "feature-landing", "description": "identifies an aggregate feature branch landing pull request" },
     { "id": "landing", "description": "PR is ready for mechanical landing once gates pass" },
     { "id": "merge-conflict", "description": "mechanical landing found a merge conflict; engineer must update the PR head" },
@@ -135,10 +164,29 @@
       "initial_labels": ["landing"]
     },
     {
+      "id": "scenario_pr",
+      "target": "pull_request",
+      "identifying_labels": ["scenario"],
+      "initial_labels": ["landing"]
+    },
+    {
       "id": "feature_landing_pr",
       "target": "pull_request",
       "identifying_labels": ["feature-landing"],
       "initial_labels": ["landing"]
+    }
+  ],
+  "validation_bindings": [
+    {
+      "id": "validate_exact_feature_head",
+      "role": "tester",
+      "action": "validate_plan",
+      "target_artifact": "plan",
+      "trigger": { "kind": "plan_needs_validation" },
+      "readiness": { "all": ["product_children_landed", "scenario_child_landed"] },
+      "target_selection": { "kind": "mapped_feature_scenario" },
+      "aggregation": { "include": ["feature", "plan", "scenario_mapping", "exact_head"] },
+      "idempotency_key": "validator:{binding_id}:plan:{issue_number}:head:{exact_head_sha}"
     }
   ],
   "relations": [
@@ -146,14 +194,17 @@
     { "kind": "parent", "source": "code", "target": "plan" },
     { "kind": "parent", "source": "validation", "target": "plan" },
     { "kind": "parent", "source": "implementation_pr", "target": "code" },
+    { "kind": "parent", "source": "scenario_pr", "target": "validation" },
     { "kind": "parent", "source": "feature_landing_pr", "target": "plan" },
     { "kind": "parent", "source": "feature_landing_pr", "target": "feature" },
     { "kind": "produced_pr", "source": "implementation_pr", "target": "code" },
+    { "kind": "produced_pr", "source": "scenario_pr", "target": "validation" },
     { "kind": "produced_pr", "source": "feature_landing_pr", "target": "plan" },
     { "kind": "dependency", "source": "feature", "target": "plan" },
     { "kind": "dependency", "source": "plan", "target": "code" },
     { "kind": "dependency", "source": "plan", "target": "validation" },
     { "kind": "dependency", "source": "code", "target": "code" },
+    { "kind": "dependency", "source": "validation", "target": "code" },
     { "kind": "dependency", "source": "implementation_pr", "target": "implementation_pr" }
   ],
   "state_dimensions": [
@@ -162,7 +213,7 @@
       "exclusive": true,
       "states": [
         { "id": "ready", "label": "ready", "artifacts": ["plan", "code", "validation"] },
-        { "id": "in_progress", "label": "in-progress", "artifacts": ["plan", "code", "implementation_pr", "feature_landing_pr"] },
+        { "id": "in_progress", "label": "in-progress", "artifacts": ["plan", "code", "validation", "implementation_pr", "scenario_pr", "feature_landing_pr"] },
         { "id": "blocked", "label": "blocked", "artifacts": ["code", "validation"] },
         { "id": "needs_validation", "label": "needs-validation", "artifacts": ["plan"] },
         { "id": "validated", "label": "validated", "artifacts": ["plan"] }
@@ -180,8 +231,8 @@
       "id": "pr_routing",
       "exclusive": false,
       "states": [
-        { "id": "landing", "label": "landing", "artifacts": ["implementation_pr", "feature_landing_pr"] },
-        { "id": "merge_conflict", "label": "merge-conflict", "artifacts": ["implementation_pr", "feature_landing_pr"] }
+        { "id": "landing", "label": "landing", "artifacts": ["implementation_pr", "scenario_pr", "feature_landing_pr"] },
+        { "id": "merge_conflict", "label": "merge-conflict", "artifacts": ["implementation_pr", "scenario_pr", "feature_landing_pr"] }
       ]
     }
   ],
@@ -210,6 +261,23 @@
       "excluded_labels": ["needs-human"],
       "condition": { "kind": "dependencies_resolved" },
       "automation": { "actor": "mechanical", "transition": "mark_code_ready" }
+    },
+    {
+      "id": "blocked_validation_unblock",
+      "artifact": "validation",
+      "labels": ["blocked"],
+      "excluded_labels": ["needs-human"],
+      "condition": { "kind": "dependencies_resolved" },
+      "automation": { "actor": "mechanical", "transition": "mark_validation_ready" }
+    },
+    {
+      "id": "validation_ready",
+      "artifact": "validation",
+      "labels": ["ready"],
+      "excluded_labels": ["needs-human"],
+      "actions": [
+        { "role": "scenario_author", "action": "author_scenario", "checkout": "writable" }
+      ]
     },
     {
       "id": "code_ready",
@@ -251,6 +319,36 @@
       }
     },
     {
+      "id": "scenario_pr_ci_failed",
+      "artifact": "scenario_pr",
+      "excluded_labels": ["merge-conflict", "needs-human"],
+      "condition": { "kind": "ci_failed" },
+      "actions": [
+        { "role": "scenario_author", "action": "address_scenario_ci_failure", "checkout": "pull_request_writable" }
+      ]
+    },
+    {
+      "id": "scenario_pr_merge_conflict",
+      "artifact": "scenario_pr",
+      "labels": ["merge-conflict"],
+      "excluded_labels": ["needs-human"],
+      "actions": [
+        { "role": "scenario_author", "action": "resolve_scenario_merge_conflict", "checkout": "pull_request_writable" }
+      ]
+    },
+    {
+      "id": "scenario_landing",
+      "artifact": "scenario_pr",
+      "labels": ["landing"],
+      "excluded_labels": ["merge-conflict", "needs-human"],
+      "condition": { "kind": "ci_passed" },
+      "automation": {
+        "actor": "mechanical",
+        "transition": "land_scenario_pr",
+        "outcomes": { "merge_conflict": "route_scenario_merge_conflict" }
+      }
+    },
+    {
       "id": "plan_dependencies_resolved",
       "artifact": "plan",
       "labels": ["in-progress"],
@@ -264,7 +362,7 @@
       "labels": ["needs-validation"],
       "excluded_labels": ["needs-human"],
       "actions": [
-        { "role": "tester", "action": "validate_plan" }
+        { "role": "tester", "action": "validate_plan", "checkout": "read_only" }
       ]
     },
     {
@@ -348,7 +446,17 @@
       "artifact": "plan",
       "roles": ["architect"],
       "effects": [
-        { "kind": "create_issues", "correlation_key": "plan-children", "record_parent_dependencies": true, "target_branch_policy": "inherit" },
+        {
+          "kind": "create_issues",
+          "correlation_key": "plan-children",
+          "record_parent_dependencies": true,
+          "min_children": 2,
+          "child_kind_requirements": [
+            { "kind": "code", "min_children": 1 },
+            { "kind": "validation", "min_children": 1, "max_children": 1, "depends_on_all_kinds": ["code"] }
+          ],
+          "target_branch_policy": "inherit"
+        },
         { "kind": "remove_label", "label": "ready" },
         { "kind": "add_label", "label": "in-progress" },
         { "kind": "set_assignee", "role": "architect" }
@@ -363,6 +471,27 @@
         { "kind": "remove_label", "label": "ready" },
         { "kind": "add_label", "label": "validated" },
         { "kind": "set_assignee", "role": "architect" }
+      ]
+    },
+    {
+      "id": "mark_validation_ready",
+      "artifact": "validation",
+      "roles": ["mechanical"],
+      "requires_gates": ["dependency_gate"],
+      "effects": [
+        { "kind": "remove_label", "label": "blocked" },
+        { "kind": "add_label", "label": "ready" }
+      ]
+    },
+    {
+      "id": "author_scenario",
+      "artifact": "validation",
+      "roles": ["scenario_author"],
+      "effects": [
+        { "kind": "remove_label", "label": "ready" },
+        { "kind": "add_label", "label": "in-progress" },
+        { "kind": "set_assignee", "role": "scenario_author" },
+        { "kind": "create_pull_request", "artifact_kind": "scenario_pr", "target_branch_policy": "non_default" }
       ]
     },
     {
@@ -430,6 +559,40 @@
       ]
     },
     {
+      "id": "address_scenario_ci_failure",
+      "artifact": "scenario_pr",
+      "roles": ["scenario_author"],
+      "effects": []
+    },
+    {
+      "id": "resolve_scenario_merge_conflict",
+      "artifact": "scenario_pr",
+      "roles": ["scenario_author"],
+      "effects": [
+        { "kind": "remove_label", "label": "merge-conflict" }
+      ]
+    },
+    {
+      "id": "route_scenario_merge_conflict",
+      "artifact": "scenario_pr",
+      "roles": ["mechanical"],
+      "effects": [
+        { "kind": "add_label", "label": "merge-conflict" },
+        { "kind": "create_comment", "body": "Mechanical landing found a merge conflict before merging this scenario PR into the feature branch. Scenario author: update the writable PR head from its target branch, resolve conflicts, and push; after fresh CI passes, Temper will retry landing." }
+      ]
+    },
+    {
+      "id": "land_scenario_pr",
+      "artifact": "scenario_pr",
+      "roles": ["mechanical"],
+      "requires_gates": ["ci_gate", "dependency_gate"],
+      "effects": [
+        { "kind": "merge_pull_request" },
+        { "kind": "remove_label", "label": "landing" },
+        { "kind": "close_parent_issues" }
+      ]
+    },
+    {
       "id": "mark_plan_needs_validation",
       "artifact": "plan",
       "roles": ["mechanical"],
@@ -467,7 +630,15 @@
       "artifact": "plan",
       "roles": ["tester"],
       "effects": [
-        { "kind": "create_issues", "correlation_key": "validation-followup", "record_parent_dependencies": true, "target_branch_policy": "inherit" },
+        {
+          "kind": "create_issues",
+          "correlation_key": "validation-followup",
+          "record_parent_dependencies": true,
+          "child_kind_requirements": [
+            { "kind": "code", "min_children": 1 }
+          ],
+          "target_branch_policy": "inherit"
+        },
         { "kind": "remove_label", "label": "needs-validation" },
         { "kind": "add_label", "label": "in-progress" },
         { "kind": "set_assignee", "role": "tester" }
@@ -500,7 +671,7 @@
       "id": "land_feature_pr",
       "artifact": "feature_landing_pr",
       "roles": ["mechanical"],
-      "requires_gates": ["ci_gate", "dependency_gate"],
+      "requires_gates": ["ci_gate", "dependency_gate", "exact_head_validation_gate"],
       "effects": [
         { "kind": "merge_pull_request" },
         { "kind": "remove_label", "label": "landing" },
@@ -510,6 +681,7 @@
   ],
   "gates": [
     { "id": "dependency_gate", "condition": { "kind": "dependencies_resolved" } },
-    { "id": "ci_gate", "condition": { "kind": "ci_passed" } }
+    { "id": "ci_gate", "condition": { "kind": "ci_passed" } },
+    { "id": "exact_head_validation_gate", "condition": { "kind": "exact_head_validation" } }
   ]
 }

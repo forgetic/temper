@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
+use temper_workflow::ArtifactRef;
 
 #[test]
-fn normal_dispatch_composes_configured_guidance_for_architect_engineer_and_tester() {
+fn normal_dispatch_composes_configured_guidance_for_workflow_roles() {
     temper_engine_io::block_on(async move {
         let forge = MemoryForge::new();
         let repository = forge
@@ -47,13 +48,22 @@ fn normal_dispatch_composes_configured_guidance_for_architect_engineer_and_teste
                 "Only touch the checked-out repository workspace.",
             ),
             (
+                "scenario_author",
+                "validation_ready",
+                "validation",
+                "Author the plan's required checked-in feature scenario",
+                "Use author_scenario only for the ready validation child.",
+                "Use this only for author_scenario",
+                "Keep generated runtime evidence out of the checked-in scenario corpus.",
+            ),
+            (
                 "tester",
                 "plan_needs_validation",
                 "plan",
-                "Validate completed feature plans",
-                "Use validate_plan only after reading",
-                "Use this from validate_plan.",
-                "Tie validation evidence to the current feature branch head",
+                "Own final feature-validation policy.",
+                "validate_plan is worker-owned",
+                "native validate_plan runner owns execution",
+                "Final validation is read-only",
             ),
         ];
 
@@ -73,6 +83,31 @@ fn normal_dispatch_composes_configured_guidance_for_architect_engineer_and_teste
                 "target_branch".to_string(),
                 "agent/pr-for-feature-1".to_string(),
             );
+            if role == "tester" {
+                context.artifact = Some(temper_protocol_worker::JobArtifactSnapshot {
+                    number: 1,
+                    title: "plan".to_string(),
+                    body: render_metadata_block(&WorkflowMetadata {
+                        parents: vec![ArtifactRef::same_repo(temper_forge::ItemNumber::new(778))],
+                        target_branch: Some("agent/pr-for-feature-1".to_string()),
+                        ..WorkflowMetadata::default()
+                    }),
+                    labels: vec!["plan".to_string(), "needs-validation".to_string()],
+                    state: "Open".to_string(),
+                });
+                context.workspace = Some(temper_protocol_worker::WorkspaceManifest {
+                    coordination_key: "validation-plan-1".to_string(),
+                    repos: vec![temper_protocol_worker::WorkspaceRepo {
+                        repo: "ai/temper".to_string(),
+                        dir: "temper".to_string(),
+                        access: temper_protocol_worker::RepoAccess::Writable,
+                        default_branch: "main".to_string(),
+                        base_branch: "agent/pr-for-feature-1".to_string(),
+                        branch_hint: Some("agent/validation-plan-1".to_string()),
+                        depends_on: Vec::new(),
+                    }],
+                });
+            }
 
             enrich_job_context_from_workflow(
                 &item,
@@ -82,6 +117,29 @@ fn normal_dispatch_composes_configured_guidance_for_architect_engineer_and_teste
                 &mut context,
             )
             .expect("normal action assignment succeeds");
+
+            if role == "tester" {
+                let primary = context
+                    .workspace
+                    .as_ref()
+                    .and_then(temper_protocol_worker::WorkspaceManifest::primary)
+                    .expect("validator primary checkout");
+                assert_eq!(primary.access, temper_protocol_worker::RepoAccess::ReadOnly);
+                assert_eq!(primary.base_branch, "agent/pr-for-feature-1");
+                assert!(primary.branch_hint.is_none());
+                assert_eq!(
+                    context.source_metadata.get("validation_binding_id"),
+                    Some(&"validate_exact_feature_head".to_string())
+                );
+                assert_eq!(
+                    context.source_metadata.get("validation_feature"),
+                    Some(&"ai/temper#778".to_string())
+                );
+                assert_eq!(
+                    context.source_metadata.get("validation_plan"),
+                    Some(&"ai/temper#1".to_string())
+                );
+            }
 
             let guidance = context
                 .structured_guidance

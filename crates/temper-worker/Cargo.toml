@@ -14,9 +14,11 @@ tracing = { workspace = true }
 temper-worker-io = { path = "../temper-worker-io" }
 temper-process-containment = { path = "../temper-process-containment" }
 temper-protocol-worker = { path = "../temper-protocol-worker" }
+temper-scenario-core = { path = "../temper-scenario-core" }
 temper-verdict = { path = "../temper-verdict" }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true

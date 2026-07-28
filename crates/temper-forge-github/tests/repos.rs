@@ -142,6 +142,27 @@ fn get_repository_by_path_maps_404_to_none() {
 }
 
 #[test]
+fn branch_head_uses_native_encoded_ref_and_maps_absence() {
+    let client = MockHttpClient::new();
+    client.push_response(200, r#"{"commit":{"sha":"abc123"}}"#);
+    client.push_response(404, r#"{"message":"Not Found"}"#);
+    let forge = forge(client.clone());
+
+    assert_eq!(
+        block_on(forge.get_branch_head(&repo_id(), "feature/exact-head")).unwrap(),
+        Some("abc123".to_string())
+    );
+    assert_eq!(
+        client.recorded()[0].path,
+        "/repos/acme/widgets/branches/feature%2Fexact-head"
+    );
+    assert_eq!(
+        block_on(forge.get_branch_head(&repo_id(), "missing")).unwrap(),
+        None
+    );
+}
+
+#[test]
 fn create_repository_under_own_user() {
     let client = MockHttpClient::new();
     client.push_response(200, r#"{"login": "acme"}"#); // current user

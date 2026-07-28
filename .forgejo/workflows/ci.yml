@@ -27,9 +27,11 @@ on:
 #      kache cannot cache, but that leaf cost is small. The scenario manifest
 #      check and deterministic benchmark harness below are checked-in CLI lanes
 #      after the build step, so they do not change that cache choreography. The
-#      validation-grade live scenario lane is `cargo dev-scenario-run`; PR CI
-#      already exercises live coverage in the ignored e2e lane. Benchmark live
-#      mode remains explicit and credential-gated, never part of PR CI.
+#      validation-grade live scenario lane requires an explicit scenario path;
+#      aggregate feature PRs use the separate focused-feature-validation
+#      workflow. PR CI also preserves broad live coverage in the ignored e2e
+#      lane. Benchmark live mode remains explicit and credential-gated, never
+#      part of PR CI.
 jobs:
   validate:
     runs-on: host

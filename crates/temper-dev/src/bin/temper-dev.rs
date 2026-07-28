@@ -36,7 +36,7 @@ fn main() {
 
 fn print_usage(program: &OsStr) {
     eprintln!(
-        "usage: {} <command>\n\ncommands:\n  dev-test-full [nextest-args...]\n  dev-scenario-run-live [scenario-path]\n  dev-benchmark-harness",
+        "usage: {} <command>\n\ncommands:\n  dev-test-full [nextest-args...]\n  dev-scenario-run-live <scenario-path>\n  dev-benchmark-harness",
         program.to_string_lossy()
     );
 }
@@ -62,7 +62,12 @@ fn run_dev_test_full(passthrough_args: &[OsString]) -> i32 {
 
 fn run_dev_scenario_run_live(args: &[OsString]) -> i32 {
     let scenario = match args {
-        [] => OsString::from("scenarios/basic-delivery"),
+        [] => {
+            eprintln!(
+                "temper-dev: dev-scenario-run-live requires an explicit mapped scenario path"
+            );
+            return 2;
+        }
         [scenario] => scenario.clone(),
         [_, extra, ..] => {
             eprintln!(
@@ -302,4 +307,14 @@ fn display_args<'a>(args: impl Iterator<Item = &'a OsStr>) -> String {
 
 fn exit_code(status: ExitStatus) -> i32 {
     status.code().unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_dev_scenario_run_live;
+
+    #[test]
+    fn live_scenario_driver_requires_an_explicit_path() {
+        assert_eq!(run_dev_scenario_run_live(&[]), 2);
+    }
 }

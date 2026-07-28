@@ -1,10 +1,11 @@
 //! Role → capability mapping.
 
-/// The capability a role runs with. Engineer mutates the checkout; architect and
-/// reviewer are read-only analysts that emit a verdict.
+/// The capability a role runs with. Engineer and scenario-author roles mutate
+/// the checkout; architect and review roles are read-only analysts that emit a
+/// verdict.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Capability {
-    /// Edit tools; leaves a product diff. Maps to the engineer role.
+    /// Edit tools; leaves a product diff. Maps to engineer and scenario-author roles.
     CodingWorkspace,
     /// Read-only analysis; emits a verdict + authored body / children.
     TriageWorkspace,
@@ -18,7 +19,7 @@ impl Capability {
     /// mutate the checkout.
     pub fn for_role(role: &str) -> Self {
         match role {
-            "engineer" => Capability::CodingWorkspace,
+            "engineer" | "scenario_author" => Capability::CodingWorkspace,
             "reviewer" | "tester" => Capability::ReviewWorkspace,
             _ => Capability::TriageWorkspace,
         }

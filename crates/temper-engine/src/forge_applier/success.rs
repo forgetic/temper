@@ -28,8 +28,8 @@ use crate::forge_applier::coordinated::{
 };
 use crate::forge_applier::pr_reuse::pull_request_reuse_error;
 use crate::workflow_meta::{
-    create_pull_request_target_branch_policy, implementation_pr_create_labels,
-    implementation_pr_labels,
+    artifact_kind_create_labels, create_pull_request_target_branch_policy,
+    success_pull_request_artifact_kind,
 };
 
 impl<F: Forge + ?Sized> ForgeApplier<F> {
@@ -110,8 +110,28 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .map(|workspace| workspace.coordination_key.clone())
             .unwrap_or_else(|| pr_correlation_key(&source_kind, number));
 
-        let lookup_labels = implementation_pr_labels(self.workflow.as_ref());
-        let create_labels = implementation_pr_create_labels(self.workflow.as_ref());
+        let pull_request_kind = match context.action.as_deref() {
+            Some(action) => match success_pull_request_artifact_kind(
+                self.workflow.as_ref(),
+                &TransitionId::new(action),
+            ) {
+                Ok(kind) => kind,
+                Err(reason) => return branch_policy_rejected(reason),
+            },
+            None => ArtifactKindId::new("implementation_pr"),
+        };
+        let lookup_labels = self
+            .workflow
+            .artifact_kind(&pull_request_kind)
+            .map(|kind| {
+                kind.identifying_labels
+                    .iter()
+                    .map(|label| label.as_str().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let create_labels =
+            artifact_kind_create_labels(self.workflow.as_ref(), pull_request_kind.as_str());
         let summary = result.summary.unwrap_or_default();
         let authored_title = result.title.as_deref();
         let authored_body = result.body.as_deref();
@@ -138,6 +158,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             create_labels: &create_labels,
             depends_on: &depends_on,
             base_branches: &base_branches,
+            pull_request_kind: &pull_request_kind,
         };
         if let Err(outcome) = self
             .validate_existing_coordinated_pr_topologies(&set, &result.repos)
@@ -353,6 +374,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             set.create_labels.to_vec(),
             set.coordination_key,
             dependencies,
+            set.pull_request_kind,
         );
         let desired_title = input.title.clone();
         let desired_body = input.body.clone();
@@ -488,7 +510,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         emit_pr_opened(PrOpened {
             item: &pr_ref,
             title: &pull_request.title,
-            kind: "implementation",
+            kind: set.pull_request_kind.as_str(),
             for_issue: set.number.get(),
             handoff: Some(pr_handoff_facts(
                 set,
@@ -536,7 +558,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             );
             emit_pr_updated(PrUpdated {
                 item: &pr_ref,
-                kind: "implementation",
+                kind: set.pull_request_kind.as_str(),
                 for_issue: set.number.get(),
                 handoff: pr_handoff_facts(
                     set,
@@ -756,7 +778,7 @@ fn pr_handoff_facts(
         } else {
             "summary_fallback"
         }),
-        metadata_kind: Cow::Borrowed("implementation_pr"),
+        metadata_kind: Cow::Owned(set.pull_request_kind.as_str().to_string()),
         metadata_parent_ref: Cow::Owned(source_ref),
         correlation_key: Cow::Owned(set.coordination_key.to_string()),
         action: Cow::Borrowed(action),

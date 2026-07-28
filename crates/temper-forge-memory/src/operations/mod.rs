@@ -55,6 +55,16 @@ impl Forge for MemoryForge {
         repositories::get_repository_by_path(self, path)
     }
 
+    async fn get_branch_head(
+        &self,
+        repo_id: &RepositoryId,
+        branch: &str,
+    ) -> ForgeResult<Option<String>> {
+        let inner = self.lock();
+        inner.state.require_repository(repo_id)?;
+        Ok(inner.state.branch_head(repo_id, branch))
+    }
+
     async fn list_labels(&self, repo_id: &RepositoryId) -> ForgeResult<Vec<Label>> {
         repositories::list_labels(self, repo_id)
     }

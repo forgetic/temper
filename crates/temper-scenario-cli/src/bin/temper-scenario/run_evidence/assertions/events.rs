@@ -5,15 +5,16 @@ use std::collections::BTreeMap;
 use toml::Value;
 
 use super::super::model::{AssertionResultEvidence, RunEvidenceArtifact};
-use super::support::{ResultBuilder, string_array};
+use super::support::{ResultBuilder, required_assertion, string_array};
 
 #[path = "events/support.rs"]
 mod event_support;
 
 use event_support::{CountConstraints, EventMatcher, field_alias};
 
-const PRESENCE_CONTROL_FIELDS: &[&str] = &["id", "description", "fields"];
-const SEQUENCE_CONTROL_FIELDS: &[&str] = &["id", "description", "events", "scope", "fields"];
+const PRESENCE_CONTROL_FIELDS: &[&str] = &["id", "description", "fields", "required"];
+const SEQUENCE_CONTROL_FIELDS: &[&str] =
+    &["id", "description", "events", "scope", "fields", "required"];
 const COUNT_CONTROL_FIELDS: &[&str] = &[
     "id",
     "description",
@@ -23,6 +24,7 @@ const COUNT_CONTROL_FIELDS: &[&str] = &[
     "max",
     "exactly",
     "count",
+    "required",
 ];
 
 pub(super) fn evaluate_event_expectations(
@@ -89,13 +91,17 @@ fn evaluate_event_presence(
         .map(str::to_string)
         .unwrap_or_else(|| format!("Structured event expectation `{id}` is observed."));
     let mut builder = ResultBuilder::new(id, description, None);
+    match required_assertion(table) {
+        Ok(required) => builder = builder.required(required),
+        Err(message) => return builder.failed(message).build(),
+    }
     let Some(events) = artifact
         .observability
         .as_ref()
         .map(|observability| observability.events.as_slice())
     else {
         return builder
-            .unsupported("run evidence has no captured structured Temper events")
+            .missing_fact("run evidence has no captured structured Temper events")
             .build();
     };
     let matcher = match EventMatcher::from_table(table, PRESENCE_CONTROL_FIELDS, artifact) {
@@ -180,13 +186,17 @@ fn evaluate_sequence(
         .map(str::to_string)
         .unwrap_or_else(|| format!("Structured event sequence `{id}` occurs in order."));
     let mut builder = ResultBuilder::new(id, description, None);
+    match required_assertion(table) {
+        Ok(required) => builder = builder.required(required),
+        Err(message) => return builder.failed(message).build(),
+    }
     let Some(events) = artifact
         .observability
         .as_ref()
         .map(|observability| observability.events.as_slice())
     else {
         return builder
-            .unsupported("run evidence has no captured structured Temper events")
+            .missing_fact("run evidence has no captured structured Temper events")
             .build();
     };
     let Some(items) = table.get("events").and_then(Value::as_array) else {
@@ -294,13 +304,17 @@ fn evaluate_count(
         .map(str::to_string)
         .unwrap_or_else(|| format!("Structured event count `{id}` matches."));
     let mut builder = ResultBuilder::new(id, description, None);
+    match required_assertion(table) {
+        Ok(required) => builder = builder.required(required),
+        Err(message) => return builder.failed(message).build(),
+    }
     let Some(events) = artifact
         .observability
         .as_ref()
         .map(|observability| observability.events.as_slice())
     else {
         return builder
-            .unsupported("run evidence has no captured structured Temper events")
+            .missing_fact("run evidence has no captured structured Temper events")
             .build();
     };
     let matcher = match EventMatcher::from_table(table, COUNT_CONTROL_FIELDS, artifact) {

@@ -35,6 +35,20 @@ pub(super) fn render_workflow_outcomes(
                 "  Each child must include non-blank `slug`, `title`, and `body`; sibling slugs must be unique and `depends_on` must be acyclic.\n",
             );
         }
+        for requirement in &contract.child_kind_requirements {
+            prompt.push_str(&format!(
+                "  The child set {} of kind `{}`.\n",
+                child_kind_count_requirement(requirement),
+                requirement.kind
+            ));
+            if !requirement.depends_on_all_kinds.is_empty() {
+                prompt.push_str(&format!(
+                    "  Every `{}` child must depend on every child of kind(s): {}.\n",
+                    requirement.kind,
+                    requirement.depends_on_all_kinds.join(", ")
+                ));
+            }
+        }
         for key in &contract.required_child_metadata {
             if key == "target_branch" && contract.target_branch.is_some() {
                 continue;
@@ -75,6 +89,25 @@ pub(super) fn render_workflow_outcomes(
                 "  The source artifact must contain non-blank workflow metadata `{key}`.\n"
             ));
         }
+    }
+}
+
+fn child_kind_count_requirement(requirement: &temper_verdict::ChildKindRequirement) -> String {
+    match requirement.max_children {
+        Some(max) if max == requirement.min_children => {
+            format!(
+                "requires exactly {} child product(s)",
+                requirement.min_children
+            )
+        }
+        Some(max) => format!(
+            "requires {}..={max} child product(s)",
+            requirement.min_children
+        ),
+        None => format!(
+            "requires at least {} child product(s)",
+            requirement.min_children
+        ),
     }
 }
 

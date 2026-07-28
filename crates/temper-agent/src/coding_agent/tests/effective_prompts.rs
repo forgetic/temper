@@ -67,6 +67,7 @@ fn registry_aware_guidance_names_only_finalized_tools() {
     let registry = named_registry(&optional_names);
     let role = system_prompt_with_registry(
         Capability::CodingWorkspace,
+        &context.work_item.role,
         &context.allowed_verdicts,
         &context.verdict_contracts,
         &registry,
@@ -92,6 +93,7 @@ fn registry_aware_guidance_names_only_finalized_tools() {
     let empty = named_registry(&[]);
     let role = system_prompt_with_registry(
         Capability::CodingWorkspace,
+        &context.work_item.role,
         &context.allowed_verdicts,
         &context.verdict_contracts,
         &empty,
@@ -107,6 +109,7 @@ fn registry_aware_guidance_names_only_finalized_tools() {
     let investigate_only = named_registry(&["investigate"]);
     let role = system_prompt_with_registry(
         Capability::CodingWorkspace,
+        "engineer",
         &[],
         &Default::default(),
         &investigate_only,
@@ -140,6 +143,7 @@ fn host_guidance_follows_filtered_submit_and_forge_registry() {
     );
     let role = system_prompt_with_registry(
         Capability::CodingWorkspace,
+        &context.work_item.role,
         &[],
         &Default::default(),
         &registry,
@@ -158,6 +162,7 @@ fn host_guidance_follows_filtered_submit_and_forge_registry() {
     );
     let role = system_prompt_with_registry(
         Capability::CodingWorkspace,
+        &context.work_item.role,
         &[],
         &Default::default(),
         &without_hosts,
@@ -177,11 +182,49 @@ fn host_guidance_follows_filtered_submit_and_forge_registry() {
     );
     let role = system_prompt_with_registry(
         Capability::CodingWorkspace,
+        &context.work_item.role,
         &[],
         &Default::default(),
         &read_only,
     );
     assert!(!role.contains("submit_for_pr"));
+}
+
+#[test]
+fn scenario_author_gets_writable_role_identity_and_submit_guidance() {
+    let mut context = parsed_fixture();
+    context.work_item.role = "scenario_author".to_string();
+    context.checkout = Some("writable".to_string());
+    context.allowed_verdicts.clear();
+    let submit: SubmitForPrCallback = std::sync::Arc::new(|_| {
+        Box::pin(async { temper_protocol_agent::SubmitForPrResponse::accepted("ok") })
+    });
+    let capability = Capability::for_role(&context.work_item.role);
+    let registry = tool_registry_for_context(
+        capability,
+        &context,
+        std::path::Path::new("."),
+        Some(submit),
+        None,
+    );
+
+    let role = system_prompt_with_registry(
+        capability,
+        &context.work_item.role,
+        &[],
+        &Default::default(),
+        &registry,
+    );
+    let names = registry
+        .tools()
+        .iter()
+        .map(|tool| tool.name())
+        .collect::<Vec<_>>();
+    assert!(role.contains("ROLE: scenario_author (coding_workspace capability)"));
+    assert!(!role.contains("ROLE: engineer"));
+    assert!(role.contains("`submit_for_pr`"));
+    assert!(names.contains(&"write"));
+    assert!(names.contains(&"submit_for_pr"));
 }
 
 #[test]
@@ -263,6 +306,7 @@ fn stable_effective_action_prompt_snapshots() {
         );
         let role = system_prompt_with_registry(
             capability,
+            &context.work_item.role,
             &context.allowed_verdicts,
             &context.verdict_contracts,
             &registry,

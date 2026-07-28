@@ -310,6 +310,18 @@ impl QueueAutomation {
     }
 }
 
+/// A validated per-kind requirement for an atomic child issue set.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ChildKindRequirement {
+    pub kind: ArtifactKindId,
+    #[serde(default = "default_min_children")]
+    pub min_children: usize,
+    #[serde(default)]
+    pub max_children: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on_all_kinds: Vec<ArtifactKindId>,
+}
+
 /// One AND-clause in a queue's disjunctive label filter.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueueLabelSet {
@@ -376,6 +388,8 @@ pub enum Effect {
         max_children: Option<usize>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         required_child_metadata: Vec<WorkflowMetadataKey>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        child_kind_requirements: Vec<ChildKindRequirement>,
         /// Explicit child target-branch production contract. `None` retains
         /// legacy behavior and never implies repository-default intent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -428,8 +442,9 @@ pub enum GateCondition {
         state: StateId,
     },
     /// Satisfied when every `dependency` relation target of the artifact has
-    /// landed, per runtime-supplied dependency status. Vacuously true for an
-    /// artifact with no dependency relations.
+    /// landed, per runtime-supplied dependency status. A blocked artifact must
+    /// have at least one dependency relation; missing projection fails closed.
+    /// Empty dependencies remain resolved for non-blocked optional gates.
     DependenciesResolved,
     /// Satisfied when the artifact's native CI passed, per the runtime-supplied
     /// CI signal computed from the Forge's `CiJob` conclusions (see ADR 0014).
@@ -442,4 +457,7 @@ pub enum GateCondition {
     ReviewApproved,
     /// Satisfied when a latest native review decision requests changes.
     ReviewChangesRequested,
+    /// Satisfied only when Temper-issued validation authority is complete and
+    /// bound to the freshly loaded pull-request source branch and head.
+    ExactHeadValidation,
 }

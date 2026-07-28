@@ -253,6 +253,20 @@ pub trait Forge: Send + Sync {
         path: &RepositoryPath,
     ) -> ForgeResult<Option<Repository>>;
 
+    /// Reads the exact current commit of a named repository branch.
+    ///
+    /// Landing authorization uses this immediately before aggregate PR creation.
+    /// Compatibility backends fail closed until they provide a native branch read.
+    async fn get_branch_head(
+        &self,
+        repo_id: &RepositoryId,
+        branch: &str,
+    ) -> ForgeResult<Option<String>> {
+        Err(ForgeError::Backend(format!(
+            "exact branch-head reads are unsupported for {repo_id}:{branch}"
+        )))
+    }
+
     /// Lists labels in a repository.
     async fn list_labels(&self, repo_id: &RepositoryId) -> ForgeResult<Vec<Label>>;
 

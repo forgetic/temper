@@ -2,19 +2,23 @@
 
 use serde::{Deserialize, Serialize};
 
+mod contract;
+
 use crate::{
     AcceptanceCriterion, ArtifactReference, EvidenceEntry, EvidenceKind, FollowUpIssueIntent,
     ValidatedClaim, ValidationReport, ValidationStatus, ValidationVerdict,
 };
 
 /// Stable schema id for workflow-native validator results.
-pub const VALIDATOR_RESULT_SCHEMA: &str = "temper.validator.result.v1";
+pub const VALIDATOR_RESULT_SCHEMA: &str = "temper.validator.result.v2";
+pub const LEGACY_VALIDATOR_RESULT_SCHEMA: &str = "temper.validator.result.v1";
 
 /// Structured validator output accepted by future workflow-native validation.
 ///
 /// The target is generalized beyond pull requests while related PR entries keep
 /// PR-level merge and source-issue facts available for aggregate validations.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidatorResult {
     /// Stable schema id, currently [`VALIDATOR_RESULT_SCHEMA`].
     pub schema: String,
@@ -25,6 +29,39 @@ pub struct ValidatorResult {
     pub related_prs: Vec<RelatedPullRequest>,
     /// Overall validator verdict.
     pub verdict: ValidationVerdict,
+    /// Feature artifact bound to this validation attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<String>,
+    /// Plan artifact bound to this validation attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Deterministic feature-to-scenario mapping identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mapping_id: Option<String>,
+    /// Mapped checked-in scenario name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario_name: Option<String>,
+    /// Mapped checked-in scenario path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario_path: Option<String>,
+    /// Source branch whose exact head was executed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_branch: Option<String>,
+    /// Exact checkout head SHA used by the scenario.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_head_sha: Option<String>,
+    /// Digest of the resolved scenario content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_content_digest: Option<String>,
+    /// Standalone Temper binary identity derived from that checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standalone_binary: Option<ValidatorBinaryIdentity>,
+    /// Total validation duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Logs and artifacts retained for this exact attempt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retained_paths: Vec<String>,
     /// Claims the validator attempted to prove or observe.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub validated_claims: Vec<ValidationAssertion>,
@@ -37,6 +74,9 @@ pub struct ValidatorResult {
     /// Missing proof, omitted context, flaky systems, or other limitations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limitations: Vec<String>,
+    /// Plain workflow follow-up intent retained even when no issue payload was proposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up_intent: Option<String>,
     /// Optional workflow-owned follow-up issue creation intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_up_issue: Option<FollowUpIssueIntent>,
@@ -53,10 +93,22 @@ impl ValidatorResult {
             target,
             related_prs: Vec::new(),
             verdict,
+            feature: None,
+            plan: None,
+            mapping_id: None,
+            scenario_name: None,
+            scenario_path: None,
+            source_branch: None,
+            exact_head_sha: None,
+            resolved_content_digest: None,
+            standalone_binary: None,
+            duration_ms: None,
+            retained_paths: Vec::new(),
             validated_claims: Vec::new(),
             acceptance_criteria: Vec::new(),
             evidence: Vec::new(),
             limitations: Vec::new(),
+            follow_up_intent: None,
             follow_up_issue: None,
             scenario_promotion: None,
         }
@@ -101,6 +153,17 @@ impl ValidatorResult {
             target,
             related_prs,
             verdict,
+            feature: None,
+            plan: None,
+            mapping_id: None,
+            scenario_name: None,
+            scenario_path: None,
+            source_branch: None,
+            exact_head_sha: None,
+            resolved_content_digest: None,
+            standalone_binary: None,
+            duration_ms: None,
+            retained_paths: Vec::new(),
             validated_claims: validated_claims
                 .into_iter()
                 .map(ValidationAssertion::from_claim)
@@ -115,14 +178,25 @@ impl ValidatorResult {
                 .map(|(index, entry)| StructuredEvidenceEntry::from_report_entry(index, entry))
                 .collect(),
             limitations,
+            follow_up_intent: None,
             follow_up_issue: follow_up,
             scenario_promotion: None,
         }
     }
 }
 
+/// Content-addressed standalone binary used by an exact-head validation.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValidatorBinaryIdentity {
+    pub path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
 /// Generalized selected target for a structured validator result.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidatorResultTarget {
     /// Workflow-defined kind, such as `implementation_pr`, `issue`, or `epic`.
     pub kind: String,
@@ -166,6 +240,7 @@ impl ValidatorResultTarget {
 
 /// Pull request facts related to a structured validator result.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RelatedPullRequest {
     /// Pull request number.
     pub pr_number: u64,
@@ -188,9 +263,13 @@ pub struct RelatedPullRequest {
 
 /// Claim or acceptance criterion status plus evidence references.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ValidationAssertion {
     /// Claim or criterion text.
     pub description: String,
+    /// Whether absence, failure, timeout, or unsupported evaluation blocks success.
+    #[serde(default = "required_by_default", skip_serializing_if = "is_true")]
+    pub required: bool,
     /// Status using the #55 validation report vocabulary.
     pub status: ValidationStatus,
     /// Evidence entry ids cited by this assertion.
@@ -203,6 +282,7 @@ impl ValidationAssertion {
     pub fn new(description: impl Into<String>, status: ValidationStatus) -> Self {
         Self {
             description: description.into(),
+            required: true,
             status,
             evidence_refs: Vec::new(),
         }
@@ -214,9 +294,17 @@ impl ValidationAssertion {
         self
     }
 
+    /// Mark this assertion as informational; its outcome remains distinguishable
+    /// but cannot by itself block the overall verdict.
+    pub fn optional(mut self) -> Self {
+        self.required = false;
+        self
+    }
+
     fn from_claim(claim: ValidatedClaim) -> Self {
         Self {
             description: claim.description,
+            required: true,
             status: claim.status,
             evidence_refs: claim.evidence,
         }
@@ -225,6 +313,7 @@ impl ValidationAssertion {
     fn from_criterion(criterion: AcceptanceCriterion) -> Self {
         Self {
             description: criterion.description,
+            required: true,
             status: criterion.status,
             evidence_refs: criterion.evidence,
         }
@@ -233,6 +322,7 @@ impl ValidationAssertion {
 
 /// Structured evidence entry cited by validation assertions.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StructuredEvidenceEntry {
     /// Stable evidence id unique within the result.
     pub id: String,
@@ -276,8 +366,17 @@ impl StructuredEvidenceEntry {
     }
 }
 
+fn required_by_default() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 /// Intent to turn validation knowledge into a checked-in scenario.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScenarioPromotionIntent {
     /// Proposed scenario name or slug.
     pub scenario_name: String,

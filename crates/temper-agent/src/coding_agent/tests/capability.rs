@@ -9,6 +9,10 @@ fn role_maps_to_capability() {
         Capability::CodingWorkspace
     );
     assert_eq!(
+        Capability::for_role("scenario_author"),
+        Capability::CodingWorkspace
+    );
+    assert_eq!(
         Capability::for_role("reviewer"),
         Capability::ReviewWorkspace
     );
@@ -23,7 +27,7 @@ fn role_maps_to_capability() {
 }
 
 #[test]
-fn only_engineer_is_writable() {
+fn coding_workspace_roles_are_writable() {
     assert!(Capability::CodingWorkspace.is_writable());
     assert!(!Capability::TriageWorkspace.is_writable());
     assert!(!Capability::ReviewWorkspace.is_writable());
@@ -138,7 +142,7 @@ fn tool_registry_writability_matches_capability() {
 }
 
 #[test]
-fn submit_for_pr_tool_exposed_only_to_writable_engineer_sessions() {
+fn submit_for_pr_tool_exposed_only_to_writable_coding_sessions() {
     let cwd = std::env::temp_dir();
     let callback = || {
         std::sync::Arc::new(|_| {
@@ -156,6 +160,19 @@ fn submit_for_pr_tool_exposed_only_to_writable_engineer_sessions() {
         None,
     );
     assert!(tool_names(&engineer_tools).contains(&"submit_for_pr"));
+
+    let mut scenario_author = engineer.clone();
+    scenario_author.work_item.role = "scenario_author".to_string();
+    let scenario_tools = tool_registry_for_context(
+        Capability::for_role("scenario_author"),
+        &scenario_author,
+        &cwd,
+        Some(callback()),
+        None,
+    );
+    let names = tool_names(&scenario_tools);
+    assert!(names.contains(&"write"));
+    assert!(names.contains(&"submit_for_pr"));
 
     let mut read_only_engineer = engineer.clone();
     read_only_engineer.checkout = Some("read_only".to_string());
@@ -202,6 +219,7 @@ fn forge_tools_are_available_to_every_role_only_with_a_host() {
     for (role, capability) in [
         ("architect", Capability::TriageWorkspace),
         ("engineer", Capability::CodingWorkspace),
+        ("scenario_author", Capability::CodingWorkspace),
         ("reviewer", Capability::ReviewWorkspace),
         ("tester", Capability::ReviewWorkspace),
     ] {

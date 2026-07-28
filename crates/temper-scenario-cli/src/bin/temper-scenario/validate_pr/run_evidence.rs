@@ -75,9 +75,36 @@ pub(super) fn add_run_evidence_validation(
         return Ok(());
     }
 
+    add_execution_verdict_validation(report, &loaded.artifact);
     add_manifest_assertion_validation(report, &loaded.artifact);
     compare_run_evidence(report, &loaded.artifact, scenario_path, tier, tier_explicit)?;
     Ok(())
+}
+
+fn add_execution_verdict_validation(
+    report: &mut ValidationReport,
+    artifact: &crate::run_evidence::RunEvidenceArtifact,
+) {
+    match artifact.verdict {
+        crate::run_evidence::RunEvidenceVerdict::Passed => {}
+        crate::run_evidence::RunEvidenceVerdict::Failed => {
+            report.verdict = ValidationVerdict::Failed;
+            report.limitations.extend(artifact.limitations.clone());
+            report.validated_claims.push(
+                ValidatedClaim::new(
+                    "The scenario executor completed successfully.",
+                    ValidationStatus::Failed,
+                )
+                .with_evidence("run evidence verdict: failed"),
+            );
+        }
+        crate::run_evidence::RunEvidenceVerdict::Inconclusive => {
+            if report.verdict != ValidationVerdict::Failed {
+                report.verdict = ValidationVerdict::Inconclusive;
+            }
+            report.limitations.extend(artifact.limitations.clone());
+        }
+    }
 }
 
 fn add_manifest_assertion_validation(
@@ -93,27 +120,32 @@ fn add_manifest_assertion_validation(
     };
 
     let summary = assertions.summary();
-    let status = if assertions.has_failures() {
-        report.verdict = ValidationVerdict::Failed;
-        ValidationStatus::Failed
-    } else {
-        ValidationStatus::Observed
+    let (claim_status, criterion_status) = match assertions.verdict() {
+        crate::run_evidence::RunEvidenceVerdict::Failed => {
+            report.verdict = ValidationVerdict::Failed;
+            (ValidationStatus::Failed, ValidationStatus::Failed)
+        }
+        crate::run_evidence::RunEvidenceVerdict::Inconclusive => {
+            if report.verdict != ValidationVerdict::Failed {
+                report.verdict = ValidationVerdict::Inconclusive;
+            }
+            (ValidationStatus::Unproven, ValidationStatus::Unproven)
+        }
+        crate::run_evidence::RunEvidenceVerdict::Passed => {
+            (ValidationStatus::Observed, ValidationStatus::Satisfied)
+        }
     };
     report.validated_claims.push(
         ValidatedClaim::new(
-            "Manifest assertions declared by the scenario have no failing results.",
-            status,
+            "All required manifest assertions declared by the scenario passed.",
+            claim_status,
         )
         .with_evidence(summary.clone()),
     );
     report.acceptance_criteria.push(
         AcceptanceCriterion::new(
             "Declarative manifest expectations are evaluated from structured run evidence.",
-            if assertions.has_failures() {
-                ValidationStatus::Failed
-            } else {
-                ValidationStatus::Satisfied
-            },
+            criterion_status,
         )
         .with_evidence(summary),
     );

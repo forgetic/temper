@@ -226,6 +226,31 @@ fn mechanical_worker<'a>(
 }
 
 #[test]
+fn mechanical_worker_keeps_missing_dependency_projection_blocked() {
+    let forge = MemoryForge::new();
+    let repo = new_repo(&forge);
+    let blocked = create_issue(&forge, &repo, &["code", "blocked"]);
+    let workflow = workflow();
+    let journal = InMemoryJournal::new();
+    let worker = mechanical_worker(&forge, &repo, &workflow, &journal);
+
+    assert_eq!(
+        block_on(worker.tick(ts("2026-05-29T00:00:00Z"))).expect("tick succeeds"),
+        Progress::unchanged(),
+        "a dependency-gated automation must not treat an empty relation set as resolved"
+    );
+    assert_eq!(
+        issue_labels(&forge, &repo, blocked),
+        vec!["blocked".to_string(), "code".to_string()]
+    );
+    assert_eq!(
+        worker.advisory_actions(),
+        1,
+        "the reconciler retains the missing-dependency diagnostic"
+    );
+}
+
+#[test]
 fn mechanical_worker_unblocks_resolved_dependency_once() {
     let forge = MemoryForge::new();
     let repo = new_repo(&forge);

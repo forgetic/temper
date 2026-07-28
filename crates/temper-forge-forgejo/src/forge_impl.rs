@@ -58,6 +58,14 @@ impl<C: HttpClient> Forge for ForgejoForge<C> {
         self.get_repository_by_path(path).await
     }
 
+    async fn get_branch_head(
+        &self,
+        repo_id: &RepositoryId,
+        branch: &str,
+    ) -> ForgeResult<Option<String>> {
+        self.get_branch_head(repo_id, branch).await
+    }
+
     async fn list_labels(&self, repo_id: &RepositoryId) -> ForgeResult<Vec<Label>> {
         self.list_labels(repo_id).await
     }

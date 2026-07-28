@@ -17,14 +17,30 @@ the same cheap check that runs in fast CI:
 cargo dev-scenario-check
 ```
 
-Exercise the validation-grade live `basic-delivery` lane. This builds a
-standalone `temper` binary, then runs real Forgejo + real `forgejo-runner` CI +
-real standalone Temper + Jig fake LLM agents through the live-only
+Exercise one explicit validation-grade live scenario. This builds a standalone
+`temper` binary, then runs real Forgejo + real `forgejo-runner` CI + real
+standalone Temper + Jig fake LLM agents through the live-only
 `runner.uses = "manifest"` path:
 
 ```sh
-cargo dev-scenario-run
+cargo dev-scenario-run scenarios/<scenario-name>
 ```
+
+The command has no default scenario. For an aggregate feature landing, resolve
+and run its sole mapping instead:
+
+```sh
+cargo dev-scenario-validate-feature \
+  --feature <owner/repo#issue> \
+  --landing-base <revision> \
+  --source-branch <feature-branch> \
+  --pr <landing-pr> \
+  --sha "$(git rev-parse HEAD)" \
+  --output-dir target/focused-validation
+```
+
+See [Run focused feature validation](run-focused-feature-validation.md) for the
+evidence and stale-head contract.
 
 The manifest runner intentionally rejects hermetic, MemoryForge-only, and
 in-process Temper substitutes. For fast local coverage, use focused crate tests

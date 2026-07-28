@@ -35,6 +35,7 @@ pub(crate) fn append_script_assertions(
         let hook_dir = artifact_dir.join(HOOK_ARTIFACT_DIR).join("assertions");
         let result = config_error_result(
             "assertions".to_string(),
+            true,
             None,
             None,
             None,
@@ -58,11 +59,16 @@ pub(crate) fn append_script_assertions(
             .join(HOOK_ARTIFACT_DIR)
             .join(format!("{index:02}-{}", safe_file_component(&id)));
 
+        let required = table
+            .and_then(|table| table.get("required"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let result = match table {
             Some(table) => match parse_hook(index, &id, table, artifact) {
                 Ok(hook) => run_hook(&hook, artifact, artifact_dir, &hook_dir),
                 Err(message) => Ok(config_error_result(
                     id,
+                    required,
                     table
                         .get("kind")
                         .and_then(Value::as_str)
@@ -81,6 +87,7 @@ pub(crate) fn append_script_assertions(
             },
             None => Ok(config_error_result(
                 id,
+                true,
                 None,
                 None,
                 None,
@@ -98,6 +105,7 @@ pub(crate) fn append_script_assertions(
 #[derive(Debug, Clone)]
 pub(super) struct ScriptHook {
     pub(super) id: String,
+    pub(super) required: bool,
     pub(super) phase: String,
     pub(super) command: PathBuf,
     pub(super) cwd: PathBuf,
@@ -152,6 +160,7 @@ fn parse_hook(
 
     Ok(ScriptHook {
         id: id.to_string(),
+        required: optional_bool(table, "required", index)?.unwrap_or(true),
         phase,
         command,
         cwd,
@@ -162,6 +171,7 @@ fn parse_hook(
 
 fn config_error_result(
     id: String,
+    required: bool,
     kind: Option<String>,
     phase: Option<String>,
     command: Option<String>,
@@ -173,6 +183,7 @@ fn config_error_result(
     let _ = fs::write(&status_path, format!("{message}\n"));
     AssertionResultEvidence {
         id,
+        required,
         status: ASSERTION_STATUS_FAILED.to_string(),
         description: "Script assertion hook configuration is invalid.".to_string(),
         artifact: None,
@@ -197,8 +208,9 @@ fn config_error_result(
 fn append_result(artifact: &mut RunEvidenceArtifact, result: AssertionResultEvidence) {
     if let Some(assertions) = artifact.assertions.as_mut() {
         assertions.append_result(result);
+        artifact.verdict = assertions.verdict();
     } else {
-        artifact.assertions = Some(AssertionEvidence::from_results(vec![result]));
+        artifact.record_assertions(AssertionEvidence::from_results(vec![result]));
     }
 }
 
@@ -253,6 +265,16 @@ fn optional_string(
         return Err(format!("assertions[{index}].{field} must not be empty"));
     }
     Ok(Some(trimmed.to_string()))
+}
+
+fn optional_bool(table: &toml::Table, field: &str, index: usize) -> Result<Option<bool>, String> {
+    let Some(value) = table.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| format!("assertions[{index}].{field} must be a boolean"))
 }
 
 fn timeout_ms(table: &toml::Table, index: usize) -> Result<u64, String> {
@@ -339,7 +361,19 @@ fn is_env_name(name: &str) -> bool {
 }
 
 fn is_reserved_env(name: &str) -> bool {
-    matches!(name, "PATH" | "LC_ALL") || name.starts_with("TEMPER_SCENARIO_")
+    let upper = name.to_ascii_uppercase();
+    matches!(name, "PATH" | "LC_ALL")
+        || name.starts_with("TEMPER_SCENARIO_")
+        || [
+            "TOKEN",
+            "SECRET",
+            "PASSWORD",
+            "CREDENTIAL",
+            "AUTH",
+            "API_KEY",
+        ]
+        .iter()
+        .any(|marker| upper.contains(marker))
 }
 
 fn safe_file_component(value: &str) -> String {
@@ -357,5 +391,26 @@ fn safe_file_component(value: &str) -> String {
         "assertion".to_string()
     } else {
         safe
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn script_assertions_cannot_import_or_override_credentials() {
+        for name in [
+            "FORGEJO_TOKEN",
+            "API_SECRET",
+            "USER_PASSWORD",
+            "AWS_CREDENTIAL_FILE",
+            "HTTP_AUTH",
+            "OPENAI_API_KEY",
+            "TEMPER_SCENARIO_CONTEXT",
+        ] {
+            assert!(is_reserved_env(name), "{name}");
+        }
+        assert!(!is_reserved_env("SCENARIO_EXPECTED_VALUE"));
     }
 }

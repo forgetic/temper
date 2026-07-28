@@ -21,6 +21,7 @@ mod body_merge;
 mod body_update;
 mod claim;
 mod coordinated;
+pub(crate) mod exact_head_validation;
 mod failure;
 mod model_recovery;
 mod pr_repair;

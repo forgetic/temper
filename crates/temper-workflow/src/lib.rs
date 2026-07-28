@@ -150,11 +150,11 @@ pub use load::{
     parse_workflow_document, parse_workflow_spec,
 };
 pub use metadata::{
-    CreateIssueIntentChild, CreateIssuesCompletion, CreateIssuesIntent, DurableAssignment, Lease,
-    METADATA_BEGIN, METADATA_END, MetadataBlockInspection, MetadataBlockSpan, MetadataError,
-    WorkflowMetadata, WorkflowMetadataKey, global_child_correlation_key, inspect_metadata_blocks,
-    is_heartbeat_only_body_change, parse_metadata_block, render_metadata_block,
-    replace_metadata_block, split_metadata_block,
+    CreateIssueIntentChild, CreateIssuesCompletion, CreateIssuesIntent, DurableAssignment,
+    ExactHeadValidationAuthority, Lease, METADATA_BEGIN, METADATA_END, MetadataBlockInspection,
+    MetadataBlockSpan, MetadataError, WorkflowMetadata, WorkflowMetadataKey,
+    global_child_correlation_key, inspect_metadata_blocks, is_heartbeat_only_body_change,
+    parse_metadata_block, render_metadata_block, replace_metadata_block, split_metadata_block,
 };
 pub use missing_ci::MissingCiRecoveryState;
 pub use plan::{
@@ -172,15 +172,17 @@ pub use reconcile::{
 pub use recover::{Applier, ApplyError, ApplyOutcome};
 pub use relation::RelationKind;
 pub use spec::{
-    RawArtifactKind, RawEffect, RawExternalTool, RawGate, RawGateCondition, RawIntakeAuthor,
-    RawLabel, RawQueue, RawQueueAction, RawQueueAutomation, RawQueueLabelSet, RawRelation, RawRole,
-    RawRolePrompt, RawState, RawStateDimension, RawTransition, RawValidationBinding,
-    RawValidationBindingDetail, RawWorkflowSpec, TargetBranchPolicy,
+    RawArtifactKind, RawChildKindRequirement, RawEffect, RawExternalTool, RawGate,
+    RawGateCondition, RawIntakeAuthor, RawLabel, RawQueue, RawQueueAction, RawQueueAutomation,
+    RawQueueLabelSet, RawRelation, RawRole, RawRolePrompt, RawState, RawStateDimension,
+    RawTransition, RawValidationBinding, RawValidationBindingDetail, RawWorkflowSpec,
+    TargetBranchPolicy,
 };
 pub use validate::validate;
 pub use validated::{
-    Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor, QueueAction, QueueAutomation,
-    QueueLabelSet, RolePromptExtension, ValidatedArtifactKind, ValidatedGate, ValidatedQueue,
-    ValidatedRelation, ValidatedRole, ValidatedState, ValidatedStateDimension, ValidatedTransition,
-    ValidatedValidationBinding, ValidatedWorkflow, ValidationBindingDetail,
+    ChildKindRequirement, Effect, ExternalToolDeclaration, GateCondition, IntakeAuthor,
+    QueueAction, QueueAutomation, QueueLabelSet, RolePromptExtension, ValidatedArtifactKind,
+    ValidatedGate, ValidatedQueue, ValidatedRelation, ValidatedRole, ValidatedState,
+    ValidatedStateDimension, ValidatedTransition, ValidatedValidationBinding, ValidatedWorkflow,
+    ValidationBindingDetail,
 };

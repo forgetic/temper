@@ -5,7 +5,10 @@
 use std::collections::BTreeSet;
 
 use temper_protocol_worker::JobArtifactSnapshot;
-use temper_verdict::{SourceMetadata, TargetBranchRequirement, VerdictContract, VerdictContracts};
+use temper_verdict::{
+    ChildKindRequirement, SourceMetadata, TargetBranchRequirement, VerdictContract,
+    VerdictContracts,
+};
 use temper_workflow::{
     ArtifactKindId, Effect, RelationKind, TargetBranchPolicy, ToolManifest, ValidatedWorkflow,
     WorkflowMetadata, parse_metadata_block,
@@ -44,6 +47,7 @@ pub(crate) fn derive_verdict_contracts(
                         min_children,
                         max_children,
                         required_child_metadata,
+                        child_kind_requirements,
                         ..
                     } => {
                         if !has_create_issues {
@@ -60,17 +64,39 @@ pub(crate) fn derive_verdict_contracts(
                         for key in required_child_metadata {
                             push_unique(&mut contract.required_child_metadata, key.as_str());
                         }
-                        for relation in workflow.relations().iter().filter(|relation| {
-                            relation.kind == RelationKind::Parent
-                                && relation.target == transition.artifact
-                                && workflow
-                                    .artifact_kind(&relation.source)
-                                    .is_some_and(|kind| {
-                                        kind.target == temper_workflow::ArtifactTarget::Issue
-                                    })
-                                && child_kind_has_reachable_queue(workflow, &relation.source)
-                        }) {
-                            child_kinds.insert(relation.source.as_str().to_string());
+                        contract.child_kind_requirements.extend(
+                            child_kind_requirements.iter().map(|requirement| {
+                                ChildKindRequirement {
+                                    kind: requirement.kind.as_str().to_string(),
+                                    min_children: requirement.min_children,
+                                    max_children: requirement.max_children,
+                                    depends_on_all_kinds: requirement
+                                        .depends_on_all_kinds
+                                        .iter()
+                                        .map(|kind| kind.as_str().to_string())
+                                        .collect(),
+                                }
+                            }),
+                        );
+                        if child_kind_requirements.is_empty() {
+                            for relation in workflow.relations().iter().filter(|relation| {
+                                relation.kind == RelationKind::Parent
+                                    && relation.target == transition.artifact
+                                    && workflow.artifact_kind(&relation.source).is_some_and(
+                                        |kind| {
+                                            kind.target == temper_workflow::ArtifactTarget::Issue
+                                        },
+                                    )
+                                    && child_kind_has_reachable_queue(workflow, &relation.source)
+                            }) {
+                                child_kinds.insert(relation.source.as_str().to_string());
+                            }
+                        } else {
+                            child_kinds.extend(
+                                child_kind_requirements
+                                    .iter()
+                                    .map(|requirement| requirement.kind.as_str().to_string()),
+                            );
                         }
                     }
                     Effect::CreatePullRequest { artifact_kind, .. } => {
@@ -312,7 +338,24 @@ mod tests {
         let contracts = derive_verdict_contracts(&workflow, &decompose_plan);
         assert_eq!(
             contracts["children_ready"].allowed_child_kinds,
-            vec!["code"]
+            vec!["code", "validation"]
+        );
+        assert_eq!(
+            contracts["children_ready"].child_kind_requirements,
+            vec![
+                ChildKindRequirement {
+                    kind: "code".to_string(),
+                    min_children: 1,
+                    max_children: None,
+                    depends_on_all_kinds: Vec::new(),
+                },
+                ChildKindRequirement {
+                    kind: "validation".to_string(),
+                    min_children: 1,
+                    max_children: Some(1),
+                    depends_on_all_kinds: vec!["code".to_string()],
+                },
+            ]
         );
 
         let (_, validate) = workflow_and_tool("validate_plan", "tester");
@@ -324,10 +367,18 @@ mod tests {
             vec!["target_branch"]
         );
         assert!(contracts["needs_followup"].min_children >= 1);
-        assert!(
-            contracts["needs_followup"]
-                .allowed_child_kinds
-                .contains(&"code".to_string())
+        assert_eq!(
+            contracts["needs_followup"].allowed_child_kinds,
+            vec!["code".to_string()]
+        );
+        assert_eq!(
+            contracts["needs_followup"].child_kind_requirements,
+            vec![ChildKindRequirement {
+                kind: "code".to_string(),
+                min_children: 1,
+                max_children: None,
+                depends_on_all_kinds: Vec::new(),
+            }]
         );
     }
 

@@ -1,17 +1,23 @@
 // SPDX-License-Identifier: MPL-2.0
 
-#[path = "temper-scenario/basic_delivery.rs"]
-mod basic_delivery;
+#[path = "temper-scenario/focused_validation.rs"]
+mod focused_validation;
+#[path = "temper-scenario/manifest_executor.rs"]
+mod manifest_executor;
 #[path = "temper-scenario/manifest_runner.rs"]
 mod manifest_runner;
 #[path = "temper-scenario/promote.rs"]
 mod promote;
+#[path = "temper-scenario/resolve_feature.rs"]
+mod resolve_feature;
 #[path = "temper-scenario/run_context.rs"]
 mod run_context;
 #[path = "temper-scenario/run_evidence.rs"]
 mod run_evidence;
 #[path = "temper-scenario/runner_registry.rs"]
 mod runner_registry;
+#[path = "temper-scenario/scaffold.rs"]
+mod scaffold;
 #[path = "temper-scenario/validate.rs"]
 mod validate;
 #[path = "temper-scenario/validate_pr.rs"]
@@ -20,6 +26,7 @@ mod validate_pr;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Instant;
 
 use temper_scenario_core::{
     DEFAULT_SCENARIOS_DIR, Diagnostic, Severity, check_scenario, check_scenarios,
@@ -29,19 +36,23 @@ use temper_scenario_core::{
 use run_context::{ScenarioRunFacts, ScenarioTier};
 
 const EX_USAGE: u8 = 64;
+const RUN_EVIDENCE_FILE: &str = "run-evidence.json";
 
 const USAGE: &str = "\
-temper-scenario: list, check, run, validate, and draft Temper scenario artifacts
+temper-scenario: list, check, scaffold, resolve, run, and validate Temper scenario artifacts
 
 Usage: temper-scenario <COMMAND> [OPTIONS]
 
 Commands:
-  list         List scenario directories and stable manifest metadata
-  check        Validate one scenario path or all scenarios under a scenarios directory
-  run          Run a supported scenario at an explicit confidence tier
-  validate     Run a scenario bundle and render validation artifacts from structured evidence
-  validate-pr  Write a temporary post-merge PR validation Markdown report
-  promote      Draft an optional scenario-promotion candidate from validation artifacts
+  list              List scenario directories and stable manifest metadata
+  check             Validate one scenario path or all scenarios under a scenarios directory
+  scaffold          Create a minimal inherited feature scenario with local Jig data
+  resolve-feature   Resolve one active feature-mapped scenario and emit deterministic JSON
+  run               Run a supported scenario at an explicit confidence tier
+  validate          Run a scenario bundle and render validation artifacts from structured evidence
+  validate-feature  Resolve and run one mapped scenario at an exact feature-landing head
+  validate-pr       Write a temporary post-merge PR validation Markdown report
+  promote           Draft an optional scenario-promotion candidate from validation artifacts
 
 Options:
   -h, --help  Print help
@@ -89,13 +100,8 @@ stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM. It is
 live-only and rejects hermetic, MemoryForge, or in-process substitutes instead
 of falling back.
 
-For live manifest scenarios, pass --temper-bin <PATH>, set
-TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling target-dir `temper` binary.
-`cargo dev-scenario-run` builds and delegates to the live lane.
-
-Supported runner ids: `manifest` (live only). Manifests must select it with
-`[runner] uses = \"manifest\"`; when that selector is absent, `run` fails clearly
-because the legacy manifest `name` fallback has been removed.";
+For live manifests, pass --temper-bin <PATH>, set TEMPER_SCENARIO_TEMPER_BIN,
+or prebuild a sibling target-dir `temper`; `cargo dev-scenario-run <path>` builds it.\nManifests must select `[runner] uses = \"manifest\"`; the legacy manifest `name` fallback has been removed.";
 
 fn main() -> ExitCode {
     run(env::args().skip(1))
@@ -115,8 +121,11 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
         }
         "list" => list_command(rest),
         "check" => check_command(rest),
+        "scaffold" => scaffold::command(rest),
+        "resolve-feature" => resolve_feature::command(rest),
         "run" => run_command(rest),
         "validate" => validate::command(rest),
+        "validate-feature" => focused_validation::command(rest),
         "validate-pr" => validate_pr::command(rest),
         "promote" => promote::command(rest),
         other => {
@@ -281,6 +290,7 @@ fn run_command(args: &[String]) -> ExitCode {
 
     let evidence_context =
         run_evidence::RunEvidenceContext::from_check_report(&report, &facts, &selected_runner);
+    let started = Instant::now();
     let result = selected_runner.run_and_print(
         &report.scenario_path,
         manifest_path,
@@ -301,7 +311,7 @@ fn run_command(args: &[String]) -> ExitCode {
                     }
                 };
             if let Some(assertions) = assertion_evidence {
-                artifact.assertions = Some(assertions);
+                artifact.record_assertions(assertions);
             }
 
             let artifact_dir = run_artifact_dir(args.evidence_out.as_deref(), &manifest.name);
@@ -319,7 +329,15 @@ fn run_command(args: &[String]) -> ExitCode {
             if let Some(assertions) = artifact.assertions.as_ref() {
                 run_evidence::print_assertions(assertions);
             }
-            if let Some(path) = args.evidence_out.as_deref() {
+            let evidence_destination = args
+                .evidence_out
+                .clone()
+                .or_else(|| assertions_failed.then(|| artifact_dir.join(RUN_EVIDENCE_FILE)));
+            if let Some(path) = evidence_destination.as_deref() {
+                artifact
+                    .artifacts
+                    .artifact_paths
+                    .push(resolved_run_evidence_output(path).display().to_string());
                 match artifact.write_to_path(path) {
                     Ok(path) => println!("run evidence: {}", path.display()),
                     Err(error) => {
@@ -336,9 +354,47 @@ fn run_command(args: &[String]) -> ExitCode {
             }
         }
         Err(error) => {
+            let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let mut artifact = evidence_context.failure_artifact(error.clone(), elapsed_ms);
+            match run_evidence::evaluate_manifest_assertions(manifest_path, &artifact) {
+                Ok(Some(assertions)) => artifact.record_assertions(assertions),
+                Ok(None) => {}
+                Err(assertion_error) => artifact.limitations.push(format!(
+                    "Declarative assertions could not be evaluated after execution failure: {assertion_error}"
+                )),
+            }
+            artifact.limitations.push(
+                "After-convergence script assertions were not executed because convergence did not complete."
+                    .to_string(),
+            );
+            let path = args
+                .evidence_out
+                .clone()
+                .unwrap_or_else(|| run_artifact_dir(None, &manifest.name).join(RUN_EVIDENCE_FILE));
+            artifact
+                .artifacts
+                .artifact_paths
+                .push(resolved_run_evidence_output(&path).display().to_string());
+            match artifact.write_to_path(&path) {
+                Ok(path) => eprintln!(
+                    "temper-scenario run: failure evidence retained at {}",
+                    path.display()
+                ),
+                Err(write_error) => eprintln!(
+                    "temper-scenario run: could not retain failure evidence: {write_error}"
+                ),
+            }
             eprintln!("temper-scenario run: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn resolved_run_evidence_output(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.join(RUN_EVIDENCE_FILE)
+    } else {
+        path.to_path_buf()
     }
 }
 
@@ -354,13 +410,26 @@ fn run_artifact_dir(evidence_out: Option<&Path>, scenario_name: &str) -> PathBuf
             .unwrap_or_else(|| PathBuf::from("."));
     }
 
-    PathBuf::from("target")
-        .join("temper-scenario-artifacts")
-        .join(format!(
-            "{}-{}",
-            safe_file_component(scenario_name),
-            std::process::id()
-        ))
+    let root = env::current_dir()
+        .ok()
+        .and_then(|current| scenario_workspace_root(&current))
+        .map(|root| root.join("target"))
+        .unwrap_or_else(std::env::temp_dir);
+    root.join("temper-scenario-artifacts").join(format!(
+        "{}-{}",
+        safe_file_component(scenario_name),
+        std::process::id()
+    ))
+}
+
+fn scenario_workspace_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start;
+    loop {
+        if current.join("Cargo.toml").is_file() && current.join("scenarios").is_dir() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
 }
 
 fn safe_file_component(value: &str) -> String {

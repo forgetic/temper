@@ -25,6 +25,36 @@ impl ValidatorResult {
             let _ = writeln!(output, "- Trigger: {trigger_reason}");
         }
         let _ = writeln!(output, "- Verdict: {}", self.verdict);
+        for (label, value) in [
+            ("Feature", self.feature.as_deref()),
+            ("Plan", self.plan.as_deref()),
+            ("Mapping identity", self.mapping_id.as_deref()),
+            ("Mapped scenario", self.scenario_name.as_deref()),
+            ("Scenario path", self.scenario_path.as_deref()),
+            ("Source branch", self.source_branch.as_deref()),
+            ("Exact head SHA", self.exact_head_sha.as_deref()),
+            (
+                "Resolved content digest",
+                self.resolved_content_digest.as_deref(),
+            ),
+        ] {
+            if let Some(value) = value {
+                let _ = writeln!(output, "- {label}: `{value}`");
+            }
+        }
+        if let Some(binary) = &self.standalone_binary {
+            let _ = writeln!(
+                output,
+                "- Standalone binary: `{}` sha256={} size_bytes={}",
+                binary.path, binary.sha256, binary.size_bytes
+            );
+        }
+        if let Some(duration_ms) = self.duration_ms {
+            let _ = writeln!(output, "- Duration: {duration_ms}ms");
+        }
+        for path in &self.retained_paths {
+            let _ = writeln!(output, "- Retained artifact: `{path}`");
+        }
         let _ = writeln!(output);
 
         let _ = writeln!(output, "## Related PRs");
@@ -88,11 +118,15 @@ impl ValidatorResult {
 
         let _ = writeln!(output, "## Follow-up intent");
         let _ = writeln!(output);
+        if let Some(intent) = self.follow_up_intent.as_deref() {
+            write_bullet(&mut output, intent, "");
+        }
         match &self.follow_up_issue {
             Some(intent) => write_follow_up(&mut output, intent),
-            None => {
+            None if self.follow_up_intent.is_none() => {
                 let _ = writeln!(output, "- None recorded.");
             }
+            None => {}
         }
         let _ = writeln!(output);
 
@@ -130,7 +164,15 @@ fn write_assertions(output: &mut String, assertions: &[ValidationAssertion]) {
     }
 
     for assertion in assertions {
-        let _ = writeln!(output, "- [{}] {}", assertion.status, assertion.description);
+        if assertion.required {
+            let _ = writeln!(output, "- [{}] {}", assertion.status, assertion.description);
+        } else {
+            let _ = writeln!(
+                output,
+                "- [{}, optional] {}",
+                assertion.status, assertion.description
+            );
+        }
         for evidence_ref in &assertion.evidence_refs {
             write_bullet(output, &format!("evidence: `{evidence_ref}`"), "  ");
         }

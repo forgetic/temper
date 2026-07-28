@@ -63,6 +63,14 @@ queues = ["code_ready"]
 expected_output = "feature_branch_implementation_prs"
 
 [[agents]]
+role = "scenario_author"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["validation_ready", "scenario_pr_ci_failed", "scenario_pr_merge_conflict"]
+expected_output = "feature_branch_scenario_pr"
+
+[[agents]]
 role = "tester"
 kind = "llm"
 mode = "scripted-fake"
@@ -74,7 +82,7 @@ expected_output = "feature_landing_pr"
 role = "mechanical"
 kind = "built-in"
 mode = "automation"
-queues = ["blocked_code_unblock", "implementation_landing", "plan_dependencies_resolved", "feature_landing"]
+queues = ["blocked_code_unblock", "blocked_validation_unblock", "implementation_landing", "scenario_landing", "plan_dependencies_resolved", "feature_landing"]
 
 [[steps]]
 id = "provision-forgejo"
@@ -85,35 +93,41 @@ id = "wait-for-forgejo-runner"
 action = "forgejo_runner.ready"
 
 [[steps]]
-id = "seed-service-repo"
-action = "repo.seed"
-repo = "service"
-seed_path = "repo"
-ci_source = "repo/.forgejo/workflows/ci.yml"
-
-[[steps]]
 id = "configure-jig-architect-response"
 action = "jig.fake_llm"
 role = "architect"
-script = "plan-centric-feature-branch"
+script_path = "jig/plan-centric-feature-branch.json"
 
 [[steps]]
 id = "configure-jig-engineer-response"
 action = "jig.fake_llm"
 role = "engineer"
-script = "plan-centric-feature-branch"
+script_path = "jig/plan-centric-feature-branch.json"
+
+[[steps]]
+id = "configure-jig-scenario-author-response"
+action = "jig.fake_llm"
+role = "scenario_author"
+script_path = "jig/plan-centric-feature-branch.json"
 
 [[steps]]
 id = "configure-jig-tester-response"
 action = "jig.fake_llm"
 role = "tester"
-script = "plan-centric-feature-branch"
+script_path = "jig/plan-centric-feature-branch.json"
 
 [[steps]]
 id = "launch-standalone-temper"
 action = "temper.launch_standalone"
 config = "config/workflow.json"
 requires_observability = true
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "repo/.forgejo/workflows/ci.yml"
 
 [[steps]]
 id = "seed-feature-issue"
@@ -126,11 +140,26 @@ after = "temper.launch_standalone"
 [[steps]]
 id = "wait-for-plan-centric-convergence"
 action = "workflow.wait_convergence"
-until = "three implementation PRs merged only to the derived feature branch, then one CI-green aggregate landing PR merged to main and feature plus plan issues closed"
+strategy = "plan-feature-landing"
+until = "two product PRs merge to the derived feature branch, the dependent scenario child unblocks and its scenario PR merges there, then one branch-local follow-up lands before a CI-green aggregate landing PR merges to main"
 
 [expect]
 outcome = "Repository-default feature metadata is replaced by an engine-derived branch, inherited through validation follow-up work, and landed through exactly one CI-gated aggregate PR."
-closed_parent_issues = 5
+closed_parent_issues = 6
+
+[[expect.checks]]
+required = true
+id = "scenario-child-finalized"
+artifact = "issue:scenario"
+state = "closed"
+
+[[expect.checks]]
+required = true
+id = "scenario-pr-landed"
+artifact = "pull_request:scenario-implementation"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
 
 [change_policy]
 validation_report_required = true

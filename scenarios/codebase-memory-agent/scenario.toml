@@ -71,13 +71,6 @@ action = "forgejo_runner.ready"
 description = "Register and require the real host forgejo-runner / Actions CI worker."
 
 [[steps]]
-id = "seed-demo-repo"
-action = "repo.seed"
-repo = "service"
-seed_path = "repo"
-ci_source = "config/ci.yml"
-
-[[steps]]
 id = "start-fake-codebase-memory-mcp"
 action = "mcp.fake_codebase_memory.start"
 project = "actual-demo-project"
@@ -97,7 +90,7 @@ server = "$step:start-fake-codebase-memory-mcp"
 id = "configure-jig-fake-llm"
 action = "jig.fake_llm"
 role = "engineer"
-script = "codebase-memory-agent"
+script_path = "jig/codebase-memory-agent.json"
 first_tool = "codebase_memory_search_code"
 expected_result = "FAKE_MCP_SEARCH_RESULT"
 expected_output_name = "MEMORY_NOTES.md"
@@ -109,6 +102,13 @@ config = "config/workflow.json"
 requires_observability = true
 
 [[steps]]
+id = "seed-demo-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
 id = "seed-source-issue"
 action = "issue.seed"
 issue_id = "source"
@@ -118,6 +118,7 @@ after = "temper.launch_standalone"
 [[steps]]
 id = "wait-for-convergence"
 action = "workflow.wait_convergence"
+strategy = "codebase-memory"
 until = "engineer PR writes MEMORY_NOTES.md, CI passes, and the source issue closes"
 
 [expect]
@@ -126,12 +127,14 @@ merged_pull_requests = 1
 closed_parent_issues = 1
 
 [[expect.checks]]
+required = true
 id = "source-finalized"
 artifact = "issue:source"
 state = "closed"
 labels = ["code"]
 
 [[expect.checks]]
+required = true
 id = "implementation-pr-landed"
 artifact = "pull_request"
 state = "merged"
@@ -139,12 +142,14 @@ labels_cleared = ["landing"]
 ci = "passed"
 
 [[expect.checks]]
+required = true
 id = "default-branch-has-engineer-diff"
 artifact = "repo:service"
 branch = "main"
 contains_engineer_diff = true
 
 [[expect.events]]
+required = true
 id = "tool-configured"
 event = "agent.tool.configured"
 fields."tool.name" = "codebase_memory"
@@ -154,6 +159,7 @@ fields.index = "blocking"
 fields."tool.model_visible" = false
 
 [[expect.events]]
+required = true
 id = "safe-search-tool-exposed"
 event = "agent.tool.exposed"
 fields."tool.name" = "codebase_memory_search_code"
@@ -162,6 +168,7 @@ fields."tool.model_visible" = true
 fields."mcp.project" = "actual-demo-project"
 
 [[expect.events]]
+required = true
 id = "internal-index-tool-hidden"
 event = "agent.tool.hidden"
 fields."tool.name" = "codebase_memory_index_repository"
@@ -169,6 +176,7 @@ fields."mcp.tool" = "index_repository"
 fields."tool.model_visible" = false
 
 [[expect.events]]
+required = true
 id = "unsafe-delete-tool-hidden"
 event = "agent.tool.hidden"
 fields."tool.name" = "codebase_memory_delete_project"
@@ -176,11 +184,13 @@ fields."mcp.tool" = "delete_project"
 fields."tool.model_visible" = false
 
 [[expect.events]]
+required = true
 id = "mcp-server-started"
 event = "mcp.server.started"
 fields."tool.name" = "codebase_memory"
 
 [[expect.events]]
+required = true
 id = "search-code-called-with-default-project"
 event = "mcp.tool.called"
 fields."tool.name" = "codebase_memory_search_code"
@@ -188,6 +198,7 @@ fields."mcp.tool" = "search_code"
 fields."mcp.project" = "actual-demo-project"
 
 [[expect.events]]
+required = true
 id = "fake-mcp-result-observed"
 event = "mcp.tool.result"
 fields."tool.name" = "codebase_memory_search_code"
@@ -196,17 +207,20 @@ fields."mcp.project" = "actual-demo-project"
 fields."result.preview" = "FAKE_MCP_SEARCH_RESULT project=actual-demo-project query=WidgetService"
 
 [[expect.events]]
+required = true
 id = "workspace-diff-produced"
 event = "workspace.diff.produced"
 fields.repo = "acme/demo"
 fields."file.path" = "MEMORY_NOTES.md"
 
 [[expect.events]]
+required = true
 id = "agent-finished"
 event = "agent.finished"
 role = "engineer"
 
 [[expect.sequence]]
+required = true
 id = "codebase-memory-agent-tool-flow"
 scope = "source_artifact"
 events = [
@@ -220,6 +234,7 @@ events = [
 ]
 
 [[expect.count]]
+required = true
 id = "search-code-called-once"
 event = "mcp.tool.called"
 fields."mcp.tool" = "search_code"

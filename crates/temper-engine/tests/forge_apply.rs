@@ -6,6 +6,8 @@ mod assertions;
 mod breakdown;
 #[path = "forge_apply/breakdown_child_kind.rs"]
 mod breakdown_child_kind;
+#[path = "forge_apply/exact_head_validation.rs"]
+mod exact_head_validation;
 #[path = "forge_apply/failure.rs"]
 mod failure;
 #[path = "forge_apply/handoff.rs"]
@@ -16,6 +18,8 @@ mod landing_pr;
 mod model_recovery;
 #[path = "forge_apply/review.rs"]
 mod review;
+#[path = "forge_apply/scenario_pr.rs"]
+mod scenario_pr;
 #[path = "forge_apply/success.rs"]
 mod success;
 #[path = "forge_apply/support.rs"]

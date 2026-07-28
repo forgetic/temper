@@ -48,6 +48,7 @@ impl Fixture {
                     "smith-architect@example.test",
                 ),
                 ("reviewer", "Smith Reviewer", "smith-reviewer@example.test"),
+                ("tester", "Smith Tester", "smith-tester@example.test"),
             ] {
                 role_identities.insert(
                     role.to_string(),
@@ -199,6 +200,7 @@ pub struct TestJobContext {
     base_branch: String,
     branch_hint: String,
     correlation_key: String,
+    access: String,
     pub artifact: Option<TestJobArtifactSnapshot>,
     pub action: Option<String>,
     checkout_capability: Option<String>,
@@ -244,7 +246,7 @@ impl TestJobContext {
                 "repos": [{
                     "repo": self.repo,
                     "dir": self.repo.split('/').next_back().unwrap_or(&self.repo),
-                    "access": "writable",
+                    "access": self.access,
                     "default_branch": self.default_branch,
                     "base_branch": self.base_branch,
                     "branch_hint": self.branch_hint,
@@ -264,6 +266,7 @@ pub fn job_context(branch_hint: &str, correlation_key: &str) -> TestJobContext {
         base_branch: "main".to_string(),
         branch_hint: branch_hint.to_string(),
         correlation_key: correlation_key.to_string(),
+        access: "writable".to_string(),
         artifact: Some(TestJobArtifactSnapshot {
             number: 7,
             title: "Implement the thing".to_string(),
@@ -288,6 +291,43 @@ pub fn read_only_job_context(branch_hint: &str, correlation_key: &str) -> TestJo
     context.action = Some("triage_intake".to_string());
     context.checkout_capability = Some("read_only".to_string());
     context.allowed_verdicts = vec!["ready_code".to_string(), "needs_design".to_string()];
+    context
+}
+
+pub fn native_validation_job_context(
+    branch_hint: &str,
+    correlation_key: &str,
+    source_branch: &str,
+) -> TestJobContext {
+    let mut context = job_context(branch_hint, correlation_key);
+    context.role = "tester".to_string();
+    context.queue = "plan_needs_validation".to_string();
+    context.artifact_kind = "plan".to_string();
+    context.action = Some("validate_plan".to_string());
+    context.checkout_capability = Some("read_only".to_string());
+    context.access = "read_only".to_string();
+    context.allowed_verdicts = vec!["validated".to_string(), "needs_followup".to_string()];
+    context.base_branch = source_branch.to_string();
+    context.source_metadata = BTreeMap::from([
+        ("target_branch".to_string(), source_branch.to_string()),
+        (
+            "validation_binding_id".to_string(),
+            "validate_exact_feature_head".to_string(),
+        ),
+        (
+            "validation_idempotency_key".to_string(),
+            "validator:{binding_id}:plan:{issue_number}:head:{exact_head_sha}".to_string(),
+        ),
+        (
+            "validation_feature".to_string(),
+            "acme/service#778".to_string(),
+        ),
+        ("validation_plan".to_string(), "acme/service#7".to_string()),
+        (
+            "validation_source_branch".to_string(),
+            source_branch.to_string(),
+        ),
+    ]);
     context
 }
 

@@ -1,0 +1,38 @@
+schema = "temper.scenario.v1"
+name = "exact-head-feature-validation"
+status = "active"
+stability = "provisional"
+intent = "Prove that feature landing authority is bound to one checked-in scenario at the exact feature head."
+introduced_by = "#786"
+owner_area = "delivery-validation"
+timeout = 600
+
+[fixtures]
+extends = "scenarios/basic-delivery"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/exact-head-feature-validation.json"
+
+[validation]
+feature = "ai/temper#778"
+plan = "ai/temper#779"
+source_branch = "feature/778-exact-head-validation"
+change = "new"
+
+[feature_contract]
+claim = "Only passing evidence for the mapped scenario and current feature head can authorize landing."
+stimulus = "Complete one isolated live delivery, then submit a deliberately stale head to the focused validator entry point."
+observable = "Structured Forge, runner, Temper, Jig, mapping digest, checkout-head, and retained stale-rejection facts."
+assertion = "The current mapped run passes while the stale head is rejected before scenario execution or landing authority."
+runtime_budget_seconds = 600
+jig_script_path = "jig/exact-head-feature-validation.json"
+
+[[assertions]]
+id = "current-head-bound-and-stale-head-rejected"
+kind = "command"
+command = "scripts/assert-exact-head-fencing.sh"
+phase = "after-convergence"
+timeout_ms = 30000
