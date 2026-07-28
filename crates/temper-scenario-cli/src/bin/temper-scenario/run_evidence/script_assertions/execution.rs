@@ -21,7 +21,9 @@ pub(super) fn run_hook(
     artifact_dir: &Path,
     hook_dir: &Path,
 ) -> Result<AssertionResultEvidence, String> {
-    fs::create_dir_all(hook_dir).map_err(|error| {
+    let artifact_dir = absolute_artifact_path(artifact_dir)?;
+    let hook_dir = absolute_artifact_path(hook_dir)?;
+    fs::create_dir_all(&hook_dir).map_err(|error| {
         format!(
             "create script assertion artifact dir {}: {error}",
             hook_dir.display()
@@ -33,7 +35,7 @@ pub(super) fn run_hook(
     let stderr_path = hook_dir.join("stderr.log");
     let status_path = hook_dir.join("status.txt");
 
-    let context = script_context(artifact, hook, artifact_dir, hook_dir, &context_path);
+    let context = script_context(artifact, hook, &artifact_dir, &hook_dir, &context_path);
     let context_json = serde_json::to_string_pretty(&context)
         .map_err(|error| format!("serialize script assertion context: {error}"))?;
     fs::write(&context_path, format!("{context_json}\n")).map_err(|error| {
@@ -65,8 +67,8 @@ pub(super) fn run_hook(
         .env("PATH", "/usr/bin:/bin")
         .env("LC_ALL", "C")
         .env("TEMPER_SCENARIO_CONTEXT", &context_path)
-        .env("TEMPER_SCENARIO_ARTIFACT_DIR", hook_dir)
-        .env("TEMPER_SCENARIO_RUN_ARTIFACT_DIR", artifact_dir)
+        .env("TEMPER_SCENARIO_ARTIFACT_DIR", &hook_dir)
+        .env("TEMPER_SCENARIO_RUN_ARTIFACT_DIR", &artifact_dir)
         .env("TEMPER_SCENARIO_HOOK_ID", &hook.id)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
@@ -287,6 +289,15 @@ fn script_context(
     })
 }
 
+fn absolute_artifact_path(path: &Path) -> Result<PathBuf, String> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    env::current_dir()
+        .map(|current_dir| current_dir.join(path))
+        .map_err(|error| format!("resolve script assertion artifact path: {error}"))
+}
+
 fn bash_path() -> PathBuf {
     ["/usr/bin/bash", "/bin/bash"]
         .into_iter()
@@ -338,5 +349,19 @@ fn truncate_line(line: &str) -> String {
         format!("{truncated}...")
     } else {
         truncated
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_artifact_paths_are_resolved_from_the_runner_directory() {
+        let relative = Path::new("validation-artifacts/focused-pr/script-assertions");
+        let resolved = absolute_artifact_path(relative).expect("resolve relative artifact path");
+
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with(relative));
     }
 }
