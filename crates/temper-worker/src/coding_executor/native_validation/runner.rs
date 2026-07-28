@@ -52,6 +52,8 @@ impl NativeValidatorCommand {
             [
                 "run",
                 "--quiet",
+                "--package",
+                "temper-scenario-cli",
                 "--bin",
                 "temper-scenario",
                 "--",
@@ -337,6 +339,30 @@ fn push_retained(paths: &mut Vec<String>, path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_validator_cargo_command_selects_scenario_cli_package() {
+        let command = NativeValidatorCommand::cargo();
+        let args = command
+            .prefix_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            [
+                "run",
+                "--quiet",
+                "--package",
+                "temper-scenario-cli",
+                "--bin",
+                "temper-scenario",
+                "--",
+                "validate",
+            ]
+        );
+    }
 
     #[test]
     fn native_validator_command_explicitly_removes_mutation_credentials() {
