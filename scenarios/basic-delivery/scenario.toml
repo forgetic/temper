@@ -149,7 +149,7 @@ required = true
 id = "implementation-pr-opened-event"
 event = "pr.opened"
 source_artifact = "$source_artifact"
-kind = "implementation"
+kind = "implementation_pr"
 for_issue_number = "$provider.issue_number"
 
 [[expect.sequence]]
