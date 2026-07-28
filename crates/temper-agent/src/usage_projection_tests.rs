@@ -91,20 +91,32 @@ fn diagnostic(category: ModelFailureCategoryV1) -> ModelFailureV1 {
         ),
         _ => unreachable!("test covers operator-facing regression categories"),
     };
-    ModelFailureV1 {
+    let mut failure = ModelFailureV1 {
         provider: "openai".into(),
         model: "gpt-test".into(),
         category,
-        retryable: matches!(
-            category,
-            ModelFailureCategoryV1::Timeout | ModelFailureCategoryV1::RateLimit
-        ),
+        disposition: temper_protocol_activity::ModelFailureDispositionV1::Unknown,
+        boundary: if status.is_some() {
+            temper_protocol_activity::ModelFailureBoundaryV1::Http
+        } else {
+            temper_protocol_activity::ModelFailureBoundaryV1::Local
+        },
+        event_kind: if status.is_some() {
+            temper_protocol_activity::ModelFailureEventKindV1::HttpResponse
+        } else {
+            temper_protocol_activity::ModelFailureEventKindV1::LocalError
+        },
+        status_present: status.is_some(),
+        code_present: code.is_some(),
+        retryable: false,
         http_status: status,
         provider_request_id: request_id.map(str::to_string),
         provider_error_code: code.map(str::to_string),
         message: message.into(),
         detail_redacted: redacted,
-    }
+    };
+    failure.normalize();
+    failure
 }
 
 fn finished(call_id: &str, failure: ModelFailureV1) -> AgentActivityEventV1 {
@@ -134,6 +146,7 @@ fn retrying_and_terminal_logs_use_finished_call_diagnostics() {
                 call_id: "rate".into(),
                 next_attempt: 1,
                 delay_ms: 500,
+                disposition: temper_protocol_activity::ModelFailureDispositionV1::Retryable,
                 failure: FailureInfoV1 {
                     code: FailureCodeV1::Provider,
                     message: temper_protocol_activity::MODEL_CALL_RETRY_FAILURE_MESSAGE.into(),

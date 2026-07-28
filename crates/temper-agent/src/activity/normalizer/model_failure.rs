@@ -1,8 +1,10 @@
 use temper_agent_core::{
-    ModelCallStatus, ModelFailureCategory, ModelFailureDiagnostic, ModelIdentity,
+    ModelCallStatus, ModelFailureBoundary, ModelFailureCategory, ModelFailureDiagnostic,
+    ModelFailureDisposition, ModelFailureEventKind, ModelIdentity,
 };
 use temper_protocol_activity::{
-    FailureCodeV1, ModelCallStatusV1, ModelFailureCategoryV1, ModelFailureV1, StopReasonV1,
+    FailureCodeV1, ModelCallStatusV1, ModelFailureBoundaryV1, ModelFailureCategoryV1,
+    ModelFailureDispositionV1, ModelFailureEventKindV1, ModelFailureV1, StopReasonV1,
 };
 
 pub(super) fn normalize_finish(
@@ -19,7 +21,14 @@ pub(super) fn normalize_finish(
     };
     let failure = match status {
         ModelCallStatus::Failed => Some(failure.as_ref().map_or_else(
-            || ModelFailureV1::redacted_unknown(model.provider.clone(), model.model.clone(), false),
+            || {
+                ModelFailureV1::unknown(
+                    model.provider.clone(),
+                    model.model.clone(),
+                    ModelFailureBoundaryV1::Local,
+                    ModelFailureEventKindV1::LocalError,
+                )
+            },
             map_diagnostic,
         )),
         ModelCallStatus::Succeeded | ModelCallStatus::Cancelled => None,
@@ -48,6 +57,14 @@ pub(super) fn retry_code(category: ModelFailureCategory) -> FailureCodeV1 {
     }
 }
 
+pub(super) fn disposition(value: ModelFailureDisposition) -> ModelFailureDispositionV1 {
+    match value {
+        ModelFailureDisposition::Retryable => ModelFailureDispositionV1::Retryable,
+        ModelFailureDisposition::NonRetryable => ModelFailureDispositionV1::NonRetryable,
+        ModelFailureDisposition::Unknown => ModelFailureDispositionV1::Unknown,
+    }
+}
+
 pub(in crate::activity) fn map_diagnostic(diagnostic: &ModelFailureDiagnostic) -> ModelFailureV1 {
     let mut failure = ModelFailureV1 {
         provider: diagnostic.provider().to_string(),
@@ -62,6 +79,24 @@ pub(in crate::activity) fn map_diagnostic(diagnostic: &ModelFailureDiagnostic) -
             ModelFailureCategory::Provider => ModelFailureCategoryV1::Provider,
             ModelFailureCategory::RedactedUnknown => ModelFailureCategoryV1::RedactedUnknown,
         },
+        disposition: disposition(diagnostic.disposition()),
+        boundary: match diagnostic.boundary() {
+            ModelFailureBoundary::Http => ModelFailureBoundaryV1::Http,
+            ModelFailureBoundary::Sse => ModelFailureBoundaryV1::Sse,
+            ModelFailureBoundary::Local => ModelFailureBoundaryV1::Local,
+        },
+        event_kind: match diagnostic.event_kind() {
+            ModelFailureEventKind::HttpResponse => ModelFailureEventKindV1::HttpResponse,
+            ModelFailureEventKind::StreamError => ModelFailureEventKindV1::StreamError,
+            ModelFailureEventKind::ErrorCompletion => ModelFailureEventKindV1::ErrorCompletion,
+            ModelFailureEventKind::StreamEof => ModelFailureEventKindV1::StreamEof,
+            ModelFailureEventKind::ConnectTimeout => ModelFailureEventKindV1::ConnectTimeout,
+            ModelFailureEventKind::StreamIdleTimeout => ModelFailureEventKindV1::StreamIdleTimeout,
+            ModelFailureEventKind::Transport => ModelFailureEventKindV1::Transport,
+            ModelFailureEventKind::LocalError => ModelFailureEventKindV1::LocalError,
+        },
+        status_present: diagnostic.status_present(),
+        code_present: diagnostic.code_present(),
         retryable: diagnostic.retryable(),
         http_status: diagnostic.http_status(),
         provider_request_id: diagnostic.provider_request_id().map(str::to_owned),

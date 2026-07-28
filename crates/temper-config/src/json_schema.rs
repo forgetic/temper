@@ -423,6 +423,22 @@ fn agent_deadline_config_schema() -> Value {
                 "model_idle_timeout_secs",
                 positive_integer_schema("Maximum wait between model stream events in seconds."),
             ),
+            (
+                "model_retry_max_attempts",
+                bounded_positive_integer_schema("Total attempts allowed for one model turn.", 32),
+            ),
+            (
+                "model_retry_base_delay_ms",
+                positive_integer_schema("Base same-turn model retry delay in milliseconds."),
+            ),
+            (
+                "model_retry_max_delay_ms",
+                positive_integer_schema("Maximum same-turn model retry delay in milliseconds."),
+            ),
+            (
+                "model_retry_jitter_percent",
+                integer_schema("Symmetric retry jitter percentage.", Some(100)),
+            ),
         ],
     )
 }

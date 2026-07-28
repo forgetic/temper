@@ -90,20 +90,32 @@ fn safe_failure(category: ModelFailureCategoryV1) -> ModelFailureV1 {
         ),
         _ => (None, None, None, "Provider request failed.", false),
     };
-    ModelFailureV1 {
+    let mut failure = ModelFailureV1 {
         provider: "openai".into(),
         model: "gpt-test".into(),
         category,
-        retryable: matches!(
-            category,
-            ModelFailureCategoryV1::Timeout | ModelFailureCategoryV1::RateLimit
-        ),
+        disposition: temper_protocol_activity::ModelFailureDispositionV1::Unknown,
+        boundary: if http_status.is_some() {
+            temper_protocol_activity::ModelFailureBoundaryV1::Http
+        } else {
+            temper_protocol_activity::ModelFailureBoundaryV1::Local
+        },
+        event_kind: if http_status.is_some() {
+            temper_protocol_activity::ModelFailureEventKindV1::HttpResponse
+        } else {
+            temper_protocol_activity::ModelFailureEventKindV1::LocalError
+        },
+        status_present: http_status.is_some(),
+        code_present: provider_code.is_some(),
+        retryable: false,
         http_status,
         provider_request_id: request_id.map(str::to_string),
         provider_error_code: provider_code.map(str::to_string),
         message: message.into(),
         detail_redacted,
-    }
+    };
+    failure.normalize();
+    failure
 }
 
 #[test]

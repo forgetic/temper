@@ -97,6 +97,10 @@ enable_subagents = false
 tool_timeout_secs = 600
 model_connect_timeout_secs = 120
 model_idle_timeout_secs = 120
+model_retry_max_attempts = 7
+model_retry_base_delay_ms = 500
+model_retry_max_delay_ms = 8000
+model_retry_jitter_percent = 20
 
 # Agent-local codebase-memory MCP tool settings. Auto mode is best-effort: if
 # `codebase-memory-mcp` is not installed, agent runs continue without these

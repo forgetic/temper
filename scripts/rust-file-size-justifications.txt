@@ -137,6 +137,10 @@ crates/temper-cli-daemon/src/standalone/mod.rs
 # split when the next config test fixture cleanup lands.
 crates/temper-config/src/tests.rs
 
+# Reference log projection coverage shares one typed tracing capture layer so
+# human and machine fields are asserted against the same emitted records.
+crates/temper-log/tests/reference_projection.rs
+
 # Agent trace capstones intentionally keep producer/process fixtures, worker
 # spools, engine query/export, web, and OTel assertions in one leak-detection path.
 crates/temper-worker/src/trace/full_path_tests.rs

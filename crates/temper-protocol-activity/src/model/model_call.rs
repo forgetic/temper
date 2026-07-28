@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{FailureInfoV1, ModelFailureV1, StopReasonV1};
+use super::{FailureInfoV1, ModelFailureDispositionV1, ModelFailureV1, StopReasonV1};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -17,6 +17,9 @@ pub struct ModelCallRetryingV1 {
     pub call_id: String,
     pub next_attempt: u32,
     pub delay_ms: u64,
+    /// Canonical disposition of the failed attempt that selected this retry.
+    #[serde(default)]
+    pub disposition: ModelFailureDispositionV1,
     pub failure: FailureInfoV1,
 }
 

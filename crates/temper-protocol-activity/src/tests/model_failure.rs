@@ -5,6 +5,11 @@ fn model_failure() -> ModelFailureV1 {
         provider: "openai-codex".into(),
         model: "gpt-5.6-sol".into(),
         category: ModelFailureCategoryV1::RateLimit,
+        disposition: crate::ModelFailureDispositionV1::Retryable,
+        boundary: crate::ModelFailureBoundaryV1::Http,
+        event_kind: crate::ModelFailureEventKindV1::HttpResponse,
+        status_present: true,
+        code_present: true,
         retryable: true,
         http_status: Some(429),
         provider_request_id: Some("req_01JTEST:attempt/2".into()),
@@ -79,9 +84,11 @@ fn model_failure_validation_enforces_bounds_and_strict_identifiers() {
     failure.provider = "p".repeat(MAX_MODEL_FAILURE_PROVIDER_BYTES);
     failure.model = "m".repeat(MAX_MODEL_FAILURE_MODEL_BYTES);
     failure.provider_request_id = Some("r".repeat(MAX_MODEL_FAILURE_REQUEST_ID_BYTES));
-    failure.provider_error_code = Some("c".repeat(MAX_MODEL_FAILURE_PROVIDER_CODE_BYTES));
+    failure.provider_error_code = Some("rate_limit_exceeded.v2".into());
     failure.message = "x".repeat(MAX_MODEL_FAILURE_MESSAGE_BYTES);
-    failure.validate().expect("values at every bound validate");
+    failure
+        .validate()
+        .expect("bounded values and an allowlisted provider code validate");
 
     for invalid in ["request id", "réquest", "request#1"] {
         let mut failure = model_failure();
@@ -216,9 +223,13 @@ fn untrusted_valid_looking_diagnostics_do_not_retain_strings() {
             4 => failure.model = sentinel.into(),
             _ => unreachable!(),
         }
-        failure
-            .validate()
-            .expect("the standalone sentinel is syntactically valid");
+        if index == 1 {
+            assert_code(failure.validate(), ActivityValidationCode::InvalidEvent);
+        } else {
+            failure
+                .validate()
+                .expect("the standalone sentinel is syntactically valid");
+        }
         let mut event = AgentActivityEventV1::ModelCallFinished(ModelCallFinishedV1 {
             call_id: format!("forged-{index}"),
             attempt: 0,

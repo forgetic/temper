@@ -479,6 +479,7 @@ fn forged_child_retry_diagnostics_are_sanitized_before_spooling() {
             call_id: "forged-call-355".to_string(),
             next_attempt: 6,
             delay_ms: 1_250,
+            disposition: temper_protocol_activity::ModelFailureDispositionV1::Unknown,
             failure: FailureInfoV1 {
                 code: FailureCodeV1::Timeout,
                 message: diagnostics.clone(),
