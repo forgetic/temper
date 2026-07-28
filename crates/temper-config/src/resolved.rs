@@ -294,12 +294,22 @@ pub struct AgentSettings {
     pub profiles: BTreeMap<String, AgentProfileSettings>,
 }
 
-/// Complete resolved first-party agent operation deadlines.
+/// Complete resolved first-party agent operation deadlines and same-turn retry
+/// limits.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct AgentOperationLimits {
     pub tool_timeout: Duration,
     pub model_connect_timeout: Duration,
     pub model_idle_timeout: Duration,
+    pub model_retry: AgentModelRetryLimits,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct AgentModelRetryLimits {
+    pub max_attempts: u32,
+    pub base_delay: Duration,
+    pub max_delay: Duration,
+    pub jitter_percent: u8,
 }
 
 /// Resolved agent-local tool settings.

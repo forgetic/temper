@@ -96,6 +96,27 @@ pub struct AgentRuntimeLimitsV1 {
     pub tool_timeout_secs: u64,
     pub model_connect_timeout_secs: u64,
     pub model_idle_timeout_secs: u64,
+    #[serde(default = "default_model_retry_max_attempts")]
+    pub model_retry_max_attempts: u32,
+    #[serde(default = "default_model_retry_base_delay_ms")]
+    pub model_retry_base_delay_ms: u64,
+    #[serde(default = "default_model_retry_max_delay_ms")]
+    pub model_retry_max_delay_ms: u64,
+    #[serde(default = "default_model_retry_jitter_percent")]
+    pub model_retry_jitter_percent: u8,
+}
+
+const fn default_model_retry_max_attempts() -> u32 {
+    7
+}
+const fn default_model_retry_base_delay_ms() -> u64 {
+    500
+}
+const fn default_model_retry_max_delay_ms() -> u64 {
+    8_000
+}
+const fn default_model_retry_jitter_percent() -> u8 {
+    20
 }
 
 impl Default for AgentRuntimeLimitsV1 {
@@ -104,6 +125,10 @@ impl Default for AgentRuntimeLimitsV1 {
             tool_timeout_secs: 600,
             model_connect_timeout_secs: 120,
             model_idle_timeout_secs: 120,
+            model_retry_max_attempts: default_model_retry_max_attempts(),
+            model_retry_base_delay_ms: default_model_retry_base_delay_ms(),
+            model_retry_max_delay_ms: default_model_retry_max_delay_ms(),
+            model_retry_jitter_percent: default_model_retry_jitter_percent(),
         }
     }
 }
@@ -121,6 +146,20 @@ impl AgentRuntimeLimitsV1 {
             if value == 0 {
                 return Err(format!("{field} must be greater than zero"));
             }
+        }
+        if self.model_retry_max_attempts == 0 || self.model_retry_max_attempts > 32 {
+            return Err("model_retry_max_attempts must be between 1 and 32".to_string());
+        }
+        if self.model_retry_base_delay_ms == 0 {
+            return Err("model_retry_base_delay_ms must be greater than zero".to_string());
+        }
+        if self.model_retry_max_delay_ms < self.model_retry_base_delay_ms {
+            return Err(
+                "model_retry_max_delay_ms must be at least model_retry_base_delay_ms".to_string(),
+            );
+        }
+        if self.model_retry_jitter_percent > 100 {
+            return Err("model_retry_jitter_percent must be at most 100".to_string());
         }
         Ok(self)
     }

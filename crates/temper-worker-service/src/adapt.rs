@@ -248,6 +248,12 @@ pub fn agent_runtime_limits(limits: AgentOperationLimits) -> temper_worker::Agen
         tool_timeout_secs: limits.tool_timeout.as_secs(),
         model_connect_timeout_secs: limits.model_connect_timeout.as_secs(),
         model_idle_timeout_secs: limits.model_idle_timeout.as_secs(),
+        model_retry_max_attempts: limits.model_retry.max_attempts,
+        model_retry_base_delay_ms: u64::try_from(limits.model_retry.base_delay.as_millis())
+            .unwrap_or(u64::MAX),
+        model_retry_max_delay_ms: u64::try_from(limits.model_retry.max_delay.as_millis())
+            .unwrap_or(u64::MAX),
+        model_retry_jitter_percent: limits.model_retry.jitter_percent,
     }
 }
 

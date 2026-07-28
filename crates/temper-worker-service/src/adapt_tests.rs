@@ -134,6 +134,7 @@ fn selected_pool_agent_profile_controls_command_and_env() {
             tool_timeout_secs: 321,
             model_connect_timeout_secs: 120,
             model_idle_timeout_secs: 22,
+            ..temper_worker::AgentRuntimeLimitsV1::default()
         })
     );
 }
@@ -292,6 +293,7 @@ fn resolved_with_profile_pool() -> Resolved {
                         tool_timeout_secs: Some(321),
                         model_connect_timeout_secs: None,
                         model_idle_timeout_secs: Some(22),
+                        ..AgentDeadlineConfig::default()
                     },
                 },
             )]),

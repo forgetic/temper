@@ -130,7 +130,7 @@ fn first_party_nonzero_exit_consumes_valid_typed_terminal_before_generic_fallbac
         r#"
 printf 'provider prose SECRET-SENTINEL-748 authorization: Bearer token\n' >&2
 cat > "$terminal" <<'JSON'
-{"protocol_version":1,"model_failure":{"provider":"openai-codex","model":"gpt-safe","category":"response","retryable":false,"http_status":502,"provider_request_id":"req_748","provider_error_code":"malformed_stream","message":"Provider returned a malformed stream.","detail_redacted":false}}
+{"protocol_version":1,"model_failure":{"provider":"openai-codex","model":"gpt-safe","category":"response","retryable":false,"http_status":400,"provider_request_id":"req_748","provider_error_code":"malformed_stream","message":"Provider returned a malformed stream.","detail_redacted":false}}
 JSON
 exit 2
 "#,
@@ -152,7 +152,7 @@ exit 2
         .unwrap_or_else(|| panic!("typed model failure missing: {}", error.message));
     assert_eq!(diagnostic.provider, "openai-codex");
     assert_eq!(diagnostic.model, "gpt-safe");
-    assert_eq!(diagnostic.http_status, Some(502));
+    assert_eq!(diagnostic.http_status, Some(400));
     assert_eq!(diagnostic.provider_request_id.as_deref(), Some("req_748"));
     assert_eq!(
         diagnostic.provider_error_code.as_deref(),

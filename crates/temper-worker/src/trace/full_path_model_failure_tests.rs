@@ -169,13 +169,15 @@ async fn exercise_sanitized_model_failure(
         &serde_json::to_vec(&batch).expect("serialize model failure batch"),
     );
 
-    // Bypass both producer and worker normalization. Every diagnostic is valid
-    // protocol data and carries exactly one opaque sentinel in one string field.
+    // Bypass both producer and worker normalization. Each diagnostic carries
+    // exactly one opaque sentinel; the unallowlisted provider-code case is
+    // intentionally invalid until the engine trust boundary redacts it.
     let mut forged_batch = batch.clone();
     replace_model_failures(&mut forged_batch.events, 0);
-    forged_batch
-        .validate()
-        .expect("valid-looking direct diagnostics pass syntax validation");
+    assert!(
+        forged_batch.validate().is_err(),
+        "an unallowlisted provider code must not be valid protocol authority"
+    );
 
     let journal_root = temporary.path().join("journal");
     let journal = AgentTraceJournal::open(TraceJournalConfig {
@@ -199,9 +201,10 @@ async fn exercise_sanitized_model_failure(
     // proves retransmit digests are computed from the redacted representation.
     let mut retransmit = forged_batch;
     replace_model_failures(&mut retransmit.events, 1);
-    retransmit
-        .validate()
-        .expect("rotated direct diagnostics remain syntactically valid");
+    assert!(
+        retransmit.validate().is_err(),
+        "rotated unallowlisted provider code remains invalid before redaction"
+    );
     journal
         .ingest(&binding, &retransmit)
         .expect("untrusted text does not change canonical retransmit identity");
@@ -315,10 +318,15 @@ fn forged_failure(case: ForgeryCase) -> ModelFailureV1 {
         provider: "openai-codex".to_string(),
         model: "gpt-5.6-sol".to_string(),
         category: ModelFailureCategoryV1::Provider,
+        disposition: temper_protocol_activity::ModelFailureDispositionV1::Retryable,
+        boundary: temper_protocol_activity::ModelFailureBoundaryV1::Http,
+        event_kind: temper_protocol_activity::ModelFailureEventKindV1::HttpResponse,
+        status_present: true,
+        code_present: true,
         retryable: true,
         http_status: Some(502),
         provider_request_id: Some("req_safe_555".to_string()),
-        provider_error_code: Some("provider_error".to_string()),
+        provider_error_code: Some("unavailable".to_string()),
         message: "Provider request failed.".to_string(),
         detail_redacted: false,
     };
@@ -333,9 +341,16 @@ fn forged_failure(case: ForgeryCase) -> ModelFailureV1 {
         ForgedField::Provider => failure.provider = case.sentinel.to_string(),
         ForgedField::Model => failure.model = case.sentinel.to_string(),
     }
-    failure
-        .validate()
-        .expect("standalone sentinel is syntactically valid");
+    if matches!(case.field, ForgedField::ProviderCode) {
+        assert!(
+            failure.validate().is_err(),
+            "unallowlisted provider code must fail standalone validation"
+        );
+    } else {
+        failure
+            .validate()
+            .expect("standalone sentinel is syntactically valid");
+    }
     let encoded = serde_json::to_string(&failure).expect("encode forged diagnostic");
     for sentinel in SENTINELS {
         assert_eq!(

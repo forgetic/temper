@@ -9,16 +9,36 @@ fn store(root: &Path) -> AgentSessionStore {
 }
 
 fn diagnostic(retryable: bool) -> ModelFailureV1 {
+    let (category, disposition, status, code) = if retryable {
+        (
+            ModelFailureCategoryV1::Provider,
+            temper_protocol_activity::ModelFailureDispositionV1::Retryable,
+            503,
+            "unavailable",
+        )
+    } else {
+        (
+            ModelFailureCategoryV1::Authentication,
+            temper_protocol_activity::ModelFailureDispositionV1::NonRetryable,
+            401,
+            "invalid_api_key",
+        )
+    };
     ModelFailureV1 {
         provider: "fixture-provider".to_string(),
         model: "fixture-model".to_string(),
-        category: ModelFailureCategoryV1::Provider,
+        category,
+        disposition,
+        boundary: temper_protocol_activity::ModelFailureBoundaryV1::Http,
+        event_kind: temper_protocol_activity::ModelFailureEventKindV1::HttpResponse,
+        status_present: true,
+        code_present: true,
         retryable,
-        http_status: Some(503),
+        http_status: Some(status),
         provider_request_id: Some("request-749".to_string()),
-        provider_error_code: Some("unavailable".to_string()),
-        message: "Provider is unavailable.".to_string(),
-        detail_redacted: false,
+        provider_error_code: Some(code.to_string()),
+        message: "Provider failure details were redacted.".to_string(),
+        detail_redacted: true,
     }
 }
 
@@ -172,7 +192,7 @@ fn semantically_inconsistent_v2_ledgers_fail_closed_without_changing_evidence() 
     cases.push(("decision count differs from ledger", document));
 
     let mut document = retry.clone();
-    document["ledger"]["latest_model_failure"]["retryable"] = json!(false);
+    document["ledger"]["latest_model_failure"] = serde_json::to_value(diagnostic(false)).unwrap();
     cases.push(("non-retryable diagnostic with retry action", document));
 
     let mut document = retry.clone();
@@ -187,7 +207,8 @@ fn semantically_inconsistent_v2_ledgers_fail_closed_without_changing_evidence() 
         ledger.remove("accounted_attempt_id");
         ledger.remove("recovery_decision");
     }
-    unrotated_success_reset["ledger"]["latest_model_failure"]["retryable"] = json!(false);
+    unrotated_success_reset["ledger"]["latest_model_failure"] =
+        serde_json::to_value(diagnostic(false)).unwrap();
     cases.push((
         "success reset retains impossible non-retryable evidence without a rotation",
         unrotated_success_reset,
@@ -226,7 +247,7 @@ fn semantically_inconsistent_v2_ledgers_fail_closed_without_changing_evidence() 
     cases.push(("park names a different prior session", document));
 
     let mut document = park.clone();
-    document["ledger"]["latest_model_failure"]["retryable"] = json!(true);
+    document["ledger"]["latest_model_failure"] = serde_json::to_value(diagnostic(true)).unwrap();
     cases.push(("park before retryable budget exhaustion", document));
 
     let mut document = park;

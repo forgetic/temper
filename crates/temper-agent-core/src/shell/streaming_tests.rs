@@ -2,7 +2,7 @@
 
 use super::{
     MAX_STREAM_RETRIES, ModelCallObservability, ModelOperationContext, ModelTaskOutcome,
-    stream_to_completion,
+    SYSTEM_STREAM_RETRY_RUNTIME, stream_to_completion,
 };
 use crate::ModelFailureCategory;
 use crate::machine::{AgentEvent, ModelCallStatus};
@@ -111,6 +111,8 @@ fn run_stalled_model(
             ModelOperationContext {
                 connect_timeout,
                 idle_timeout,
+                retry: crate::ModelRetryLimits::default(),
+                retry_runtime: &SYSTEM_STREAM_RETRY_RUNTIME,
                 cancellation: &cancellation,
             },
             ModelCallObservability {
@@ -227,6 +229,8 @@ fn external_model_cancellation_emits_terminal_boundary_without_time_advance() {
             ModelOperationContext {
                 connect_timeout: Duration::from_secs(120),
                 idle_timeout: Duration::from_secs(120),
+                retry: crate::ModelRetryLimits::default(),
+                retry_runtime: &SYSTEM_STREAM_RETRY_RUNTIME,
                 cancellation: &cancellation,
             },
             ModelCallObservability {
@@ -332,6 +336,8 @@ fn model_attempt_timing_and_usage_use_the_injected_clock() {
             ModelOperationContext {
                 connect_timeout: Duration::from_secs(2),
                 idle_timeout: Duration::from_secs(2),
+                retry: crate::ModelRetryLimits::default(),
+                retry_runtime: &SYSTEM_STREAM_RETRY_RUNTIME,
                 cancellation: &cancellation,
             },
             ModelCallObservability {

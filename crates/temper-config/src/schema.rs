@@ -433,6 +433,18 @@ pub struct AgentDeadlineConfig {
     /// Maximum wait between model stream events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_idle_timeout_secs: Option<u64>,
+    /// Total requests allowed for one model turn, including the first request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_retry_max_attempts: Option<u32>,
+    /// Base same-turn retry delay in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_retry_base_delay_ms: Option<u64>,
+    /// Maximum selected same-turn retry delay in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_retry_max_delay_ms: Option<u64>,
+    /// Symmetric bounded retry jitter percentage (`0..=100`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_retry_jitter_percent: Option<u8>,
 }
 
 impl AgentDeadlineConfig {
@@ -440,6 +452,10 @@ impl AgentDeadlineConfig {
         self.tool_timeout_secs.is_none()
             && self.model_connect_timeout_secs.is_none()
             && self.model_idle_timeout_secs.is_none()
+            && self.model_retry_max_attempts.is_none()
+            && self.model_retry_base_delay_ms.is_none()
+            && self.model_retry_max_delay_ms.is_none()
+            && self.model_retry_jitter_percent.is_none()
     }
 }
 

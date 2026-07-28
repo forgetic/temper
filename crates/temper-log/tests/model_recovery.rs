@@ -24,7 +24,12 @@ fn model_recovery_catalog_projects_the_same_safe_typed_fields() {
         provider: "fixture-provider".into(),
         model: "fixture-model".into(),
         category: ModelFailureCategoryV1::Provider,
-        retryable: false,
+        disposition: temper_protocol_activity::ModelFailureDispositionV1::Retryable,
+        boundary: temper_protocol_activity::ModelFailureBoundaryV1::Http,
+        event_kind: temper_protocol_activity::ModelFailureEventKindV1::HttpResponse,
+        status_present: true,
+        code_present: true,
+        retryable: true,
         http_status: Some(503),
         provider_request_id: Some("request-750".into()),
         provider_error_code: Some("unavailable".into()),
@@ -73,7 +78,7 @@ fn model_recovery_catalog_projects_the_same_safe_typed_fields() {
         assert_eq!(fields["provider"], "fixture-provider");
         assert_eq!(fields["model"], "fixture-model");
         assert_eq!(fields["category"], "provider");
-        assert_eq!(fields["retryable"], false);
+        assert_eq!(fields["retryable"], true);
         assert_eq!(fields["http_status"], 503);
         assert_eq!(fields["provider_request_id"], "request-750");
         assert_eq!(fields["provider_error_code"], "unavailable");

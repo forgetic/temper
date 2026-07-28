@@ -8,9 +8,9 @@ use crate::server::AppState;
 use std::sync::Mutex;
 use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentAssignmentIdentityV1, AgentScopeKindV1, AgentScopeV1,
-    FailureCodeV1, FailureInfoV1, InlineContentV1, ModelCallRetryingV1, OutputDeltaV1,
-    PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1, PromptToolDefinitionV1,
-    RunFailedV1, RunFinishedV1, RunStartedV1, RunStatusV1,
+    FailureCodeV1, FailureInfoV1, InlineContentV1, ModelCallRetryingV1, ModelFailureDispositionV1,
+    OutputDeltaV1, PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1,
+    PromptToolDefinitionV1, RunFailedV1, RunFinishedV1, RunStartedV1, RunStatusV1,
 };
 
 const RAW_SNAPSHOT: &str = r#"{
@@ -345,6 +345,7 @@ fn transcript_content_and_failure_messages_have_no_global_projection() {
             call_id: "model-1".to_string(),
             next_attempt: 2,
             delay_ms: 100,
+            disposition: ModelFailureDispositionV1::Retryable,
             failure: failure.clone(),
         }),
     );

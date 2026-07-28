@@ -412,17 +412,17 @@ impl AgentActivityEventV1 {
     }
 
     /// Applies conservative normalization to a finished model call received
-    /// from an untrusted source.
-    ///
-    /// A syntactically valid diagnostic is not evidence that its strings came
-    /// from a hardened provider adapter: a child or direct batch can forge the
-    /// same shape. This therefore removes message and identifier fields while
-    /// retaining only independently safe typed facts. It also canonicalizes
-    /// the legacy `succeeded + stop_reason=error` shape and supplies an explicit
-    /// `redacted_unknown` diagnostic for newly ingested failed calls. Retained
-    /// records remain readable because deserialization and validation do not
-    /// call this method.
+    /// from an untrusted source, using no trusted launch identity.
     pub fn normalize_model_failure(&mut self) {
+        self.normalize_model_failure_with_identity(
+            UNKNOWN_MODEL_FAILURE_IDENTITY,
+            UNKNOWN_MODEL_FAILURE_IDENTITY,
+        );
+    }
+
+    /// Applies conservative normalization while attributing provider/model from
+    /// host-owned launch context rather than child-controlled strings.
+    pub fn normalize_model_failure_with_identity(&mut self, provider: &str, model: &str) {
         let Self::ModelCallFinished(finished) = self else {
             return;
         };
@@ -432,14 +432,15 @@ impl AgentActivityEventV1 {
             finished.status = ModelCallStatusV1::Failed;
         }
         if finished.status == ModelCallStatusV1::Failed && finished.failure.is_none() {
-            finished.failure = Some(ModelFailureV1::redacted_unknown(
-                UNKNOWN_MODEL_FAILURE_IDENTITY,
-                UNKNOWN_MODEL_FAILURE_IDENTITY,
-                false,
+            finished.failure = Some(ModelFailureV1::unknown(
+                provider,
+                model,
+                ModelFailureBoundaryV1::Local,
+                ModelFailureEventKindV1::LocalError,
             ));
         }
         if let Some(failure) = &mut finished.failure {
-            failure.redact_untrusted();
+            failure.redact_untrusted_with_identity(provider, model);
         }
     }
 

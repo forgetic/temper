@@ -21,7 +21,8 @@ use crate::machine::{
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
 use crate::shell::streaming::{
-    ModelCallObservability, ModelOperationContext, ModelTaskOutcome, stream_to_completion,
+    ModelCallObservability, ModelOperationContext, ModelTaskOutcome, SYSTEM_STREAM_RETRY_RUNTIME,
+    stream_to_completion,
 };
 use crate::shell::task_group::{CancellationToken, RunTaskGroup, cancel_or};
 
@@ -223,6 +224,8 @@ impl AgentShell {
                 ModelOperationContext {
                     connect_timeout: limits.model_connect_timeout,
                     idle_timeout: limits.model_idle_timeout,
+                    retry: limits.model_retry,
+                    retry_runtime: &SYSTEM_STREAM_RETRY_RUNTIME,
                     cancellation: &cancellation,
                 },
                 ModelCallObservability {

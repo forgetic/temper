@@ -2,7 +2,7 @@
 
 use super::{
     MAX_STREAM_RETRIES, ModelCallObservability, ModelOperationContext, ModelTaskOutcome,
-    stream_to_completion,
+    SYSTEM_STREAM_RETRY_RUNTIME, stream_to_completion,
 };
 use crate::machine::{AgentEvent, ModelCallStatus};
 use crate::shell::task_group::CancellationToken;
@@ -105,6 +105,42 @@ impl Provider for ScriptedProvider {
     }
 }
 
+struct UnknownThenSuccessProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Provider for UnknownThenSuccessProvider {
+    fn api(&self) -> &str {
+        "unknown-then-success"
+    }
+
+    async fn stream(
+        &self,
+        _context: &Context<'_>,
+        _options: &StreamOptions,
+    ) -> tongs::Result<EventStream> {
+        let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
+        let event = if attempt == 0 {
+            StreamEvent::Error {
+                reason: StopReason::Error,
+                error: assistant_with_stop(StopReason::Error),
+                diagnostic: ProviderFailureDiagnostic::redacted(
+                    false,
+                    None,
+                    Some("req_unknown_stream"),
+                ),
+            }
+        } else {
+            StreamEvent::Done {
+                reason: StopReason::Stop,
+                message: assistant_with_stop(StopReason::Stop),
+            }
+        };
+        Ok(EventStream::from_events(vec![Ok(event)]))
+    }
+}
+
 fn assistant_with_stop(stop_reason: StopReason) -> AssistantMessage {
     AssistantMessage {
         content: Vec::new(),
@@ -139,6 +175,8 @@ fn run_scripted(
             ModelOperationContext {
                 connect_timeout: Duration::from_secs(10),
                 idle_timeout: Duration::from_secs(10),
+                retry: crate::ModelRetryLimits::default(),
+                retry_runtime: &SYSTEM_STREAM_RETRY_RUNTIME,
                 cancellation: &cancellation,
             },
             ModelCallObservability {
@@ -176,6 +214,62 @@ fn interrupted_transport_is_failed_and_keeps_the_retry_budget() {
                 && diagnostic.detail_redacted()
                 && !diagnostic.message().contains("SECRET_SENTINEL")
     ));
+}
+
+#[test]
+fn unclassified_stream_failure_retries_same_call_and_later_succeeds() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = UnknownThenSuccessProvider {
+        calls: Arc::clone(&calls),
+    };
+    let events = Arc::new(EventRecorder::default());
+    let observed = Arc::clone(&events);
+    let (outcome, _) = run_in_lab(async move {
+        let cancellation = CancellationToken::default();
+        stream_to_completion(
+            &provider,
+            None,
+            &[],
+            &[],
+            &StreamOptions::default(),
+            ModelOperationContext {
+                connect_timeout: Duration::from_secs(10),
+                idle_timeout: Duration::from_secs(10),
+                retry: crate::ModelRetryLimits::default(),
+                retry_runtime: &SYSTEM_STREAM_RETRY_RUNTIME,
+                cancellation: &cancellation,
+            },
+            ModelCallObservability {
+                turn: 4,
+                model: &ModelIdentity::new("test-provider", "test-model"),
+                clock: &SystemEventClock,
+                events: observed.as_ref(),
+            },
+        )
+        .await
+    });
+
+    assert!(matches!(outcome, ModelTaskOutcome::Responded(_)));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let recorded = events.0.lock().expect("events");
+    let starts = recorded
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ModelCallStarted {
+                call_id, attempt, ..
+            } => Some((call_id.as_str(), *attempt)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(starts, [("turn-4", 0), ("turn-4", 1)]);
+    assert!(recorded.iter().any(|event| matches!(
+        event,
+        AgentEvent::ModelCallRetrying { reason, .. }
+            if reason.disposition() == crate::ModelFailureDisposition::Unknown
+                && reason.boundary() == crate::ModelFailureBoundary::Sse
+                && reason.event_kind() == crate::ModelFailureEventKind::StreamError
+                && reason.provider_request_id() == Some("req_unknown_stream")
+    )));
 }
 
 #[test]

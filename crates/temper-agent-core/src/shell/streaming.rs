@@ -17,7 +17,8 @@ use tongs::model::{AssistantMessage, Message, StopReason, StreamEvent};
 use tongs::provider::{Context, Provider, StreamOptions, ToolDef};
 
 use crate::machine::{AgentEvent, ModelCallStatus, StreamDelta};
-use crate::model_failure::ModelFailureDiagnostic;
+use crate::model_failure::{ModelFailureBoundary, ModelFailureDiagnostic, ModelFailureEventKind};
+use crate::run::ModelRetryLimits;
 use crate::shell::task_group::CancellationToken;
 use crate::shell::{EventClock, EventSink, ModelIdentity};
 
@@ -36,6 +37,8 @@ pub(super) struct ModelCallObservability<'a> {
 pub(super) struct ModelOperationContext<'a> {
     pub(super) connect_timeout: Duration,
     pub(super) idle_timeout: Duration,
+    pub(super) retry: ModelRetryLimits,
+    pub(super) retry_runtime: &'a dyn StreamRetryRuntime,
     pub(super) cancellation: &'a CancellationToken,
 }
 
@@ -48,43 +51,60 @@ pub(super) enum ModelTaskOutcome {
     Cancelled,
 }
 
-/// Maximum number of *additional* attempts after the first for a transient
-/// model-call failure (so up to `MAX_STREAM_RETRIES + 1` total tries). Sized to
-/// ride out a short burst of connection resets (observed on large request
-/// bodies under load) without giving up on the turn.
+#[cfg(test)]
 const MAX_STREAM_RETRIES: usize = 6;
 
-/// Base backoff before the first retry; doubles each subsequent attempt (capped).
-const STREAM_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+/// Compatibility name retained for hermetic test support.
+#[cfg(feature = "test-support")]
+pub type StreamRetryConfig = ModelRetryLimits;
 
-/// Upper bound on a single backoff so exponential growth does not stall a turn
-/// for minutes on the later attempts.
-const STREAM_RETRY_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(8);
-
-/// Retry budget/timing for transient provider failures in one model turn.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StreamRetryConfig {
-    /// Additional attempts after the first failed attempt.
-    pub max_retries: usize,
-    /// Backoff before the first retry; doubled on later retries.
-    pub base_backoff: std::time::Duration,
-    /// Per-retry cap applied after exponential growth.
-    pub max_backoff: std::time::Duration,
+#[async_trait::async_trait]
+pub(super) trait StreamRetryRuntime: Send + Sync {
+    async fn sleep(&self, delay: Duration);
+    /// Returns a sample in `0..=10_000` for bounded symmetric jitter.
+    fn jitter_sample(&self, call_id: &str, next_attempt: u32) -> u32;
 }
 
-impl Default for StreamRetryConfig {
-    fn default() -> Self {
-        Self {
-            max_retries: MAX_STREAM_RETRIES,
-            base_backoff: STREAM_RETRY_BACKOFF,
-            max_backoff: STREAM_RETRY_BACKOFF_MAX,
+pub(super) struct SystemStreamRetryRuntime;
+
+#[async_trait::async_trait]
+impl StreamRetryRuntime for SystemStreamRetryRuntime {
+    async fn sleep(&self, delay: Duration) {
+        temper_agent_io::sleep_for(delay).await;
+    }
+
+    fn jitter_sample(&self, call_id: &str, next_attempt: u32) -> u32 {
+        // No ambient RNG is needed: mix a monotonic timestamp with stable call
+        // identity. Tests inject their own policy and production calls still
+        // decorrelate concurrent retry waves.
+        let mut hash = temper_agent_io::engine_now().as_nanos() as u64;
+        for byte in call_id.bytes().chain(next_attempt.to_le_bytes()) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
         }
+        (hash % 10_001) as u32
     }
 }
 
-impl StreamRetryConfig {
-    fn backoff(self, attempt: usize) -> std::time::Duration {
-        (self.base_backoff * (1u32 << attempt.min(5))).min(self.max_backoff)
+pub(super) static SYSTEM_STREAM_RETRY_RUNTIME: SystemStreamRetryRuntime = SystemStreamRetryRuntime;
+
+impl ModelRetryLimits {
+    fn delay(self, retry_index: u32, sample: u32) -> Duration {
+        let exponent = retry_index.min(31);
+        let nominal = self
+            .base_delay
+            .saturating_mul(1u32 << exponent)
+            .min(self.max_delay);
+        let percent = u32::from(self.jitter_percent.min(100));
+        if percent == 0 {
+            return nominal;
+        }
+        let nanos = nominal.as_nanos();
+        let lower = nanos.saturating_mul(u128::from(100 - percent)) / 100;
+        let width = nanos.saturating_mul(u128::from(percent.saturating_mul(2))) / 100;
+        let selected =
+            lower.saturating_add(width.saturating_mul(u128::from(sample.min(10_000))) / 10_000);
+        Duration::from_nanos(u64::try_from(selected).unwrap_or(u64::MAX)).min(self.max_delay)
     }
 }
 
@@ -125,7 +145,7 @@ pub fn install_stream_retry_config_override(
     StreamRetryConfigOverrideGuard { previous }
 }
 
-fn stream_retry_config() -> StreamRetryConfig {
+fn stream_retry_config(configured: ModelRetryLimits) -> ModelRetryLimits {
     #[cfg(feature = "test-support")]
     {
         if let Some(config) = *STREAM_RETRY_CONFIG_OVERRIDE
@@ -135,7 +155,7 @@ fn stream_retry_config() -> StreamRetryConfig {
             return config;
         }
     }
-    StreamRetryConfig::default()
+    configured
 }
 
 /// Streams one model response and collapses it into a completion. A successful
@@ -169,7 +189,7 @@ pub(super) async fn stream_to_completion(
     // so a model turn never double-emits. Terminal provider errors are failed
     // attempts and follow the structured diagnostic's retryability decision.
     let mut attempt = 0u32;
-    let retry_config = stream_retry_config();
+    let retry_config = stream_retry_config(operation.retry);
     let call_id = format!("turn-{turn}");
     loop {
         let started_ms = clock.now_millis();
@@ -243,24 +263,30 @@ pub(super) async fn stream_to_completion(
                     usage,
                     failure: Some(diagnostic.clone()),
                 });
-                let will_retry =
-                    diagnostic.retryable() && (attempt as usize) < retry_config.max_retries;
+                let will_retry = diagnostic.eligible_for_turn_retry()
+                    && attempt.saturating_add(1) < retry_config.max_attempts;
                 if will_retry {
-                    let delay = retry_config.backoff(attempt as usize);
+                    let next_attempt = attempt.saturating_add(1);
+                    let delay = retry_config.delay(
+                        attempt,
+                        operation
+                            .retry_runtime
+                            .jitter_sample(&call_id, next_attempt),
+                    );
                     events.emit(AgentEvent::ModelCallRetrying {
                         turn,
                         call_id: call_id.clone(),
-                        next_attempt: attempt.saturating_add(1),
+                        next_attempt,
                         delay_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
                         reason: diagnostic.clone(),
                     });
-                    if cancel_or(operation.cancellation, temper_agent_io::sleep_for(delay))
+                    if cancel_or(operation.cancellation, operation.retry_runtime.sleep(delay))
                         .await
                         .is_none()
                     {
                         return ModelTaskOutcome::Cancelled;
                     }
-                    attempt = attempt.saturating_add(1);
+                    attempt = next_attempt;
                     continue;
                 }
                 return ModelTaskOutcome::Failed(diagnostic);
@@ -330,7 +356,8 @@ async fn stream_one_attempt(
             return StreamAttempt::Failed {
                 diagnostic: ModelFailureDiagnostic::response(
                     model,
-                    true,
+                    ModelFailureBoundary::Sse,
+                    ModelFailureEventKind::StreamEof,
                     "Model stream ended before a terminal event.",
                 ),
                 stop_reason: None,
@@ -350,6 +377,7 @@ async fn stream_one_attempt(
             return StreamAttempt::Failed {
                 diagnostic: ModelFailureDiagnostic::timeout(
                     model,
+                    ModelFailureEventKind::ConnectTimeout,
                     "Model connect deadline elapsed.",
                 ),
                 stop_reason: None,
@@ -381,7 +409,8 @@ async fn stream_one_attempt(
                     return StreamAttempt::Failed {
                         diagnostic: ModelFailureDiagnostic::response(
                             model,
-                            true,
+                            ModelFailureBoundary::Sse,
+                            ModelFailureEventKind::StreamEof,
                             "Model stream ended before a terminal event.",
                         ),
                         stop_reason: None,
@@ -393,6 +422,7 @@ async fn stream_one_attempt(
                     return StreamAttempt::Failed {
                         diagnostic: ModelFailureDiagnostic::timeout(
                             model,
+                            ModelFailureEventKind::StreamIdleTimeout,
                             "Model stream idle deadline elapsed.",
                         ),
                         stop_reason: None,
@@ -416,7 +446,8 @@ async fn stream_one_attempt(
                     return StreamAttempt::Failed {
                         diagnostic: ModelFailureDiagnostic::response(
                             model,
-                            false,
+                            ModelFailureBoundary::Sse,
+                            ModelFailureEventKind::ErrorCompletion,
                             "Model stream returned an error completion.",
                         ),
                         stop_reason: Some(StopReason::Error),
@@ -435,7 +466,7 @@ async fn stream_one_attempt(
                 diagnostic,
             }) => {
                 return StreamAttempt::Failed {
-                    diagnostic: ModelFailureDiagnostic::from_provider(model, &diagnostic),
+                    diagnostic: ModelFailureDiagnostic::from_stream_event(model, &diagnostic),
                     stop_reason: Some(reason),
                     usage: error.usage,
                     time_to_first_token_ms,

@@ -70,6 +70,10 @@ fn runtime_limits_flag_and_file_are_first_party_opt_in() {
         tool_timeout_secs: 41,
         model_connect_timeout_secs: 17,
         model_idle_timeout_secs: 13,
+        model_retry_max_attempts: 4,
+        model_retry_base_delay_ms: 50,
+        model_retry_max_delay_ms: 400,
+        model_retry_jitter_percent: 15,
     };
     let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
         .with_env(vec![

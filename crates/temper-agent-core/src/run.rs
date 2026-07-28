@@ -74,15 +74,35 @@ impl SubAgentControl {
     }
 }
 
-/// Complete operation deadlines carried by every main or nested agent run.
-/// Deadline enforcement is owned by the shell; this type keeps the resolved
-/// contract beside the run definition without coupling the core to config or
-/// process-protocol crates.
+/// Bounded same-turn model-request retry policy. The total attempt budget
+/// includes the initial request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ModelRetryLimits {
+    pub max_attempts: u32,
+    pub base_delay: Duration,
+    pub max_delay: Duration,
+    pub jitter_percent: u8,
+}
+
+impl Default for ModelRetryLimits {
+    fn default() -> Self {
+        Self {
+            max_attempts: 7,
+            base_delay: Duration::from_millis(500),
+            max_delay: Duration::from_secs(8),
+            jitter_percent: 20,
+        }
+    }
+}
+
+/// Complete operation deadlines and retry policy carried by every main or
+/// nested agent run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AgentOperationLimits {
     pub tool_timeout: Duration,
     pub model_connect_timeout: Duration,
     pub model_idle_timeout: Duration,
+    pub model_retry: ModelRetryLimits,
 }
 
 impl Default for AgentOperationLimits {
@@ -91,6 +111,7 @@ impl Default for AgentOperationLimits {
             tool_timeout: Duration::from_secs(600),
             model_connect_timeout: Duration::from_secs(120),
             model_idle_timeout: Duration::from_secs(120),
+            model_retry: ModelRetryLimits::default(),
         }
     }
 }
