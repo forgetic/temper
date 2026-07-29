@@ -496,6 +496,11 @@ pub fn emit_agent_finished(ev: AgentFinished<'_>) {
         model.provider = model_failure.map(|failure| failure.provider.as_str()),
         model.name = model_failure.map(|failure| failure.model.as_str()),
         model.failure.category = model_failure.map(|failure| failure.category.as_str()),
+        model.failure.disposition = model_failure.map(|failure| failure.disposition.as_str()),
+        model.failure.boundary = model_failure.map(|failure| failure.boundary.as_str()),
+        model.failure.event_kind = model_failure.map(|failure| failure.event_kind.as_str()),
+        model.failure.status_present = model_failure.map(|failure| failure.status_present),
+        model.failure.code_present = model_failure.map(|failure| failure.code_present),
         model.failure.retryable = model_failure.map(|failure| failure.retryable),
         model.failure.http_status = http_status,
         model.failure.request_id = model_failure
@@ -802,53 +807,5 @@ pub fn emit_trigger_status(message: impl AsRef<str>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The per-event service the emit site hard-codes in its `target:` literal
-    /// must match the `Service` whose `as_str()` it writes into `service=`. We
-    /// can't read the literal back at runtime, so this guards the *mapping* the
-    /// design fixes (§2): the spec assigns each event to exactly one plane.
-    #[test]
-    fn event_service_mapping_is_the_spec_assignment() {
-        // (Event, Service) pairs straight from §2's "Example events" column.
-        let mapping = [
-            (Event::IssueOpened, Service::Trigger),
-            (Event::WakeReceived, Service::Trigger),
-            (Event::CiCompleted, Service::Trigger),
-            (Event::LeaseClaimed, Service::Worker),
-            (Event::LeaseReleased, Service::Worker),
-            (Event::LeaseLost, Service::Worker),
-            (Event::ForgeContextRead, Service::Engine),
-            (Event::RoleSaturated, Service::Worker),
-            (Event::AgentStarted, Service::Agent),
-            (Event::AgentFinished, Service::Agent),
-            (Event::AgentToolConfigured, Service::Agent),
-            (Event::AgentToolExposed, Service::Agent),
-            (Event::AgentToolHidden, Service::Agent),
-            (Event::McpServerStarted, Service::Agent),
-            (Event::McpToolCalled, Service::Agent),
-            (Event::McpToolResult, Service::Agent),
-            (Event::WorkspaceDiffProduced, Service::Worker),
-            (Event::ModelSessionRotated, Service::Worker),
-            (Event::ModelFailureParked, Service::Engine),
-            (Event::TransitionApplied, Service::Engine),
-            (Event::ValidationOutcome, Service::Engine),
-            (Event::QueueEntered, Service::Engine),
-            (Event::GateEvaluated, Service::Engine),
-            (Event::PrOpened, Service::Engine),
-            (Event::PrUpdated, Service::Engine),
-            (Event::PrMerged, Service::Engine),
-            (Event::ItemResolved, Service::Engine),
-        ];
-        // Every event in the catalog is mapped exactly once.
-        assert_eq!(mapping.len(), Event::ALL.len());
-        for event in Event::ALL {
-            assert_eq!(
-                mapping.iter().filter(|(e, _)| *e == event).count(),
-                1,
-                "{event:?} is not mapped to exactly one service"
-            );
-        }
-    }
-}
+#[path = "tests.rs"]
+mod tests;

@@ -22,6 +22,7 @@ fn walker_dispatches_every_manifest_action_in_declared_order() {
             ManifestAction::StartJig {
                 script_path: PathBuf::from("jig.json"),
                 roles: vec!["engineer".to_string()],
+                late_stream_failure: None,
             },
         ),
         step(

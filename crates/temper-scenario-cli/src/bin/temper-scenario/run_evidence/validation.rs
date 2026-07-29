@@ -133,6 +133,19 @@ impl RunEvidenceArtifact {
                                     .to_string(),
                             );
                         }
+                        if provider.request_ids.len() != total
+                            || provider
+                                .request_ids
+                                .iter()
+                                .collect::<std::collections::BTreeSet<_>>()
+                                .len()
+                                != total
+                        {
+                            diagnostics.push(
+                                "run evidence Jig request identities are missing or duplicated"
+                                    .to_string(),
+                            );
+                        }
                     }
                     _ => diagnostics.push(
                         "passing live run evidence is missing Jig script/request facts".to_string(),

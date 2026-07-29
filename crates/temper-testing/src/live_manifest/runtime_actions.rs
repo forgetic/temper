@@ -119,7 +119,12 @@ impl LiveExecutionContext<'_> {
         Ok(())
     }
 
-    pub(super) fn start_jig(&mut self, script_path: &Path, roles: &[String]) -> Result<(), String> {
+    pub(super) fn start_jig(
+        &mut self,
+        script_path: &Path,
+        roles: &[String],
+        late_stream_failure: Option<&super::super::LateStreamFailureFixture>,
+    ) -> Result<(), String> {
         required_ref(&self.server, "forgejo.provision")?;
         if let Some(fake) = &self.fake {
             require(
@@ -134,6 +139,7 @@ impl LiveExecutionContext<'_> {
             self.fake = Some(ManifestFake::start(
                 self.harness.scenario.execution.convergence,
                 script_path,
+                late_stream_failure,
             )?);
         }
         for role in roles {
@@ -190,6 +196,7 @@ impl LiveExecutionContext<'_> {
             &self.bundle_dir.join("config.toml"),
             self.harness.scenario.poll_backstop.as_secs(),
             self.harness.scenario.mechanical_cadence.as_secs(),
+            self.harness.scenario.recovery.as_ref(),
         )?;
         if let Some(configuration) = &self.tool_configuration {
             let mcp = required_ref(&self.mcp, "mcp.fake_codebase_memory.start")?;

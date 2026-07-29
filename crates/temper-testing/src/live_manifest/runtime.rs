@@ -136,7 +136,11 @@ impl<'a> LiveExecutionContext<'a> {
                 seed_path,
                 ci_source_path,
             } => self.seed_repository(repo_id, seed_path, ci_source_path),
-            ManifestAction::StartJig { script_path, roles } => self.start_jig(script_path, roles),
+            ManifestAction::StartJig {
+                script_path,
+                roles,
+                late_stream_failure,
+            } => self.start_jig(script_path, roles, late_stream_failure.as_ref()),
             ManifestAction::LaunchTemper { workflow_path } => self.launch_temper(workflow_path),
             ManifestAction::SeedIssue {
                 issue_id,
@@ -327,7 +331,9 @@ impl<'a> LiveExecutionContext<'a> {
 
     fn execute_stimulus(&mut self, stimulus: &super::StimulusSpec) -> Result<(), String> {
         let issue = match &stimulus.kind {
-            StimulusKind::RepeatDelivery { artifact, .. } => artifact
+            StimulusKind::RepeatDelivery { artifact, .. }
+            | StimulusKind::WaitProviderDeferred { artifact, .. }
+            | StimulusKind::ProviderHealthWake { artifact, .. } => artifact
                 .strip_prefix("issue:")
                 .and_then(|binding| self.issues.get(binding))
                 .copied()
@@ -501,6 +507,17 @@ impl<'a> LiveExecutionContext<'a> {
         }
         let runner_running = required_mut(&mut self.runner, "forgejo_runner.ready")?.is_running();
         let fake_llm = fake.evidence(&self.logs.fake_llm_log);
+        let mut forge_pull_requests = engine_block_on(
+            required_ref(&self.forge, "temper.launch_standalone")?.list_pull_requests(
+                required_ref(&self.repository, "temper.launch_standalone")?,
+                PullRequestQuery::default(),
+            ),
+        )
+        .map_err(|error| format!("capture terminal pull-request inventory: {error}"))?
+        .iter()
+        .map(super::convergence::pr_evidence)
+        .collect::<Vec<_>>();
+        forge_pull_requests.sort_by_key(|pull| pull.number);
         Ok(LiveManifestEvidence {
             _workspace: self.workspace,
             scenario_path: self.harness.scenario.scenario_path.clone(),
@@ -522,6 +539,7 @@ impl<'a> LiveExecutionContext<'a> {
             total_elapsed: self.started.elapsed(),
             poll_backstop: self.harness.scenario.poll_backstop,
             fake_llm,
+            forge_pull_requests,
             final_state: convergence.final_state,
             handoff: convergence.handoff,
             codebase_memory: convergence.codebase_memory,

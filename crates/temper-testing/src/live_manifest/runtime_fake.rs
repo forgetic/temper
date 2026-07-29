@@ -5,7 +5,7 @@ use super::codebase_memory::CodebaseMemoryFake;
 use super::fake_llm::SinglePullRequestFake;
 use super::handoff::fake::HandoffFake;
 use super::plan_feature::fake::PlanFeatureFake;
-use super::{ConvergenceStrategy, FakeLlmEvidence};
+use super::{ConvergenceStrategy, FakeLlmEvidence, LateStreamFailureFixture};
 
 pub(super) enum ManifestFake {
     Single {
@@ -27,11 +27,21 @@ pub(super) enum ManifestFake {
 }
 
 impl ManifestFake {
-    pub(super) fn start(strategy: ConvergenceStrategy, script_path: &Path) -> Result<Self, String> {
+    pub(super) fn start(
+        strategy: ConvergenceStrategy,
+        script_path: &Path,
+        late_stream_failure: Option<&LateStreamFailureFixture>,
+    ) -> Result<Self, String> {
+        if late_stream_failure.is_some() && strategy != ConvergenceStrategy::SinglePullRequest {
+            return Err(
+                "late streamed failure injection currently requires single-pull-request convergence"
+                    .to_string(),
+            );
+        }
         let script_path = script_path.to_path_buf();
         match strategy {
             ConvergenceStrategy::SinglePullRequest => Ok(Self::Single {
-                fake: SinglePullRequestFake::start(&script_path)?,
+                fake: SinglePullRequestFake::start(&script_path, late_stream_failure)?,
                 script_path,
             }),
             ConvergenceStrategy::CodebaseMemory => Ok(Self::CodebaseMemory {

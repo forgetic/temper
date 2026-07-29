@@ -1,6 +1,7 @@
 //! Durable assignment claim, heartbeat, release, and recovery mutations.
 
 use super::*;
+use crate::ProviderRecovery;
 
 impl<F: Forge + ?Sized> LeaseManager<'_, F> {
     /// Atomically persists an exact assignment, lease, and lifecycle mutation.
@@ -109,10 +110,10 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
         repo_id: &RepositoryId,
         target: ArtifactSource,
         expected: &DurableAssignment,
-    ) -> Result<(), LeaseError> {
+    ) -> Result<Option<ProviderRecovery>, LeaseError> {
         let loaded = self.load(repo_id, target).await?;
         let Some(current) = loaded.metadata().assignment.as_ref() else {
-            return Ok(());
+            return Ok(None);
         };
         if !assignment_identity_matches(current, expected) {
             return Err(LeaseError::AssignmentConflict {
@@ -120,6 +121,7 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
             });
         }
         let mut metadata = loaded.metadata().clone();
+        let mut cleared_recovery = None;
         if let Some(recovery) = metadata.provider_recovery.as_ref() {
             recovery
                 .validate()
@@ -137,6 +139,7 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
                     job_id: "provider recovery does not authorize successful attempt".to_string(),
                 });
             }
+            cleared_recovery = Some(recovery.as_ref().clone());
             metadata.provider_recovery = None;
         }
         self.write_assignment_with_metadata(
@@ -147,7 +150,8 @@ impl<F: Forge + ?Sized> LeaseManager<'_, F> {
             AssignmentMutation::default(),
             target,
         )
-        .await
+        .await?;
+        Ok(cleared_recovery)
     }
 
     /// Rolls an unpublished assignment back to its captured pre-claim

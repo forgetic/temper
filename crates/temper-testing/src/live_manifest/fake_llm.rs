@@ -2,9 +2,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use jig_core::{Reply, RequestView, Script, ScriptFile};
+use jig_core::{RecordedRequest, Reply, RequestView, Script, ScriptFile};
 use jig_server::FakeLlm;
 use serde_json::Value;
+
+use super::LateStreamFailureFixture;
+use super::late_stream_jig::LateStreamJig;
 
 const ARCHITECT_ROLE_PROMPT: &str = "ROLE: architect";
 const ENGINEER_ROLE_PROMPT: &str = "ROLE: engineer";
@@ -35,13 +38,37 @@ pub(super) fn engineer_summary() -> &'static str {
 
 /// Jig-compatible fake LLM backed by the script declared in the resolved bundle.
 pub(super) struct SinglePullRequestFake {
-    fake: FakeLlm,
+    fake: FakeBackend,
     architect_requests: Arc<AtomicUsize>,
     engineer_requests: Arc<AtomicUsize>,
 }
 
+enum FakeBackend {
+    Jig(FakeLlm),
+    LateStream(LateStreamJig),
+}
+
+impl FakeBackend {
+    fn base_url(&self) -> String {
+        match self {
+            Self::Jig(fake) => fake.base_url(),
+            Self::LateStream(fake) => fake.base_url(),
+        }
+    }
+
+    fn requests(&self) -> Vec<RecordedRequest> {
+        match self {
+            Self::Jig(fake) => fake.requests(),
+            Self::LateStream(fake) => fake.requests(),
+        }
+    }
+}
+
 impl SinglePullRequestFake {
-    pub(super) fn start(path: &Path) -> Result<Self, String> {
+    pub(super) fn start(
+        path: &Path,
+        late_stream_failure: Option<&LateStreamFailureFixture>,
+    ) -> Result<Self, String> {
         let expectations = expectations_from_path(path)?;
         if let Some(existing) = EXPECTATIONS.get() {
             if existing != &expectations {
@@ -61,19 +88,30 @@ impl SinglePullRequestFake {
 
         let architect_requests = Arc::new(AtomicUsize::new(0));
         let engineer_requests = Arc::new(AtomicUsize::new(0));
-        let architect_seen = Arc::clone(&architect_requests);
-        let engineer_seen = Arc::clone(&engineer_requests);
-        let fake = FakeLlm::start(Script::rule(move |view| {
-            if messages_contain(view, ARCHITECT_ROLE_PROMPT) {
-                architect_seen.fetch_add(1, Ordering::SeqCst);
-            } else if messages_contain(view, ENGINEER_ROLE_PROMPT) {
-                engineer_seen.fetch_add(1, Ordering::SeqCst);
-            } else {
-                return Reply::text("unexpected role for scenario-owned Jig script");
-            }
-            script.next_reply(view)
-        }))
-        .map_err(|error| format!("start scenario Jig fake LLM: {error}"))?;
+        let fake = if let Some(fixture) = late_stream_failure {
+            FakeBackend::LateStream(LateStreamJig::start(
+                script,
+                fixture.clone(),
+                Arc::clone(&architect_requests),
+                Arc::clone(&engineer_requests),
+            )?)
+        } else {
+            let architect_seen = Arc::clone(&architect_requests);
+            let engineer_seen = Arc::clone(&engineer_requests);
+            FakeBackend::Jig(
+                FakeLlm::start(Script::rule(move |view| {
+                    if messages_contain(view, ARCHITECT_ROLE_PROMPT) {
+                        architect_seen.fetch_add(1, Ordering::SeqCst);
+                    } else if messages_contain(view, ENGINEER_ROLE_PROMPT) {
+                        engineer_seen.fetch_add(1, Ordering::SeqCst);
+                    } else {
+                        return Reply::text("unexpected role for scenario-owned Jig script");
+                    }
+                    script.next_reply(view)
+                }))
+                .map_err(|error| format!("start scenario Jig fake LLM: {error}"))?,
+            )
+        };
         Ok(Self {
             fake,
             architect_requests,

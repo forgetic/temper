@@ -9,8 +9,8 @@ use toml::Value as TomlValue;
 use crate::forgejo_server::ForgejoServer;
 
 use super::{
-    DEFAULT_ADMIN_EMAIL, INIT_PROVIDER_KEY, ObservabilityFixture, RepoFixture, ScenarioBundle,
-    TemperCommand,
+    DEFAULT_ADMIN_EMAIL, INIT_PROVIDER_KEY, ObservabilityFixture, RecoveryFixture, RepoFixture,
+    ScenarioBundle, TemperCommand,
 };
 
 const STANDALONE_READY_TIMEOUT: Duration = Duration::from_secs(90);
@@ -155,6 +155,7 @@ pub(super) fn tune_init_config(
     config_path: &Path,
     poll_cadence_secs: u64,
     mech_secs: u64,
+    recovery: Option<&RecoveryFixture>,
 ) -> Result<(), String> {
     let text = fs::read_to_string(config_path)
         .map_err(|error| format!("read {}: {error}", config_path.display()))?;
@@ -173,6 +174,59 @@ pub(super) fn tune_init_config(
         "mechanical_cadence_secs".to_string(),
         TomlValue::Integer(mech_secs as i64),
     );
+    if let Some(recovery) = recovery {
+        let worker = doc
+            .get_mut("worker")
+            .and_then(TomlValue::as_table_mut)
+            .ok_or_else(|| "config.toml has no [worker] table".to_string())?;
+        for (field, value) in [
+            (
+                "session_failure_limit",
+                u64::from(recovery.session_failure_limit),
+            ),
+            (
+                "fresh_session_limit",
+                u64::from(recovery.fresh_session_limit),
+            ),
+            (
+                "provider_deferral_limit",
+                u64::from(recovery.provider_deferral_limit),
+            ),
+            (
+                "provider_deferral_delay_secs",
+                recovery.provider_deferral_delay_secs,
+            ),
+            ("model_recovery_slo_secs", recovery.model_recovery_slo_secs),
+        ] {
+            worker.insert(field.to_string(), TomlValue::Integer(value as i64));
+        }
+        let deadlines = doc
+            .get_mut("agent")
+            .and_then(TomlValue::as_table_mut)
+            .and_then(|agent| agent.get_mut("deadlines"))
+            .and_then(TomlValue::as_table_mut)
+            .ok_or_else(|| "config.toml has no [agent.deadlines] table".to_string())?;
+        for (field, value) in [
+            (
+                "model_retry_max_attempts",
+                u64::from(recovery.model_retry_max_attempts),
+            ),
+            (
+                "model_retry_base_delay_ms",
+                recovery.model_retry_base_delay_ms,
+            ),
+            (
+                "model_retry_max_delay_ms",
+                recovery.model_retry_max_delay_ms,
+            ),
+            (
+                "model_retry_jitter_percent",
+                u64::from(recovery.model_retry_jitter_percent),
+            ),
+        ] {
+            deadlines.insert(field.to_string(), TomlValue::Integer(value as i64));
+        }
+    }
     fs::write(
         config_path,
         toml::to_string_pretty(&doc).map_err(|error| format!("serialize tuned config: {error}"))?,
