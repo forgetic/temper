@@ -380,6 +380,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
         let expected = durable_assignment(&job, &claim_context);
 
+        let result_status = result.status;
         // Result application consumes the assignment-time lease instead of
         // reacquiring under a possibly conflicting daemon owner.
         let span = work_item_span(&item, &job.role, Some("apply result"));
@@ -428,10 +429,19 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                 return outcome;
             }
 
-            if let Err(error) = manager
-                .release_assignment(&repo_id, target, &expected)
-                .await
-            {
+            let authoritative_success = result_status
+                == temper_protocol_worker::ResultStatus::Success
+                && matches!(&outcome, ApplyOutcome::Applied);
+            let release = if authoritative_success {
+                manager
+                    .release_successful_assignment(&repo_id, target, &expected)
+                    .await
+            } else {
+                manager
+                    .release_assignment(&repo_id, target, &expected)
+                    .await
+            };
+            if let Err(error) = release {
                 tracing::error!(
                     target: "temper_daemon",
                     job_id = %job.job_id,

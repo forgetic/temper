@@ -41,6 +41,7 @@ mod interrupted_ci_recovery;
 pub mod lease_applier;
 pub mod mechanical;
 pub mod pr_freshness;
+pub mod provider_recovery;
 pub mod trace_journal;
 pub mod trace_query;
 mod verdict_contract;
@@ -91,6 +92,10 @@ pub use mechanical::{
     spawn_coordinated_mechanical_backstop,
 };
 pub use pr_freshness::check_pull_request_freshness;
+pub use provider_recovery::{
+    ProviderHealthSignal, ProviderHealthWakeError, ProviderHealthWakeOutcome, ProviderHealthWaker,
+    provider_health_signature,
+};
 pub use trace_journal::{
     AgentTraceJournal, AgentTraceManifest, AgentTraceRun, AgentTraceRunStatus, AgentTraceSummary,
     AuthenticatedWorkerBinding, RetentionProtection, RetentionReport, TraceAuditRecord,

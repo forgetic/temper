@@ -350,9 +350,10 @@ fn ci_change_after_stale_active_read_lands_in_immediate_exact_follow_up() {
                 CountedForgeOp::GetPullRequestByNumber,
                 CountedForgeOp::GetPullRequestByNumber,
                 CountedForgeOp::ListCiJobs,
+                CountedForgeOp::GetPullRequestByNumber,
                 CountedForgeOp::MergePullRequest,
             ],
-            "the dirty generation uses only the exact PR fetch and required CI signal before landing"
+            "the dirty generation uses exact target reads, required CI, and a fresh recovery fence before landing"
         );
         let ci_query = fixture
             .forge
@@ -476,8 +477,8 @@ fn heartbeat_burst_keeps_ci_target_bounded_and_ahead_of_broad_work() {
                 .iter()
                 .filter(|op| **op == CountedForgeOp::GetPullRequestByNumber)
                 .count(),
-            3,
-            "the exact CI target has one bounded processing budget despite duplicate traffic: {before_broad:?}"
+            4,
+            "the exact CI target has one bounded processing budget plus its fresh recovery fence despite duplicate traffic: {before_broad:?}"
         );
         assert_eq!(
             before_broad

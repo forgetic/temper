@@ -430,6 +430,13 @@ from failure messages, stderr, provider prose, prompts, or raw responses. Older
 failure JSON without either field continues to deserialize unchanged. See
 [`result-model-failure.json`](worker-daemon-wire-protocol/examples/result-model-failure.json).
 
+A transient result carrying `session_recovery.action=provider_deferred` is an
+exception to generic transient drop-for-rescan handling. The daemon applies it
+so the bounded Forge `provider_recovery` marker converges before the exact
+assignment and lease are released. Ordinary transient/canceled failures still
+use drop-for-rescan behavior. Assignment claim binds one due attempt id; only
+that fresh attempt may publish success and clear the marker.
+
 The worker first records the exact result in its private durable result outbox.
 Transport failures retain that entry and replay it with bounded exponential
 backoff independently of job permits. The daemon applies a matching result

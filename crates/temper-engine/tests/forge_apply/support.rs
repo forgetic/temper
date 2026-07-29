@@ -337,6 +337,7 @@ pub(crate) fn model_recovery_failure_result(
         "generic message must not be projected into the typed audit",
     );
     let attempt_id = result.attempt_id.clone().expect("test attempt");
+    let deferred = action == SessionRecoveryActionV1::ProviderDeferred;
     result.failure = Some(Failure {
         class,
         message: "generic message must not be projected into the typed audit".to_string(),
@@ -360,19 +361,20 @@ pub(crate) fn model_recovery_failure_result(
             attempt_id,
             failure_epoch,
             failure_count,
-            session_number: 0,
-            session_failure_count: 0,
-            epoch_started_unix_ms: None,
-            epoch_elapsed_ms: 0,
-            disposition: None,
-            immediate_retry_exhausted: false,
-            configured_session_failure_limit: 0,
-            configured_fresh_session_limit: 0,
-            configured_deferral_limit: 0,
-            deferral_count: 0,
-            deferral_generation: 0,
-            not_before_unix_ms: None,
-            slo_deadline_unix_ms: None,
+            session_number: if deferred { 2 } else { 0 },
+            session_failure_count: if deferred { 1 } else { 0 },
+            epoch_started_unix_ms: deferred.then_some(1_000),
+            epoch_elapsed_ms: if deferred { 100 } else { 0 },
+            disposition: deferred
+                .then_some(temper_protocol_activity::ModelFailureDispositionV1::Retryable),
+            immediate_retry_exhausted: deferred,
+            configured_session_failure_limit: if deferred { 1 } else { 0 },
+            configured_fresh_session_limit: if deferred { 1 } else { 0 },
+            configured_deferral_limit: if deferred { 3 } else { 0 },
+            deferral_count: if deferred { 1 } else { 0 },
+            deferral_generation: if deferred { 1 } else { 0 },
+            not_before_unix_ms: deferred.then_some(2_000),
+            slo_deadline_unix_ms: deferred.then_some(10_000),
             action,
             current_session_id: current_session_id.to_string(),
             prior_session_id: (action == SessionRecoveryActionV1::ParkForHuman)

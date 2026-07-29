@@ -228,6 +228,7 @@ pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
                 snapshot: &scan.snapshot,
                 classified: &scan.classified,
             }),
+            Some(now),
         )
         .await
         {
@@ -254,6 +255,7 @@ pub async fn enqueue_targeted_role_work<F: Forge + ?Sized>(
             Ok(
                 outcome @ (EnrichOutcome::SkipTerminalArtifact
                 | EnrichOutcome::SkipAttentionArtifact
+                | EnrichOutcome::SkipProviderDeferred
                 | EnrichOutcome::SkipExistingPullRequest),
             ) => tracing::debug!("{}", skip_log_line(&repo_label, &item.role, item, outcome)),
             Err(error) => tracing::debug!(

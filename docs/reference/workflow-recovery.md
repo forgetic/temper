@@ -82,23 +82,50 @@ the same attempt returns that decision without incrementing the count.
 
 The finite state transition is:
 
-1. A retryable terminal model failure authorizes up to three worker runs on the
-   current session. Provider-internal stream retries are already exhausted and
-   are not counted separately.
-2. A non-retryable terminal immediately consumes the current session; reaching
-   the retryable cap does the same.
-3. The first consumed session is archived and exactly one fresh session is
-   persisted over the same dirty checkout. The transient result permits one
-   later claim.
-4. If the fresh session is consumed before authoritative success, the permanent
-   result removes `ready`, `in-progress`, the active assignee and other action
-   presentation, adds `needs-human`, and creates one failure-epoch-keyed audit.
-   Polling, result replay, and process replacement cannot create a third session
-   or another audit.
-5. Authoritative success starts a new failure epoch and clears the consecutive
-   decision boundary while retaining bounded predecessor evidence. Missing
-   state may create only the initial session. Malformed, unsupported, or
-   workstream-mismatched state fails closed without overwrite or budget reset.
+1. Retryable and unknown failures first consume the configured same-turn request
+   budget. Only the failed model request is retried; completed tool calls are
+   outside that loop.
+2. Terminal failures are counted cumulatively for the unsucceeded workstream
+   epoch as well as per session. The configured session run limit and fresh
+   session limit bound rotation over the same preserved dirty checkout.
+3. Once eligible immediate and fresh-session recovery is exhausted, the worker
+   emits `provider_deferred`. Before releasing the exact assignment, the engine
+   writes a bounded `WorkflowMetadata.provider_recovery` record containing the
+   coordination key, failure epoch/disposition, allowlisted provider facts
+   (including status/code presence after unsafe text is discarded), cumulative
+   and deferral counts, generation, not-before/SLO timestamps, and an
+   idempotency digest. It restores queue presentation and removes the active
+   assignee, but does **not** add `needs-human`.
+4. Normal role scans, targeted webhook scans, broad startup/wake scans, and the
+   poll backstop all suppress a valid pre-due record. At or after `not_before`,
+   one claim binds its new attempt id into that record in the same CAS as the
+   assignment lease. Expired-assignment reconciliation clears only that binding,
+   allowing a replacement attempt through the same lease fence without making
+   the expired attempt authoritative.
+5. A host may advance one scoped wake with `ProviderHealthWaker`. The request is
+   HMAC-authenticated and must match the target artifact's workstream, failure
+   epoch, and current generation. Duplicate event ids converge, stale
+   generations do nothing, and no signal changes other workstreams or acts as a
+   global provider circuit breaker.
+6. Fresh success publication re-reads the marker. PR create/update, verdict and
+   validation application accept only the bound due attempt; stale or rejected
+   success releases that attempt without clearing recovery. Only an
+   authoritatively applied success clears the marker in the same CAS as its
+   assignment and lease. PR landing also refuses a fresh provider-recovery
+   marker.
+7. A later exhausted due attempt advances the bounded generation/count and
+   defers again. Reaching `worker.provider_deferral_limit`, reaching
+   `worker.model_recovery_slo_secs`, or finding corrupt durable recovery state
+   parks with `needs-human` and one actionable, safe audit. The automatic delay
+   is `worker.provider_deferral_delay_secs`; configuration rejects zero,
+   excessive, or delay-greater-than-SLO values.
+
+The marker intentionally stores no prompt, free-form provider message, raw
+response, credentials, stderr, or workspace content. Queue authority and the
+coordination-scoped checkout/session ledger remain in place while the artifact
+has no lease or assignee. A Forge body update caused by a health wake is a normal
+change signal, so replacement daemons reconstruct scheduling from durable state
+without an in-memory timer being authoritative.
 
 Activity traces are observational. The normalized model diagnostic and session
 decision in the durable worker result/ledger remain authoritative when trace
