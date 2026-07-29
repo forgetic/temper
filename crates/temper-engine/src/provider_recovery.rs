@@ -13,9 +13,12 @@ use temper_forge::{
     CreateComment, Forge, ForgeError, Issue, PullRequest, RepositoryId, UpdateIssue,
     UpdatePullRequest,
 };
+use temper_log::WorkItemRef;
+use temper_log::emit::{ModelProviderWake, emit_model_provider_wake};
 use temper_runner::ScanError;
 use temper_workflow::{
-    ArtifactSource, inspect_metadata_blocks, parse_metadata_block, replace_metadata_block,
+    ArtifactSource, ProviderRecovery, ProviderRecoveryDisposition, inspect_metadata_blocks,
+    parse_metadata_block, replace_metadata_block,
 };
 
 use crate::WallClock;
@@ -240,13 +243,21 @@ impl<F: Forge + ?Sized> ProviderHealthWaker<F> {
                 return Ok(ProviderHealthWakeOutcome::Stale);
             }
             if recovery.health_event_id.as_deref() == Some(signal.event_id.as_str()) {
-                return Ok(
-                    if signal.expected_generation.checked_add(1) == Some(recovery.generation) {
-                        ProviderHealthWakeOutcome::Duplicate
-                    } else {
-                        ProviderHealthWakeOutcome::Stale
-                    },
-                );
+                if signal.expected_generation.checked_add(1) != Some(recovery.generation) {
+                    return Ok(ProviderHealthWakeOutcome::Stale);
+                }
+                let recovery = recovery.as_ref().clone();
+                let audit_created = ensure_provider_wake_audit(
+                    self.forge.as_ref(),
+                    &snapshot,
+                    &recovery,
+                    &signal.event_id,
+                )
+                .await?;
+                if audit_created {
+                    emit_provider_wake(repo, target, &recovery, &signal.event_id);
+                }
+                return Ok(ProviderHealthWakeOutcome::Duplicate);
             }
             if recovery.generation != signal.expected_generation {
                 return Ok(ProviderHealthWakeOutcome::Stale);
@@ -282,10 +293,23 @@ impl<F: Forge + ?Sized> ProviderHealthWaker<F> {
             recovery
                 .validate()
                 .map_err(ProviderHealthWakeError::CorruptRecovery)?;
+            let recovery = recovery.as_ref().clone();
             let body = replace_metadata_block(snapshot.body(), &metadata)
                 .map_err(|error| ProviderHealthWakeError::CorruptRecovery(error.to_string()))?;
             match snapshot.update_body(self.forge.as_ref(), body).await {
-                Ok(_) => return Ok(ProviderHealthWakeOutcome::Advanced),
+                Ok(_) => {
+                    let audit_created = ensure_provider_wake_audit(
+                        self.forge.as_ref(),
+                        &snapshot,
+                        &recovery,
+                        &signal.event_id,
+                    )
+                    .await?;
+                    if audit_created {
+                        emit_provider_wake(repo, target, &recovery, &signal.event_id);
+                    }
+                    return Ok(ProviderHealthWakeOutcome::Advanced);
+                }
                 Err(ForgeError::Conflict(_)) => continue,
                 Err(error) => return Err(ProviderHealthWakeError::Forge(error.to_string())),
             }
@@ -294,6 +318,128 @@ impl<F: Forge + ?Sized> ProviderHealthWaker<F> {
             "provider health wake remained contended".to_string(),
         ))
     }
+}
+
+fn recovery_item(repo: &RepositoryId, target: ArtifactSource) -> WorkItemRef {
+    match target {
+        ArtifactSource::Issue { number } => WorkItemRef::issue(repo.as_str(), number.get()),
+        ArtifactSource::PullRequest { number } => {
+            WorkItemRef::pull_request(repo.as_str(), number.get())
+        }
+    }
+}
+
+fn emit_provider_wake(
+    repo: &RepositoryId,
+    target: ArtifactSource,
+    recovery: &ProviderRecovery,
+    event_id: &str,
+) {
+    let item = recovery_item(repo, target);
+    let disposition = match recovery.disposition {
+        ProviderRecoveryDisposition::Retryable => "retryable",
+        ProviderRecoveryDisposition::Unknown => "unknown",
+    };
+    emit_model_provider_wake(ModelProviderWake {
+        item: &item,
+        workstream_id: &recovery.workstream_id,
+        failure_epoch: recovery.failure_epoch,
+        failure_count: recovery.cumulative_failure_count,
+        elapsed_ms: recovery.elapsed_ms,
+        deferral_count: recovery.deferral_count,
+        generation: recovery.generation,
+        action: "provider_health_wake",
+        event_id,
+        disposition,
+        provider: &recovery.facts.provider,
+        model: &recovery.facts.model,
+        category: &recovery.facts.category,
+        boundary: &recovery.facts.boundary,
+        event_kind: &recovery.facts.event_kind,
+        status_present: recovery.facts.status_present,
+        code_present: recovery.facts.code_present,
+        http_status: recovery.facts.http_status,
+        provider_request_id: recovery.facts.provider_request_id.as_deref(),
+        provider_error_code: recovery.facts.provider_error_code.as_deref(),
+    });
+}
+
+async fn ensure_provider_wake_audit<F: Forge + ?Sized>(
+    forge: &F,
+    snapshot: &RecoveryArtifact,
+    recovery: &ProviderRecovery,
+    event_id: &str,
+) -> Result<bool, ProviderHealthWakeError> {
+    let marker = format!(
+        "<!-- temper:comment-key=model_recovery_audit:{} -->",
+        recovery_event_key(
+            &recovery.workstream_id,
+            recovery.failure_epoch,
+            recovery.generation,
+            "provider_health_wake",
+            "audit"
+        )
+    );
+    let comments = snapshot
+        .comments(forge)
+        .await
+        .map_err(|error| ProviderHealthWakeError::Forge(error.to_string()))?;
+    if comments
+        .iter()
+        .any(|comment| comment.body.contains(&marker))
+    {
+        return Ok(false);
+    }
+    let facts = &recovery.facts;
+    let optional = |value: Option<&str>| value.unwrap_or("none").to_string();
+    snapshot
+        .comment(
+            forge,
+            format!(
+                "Temper accepted an authenticated provider-health wake for automatic recovery.\n\n\
+- workstream_id: `{}`\n\
+- failure_epoch: `{}`\n\
+- cumulative_failure_count: `{}`\n\
+- action: `provider_health_wake`\n\
+- deferral_count: `{}`\n\
+- generation: `{}`\n\
+- elapsed_ms: `{}`\n\
+- disposition: `{}`\n\
+- boundary: `{}`\n\
+- event_kind: `{}`\n\
+- status_present: `{}`\n\
+- code_present: `{}`\n\
+- http_status: `{}`\n\
+- provider_request_id: `{}`\n\
+- provider_error_code: `{}`\n\
+- health_event_id: `{}`\n\n\
+This wake does not authorize publication; the exact due assignment and normal success gates remain authoritative.\n\n{marker}",
+                recovery.workstream_id,
+                recovery.failure_epoch,
+                recovery.cumulative_failure_count,
+                recovery.deferral_count,
+                recovery.generation,
+                recovery.elapsed_ms,
+                match recovery.disposition {
+                    ProviderRecoveryDisposition::Retryable => "retryable",
+                    ProviderRecoveryDisposition::Unknown => "unknown",
+                },
+                facts.boundary,
+                facts.event_kind,
+                facts.status_present,
+                facts.code_present,
+                facts
+                    .http_status
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                optional(facts.provider_request_id.as_deref()),
+                optional(facts.provider_error_code.as_deref()),
+                escape_markdown(event_id),
+            ),
+        )
+        .await
+        .map_err(|error| ProviderHealthWakeError::Forge(error.to_string()))?;
+    Ok(true)
 }
 
 pub fn provider_health_signature(secret: &str, signal: &ProviderHealthSignal) -> String {

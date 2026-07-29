@@ -65,7 +65,7 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         }
         .ok_or_else(|| "could not resolve model-failure source artifact".to_string())?;
 
-        let marker = model_recovery_comment_marker(job, evidence.recovery.failure_epoch);
+        let marker = model_recovery_comment_marker(job, &evidence.recovery);
         let comments = target
             .list_comments(self.forge.as_ref())
             .await
@@ -102,7 +102,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 attempt_id: &evidence.recovery.attempt_id,
                 failure_epoch: evidence.recovery.failure_epoch,
                 failure_count: evidence.recovery.failure_count,
+                session_number: evidence.recovery.session_number,
+                session_failure_count: evidence.recovery.session_failure_count,
+                elapsed_ms: evidence.recovery.epoch_elapsed_ms,
                 action: evidence.recovery.action.as_str(),
+                deferral_count: evidence.recovery.deferral_count,
+                generation: evidence.recovery.deferral_generation,
                 current_session_id: &evidence.recovery.current_session_id,
                 prior_session_id: evidence.recovery.prior_session_id.as_deref(),
                 new_session_id: evidence.recovery.new_session_id.as_deref(),
@@ -263,15 +268,29 @@ impl ParkTarget {
     }
 }
 
-fn model_recovery_comment_marker(job: &InFlightJob, failure_epoch: u32) -> String {
+fn model_recovery_comment_marker(
+    job: &InFlightJob,
+    recovery: &SessionRecoveryEvidenceV1,
+) -> String {
     let workstream = serde_json::from_value::<JobContext>(job.job_payload.clone())
         .ok()
         .and_then(|context| context.workspace)
         .map(|workspace| workspace.coordination_key)
         .unwrap_or_else(|| format!("{}:{}:{}", job.repo, job.artifact.kind, job.artifact.item));
-    let digest = Sha256::digest(workstream.as_bytes());
+    let mut digest = Sha256::new();
+    for value in [
+        workstream.as_str(),
+        &recovery.failure_epoch.to_string(),
+        recovery.action.as_str(),
+        &recovery.deferral_generation.to_string(),
+    ] {
+        digest.update(value.len().to_string());
+        digest.update(b":");
+        digest.update(value.as_bytes());
+    }
     format!(
-        "<!-- temper:comment-key={MODEL_RECOVERY_AUDIT_KEY_PREFIX}{digest:x}:{failure_epoch} -->"
+        "<!-- temper:comment-key={MODEL_RECOVERY_AUDIT_KEY_PREFIX}{:x} -->",
+        digest.finalize()
     )
 }
 
@@ -280,13 +299,18 @@ fn model_recovery_audit_body(evidence: &ModelRecoveryParkEvidence, marker: &str)
     let failure = &evidence.diagnostic;
     let optional = |value: Option<&str>| html_code(value.unwrap_or("none"));
     format!(
-        "Temper parked this workstream because bounded model recovery was exhausted. Automatic claims are disabled until an operator explicitly restores queue eligibility.\n\n\
+        "Temper parked this workstream because bounded model recovery was exhausted by an actionable failure that requires operator repair. Automatic claims are disabled until queue eligibility is deliberately restored.\n\n\
 **Durable recovery decision**\n\
 - attempt_id: {}\n\
 - failure_epoch: `{}`\n\
-- failure_count: `{}`\n\
+- cumulative_failure_count: `{}`\n\
+- session_number: `{}`\n\
+- session_failure_count: `{}`\n\
+- elapsed_ms: `{}`\n\
 - action: `{}`\n\
-- current_session_id (failed fresh session): {}\n\
+- deferral_count: `{}`\n\
+- generation: `{}`\n\
+- current_session_id: {}\n\
 - prior_session_id: {}\n\
 - new_session_id: {}\n\
 - evidence_location: {}\n\n\
@@ -294,17 +318,26 @@ fn model_recovery_audit_body(evidence: &ModelRecoveryParkEvidence, marker: &str)
 - provider: {}\n\
 - model: {}\n\
 - category: `{}`\n\
+- disposition: `{}`\n\
+- boundary: `{}`\n\
+- event_kind: `{}`\n\
+- status_present: `{}`\n\
+- code_present: `{}`\n\
 - retryable: `{}`\n\
 - http_status: `{}`\n\
 - provider_request_id: {}\n\
 - provider_error_code: {}\n\
-- detail_redacted: `{}`\n\
-- message: {}\n\n\
-**Operator action:** inspect the preserved workspace and session ledger at the evidence location, resolve the provider/session problem without discarding workspace changes, then deliberately restore the appropriate queue label.\n\n{}",
+- detail_redacted: `{}`\n\n\
+**Operator action:** inspect the preserved workspace and session ledger at the evidence location, repair the actionable provider/session condition without discarding workspace changes, then deliberately restore the appropriate queue label.\n\n{}",
         html_code(&recovery.attempt_id),
         recovery.failure_epoch,
         recovery.failure_count,
+        recovery.session_number,
+        recovery.session_failure_count,
+        recovery.epoch_elapsed_ms,
         recovery.action.as_str(),
+        recovery.deferral_count,
+        recovery.deferral_generation,
         html_code(&recovery.current_session_id),
         optional(recovery.prior_session_id.as_deref()),
         optional(recovery.new_session_id.as_deref()),
@@ -312,6 +345,11 @@ fn model_recovery_audit_body(evidence: &ModelRecoveryParkEvidence, marker: &str)
         html_code(&failure.provider),
         html_code(&failure.model),
         failure.category.as_str(),
+        failure.disposition.as_str(),
+        failure.boundary.as_str(),
+        failure.event_kind.as_str(),
+        failure.status_present,
+        failure.code_present,
         failure.retryable,
         failure
             .http_status
@@ -320,7 +358,6 @@ fn model_recovery_audit_body(evidence: &ModelRecoveryParkEvidence, marker: &str)
         optional(failure.provider_request_id.as_deref()),
         optional(failure.provider_error_code.as_deref()),
         failure.detail_redacted,
-        html_code(&failure.message),
         marker,
     )
 }

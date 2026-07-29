@@ -138,6 +138,7 @@ pub enum ManifestAction {
     StartJig {
         script_path: PathBuf,
         roles: Vec<String>,
+        late_stream_failure: Option<LateStreamFailureFixture>,
     },
     LaunchTemper {
         workflow_path: PathBuf,
@@ -210,6 +211,22 @@ impl ConvergenceStrategy {
             _ => None,
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LateStreamFailureFixture {
+    /// Agent role whose provider requests receive the injected SSE failures.
+    pub role: String,
+    /// Absolute, non-overlapping role-request ranges that receive failures.
+    pub bursts: Vec<LateStreamFailureBurst>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LateStreamFailureBurst {
+    /// Number of matching-role requests completed before this burst starts.
+    pub after_requests: u32,
+    /// Number of consecutive unclassified late failures in this burst.
+    pub failures: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -289,7 +306,20 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             if roles.is_empty() {
                 return Err(format!("{field}.role or {field}.roles is required"));
             }
-            Ok(ManifestAction::StartJig { script_path, roles })
+            let late_stream_failure = parse_late_stream_failure(table, &field)?;
+            if let Some(failure) = &late_stream_failure {
+                if !roles.contains(&failure.role) {
+                    return Err(format!(
+                        "{field}.late_stream_failure.role `{}` must be included in the Jig roles",
+                        failure.role
+                    ));
+                }
+            }
+            Ok(ManifestAction::StartJig {
+                script_path,
+                roles,
+                late_stream_failure,
+            })
         }
         "temper.launch_standalone" => Ok(ManifestAction::LaunchTemper {
             workflow_path: PathBuf::from(required_table_string(table, "config", &field)?),
@@ -333,13 +363,98 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
         | "forgejo_runner.restart"
         | "ci.fail"
         | "ci.recover"
-        | "delivery.repeat" => Ok(ManifestAction::Stimulus(parse_stimulus(
+        | "delivery.repeat"
+        | "provider.wait_deferred"
+        | "provider.health_wake" => Ok(ManifestAction::Stimulus(parse_stimulus(
             name, table, index,
         )?)),
         other => Err(format!(
             "{field}.action `{other}` is not supported by the live manifest executor"
         )),
     }
+}
+
+fn parse_late_stream_failure(
+    table: &toml::Table,
+    field: &str,
+) -> Result<Option<LateStreamFailureFixture>, String> {
+    let Some(value) = table.get("late_stream_failure") else {
+        return Ok(None);
+    };
+    let failure = value
+        .as_table()
+        .ok_or_else(|| format!("{field}.late_stream_failure must be an inline table"))?;
+    let role = required_table_string(failure, "role", &format!("{field}.late_stream_failure"))?;
+    let has_single = failure.contains_key("after_requests") || failure.contains_key("failures");
+    let bursts = match failure.get("bursts") {
+        Some(_) if has_single => {
+            return Err(format!(
+                "{field}.late_stream_failure must use either after_requests/failures or bursts, not both"
+            ));
+        }
+        Some(value) => {
+            let values = value.as_array().ok_or_else(|| {
+                format!("{field}.late_stream_failure.bursts must be an array of inline tables")
+            })?;
+            if values.is_empty() || values.len() > 8 {
+                return Err(format!(
+                    "{field}.late_stream_failure.bursts must contain 1 through 8 entries"
+                ));
+            }
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let burst = value.as_table().ok_or_else(|| {
+                        format!(
+                            "{field}.late_stream_failure.bursts[{index}] must be an inline table"
+                        )
+                    })?;
+                    parse_late_stream_burst(
+                        burst,
+                        &format!("{field}.late_stream_failure.bursts[{index}]"),
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        None => vec![parse_late_stream_burst(
+            failure,
+            &format!("{field}.late_stream_failure"),
+        )?],
+    };
+    for pair in bursts.windows(2) {
+        let prior_end = pair[0]
+            .after_requests
+            .checked_add(pair[0].failures)
+            .ok_or_else(|| format!("{field}.late_stream_failure burst range overflow"))?;
+        if pair[1].after_requests < prior_end {
+            return Err(format!(
+                "{field}.late_stream_failure bursts must be ordered and non-overlapping"
+            ));
+        }
+    }
+    Ok(Some(LateStreamFailureFixture { role, bursts }))
+}
+
+fn parse_late_stream_burst(
+    table: &toml::Table,
+    field: &str,
+) -> Result<LateStreamFailureBurst, String> {
+    for required in ["after_requests", "failures"] {
+        if !table.contains_key(required) {
+            return Err(format!("{field}.{required} is required"));
+        }
+    }
+    let after_requests = bounded_integer(table, "after_requests", field, 1, 0, 100)? as u32;
+    let failures = bounded_integer(table, "failures", field, 1, 1, 32)? as u32;
+    after_requests
+        .checked_add(failures)
+        .filter(|end| *end <= 128)
+        .ok_or_else(|| format!("{field} request range must end at or before 128"))?;
+    Ok(LateStreamFailureBurst {
+        after_requests,
+        failures,
+    })
 }
 
 fn apply_jig_script_override(
@@ -400,6 +515,22 @@ fn parse_stimulus(action: &str, table: &toml::Table, index: usize) -> Result<Sti
             artifact: required_table_string(table, "artifact", &field)?,
             deliveries: bounded_integer(table, "deliveries", &field, 2, 2, MAX_DELIVERIES)?,
         },
+        "provider.wait_deferred" => StimulusKind::WaitProviderDeferred {
+            artifact: required_table_string(table, "artifact", &field)?,
+            generation: bounded_integer(table, "generation", &field, 1, 1, 1_000_000)? as u32,
+        },
+        "provider.health_wake" => StimulusKind::ProviderHealthWake {
+            artifact: required_table_string(table, "artifact", &field)?,
+            expected_generation: bounded_integer(
+                table,
+                "expected_generation",
+                &field,
+                1,
+                1,
+                1_000_000,
+            )? as u32,
+            event_id: required_table_string(table, "event_id", &field)?,
+        },
         _ => unreachable!("caller filters stimulus actions"),
     };
     Ok(StimulusSpec {
@@ -443,6 +574,7 @@ fn bounded_integer(
 
 fn validate_stimulus_sequence(stimuli: &[StimulusSpec]) -> Result<(), String> {
     let mut pending_ci_failures = BTreeMap::<&str, &str>::new();
+    let mut observed_deferrals = BTreeSet::<(&str, u32)>::new();
     for stimulus in stimuli {
         match &stimulus.kind {
             StimulusKind::CiFailure { repo_id, .. } => {
@@ -457,6 +589,24 @@ fn validate_stimulus_sequence(stimuli: &[StimulusSpec]) -> Result<(), String> {
                 if pending_ci_failures.remove(repo_id.as_str()).is_none() {
                     return Err(format!(
                         "stimulus `{}` recovers CI for `{repo_id}` without a preceding ci.fail stimulus",
+                        stimulus.id
+                    ));
+                }
+            }
+            StimulusKind::WaitProviderDeferred {
+                artifact,
+                generation,
+            } => {
+                observed_deferrals.insert((artifact.as_str(), *generation));
+            }
+            StimulusKind::ProviderHealthWake {
+                artifact,
+                expected_generation,
+                ..
+            } => {
+                if !observed_deferrals.contains(&(artifact.as_str(), *expected_generation)) {
+                    return Err(format!(
+                        "provider-health wake stimulus `{}` requires an earlier provider.wait_deferred for `{artifact}` generation {expected_generation}",
                         stimulus.id
                     ));
                 }

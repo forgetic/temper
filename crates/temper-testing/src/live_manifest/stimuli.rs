@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use temper_forge_forgejo::ForgejoForge;
 use temper_forge_model::{CommitFile, ForgeContent, ItemNumber, RepositoryId, UpdateIssue};
+use temper_workflow::{ArtifactSource, parse_metadata_block};
 
 use super::process::{
     ChildGuard, engine_block_on, spawn_temper_standalone, wait_for_standalone_with_timeout,
@@ -51,6 +52,17 @@ pub enum StimulusKind {
         artifact: String,
         deliveries: u64,
     },
+    /// Observe (without mutating) a durable provider-recovery generation.
+    WaitProviderDeferred {
+        artifact: String,
+        generation: u32,
+    },
+    /// Advance an observed deferral with the harness-owned authenticated capability.
+    ProviderHealthWake {
+        artifact: String,
+        expected_generation: u32,
+        event_id: String,
+    },
 }
 
 impl StimulusKind {
@@ -61,6 +73,8 @@ impl StimulusKind {
             Self::CiFailure { .. } => "ci.fail",
             Self::CiRecovery { .. } => "ci.recover",
             Self::RepeatDelivery { .. } => "delivery.repeat",
+            Self::WaitProviderDeferred { .. } => "provider.wait_deferred",
+            Self::ProviderHealthWake { .. } => "provider.health_wake",
         }
     }
 }
@@ -118,6 +132,19 @@ pub trait StimulusRuntime {
         &mut self,
         artifact: &str,
         deliveries: u64,
+        timeout: Duration,
+    ) -> Result<String, String>;
+    fn wait_provider_deferred(
+        &mut self,
+        artifact: &str,
+        generation: u32,
+        timeout: Duration,
+    ) -> Result<String, String>;
+    fn provider_health_wake(
+        &mut self,
+        artifact: &str,
+        expected_generation: u32,
+        event_id: &str,
         timeout: Duration,
     ) -> Result<String, String>;
 }
@@ -269,6 +296,17 @@ fn dispatch(stimulus: &StimulusSpec, runtime: &mut impl StimulusRuntime) -> Resu
             artifact,
             deliveries,
         } => runtime.repeat_delivery(artifact, *deliveries, stimulus.timeout),
+        StimulusKind::WaitProviderDeferred {
+            artifact,
+            generation,
+        } => runtime.wait_provider_deferred(artifact, *generation, stimulus.timeout),
+        StimulusKind::ProviderHealthWake {
+            artifact,
+            expected_generation,
+            event_id,
+        } => {
+            runtime.provider_health_wake(artifact, *expected_generation, event_id, stimulus.timeout)
+        }
     }
 }
 
@@ -390,30 +428,21 @@ impl StimulusRuntime for LiveStimulusRuntime<'_> {
         deliveries: u64,
         _timeout: Duration,
     ) -> Result<String, String> {
-        let Some(_id) = artifact.strip_prefix("issue:") else {
-            return Err(format!(
-                "live repeated delivery currently requires an issue:<id> artifact, got `{artifact}`"
-            ));
-        };
-        let issue = engine_block_on(
+        let issue = self.issue_for_artifact(artifact)?;
+        let snapshot = engine_block_on(
             self.resources
                 .forge
-                .get_issue_by_number(self.resources.repository, self.resources.issue),
+                .get_issue_by_number(self.resources.repository, issue),
         )
         .map_err(|error| format!("read repeated-delivery issue: {error}"))?
-        .ok_or_else(|| {
-            format!(
-                "repeated-delivery issue #{} disappeared",
-                self.resources.issue
-            )
-        })?;
+        .ok_or_else(|| format!("repeated-delivery issue #{} disappeared", issue))?;
         for delivery in 1..=deliveries {
             engine_block_on(self.resources.forge.update_issue(
-                &issue.id,
+                &snapshot.id,
                 UpdateIssue {
                     // Re-applying the exact body emits a bounded, state-equivalent
                     // provider delivery without changing workflow state.
-                    body: Some(issue.body.clone()),
+                    body: Some(snapshot.body.clone()),
                     ..UpdateIssue::default()
                 },
             ))
@@ -423,9 +452,132 @@ impl StimulusRuntime for LiveStimulusRuntime<'_> {
             "replayed {deliveries} bounded provider deliveries for `{artifact}`"
         ))
     }
+
+    fn wait_provider_deferred(
+        &mut self,
+        artifact: &str,
+        generation: u32,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        let issue = self.issue_for_artifact(artifact)?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            let snapshot = engine_block_on(
+                self.resources
+                    .forge
+                    .get_issue_by_number(self.resources.repository, issue),
+            )
+            .map_err(|error| format!("read provider-deferred issue: {error}"))?
+            .ok_or_else(|| format!("provider-deferred issue #{} disappeared", issue))?;
+            if let Some(recovery) = parse_metadata_block(&snapshot.body)
+                .map_err(|error| format!("parse provider-deferred metadata: {error}"))?
+                .and_then(|metadata| metadata.provider_recovery)
+            {
+                recovery
+                    .validate()
+                    .map_err(|error| format!("invalid provider-deferred metadata: {error}"))?;
+                if recovery.generation == generation {
+                    return Ok(format!(
+                        "observed durable provider deferral for `{artifact}` epoch {} generation {} cumulative_failures={} workspace={}",
+                        recovery.failure_epoch,
+                        recovery.generation,
+                        recovery.cumulative_failure_count,
+                        recovery.workstream_id,
+                    ));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "durable provider deferral `{artifact}` generation {generation} was not observed"
+                ));
+            }
+            if let Some(status) = self.resources.standalone.try_wait()? {
+                return Err(format!(
+                    "standalone exited while waiting for provider deferral: {status:?}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn provider_health_wake(
+        &mut self,
+        artifact: &str,
+        expected_generation: u32,
+        event_id: &str,
+        _timeout: Duration,
+    ) -> Result<String, String> {
+        use secrecy::SecretString;
+        use temper_engine::{
+            ProviderHealthSignal, ProviderHealthWakeOutcome, ProviderHealthWaker,
+            provider_health_signature, system_clock,
+        };
+
+        let issue = self.issue_for_artifact(artifact)?;
+        let snapshot = engine_block_on(
+            self.resources
+                .forge
+                .get_issue_by_number(self.resources.repository, issue),
+        )
+        .map_err(|error| format!("read provider-health target: {error}"))?
+        .ok_or_else(|| format!("provider-health issue #{} disappeared", issue))?;
+        let recovery = parse_metadata_block(&snapshot.body)
+            .map_err(|error| format!("parse provider-health target metadata: {error}"))?
+            .and_then(|metadata| metadata.provider_recovery)
+            .ok_or_else(|| format!("`{artifact}` is not provider-deferred"))?;
+        if recovery.generation != expected_generation {
+            return Err(format!(
+                "provider-health wake expected generation {expected_generation}, observed {}",
+                recovery.generation
+            ));
+        }
+        let signal = ProviderHealthSignal {
+            workstream_id: recovery.workstream_id.clone(),
+            failure_epoch: recovery.failure_epoch,
+            expected_generation,
+            event_id: event_id.to_string(),
+        };
+        let signature = provider_health_signature(super::PROVIDER_HEALTH_SECRET, &signal);
+        let waker = ProviderHealthWaker::new(
+            std::sync::Arc::new(self.resources.forge.clone()),
+            SecretString::from(super::PROVIDER_HEALTH_SECRET.to_string()),
+            system_clock(),
+        );
+        let outcome = engine_block_on(waker.advance(
+            self.resources.repository,
+            ArtifactSource::Issue { number: issue },
+            &signal,
+            &signature,
+        ))
+        .map_err(|error| format!("authenticated provider-health wake failed: {error:?}"))?;
+        match outcome {
+            ProviderHealthWakeOutcome::Advanced | ProviderHealthWakeOutcome::Duplicate => {
+                Ok(format!(
+                    "authenticated provider-health wake `{event_id}` advanced `{artifact}` from generation {expected_generation}"
+                ))
+            }
+            other => Err(format!(
+                "provider-health wake `{event_id}` was not applied: {other:?}"
+            )),
+        }
+    }
 }
 
 impl LiveStimulusRuntime<'_> {
+    fn issue_for_artifact(&self, artifact: &str) -> Result<ItemNumber, String> {
+        let Some(id) = artifact.strip_prefix("issue:").filter(|id| !id.is_empty()) else {
+            return Err(format!(
+                "live provider/delivery stimulus requires issue:<id>, got `{artifact}`"
+            ));
+        };
+        // Runtime dispatch has already resolved this declared fixture id or
+        // binding through its seeded-issue map and placed the exact number in
+        // `resources.issue`. Do not resolve it a second time as a fixture id:
+        // valid `bind = ...` aliases need not equal the fixture's own id.
+        let _resolved_binding = id;
+        Ok(self.resources.issue)
+    }
+
     fn commit_ci_fixture(
         &self,
         repo_id: &str,
@@ -518,6 +670,30 @@ mod tests {
             self.calls
                 .push(format!("delivery.repeat:{artifact}:{deliveries}"));
             Ok(format!("delivered {deliveries} bounded duplicate wakes"))
+        }
+
+        fn wait_provider_deferred(
+            &mut self,
+            artifact: &str,
+            generation: u32,
+            _: Duration,
+        ) -> Result<String, String> {
+            self.calls
+                .push(format!("provider.wait_deferred:{artifact}:{generation}"));
+            Ok(format!("observed generation {generation}"))
+        }
+
+        fn provider_health_wake(
+            &mut self,
+            artifact: &str,
+            expected_generation: u32,
+            event_id: &str,
+            _: Duration,
+        ) -> Result<String, String> {
+            self.calls.push(format!(
+                "provider.health_wake:{artifact}:{expected_generation}:{event_id}"
+            ));
+            Ok("authenticated wake advanced".to_string())
         }
     }
 

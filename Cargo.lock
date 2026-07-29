@@ -2242,6 +2242,7 @@ dependencies = [
  "fs2",
  "jig-core",
  "jig-server",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2",

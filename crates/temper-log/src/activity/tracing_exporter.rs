@@ -78,6 +78,11 @@ impl ActivitySpanExporter for TracingActivitySpanExporter {
         }
         if let Some(failure) = &finished.attributes.model_failure {
             span.record("model.failure.category", failure.category.as_str());
+            span.record("model.failure.disposition", failure.disposition.as_str());
+            span.record("model.failure.boundary", failure.boundary.as_str());
+            span.record("model.failure.event_kind", failure.event_kind.as_str());
+            span.record("model.failure.status_present", failure.status_present);
+            span.record("model.failure.code_present", failure.code_present);
             span.record("model.failure.retryable", failure.retryable);
             if let Some(status) = failure.http_status {
                 span.record("model.failure.http_status", u64::from(status));
@@ -127,6 +132,11 @@ fn tracing_span(start: &ActivitySpanStart, parent: Option<&Span>) -> Span {
                 agent.stop_reason = tracing::field::Empty,
                 agent.terminal_reason = tracing::field::Empty,
                 model.failure.category = tracing::field::Empty,
+                model.failure.disposition = tracing::field::Empty,
+                model.failure.boundary = tracing::field::Empty,
+                model.failure.event_kind = tracing::field::Empty,
+                model.failure.status_present = tracing::field::Empty,
+                model.failure.code_present = tracing::field::Empty,
                 model.failure.retryable = tracing::field::Empty,
                 model.failure.http_status = tracing::field::Empty,
                 model.failure.request_id = tracing::field::Empty,
@@ -174,6 +184,11 @@ fn tracing_span(start: &ActivitySpanStart, parent: Option<&Span>) -> Span {
                 agent.stop_reason = tracing::field::Empty,
                 agent.terminal_reason = tracing::field::Empty,
                 model.failure.category = tracing::field::Empty,
+                model.failure.disposition = tracing::field::Empty,
+                model.failure.boundary = tracing::field::Empty,
+                model.failure.event_kind = tracing::field::Empty,
+                model.failure.status_present = tracing::field::Empty,
+                model.failure.code_present = tracing::field::Empty,
                 model.failure.retryable = tracing::field::Empty,
                 model.failure.http_status = tracing::field::Empty,
                 model.failure.request_id = tracing::field::Empty,

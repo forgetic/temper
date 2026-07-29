@@ -61,12 +61,15 @@ pub(super) fn validate_action_links(
                 ));
             }
             ManifestAction::Stimulus(StimulusSpec {
-                kind: StimulusKind::RepeatDelivery { artifact, .. },
+                kind:
+                    StimulusKind::RepeatDelivery { artifact, .. }
+                    | StimulusKind::WaitProviderDeferred { artifact, .. }
+                    | StimulusKind::ProviderHealthWake { artifact, .. },
                 ..
             }) => {
                 let Some(issue_id) = artifact.strip_prefix("issue:") else {
                     return Err(format!(
-                        "stimulus step `{}` delivery.repeat artifact must use issue:<id>, got `{artifact}`",
+                        "stimulus step `{}` provider/delivery artifact must use issue:<id>, got `{artifact}`",
                         step.id
                     ));
                 };

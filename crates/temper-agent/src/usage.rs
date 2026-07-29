@@ -158,11 +158,16 @@ impl TracingProjection {
 
     fn failure_detail(failure: &ModelFailureV1) -> String {
         let mut detail = format!(
-            "{}/{} category={} retryable={}",
+            "{}/{} category={} disposition={} boundary={} event_kind={} retryable={} status_present={} code_present={}",
             failure.provider,
             failure.model,
             failure.category.as_str(),
-            failure.retryable
+            failure.disposition.as_str(),
+            failure.boundary.as_str(),
+            failure.event_kind.as_str(),
+            failure.retryable,
+            failure.status_present,
+            failure.code_present,
         );
         if let Some(status) = failure.http_status {
             detail.push_str(&format!(" http_status={status}"));
@@ -185,6 +190,7 @@ impl TracingProjection {
     fn emit_model_failure(
         scope: &str,
         scope_id: &str,
+        call_id: &str,
         will_retry: bool,
         attempt: u32,
         duration_ms: u64,
@@ -192,6 +198,37 @@ impl TracingProjection {
         delay_ms: u64,
         failure: &ModelFailureV1,
     ) {
+        if will_retry {
+            let http_status = failure.http_status.map(u64::from);
+            tracing::debug!(
+                target: AGENT_TARGET,
+                service = "agent",
+                event = "model.turn.retrying",
+                scope,
+                scope_id,
+                call_id,
+                attempt,
+                next_attempt = next_attempt.unwrap_or_else(|| attempt.saturating_add(1)),
+                delay_ms,
+                duration_ms,
+                disposition = failure.disposition.as_str(),
+                final_disposition = failure.disposition.as_str(),
+                boundary = failure.boundary.as_str(),
+                event_kind = failure.event_kind.as_str(),
+                status_present = failure.status_present,
+                code_present = failure.code_present,
+                provider = failure.provider.as_str(),
+                model = failure.model.as_str(),
+                category = failure.category.as_str(),
+                retryable = failure.retryable,
+                http_status,
+                provider_request_id = failure.provider_request_id.as_deref(),
+                provider_error_code = failure.provider_error_code.as_deref(),
+                detail_redacted = failure.detail_redacted,
+                "agent: retrying failed model turn after bounded backoff"
+            );
+            return;
+        }
         let detail = Self::failure_detail(failure);
         let http_status = failure.http_status.map(u64::from);
         tracing::debug!(
@@ -207,6 +244,11 @@ impl TracingProjection {
             model.provider = %failure.provider,
             model.name = %failure.model,
             model.failure.category = failure.category.as_str(),
+            model.failure.disposition = failure.disposition.as_str(),
+            model.failure.boundary = failure.boundary.as_str(),
+            model.failure.event_kind = failure.event_kind.as_str(),
+            model.failure.status_present = failure.status_present,
+            model.failure.code_present = failure.code_present,
             model.failure.retryable = failure.retryable,
             model.failure.http_status = http_status,
             model.failure.request_id = failure.provider_request_id.as_deref().unwrap_or(""),
@@ -353,6 +395,7 @@ impl ActivityProjection for TracingProjection {
                 Self::emit_model_failure(
                     &scope,
                     &frame.scope.id,
+                    &retry.call_id,
                     true,
                     pending.attempt,
                     pending.duration_ms,
@@ -399,6 +442,7 @@ impl ActivityProjection for TracingProjection {
                     Self::emit_model_failure(
                         &scope,
                         &frame.scope.id,
+                        &key.1,
                         false,
                         failure.attempt,
                         failure.duration_ms,

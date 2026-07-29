@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ForgeResult, ItemNumber, RepositoryId, RepositoryPath};
-use temper_log::emit::{LeaseLost, LeaseReleased, emit_lease_lost, emit_lease_released};
+use temper_log::emit::{
+    LeaseLost, LeaseReleased, ModelRecoveryCleared, emit_lease_lost, emit_lease_released,
+    emit_model_recovery_cleared,
+};
 use temper_log::{WorkItemRef, strip_provider_scheme, work_item_span};
 use temper_protocol_worker::{
     JobContext, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
@@ -440,23 +443,36 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                 manager
                     .release_assignment(&repo_id, target, &expected)
                     .await
+                    .map(|()| None)
             };
-            if let Err(error) = release {
-                tracing::error!(
-                    target: "temper_daemon",
-                    job_id = %job.job_id,
-                    %error,
-                    "lease applier could not release durable assignment"
-                );
-                return ApplyOutcome::Retryable {
-                    reason: format!("could not release durable assignment: {error}"),
-                };
-            } else {
-                emit_lease_released(LeaseReleased {
+            let cleared_recovery = match release {
+                Ok(recovery) => recovery,
+                Err(error) => {
+                    tracing::error!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        %error,
+                        "lease applier could not release durable assignment"
+                    );
+                    return ApplyOutcome::Retryable {
+                        reason: format!("could not release durable assignment: {error}"),
+                    };
+                }
+            };
+            if let Some(recovery) = cleared_recovery {
+                emit_model_recovery_cleared(ModelRecoveryCleared {
                     item: &item,
-                    role: &job.role,
+                    workstream_id: &recovery.workstream_id,
+                    failure_epoch: recovery.failure_epoch,
+                    failure_count: recovery.cumulative_failure_count,
+                    elapsed_ms: recovery.elapsed_ms,
+                    generation: recovery.generation,
                 });
             }
+            emit_lease_released(LeaseReleased {
+                item: &item,
+                role: &job.role,
+            });
             self.authority
                 .lock()
                 .expect("assignment authority lock")

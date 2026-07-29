@@ -53,10 +53,22 @@ pub enum Event {
     McpToolResult,
     /// A workspace contains a product diff after an agent run (`workspace.diff.produced`).
     WorkspaceDiffProduced,
+    /// A failed side-effect-free provider request will be retried in the same model turn
+    /// (`model.turn.retrying`).
+    ModelTurnRetrying,
     /// A durable model failure consumed a session and selected its one fresh replacement
     /// (`model.session.rotated`).
     ModelSessionRotated,
-    /// Exhausted bounded model recovery was parked for operator action
+    /// Exhausted immediate/session recovery entered automatic provider deferral
+    /// (`model.provider.deferred`).
+    ModelProviderDeferred,
+    /// An authenticated provider-health signal advanced a deferred generation
+    /// (`model.provider.wake`).
+    ModelProviderWake,
+    /// Authoritative success cleared durable provider recovery
+    /// (`model.recovery.cleared`).
+    ModelRecoveryCleared,
+    /// Exhausted or actionable bounded recovery was parked for operator action
     /// (`model.failure.parked`).
     ModelFailureParked,
     /// The engine applied a workflow transition (`transition.applied`).
@@ -103,7 +115,11 @@ impl Event {
             Self::McpToolCalled => "mcp.tool.called",
             Self::McpToolResult => "mcp.tool.result",
             Self::WorkspaceDiffProduced => "workspace.diff.produced",
+            Self::ModelTurnRetrying => "model.turn.retrying",
             Self::ModelSessionRotated => "model.session.rotated",
+            Self::ModelProviderDeferred => "model.provider.deferred",
+            Self::ModelProviderWake => "model.provider.wake",
+            Self::ModelRecoveryCleared => "model.recovery.cleared",
             Self::ModelFailureParked => "model.failure.parked",
             Self::TransitionApplied => "transition.applied",
             Self::ValidationOutcome => "validation.outcome",
@@ -122,7 +138,7 @@ impl Event {
     ///
     /// Kept in sync with the enum by the `all_variants_have_unique_dotted_form`
     /// test, which fails if a new variant is added without listing it here.
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 31] = [
         Self::IssueOpened,
         Self::WakeReceived,
         Self::CiCompleted,
@@ -138,7 +154,11 @@ impl Event {
         Self::McpToolCalled,
         Self::McpToolResult,
         Self::WorkspaceDiffProduced,
+        Self::ModelTurnRetrying,
         Self::ModelSessionRotated,
+        Self::ModelProviderDeferred,
+        Self::ModelProviderWake,
+        Self::ModelRecoveryCleared,
         Self::ModelFailureParked,
         Self::TransitionApplied,
         Self::ValidationOutcome,
@@ -177,7 +197,11 @@ mod tests {
             "mcp.tool.called",
             "mcp.tool.result",
             "workspace.diff.produced",
+            "model.turn.retrying",
             "model.session.rotated",
+            "model.provider.deferred",
+            "model.provider.wake",
+            "model.recovery.cleared",
             "model.failure.parked",
             "transition.applied",
             "validation.outcome",
@@ -218,6 +242,6 @@ mod tests {
         // variant is added but not appended to ALL, this and the uniqueness test
         // catch it (the array literal would also fail to compile on a length
         // mismatch).
-        assert_eq!(Event::ALL.len(), 27);
+        assert_eq!(Event::ALL.len(), 31);
     }
 }

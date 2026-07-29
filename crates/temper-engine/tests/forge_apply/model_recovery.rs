@@ -133,14 +133,15 @@ fn exhausted_model_recovery_parks_once_with_typed_actionable_audit() {
         let audit = &comments[0].body;
         for expected in [
             "failure_epoch: `7`",
-            "failure_count: `1`",
+            "cumulative_failure_count: `1`",
             "action: `park_for_human`",
             "session-fresh",
             "session-prior",
             ".temper-agent-session/state.json",
             "fixture-provider",
             "request-750",
-            "Provider failure details were redacted.",
+            "disposition: `retryable`",
+            "boundary: `http`",
             "Operator action:",
             "temper:comment-key=model_recovery_park:",
         ] {
@@ -154,6 +155,7 @@ fn exhausted_model_recovery_parks_once_with_typed_actionable_audit() {
             "Authorization",
             "Bearer",
             "generic message must not be projected",
+            "Provider failure details were redacted.",
         ] {
             assert!(!audit.contains(forbidden), "audit leaked {forbidden}");
         }

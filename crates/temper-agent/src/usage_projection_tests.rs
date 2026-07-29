@@ -178,29 +178,33 @@ fn retrying_and_terminal_logs_use_finished_call_diagnostics() {
         .filter(|event| event.get("event").map(String::as_str) == Some("model.call_failed"))
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(failures.len(), 4);
-    for category in ["timeout", "rate_limit", "response", "redacted_unknown"] {
+    assert_eq!(failures.len(), 3);
+    for category in ["timeout", "response", "redacted_unknown"] {
         assert!(failures.iter().any(|event| {
             event.get("model.failure.category").map(String::as_str) == Some(category)
         }));
     }
-    let retry = failures
+    let retry = events
+        .lock()
+        .unwrap()
         .iter()
-        .find(|event| event.get("will_retry").map(String::as_str) == Some("true"))
-        .expect("retrying model call log");
+        .find(|event| event.get("event").map(String::as_str) == Some("model.turn.retrying"))
+        .cloned()
+        .expect("retrying model turn event");
     assert_eq!(
-        retry.get("model.failure.request_id").map(String::as_str),
+        retry.get("provider_request_id").map(String::as_str),
         Some("req_rate_532")
     );
     assert_eq!(
-        retry.get("model.failure.message").map(String::as_str),
-        Some("Rate limit exceeded; retry later.")
+        retry.get("disposition").map(String::as_str),
+        Some("retryable")
     );
-    assert!(
-        retry
-            .get("message")
-            .is_some_and(|message| message.contains("openai/gpt-test category=rate_limit"))
+    assert_eq!(retry.get("boundary").map(String::as_str), Some("http"));
+    assert_eq!(
+        retry.get("status_present").map(String::as_str),
+        Some("true")
     );
+    assert!(!retry.contains_key("model_failure_message"));
 
     let rendered = format!("{failures:?}");
     assert!(!rendered.contains(temper_protocol_activity::MODEL_CALL_RETRY_FAILURE_MESSAGE));

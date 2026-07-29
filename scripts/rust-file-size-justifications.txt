@@ -166,3 +166,31 @@ crates/temper-worker/src/out_of_process_runner/managed_run.rs
 # The worker shell keeps attempt controls, cleanup observers, task lifetime, and
 # unified completion publication at the one imperative job-dispatch boundary.
 crates/temper-worker/src/worker_shell.rs
+
+# Generic live stimuli keep bounded dispatch, retained outcomes, and the real
+# process/Forge provider-recovery adapters behind one orchestration-neutral trait.
+crates/temper-testing/src/live_manifest/stimuli.rs
+
+# Manifest action parsing owns cross-step ordering, links, and bounds together so
+# unsupported recovery injection or wake sequences fail before topology startup.
+crates/temper-testing/src/live_manifest/execution_plan.rs
+
+# Provider-deferral application keeps the exact-assignment CAS, safe durable
+# audit, lifecycle restoration, and publication authority at one Forge boundary.
+crates/temper-engine/src/forge_applier/provider_recovery.rs
+
+# Provider-recovery admission and authenticated generation-fenced wakes share the
+# durable metadata parser and actionable parking policy they must not bypass.
+crates/temper-engine/src/provider_recovery.rs
+
+# Live process setup mutates one generated standalone configuration and keeps
+# bounded scenario recovery tuning beside poll, logging, and launch settings.
+crates/temper-testing/src/live_manifest/process.rs
+
+# Lease result application keeps exact-attempt validation, authoritative success,
+# atomic recovery clearing, and local claim revocation in one fenced sequence.
+crates/temper-engine/src/lease_applier.rs
+
+# Live run-evidence assembly keeps final Forge state, provider-request identity,
+# observability, stimuli, and retained-artifact facts in one coherent snapshot.
+crates/temper-scenario-cli/src/bin/temper-scenario/manifest_executor/live.rs

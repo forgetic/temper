@@ -303,6 +303,30 @@ fn deferred_provider_recovery_is_restart_safe_health_wake_fenced_and_cleared_by_
         assert!(marker.facts.code_present);
         assert!(marker.due_assignment_attempt_id.is_none());
         assert!(!deferred_issue.labels.contains(&"needs-human".to_string()));
+        let deferred_audits = root.list_issue_comments(&deferred_issue.id).await.unwrap();
+        assert_eq!(deferred_audits.len(), 1);
+        let deferred_audit = &deferred_audits[0].body;
+        for expected in [
+            "automatically deferred",
+            "cumulative_failure_count: `2`",
+            "session_number: `2`",
+            "session_failure_count: `1`",
+            "action: `provider_deferred`",
+            "generation: `1`",
+            "disposition: `retryable`",
+            "provider_request_id: `request-750`",
+        ] {
+            assert!(
+                deferred_audit.contains(expected),
+                "deferral audit omitted {expected}: {deferred_audit}"
+            );
+        }
+        for forbidden in [
+            "generic message must not be projected",
+            "Provider is unavailable.",
+        ] {
+            assert!(!deferred_audit.contains(forbidden));
+        }
 
         let replacement = Daemon::new(Arc::new(handle.clone()));
         assert_eq!(
@@ -390,6 +414,32 @@ fn deferred_provider_recovery_is_restart_safe_health_wake_fenced_and_cleared_by_
                 .unwrap(),
             ProviderHealthWakeOutcome::Duplicate
         );
+        let wake_audits = root.list_issue_comments(&deferred_issue.id).await.unwrap();
+        assert_eq!(
+            wake_audits.len(),
+            2,
+            "duplicate authenticated wake must not duplicate its durable audit"
+        );
+        let wake_audit = wake_audits
+            .iter()
+            .find(|comment| comment.body.contains("action: `provider_health_wake`"))
+            .expect("provider-health wake audit");
+        for expected in [
+            "cumulative_failure_count: `2`",
+            "deferral_count: `1`",
+            "generation: `2`",
+            "disposition: `retryable`",
+            "boundary: `http`",
+            "provider_request_id: `request-750`",
+            "health_event_id: `provider-healthy-1`",
+        ] {
+            assert!(
+                wake_audit.body.contains(expected),
+                "wake audit omitted {expected}: {}",
+                wake_audit.body
+            );
+        }
+        assert!(!wake_audit.body.contains("Provider is unavailable."));
         let unrelated_signal = ProviderHealthSignal {
             workstream_id: "unrelated-workstream".to_string(),
             failure_epoch: signal.failure_epoch,
@@ -501,6 +551,19 @@ fn deferred_provider_recovery_is_restart_safe_health_wake_fenced_and_cleared_by_
         assert_eq!(marker.deferral_count, 2);
         assert_eq!(marker.generation, 3);
         assert!(marker.due_assignment_attempt_id.is_none());
+        let second_deferral_audits = root.list_issue_comments(&deferred_again.id).await.unwrap();
+        assert_eq!(
+            second_deferral_audits.len(),
+            3,
+            "each action/generation receives one durable audit"
+        );
+        assert_eq!(
+            second_deferral_audits
+                .iter()
+                .filter(|comment| comment.body.contains("action: `provider_deferred`"))
+                .count(),
+            2
+        );
 
         now_ms.store(2_000, Ordering::SeqCst);
         let final_lease = LeaseApplier::new(forge.clone(), policy(), "daemon-final", inner, clock);

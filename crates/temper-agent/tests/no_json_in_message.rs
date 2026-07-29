@@ -13,7 +13,7 @@
 //!
 //! Core guard: **no `info`-level event on the agent target carries a `message`
 //! that starts with `{`** (raw JSON), and the between-state-cause events
-//! (`turn.usage`, `tool.start`, `tool.end`, `tool.error`, `model.call_failed`,
+//! (`turn.usage`, `tool.start`, `tool.end`, `tool.error`, `model.turn.retrying`,
 //! `agent.end`, `usage.total`) do **not** appear at `info` at all — they belong
 //! at `debug`/`trace` per §5.
 
@@ -270,7 +270,7 @@ fn between_state_cause_events_are_not_info() {
         "tool.start",
         "tool.end",
         "tool.error",
-        "model.call_failed",
+        "model.turn.retrying",
         "agent.end",
         "usage.total",
     ];
@@ -312,7 +312,7 @@ fn between_state_cause_events_render_human_message_at_debug() {
         "tool.start",
         "tool.end",
         "tool.error",
-        "model.call_failed",
+        "model.turn.retrying",
         "agent.end",
         "usage.total",
     ];

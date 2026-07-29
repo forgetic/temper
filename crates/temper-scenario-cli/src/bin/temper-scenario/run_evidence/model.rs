@@ -272,6 +272,8 @@ pub(crate) struct ProviderEvidence {
     pub(crate) request_log_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) request_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) request_counts_by_role: BTreeMap<String, usize>,
 }

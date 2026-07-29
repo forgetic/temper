@@ -7,6 +7,10 @@ use sha2::{Digest, Sha256};
 use temper_forge::{
     CreateComment, Forge, ForgeError, Issue, PullRequest, UpdateIssue, UpdatePullRequest, UserId,
 };
+use temper_log::WorkItemRef;
+use temper_log::emit::{
+    ModelProviderDeferred, ModelRecoveryDecision, emit_model_provider_deferred,
+};
 use temper_protocol_activity::{ModelFailureDispositionV1, ModelFailureV1};
 use temper_protocol_worker::{
     FailureClass, JobContext, JobResult, SessionRecoveryActionV1, SessionRecoveryEvidenceV1,
@@ -101,8 +105,33 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             &evidence.recovery,
             None,
         )?;
-        self.converge_provider_deferral(job, result, target, desired)
-            .await
+        let converged = self
+            .converge_provider_deferral(job, result, target, desired, &evidence.recovery)
+            .await?;
+        let item = recovery_work_item(job)?;
+        emit_model_provider_deferred(ModelProviderDeferred {
+            item: &item,
+            worker_id: &result.worker_id,
+            job_id: &result.job_id,
+            workstream_id: &converged.workstream_id,
+            decision: ModelRecoveryDecision {
+                attempt_id: &evidence.recovery.attempt_id,
+                failure_epoch: converged.failure_epoch,
+                failure_count: converged.cumulative_failure_count,
+                session_number: evidence.recovery.session_number,
+                session_failure_count: evidence.recovery.session_failure_count,
+                elapsed_ms: converged.elapsed_ms,
+                action: evidence.recovery.action.as_str(),
+                deferral_count: converged.deferral_count,
+                generation: converged.generation,
+                current_session_id: &evidence.recovery.current_session_id,
+                prior_session_id: evidence.recovery.prior_session_id.as_deref(),
+                new_session_id: evidence.recovery.new_session_id.as_deref(),
+                evidence_location: &evidence.recovery.evidence_location,
+                model_failure: &evidence.diagnostic,
+            },
+        });
+        Ok(())
     }
 
     async fn converge_provider_deferral(
@@ -111,7 +140,8 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
         result: &JobResult,
         mut target: RecoveryTarget,
         mut desired: ProviderRecovery,
-    ) -> Result<(), String> {
+        recovery_evidence: &SessionRecoveryEvidenceV1,
+    ) -> Result<ProviderRecovery, String> {
         for _ in 0..3 {
             let mut metadata = parse_metadata_block(target.body())
                 .map_err(|error| format!("parse provider-deferral metadata: {error}"))?
@@ -172,7 +202,17 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
                 .map_err(|error| format!("render provider-deferral metadata: {error}"))?;
             let mutation = self.provider_deferral_mutation(job, &target, &assignment);
             match target.update(self.forge.as_ref(), body, mutation).await {
-                Ok(_) => return Ok(()),
+                Ok(updated) => {
+                    target = updated;
+                    ensure_provider_deferral_audit(
+                        self.forge.as_ref(),
+                        &target,
+                        &desired,
+                        recovery_evidence,
+                    )
+                    .await?;
+                    return Ok(desired);
+                }
                 Err(ForgeError::Conflict(_)) => {
                     target = self
                         .reload_recovery_target(job)
@@ -353,6 +393,100 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .collect();
         mutation
     }
+}
+
+fn recovery_work_item(job: &InFlightJob) -> Result<WorkItemRef, String> {
+    let number = serde_json::from_value::<u64>(job.artifact.item.clone())
+        .map_err(|error| format!("invalid recovery artifact number: {error}"))?;
+    Ok(match job.artifact.kind.as_str() {
+        "issue" => WorkItemRef::issue(&job.repo, number),
+        "pull_request" => WorkItemRef::pull_request(&job.repo, number),
+        other => return Err(format!("unsupported recovery artifact kind `{other}`")),
+    })
+}
+
+async fn ensure_provider_deferral_audit<F: Forge + ?Sized>(
+    forge: &F,
+    target: &RecoveryTarget,
+    recovery: &ProviderRecovery,
+    evidence: &SessionRecoveryEvidenceV1,
+) -> Result<(), String> {
+    let marker = format!(
+        "<!-- temper:comment-key=model_recovery_audit:{} -->",
+        recovery_event_key(
+            &recovery.workstream_id,
+            recovery.failure_epoch,
+            recovery.generation,
+            "provider_deferred",
+            "audit",
+        )
+    );
+    let comments = target
+        .comments(forge)
+        .await
+        .map_err(|error| format!("list provider-deferral audits: {error}"))?;
+    if comments
+        .iter()
+        .any(|comment| comment.body.contains(&marker))
+    {
+        return Ok(());
+    }
+    let facts = &recovery.facts;
+    let optional = |value: Option<&str>| value.unwrap_or("none").to_string();
+    target
+        .comment(
+            forge,
+            format!(
+                "Temper automatically deferred this workstream for bounded provider recovery; this is not actionable human parking.\n\n\
+**Durable recovery decision**\n\
+- workstream_id: `{}`\n\
+- failure_epoch: `{}`\n\
+- cumulative_failure_count: `{}`\n\
+- session_number: `{}`\n\
+- session_failure_count: `{}`\n\
+- action: `provider_deferred`\n\
+- deferral_count: `{}`\n\
+- generation: `{}`\n\
+- elapsed_ms: `{}`\n\
+- disposition: `{}`\n\
+- provider: `{}`\n\
+- model: `{}`\n\
+- category: `{}`\n\
+- boundary: `{}`\n\
+- event_kind: `{}`\n\
+- status_present: `{}`\n\
+- code_present: `{}`\n\
+- http_status: `{}`\n\
+- provider_request_id: `{}`\n\
+- provider_error_code: `{}`\n\n\
+Temper retained the coordination-scoped workspace and will retry after the durable wake fence.\n\n{}",
+                recovery.workstream_id,
+                recovery.failure_epoch,
+                recovery.cumulative_failure_count,
+                evidence.session_number,
+                evidence.session_failure_count,
+                recovery.deferral_count,
+                recovery.generation,
+                recovery.elapsed_ms,
+                match recovery.disposition {
+                    ProviderRecoveryDisposition::Retryable => "retryable",
+                    ProviderRecoveryDisposition::Unknown => "unknown",
+                },
+                facts.provider,
+                facts.model,
+                facts.category,
+                facts.boundary,
+                facts.event_kind,
+                facts.status_present,
+                facts.code_present,
+                recovery.facts.http_status.map(|value| value.to_string()).unwrap_or_else(|| "none".to_string()),
+                optional(facts.provider_request_id.as_deref()),
+                optional(facts.provider_error_code.as_deref()),
+                marker,
+            ),
+        )
+        .await
+        .map_err(|error| format!("add provider-deferral audit: {error}"))
 }
 
 fn provider_recovery_from_evidence(
