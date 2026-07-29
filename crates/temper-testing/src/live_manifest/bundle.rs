@@ -26,6 +26,7 @@ pub struct ScenarioBundle {
     pub issues: Vec<IssueFixture>,
     pub intake: IntakeFixture,
     pub timeout: Duration,
+    pub poll_cadence: Duration,
     pub poll_backstop: Duration,
     pub mechanical_cadence: Duration,
     pub observability: ObservabilityFixture,
@@ -81,6 +82,7 @@ impl ScenarioBundle {
             "poll_backstop",
             Duration::from_secs(DEFAULT_DAEMON_POLL_BACKSTOP_SECS),
         )?;
+        let poll_cadence = live_harness_duration(&manifest, "poll_cadence", poll_backstop)?;
         let mechanical_cadence = live_harness_duration(
             &manifest,
             "mechanical_cadence",
@@ -100,6 +102,7 @@ impl ScenarioBundle {
             issues,
             intake,
             timeout,
+            poll_cadence,
             poll_backstop,
             mechanical_cadence,
             observability,

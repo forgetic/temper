@@ -1,0 +1,11 @@
+name: ci
+on: [push]
+
+jobs:
+  validate:
+    runs-on: host
+    steps:
+      - name: accept the recovered PR head
+        run: |
+          echo "model-failure-recovery CI accepted ${GITHUB_SHA}"
+          test -n "${GITHUB_SHA}"

@@ -1,0 +1,458 @@
+schema = "temper.scenario.v1"
+name = "model-failure-recovery"
+status = "active"
+stability = "provisional"
+intent = "Prove unclassified late model failures recover through bounded same-turn retry and durable provider deferral without duplicate effects or human escalation."
+introduced_by = "#812"
+owner_area = "model-recovery"
+timeout = "15m"
+
+[runner]
+uses = "manifest"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "model-failure-recovery"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/service"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "intake"
+repo = "service"
+kind = "intake"
+title = "Service banner should identify the environment after provider recovery"
+body = "config/intake-issue.md"
+author = "site_admin"
+labels = []
+created_after = "standalone_ready"
+
+[[agents]]
+role = "architect"
+kind = "llm"
+mode = "scripted-fake"
+tool = "triage_workspace"
+queues = ["triage"]
+expected_verdict = "ready_code"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready", "pr_ci_failed"]
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["raw_intake", "landing"]
+
+[live_harness]
+poll_cadence = "15s"
+poll_backstop = "120s"
+mechanical_cadence = "1s"
+
+[live_harness.recovery]
+model_retry_max_attempts = 2
+model_retry_base_delay_ms = 1
+model_retry_max_delay_ms = 2
+model_retry_jitter_percent = 0
+session_failure_limit = 1
+fresh_session_limit = 1
+provider_deferral_limit = 3
+provider_deferral_delay_secs = 300
+model_recovery_slo_secs = 7200
+
+[validation]
+feature = "ai/temper#806"
+plan = "ai/temper#807"
+source_branch = "agent/pr-for-feature-806"
+change = "new"
+
+[feature_contract]
+claim = "Unknown late streamed failures retry only the failed turn, then defer durably and recover automatically without needs-human or duplicate effects."
+stimulus = "Inject one recoverable late SSE failure and one bounded exhaustion burst, observe generation-one deferral, then issue one authenticated provider-health wake."
+observable = "Structured Forge, Temper recovery, session ledger, Jig request, workspace, branch, CI, stimulus, lease, and retained-artifact facts."
+assertion = "Recovery preserves work and identity, remains bounded and publication-fenced while deferred, then clears through exactly one PR and landing path."
+runtime_budget_seconds = 900
+jig_script_path = "jig/model-failure-recovery.json"
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start disposable real Forgejo for the isolated recovery proof."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Require the real host forgejo-runner for Actions CI."
+
+[[steps]]
+id = "configure-recovery-jig"
+action = "jig.fake_llm"
+roles = ["architect", "engineer"]
+script_path = "jig/model-failure-recovery.json"
+late_stream_failure = { role = "engineer", bursts = [{ after_requests = 1, failures = 1 }, { after_requests = 4, failures = 4 }] }
+
+[[steps]]
+id = "launch-feature-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-recovery-intake"
+action = "issue.seed"
+issue_id = "intake"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "observe-provider-deferral"
+action = "provider.wait_deferred"
+artifact = "issue:intake"
+generation = 1
+timeout_ms = 120000
+max_attempts = 1
+
+[[steps]]
+id = "wake-healthy-provider"
+action = "provider.health_wake"
+artifact = "issue:intake"
+expected_generation = 1
+event_id = "model-failure-recovery-provider-healthy-1"
+timeout_ms = 30000
+max_attempts = 1
+
+[[steps]]
+id = "wait-for-recovered-convergence"
+action = "workflow.wait_convergence"
+strategy = "single-pull-request"
+until = "one recovered implementation PR passes CI, merges, and closes its source issue"
+
+[expect]
+templates = ["single-pr-merged-source-closed", "no-duplicate-prs"]
+outcome = "A same-turn retry succeeds, later unknown failures defer without needs-human, one health wake resumes the preserved workspace, and exactly one implementation PR lands."
+merged_pull_requests = 1
+closed_parent_issues = 1
+created_pull_requests = 1
+
+[[expect.checks]]
+required = true
+id = "source-closes-without-human-escalation"
+artifact = "issue:intake"
+state = "closed"
+labels = ["code"]
+labels_cleared = ["needs-human", "ready", "in-progress"]
+
+[[expect.checks]]
+required = true
+id = "single-recovered-pr-lands-on-green-ci"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+required = true
+id = "recovered-diff-reaches-default-branch"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.provider_requests]]
+required = true
+id = "all-provider-requests-are-bounded-and-identified"
+exactly = 12
+unique = true
+
+[[expect.provider_requests]]
+required = true
+id = "engineer-request-budget-is-exact"
+role = "engineer"
+exactly = 10
+
+[[expect.provider_requests]]
+required = true
+id = "architect-request-budget-is-exact"
+role = "architect"
+exactly = 2
+
+[[expect.recovery]]
+required = true
+id = "late-failure-retries-the-same-turn"
+event = "model.turn.retrying"
+attempt = 0
+next_attempt = 1
+disposition = "unknown"
+boundary = "sse"
+event_kind = "stream_error"
+provider_request_id = "jig-request-4"
+status_present = false
+code_present = false
+
+[[expect.recovery]]
+required = true
+id = "exhaustion-rotates-one-preserved-session"
+event = "model.session.rotated"
+action = "rotate_session"
+final_disposition = "unknown"
+boundary = "sse"
+event_kind = "stream_error"
+provider_request_id = "jig-request-8"
+status_present = false
+code_present = false
+session_number = 1
+session_failure_count = 1
+cumulative_failure_count = 1
+deferral_count = 0
+generation = 0
+
+[[expect.recovery]]
+required = true
+id = "fresh-session-exhaustion-defers-provider"
+event = "model.provider.deferred"
+action = "provider_deferred"
+final_disposition = "unknown"
+boundary = "sse"
+event_kind = "stream_error"
+provider_request_id = "jig-request-10"
+status_present = false
+code_present = false
+session_number = 2
+session_failure_count = 1
+cumulative_failure_count = 2
+deferral_count = 1
+generation = 1
+
+[[expect.recovery]]
+required = true
+id = "authenticated-health-wake-advances-one-generation"
+event = "model.provider.wake"
+action = "provider_health_wake"
+final_disposition = "unknown"
+boundary = "sse"
+event_kind = "stream_error"
+provider_request_id = "jig-request-10"
+status_present = false
+code_present = false
+cumulative_failure_count = 2
+deferral_count = 1
+generation = 2
+
+[[expect.recovery]]
+required = true
+id = "authoritative-success-clears-recovery-marker"
+event = "model.recovery.cleared"
+action = "success_clear"
+final_disposition = "succeeded"
+cumulative_failure_count = 2
+generation = 2
+
+[[expect.stimuli]]
+required = true
+id = "generation-one-deferral-was-observed"
+stimulus = "observe-provider-deferral"
+action = "provider.wait_deferred"
+status = "passed"
+attempts = 1
+details_contain = "cumulative_failures=2"
+
+[[expect.stimuli]]
+required = true
+id = "one-declared-health-wake-was-applied"
+stimulus = "wake-healthy-provider"
+action = "provider.health_wake"
+status = "passed"
+attempts = 1
+details_contain = "model-failure-recovery-provider-healthy-1"
+
+[[expect.workspace]]
+required = true
+id = "coordination-workspace-and-artifacts-are-retained"
+retained = true
+
+[[expect.workspace]]
+required = true
+id = "mutating-write-effects-are-not-replayed"
+tool = "write"
+tool_effects = 2
+max_tool_effects = 2
+
+[[expect.workspace]]
+required = true
+id = "submit-effect-occurs-once-after-wake"
+tool = "submit_for_pr"
+tool_effects = 1
+max_tool_effects = 1
+
+[[expect.publication]]
+required = true
+id = "publication-is-fenced-and-exactly-once"
+pull_requests = 1
+branches = 2
+blocked_while_deferred = true
+
+[[expect.events]]
+required = true
+id = "deferral-retains-session-ledger-evidence"
+event = "model.provider.deferred"
+fields.evidence_location = ".temper-agent-session/state.json"
+fields.cumulative_failure_count = 2
+
+[[expect.sequence]]
+required = true
+id = "retry-deferral-wake-and-clearing-order"
+scope = "source_artifact"
+events = [
+  { event = "tool.start", fields.tool = "write", fields.id = "call_write_tracked_recovery_marker" },
+  { event = "model.turn.retrying", fields.provider_request_id = "jig-request-4", fields.attempt = 0, fields.next_attempt = 1 },
+  { event = "tool.start", fields.tool = "write", fields.id = "call_write_untracked_banner" },
+  { event = "tool.start", fields.tool = "bash", fields.id = "call_probe_preserved_work" },
+  { event = "model.session.rotated", fields.action = "rotate_session", fields.cumulative_failure_count = 1 },
+  { event = "model.provider.deferred", fields.action = "provider_deferred", fields.cumulative_failure_count = 2, fields.generation = 1 },
+  { event = "lease.released", fields.role = "engineer" },
+  { event = "model.provider.wake", fields.action = "provider_health_wake", fields.generation = 2 },
+  { event = "tool.start", fields.tool = "submit_for_pr", fields.id = "call_submit_recovered_pr" },
+  { event = "workspace.diff.produced", fields.changed_count = 2 },
+  { event = "pr.opened", source_artifact = "$source_artifact", action = "created" },
+  { event = "model.recovery.cleared", fields.action = "success_clear", fields.final_disposition = "succeeded" },
+  { event = "ci.completed", pr_ref = "$implementation_pr", conclusion = "success" },
+  { event = "pr.merged", pr_ref = "$implementation_pr" },
+  { event = "item.resolved", artifact_ref = "$source_artifact" },
+]
+
+[[expect.count]]
+required = true
+id = "three-bounded-same-turn-retries"
+event = "model.turn.retrying"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "one-retry-event-per-stable-call-identity"
+event = "model.turn.retrying"
+group_by = ["call_id"]
+max = 1
+
+[[expect.count]]
+required = true
+id = "one-session-rotation"
+event = "model.session.rotated"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-provider-deferral"
+event = "model.provider.deferred"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-provider-health-wake"
+event = "model.provider.wake"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-successful-recovery-clear"
+event = "model.recovery.cleared"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "unknown-recovery-never-parks-for-human"
+event = "model.failure.parked"
+exactly = 0
+
+[[expect.count]]
+required = true
+id = "three-engineer-leases-release"
+event = "lease.released"
+role = "engineer"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "tracked-write-call-occurs-once"
+event = "tool.start"
+fields.tool = "write"
+fields.id = "call_write_tracked_recovery_marker"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "untracked-write-call-occurs-once"
+event = "tool.start"
+fields.tool = "write"
+fields.id = "call_write_untracked_banner"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-submit-tool-path"
+event = "tool.start"
+fields.tool = "submit_for_pr"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-diff-publication-path"
+event = "workspace.diff.produced"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-implementation-pr-path"
+event = "pr.opened"
+action = "created"
+group_by = ["source_artifact"]
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-landing-path"
+event = "pr.merged"
+exactly = 1
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Tighten structured assertions without changing request ranges or recovery budgets.",
+  "Update copied workflow or CI fixtures while preserving the same isolated topology and recovery contract.",
+]
+requires_new_scenario_or_major_update = [
+  "Changing the mapped feature or plan.",
+  "Replacing declarative failure injection or provider-health wake with script orchestration.",
+  "Removing either the same-turn retry or durable deferral path.",
+]

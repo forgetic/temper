@@ -200,12 +200,15 @@ pub(super) fn tune_init_config(
         ] {
             worker.insert(field.to_string(), TomlValue::Integer(value as i64));
         }
-        let deadlines = doc
+        let agent = doc
             .get_mut("agent")
             .and_then(TomlValue::as_table_mut)
-            .and_then(|agent| agent.get_mut("deadlines"))
-            .and_then(TomlValue::as_table_mut)
-            .ok_or_else(|| "config.toml has no [agent.deadlines] table".to_string())?;
+            .ok_or_else(|| "config.toml has no [agent] table".to_string())?;
+        let deadlines = agent
+            .entry("deadlines")
+            .or_insert_with(|| TomlValue::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| "config.toml [agent.deadlines] value is not a table".to_string())?;
         for (field, value) in [
             (
                 "model_retry_max_attempts",

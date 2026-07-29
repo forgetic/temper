@@ -21,6 +21,10 @@ fn loads_checked_in_live_manifest_bundle() {
     );
     assert_eq!(bundle.timeout, Duration::from_secs(600));
     assert_eq!(
+        bundle.poll_cadence,
+        Duration::from_secs(DEFAULT_DAEMON_POLL_BACKSTOP_SECS)
+    );
+    assert_eq!(
         bundle.poll_backstop,
         Duration::from_secs(DEFAULT_DAEMON_POLL_BACKSTOP_SECS)
     );
