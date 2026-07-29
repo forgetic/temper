@@ -43,9 +43,11 @@ jobs:
       - name: Resolve and run one mapped feature scenario
         run: |
           set -uo pipefail
-          feature_number="$(printf '%s\n' "$FEATURE_HEAD_BRANCH" | sed -n 's#^feature/\([1-9][0-9]*\)\(-.*\)\?$#\1#p')"
+          feature_number="$(printf '%s\n' "$FEATURE_HEAD_BRANCH" | sed -n \
+            -e 's#^agent/pr-for-feature-\([1-9][0-9]*\)$#\1#p' \
+            -e 's#^feature/\([1-9][0-9]*\)\(-.*\)\?$#\1#p')"
           if [ -z "$feature_number" ]; then
-            echo "feature landing branch must match feature/<issue>-<slug>: $FEATURE_HEAD_BRANCH" \
+            echo "feature landing branch must match agent/pr-for-feature-<issue> (or legacy feature/<issue>-<slug>): $FEATURE_HEAD_BRANCH" \
               | tee "$FOCUSED_ARTIFACT_DIR/ci-audit.log" >&2
             exit 1
           fi

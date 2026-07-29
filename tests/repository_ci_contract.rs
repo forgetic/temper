@@ -137,6 +137,11 @@ fn repository_ci_runs_one_mapped_scenario_from_exact_feature_head() {
         .expect("focused run precedes artifact upload")
         .0;
     assert!(
+        run_step.contains("s#^agent/pr-for-feature-\\([1-9][0-9]*\\)$#\\1#p")
+            && run_step.contains("s#^feature/\\([1-9][0-9]*\\)\\(-.*\\)\\?$#\\1#p"),
+        "focused CI must derive feature identity from canonical and legacy feature branches"
+    );
+    assert!(
         run_step.contains("cargo dev-scenario-validate-feature")
             && run_step.contains("--landing-base \"$FEATURE_LANDING_BASE_SHA\"")
             && run_step.contains("--sha \"$FEATURE_HEAD_SHA\"")
