@@ -194,7 +194,7 @@ impl LiveExecutionContext<'_> {
         )?;
         tune_init_config(
             &self.bundle_dir.join("config.toml"),
-            self.harness.scenario.poll_backstop.as_secs(),
+            self.harness.scenario.poll_cadence.as_secs(),
             self.harness.scenario.mechanical_cadence.as_secs(),
             self.harness.scenario.recovery.as_ref(),
         )?;

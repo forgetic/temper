@@ -469,21 +469,25 @@ impl StimulusRuntime for LiveStimulusRuntime<'_> {
             )
             .map_err(|error| format!("read provider-deferred issue: {error}"))?
             .ok_or_else(|| format!("provider-deferred issue #{} disappeared", issue))?;
-            if let Some(recovery) = parse_metadata_block(&snapshot.body)
+            if let Some(metadata) = parse_metadata_block(&snapshot.body)
                 .map_err(|error| format!("parse provider-deferred metadata: {error}"))?
-                .and_then(|metadata| metadata.provider_recovery)
             {
-                recovery
-                    .validate()
-                    .map_err(|error| format!("invalid provider-deferred metadata: {error}"))?;
-                if recovery.generation == generation {
-                    return Ok(format!(
-                        "observed durable provider deferral for `{artifact}` epoch {} generation {} cumulative_failures={} workspace={}",
-                        recovery.failure_epoch,
-                        recovery.generation,
-                        recovery.cumulative_failure_count,
-                        recovery.workstream_id,
-                    ));
+                if let Some(recovery) = metadata.provider_recovery {
+                    recovery
+                        .validate()
+                        .map_err(|error| format!("invalid provider-deferred metadata: {error}"))?;
+                    if recovery.generation == generation
+                        && metadata.assignment.is_none()
+                        && metadata.lease.is_none()
+                    {
+                        return Ok(format!(
+                            "observed durable provider deferral with released lease for `{artifact}` epoch {} generation {} cumulative_failures={} workspace={}",
+                            recovery.failure_epoch,
+                            recovery.generation,
+                            recovery.cumulative_failure_count,
+                            recovery.workstream_id,
+                        ));
+                    }
                 }
             }
             if Instant::now() >= deadline {
@@ -543,12 +547,33 @@ impl StimulusRuntime for LiveStimulusRuntime<'_> {
             SecretString::from(super::PROVIDER_HEALTH_SECRET.to_string()),
             system_clock(),
         );
-        let outcome = engine_block_on(waker.advance(
-            self.resources.repository,
-            ArtifactSource::Issue { number: issue },
-            &signal,
-            &signature,
-        ))
+        let capture_path = self.resources.logs.standalone_log.with_file_name(format!(
+            "standalone.stimulus-provider-health-{expected_generation}.log"
+        ));
+        let capture = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&capture_path)
+            .map_err(|error| {
+                format!(
+                    "open provider-health structured event capture {}: {error}",
+                    capture_path.display()
+                )
+            })?;
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(capture)
+            .finish();
+        let outcome = tracing::subscriber::with_default(subscriber, || {
+            engine_block_on(waker.advance(
+                self.resources.repository,
+                ArtifactSource::Issue { number: issue },
+                &signal,
+                &signature,
+            ))
+        })
         .map_err(|error| format!("authenticated provider-health wake failed: {error:?}"))?;
         match outcome {
             ProviderHealthWakeOutcome::Advanced | ProviderHealthWakeOutcome::Duplicate => {

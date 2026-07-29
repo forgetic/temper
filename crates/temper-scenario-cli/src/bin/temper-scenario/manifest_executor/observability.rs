@@ -43,12 +43,12 @@ fn capture_structured_events(
         "{} PR#{}",
         evidence.repo_slug, evidence.final_state.pull_request.number
     );
-    let mut events = Vec::new();
-    for standalone_log in standalone_logs {
+    let mut records = Vec::new();
+    for (source_index, standalone_log) in standalone_logs.iter().enumerate() {
         let Ok(contents) = fs::read_to_string(standalone_log) else {
             continue;
         };
-        for line in contents.lines() {
+        for (line_index, line) in contents.lines().enumerate() {
             let Ok(record) = serde_json::from_str::<JsonValue>(line) else {
                 continue;
             };
@@ -74,19 +74,37 @@ fn capture_structured_events(
                 &implementation_pr_ref,
                 evidence.final_state.issue.number,
             );
-            events.push(run_evidence::StructuredEventEvidence {
-                sequence: events.len() + 1,
-                event: event.to_string(),
-                service: fact_fields.get("service").cloned(),
-                target: record
-                    .get("target")
-                    .and_then(JsonValue::as_str)
-                    .map(str::to_string),
-                fields: fact_fields,
-            });
+            let timestamp = record
+                .get("timestamp")
+                .and_then(JsonValue::as_str)
+                .unwrap_or_default()
+                .to_string();
+            records.push((
+                timestamp,
+                source_index,
+                line_index,
+                run_evidence::StructuredEventEvidence {
+                    sequence: 0,
+                    event: event.to_string(),
+                    service: fact_fields.get("service").cloned(),
+                    target: record
+                        .get("target")
+                        .and_then(JsonValue::as_str)
+                        .map(str::to_string),
+                    fields: fact_fields,
+                },
+            ));
         }
     }
-    events
+    records.sort_by(|left, right| (&left.0, left.1, left.2).cmp(&(&right.0, right.1, right.2)));
+    records
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, _, _, mut event))| {
+            event.sequence = index + 1;
+            event
+        })
+        .collect()
 }
 
 fn collect_span_fields(record: &JsonValue, fields: &mut BTreeMap<String, String>) {
