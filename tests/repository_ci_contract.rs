@@ -2,6 +2,7 @@
 
 const CI_WORKFLOW: &str = include_str!("../.forgejo/workflows/ci.yml");
 const FOCUSED_WORKFLOW: &str = include_str!("../.forgejo/workflows/focused-feature-validation.yml");
+const POST_MERGE_WORKFLOW: &str = include_str!("../.forgejo/workflows/post-merge-validation.yml");
 
 #[test]
 fn repository_ci_accepts_feature_branch_pull_request_targets() {
@@ -147,6 +148,19 @@ fn repository_ci_runs_one_mapped_scenario_from_exact_feature_head() {
             && run_step.contains("--sha \"$FEATURE_HEAD_SHA\"")
             && !run_step.contains("--scenario"),
         "CI must resolve the sole mapped scenario instead of naming or defaulting one"
+    );
+}
+
+#[test]
+fn live_scenario_lanes_reuse_the_host_fixture_cache() {
+    let cache_export = "export BENCH_FORGEJO_CACHE_DIR=\"$HOME/.cache/bench-forgejo\"";
+    assert!(
+        FOCUSED_WORKFLOW.contains(cache_export),
+        "focused validation must not download Forgejo fixtures during the gate"
+    );
+    assert!(
+        POST_MERGE_WORKFLOW.contains(cache_export),
+        "post-merge validation must not download Forgejo fixtures during the report"
     );
 }
 

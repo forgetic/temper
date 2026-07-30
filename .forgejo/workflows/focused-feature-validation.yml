@@ -43,6 +43,7 @@ jobs:
       - name: Resolve and run one mapped feature scenario
         run: |
           set -uo pipefail
+          export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
           feature_number="$(printf '%s\n' "$FEATURE_HEAD_BRANCH" | sed -n \
             -e 's#^agent/pr-for-feature-\([1-9][0-9]*\)$#\1#p' \
             -e 's#^feature/\([1-9][0-9]*\)\(-.*\)\?$#\1#p')"

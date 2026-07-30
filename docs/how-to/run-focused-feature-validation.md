@@ -38,6 +38,10 @@ run. It now requires the path and never defaults to `basic-delivery`.
 aggregate pull requests targeting `main`. It checks out
 `pull_request.head.sha`, fetches the landing base, derives the feature issue
 from the canonical or legacy source-branch form, and invokes the same command.
+The host lane resolves its disposable Forgejo server and runner binaries through
+`$HOME/.cache/bench-forgejo`; it must not depend on a first-use release download
+during validation. The post-merge live-validator lane uses the same shared
+fixture cache.
 
 The retained artifact is named
 `focused-feature-validation-pr-<pr>-<head-sha>` and contains, when available:
