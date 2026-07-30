@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use crate::error::ConfigError;
 use crate::resolved::{
-    AgentOperationLimits, AgentSettings, STANDALONE_FINAL_KILL_ALLOWANCE,
-    STANDALONE_HTTP_DRAIN_ALLOWANCE, WorkerLivenessLimits,
+    AgentModelRetryLimits, AgentOperationLimits, AgentSettings, STANDALONE_FINAL_KILL_ALLOWANCE,
+    STANDALONE_HTTP_DRAIN_ALLOWANCE, SessionRecoverySettings, WorkerLivenessLimits,
 };
 use crate::schema::{AgentDeadlineConfig, Config};
 
@@ -19,6 +19,80 @@ pub(crate) const DEFAULT_STANDALONE_SHUTDOWN_BUDGET_SECS: u64 = 30;
 const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 600;
 const DEFAULT_MODEL_CONNECT_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_MODEL_IDLE_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_MODEL_RETRY_MAX_ATTEMPTS: u32 = 7;
+const DEFAULT_MODEL_RETRY_BASE_DELAY_MS: u64 = 500;
+const DEFAULT_MODEL_RETRY_MAX_DELAY_MS: u64 = 8_000;
+const DEFAULT_MODEL_RETRY_JITTER_PERCENT: u8 = 20;
+const DEFAULT_SESSION_FAILURE_LIMIT: u32 = 1;
+const DEFAULT_FRESH_SESSION_LIMIT: u32 = 1;
+const DEFAULT_PROVIDER_DEFERRAL_LIMIT: u32 = 3;
+const DEFAULT_PROVIDER_DEFERRAL_DELAY_SECS: u64 = 300;
+const DEFAULT_MODEL_RECOVERY_SLO_SECS: u64 = 7_200;
+
+pub(crate) fn resolve_session_recovery_policy(
+    config: &Config,
+) -> Result<SessionRecoverySettings, ConfigError> {
+    let bounded_count = |value: u32, field: &str, allow_zero: bool| {
+        if value > 32 || (!allow_zero && value == 0) {
+            let range = if allow_zero { "0 and 32" } else { "1 and 32" };
+            Err(ConfigError::invalid(format!(
+                "{field} must be between {range}"
+            )))
+        } else {
+            Ok(value)
+        }
+    };
+    let session_failure_limit = bounded_count(
+        config
+            .worker
+            .session_failure_limit
+            .unwrap_or(DEFAULT_SESSION_FAILURE_LIMIT),
+        "worker.session_failure_limit",
+        false,
+    )?;
+    let fresh_session_limit = bounded_count(
+        config
+            .worker
+            .fresh_session_limit
+            .unwrap_or(DEFAULT_FRESH_SESSION_LIMIT),
+        "worker.fresh_session_limit",
+        true,
+    )?;
+    let provider_deferral_limit = bounded_count(
+        config
+            .worker
+            .provider_deferral_limit
+            .unwrap_or(DEFAULT_PROVIDER_DEFERRAL_LIMIT),
+        "worker.provider_deferral_limit",
+        false,
+    )?;
+    let provider_deferral_delay = positive_duration_secs(
+        config
+            .worker
+            .provider_deferral_delay_secs
+            .unwrap_or(DEFAULT_PROVIDER_DEFERRAL_DELAY_SECS),
+        "worker.provider_deferral_delay_secs",
+    )?;
+    let recovery_slo = positive_duration_secs(
+        config
+            .worker
+            .model_recovery_slo_secs
+            .unwrap_or(DEFAULT_MODEL_RECOVERY_SLO_SECS),
+        "worker.model_recovery_slo_secs",
+    )?;
+    if provider_deferral_delay > recovery_slo {
+        return Err(ConfigError::invalid(
+            "worker.provider_deferral_delay_secs must not exceed worker.model_recovery_slo_secs",
+        ));
+    }
+    Ok(SessionRecoverySettings {
+        session_failure_limit,
+        fresh_session_limit,
+        provider_deferral_limit,
+        provider_deferral_delay,
+        recovery_slo,
+    })
+}
 
 pub(crate) fn resolve_worker_liveness_limits(
     config: &Config,
@@ -101,7 +175,48 @@ pub(crate) fn resolve_agent_operation_limits(
         tool_timeout: Duration::from_secs(DEFAULT_TOOL_TIMEOUT_SECS),
         model_connect_timeout: Duration::from_secs(DEFAULT_MODEL_CONNECT_TIMEOUT_SECS),
         model_idle_timeout: Duration::from_secs(DEFAULT_MODEL_IDLE_TIMEOUT_SECS),
+        model_retry: AgentModelRetryLimits {
+            max_attempts: DEFAULT_MODEL_RETRY_MAX_ATTEMPTS,
+            base_delay: Duration::from_millis(DEFAULT_MODEL_RETRY_BASE_DELAY_MS),
+            max_delay: Duration::from_millis(DEFAULT_MODEL_RETRY_MAX_DELAY_MS),
+            jitter_percent: DEFAULT_MODEL_RETRY_JITTER_PERCENT,
+        },
     });
+    let max_attempts = raw
+        .model_retry_max_attempts
+        .unwrap_or(defaults.model_retry.max_attempts);
+    if !(1..=32).contains(&max_attempts) {
+        return Err(ConfigError::invalid(format!(
+            "{field}.model_retry_max_attempts must be between 1 and 32"
+        )));
+    }
+    let base_delay = raw
+        .model_retry_base_delay_ms
+        .map(|millis| {
+            positive_duration_millis(millis, &format!("{field}.model_retry_base_delay_ms"))
+        })
+        .transpose()?
+        .unwrap_or(defaults.model_retry.base_delay);
+    let max_delay = raw
+        .model_retry_max_delay_ms
+        .map(|millis| {
+            positive_duration_millis(millis, &format!("{field}.model_retry_max_delay_ms"))
+        })
+        .transpose()?
+        .unwrap_or(defaults.model_retry.max_delay);
+    if max_delay < base_delay {
+        return Err(ConfigError::invalid(format!(
+            "{field}.model_retry_max_delay_ms must be at least model_retry_base_delay_ms"
+        )));
+    }
+    let jitter_percent = raw
+        .model_retry_jitter_percent
+        .unwrap_or(defaults.model_retry.jitter_percent);
+    if jitter_percent > 100 {
+        return Err(ConfigError::invalid(format!(
+            "{field}.model_retry_jitter_percent must be at most 100"
+        )));
+    }
     Ok(AgentOperationLimits {
         tool_timeout: raw
             .tool_timeout_secs
@@ -120,6 +235,12 @@ pub(crate) fn resolve_agent_operation_limits(
             .map(|secs| positive_duration_secs(secs, &format!("{field}.model_idle_timeout_secs")))
             .transpose()?
             .unwrap_or(defaults.model_idle_timeout),
+        model_retry: AgentModelRetryLimits {
+            max_attempts,
+            base_delay,
+            max_delay,
+            jitter_percent,
+        },
     })
 }
 
@@ -141,6 +262,7 @@ fn validate_operation_deadlines(
         ("tool_timeout_secs", limits.tool_timeout),
         ("model_connect_timeout_secs", limits.model_connect_timeout),
         ("model_idle_timeout_secs", limits.model_idle_timeout),
+        ("model_retry_max_delay_ms", limits.model_retry.max_delay),
     ] {
         if duration >= max_no_progress {
             return Err(ConfigError::invalid(format!(

@@ -373,10 +373,13 @@ impl NormalizingEventSink {
                 call_id,
                 next_attempt,
                 delay_ms,
+                disposition: model_failure::disposition(reason.disposition()),
                 failure: FailureInfoV1 {
                     code: retry_code(reason.category()),
                     message: MODEL_CALL_RETRY_FAILURE_MESSAGE.to_string(),
-                    retryable: reason.retryable(),
+                    // A selected retry is true even when its canonical
+                    // disposition remains unknown.
+                    retryable: true,
                 },
             }),
         );

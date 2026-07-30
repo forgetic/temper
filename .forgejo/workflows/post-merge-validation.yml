@@ -47,6 +47,7 @@ jobs:
         # artifact directory, and builds/resolves standalone temper as needed.
         run: |
           set -eu
+          export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
           mkdir -p "$VALIDATION_ARTIFACT_DIR"
           set +e
           cargo run -p temper-scenario-cli -- validate \

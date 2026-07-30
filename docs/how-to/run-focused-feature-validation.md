@@ -6,18 +6,20 @@ one active scenario. It does not pick `basic-delivery` or run the whole corpus.
 
 ## Mapping contract
 
-The source branch must use `feature/<issue>-<slug>`. The mapped scenario must
-have matching `[validation]` metadata, be active, and be new or deliberately
-updated relative to the landing base. Resolution rejects zero or multiple
-matches, dirty scenario content, unchanged content, and digest mismatches.
+The source branch normally uses Temper's derived
+`agent/pr-for-feature-<issue>` form. The legacy `feature/<issue>-<slug>` form
+remains accepted for existing feature branches. The mapped scenario must have
+matching `[validation]` metadata, be active, and be new or deliberately updated
+relative to the landing base. Resolution rejects zero or multiple matches,
+dirty scenario content, unchanged content, and digest mismatches.
 
 Run the same path locally from the exact feature head:
 
 ```sh
 cargo dev-scenario-validate-feature \
-  --feature ai/temper#778 \
+  --feature ai/temper#806 \
   --landing-base origin/main \
-  --source-branch feature/778-exact-head-validation \
+  --source-branch agent/pr-for-feature-806 \
   --pr <landing-pr-number> \
   --sha "$(git rev-parse HEAD)" \
   --output-dir target/focused-validation
@@ -32,10 +34,14 @@ run. It now requires the path and never defaults to `basic-delivery`.
 
 ## CI evidence
 
-`.forgejo/workflows/ci.yml` runs the focused job only for `feature/*` pull
-requests targeting `main`. It checks out `pull_request.head.sha`, fetches the
-landing base, derives the feature issue from the source branch, and invokes the
-same command.
+`.forgejo/workflows/focused-feature-validation.yml` runs the focused job for
+aggregate pull requests targeting `main`. It checks out
+`pull_request.head.sha`, fetches the landing base, derives the feature issue
+from the canonical or legacy source-branch form, and invokes the same command.
+The host lane resolves its disposable Forgejo server and runner binaries through
+`$HOME/.cache/bench-forgejo`; it must not depend on a first-use release download
+during validation. The post-merge live-validator lane uses the same shared
+fixture cache.
 
 The retained artifact is named
 `focused-feature-validation-pr-<pr>-<head-sha>` and contains, when available:

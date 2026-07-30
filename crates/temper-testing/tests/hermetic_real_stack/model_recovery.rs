@@ -208,8 +208,8 @@ fn model_recovery_rotates_once_across_daemon_replacement_and_publishes_preserved
             prior_session_id
         );
         assert_eq!(completed_ledger.failure_epoch, 2);
-        assert_eq!(completed_ledger.consecutive_terminal_count, 0);
-        assert!(!completed_ledger.rotation_consumed);
+        assert_eq!(completed_ledger.cumulative_terminal_failures, 0);
+        assert_eq!(completed_ledger.fresh_sessions_used, 0);
         assert!(completed_ledger.accounted_attempt_id.is_none());
         assert!(completed_ledger.recovery_decision.is_none());
         assert_eq!(model_calls.load(Ordering::SeqCst), 5);
@@ -326,8 +326,9 @@ fn model_recovery_exhaustion_parks_once_and_never_reclaims_after_restarts() {
             prior_session_id
         );
         assert_eq!(exhausted_ledger.failure_epoch, 1);
-        assert_eq!(exhausted_ledger.consecutive_terminal_count, 1);
-        assert!(exhausted_ledger.rotation_consumed);
+        assert_eq!(exhausted_ledger.cumulative_terminal_failures, 2);
+        assert_eq!(exhausted_ledger.session_terminal_failures, 1);
+        assert_eq!(exhausted_ledger.fresh_sessions_used, 1);
         assert_eq!(
             exhausted_ledger
                 .recovery_decision

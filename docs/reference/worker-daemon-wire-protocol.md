@@ -391,12 +391,30 @@ Worker returns the structured result for one assigned job.
 | `failure` | object | required for failures | Failure details. |
 | `failure.class` | string | yes when `failure` is present | `transient`, `permanent`, `canceled`, or `protocol`. |
 | `failure.message` | string | yes when `failure` is present | Human-readable failure summary. |
-| `failure.model_failure` | object | no | Normalized bounded `ModelFailureV1`, authoritative independently of activity tracing. Contains only safe provider/model identity, category, retryability, optional status/request/code, a bounded sanitized message, and `detail_redacted`. |
+| `failure.model_failure` | object | no | Normalized bounded `ModelFailureV1`, authoritative independently of activity tracing. Contains only safe provider/model identity, canonical disposition/provenance, optional status/request/code, a bounded sanitized message, and `detail_redacted`. |
+| `failure.model_failure.disposition` | string | no for legacy diagnostics; yes for current workers | Canonical `retryable`, `non_retryable`, or `unknown` recovery authority. The compatibility `retryable` boolean is not an independent authority. |
+| `failure.model_failure.boundary` | string | no for legacy diagnostics; yes for current workers | Typed `http`, `sse`, or `local` failure boundary. |
+| `failure.model_failure.event_kind` | string | no for legacy diagnostics; yes for current workers | Closed safe event kind such as `http_response`, `stream_error`, or `stream_eof`. |
+| `failure.model_failure.status_present` | boolean | no for legacy diagnostics; yes for current workers | Whether independently typed HTTP status evidence was present, even when no safe value is retained. |
+| `failure.model_failure.code_present` | boolean | no for legacy diagnostics; yes for current workers | Whether provider code evidence was present, even when an unrecognized value is not retained. |
 | `failure.session_recovery` | object | no | Typed bounded evidence for the durable session-recovery decision. |
 | `failure.session_recovery.attempt_id` | string | yes when session recovery is present | Exact attempt identity; must match the enclosing result. |
 | `failure.session_recovery.failure_epoch` | integer | yes when session recovery is present | One-based consecutive-failure epoch. |
-| `failure.session_recovery.failure_count` | integer | yes when session recovery is present | One-based terminal count within the epoch. |
-| `failure.session_recovery.action` | string | yes when session recovery is present | `retry_current_session`, `rotate_session`, or `park_for_human`. |
+| `failure.session_recovery.failure_count` | integer | yes when session recovery is present | One-based cumulative terminal count for the unsucceeded workstream epoch; session rotation never resets it. |
+| `failure.session_recovery.session_number` | integer | no for legacy evidence; yes for current workers | One-based session number in the failure epoch. |
+| `failure.session_recovery.session_failure_count` | integer | no for legacy evidence; yes for current workers | Terminal count in the session that produced this failure. |
+| `failure.session_recovery.epoch_started_unix_ms` | integer | no for legacy evidence; yes for current workers | Failure-epoch wall-clock start. |
+| `failure.session_recovery.epoch_elapsed_ms` | integer | no for legacy evidence; yes for current workers | Elapsed wall-clock evidence at the decision. |
+| `failure.session_recovery.disposition` | string | no for legacy evidence; yes for current workers | Canonical `retryable`, `non_retryable`, or `unknown` recovery authority. |
+| `failure.session_recovery.immediate_retry_exhausted` | boolean | no for legacy evidence; yes for current workers | Whether bounded same-turn model requests were exhausted. |
+| `failure.session_recovery.configured_session_failure_limit` | integer | no for legacy evidence; yes for current workers | Snapshotted terminal-run budget for one session. |
+| `failure.session_recovery.configured_fresh_session_limit` | integer | no for legacy evidence; yes for current workers | Snapshotted fresh-session budget. |
+| `failure.session_recovery.configured_deferral_limit` | integer | no for legacy evidence; yes for current workers | Snapshotted provider-deferral budget. |
+| `failure.session_recovery.deferral_count` | integer | no | Provider deferrals issued in this failure epoch. |
+| `failure.session_recovery.deferral_generation` | integer | no | Monotonic deferred-wake fence generation. |
+| `failure.session_recovery.not_before_unix_ms` | integer | required for `provider_deferred` | Earliest automatic provider-recovery wake. |
+| `failure.session_recovery.slo_deadline_unix_ms` | integer | no for legacy evidence; yes for current workers | Absolute configured failure-epoch SLO boundary. |
+| `failure.session_recovery.action` | string | yes when session recovery is present | `retry_current_session`, `rotate_session`, `provider_deferred`, or `park_for_human`. Provider deferral is automatic recovery and is distinct from actionable human parking. |
 | `failure.session_recovery.current_session_id` | string | yes when session recovery is present | Session that produced the terminal failure. |
 | `failure.session_recovery.prior_session_id` | string | no | Archived predecessor when the current session followed a rotation. |
 | `failure.session_recovery.new_session_id` | string | no | Fresh session selected by `rotate_session`. |
@@ -411,6 +429,13 @@ attempt-mismatched session evidence. These typed fields are never reconstructed
 from failure messages, stderr, provider prose, prompts, or raw responses. Older
 failure JSON without either field continues to deserialize unchanged. See
 [`result-model-failure.json`](worker-daemon-wire-protocol/examples/result-model-failure.json).
+
+A transient result carrying `session_recovery.action=provider_deferred` is an
+exception to generic transient drop-for-rescan handling. The daemon applies it
+so the bounded Forge `provider_recovery` marker converges before the exact
+assignment and lease are released. Ordinary transient/canceled failures still
+use drop-for-rescan behavior. Assignment claim binds one due attempt id; only
+that fresh attempt may publish success and clear the marker.
 
 The worker first records the exact result in its private durable result outbox.
 Transport failures retain that entry and replay it with bounded exponential

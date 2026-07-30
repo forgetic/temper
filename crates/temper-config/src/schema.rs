@@ -315,6 +315,21 @@ pub struct WorkerConfig {
     /// Time allowed for forced termination and process reaping.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forced_termination_grace_secs: Option<u64>,
+    /// Terminal agent runs allowed in one durable model session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_failure_limit: Option<u32>,
+    /// Fresh sessions allowed in one unsucceeded model-failure epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh_session_limit: Option<u32>,
+    /// Provider-deferral generations allowed before actionable human parking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_deferral_limit: Option<u32>,
+    /// Delay before an automatic provider-recovery wake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_deferral_delay_secs: Option<u64>,
+    /// Wall-clock SLO for one unsucceeded model-failure epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_recovery_slo_secs: Option<u64>,
     /// Explicit `owner/name:role` capabilities. Defaults to the cross-product of
     /// `engine.repos` and `engine.roles` (one worker covers the whole feed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -340,6 +355,11 @@ impl WorkerConfig {
             && self.max_run_secs.is_none()
             && self.graceful_cancellation_grace_secs.is_none()
             && self.forced_termination_grace_secs.is_none()
+            && self.session_failure_limit.is_none()
+            && self.fresh_session_limit.is_none()
+            && self.provider_deferral_limit.is_none()
+            && self.provider_deferral_delay_secs.is_none()
+            && self.model_recovery_slo_secs.is_none()
             && self.capabilities.is_none()
             && self.pools.is_empty()
     }
@@ -433,6 +453,18 @@ pub struct AgentDeadlineConfig {
     /// Maximum wait between model stream events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_idle_timeout_secs: Option<u64>,
+    /// Total requests allowed for one model turn, including the first request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_retry_max_attempts: Option<u32>,
+    /// Base same-turn retry delay in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_retry_base_delay_ms: Option<u64>,
+    /// Maximum selected same-turn retry delay in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_retry_max_delay_ms: Option<u64>,
+    /// Symmetric bounded retry jitter percentage (`0..=100`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_retry_jitter_percent: Option<u8>,
 }
 
 impl AgentDeadlineConfig {
@@ -440,6 +472,10 @@ impl AgentDeadlineConfig {
         self.tool_timeout_secs.is_none()
             && self.model_connect_timeout_secs.is_none()
             && self.model_idle_timeout_secs.is_none()
+            && self.model_retry_max_attempts.is_none()
+            && self.model_retry_base_delay_ms.is_none()
+            && self.model_retry_max_delay_ms.is_none()
+            && self.model_retry_jitter_percent.is_none()
     }
 }
 

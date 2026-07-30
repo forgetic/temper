@@ -17,6 +17,8 @@ mod events;
 mod issue;
 #[path = "assertions/pull_request.rs"]
 mod pull_request;
+#[path = "assertions/recovery.rs"]
+mod recovery;
 #[path = "assertions/repository.rs"]
 mod repository;
 #[path = "assertions/summary.rs"]
@@ -38,6 +40,7 @@ pub(crate) fn evaluate_manifest_assertions(
     summary::evaluate_counts(expect, artifact, &mut results);
     checks::evaluate_checks(expect, artifact, &mut results);
     events::evaluate_event_expectations(expect, artifact, &mut results);
+    recovery::evaluate(expect, artifact, &mut results);
 
     if results.is_empty() {
         Ok(None)

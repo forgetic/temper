@@ -24,8 +24,8 @@ the operator workflow.
 
 - `manifest` — live-only validation-grade e2e runner. The checked-in
   `basic-delivery`, `implementation-pr-handoff`, `codebase-memory-agent`,
-  `plan-centric-feature-branch`, and `target-ux-e2e` scenarios select this
-  runner with
+  `model-failure-recovery`, `plan-centric-feature-branch`, and `target-ux-e2e`
+  scenarios select this runner with
   `runner.uses = "manifest"` and boot real Forgejo, real `forgejo-runner` CI, a
   real standalone `temper` process, and Jig fake LLM agents.
   Hermetic/MemoryForge/in-process substitutes are rejected, and no scenario-name
@@ -188,6 +188,58 @@ evidence:
   fields such as `event`, `artifact_ref`, `pr_ref`, `source_artifact`,
   `transition`, `action`, handoff metadata/title/body-source fields, and CI
   `conclusion`.
+
+Model-recovery scenarios additionally have bounded, pre-convergence primitives:
+
+```toml
+# On the Jig step: inject one late failure after two normal engineer
+# requests (so the same-turn retry can succeed), then a bounded consecutive
+# burst later in the same role's request stream (so deferral can be exercised).
+late_stream_failure = { role = "engineer", bursts = [{ after_requests = 2, failures = 1 }, { after_requests = 5, failures = 14 }] }
+
+[[steps]]
+id = "observe-deferral"
+action = "provider.wait_deferred"
+artifact = "issue:source"
+generation = 1
+timeout_ms = 45000
+
+[[steps]]
+id = "wake-provider"
+action = "provider.health_wake"
+artifact = "issue:source"
+expected_generation = 1
+event_id = "provider-healthy-1"
+```
+
+`provider.wait_deferred` is observation-only. `provider.health_wake` must follow a
+matching observation and invokes the engine's HMAC-authenticated, workstream-
+scoped health capability; assertions cannot invoke either operation. The live
+harness may bound recovery timing without changing production defaults:
+
+```toml
+[live_harness.recovery]
+model_retry_max_attempts = 2
+model_retry_base_delay_ms = 1
+model_retry_max_delay_ms = 2
+model_retry_jitter_percent = 0
+session_failure_limit = 1
+fresh_session_limit = 1
+provider_deferral_limit = 3
+provider_deferral_delay_secs = 300
+model_recovery_slo_secs = 7200
+```
+
+Structured recovery assertions use `[[expect.provider_requests]]` (`role`,
+`exactly`/`min`/`max`, `unique`), `[[expect.recovery]]` (event, action,
+attempt, disposition, boundary/event kind, provider request/status/code facts,
+session/cumulative counts, elapsed time, deferral count, generation),
+`[[expect.stimuli]]`, `[[expect.workspace]]` (`retained`, `path_contains`, and
+bounded tool-effect counts), and `[[expect.publication]]` (branch/PR counts and
+`blocked_while_deferred = true`). All are required by default. Missing event,
+request identity, retained path, stimulus, or publication-fence evidence blocks
+validation rather than silently passing. Unknown required assertion fields are
+reported as unsupported and also block validation.
 
 Unsupported or missing-fact declarations remain visible diagnostics. Assertions
 are required by default, so any failed, missing, timed-out, or unsupported

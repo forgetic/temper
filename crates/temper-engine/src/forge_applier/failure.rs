@@ -9,6 +9,7 @@ use crate::InFlightJob;
 use crate::applier::ApplyOutcome;
 use crate::forge_applier::ForgeApplier;
 use crate::forge_applier::model_recovery::ModelRecoveryParkEvidence;
+use crate::forge_applier::provider_recovery::ModelRecoveryDeferralEvidence;
 
 const FAILURE_AUDIT_COMMENT_KEY_PREFIX: &str = "daemon_failure_audit:";
 
@@ -24,6 +25,12 @@ impl<F: Forge + ?Sized> ForgeApplier<F> {
             .as_ref()
             .map(|failure| failure.message.clone())
             .unwrap_or_else(|| "worker failure omitted failure details".to_string());
+        if let Some(evidence) = ModelRecoveryDeferralEvidence::from_result(&result) {
+            return match self.defer_model_recovery(&job, &result, &evidence).await {
+                Ok(()) => ApplyOutcome::RetryReleased,
+                Err(reason) => ApplyOutcome::Retryable { reason },
+            };
+        }
         match class {
             FailureClass::Transient => {
                 return if self.release_source_action_claim_for_retry(&job).await {

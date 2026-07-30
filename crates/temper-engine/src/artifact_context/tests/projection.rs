@@ -77,6 +77,7 @@ fn large_bookkeeping_metadata(
             coordination_key: Some(payload.into()),
             ..Default::default()
         }),
+        provider_recovery: None,
         repaired_head: Some(payload.into()),
         exact_head_validation: None,
         missing_ci_recovery: None,

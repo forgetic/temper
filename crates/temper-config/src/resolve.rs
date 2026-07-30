@@ -23,7 +23,8 @@ use crate::agent_resolve::{parse_provider_kind, resolve_provider_credential};
 use crate::agent_trace_resolve::resolve_observability;
 use crate::deadline_resolve::{
     DEFAULT_STANDALONE_SHUTDOWN_BUDGET_SECS, positive_duration_millis,
-    resolve_agent_operation_limits, resolve_worker_liveness_limits, validate_liveness_ordering,
+    resolve_agent_operation_limits, resolve_session_recovery_policy,
+    resolve_worker_liveness_limits, validate_liveness_ordering,
     validate_standalone_shutdown_budget,
 };
 use crate::env::EnvLookup;
@@ -453,6 +454,7 @@ fn resolve_worker(
         "worker.heartbeat_interval_ms",
     )?;
     let liveness_limits = resolve_worker_liveness_limits(config)?;
+    let session_recovery = resolve_session_recovery_policy(config)?;
     validate_liveness_ordering(heartbeat_interval, liveness_limits, agent)?;
 
     let capabilities = match &config.worker.capabilities {
@@ -483,6 +485,7 @@ fn resolve_worker(
         poll_wait,
         heartbeat_interval,
         liveness_limits,
+        session_recovery,
         capabilities,
         pools: resolved_pools.pools,
         worker_pool_tokens: resolved_pools.token_values,

@@ -206,6 +206,7 @@ async fn recovered_job_from_assignment_inner<F: Forge + ?Sized>(
             snapshot: &snapshot,
             classified: &classified,
         }),
+        None,
     )
     .await
     .map_err(|error| error.to_string())?
@@ -285,7 +286,7 @@ pub(crate) async fn enrich_work_item_job<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
 ) -> Result<EnrichOutcome, ScanError> {
     enrich_work_item_job_inner(
-        forge, repo, item, job, workflow, compiled, false, None, None, None,
+        forge, repo, item, job, workflow, compiled, false, None, None, None, None,
     )
     .await
 }
@@ -302,6 +303,7 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     artifact_context: Option<&crate::ArtifactContextBundleService>,
     repository: Option<&temper_forge::Repository>,
     targeted: Option<TargetedEnrichment<'_>>,
+    now: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<EnrichOutcome, ScanError> {
     let repository = match targeted.as_ref() {
         Some(targeted) => targeted.repository.clone(),
@@ -340,6 +342,22 @@ async fn enrich_work_item_job_inner<F: Forge + ?Sized>(
     // the unchanged artifact again.
     if requires_human_attention(&artifact.labels) {
         return Ok(EnrichOutcome::SkipAttentionArtifact);
+    }
+    if !recovering_assignment {
+        let recovery_now = now.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+        if !Box::pin(
+            crate::provider_recovery::enforce_provider_recovery_admission(
+                forge,
+                repo,
+                item.target,
+                &artifact.body,
+                recovery_now,
+            ),
+        )
+        .await?
+        {
+            return Ok(EnrichOutcome::SkipProviderDeferred);
+        }
     }
 
     // Assemble the job's workspace manifest: the primary (writable) repo, plus
@@ -448,6 +466,7 @@ pub(crate) enum EnrichOutcome {
     Enriched,
     SkipTerminalArtifact,
     SkipAttentionArtifact,
+    SkipProviderDeferred,
     SkipExistingPullRequest,
 }
 
@@ -626,6 +645,7 @@ pub(crate) fn skip_log_reason(outcome: EnrichOutcome) -> &'static str {
         EnrichOutcome::Enriched => "",
         EnrichOutcome::SkipTerminalArtifact => "terminal",
         EnrichOutcome::SkipAttentionArtifact => "attention",
+        EnrichOutcome::SkipProviderDeferred => "provider-deferred",
         EnrichOutcome::SkipExistingPullRequest => "existing-pr",
     }
 }
@@ -712,6 +732,7 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
             daemon.artifact_context.as_deref(),
             Some(&repository),
             None,
+            Some(now),
         )
         .await
         {
@@ -731,6 +752,7 @@ pub(crate) async fn enqueue_scanned_role_work<F: Forge + ?Sized>(
             Ok(
                 outcome @ (EnrichOutcome::SkipTerminalArtifact
                 | EnrichOutcome::SkipAttentionArtifact
+                | EnrichOutcome::SkipProviderDeferred
                 | EnrichOutcome::SkipExistingPullRequest),
             ) => {
                 tracing::debug!("{}", skip_log_line(&repo_label, role, item, outcome));

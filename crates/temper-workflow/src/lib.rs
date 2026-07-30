@@ -151,10 +151,12 @@ pub use load::{
 };
 pub use metadata::{
     CreateIssueIntentChild, CreateIssuesCompletion, CreateIssuesIntent, DurableAssignment,
-    ExactHeadValidationAuthority, Lease, METADATA_BEGIN, METADATA_END, MetadataBlockInspection,
-    MetadataBlockSpan, MetadataError, WorkflowMetadata, WorkflowMetadataKey,
-    global_child_correlation_key, inspect_metadata_blocks, is_heartbeat_only_body_change,
-    parse_metadata_block, render_metadata_block, replace_metadata_block, split_metadata_block,
+    ExactHeadValidationAuthority, Lease, MAX_PROVIDER_RECOVERY_COUNT,
+    MAX_PROVIDER_RECOVERY_ID_BYTES, METADATA_BEGIN, METADATA_END, MetadataBlockInspection,
+    MetadataBlockSpan, MetadataError, ProviderRecovery, ProviderRecoveryDisposition,
+    ProviderRecoveryFacts, WorkflowMetadata, WorkflowMetadataKey, global_child_correlation_key,
+    inspect_metadata_blocks, is_heartbeat_only_body_change, parse_metadata_block,
+    render_metadata_block, replace_metadata_block, split_metadata_block,
 };
 pub use missing_ci::MissingCiRecoveryState;
 pub use plan::{

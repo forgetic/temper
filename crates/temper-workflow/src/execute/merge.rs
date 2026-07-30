@@ -6,6 +6,7 @@
 
 use super::{ExecutionError, Executor, Loaded};
 use crate::classify::ArtifactSource;
+use crate::metadata::parse_metadata_block;
 use crate::plan::WorkflowEffect;
 use temper_forge::{
     Forge, ForgeError, MergeMethod, MergePullRequest, PullRequestState, RepositoryId,
@@ -37,12 +38,7 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
             return Ok(());
         }
         let Loaded::PullRequest {
-            id,
-            merged,
-            source_branch,
-            head_sha,
-            classified,
-            ..
+            merged, classified, ..
         } = loaded
         else {
             return Err(ExecutionError::UnsupportedEffect {
@@ -52,28 +48,65 @@ impl<F: Forge + ?Sized> Executor<'_, F> {
         if *merged {
             return Ok(());
         }
-        if let Some(authority) = classified.metadata.exact_head_validation.as_ref() {
+        let target = loaded.classified().source;
+        let ArtifactSource::PullRequest { number } = target else {
+            return Err(ExecutionError::UnsupportedEffect {
+                effect: WorkflowEffect::MergePullRequest,
+            });
+        };
+        // Re-read immediately before the irreversible merge. The executor load
+        // is intentionally earlier than comments/reviews and is therefore not
+        // fresh enough to authorize publication after those idempotent stages.
+        let fresh = self
+            .forge
+            .get_pull_request_by_number(repo_id, number)
+            .await?
+            .ok_or(ExecutionError::TargetMissing { target })?;
+        if fresh.state == PullRequestState::Merged {
+            return Ok(());
+        }
+        let fresh_metadata =
+            parse_metadata_block(&fresh.body).map_err(|error| ExecutionError::TargetStale {
+                target,
+                message: format!(
+                    "fresh workflow metadata is corrupt at the landing boundary: {error}"
+                ),
+            })?;
+        if fresh_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.provider_recovery.is_some())
+        {
+            return Err(ExecutionError::TargetStale {
+                target,
+                message: "provider recovery is deferred; mechanical landing is fenced".to_string(),
+            });
+        }
+        let source_branch = &fresh.source.branch;
+        let head_sha = fresh.head_sha.as_deref();
+        if let Some(authority) = fresh_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.exact_head_validation.as_ref())
+        {
             let current_head = self.forge.get_branch_head(repo_id, source_branch).await?;
             if !authority.authorizes(source_branch, current_head.as_deref())
-                || head_sha.as_deref() != current_head.as_deref()
+                || head_sha != current_head.as_deref()
             {
                 self.invalidate_exact_head_validation(repo_id, classified, authority)
                     .await?;
                 return Err(ExecutionError::TargetStale {
-                    target: loaded.classified().source,
+                    target,
                     message: "exact-head validation authority changed immediately before merge"
                         .to_string(),
                 });
             }
         }
-        let target = loaded.classified().source;
         let input = MergePullRequest {
             method: MergeMethod::MergeCommit,
             commit_title: None,
             commit_body: None,
             delete_source_branch,
         };
-        match self.forge.merge_pull_request(id, input).await {
+        match self.forge.merge_pull_request(&fresh.id, input).await {
             Ok(_) => Ok(()),
             Err(ForgeError::Conflict(message)) => {
                 self.resolve_merge_rejection(repo_id, target, message).await

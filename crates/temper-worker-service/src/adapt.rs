@@ -78,6 +78,26 @@ pub fn worker_liveness_limits(resolved: &Resolved) -> RuntimeWorkerLivenessLimit
     }
 }
 
+pub fn session_recovery_policy(
+    resolved: &Resolved,
+) -> Result<temper_worker::SessionRecoveryPolicy, String> {
+    let policy = resolved.worker.session_recovery;
+    let millis = |value: std::time::Duration, field: &str| {
+        u64::try_from(value.as_millis())
+            .map_err(|_| format!("{field} exceeds durable millisecond evidence range"))
+    };
+    Ok(temper_worker::SessionRecoveryPolicy {
+        session_failure_limit: policy.session_failure_limit,
+        fresh_session_limit: policy.fresh_session_limit,
+        provider_deferral_limit: policy.provider_deferral_limit,
+        provider_deferral_delay_ms: millis(
+            policy.provider_deferral_delay,
+            "worker.provider_deferral_delay_secs",
+        )?,
+        recovery_slo_ms: millis(policy.recovery_slo, "worker.model_recovery_slo_secs")?,
+    })
+}
+
 /// Projects resolved trace policy and the durable spool root into the worker
 /// subsystem config. Missing durable state produces an effective `off` policy;
 /// the service runtime reports that degradation without failing product work.
@@ -248,6 +268,12 @@ pub fn agent_runtime_limits(limits: AgentOperationLimits) -> temper_worker::Agen
         tool_timeout_secs: limits.tool_timeout.as_secs(),
         model_connect_timeout_secs: limits.model_connect_timeout.as_secs(),
         model_idle_timeout_secs: limits.model_idle_timeout.as_secs(),
+        model_retry_max_attempts: limits.model_retry.max_attempts,
+        model_retry_base_delay_ms: u64::try_from(limits.model_retry.base_delay.as_millis())
+            .unwrap_or(u64::MAX),
+        model_retry_max_delay_ms: u64::try_from(limits.model_retry.max_delay.as_millis())
+            .unwrap_or(u64::MAX),
+        model_retry_jitter_percent: limits.model_retry.jitter_percent,
     }
 }
 

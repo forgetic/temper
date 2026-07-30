@@ -209,9 +209,10 @@ mod trace_reclamation_restart;
 #[test]
 fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
     let _retry_override = install_stream_retry_config_override(StreamRetryConfig {
-        max_retries: 2,
-        base_backoff: Duration::from_millis(1),
-        max_backoff: Duration::from_millis(1),
+        max_attempts: 3,
+        base_delay: Duration::from_millis(1),
+        max_delay: Duration::from_millis(1),
+        jitter_percent: 0,
     });
 
     temper_engine_io::block_on_with(|cx, handle| async move {
@@ -273,11 +274,9 @@ fn hermetic_real_stack_requeues_provider_server_error_and_later_succeeds() {
             .session_recovery
             .as_ref()
             .expect("retryable terminal is durably accounted");
-        assert_eq!(
-            recovery.action,
-            SessionRecoveryActionV1::RetryCurrentSession
-        );
+        assert_eq!(recovery.action, SessionRecoveryActionV1::RotateSession);
         assert_eq!(recovery.failure_count, 1);
+        assert!(recovery.new_session_id.is_some());
         assert!(
             provider_errors.load(Ordering::SeqCst) >= 3,
             "fake provider should see the initial HTTP 500 plus configured stream retries"

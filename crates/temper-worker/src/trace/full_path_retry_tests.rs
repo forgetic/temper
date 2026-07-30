@@ -82,6 +82,7 @@ async fn exercise_sanitized_retry(
             call_id: "model-call-retry-355".to_string(),
             next_attempt: 7,
             delay_ms: 1_500,
+            disposition: temper_protocol_activity::ModelFailureDispositionV1::Unknown,
             failure: FailureInfoV1 {
                 code: FailureCodeV1::Timeout,
                 message: diagnostics.clone(),

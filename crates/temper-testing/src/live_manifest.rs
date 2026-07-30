@@ -13,6 +13,7 @@ mod convergence;
 mod execution_plan;
 mod fake_llm;
 mod handoff;
+mod late_stream_jig;
 mod plan_feature;
 mod process;
 mod runtime;
@@ -31,8 +32,9 @@ use std::time::Duration;
 
 use crate::forgejo_runtime::RunWorkspace;
 pub use bundle::{
-    AgentFixture, ConvergenceStrategy, IntakeFixture, ManifestAction, ManifestExecutionPlan,
-    ManifestStep, ObservabilityFixture, RepoFixture, ScenarioBundle,
+    AgentFixture, ConvergenceStrategy, IntakeFixture, LateStreamFailureBurst,
+    LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan, ManifestStep,
+    ObservabilityFixture, RecoveryFixture, RepoFixture, ScenarioBundle,
 };
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
 pub use plan_feature::{
@@ -54,6 +56,7 @@ const DEFAULT_ADMIN_USER: &str = "basicadmin";
 const DEFAULT_ADMIN_PASSWORD: &str = "Basic-Delivery-Admin-1!";
 const DEFAULT_ADMIN_EMAIL: &str = "basicadmin@example.invalid";
 const INIT_PROVIDER_KEY: &str = "basic-delivery-jig-dummy-key";
+pub(super) const PROVIDER_HEALTH_SECRET: &str = "temper-live-manifest-provider-health-v1";
 
 const DEFAULT_WORKSPACE_PREFIX: &str = "temper-basic-delivery-e2e";
 const DEFAULT_CONVERGENCE_SECS: u64 = 360;
@@ -171,6 +174,8 @@ pub struct LiveManifestEvidence {
     pub total_elapsed: Duration,
     pub poll_backstop: Duration,
     pub fake_llm: FakeLlmEvidence,
+    /// Complete terminal Forge PR inventory, including unexpected publications.
+    pub forge_pull_requests: Vec<PullRequestEvidence>,
     pub final_state: FinalStateEvidence,
     pub handoff: Option<LiveHandoffEvidence>,
     pub codebase_memory: Option<LiveCodebaseMemoryEvidence>,
@@ -211,6 +216,7 @@ impl LiveManifestEvidence {
                 self.fake_llm.tester_requests,
                 self.fake_llm.log_path.display()
             ),
+            format!("  forge_pull_requests: {}", self.forge_pull_requests.len()),
             format!(
                 "  source_issue: #{} state={} labels={:?}",
                 self.final_state.issue.number,

@@ -386,6 +386,7 @@ mod tests {
             tool_timeout_secs: 31,
             model_connect_timeout_secs: 11,
             model_idle_timeout_secs: 7,
+            ..AgentRuntimeLimitsV1::default()
         };
         std::fs::write(&path, limits.to_json().unwrap()).expect("write limits");
         assert_eq!(read_runtime_limits(Some(&path)).unwrap(), limits);

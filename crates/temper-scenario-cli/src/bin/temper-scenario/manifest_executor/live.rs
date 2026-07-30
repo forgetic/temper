@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -178,6 +179,52 @@ fn live_artifact(
             },
         }
     } else {
+        let implementation_number = evidence.final_state.pull_request.number;
+        let pull_requests = evidence
+            .forge_pull_requests
+            .iter()
+            .map(|pull| run_evidence::PullRequestStateEvidence {
+                number: pull.number,
+                id: Some(if pull.number == implementation_number {
+                    "implementation".to_string()
+                } else {
+                    format!("forge-pr-{}", pull.number)
+                }),
+                title: Some(pull.title.clone()),
+                body: None,
+                state: Some(pull.state.clone()),
+                labels: pull.labels.clone(),
+                head_branch: Some(pull.head_branch.clone()),
+                head_sha: pull.head_sha.clone(),
+                merged_sha: pull.merged_sha.clone(),
+            })
+            .collect::<Vec<_>>();
+        // Forge's portable read surface has no list-branches operation. Every
+        // published PR does carry its source branch, so retain the default
+        // branch plus the complete terminal PR-source inventory. This is the
+        // publication surface the recovery scenario must bound.
+        let mut branches = BTreeMap::from([(
+            evidence.repo_default_branch.clone(),
+            run_evidence::RepositoryBranchStateEvidence {
+                name: evidence.repo_default_branch.clone(),
+                head_sha: evidence
+                    .final_state
+                    .pull_request
+                    .merged_sha
+                    .clone()
+                    .or_else(|| evidence.final_state.pull_request.head_sha.clone()),
+                contains_engineer_diff: Some(evidence.final_state.pull_request.state == "merged"),
+            },
+        )]);
+        for pull in &evidence.forge_pull_requests {
+            branches.entry(pull.head_branch.clone()).or_insert_with(|| {
+                run_evidence::RepositoryBranchStateEvidence {
+                    name: pull.head_branch.clone(),
+                    head_sha: pull.head_sha.clone(),
+                    contains_engineer_diff: Some(true),
+                }
+            });
+        }
         run_evidence::FinalStateEvidence {
             issues: vec![run_evidence::IssueStateEvidence {
                 number: evidence.final_state.issue.number,
@@ -193,32 +240,11 @@ fn live_artifact(
                 state: Some(evidence.final_state.issue.state.clone()),
                 labels: evidence.final_state.issue.labels.clone(),
             }],
-            pull_requests: vec![run_evidence::PullRequestStateEvidence {
-                number: evidence.final_state.pull_request.number,
-                id: Some("implementation".to_string()),
-                title: Some(evidence.final_state.pull_request.title.clone()),
-                body: None,
-                state: Some(evidence.final_state.pull_request.state.clone()),
-                labels: evidence.final_state.pull_request.labels.clone(),
-                head_branch: Some(evidence.final_state.pull_request.head_branch.clone()),
-                head_sha: evidence.final_state.pull_request.head_sha.clone(),
-                merged_sha: evidence.final_state.pull_request.merged_sha.clone(),
-            }],
+            pull_requests,
             repositories: vec![run_evidence::RepositoryStateEvidence {
                 id: Some(evidence.repo_id.clone()),
                 slug: Some(evidence.repo_slug.clone()),
-                branches: vec![run_evidence::RepositoryBranchStateEvidence {
-                    name: evidence.repo_default_branch.clone(),
-                    head_sha: evidence
-                        .final_state
-                        .pull_request
-                        .merged_sha
-                        .clone()
-                        .or_else(|| evidence.final_state.pull_request.head_sha.clone()),
-                    contains_engineer_diff: Some(
-                        evidence.final_state.pull_request.state == "merged",
-                    ),
-                }],
+                branches: branches.into_values().collect(),
             }],
             ci: run_evidence::CiStateEvidence {
                 completed_jobs: Some(evidence.final_state.ci_jobs.len()),
@@ -251,6 +277,14 @@ fn live_artifact(
         total_duration_ms: duration_ms(evidence.total_elapsed),
         failure: None,
     });
+    let provider_request_ids = [
+        ("architect", evidence.fake_llm.architect_requests),
+        ("engineer", evidence.fake_llm.engineer_requests),
+        ("tester", evidence.fake_llm.tester_requests),
+    ]
+    .into_iter()
+    .flat_map(|(role, count)| (1..=count).map(move |index| format!("{role}:{index}")))
+    .collect::<Vec<_>>();
     artifact.provider = Some(run_evidence::ProviderEvidence {
         forgejo_url: Some(evidence.forge_url.clone()),
         repo_slug: Some(evidence.repo_slug.clone()),
@@ -262,11 +296,8 @@ fn live_artifact(
         fake_llm_url: Some(evidence.fake_llm.base_url.clone()),
         jig_script_paths: vec![scenario.jig_script_path().display().to_string()],
         request_log_path: Some(fake_llm_log.display().to_string()),
-        request_count: Some(
-            evidence.fake_llm.architect_requests
-                + evidence.fake_llm.engineer_requests
-                + evidence.fake_llm.tester_requests,
-        ),
+        request_count: Some(provider_request_ids.len()),
+        request_ids: provider_request_ids,
         request_counts_by_role: [
             (
                 "architect".to_string(),

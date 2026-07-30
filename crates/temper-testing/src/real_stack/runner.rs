@@ -519,7 +519,7 @@ mod tests {
 
         assert_eq!(failure.class, FailureClass::Transient);
         assert!(failure.message.contains("redacted_unknown"));
-        assert!(failure.message.contains("retryable=false"));
+        assert!(failure.message.contains("disposition=unknown"));
         let diagnostic = failure
             .model_failure
             .expect("native fixture retains the authoritative typed diagnostic");
@@ -528,6 +528,10 @@ mod tests {
         assert_eq!(
             diagnostic.category,
             temper_protocol_activity::ModelFailureCategoryV1::RedactedUnknown
+        );
+        assert_eq!(
+            diagnostic.disposition,
+            temper_protocol_activity::ModelFailureDispositionV1::Unknown
         );
         assert!(!diagnostic.retryable);
     }

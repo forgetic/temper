@@ -5,7 +5,8 @@ use std::time::Duration;
 use toml::Value as TomlValue;
 
 pub use super::execution_plan::{
-    AgentFixture, ConvergenceStrategy, ManifestAction, ManifestExecutionPlan, ManifestStep,
+    AgentFixture, ConvergenceStrategy, LateStreamFailureBurst, LateStreamFailureFixture,
+    ManifestAction, ManifestExecutionPlan, ManifestStep,
 };
 
 use super::{
@@ -25,9 +26,11 @@ pub struct ScenarioBundle {
     pub issues: Vec<IssueFixture>,
     pub intake: IntakeFixture,
     pub timeout: Duration,
+    pub poll_cadence: Duration,
     pub poll_backstop: Duration,
     pub mechanical_cadence: Duration,
     pub observability: ObservabilityFixture,
+    pub recovery: Option<RecoveryFixture>,
 }
 
 impl ScenarioBundle {
@@ -79,12 +82,14 @@ impl ScenarioBundle {
             "poll_backstop",
             Duration::from_secs(DEFAULT_DAEMON_POLL_BACKSTOP_SECS),
         )?;
+        let poll_cadence = live_harness_duration(&manifest, "poll_cadence", poll_backstop)?;
         let mechanical_cadence = live_harness_duration(
             &manifest,
             "mechanical_cadence",
             Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS),
         )?;
         let observability = observability_fixture(&manifest)?;
+        let recovery = recovery_fixture(&manifest)?;
 
         Ok(Self {
             scenario_path,
@@ -97,9 +102,11 @@ impl ScenarioBundle {
             issues,
             intake,
             timeout,
+            poll_cadence,
             poll_backstop,
             mechanical_cadence,
             observability,
+            recovery,
         })
     }
 
@@ -161,6 +168,20 @@ pub struct IntakeFixture {
     pub title: String,
     pub body: String,
     pub labels: Vec<String>,
+}
+
+/// Bounded model/session recovery settings selected by a live fixture.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryFixture {
+    pub model_retry_max_attempts: u32,
+    pub model_retry_base_delay_ms: u64,
+    pub model_retry_max_delay_ms: u64,
+    pub model_retry_jitter_percent: u8,
+    pub session_failure_limit: u32,
+    pub fresh_session_limit: u32,
+    pub provider_deferral_limit: u32,
+    pub provider_deferral_delay_secs: u64,
+    pub model_recovery_slo_secs: u64,
 }
 
 /// Structured observability settings the live scenario harness applies to the
@@ -409,6 +430,55 @@ fn intake_fixture(issues: &[IssueFixture]) -> Result<IntakeFixture, String> {
         body: issue.body.clone(),
         labels: issue.labels.clone(),
     })
+}
+
+fn recovery_fixture(manifest: &TomlValue) -> Result<Option<RecoveryFixture>, String> {
+    let Some(table) = manifest
+        .get("live_harness")
+        .and_then(TomlValue::as_table)
+        .and_then(|table| table.get("recovery"))
+        .and_then(TomlValue::as_table)
+    else {
+        return Ok(None);
+    };
+    let bounded = |field: &str, min: u64, max: u64| -> Result<u64, String> {
+        table
+            .get(field)
+            .and_then(TomlValue::as_integer)
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| (min..=max).contains(value))
+            .ok_or_else(|| {
+                format!("live_harness.recovery.{field} must be an integer from {min} through {max}")
+            })
+    };
+    let model_retry_max_attempts = bounded("model_retry_max_attempts", 1, 32)? as u32;
+    let model_retry_base_delay_ms = bounded("model_retry_base_delay_ms", 1, 60_000)?;
+    let model_retry_max_delay_ms = bounded("model_retry_max_delay_ms", 1, 60_000)?;
+    if model_retry_max_delay_ms < model_retry_base_delay_ms {
+        return Err(
+            "live_harness.recovery.model_retry_max_delay_ms must be at least model_retry_base_delay_ms"
+                .to_string(),
+        );
+    }
+    let provider_deferral_delay_secs = bounded("provider_deferral_delay_secs", 1, 86_400)?;
+    let model_recovery_slo_secs = bounded("model_recovery_slo_secs", 1, 604_800)?;
+    if model_recovery_slo_secs < provider_deferral_delay_secs {
+        return Err(
+            "live_harness.recovery.model_recovery_slo_secs must be at least provider_deferral_delay_secs"
+                .to_string(),
+        );
+    }
+    Ok(Some(RecoveryFixture {
+        model_retry_max_attempts,
+        model_retry_base_delay_ms,
+        model_retry_max_delay_ms,
+        model_retry_jitter_percent: bounded("model_retry_jitter_percent", 0, 100)? as u8,
+        session_failure_limit: bounded("session_failure_limit", 1, 32)? as u32,
+        fresh_session_limit: bounded("fresh_session_limit", 0, 32)? as u32,
+        provider_deferral_limit: bounded("provider_deferral_limit", 1, 32)? as u32,
+        provider_deferral_delay_secs,
+        model_recovery_slo_secs,
+    }))
 }
 
 fn observability_fixture(manifest: &TomlValue) -> Result<ObservabilityFixture, String> {

@@ -21,6 +21,7 @@ pub(super) const TRACKED_CONTENT: &str = "tracked work from the consumed model s
 pub(super) const UNTRACKED_CONTENT: &str = "untracked work from the consumed model session\n";
 pub(super) const UNTRACKED_PATH: &str = "MODEL-RECOVERY.txt";
 const PROVIDER_CODE: &str = "invalid_api_key";
+const UNKNOWN_PROVIDER_CODE: &str = "opaque_fixture_failure";
 
 pub(super) fn model_recovery_builder() -> HermeticRealStackBuilder {
     let builder = HermeticRealStackBuilder::new();
@@ -34,7 +35,7 @@ pub(super) fn recovery_success_script(model_calls: Arc<AtomicUsize>) -> Script {
     Script::action_rule(
         move |view| match model_calls.fetch_add(1, Ordering::SeqCst) {
             0 => ScriptAction::Reply(write_predecessor_work()),
-            1 => non_retryable_model_failure(),
+            1 => unknown_model_failure(),
             2 => ScriptAction::Reply(read_predecessor_work()),
             3 => ScriptAction::Reply(Reply {
                 turns: vec![Turn::ToolCall {
@@ -65,7 +66,7 @@ pub(super) fn recovery_exhaustion_script(model_calls: Arc<AtomicUsize>) -> Scrip
     Script::action_rule(
         move |view| match model_calls.fetch_add(1, Ordering::SeqCst) {
             0 => ScriptAction::Reply(write_predecessor_work()),
-            1 => non_retryable_model_failure(),
+            1 => unknown_model_failure(),
             2 => ScriptAction::Reply(read_predecessor_work()),
             3 => non_retryable_model_failure(),
             extra => panic!(
@@ -120,6 +121,14 @@ fn read_predecessor_work() -> Reply {
     }
 }
 
+fn unknown_model_failure() -> ScriptAction {
+    ScriptAction::HttpError(HttpError::provider(
+        418,
+        UNKNOWN_PROVIDER_CODE,
+        "Fixture provider returned an unclassified failure.",
+    ))
+}
+
 fn non_retryable_model_failure() -> ScriptAction {
     ScriptAction::HttpError(HttpError::provider(
         401,
@@ -137,13 +146,15 @@ pub(super) fn assert_rotation_result(result: &JobResult) -> (String, String) {
         .model_failure
         .as_ref()
         .unwrap_or_else(|| panic!("rotation omitted typed model diagnostic: {failure:?}"));
-    assert_eq!(diagnostic.category, ModelFailureCategoryV1::Authentication);
-    assert!(!diagnostic.retryable);
-    assert_eq!(diagnostic.http_status, Some(401));
+    assert_eq!(diagnostic.category, ModelFailureCategoryV1::RedactedUnknown);
     assert_eq!(
-        diagnostic.provider_error_code.as_deref(),
-        Some(PROVIDER_CODE)
+        diagnostic.disposition,
+        temper_protocol_activity::ModelFailureDispositionV1::Unknown
     );
+    assert!(!diagnostic.retryable);
+    assert_eq!(diagnostic.http_status, Some(418));
+    assert_eq!(diagnostic.provider_error_code, None);
+    assert!(diagnostic.code_present);
     let recovery = failure
         .session_recovery
         .as_ref()
@@ -186,7 +197,9 @@ pub(super) fn assert_park_result(
         .expect("park has durable recovery evidence");
     assert_eq!(recovery.action, SessionRecoveryActionV1::ParkForHuman);
     assert_eq!(recovery.failure_epoch, 1);
-    assert_eq!(recovery.failure_count, 1);
+    assert_eq!(recovery.failure_count, 2);
+    assert_eq!(recovery.session_number, 2);
+    assert_eq!(recovery.session_failure_count, 1);
     assert_eq!(recovery.current_session_id, fresh_session_id);
     assert_eq!(recovery.prior_session_id.as_deref(), Some(prior_session_id));
     assert!(recovery.new_session_id.is_none());
@@ -209,14 +222,14 @@ pub(super) fn assert_rotated_ledger(
         prior.failed_attempt_id,
         result.attempt_id.as_deref().unwrap()
     );
-    assert_eq!(prior.consecutive_terminal_count, 1);
+    assert_eq!(prior.session_terminal_failures, 1);
     assert_eq!(
         prior.model_failure.category,
-        ModelFailureCategoryV1::Authentication
+        ModelFailureCategoryV1::RedactedUnknown
     );
     assert_eq!(ledger.failure_epoch, 1);
-    assert_eq!(ledger.consecutive_terminal_count, 0);
-    assert!(ledger.rotation_consumed);
+    assert_eq!(ledger.session_terminal_failures, 0);
+    assert_eq!(ledger.fresh_sessions_used, 1);
     assert_eq!(
         ledger.accounted_attempt_id.as_deref(),
         result.attempt_id.as_deref()
@@ -399,7 +412,7 @@ pub(super) fn assert_actionable_park_audit(audit: &str) {
     for expected in [
         "bounded model recovery was exhausted",
         "failure_epoch: `1`",
-        "failure_count: `1`",
+        "failure_count: `2`",
         "action: `park_for_human`",
         "category: `authentication`",
         "retryable: `false`",

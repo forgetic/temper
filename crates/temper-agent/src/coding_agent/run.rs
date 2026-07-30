@@ -16,6 +16,7 @@ use super::result::{
     collect_text, parse_result, validate_contract, validate_verdict_contract,
     validate_verdict_vocabulary,
 };
+use super::runtime_limits;
 use super::tools::{add_subagents_with_containment, tool_registry_for_context_with_containment};
 use super::{
     AgentAbortAuthority, Capability, CodingAgentError, ForgeContextHost, SubmitForPrCallback,
@@ -338,13 +339,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
     runtime_limits: AgentRuntimeLimitsV1,
     containment: temper_agent_core::AgentContainmentContext,
 ) -> Result<(WorkspaceResult, RunTotals), CodingAgentError> {
-    let operation_limits = temper_agent_core::AgentOperationLimits {
-        tool_timeout: std::time::Duration::from_secs(runtime_limits.tool_timeout_secs),
-        model_connect_timeout: std::time::Duration::from_secs(
-            runtime_limits.model_connect_timeout_secs,
-        ),
-        model_idle_timeout: std::time::Duration::from_secs(runtime_limits.model_idle_timeout_secs),
-    };
+    let operation_limits = runtime_limits::operation_limits(runtime_limits);
     let capability = Capability::for_role(&context.work_item.role);
     // Build lifecycle before codebase-memory MCP startup so every process owner
     // shares one attempt-bound observer. No frame is emitted before `main`.

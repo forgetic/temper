@@ -87,6 +87,13 @@ max_no_progress_secs = 900
 # Cooperative cancellation is followed by bounded forced process termination.
 graceful_cancellation_grace_secs = 10
 forced_termination_grace_secs = 5
+# Durable model-recovery policy. Same-turn request retries are configured below;
+# these limits govern terminal session rotation and delayed provider recovery.
+session_failure_limit = 1
+fresh_session_limit = 1
+provider_deferral_limit = 3
+provider_deferral_delay_secs = 300
+model_recovery_slo_secs = 7200
 
 [agent]
 provider = \"anthropic\"
@@ -97,6 +104,10 @@ enable_subagents = false
 tool_timeout_secs = 600
 model_connect_timeout_secs = 120
 model_idle_timeout_secs = 120
+model_retry_max_attempts = 7
+model_retry_base_delay_ms = 500
+model_retry_max_delay_ms = 8000
+model_retry_jitter_percent = 20
 
 # Agent-local codebase-memory MCP tool settings. Auto mode is best-effort: if
 # `codebase-memory-mcp` is not installed, agent runs continue without these

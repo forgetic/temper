@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use temper_forge::{Forge, ForgeResult, ItemNumber, RepositoryId, RepositoryPath};
-use temper_log::emit::{LeaseLost, LeaseReleased, emit_lease_lost, emit_lease_released};
+use temper_log::emit::{
+    LeaseLost, LeaseReleased, ModelRecoveryCleared, emit_lease_lost, emit_lease_released,
+    emit_model_recovery_cleared,
+};
 use temper_log::{WorkItemRef, strip_provider_scheme, work_item_span};
 use temper_protocol_worker::{
     JobContext, JobResult, PullRequestFreshness, PullRequestFreshnessResponse,
@@ -380,6 +383,7 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
         let manager = LeaseManager::new(self.forge.as_ref(), self.policy);
         let expected = durable_assignment(&job, &claim_context);
 
+        let result_status = result.status;
         // Result application consumes the assignment-time lease instead of
         // reacquiring under a possibly conflicting daemon owner.
         let span = work_item_span(&item, &job.role, Some("apply result"));
@@ -428,25 +432,47 @@ impl<F: Forge + ?Sized + 'static> ResultApplier for LeaseApplier<F> {
                 return outcome;
             }
 
-            if let Err(error) = manager
-                .release_assignment(&repo_id, target, &expected)
-                .await
-            {
-                tracing::error!(
-                    target: "temper_daemon",
-                    job_id = %job.job_id,
-                    %error,
-                    "lease applier could not release durable assignment"
-                );
-                return ApplyOutcome::Retryable {
-                    reason: format!("could not release durable assignment: {error}"),
-                };
+            let authoritative_success = result_status
+                == temper_protocol_worker::ResultStatus::Success
+                && matches!(&outcome, ApplyOutcome::Applied);
+            let release = if authoritative_success {
+                manager
+                    .release_successful_assignment(&repo_id, target, &expected)
+                    .await
             } else {
-                emit_lease_released(LeaseReleased {
+                manager
+                    .release_assignment(&repo_id, target, &expected)
+                    .await
+                    .map(|()| None)
+            };
+            let cleared_recovery = match release {
+                Ok(recovery) => recovery,
+                Err(error) => {
+                    tracing::error!(
+                        target: "temper_daemon",
+                        job_id = %job.job_id,
+                        %error,
+                        "lease applier could not release durable assignment"
+                    );
+                    return ApplyOutcome::Retryable {
+                        reason: format!("could not release durable assignment: {error}"),
+                    };
+                }
+            };
+            if let Some(recovery) = cleared_recovery {
+                emit_model_recovery_cleared(ModelRecoveryCleared {
                     item: &item,
-                    role: &job.role,
+                    workstream_id: &recovery.workstream_id,
+                    failure_epoch: recovery.failure_epoch,
+                    failure_count: recovery.cumulative_failure_count,
+                    elapsed_ms: recovery.elapsed_ms,
+                    generation: recovery.generation,
                 });
             }
+            emit_lease_released(LeaseReleased {
+                item: &item,
+                role: &job.role,
+            });
             self.authority
                 .lock()
                 .expect("assignment authority lock")

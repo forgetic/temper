@@ -27,6 +27,16 @@ fn worker_config_projects_liveness_and_creates_private_result_root() {
         Some(std::time::Duration::from_secs(99))
     );
     assert_eq!(config.result_root, resolved.worker.result_root);
+    assert_eq!(
+        session_recovery_policy(&resolved).unwrap(),
+        temper_worker::SessionRecoveryPolicy {
+            session_failure_limit: 1,
+            fresh_session_limit: 1,
+            provider_deferral_limit: 3,
+            provider_deferral_delay_ms: 300_000,
+            recovery_slo_ms: 7_200_000,
+        }
+    );
     assert!(config.result_root.is_dir());
     #[cfg(unix)]
     {
@@ -134,6 +144,7 @@ fn selected_pool_agent_profile_controls_command_and_env() {
             tool_timeout_secs: 321,
             model_connect_timeout_secs: 120,
             model_idle_timeout_secs: 22,
+            ..temper_worker::AgentRuntimeLimitsV1::default()
         })
     );
 }
@@ -292,6 +303,7 @@ fn resolved_with_profile_pool() -> Resolved {
                         tool_timeout_secs: Some(321),
                         model_connect_timeout_secs: None,
                         model_idle_timeout_secs: Some(22),
+                        ..AgentDeadlineConfig::default()
                     },
                 },
             )]),

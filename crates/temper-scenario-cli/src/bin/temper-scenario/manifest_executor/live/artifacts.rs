@@ -88,7 +88,9 @@ pub(super) fn stimulus_log_paths(standalone_log: &Path) -> Result<Vec<PathBuf>, 
             path.file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| {
-                    name.starts_with("standalone.before-restart-") && name.ends_with(".log")
+                    (name.starts_with("standalone.before-restart-")
+                        || name.starts_with("standalone.stimulus-"))
+                        && name.ends_with(".log")
                 })
         })
         .collect::<Vec<_>>();

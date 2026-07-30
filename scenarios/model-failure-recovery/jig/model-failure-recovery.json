@@ -1,0 +1,102 @@
+{
+  "phases": [
+    {
+      "name": "architect-triage",
+      "when": {
+        "messages_contain": [
+          "ROLE: architect"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_architect_inspect_recovery_fixture",
+                "name": "bash",
+                "args": {
+                  "command": "printf 'model-failure-recovery fixture inspection\\n'; find service -maxdepth 2 -type f -print | sort"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"verdict\":\"ready_code\",\"body\":\"## Code spec\\n\\nImplement an environment-aware service banner while preserving both tracked and untracked recovery evidence.\\n\\n### Requirements\\n\\n- Keep the tracked recovery marker in `service/README.md`.\\n- Add `service/src/banner.py` with `service_banner(environment=None)`.\\n- Include the active environment and default it from `SERVICE_ENVIRONMENT`, falling back to `development`.\\n\"}"
+        }
+      ]
+    },
+    {
+      "name": "engineer-implementation",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_write_tracked_recovery_marker",
+                "name": "write",
+                "args": {
+                  "path": "service/README.md",
+                  "content": "# acme/service\n\nMinimal project baseline for the Temper model-failure recovery scenario.\n\nTracked recovery marker: completed before provider deferral.\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_write_untracked_banner",
+                "name": "write",
+                "args": {
+                  "path": "service/src/banner.py",
+                  "content": "\"\"\"Environment-aware service banner.\"\"\"\n\nfrom __future__ import annotations\n\nimport os\n\n\ndef service_banner(environment=None):\n    \"\"\"Return a banner naming the active service environment.\"\"\"\n    active = environment if environment is not None else os.getenv(\"SERVICE_ENVIRONMENT\", \"development\")\n    return f\"Service environment: {active}\"\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_probe_preserved_work",
+                "name": "bash",
+                "args": {
+                  "command": "test -f service/src/banner.py && grep -q 'Tracked recovery marker' service/README.md && git -C service status --short"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_submit_recovered_pr",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "Preserved the tracked marker and untracked banner through bounded provider recovery."
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Add environment-aware service banner\",\"body\":\"# Implementation report\\n\\n- Added the environment-aware banner.\\n- Preserved the pre-deferral tracked marker.\",\"summary\":\"Preserved the tracked marker and untracked banner through bounded provider recovery.\"}"
+        }
+      ]
+    }
+  ]
+}

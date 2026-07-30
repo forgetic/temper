@@ -37,6 +37,21 @@ impl<F: temper_forge::Forge + ?Sized + 'static> ResultApplier for ForgeApplier<F
         }
         match result.status {
             ResultStatus::Success => {
+                match self.success_recovery_authority(&job).await {
+                    crate::forge_applier::provider_recovery::SuccessRecoveryAuthority::Authorized => {}
+                    crate::forge_applier::provider_recovery::SuccessRecoveryAuthority::Stale => {
+                        return ApplyOutcome::Stale;
+                    }
+                    crate::forge_applier::provider_recovery::SuccessRecoveryAuthority::Corrupt => {
+                        return match self.park_corrupt_provider_recovery(&job).await {
+                            Ok(()) => ApplyOutcome::Rejected {
+                                class: temper_protocol_worker::FailureClass::Protocol,
+                                reason: "corrupt durable provider recovery state; inspect and repair the preserved recovery metadata before restoring queue eligibility".to_string(),
+                            },
+                            Err(reason) => ApplyOutcome::Retryable { reason },
+                        };
+                    }
+                }
                 if result.verdict.is_some() {
                     match self.validate_successful_verdict(&job, &result).await {
                         VerdictCheck::Valid => {}

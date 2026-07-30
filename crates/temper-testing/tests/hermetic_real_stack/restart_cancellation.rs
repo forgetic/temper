@@ -241,15 +241,23 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
         // Reset both process-local components before the successful retry. The
         // timed-out worker can leave already-queued protocol completions in the
         // current daemon after its durable result is acknowledged; those belong
-        // to the crashed incarnation and must not race the next dispatch. The
-        // recovery barrier also proves the accepted retryable result left no
-        // durable assignment behind.
+        // to the crashed incarnation and must not race the next dispatch. Once
+        // durable recording releases capacity, the same worker may legitimately
+        // claim the newly eligible retry before this test thread crashes it. The
+        // recovery barrier must never find the accepted exact attempt, but it may
+        // roll back that one newer claim before the explicit retry below.
         stack.crash_worker().await;
         stack.set_worker_liveness_limits(WorkerLivenessLimits::default());
         stack.replace_daemon(&handle).await;
+        let recovered = stack.open_recovery_barrier().await;
         assert!(
-            stack.open_recovery_barrier().await.is_empty(),
-            "accepted retryable result must leave no assignment to recover"
+            recovered.len() <= 1
+                && recovered.iter().all(|orphan| {
+                    orphan.job_id == transient.job_id
+                        && orphan.attempt_id.is_some()
+                        && orphan.attempt_id != transient.attempt_id
+                }),
+            "accepted retryable result must remove its exact assignment; only one newer retry may be recovered: {recovered:?}"
         );
 
         // The next attempt must attach to the same coordination-key checkout

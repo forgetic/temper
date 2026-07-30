@@ -91,20 +91,32 @@ fn diagnostic(category: ModelFailureCategoryV1) -> ModelFailureV1 {
         ),
         _ => unreachable!("test covers operator-facing regression categories"),
     };
-    ModelFailureV1 {
+    let mut failure = ModelFailureV1 {
         provider: "openai".into(),
         model: "gpt-test".into(),
         category,
-        retryable: matches!(
-            category,
-            ModelFailureCategoryV1::Timeout | ModelFailureCategoryV1::RateLimit
-        ),
+        disposition: temper_protocol_activity::ModelFailureDispositionV1::Unknown,
+        boundary: if status.is_some() {
+            temper_protocol_activity::ModelFailureBoundaryV1::Http
+        } else {
+            temper_protocol_activity::ModelFailureBoundaryV1::Local
+        },
+        event_kind: if status.is_some() {
+            temper_protocol_activity::ModelFailureEventKindV1::HttpResponse
+        } else {
+            temper_protocol_activity::ModelFailureEventKindV1::LocalError
+        },
+        status_present: status.is_some(),
+        code_present: code.is_some(),
+        retryable: false,
         http_status: status,
         provider_request_id: request_id.map(str::to_string),
         provider_error_code: code.map(str::to_string),
         message: message.into(),
         detail_redacted: redacted,
-    }
+    };
+    failure.normalize();
+    failure
 }
 
 fn finished(call_id: &str, failure: ModelFailureV1) -> AgentActivityEventV1 {
@@ -134,6 +146,7 @@ fn retrying_and_terminal_logs_use_finished_call_diagnostics() {
                 call_id: "rate".into(),
                 next_attempt: 1,
                 delay_ms: 500,
+                disposition: temper_protocol_activity::ModelFailureDispositionV1::Retryable,
                 failure: FailureInfoV1 {
                     code: FailureCodeV1::Provider,
                     message: temper_protocol_activity::MODEL_CALL_RETRY_FAILURE_MESSAGE.into(),
@@ -165,29 +178,33 @@ fn retrying_and_terminal_logs_use_finished_call_diagnostics() {
         .filter(|event| event.get("event").map(String::as_str) == Some("model.call_failed"))
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(failures.len(), 4);
-    for category in ["timeout", "rate_limit", "response", "redacted_unknown"] {
+    assert_eq!(failures.len(), 3);
+    for category in ["timeout", "response", "redacted_unknown"] {
         assert!(failures.iter().any(|event| {
             event.get("model.failure.category").map(String::as_str) == Some(category)
         }));
     }
-    let retry = failures
+    let retry = events
+        .lock()
+        .unwrap()
         .iter()
-        .find(|event| event.get("will_retry").map(String::as_str) == Some("true"))
-        .expect("retrying model call log");
+        .find(|event| event.get("event").map(String::as_str) == Some("model.turn.retrying"))
+        .cloned()
+        .expect("retrying model turn event");
     assert_eq!(
-        retry.get("model.failure.request_id").map(String::as_str),
+        retry.get("provider_request_id").map(String::as_str),
         Some("req_rate_532")
     );
     assert_eq!(
-        retry.get("model.failure.message").map(String::as_str),
-        Some("Rate limit exceeded; retry later.")
+        retry.get("disposition").map(String::as_str),
+        Some("retryable")
     );
-    assert!(
-        retry
-            .get("message")
-            .is_some_and(|message| message.contains("openai/gpt-test category=rate_limit"))
+    assert_eq!(retry.get("boundary").map(String::as_str), Some("http"));
+    assert_eq!(
+        retry.get("status_present").map(String::as_str),
+        Some("true")
     );
+    assert!(!retry.contains_key("model_failure_message"));
 
     let rendered = format!("{failures:?}");
     assert!(!rendered.contains(temper_protocol_activity::MODEL_CALL_RETRY_FAILURE_MESSAGE));

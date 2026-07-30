@@ -156,6 +156,11 @@ fn typed_model_and_session_failure_evidence_round_trips() {
                 "provider": "openai-codex",
                 "model": "gpt-safe",
                 "category": "rate_limit",
+                "disposition": "retryable",
+                "boundary": "http",
+                "event_kind": "http_response",
+                "status_present": true,
+                "code_present": true,
                 "retryable": true,
                 "http_status": 429,
                 "provider_request_id": "req_748",
@@ -185,6 +190,71 @@ fn typed_model_and_session_failure_evidence_round_trips() {
         .unwrap();
     assert_eq!(recovery.action, SessionRecoveryActionV1::RotateSession);
     assert_eq!(serde_json::to_value(result).unwrap(), raw);
+}
+
+#[test]
+fn provider_deferral_requires_complete_bounded_timing_evidence() {
+    let raw = serde_json::json!({
+        "attempt_id": "attempt-deferred",
+        "failure_epoch": 3,
+        "failure_count": 5,
+        "session_number": 2,
+        "session_failure_count": 4,
+        "epoch_started_unix_ms": 1000,
+        "epoch_elapsed_ms": 500,
+        "disposition": "unknown",
+        "immediate_retry_exhausted": true,
+        "configured_session_failure_limit": 1,
+        "configured_fresh_session_limit": 1,
+        "configured_deferral_limit": 3,
+        "deferral_count": 2,
+        "deferral_generation": 2,
+        "not_before_unix_ms": 1700,
+        "slo_deadline_unix_ms": 5000,
+        "action": "provider_deferred",
+        "current_session_id": "session-current",
+        "prior_session_id": "session-prior",
+        "evidence_location": ".temper-agent-session/state.json"
+    });
+    let evidence: crate::SessionRecoveryEvidenceV1 =
+        serde_json::from_value(raw.clone()).expect("provider deferral parses");
+    evidence
+        .validate_for_attempt(Some("attempt-deferred"))
+        .expect("complete provider deferral validates");
+    assert_eq!(evidence.action, SessionRecoveryActionV1::ProviderDeferred);
+    assert_eq!(serde_json::to_value(&evidence).unwrap(), raw);
+
+    let known_failure: temper_protocol_activity::ModelFailureV1 =
+        serde_json::from_value(serde_json::json!({
+            "provider": "fixture-provider",
+            "model": "fixture-model",
+            "category": "authentication",
+            "retryable": false,
+            "http_status": 401,
+            "provider_error_code": "invalid_api_key",
+            "message": "Provider authentication failed.",
+            "detail_redacted": false
+        }))
+        .unwrap();
+    let mut contradictory = crate::Failure {
+        class: crate::FailureClass::Permanent,
+        message: "typed evidence disagrees".to_string(),
+        model_failure: Some(known_failure),
+        session_recovery: Some(evidence.clone()),
+    };
+    contradictory.normalize_evidence(Some("attempt-deferred"));
+    assert!(
+        contradictory.session_recovery.is_none(),
+        "recovery disposition must agree with the canonical diagnostic"
+    );
+
+    let mut missing_wake = evidence;
+    missing_wake.not_before_unix_ms = None;
+    assert!(
+        missing_wake
+            .validate_for_attempt(Some("attempt-deferred"))
+            .is_err()
+    );
 }
 
 #[test]

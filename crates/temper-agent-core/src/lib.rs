@@ -35,11 +35,12 @@ pub use machine::{
 pub use managed_bash::ManagedBashTool;
 pub use managed_fs::joined_filesystem_tool;
 pub use model_failure::{
-    ModelFailureCategory, ModelFailureDiagnostic, REDACTED_MODEL_FAILURE_MESSAGE,
+    ModelFailureBoundary, ModelFailureCategory, ModelFailureDiagnostic, ModelFailureDisposition,
+    ModelFailureEventKind, REDACTED_MODEL_FAILURE_MESSAGE,
 };
 pub use run::{
-    AgentOperationLimits, SubAgent, SubAgentControl, SubAgentError, run_sub_agent,
-    run_sub_agent_controllable, run_sub_agent_controllable_with_hook,
+    AgentOperationLimits, ModelRetryLimits, SubAgent, SubAgentControl, SubAgentError,
+    run_sub_agent, run_sub_agent_controllable, run_sub_agent_controllable_with_hook,
     run_sub_agent_controllable_with_hooks, run_sub_agent_controllable_with_observability,
     run_sub_agent_with_events, run_sub_agent_with_hook,
 };

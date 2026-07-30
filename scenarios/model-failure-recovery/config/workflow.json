@@ -1,0 +1,423 @@
+{
+  "name": "model-failure-recovery",
+  "intake_author": { "kind": "site_admin" },
+  "roles": [
+    {
+      "id": "architect",
+      "charter": "Triage one unlabeled intake issue into a crisp, ready-to-implement code spec. There is no design or breakdown branch: the only outcome is a ready code issue.",
+      "prompt": {
+        "guidance": "Use triage_intake to triage untriaged intake. The triage workspace reads the issue and returns the single declared verdict ready_code, which rewrites the body into a crisp code spec and marks it code + ready."
+      },
+      "external_tools": [
+        {
+          "id": "triage_workspace",
+          "description": "Read the intake issue and any linked context, then author a rewritten body as a crisp code spec, and return the ready_code verdict that routes the triage.",
+          "required": false,
+          "constraints": [
+            "Only read the work-item context and repository; never mutate Forge state.",
+            "Return the single declared verdict; the engine applies the routed transition's effects."
+          ],
+          "guidance": "Use this from triage_intake. If it is not bound, fail the assigned triage job with a structured unavailable-workspace result."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "triage"
+      ]
+    },
+    {
+      "id": "engineer",
+      "charter": "Claim ready code issues, implement them, open PRs, and address failed CI gates before landing.",
+      "prompt": {
+        "guidance": "Use open_pr for ready code: the coding workspace must produce a real product diff and the engine opens a PR from the head it produces. Use address_ci_failure for PRs whose CI failed before landing."
+      },
+      "external_tools": [
+        {
+          "id": "coding_workspace",
+          "description": "Prepare a checked-out repository workspace, make or delegate code edits, commit a PR head branch, and report changed files plus a short summary.",
+          "required": false,
+          "constraints": [
+            "Only touch the checked-out repository workspace.",
+            "Do not create bookkeeping-only diffs such as .temper-pr-prep or .temper-ci changes."
+          ],
+          "guidance": "Use this for open_pr on ready code issues. If it is not bound, fail the assigned implementation job with a structured unavailable-workspace result."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "code_ready",
+        "pr_ci_failed"
+      ]
+    },
+    {
+      "id": "ci_diagnostician",
+      "charter": "Diagnose one exact infrastructure-interrupted CI attempt without changing source, workflow files, commits, or pull-request refs.",
+      "prompt": {
+        "guidance": "Use diagnose_interrupted_ci only for the supplied exact-head interruption evidence. The checkout is read-only; return diagnosed after recording the actionable infrastructure finding, never infer or repair a source defect."
+      },
+      "external_tools": [
+        {
+          "id": "review_workspace",
+          "description": "Inspect an existing pull request and structured interrupted-CI evidence in a read-only checkout, then return the declared diagnostic verdict.",
+          "required": false,
+          "constraints": [
+            "Read the pull request and supplied CI evidence only; never mutate files, commits, refs, or Forge state.",
+            "Return exactly one declared verdict; the engine owns retry and parking side effects."
+          ],
+          "guidance": "Use this only from diagnose_interrupted_ci. Do not invoke coding workspace behavior or suggest speculative source changes."
+        }
+      ],
+      "concurrency": 1,
+      "queues": [
+        "pr_ci_recovery"
+      ]
+    },
+    {
+      "id": "mechanical",
+      "charter": "Automation authority used by the mechanical worker to stamp raw intake untriaged and to land CI-green PRs; do not bind this role to an LLM worker.",
+      "prompt": {
+        "guidance": "Automation-only role id for queue automation authorization. It is serviced by the mechanical worker, not by a role worker."
+      },
+      "concurrency": 1,
+      "queues": []
+    }
+  ],
+  "labels": [
+    {
+      "id": "untriaged",
+      "description": "intake issue awaiting triage by the architect"
+    },
+    {
+      "id": "code",
+      "description": "identifies a code issue"
+    },
+    {
+      "id": "ready",
+      "description": "work item is ready for the next workflow step"
+    },
+    {
+      "id": "in-progress",
+      "description": "work item is currently being advanced"
+    },
+    {
+      "id": "implementation",
+      "description": "identifies an implementation pull request"
+    },
+    {
+      "id": "landing",
+      "description": "engineer-complete implementation PR awaiting CI-green mechanical landing"
+    },
+    {
+      "id": "needs-human",
+      "description": "automation is parked pending actionable human attention"
+    }
+  ],
+  "artifact_kinds": [
+    {
+      "id": "intake",
+      "target": "issue",
+      "identifying_labels": []
+    },
+    {
+      "id": "code",
+      "target": "issue",
+      "identifying_labels": [
+        "code"
+      ]
+    },
+    {
+      "id": "implementation_pr",
+      "target": "pull_request",
+      "identifying_labels": [
+        "implementation"
+      ],
+      "initial_labels": [
+        "landing"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "kind": "produced_pr",
+      "source": "implementation_pr",
+      "target": "code"
+    },
+    {
+      "kind": "dependency",
+      "source": "implementation_pr",
+      "target": "implementation_pr"
+    }
+  ],
+  "state_dimensions": [
+    {
+      "id": "work_lifecycle",
+      "exclusive": true,
+      "states": [
+        {
+          "id": "ready",
+          "label": "ready",
+          "artifacts": [
+            "code"
+          ]
+        },
+        {
+          "id": "in_progress",
+          "label": "in-progress",
+          "artifacts": [
+            "code",
+            "implementation_pr"
+          ]
+        }
+      ]
+    }
+  ],
+  "queues": [
+    {
+      "id": "raw_intake",
+      "artifact": "intake",
+      "automation": {
+        "actor": "mechanical",
+        "transition": "mark_untriaged"
+      }
+    },
+    {
+      "id": "triage",
+      "artifact": "intake",
+      "labels": [
+        "untriaged"
+      ],
+      "actions": [
+        {
+          "role": "architect",
+          "action": "triage_intake"
+        }
+      ]
+    },
+    {
+      "id": "code_ready",
+      "artifact": "code",
+      "labels": [
+        "ready"
+      ],
+      "actions": [
+        {
+          "role": "engineer",
+          "action": "open_pr"
+        }
+      ]
+    },
+    {
+      "id": "pr_ci_failed",
+      "artifact": "implementation_pr",
+      "condition": {
+        "kind": "ci_failed"
+      },
+      "actions": [
+        {
+          "role": "engineer",
+          "action": "address_ci_failure",
+          "checkout": "pull_request_writable"
+        }
+      ]
+    },
+    {
+      "id": "pr_ci_recovery",
+      "artifact": "implementation_pr",
+      "condition": {
+        "kind": "ci_recovery_required"
+      },
+      "actions": [
+        {
+          "role": "ci_diagnostician",
+          "action": "diagnose_interrupted_ci",
+          "checkout": "pull_request_read_only",
+          "guidance": "Diagnose only the exact structured interruption evidence. Do not edit files, push, or route this as a code repair."
+        }
+      ]
+    },
+    {
+      "id": "landing",
+      "artifact": "implementation_pr",
+      "labels": [
+        "landing"
+      ],
+      "condition": {
+        "kind": "ci_passed"
+      },
+      "automation": {
+        "actor": "mechanical",
+        "transition": "land_pr"
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "id": "mark_untriaged",
+      "artifact": "intake",
+      "roles": [
+        "mechanical"
+      ],
+      "effects": [
+        {
+          "kind": "add_label",
+          "label": "untriaged"
+        }
+      ]
+    },
+    {
+      "id": "triage_intake",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "outcomes": {
+        "ready_code": "triage_intake_to_code"
+      },
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "set_assignee",
+          "role": "architect"
+        }
+      ]
+    },
+    {
+      "id": "triage_intake_to_code",
+      "artifact": "intake",
+      "roles": [
+        "architect"
+      ],
+      "effects": [
+        {
+          "kind": "set_body",
+          "correlation_key": "triage-intake-code"
+        },
+        {
+          "kind": "remove_label",
+          "label": "untriaged"
+        },
+        {
+          "kind": "add_label",
+          "label": "code"
+        },
+        {
+          "kind": "add_label",
+          "label": "ready"
+        },
+        {
+          "kind": "set_assignee",
+          "role": "architect"
+        }
+      ]
+    },
+    {
+      "id": "open_pr",
+      "artifact": "code",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "ready"
+        },
+        {
+          "kind": "add_label",
+          "label": "in-progress"
+        },
+        {
+          "kind": "set_assignee",
+          "role": "engineer"
+        },
+        {
+          "kind": "create_pull_request"
+        }
+      ]
+    },
+    {
+      "id": "request_review",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": [
+        {
+          "kind": "remove_label",
+          "label": "in-progress",
+          "if_present": true
+        },
+        {
+          "kind": "add_label",
+          "label": "landing"
+        }
+      ]
+    },
+    {
+      "id": "address_ci_failure",
+      "artifact": "implementation_pr",
+      "roles": [
+        "engineer"
+      ],
+      "effects": []
+    },
+    {
+      "id": "diagnose_interrupted_ci",
+      "artifact": "implementation_pr",
+      "roles": [
+        "ci_diagnostician"
+      ],
+      "outcomes": {
+        "diagnosed": "record_interrupted_ci_diagnostic"
+      },
+      "effects": []
+    },
+    {
+      "id": "record_interrupted_ci_diagnostic",
+      "artifact": "implementation_pr",
+      "roles": [
+        "ci_diagnostician"
+      ],
+      "effects": []
+    },
+    {
+      "id": "land_pr",
+      "artifact": "implementation_pr",
+      "roles": [
+        "mechanical"
+      ],
+      "requires_gates": [
+        "ci_gate",
+        "dependency_gate"
+      ],
+      "effects": [
+        {
+          "kind": "merge_pull_request"
+        },
+        {
+          "kind": "remove_label",
+          "label": "landing"
+        },
+        {
+          "kind": "close_parent_issues"
+        }
+      ]
+    }
+  ],
+  "gates": [
+    {
+      "id": "ci_gate",
+      "condition": {
+        "kind": "ci_passed"
+      }
+    },
+    {
+      "id": "dependency_gate",
+      "condition": {
+        "kind": "dependencies_resolved"
+      }
+    }
+  ]
+}

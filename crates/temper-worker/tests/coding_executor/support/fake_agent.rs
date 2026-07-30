@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use super::model_failure::{non_retryable_model_failure, retryable_model_failure};
 use super::*;
 
 /// What the fake agent does for one turn. Each variant mirrors a behavior the
@@ -159,13 +160,7 @@ impl AgentRunner for FakeAgentRunner {
             AgentBehavior::RetryableModelError => Err(AgentRunError::transient(
                 "terminal retryable model call failed",
             )
-            .with_model_failure(
-                temper_protocol_activity::ModelFailureV1::redacted_unknown(
-                    "fixture-provider",
-                    "fixture-model",
-                    true,
-                ),
-            )),
+            .with_model_failure(retryable_model_failure())),
             AgentBehavior::NonRetryableModelError => {
                 fs::write(
                     repo_cwd.join("README.md"),
@@ -177,15 +172,8 @@ impl AgentRunner for FakeAgentRunner {
                     "valuable untracked work\n",
                 )
                 .expect("write untracked model work");
-                Err(
-                    AgentRunError::transient("terminal model call failed").with_model_failure(
-                        temper_protocol_activity::ModelFailureV1::redacted_unknown(
-                            "fixture-provider",
-                            "fixture-model",
-                            false,
-                        ),
-                    ),
-                )
+                Err(AgentRunError::transient("terminal model call failed")
+                    .with_model_failure(non_retryable_model_failure()))
             }
             AgentBehavior::UnexpectedRun => {
                 panic!("agent must not run for an already-accounted attempt")

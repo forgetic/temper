@@ -16,6 +16,6 @@ pub use adapt::{
     AgentInvocation, AgentSupervisionKind, agent_invocation,
     agent_invocation_with_first_party_program, agent_runtime_limits, agent_tool_config,
     git_base_url, role_identities, selected_agent_runtime_limits, selected_worker_auth,
-    worker_agent_trace_config, worker_config, worker_liveness_limits,
+    session_recovery_policy, worker_agent_trace_config, worker_config, worker_liveness_limits,
 };
 pub use run::{run, self_subcommand, sibling_program};

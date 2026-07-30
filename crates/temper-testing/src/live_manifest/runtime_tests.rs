@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use super::process::tune_init_config;
 use super::runtime::{action_name, walk_steps};
-use super::{ConvergenceStrategy, ManifestAction, ManifestStep, StimulusKind, StimulusSpec};
+use super::{
+    ConvergenceStrategy, ManifestAction, ManifestStep, RecoveryFixture, StimulusKind, StimulusSpec,
+};
 
 #[test]
 fn walker_dispatches_every_manifest_action_in_declared_order() {
@@ -22,6 +25,7 @@ fn walker_dispatches_every_manifest_action_in_declared_order() {
             ManifestAction::StartJig {
                 script_path: PathBuf::from("jig.json"),
                 roles: vec!["engineer".to_string()],
+                late_stream_failure: None,
             },
         ),
         step(
@@ -98,6 +102,45 @@ fn walker_dispatches_every_manifest_action_in_declared_order() {
     assert!(dispatched.contains(&"mcp.fake_codebase_memory.start"));
     assert!(dispatched.contains(&"pr.seed_existing"));
     assert!(dispatched.contains(&"forgejo_runner.restart"));
+}
+
+#[test]
+fn recovery_tuning_adds_deadlines_to_minimal_init_config() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let path = temp.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[engine]\npoll_cadence_secs = 60\n[worker]\nworkspace = \"workspaces\"\n[agent]\nprovider = \"deepseek\"\n",
+    )
+    .expect("minimal init config");
+    let recovery = RecoveryFixture {
+        model_retry_max_attempts: 2,
+        model_retry_base_delay_ms: 1,
+        model_retry_max_delay_ms: 2,
+        model_retry_jitter_percent: 0,
+        session_failure_limit: 1,
+        fresh_session_limit: 1,
+        provider_deferral_limit: 3,
+        provider_deferral_delay_secs: 300,
+        model_recovery_slo_secs: 7_200,
+    };
+
+    tune_init_config(&path, 600, 1, Some(&recovery)).expect("tune recovery config");
+
+    let tuned = std::fs::read_to_string(path).expect("tuned config");
+    let parsed = tuned.parse::<toml::Value>().expect("tuned TOML");
+    let deadlines = parsed["agent"]["deadlines"]
+        .as_table()
+        .expect("created agent.deadlines table");
+    assert_eq!(deadlines["model_retry_max_attempts"].as_integer(), Some(2));
+    assert_eq!(
+        deadlines["model_retry_jitter_percent"].as_integer(),
+        Some(0)
+    );
+    assert_eq!(
+        parsed["worker"]["fresh_session_limit"].as_integer(),
+        Some(1)
+    );
 }
 
 fn step(id: &str, action: ManifestAction) -> ManifestStep {

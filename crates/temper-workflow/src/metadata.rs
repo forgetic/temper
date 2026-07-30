@@ -51,8 +51,13 @@ use crate::interrupted_ci::InterruptedCiRecoveryState;
 use crate::missing_ci::MissingCiRecoveryState;
 
 mod assignment;
+mod provider_recovery;
 pub use assignment::DurableAssignment;
 use chrono::{DateTime, Utc};
+pub use provider_recovery::{
+    MAX_PROVIDER_RECOVERY_COUNT, MAX_PROVIDER_RECOVERY_ID_BYTES, ProviderRecovery,
+    ProviderRecoveryDisposition, ProviderRecoveryFacts,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -115,6 +120,9 @@ pub struct WorkflowMetadata {
     /// published. Older metadata blocks omit this field and continue to parse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignment: Option<DurableAssignment>,
+    /// Durable, restart-safe provider deferral and exact due-attempt fence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_recovery: Option<Box<ProviderRecovery>>,
     /// PR head produced by the most recently published in-place repair. While
     /// CI for this exact SHA is absent or pending, stale CI from an earlier head
     /// must not make the pull request eligible to land.

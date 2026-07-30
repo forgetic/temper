@@ -13,7 +13,9 @@ use crate::{
 mod fields;
 mod model_failure;
 use fields::{assignment, event, identifier, scope, timestamp, version};
-pub(crate) use model_failure::validate_model_failure_at;
+pub(crate) use model_failure::{
+    is_non_retryable_provider_code, is_retryable_provider_code, validate_model_failure_at,
+};
 pub use model_failure::{normalize_model_failure, validate_model_failure};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
