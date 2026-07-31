@@ -1,0 +1,161 @@
+schema = "temper.scenario.v1"
+name = "forgejo-v16-api-ci"
+status = "active"
+stability = "provisional"
+intent = "Prove Forgejo v16 Actions run and job API reads preserve exact-head CI identities and conservatively map a status-only failure."
+introduced_by = "#821"
+owner_area = "delivery-validation"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/basic-delivery"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/forgejo-v16-api-ci.json"
+
+[workflow]
+name = "forgejo-v16-api-ci"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/service"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[validation]
+feature = "ai/temper#766"
+plan = "ai/temper#767"
+source_branch = "agent/pr-for-feature-766"
+change = "new"
+
+[feature_contract]
+claim = "Forgejo v16 CI reads use only token-authenticated Actions run and per-run jobs APIs while retaining stable provider identities and conservative terminal evidence."
+stimulus = "Open one implementation PR whose single Actions run contains one successful job and one intentionally failing job."
+observable = "Two independent structured CI observations, provider run/job/attempt/commit identities, exact PR head ownership, terminal conclusions, and bounded secret-free request provenance."
+assertion = "Exactly one run yields one Success and one Unknown retaining provider failure, identities remain stable, required JSON GETs are present, and legacy, UI, live-view, and mutation routes are absent."
+runtime_budget_seconds = 600
+jig_script_path = "jig/forgejo-v16-api-ci.json"
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start disposable Forgejo v16 and create the isolated service repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+roles = ["architect", "engineer"]
+script_path = "jig/forgejo-v16-api-ci.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-intake-issue"
+action = "issue.seed"
+issue_id = "intake"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-terminal-provider-ci"
+action = "workflow.wait_convergence"
+strategy = "implementation-pr-terminal-ci"
+until = "one implementation PR remains open at an exact head with one complete two-job provider run"
+
+[expect]
+template = "no-duplicate-prs"
+outcome = "One exact-head implementation PR retains a successful job and a conservative Unknown provider failure observed exclusively through Forgejo v16 Actions APIs."
+merged_pull_requests = 0
+closed_parent_issues = 0
+created_pull_requests = 1
+sequence = []
+
+[[expect.checks]]
+required = true
+id = "implementation-pr-remains-at-terminal-ci-head"
+artifact = "pull_request:implementation"
+state = "open"
+labels = ["implementation", "landing"]
+
+[[expect.events]]
+required = true
+id = "single-implementation-pr-opened"
+event = "pr.opened"
+action = "created"
+source_artifact = "$source_artifact"
+kind = "implementation_pr"
+
+[[expect.count]]
+required = true
+id = "one-implementation-pr-publication"
+event = "pr.opened"
+action = "created"
+group_by = ["source_artifact"]
+exactly = 1
+
+[[expect.ci_provenance]]
+id = "forgejo-v16-actions-api-only"
+required = true
+pull_request = "implementation"
+matching_provider_run = true
+materialized_jobs = true
+job_count = 2
+provider_run_count = 1
+stable_identities = true
+exact_head = true
+job_outcomes = [
+  { status = "completed", conclusion = "success", exactly = 1 },
+  { status = "completed", conclusion = "unknown", provider_conclusion = "failure", exactly = 1 },
+]
+required_requests = [
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
+]
+forbidden_requests = [
+  { route_contains = "/actions/tasks" },
+  { route_contains = "/user/login" },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions" },
+  { method = "POST", route_contains = "/actions" },
+  { method = "PUT", route_contains = "/actions" },
+  { method = "PATCH", route_contains = "/actions" },
+  { method = "DELETE", route_contains = "/actions" },
+]
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Tighten request or identity assertions while preserving the same Forgejo v16 API-only contract.",
+  "Update inherited delivery fixtures without changing the one-run, two-job terminal outcome.",
+]
+requires_new_scenario_or_major_update = [
+  "Changing the mapped feature, plan, or canonical feature branch.",
+  "Replacing the disposable Forgejo v16 stack or host runner with a mock or hermetic substitute.",
+  "Introducing scenario-name dispatch or non-declarative CI orchestration.",
+]

@@ -32,7 +32,10 @@ mod request;
 mod types;
 mod version;
 
-pub use client::{EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpResponse};
+pub use client::{
+    EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpRequestProvenance,
+    HttpRequestProvenanceSnapshot, HttpResponse,
+};
 pub use config::{CasMode, DEFAULT_PAGE_LIMIT, ForgejoConfig};
 pub use provision::{ROLE_PASSWORD, admin_token_via_basic_auth};
 pub use read_only_basic::ReadOnlyBasicAuthClient;
@@ -41,6 +44,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use version::VersionCache;
+
+use client::BoundedRequestProvenance;
 
 /// Forgejo Forge backend.
 ///
@@ -54,6 +59,9 @@ pub struct ForgejoForge<C = EngineHttpClient> {
     versions: Arc<VersionCache>,
     /// Cumulative provider requests, shared by clones for per-apply deltas.
     provider_requests: Arc<AtomicU64>,
+    /// Optional bounded, redacted provider request recorder. Disabled unless a
+    /// caller explicitly enables evidence capture.
+    request_provenance: Option<Arc<Mutex<BoundedRequestProvenance>>>,
     /// Repository-scoped label name/id maps used by issue fan-out. Forgejo's
     /// issue endpoints require numeric ids, while the portable surface uses
     /// names. Shared across clones and invalidated after label upserts.
@@ -119,8 +127,32 @@ impl<C: HttpClient> ForgejoForge<C> {
             client,
             versions: Arc::new(VersionCache::default()),
             provider_requests: Arc::new(AtomicU64::new(0)),
+            request_provenance: None,
             label_ids: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Enables a clone-shared ring buffer of secret-free request provenance.
+    ///
+    /// The oldest record is discarded when `capacity` is reached and the
+    /// snapshot's `dropped` counter advances. A zero capacity records only the
+    /// number of dropped requests. Production callers do not enable this;
+    /// validation harnesses opt in when they need provider API provenance.
+    pub fn with_request_provenance(mut self, capacity: usize) -> Self {
+        self.request_provenance = Some(Arc::new(Mutex::new(BoundedRequestProvenance::new(
+            capacity,
+        ))));
+        self
+    }
+
+    /// Returns the current redacted request snapshot when recording is enabled.
+    pub fn request_provenance(&self) -> Option<HttpRequestProvenanceSnapshot> {
+        self.request_provenance.as_ref().map(|recorder| {
+            recorder
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .snapshot()
+        })
     }
 
     /// Returns the cumulative number of provider requests sent by this backend
@@ -130,8 +162,14 @@ impl<C: HttpClient> ForgejoForge<C> {
     }
 
     /// Records one provider request that is about to cross the HTTP seam.
-    pub(crate) fn record_provider_request(&self) {
+    pub(crate) fn record_provider_request(&self, request: &HttpRequest) {
         self.provider_requests.fetch_add(1, Ordering::Relaxed);
+        if let Some(recorder) = &self.request_provenance {
+            recorder
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .record(request);
+        }
     }
 
     /// Returns the underlying HTTP client.

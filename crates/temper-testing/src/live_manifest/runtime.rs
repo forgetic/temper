@@ -14,9 +14,9 @@ use super::process::{
 };
 use super::runtime_fake::ManifestFake;
 use super::{
-    ConvergenceStrategy, FinalStateEvidence, LiveCodebaseMemoryEvidence, LiveHandoffEvidence,
-    LiveLogPaths, LiveManifestEvidence, LiveManifestHarness, LivePlanFeatureEvidence,
-    ManifestAction, ManifestStep, StimulusKind, StimulusOutcome,
+    CiRequestEvidence, ConvergenceStrategy, FinalStateEvidence, LiveCodebaseMemoryEvidence,
+    LiveHandoffEvidence, LiveLogPaths, LiveManifestEvidence, LiveManifestHarness,
+    LivePlanFeatureEvidence, ManifestAction, ManifestStep, StimulusKind, StimulusOutcome,
 };
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, ForgejoServer, start_cached_bare_admin_server};
@@ -394,6 +394,19 @@ impl<'a> LiveExecutionContext<'a> {
                     None,
                     None,
                 ),
+                ConvergenceStrategy::ImplementationPrTerminalCi => (
+                    super::convergence::drive_implementation_pr_terminal_ci_convergence(
+                        forge,
+                        repository,
+                        primary_issue,
+                        &self.harness.admin_user,
+                        &mut standalone,
+                        timeout,
+                    )?,
+                    None,
+                    None,
+                    None,
+                ),
                 ConvergenceStrategy::CodebaseMemory => {
                     let fake = required_ref(&self.fake, "jig.fake_llm")?.codebase()?;
                     let mcp = required_ref(&self.mcp, "mcp.fake_codebase_memory.start")?;
@@ -448,8 +461,11 @@ impl<'a> LiveExecutionContext<'a> {
         let (final_state, handoff, codebase_memory, plan_feature) = result?;
         let elapsed = started.elapsed();
         required_ref(&self.fake, "jig.fake_llm")?.validate_after_convergence(strategy)?;
-        if strategy == ConvergenceStrategy::SinglePullRequest
-            && elapsed >= self.harness.scenario.poll_backstop
+        if matches!(
+            strategy,
+            ConvergenceStrategy::SinglePullRequest
+                | ConvergenceStrategy::ImplementationPrTerminalCi
+        ) && elapsed >= self.harness.scenario.poll_backstop
         {
             return Err(format!(
                 "converged in {elapsed:?}, not before the declared poll backstop {:?}; raw webhooks should wake the standalone engine",
@@ -518,6 +534,22 @@ impl<'a> LiveExecutionContext<'a> {
         .map(super::convergence::pr_evidence)
         .collect::<Vec<_>>();
         forge_pull_requests.sort_by_key(|pull| pull.number);
+        let ci_request_provenance = required_ref(&self.forge, "temper.launch_standalone")?
+            .request_provenance()
+            .ok_or_else(|| "live Forge request provenance recorder was not enabled".to_string())?;
+        let ci_request_capture_dropped = ci_request_provenance.dropped;
+        let ci_requests = ci_request_provenance
+            .requests
+            .into_iter()
+            .map(|request| CiRequestEvidence {
+                method: request.method.to_string(),
+                path: request.path,
+                query_keys: request.query_keys,
+                authentication_present: request.authentication_present,
+                authentication_scheme: request.authentication_scheme,
+                accepts_json: request.accepts_json,
+            })
+            .collect();
         Ok(LiveManifestEvidence {
             _workspace: self.workspace,
             scenario_path: self.harness.scenario.scenario_path.clone(),
@@ -541,6 +573,8 @@ impl<'a> LiveExecutionContext<'a> {
             fake_llm,
             forge_pull_requests,
             final_state: convergence.final_state,
+            ci_requests,
+            ci_request_capture_dropped,
             handoff: convergence.handoff,
             codebase_memory: convergence.codebase_memory,
             plan_feature: convergence.plan_feature,

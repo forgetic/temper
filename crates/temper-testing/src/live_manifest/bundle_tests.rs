@@ -56,6 +56,10 @@ fn loads_checked_in_live_manifest_bundle() {
 fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
     for (name, convergence) in [
         ("basic-delivery", ConvergenceStrategy::SinglePullRequest),
+        (
+            "forgejo-v16-api-ci",
+            ConvergenceStrategy::ImplementationPrTerminalCi,
+        ),
         ("codebase-memory-agent", ConvergenceStrategy::CodebaseMemory),
         (
             "implementation-pr-handoff",
@@ -87,6 +91,24 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
             "{name} has a typed issue seed"
         );
     }
+}
+
+#[test]
+fn forgejo_v16_api_ci_bundle_owns_two_job_terminal_workflow() {
+    let bundle = ScenarioBundle::load(scenarios_root().join("forgejo-v16-api-ci"))
+        .expect("Forgejo v16 API CI bundle");
+
+    assert_eq!(
+        bundle.execution.convergence,
+        ConvergenceStrategy::ImplementationPrTerminalCi
+    );
+    assert!(bundle.repo.ci_source.contains("successful-job:"));
+    assert!(bundle.repo.ci_source.contains("status-only-failure:"));
+    assert!(bundle.repo.ci_source.contains("exit 1"));
+    assert_eq!(
+        bundle.repo.ci_source,
+        fs::read_to_string(&bundle.repo.ci_seed_path).expect("seeded CI workflow")
+    );
 }
 
 #[test]

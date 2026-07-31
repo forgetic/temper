@@ -40,7 +40,8 @@ impl ManifestFake {
         }
         let script_path = script_path.to_path_buf();
         match strategy {
-            ConvergenceStrategy::SinglePullRequest => Ok(Self::Single {
+            ConvergenceStrategy::SinglePullRequest
+            | ConvergenceStrategy::ImplementationPrTerminalCi => Ok(Self::Single {
                 fake: SinglePullRequestFake::start(&script_path, late_stream_failure)?,
                 script_path,
             }),
@@ -111,7 +112,11 @@ impl ManifestFake {
         strategy: ConvergenceStrategy,
     ) -> Result<(), String> {
         match (strategy, self) {
-            (ConvergenceStrategy::SinglePullRequest, Self::Single { fake, .. }) => {
+            (
+                ConvergenceStrategy::SinglePullRequest
+                | ConvergenceStrategy::ImplementationPrTerminalCi,
+                Self::Single { fake, .. },
+            ) => {
                 if fake.architect_requests() < 2 {
                     return Err(format!(
                         "fake LLM never served the architect tool loop\n{}",
@@ -126,9 +131,14 @@ impl ManifestFake {
                 }
                 Ok(())
             }
-            (ConvergenceStrategy::SinglePullRequest, _) => {
-                Err("single-pull-request convergence requires its declared Jig runtime".to_string())
-            }
+            (
+                ConvergenceStrategy::SinglePullRequest
+                | ConvergenceStrategy::ImplementationPrTerminalCi,
+                _,
+            ) => Err(
+                "single implementation PR convergence requires its declared Jig runtime"
+                    .to_string(),
+            ),
             _ => Ok(()),
         }
     }

@@ -10,9 +10,16 @@ use temper_workflow::{CiStatus, parse_metadata_block};
 use super::fake_llm::{architect_body, engineer_summary};
 use super::process::{ChildGuard, engine_block_on};
 use super::{
-    CiJobEvidence, ENGINEER, FinalStateEvidence, IntakeFixture, IssueEvidence, PullRequestEvidence,
-    RepoFixture,
+    CiJobEvidence, CiObservationEvidence, ENGINEER, FinalStateEvidence, IntakeFixture,
+    IssueEvidence, PullRequestEvidence, RepoFixture,
 };
+
+#[path = "convergence/terminal_ci.rs"]
+mod terminal_ci;
+
+pub(super) use terminal_ci::drive_implementation_pr_terminal_ci_convergence;
+
+const REQUEST_PROVENANCE_CAPACITY: usize = 4096;
 
 const ASSERT_POLL: Duration = Duration::from_secs(1);
 
@@ -20,6 +27,7 @@ pub(super) fn admin_forge(base_url: &str, admin_token: &str, repo: &RepoFixture)
     ForgejoForge::new(
         ForgejoConfig::new(base_url, admin_token).with_default_repo(&repo.owner, &repo.name),
     )
+    .with_request_provenance(REQUEST_PROVENANCE_CAPACITY)
 }
 
 pub(super) async fn repository(
@@ -63,7 +71,20 @@ pub(super) fn drive_single_pull_request_convergence(
     timeout: Duration,
 ) -> Result<FinalStateEvidence, String> {
     let deadline = Instant::now() + timeout;
+    drive_basic_delivery_to_open(forge, repository, issue, admin_user, standalone, deadline)?;
+    poll_until(deadline, standalone, || {
+        engine_block_on(assert_converged(forge, repository, issue, admin_user))
+    })
+}
 
+fn drive_basic_delivery_to_open(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+    admin_user: &str,
+    standalone: &mut ChildGuard,
+    deadline: Instant,
+) -> Result<(), String> {
     poll_until(deadline, standalone, || {
         engine_block_on(assert_basic_delivery_reached(
             forge,
@@ -90,9 +111,6 @@ pub(super) fn drive_single_pull_request_convergence(
             admin_user,
             BasicDeliveryPhase::ImplementationPrOpen,
         ))
-    })?;
-    poll_until(deadline, standalone, || {
-        engine_block_on(assert_converged(forge, repository, issue, admin_user))
     })
 }
 
@@ -276,7 +294,8 @@ async fn assert_converged(
     require_labels(&pr.labels, &["implementation"])?;
     reject_labels(&pr.labels, &["landing"])?;
 
-    let jobs = completed_ci_jobs(forge, repository, &pr).await?;
+    let first_ci_observation = completed_ci_observation(forge, repository, &pr).await?;
+    let jobs = &first_ci_observation.jobs;
     if jobs.is_empty() {
         return Err(format!("no completed CI jobs for PR #{}", pr.number));
     }
@@ -287,7 +306,7 @@ async fn assert_converged(
             jobs.last()
         ));
     }
-    if !CiStatus::from_jobs(&jobs).is_passed() {
+    if !CiStatus::from_jobs(jobs).is_passed() {
         return Err("latest CI aggregate is not passing".to_string());
     }
 
@@ -312,10 +331,16 @@ async fn assert_converged(
         ));
     }
 
+    let second_ci_observation = completed_ci_observation(forge, repository, &pr).await?;
+
     Ok(FinalStateEvidence {
         issue: issue_evidence(&issue),
         pull_request: pr_evidence(&pr),
         ci_jobs: jobs.iter().map(ci_job_evidence).collect(),
+        ci_observations: vec![
+            ci_observation_evidence(&first_ci_observation),
+            ci_observation_evidence(&second_ci_observation),
+        ],
     })
 }
 
@@ -377,13 +402,18 @@ fn verify_metadata(pr: &PullRequest, issue: ItemNumber) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) async fn completed_ci_jobs(
+pub(super) struct CompletedCiObservation {
+    pub(super) matching_provider_run: bool,
+    pub(super) jobs: Vec<CiJob>,
+}
+
+pub(super) async fn completed_ci_observation(
     forge: &ForgejoForge,
     repository: &RepositoryId,
     pr: &PullRequest,
-) -> Result<Vec<CiJob>, String> {
-    let mut jobs = forge
-        .list_ci_jobs(
+) -> Result<CompletedCiObservation, String> {
+    let listing = forge
+        .list_ci_jobs_with_presence(
             repository,
             CiJobQuery {
                 pull_request_id: Some(pr.id.clone()),
@@ -393,12 +423,27 @@ pub(super) async fn completed_ci_jobs(
         )
         .await
         .map_err(|error| format!("list_ci_jobs failed: {error}"))?;
+    let matching_provider_run = listing.matching_ci_present();
+    let mut jobs = listing.into_jobs();
     jobs.sort_by(|left, right| {
         left.created_at
             .cmp(&right.created_at)
             .then(left.id.cmp(&right.id))
     });
-    Ok(jobs)
+    Ok(CompletedCiObservation {
+        matching_provider_run,
+        jobs,
+    })
+}
+
+pub(super) async fn completed_ci_jobs(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    pr: &PullRequest,
+) -> Result<Vec<CiJob>, String> {
+    completed_ci_observation(forge, repository, pr)
+        .await
+        .map(|observation| observation.jobs)
 }
 
 pub(super) fn ci_diagnostics(forge: &ForgejoForge, repository: &RepositoryId) -> String {
@@ -467,10 +512,24 @@ pub(super) fn pr_evidence(pr: &PullRequest) -> PullRequestEvidence {
 
 pub(super) fn ci_job_evidence(job: &CiJob) -> CiJobEvidence {
     CiJobEvidence {
+        job_id: job.id.to_string(),
+        provider_run_id: job.run_id.clone(),
+        provider_attempt: job.attempt.clone(),
+        commit_sha: job.commit_sha.clone(),
         name: job.name.clone(),
         status: format!("{:?}", job.status),
         conclusion: job.conclusion.map(|conclusion| format!("{conclusion:?}")),
+        provider_conclusion: job.provider_conclusion.clone(),
         url: job.url.clone(),
+    }
+}
+
+pub(super) fn ci_observation_evidence(
+    observation: &CompletedCiObservation,
+) -> CiObservationEvidence {
+    CiObservationEvidence {
+        matching_provider_run: observation.matching_provider_run,
+        jobs: observation.jobs.iter().map(ci_job_evidence).collect(),
     }
 }
 

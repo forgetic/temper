@@ -23,9 +23,10 @@ the operator workflow.
 `temper-scenario run` exposes one public runner:
 
 - `manifest` — live-only validation-grade e2e runner. The checked-in
-  `basic-delivery`, `implementation-pr-handoff`, `codebase-memory-agent`,
-  `model-failure-recovery`, `plan-centric-feature-branch`, and `target-ux-e2e`
-  scenarios select this runner with
+  `basic-delivery`, `forgejo-v16-api-ci`, `implementation-pr-handoff`,
+  `codebase-memory-agent`, `model-failure-recovery`,
+  `plan-centric-feature-branch`, and `target-ux-e2e` scenarios select this runner
+  with
   `runner.uses = "manifest"` and boot real Forgejo, real `forgejo-runner` CI, a
   real standalone `temper` process, and Jig fake LLM agents.
   Hermetic/MemoryForge/in-process substitutes are rejected, and no scenario-name
@@ -188,6 +189,45 @@ evidence:
   fields such as `event`, `artifact_ref`, `pr_ref`, `source_artifact`,
   `transition`, `action`, handoff metadata/title/body-source fields, and CI
   `conclusion`.
+- `[[expect.ci_provenance]]` asserts provider-neutral CI identities, repeated
+  observations, exact-head ownership, job outcomes, and bounded request rules.
+  Request evidence retains method/path/query-key names, JSON acceptance, and
+  authentication scheme/presence only; token values and unrelated headers are
+  never serialized. Missing observations, identity fields, request capture, or
+  a nonzero dropped-request count blocks a required assertion.
+
+A strict provider API contract can be expressed without scenario-specific
+runner code:
+
+```toml
+[[expect.ci_provenance]]
+id = "provider-api-ci"
+pull_request = "implementation"
+matching_provider_run = true
+materialized_jobs = true
+job_count = 2
+provider_run_count = 1
+stable_identities = true
+exact_head = true
+job_outcomes = [
+  { status = "completed", conclusion = "success", exactly = 1 },
+  { status = "completed", conclusion = "unknown", provider_conclusion = "failure", exactly = 1 },
+]
+required_requests = [
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
+]
+forbidden_requests = [
+  { route_contains = "/actions/tasks" },
+  { route_contains = "/user/login" },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions" },
+  { method = "POST", route_contains = "/actions" },
+]
+```
+
+`{repo}` resolves from structured provider evidence. A rule containing
+`{provider_run_id}` is expanded once for every retained run identity. Required
+request rules match at least once by default and accept `at_least = <n>`.
 
 Model-recovery scenarios additionally have bounded, pre-convergence primitives:
 

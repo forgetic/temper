@@ -1,0 +1,25 @@
+# The workflow intentionally creates one successful job and one status-only
+# provider failure in a single Forgejo Actions run. Temper must not reinterpret
+# the bare v16 `failure` status as an ordinary source/test failure.
+name: forgejo-v16-api-ci
+on: [push]
+
+jobs:
+  successful-job:
+    runs-on: host
+    steps:
+      - name: checkout exact head
+        uses: actions/checkout@v4
+      - name: complete successfully
+        run: |
+          echo "successful Forgejo v16 Actions job at ${GITHUB_SHA}"
+
+  status-only-failure:
+    runs-on: host
+    steps:
+      - name: checkout exact head
+        uses: actions/checkout@v4
+      - name: fail intentionally
+        run: |
+          echo "intentional status-only Forgejo v16 failure at ${GITHUB_SHA}"
+          exit 1
