@@ -368,9 +368,14 @@ async fn merged_pr_ci_evidence(
             let job = ci_job_evidence(job);
             PullRequestCiJobEvidence {
                 pull_request_number: pull.number.get(),
+                job_id: job.job_id,
+                provider_run_id: job.provider_run_id,
+                provider_attempt: job.provider_attempt,
+                commit_sha: job.commit_sha,
                 name: job.name,
                 status: job.status,
                 conclusion: job.conclusion,
+                provider_conclusion: job.provider_conclusion,
                 url: job.url,
             }
         }));

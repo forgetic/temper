@@ -16,7 +16,8 @@ use temper_workflow::{CiStatus, parse_metadata_block};
 use toml::Value as TomlValue;
 
 use super::convergence::{
-    completed_ci_jobs, issue_evidence, poll_until, pr_evidence, reject_labels, require_labels,
+    ci_observation_evidence, completed_ci_observation, issue_evidence, poll_until, pr_evidence,
+    reject_labels, require_labels,
 };
 use super::{ENGINEER, FinalStateEvidence, LiveCodebaseMemoryEvidence};
 
@@ -187,7 +188,8 @@ async fn assert_codebase_memory_converged(
     require_labels(&pr.labels, &["implementation"])?;
     reject_labels(&pr.labels, &["landing"])?;
 
-    let jobs = completed_ci_jobs(forge, repository, &pr).await?;
+    let ci_observation = completed_ci_observation(forge, repository, &pr).await?;
+    let jobs = &ci_observation.jobs;
     if jobs.is_empty() {
         return Err(format!("no completed CI jobs for PR #{}", pr.number));
     }
@@ -198,7 +200,7 @@ async fn assert_codebase_memory_converged(
             jobs.last()
         ));
     }
-    if !CiStatus::from_jobs(&jobs).is_passed() {
+    if !CiStatus::from_jobs(jobs).is_passed() {
         return Err("latest CI aggregate is not passing".to_string());
     }
 
@@ -223,6 +225,7 @@ async fn assert_codebase_memory_converged(
             .iter()
             .map(super::convergence::ci_job_evidence)
             .collect(),
+        ci_observations: vec![ci_observation_evidence(&ci_observation)],
     })
 }
 

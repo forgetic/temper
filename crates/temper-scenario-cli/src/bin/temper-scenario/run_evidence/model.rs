@@ -211,10 +211,32 @@ pub(crate) struct CiStateEvidence {
     pub(crate) completed_jobs: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) jobs: Vec<CiJobEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) observations: Vec<CiObservationEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) requests: Vec<CiRequestEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request_capture_dropped: Option<usize>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CiObservationEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) matching_provider_run: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) jobs: Vec<CiJobEvidence>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CiJobEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_attempt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) commit_sha: Option<String>,
     pub(crate) name: String,
     pub(crate) status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -222,7 +244,24 @@ pub(crate) struct CiJobEvidence {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) conclusion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) provider_conclusion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) url: Option<String>,
+}
+
+/// Bounded request provenance with values and unrelated headers omitted.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CiRequestEvidence {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) query_keys: Vec<String>,
+    #[serde(default)]
+    pub(crate) authentication_present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) authentication_scheme: Option<String>,
+    #[serde(default)]
+    pub(crate) accepts_json: bool,
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -508,61 +547,5 @@ pub(crate) struct LoadedRunEvidence {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn result(id: &str, status: &str, required: bool) -> AssertionResultEvidence {
-        AssertionResultEvidence {
-            id: id.to_string(),
-            required,
-            status: status.to_string(),
-            description: id.to_string(),
-            artifact: None,
-            kind: None,
-            phase: None,
-            command: None,
-            cwd: None,
-            context_path: None,
-            stdout_path: None,
-            stderr_path: None,
-            status_path: None,
-            exit_status: None,
-            timeout_ms: None,
-            duration_ms: None,
-            details: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn unsupported_optional_assertion_remains_visible_without_blocking() {
-        let assertions = AssertionEvidence::from_results(vec![
-            result("required", ASSERTION_STATUS_PASSED, true),
-            result("optional", ASSERTION_STATUS_UNSUPPORTED, false),
-        ]);
-
-        assert_eq!(assertions.status, ASSERTION_STATUS_PASSED);
-        assert_eq!(assertions.unsupported, 1);
-        assert_eq!(assertions.blocked_required, 0);
-        assert!(!assertions.has_failures());
-    }
-
-    #[test]
-    fn every_nonpassing_required_outcome_blocks_success() {
-        for (status, verdict) in [
-            (ASSERTION_STATUS_FAILED, RunEvidenceVerdict::Failed),
-            (ASSERTION_STATUS_TIMED_OUT, RunEvidenceVerdict::Failed),
-            (
-                ASSERTION_STATUS_MISSING_FACT,
-                RunEvidenceVerdict::Inconclusive,
-            ),
-            (
-                ASSERTION_STATUS_UNSUPPORTED,
-                RunEvidenceVerdict::Inconclusive,
-            ),
-        ] {
-            let assertions = AssertionEvidence::from_results(vec![result("proof", status, true)]);
-            assert!(assertions.has_failures(), "{status}");
-            assert_eq!(assertions.verdict(), verdict, "{status}");
-        }
-    }
-}
+#[path = "model_tests.rs"]
+mod tests;

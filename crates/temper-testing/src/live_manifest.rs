@@ -177,6 +177,10 @@ pub struct LiveManifestEvidence {
     /// Complete terminal Forge PR inventory, including unexpected publications.
     pub forge_pull_requests: Vec<PullRequestEvidence>,
     pub final_state: FinalStateEvidence,
+    /// Bounded, secret-free provenance for requests made by the harness's live
+    /// Forge observer. This includes the CI reads retained in `final_state`.
+    pub ci_requests: Vec<CiRequestEvidence>,
+    pub ci_request_capture_dropped: usize,
     pub handoff: Option<LiveHandoffEvidence>,
     pub codebase_memory: Option<LiveCodebaseMemoryEvidence>,
     pub plan_feature: Option<LivePlanFeatureEvidence>,
@@ -247,10 +251,22 @@ impl LiveManifestEvidence {
         }
         for job in &self.final_state.ci_jobs {
             lines.push(format!(
-                "    - {} status={} conclusion={:?} url={:?}",
-                job.name, job.status, job.conclusion, job.url
+                "    - {} id={} run={:?} attempt={:?} commit={} status={} conclusion={:?} url={:?}",
+                job.name,
+                job.job_id,
+                job.provider_run_id,
+                job.provider_attempt,
+                job.commit_sha,
+                job.status,
+                job.conclusion,
+                job.url
             ));
         }
+        lines.push(format!(
+            "  ci_request_provenance: retained={} dropped={}",
+            self.ci_requests.len(),
+            self.ci_request_capture_dropped
+        ));
         lines.extend([
             "  logs:".to_string(),
             format!("    workspace_root: {}", self.logs.workspace_root.display()),
@@ -307,6 +323,10 @@ pub struct FinalStateEvidence {
     pub issue: IssueEvidence,
     pub pull_request: PullRequestEvidence,
     pub ci_jobs: Vec<CiJobEvidence>,
+    /// Independently fetched snapshots used to prove provider identities remain
+    /// stable across observations. Strategies that do not observe CI leave this
+    /// empty and strict provenance assertions fail closed.
+    pub ci_observations: Vec<CiObservationEvidence>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -332,8 +352,30 @@ pub struct PullRequestEvidence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CiJobEvidence {
+    pub job_id: String,
+    pub provider_run_id: Option<String>,
+    pub provider_attempt: Option<String>,
+    pub commit_sha: String,
     pub name: String,
     pub status: String,
     pub conclusion: Option<String>,
+    pub provider_conclusion: Option<String>,
     pub url: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CiObservationEvidence {
+    pub matching_provider_run: bool,
+    pub jobs: Vec<CiJobEvidence>,
+}
+
+/// Redacted request metadata. Header and query values are intentionally absent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CiRequestEvidence {
+    pub method: String,
+    pub path: String,
+    pub query_keys: Vec<String>,
+    pub authentication_present: bool,
+    pub authentication_scheme: Option<String>,
+    pub accepts_json: bool,
 }

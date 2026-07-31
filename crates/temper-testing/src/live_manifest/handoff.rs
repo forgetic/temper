@@ -118,6 +118,7 @@ pub(super) fn converge(
             merged_sha: None,
         },
         ci_jobs: Vec::new(),
+        ci_observations: Vec::new(),
     };
     Ok((
         final_state,

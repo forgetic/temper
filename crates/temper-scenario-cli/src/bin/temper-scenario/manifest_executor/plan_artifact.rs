@@ -132,13 +132,21 @@ pub(super) fn final_state(
                 .ci_jobs
                 .iter()
                 .map(|job| run_evidence::CiJobEvidence {
+                    job_id: Some(job.job_id.clone()),
+                    provider_run_id: job.provider_run_id.clone(),
+                    provider_attempt: job.provider_attempt.clone(),
+                    commit_sha: Some(job.commit_sha.clone()),
                     name: job.name.clone(),
                     status: job.status.clone(),
                     pull_request_number: Some(job.pull_request_number),
                     conclusion: job.conclusion.clone(),
+                    provider_conclusion: job.provider_conclusion.clone(),
                     url: job.url.clone(),
                 })
                 .collect(),
+            observations: Vec::new(),
+            requests: super::live::ci_requests(evidence),
+            request_capture_dropped: Some(evidence.ci_request_capture_dropped),
         },
     }
 }

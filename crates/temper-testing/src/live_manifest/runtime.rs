@@ -14,9 +14,9 @@ use super::process::{
 };
 use super::runtime_fake::ManifestFake;
 use super::{
-    ConvergenceStrategy, FinalStateEvidence, LiveCodebaseMemoryEvidence, LiveHandoffEvidence,
-    LiveLogPaths, LiveManifestEvidence, LiveManifestHarness, LivePlanFeatureEvidence,
-    ManifestAction, ManifestStep, StimulusKind, StimulusOutcome,
+    CiRequestEvidence, ConvergenceStrategy, FinalStateEvidence, LiveCodebaseMemoryEvidence,
+    LiveHandoffEvidence, LiveLogPaths, LiveManifestEvidence, LiveManifestHarness,
+    LivePlanFeatureEvidence, ManifestAction, ManifestStep, StimulusKind, StimulusOutcome,
 };
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, ForgejoServer, start_cached_bare_admin_server};
@@ -518,6 +518,22 @@ impl<'a> LiveExecutionContext<'a> {
         .map(super::convergence::pr_evidence)
         .collect::<Vec<_>>();
         forge_pull_requests.sort_by_key(|pull| pull.number);
+        let ci_request_provenance = required_ref(&self.forge, "temper.launch_standalone")?
+            .request_provenance()
+            .ok_or_else(|| "live Forge request provenance recorder was not enabled".to_string())?;
+        let ci_request_capture_dropped = ci_request_provenance.dropped;
+        let ci_requests = ci_request_provenance
+            .requests
+            .into_iter()
+            .map(|request| CiRequestEvidence {
+                method: request.method.to_string(),
+                path: request.path,
+                query_keys: request.query_keys,
+                authentication_present: request.authentication_present,
+                authentication_scheme: request.authentication_scheme,
+                accepts_json: request.accepts_json,
+            })
+            .collect();
         Ok(LiveManifestEvidence {
             _workspace: self.workspace,
             scenario_path: self.harness.scenario.scenario_path.clone(),
@@ -541,6 +557,8 @@ impl<'a> LiveExecutionContext<'a> {
             fake_llm,
             forge_pull_requests,
             final_state: convergence.final_state,
+            ci_requests,
+            ci_request_capture_dropped,
             handoff: convergence.handoff,
             codebase_memory: convergence.codebase_memory,
             plan_feature: convergence.plan_feature,
