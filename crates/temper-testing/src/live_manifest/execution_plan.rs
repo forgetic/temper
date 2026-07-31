@@ -196,6 +196,7 @@ impl ManifestAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConvergenceStrategy {
     SinglePullRequest,
+    ImplementationPrTerminalCi,
     CodebaseMemory,
     ImplementationPrHandoff,
     PlanFeatureLanding,
@@ -205,6 +206,7 @@ impl ConvergenceStrategy {
     fn parse(value: &str) -> Option<Self> {
         match value {
             "single-pull-request" => Some(Self::SinglePullRequest),
+            "implementation-pr-terminal-ci" => Some(Self::ImplementationPrTerminalCi),
             "codebase-memory" => Some(Self::CodebaseMemory),
             "implementation-pr-handoff" => Some(Self::ImplementationPrHandoff),
             "plan-feature-landing" => Some(Self::PlanFeatureLanding),
@@ -354,7 +356,7 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             let raw = required_table_string(table, "strategy", &field)?;
             let strategy = ConvergenceStrategy::parse(&raw).ok_or_else(|| {
                 format!(
-                    "{field}.strategy `{raw}` is unknown; expected single-pull-request, codebase-memory, implementation-pr-handoff, or plan-feature-landing"
+                    "{field}.strategy `{raw}` is unknown; expected single-pull-request, implementation-pr-terminal-ci, codebase-memory, implementation-pr-handoff, or plan-feature-landing"
                 )
             })?;
             Ok(ManifestAction::WaitForConvergence { strategy })

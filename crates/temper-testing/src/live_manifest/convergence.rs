@@ -14,6 +14,11 @@ use super::{
     IssueEvidence, PullRequestEvidence, RepoFixture,
 };
 
+#[path = "convergence/terminal_ci.rs"]
+mod terminal_ci;
+
+pub(super) use terminal_ci::drive_implementation_pr_terminal_ci_convergence;
+
 const REQUEST_PROVENANCE_CAPACITY: usize = 4096;
 
 const ASSERT_POLL: Duration = Duration::from_secs(1);
@@ -66,7 +71,20 @@ pub(super) fn drive_single_pull_request_convergence(
     timeout: Duration,
 ) -> Result<FinalStateEvidence, String> {
     let deadline = Instant::now() + timeout;
+    drive_basic_delivery_to_open(forge, repository, issue, admin_user, standalone, deadline)?;
+    poll_until(deadline, standalone, || {
+        engine_block_on(assert_converged(forge, repository, issue, admin_user))
+    })
+}
 
+fn drive_basic_delivery_to_open(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue: ItemNumber,
+    admin_user: &str,
+    standalone: &mut ChildGuard,
+    deadline: Instant,
+) -> Result<(), String> {
     poll_until(deadline, standalone, || {
         engine_block_on(assert_basic_delivery_reached(
             forge,
@@ -93,9 +111,6 @@ pub(super) fn drive_single_pull_request_convergence(
             admin_user,
             BasicDeliveryPhase::ImplementationPrOpen,
         ))
-    })?;
-    poll_until(deadline, standalone, || {
-        engine_block_on(assert_converged(forge, repository, issue, admin_user))
     })
 }
 

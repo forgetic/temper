@@ -394,6 +394,19 @@ impl<'a> LiveExecutionContext<'a> {
                     None,
                     None,
                 ),
+                ConvergenceStrategy::ImplementationPrTerminalCi => (
+                    super::convergence::drive_implementation_pr_terminal_ci_convergence(
+                        forge,
+                        repository,
+                        primary_issue,
+                        &self.harness.admin_user,
+                        &mut standalone,
+                        timeout,
+                    )?,
+                    None,
+                    None,
+                    None,
+                ),
                 ConvergenceStrategy::CodebaseMemory => {
                     let fake = required_ref(&self.fake, "jig.fake_llm")?.codebase()?;
                     let mcp = required_ref(&self.mcp, "mcp.fake_codebase_memory.start")?;
@@ -448,8 +461,11 @@ impl<'a> LiveExecutionContext<'a> {
         let (final_state, handoff, codebase_memory, plan_feature) = result?;
         let elapsed = started.elapsed();
         required_ref(&self.fake, "jig.fake_llm")?.validate_after_convergence(strategy)?;
-        if strategy == ConvergenceStrategy::SinglePullRequest
-            && elapsed >= self.harness.scenario.poll_backstop
+        if matches!(
+            strategy,
+            ConvergenceStrategy::SinglePullRequest
+                | ConvergenceStrategy::ImplementationPrTerminalCi
+        ) && elapsed >= self.harness.scenario.poll_backstop
         {
             return Err(format!(
                 "converged in {elapsed:?}, not before the declared poll backstop {:?}; raw webhooks should wake the standalone engine",
