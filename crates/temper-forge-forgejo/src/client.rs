@@ -6,6 +6,7 @@
 //! responses without touching the network.
 
 use async_trait::async_trait;
+use std::collections::VecDeque;
 use std::time::Instant;
 use thiserror::Error;
 
@@ -50,6 +51,92 @@ pub struct HttpRequest {
     pub query: Vec<(String, String)>,
     pub headers: Vec<(String, String)>,
     pub body: Option<String>,
+}
+
+/// Secret-free request metadata retained by an explicitly enabled recorder.
+///
+/// Header values and query values are deliberately absent. Authentication only
+/// records whether a header was present and its recognized scheme, so tokens,
+/// cookies, and unrelated headers cannot enter scenario evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HttpRequestProvenance {
+    pub method: HttpMethod,
+    pub path: String,
+    pub query_keys: Vec<String>,
+    pub authentication_present: bool,
+    pub authentication_scheme: Option<String>,
+    pub accepts_json: bool,
+}
+
+/// One bounded snapshot of redacted provider request provenance.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HttpRequestProvenanceSnapshot {
+    pub requests: Vec<HttpRequestProvenance>,
+    pub dropped: usize,
+}
+
+#[derive(Debug)]
+pub(crate) struct BoundedRequestProvenance {
+    capacity: usize,
+    dropped: usize,
+    requests: VecDeque<HttpRequestProvenance>,
+}
+
+impl BoundedRequestProvenance {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            dropped: 0,
+            requests: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    pub(crate) fn record(&mut self, request: &HttpRequest) {
+        if self.capacity == 0 {
+            self.dropped = self.dropped.saturating_add(1);
+            return;
+        }
+        if self.requests.len() == self.capacity {
+            self.requests.pop_front();
+            self.dropped = self.dropped.saturating_add(1);
+        }
+        self.requests.push_back(redact_request(request));
+    }
+
+    pub(crate) fn snapshot(&self) -> HttpRequestProvenanceSnapshot {
+        HttpRequestProvenanceSnapshot {
+            requests: self.requests.iter().cloned().collect(),
+            dropped: self.dropped,
+        }
+    }
+}
+
+fn redact_request(request: &HttpRequest) -> HttpRequestProvenance {
+    let authorization = request
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+    let authentication_scheme = authorization.and_then(|(_, value)| {
+        let (scheme, _) = value.split_once(char::is_whitespace)?;
+        match scheme.to_ascii_lowercase().as_str() {
+            "token" | "bearer" | "basic" => Some(scheme.to_ascii_lowercase()),
+            _ => Some("other".to_string()),
+        }
+    });
+    let accepts_json = request.headers.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("accept")
+            && value
+                .split(',')
+                .any(|item| item.trim().eq_ignore_ascii_case("application/json"))
+    });
+    HttpRequestProvenance {
+        method: request.method,
+        path: request.path.clone(),
+        query_keys: request.query.iter().map(|(key, _)| key.clone()).collect(),
+        authentication_present: authorization.is_some(),
+        authentication_scheme,
+        accepts_json,
+    }
 }
 
 /// An HTTP response observed from the provider (or replayed by the mock).
@@ -279,6 +366,40 @@ mod tests {
 
         assert_eq!(request.method, HttpMethod::Post);
         assert_eq!(request.body.as_deref(), Some("{\"title\":\"hi\"}"));
+    }
+
+    #[test]
+    fn bounded_provenance_redacts_secrets_and_reports_drops() {
+        let mut recorder = BoundedRequestProvenance::new(1);
+        let first = build_request(
+            "first-secret",
+            HttpMethod::Get,
+            "/repos/acme/widgets/actions/runs",
+            vec![("limit".to_string(), "secret-query-value".to_string())],
+            None,
+        );
+        let second = build_request(
+            "second-secret",
+            HttpMethod::Get,
+            "/repos/acme/widgets/actions/runs/42/jobs",
+            Vec::new(),
+            None,
+        );
+        recorder.record(&first);
+        recorder.record(&second);
+
+        let snapshot = recorder.snapshot();
+        assert_eq!(snapshot.dropped, 1);
+        assert_eq!(snapshot.requests.len(), 1);
+        let retained = &snapshot.requests[0];
+        assert_eq!(retained.authentication_scheme.as_deref(), Some("token"));
+        assert!(retained.authentication_present);
+        assert!(retained.accepts_json);
+        assert!(retained.query_keys.is_empty());
+        let debug = format!("{snapshot:?}");
+        assert!(!debug.contains("first-secret"));
+        assert!(!debug.contains("second-secret"));
+        assert!(!debug.contains("secret-query-value"));
     }
 
     #[test]

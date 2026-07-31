@@ -85,9 +85,14 @@ pub struct PullRequestStateEvidence {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PullRequestCiJobEvidence {
     pub pull_request_number: u64,
+    pub job_id: String,
+    pub provider_run_id: Option<String>,
+    pub provider_attempt: Option<String>,
+    pub commit_sha: String,
     pub name: String,
     pub status: String,
     pub conclusion: Option<String>,
+    pub provider_conclusion: Option<String>,
     pub url: Option<String>,
 }
 
@@ -183,12 +188,18 @@ pub(super) fn converge(
             .ci_jobs
             .iter()
             .map(|job| CiJobEvidence {
+                job_id: job.job_id.clone(),
+                provider_run_id: job.provider_run_id.clone(),
+                provider_attempt: job.provider_attempt.clone(),
+                commit_sha: job.commit_sha.clone(),
                 name: job.name.clone(),
                 status: job.status.clone(),
                 conclusion: job.conclusion.clone(),
+                provider_conclusion: job.provider_conclusion.clone(),
                 url: job.url.clone(),
             })
             .collect(),
+        ci_observations: Vec::new(),
     };
     Ok((final_state, plan_feature))
 }
