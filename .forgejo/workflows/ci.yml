@@ -14,12 +14,12 @@ on:
 # Builds are cached transparently by the kache daemon (rustc-wrapper in
 # ~/.cargo/config.toml on the host runner), so a clean checkout still gets warm
 # builds for everything that emits real artifacts (rlibs, test executables, the
-# final binary). Two caching notes drive the step layout below:
+# final binary). A persistent host workspace also lets successive CI runs reuse
+# Cargo's path-sensitive fingerprints without paying kache's per-crate key cost.
+# Two caching notes drive the step layout below:
 #   1. Build and run the cacheable test executables BEFORE linting, so the
 #      expensive shared lib compiles are warmed once and reused by clippy.
-#      Linked test binaries are then discarded before linting; otherwise the
-#      full no-run test set plus clippy metadata can exceed the host runner's
-#      local checkout budget even though kache has the reusable artifacts.
+#      Linked test binaries remain in the persistent target for the next run.
 #   2. Every cargo invocation on the build/test/lint cache path uses the SAME
 #      `--all-targets` scope so feature unification matches and the cached lib
 #      artifacts key-match across steps (see the comment in .cargo/config.toml).
@@ -35,24 +35,30 @@ on:
 jobs:
   validate:
     runs-on: host
-    # The shared runner has no swap. An all-targets cold build can otherwise
-    # launch enough rustc/linker processes to OOM the runner and strand the job.
-    # Keep the bound at two: concurrently linked test binaries also need enough
-    # temporary disk headroom for mold to finish on the shared runner.
+    concurrency:
+      group: temper-ci-rust
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: /var/tmp/temper-ci-workspace
     # Its system /tmp is also a small tmpfs shared with other workspaces, so the
     # first post-checkout step moves scratch data to disk-backed /var/tmp.
-    env:
-      CARGO_BUILD_JOBS: "2"
     steps:
       - name: Checkout
         # Bypass the default action mirror so a data.forgejo.org outage cannot
         # prevent this job from reaching the repository checkout.
         uses: https://github.com/actions/checkout@v4
-      - name: Reclaim shared build cache
-        # The wrapper daemon is not guaranteed to remain resident between host
-        # jobs, so explicitly apply kache's configured LRU size bound before a
-        # restored build needs linker headroom.
-        run: kache gc
+      - name: Refresh persistent CI workspace
+        # Cargo fingerprints contain absolute source paths. Keep one stable path
+        # on the host so Cargo can reuse its target directly; kache supplies
+        # artifacts when that target is cold. The concurrency group prevents
+        # simultaneous mutation of the shared workspace.
+        working-directory: ${{ github.workspace }}
+        run: |
+          stable_workspace="/var/tmp/temper-ci-workspace"
+          mkdir -p "$stable_workspace"
+          rsync -rlp --checksum --delete --exclude target/ \
+            "$GITHUB_WORKSPACE/" "$stable_workspace/"
       - name: Prepare scratch directory
         # This Forgejo Actions runner does not provide the `runner.temp`
         # context. Use a short path outside the checkout so temporary git probes
@@ -112,12 +118,6 @@ jobs:
         run: |
           export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
           scripts/run-nextest-quick.sh --run-ignored only -P e2e
-      - name: Free linked test binaries
-        # Reclaim the large linked test set even when the live e2e lane fails;
-        # otherwise a resource-related test failure can exhaust the shared host
-        # and make the following web job fail before npm can install.
-        if: ${{ always() }}
-        run: find target/debug target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
       - name: Lint
         run: cargo dev-clippy
       - name: Cleanup scratch directory
@@ -141,11 +141,6 @@ jobs:
         # Bypass the default action mirror so a data.forgejo.org outage cannot
         # prevent this job from reaching the repository checkout.
         uses: https://github.com/actions/checkout@v4
-      - name: Reclaim shared build cache
-        # The web lane may be the first job scheduled on a full host. LRU
-        # eviction preserves warm Rust artifacts while making npm extraction
-        # independent of validate-job ordering.
-        run: kache gc
       - name: Install (npm ci)
         # `npm ci` installs exactly the committed package-lock.json. Keep the
         # install hermetic and bounded: advisory/funding network calls are not

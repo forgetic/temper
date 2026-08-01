@@ -15,9 +15,9 @@ on:
 jobs:
   focused-feature-validation:
     name: focused feature validation
+    if: ${{ startsWith(github.event.pull_request.head.ref, 'agent/pr-for-feature-') || startsWith(github.event.pull_request.head.ref, 'feature/') }}
     runs-on: host
     env:
-      CARGO_BUILD_JOBS: "2"
       FEATURE_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
       FEATURE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       FEATURE_LANDING_BASE_SHA: ${{ github.event.pull_request.base.sha }}
