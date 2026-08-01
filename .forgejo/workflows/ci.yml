@@ -30,8 +30,9 @@ on:
 #      validation-grade live scenario lane requires an explicit scenario path;
 #      aggregate feature PRs use the separate focused-feature-validation
 #      workflow. PR CI also preserves broad live coverage in the ignored e2e
-#      lane. Benchmark live mode remains explicit and credential-gated, never
-#      part of PR CI.
+#      lane. The manifest check is additionally skipped unless its inputs or
+#      implementation changed. Benchmark live mode remains explicit and
+#      credential-gated, never part of PR CI.
 jobs:
   validate:
     runs-on: host
@@ -105,9 +106,30 @@ jobs:
         run: |
           export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
           cargo dev-test-e2e-all
+      - name: Detect scenario manifest changes
+        id: scenario-manifest-changes
+        run: |
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          for sha in "$base_sha" "$head_sha"; do
+            if ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$sha"
+            fi
+          done
+          changed="$({ git diff --name-only "$base_sha" "$head_sha"; } | awk '
+            /^scenarios\// ||
+            /^crates\/temper-scenario-core\// ||
+            /^\.cargo\/config\.toml$/ ||
+            /^Cargo\.(toml|lock)$/ ||
+            /^\.forgejo\/workflows\/ci\.yml$/ { found = 1 }
+            END { print found ? "true" : "false" }
+          ')"
+          echo "needed=$changed" >> "$GITHUB_OUTPUT"
       - name: Scenario manifest check
         # Validate checked-in manifests and local fixture references without
-        # executing the implicit live scenario topology.
+        # executing the implicit live scenario topology. Unrelated PRs skip the
+        # narrow checker lane entirely.
+        if: steps.scenario-manifest-changes.outputs.needed == 'true'
         run: cargo dev-scenario-check
       - name: Agent-session benchmark harness
         # Runs the real agent loop against deterministic Jig responses, then

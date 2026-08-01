@@ -35,7 +35,7 @@
 
 [alias]
 dev-check = "check --workspace --all-targets"
-dev-scenario-check = "run -p temper-scenario-cli -- check scenarios"
+dev-scenario-check = "run -p temper-scenario-core --bin temper-scenario-check -- scenarios"
 dev-scenario-run = "run --quiet -p temper-dev --bin temper-dev -- dev-scenario-run"
 dev-scenario-validate-feature = "run --quiet -p temper-scenario-cli -- validate-feature"
 dev-benchmark-harness = "run --quiet -p temper-dev --bin temper-dev -- dev-benchmark-harness"

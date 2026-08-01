@@ -93,6 +93,40 @@ fn repository_ci_runs_tests_before_narrow_cargo_lanes() {
 }
 
 #[test]
+fn repository_ci_only_checks_manifests_for_relevant_changes() {
+    let detector = CI_WORKFLOW
+        .split_once("      - name: Detect scenario manifest changes\n")
+        .expect("CI detects scenario manifest changes")
+        .1
+        .split_once("      - name: Scenario manifest check\n")
+        .expect("change detection precedes the scenario check")
+        .0;
+    for relevant_path in [
+        "^scenarios\\/",
+        "^crates\\/temper-scenario-core\\/",
+        "^\\.cargo\\/config\\.toml$",
+        "^Cargo\\.(toml|lock)$",
+    ] {
+        assert!(
+            detector.contains(relevant_path),
+            "scenario change detector must include `{relevant_path}`"
+        );
+    }
+
+    let check = CI_WORKFLOW
+        .split_once("      - name: Scenario manifest check\n")
+        .expect("CI declares the scenario check")
+        .1
+        .split_once("      - name: Agent-session benchmark harness\n")
+        .expect("scenario check precedes benchmark harness")
+        .0;
+    assert!(
+        check.contains("if: steps.scenario-manifest-changes.outputs.needed == 'true'"),
+        "unrelated pull requests should skip scenario manifest validation"
+    );
+}
+
+#[test]
 fn repository_ci_runs_one_mapped_scenario_from_exact_feature_head() {
     let trigger = FOCUSED_WORKFLOW
         .split_once("  pull_request:\n")

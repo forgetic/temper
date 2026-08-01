@@ -17,5 +17,9 @@ toml = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
+[[bin]]
+name = "temper-scenario-check"
+path = "src/bin/temper-scenario-check.rs"
+
 [lints]
 workspace = true
