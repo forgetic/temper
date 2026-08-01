@@ -9,16 +9,16 @@ real standalone Temper, and Jig fake LLM responses.
 From a fresh checkout of the revision you want to verify:
 
 ```sh
-cargo build --bin temper
 cargo run -p temper-scenario-cli -- check scenarios/implementation-pr-handoff
-cargo run -p temper-scenario-cli -- run --tier live \
-  --temper-bin target/debug/temper \
-  scenarios/implementation-pr-handoff
+cargo dev-scenario-run scenarios/implementation-pr-handoff
 ```
 
-The run selects `runner: manifest`, captures JSON Temper observability, and
-evaluates the declarative `[[expect.checks]]`, `[[expect.events]]`,
-`[[expect.sequence]]`, and `[[expect.count]]` entries in `scenario.toml`.
+`cargo dev-scenario-run scenarios/<name>` is the sole manual live-run alias. It
+builds and supplies standalone Temper, then executes the implicit manifest
+topology. The run reports `runner: manifest`, captures JSON Temper
+observability, and evaluates the declarative `[[expect.checks]]`,
+`[[expect.events]]`, `[[expect.sequence]]`, and `[[expect.count]]` entries in
+`scenario.toml`.
 
 ## What the scenario proves
 
@@ -28,5 +28,6 @@ PR with the authored create handoff, refreshes an existing stale implementation
 PR without duplicating it, clears stale body text, and preserves workflow
 metadata linking each PR back to its source issue and correlation key.
 
-An explicit hermetic tier request is intentionally rejected; this scenario no
-longer has a MemoryForge or in-process runner substitute.
+MemoryForge, filesystem-forge, in-process, hermetic real-stack, and simulation
+tests continue to cover lower-level handoff behavior. They are not alternate
+execution modes for this scenario and do not provide its landing evidence.

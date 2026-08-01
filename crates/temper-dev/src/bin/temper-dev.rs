@@ -20,9 +20,9 @@ fn main() {
         let passthrough_args: Vec<OsString> = args.collect();
         process::exit(run_dev_test_full(&passthrough_args));
     }
-    if command == OsStr::new("dev-scenario-run-live") {
+    if command == OsStr::new("dev-scenario-run") {
         let scenario_args: Vec<OsString> = args.collect();
-        process::exit(run_dev_scenario_run_live(&scenario_args));
+        process::exit(run_dev_scenario_run(&scenario_args));
     }
     if command == OsStr::new("dev-benchmark-harness") {
         let benchmark_args: Vec<OsString> = args.collect();
@@ -36,7 +36,7 @@ fn main() {
 
 fn print_usage(program: &OsStr) {
     eprintln!(
-        "usage: {} <command>\n\ncommands:\n  dev-test-full [nextest-args...]\n  dev-scenario-run-live <scenario-path>\n  dev-benchmark-harness",
+        "usage: {} <command>\n\ncommands:\n  dev-test-full [nextest-args...]\n  dev-scenario-run <scenario-path>\n  dev-benchmark-harness",
         program.to_string_lossy()
     );
 }
@@ -60,18 +60,16 @@ fn run_dev_test_full(passthrough_args: &[OsString]) -> i32 {
     }
 }
 
-fn run_dev_scenario_run_live(args: &[OsString]) -> i32 {
+fn run_dev_scenario_run(args: &[OsString]) -> i32 {
     let scenario = match args {
         [] => {
-            eprintln!(
-                "temper-dev: dev-scenario-run-live requires an explicit mapped scenario path"
-            );
+            eprintln!("temper-dev: dev-scenario-run requires an explicit mapped scenario path");
             return 2;
         }
         [scenario] => scenario.clone(),
         [_, extra, ..] => {
             eprintln!(
-                "temper-dev: unexpected dev-scenario-run-live argument: {}",
+                "temper-dev: unexpected dev-scenario-run argument: {}",
                 extra.to_string_lossy()
             );
             return 2;
@@ -90,18 +88,20 @@ fn run_dev_scenario_run_live(args: &[OsString]) -> i32 {
         return build_status;
     }
 
-    run_cargo_owned(&[
+    run_cargo_owned(&scenario_run_args(scenario, &target_debug_temper_binary()))
+}
+
+fn scenario_run_args(scenario: OsString, temper_binary: &Path) -> Vec<OsString> {
+    vec![
         OsString::from("run"),
         OsString::from("-p"),
         OsString::from("temper-scenario-cli"),
         OsString::from("--"),
         OsString::from("run"),
-        OsString::from("--tier"),
-        OsString::from("live"),
         OsString::from("--temper-bin"),
-        target_debug_temper_binary().into_os_string(),
+        temper_binary.as_os_str().to_owned(),
         scenario,
-    ])
+    ]
 }
 
 fn target_debug_temper_binary() -> PathBuf {
@@ -311,10 +311,55 @@ fn exit_code(status: ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::run_dev_scenario_run_live;
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    use super::{run_dev_scenario_run, scenario_run_args};
 
     #[test]
-    fn live_scenario_driver_requires_an_explicit_path() {
-        assert_eq!(run_dev_scenario_run_live(&[]), 2);
+    fn scenario_driver_requires_an_explicit_path() {
+        assert_eq!(run_dev_scenario_run(&[]), 2);
+    }
+
+    #[test]
+    fn scenario_driver_constructs_an_implicit_live_run() {
+        let args = scenario_run_args(
+            OsString::from("scenarios/proof"),
+            Path::new("custom-target/debug/temper"),
+        );
+        let args = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            [
+                "run",
+                "-p",
+                "temper-scenario-cli",
+                "--",
+                "run",
+                "--temper-bin",
+                "custom-target/debug/temper",
+                "scenarios/proof",
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "--tier"));
+    }
+
+    #[test]
+    fn cargo_config_exposes_one_scenario_run_alias() {
+        let aliases = include_str!("../../../../.cargo/config.toml")
+            .lines()
+            .filter(|line| line.starts_with("dev-scenario-run"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            aliases,
+            [
+                "dev-scenario-run = \"run --quiet -p temper-dev --bin temper-dev -- dev-scenario-run\""
+            ]
+        );
     }
 }

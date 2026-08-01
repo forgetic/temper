@@ -2,14 +2,12 @@
 
 use std::path::PathBuf;
 
-use crate::run_context::ScenarioTier;
-
 const DEFAULT_REPO: &str = "ai/temper";
 
 pub(super) const USAGE: &str = "\
 Run a validation bundle and render final PR validation artifacts from structured evidence.
 
-Usage: temper-scenario validate --pr <N> --sha <SHA> --scenario <PATH> --output-dir <DIR> [--tier <live|hermetic>] [--temper-bin <PATH>] [--repo <OWNER/NAME>] [--target-kind <KIND> --target-issue <N>]
+Usage: temper-scenario validate --pr <N> --sha <SHA> --scenario <PATH> --output-dir <DIR> [--temper-bin <PATH>] [--repo <OWNER/NAME>] [--target-kind <KIND> --target-issue <N>]
 
 Options:
   --pr <N>               Pull request/report number under validation
@@ -17,8 +15,7 @@ Options:
   --target-kind <KIND>   Workflow artifact kind for an issue validation target
   --target-issue <N>     Workflow issue number paired with --target-kind
   --scenario <PATH>      Scenario directory or manifest file to run
-  --tier <live|hermetic> Confidence tier to run (default: live)
-  --temper-bin <PATH>    Standalone `temper` binary for live runners; when omitted, live runners resolve an existing binary or build `cargo build --bin temper`
+  --temper-bin <PATH>    Standalone `temper` binary; when omitted, the validator resolves an existing binary or builds `cargo build --bin temper`
   --output-dir <DIR>     Artifact directory for run evidence, hook logs, Markdown report, and JSON result
   --artifact-dir <DIR>   Alias for --output-dir
   --repo <OWNER/NAME>    Repository recorded in the structured validator result (default: ai/temper)
@@ -29,16 +26,14 @@ bundle on the validation-grade live stack, writes structured run evidence to the
 artifact directory, invokes the same validate-pr report builder against that
 evidence, and retains Markdown/JSON validation output. Lower-level `run
 --evidence-out` and `validate-pr --run-evidence` remain available for manual
-use. The `manifest` runner is the only public runner; explicit `--tier hermetic`
-requests are rejected instead of substituting MemoryForge or in-process paths.";
+use. The `manifest` runner is the only public runner and always uses real
+Forgejo, host `forgejo-runner` CI, standalone Temper, and Jig fake-LLM agents.";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(super) struct Args {
     pub(super) pr_number: u64,
     pub(super) sha: String,
     pub(super) scenario: PathBuf,
-    pub(super) tier: ScenarioTier,
-    pub(super) tier_explicit: bool,
     pub(super) temper_bin: Option<PathBuf>,
     pub(super) output_dir: PathBuf,
     pub(super) repo: String,
@@ -63,7 +58,6 @@ pub(super) fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
     let mut pr_number = None;
     let mut sha = None;
     let mut scenario = None;
-    let mut tier = None;
     let mut temper_bin = None;
     let mut output_dir = None;
     let mut repo = None;
@@ -102,17 +96,6 @@ pub(super) fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         }
         if let Some(value) = inline_flag_value(arg, "--scenario") {
             set_path(&mut scenario, value, "--scenario")?;
-            index += 1;
-            continue;
-        }
-        if arg == "--tier" {
-            let value = flag_value(args, index, "--tier")?;
-            set_tier(&mut tier, value)?;
-            index += 2;
-            continue;
-        }
-        if let Some(value) = inline_flag_value(arg, "--tier") {
-            set_tier(&mut tier, value)?;
             index += 1;
             continue;
         }
@@ -205,13 +188,10 @@ pub(super) fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         return Err(());
     }
 
-    let tier_explicit = tier.is_some();
     Ok(ParseResult::Args(Args {
         pr_number,
         sha,
         scenario,
-        tier: tier.unwrap_or(ScenarioTier::Live),
-        tier_explicit,
         temper_bin,
         output_dir,
         repo: repo.unwrap_or_else(|| DEFAULT_REPO.to_string()),
@@ -269,20 +249,6 @@ fn set_path(path: &mut Option<PathBuf>, value: &str, flag: &str) -> Result<(), (
     }
     if path.replace(PathBuf::from(value)).is_some() {
         eprintln!("temper-scenario validate: duplicate {flag} option\n\n{USAGE}");
-        return Err(());
-    }
-    Ok(())
-}
-
-fn set_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
-    let Some(parsed) = ScenarioTier::parse(value) else {
-        eprintln!(
-            "temper-scenario validate: unknown --tier `{value}` (expected live or hermetic)\n\n{USAGE}"
-        );
-        return Err(());
-    };
-    if tier.replace(parsed).is_some() {
-        eprintln!("temper-scenario validate: duplicate --tier option\n\n{USAGE}");
         return Err(());
     }
     Ok(())

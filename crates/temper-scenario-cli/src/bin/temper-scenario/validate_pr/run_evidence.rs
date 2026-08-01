@@ -7,7 +7,7 @@ use temper_scenario_core::{
     ValidationStatus, ValidationVerdict, check_scenario,
 };
 
-use crate::run_context::{ScenarioRunFacts, ScenarioTier};
+use crate::run_context::ScenarioRunFacts;
 
 use super::Error;
 
@@ -15,8 +15,6 @@ pub(super) fn add_run_evidence_validation(
     report: &mut ValidationReport,
     path: &Path,
     scenario_path: Option<&Path>,
-    tier: ScenarioTier,
-    tier_explicit: bool,
 ) -> Result<(), Error> {
     let loaded = crate::run_evidence::load_run_evidence(path).map_err(Error::RunEvidence)?;
     let diagnostics = loaded.artifact.validate();
@@ -77,7 +75,7 @@ pub(super) fn add_run_evidence_validation(
 
     add_execution_verdict_validation(report, &loaded.artifact);
     add_manifest_assertion_validation(report, &loaded.artifact);
-    compare_run_evidence(report, &loaded.artifact, scenario_path, tier, tier_explicit)?;
+    compare_run_evidence(report, &loaded.artifact, scenario_path)?;
     Ok(())
 }
 
@@ -162,116 +160,95 @@ fn compare_run_evidence(
     report: &mut ValidationReport,
     artifact: &crate::run_evidence::RunEvidenceArtifact,
     scenario_path: Option<&Path>,
-    tier: ScenarioTier,
-    tier_explicit: bool,
 ) -> Result<(), Error> {
-    let mut matches = Vec::new();
-    let mut mismatches = Vec::new();
-
-    if tier_explicit || scenario_path.is_some() {
-        if artifact.scenario.tier == tier.as_str() {
-            matches.push(format!("tier matches requested `{}`", tier.as_str()));
-        } else {
-            mismatches.push(format!(
-                "tier mismatch: requested `{}`, evidence has `{}`",
-                tier.as_str(),
-                artifact.scenario.tier
-            ));
-        }
-    } else {
-        matches.push(format!(
-            "tier accepted from evidence `{}` (no --tier supplied)",
-            artifact.scenario.tier
-        ));
-    }
-
-    if let Some(path) = scenario_path {
-        let check_report = check_scenario(path);
-        if !check_report.is_valid() {
-            return Err(Error::InvalidScenario(Box::new(check_report)));
-        }
-        let scenario_name = check_report
-            .manifest
-            .as_ref()
-            .map(|manifest| manifest.name.as_str())
-            .unwrap_or("unknown");
-        let facts = ScenarioRunFacts::from_check_report(&check_report, tier);
-        let mut check_evidence = EvidenceEntry::new(
-            EvidenceKind::ScenarioCheck,
-            "Scenario check passed for comparison with run evidence.",
-        )
-        .with_detail(format!("scenario: `{scenario_name}`"));
-        if let Some(manifest_path) = check_report.manifest_path.as_deref() {
-            check_evidence = check_evidence.with_detail(format!(
-                "manifest: `{}`",
-                crate::display_path(manifest_path)
-            ));
-        }
-        check_evidence = check_evidence.with_details(facts.evidence_details());
-        report.evidence.push(check_evidence);
-
-        if scenario_name == artifact.scenario.name {
-            matches.push(format!("scenario matches `{scenario_name}`"));
-        } else {
-            mismatches.push(format!(
-                "scenario mismatch: supplied scenario `{scenario_name}`, evidence has `{}`",
-                artifact.scenario.name
-            ));
-        }
-        if facts.source.evidence_value() == artifact.scenario.source {
-            matches.push(format!(
-                "source classification matches `{}`",
-                facts.source.as_str()
-            ));
-        } else {
-            mismatches.push(format!(
-                "source mismatch: supplied scenario is `{}`, evidence has `{}`",
-                facts.source.as_str(),
-                artifact.scenario.source_description
-            ));
-        }
-        if let Some(manifest) = check_report.manifest.as_ref() {
-            match crate::runner_registry::select_runner(manifest, tier) {
-                Ok(selected_runner) if selected_runner.id() == artifact.scenario.runner_id => {
-                    matches.push(format!("runner matches `{}`", selected_runner.id()));
-                }
-                Ok(selected_runner) => mismatches.push(format!(
-                    "runner mismatch: supplied scenario selects `{}`, evidence has `{}`",
-                    selected_runner.id(),
-                    artifact.scenario.runner_id
-                )),
-                Err(error) => mismatches.push(format!(
-                    "runner mismatch: supplied scenario runner selection failed: {}",
-                    error.message(&check_report.scenario_path)
-                )),
-            }
-        }
-    } else {
+    let Some(path) = scenario_path else {
         report.limitations.push(
             "No --scenario path was supplied with --run-evidence; the report did not re-check the scenario manifest."
                 .to_string(),
         );
+        return Ok(());
+    };
+
+    let mut matches = Vec::new();
+    let mut mismatches = Vec::new();
+    let check_report = check_scenario(path);
+    if !check_report.is_valid() {
+        return Err(Error::InvalidScenario(Box::new(check_report)));
+    }
+    let scenario_name = check_report
+        .manifest
+        .as_ref()
+        .map(|manifest| manifest.name.as_str())
+        .unwrap_or("unknown");
+    let facts = ScenarioRunFacts::from_check_report(&check_report);
+    let mut check_evidence = EvidenceEntry::new(
+        EvidenceKind::ScenarioCheck,
+        "Scenario check passed for comparison with run evidence.",
+    )
+    .with_detail(format!("scenario: `{scenario_name}`"));
+    if let Some(manifest_path) = check_report.manifest_path.as_deref() {
+        check_evidence = check_evidence.with_detail(format!(
+            "manifest: `{}`",
+            crate::display_path(manifest_path)
+        ));
+    }
+    check_evidence = check_evidence.with_details(facts.evidence_details());
+    report.evidence.push(check_evidence);
+
+    if scenario_name == artifact.scenario.name {
+        matches.push(format!("scenario matches `{scenario_name}`"));
+    } else {
+        mismatches.push(format!(
+            "scenario mismatch: supplied scenario `{scenario_name}`, evidence has `{}`",
+            artifact.scenario.name
+        ));
+    }
+    if facts.source.evidence_value() == artifact.scenario.source {
+        matches.push(format!(
+            "source classification matches `{}`",
+            facts.source.as_str()
+        ));
+    } else {
+        mismatches.push(format!(
+            "source mismatch: supplied scenario is `{}`, evidence has `{}`",
+            facts.source.as_str(),
+            artifact.scenario.source_description
+        ));
+    }
+    if let Some(manifest) = check_report.manifest.as_ref() {
+        match crate::runner_registry::select_runner(manifest) {
+            Ok(selected_runner) if selected_runner.id() == artifact.scenario.runner_id => {
+                matches.push(format!("runner matches `{}`", selected_runner.id()));
+            }
+            Ok(selected_runner) => mismatches.push(format!(
+                "runner mismatch: supplied scenario selects `{}`, evidence has `{}`",
+                selected_runner.id(),
+                artifact.scenario.runner_id
+            )),
+            Err(error) => mismatches.push(format!(
+                "runner mismatch: supplied scenario runner selection failed: {}",
+                error.message(&check_report.scenario_path)
+            )),
+        }
     }
 
+    let criterion = "Run evidence scenario name, source classification, and runner identity agree with the supplied scenario.";
     if mismatches.is_empty() {
         report.validated_claims.push(
             ValidatedClaim::new(
-                "Run evidence matches the requested validation scenario context.",
+                "Run evidence matches the supplied validation scenario context.",
                 ValidationStatus::Observed,
             )
             .with_evidence(matches.join("; ")),
         );
         report.acceptance_criteria.push(
-            AcceptanceCriterion::new(
-                "Run evidence scenario, tier, and runner agree with supplied validation inputs when those inputs are present.",
-                ValidationStatus::Satisfied,
-            )
-            .with_evidence(matches.join("; ")),
+            AcceptanceCriterion::new(criterion, ValidationStatus::Satisfied)
+                .with_evidence(matches.join("; ")),
         );
         report.evidence.push(
             EvidenceEntry::new(
                 EvidenceKind::Observation,
-                "Run evidence context matched supplied validation inputs.",
+                "Run evidence context matched the supplied validation scenario.",
             )
             .with_details(matches),
         );
@@ -279,22 +256,19 @@ fn compare_run_evidence(
         report.verdict = ValidationVerdict::Failed;
         report.validated_claims.push(
             ValidatedClaim::new(
-                "Run evidence matches the requested validation scenario context.",
+                "Run evidence matches the supplied validation scenario context.",
                 ValidationStatus::Failed,
             )
             .with_evidence(mismatches.join("; ")),
         );
         report.acceptance_criteria.push(
-            AcceptanceCriterion::new(
-                "Run evidence scenario, tier, and runner agree with supplied validation inputs when those inputs are present.",
-                ValidationStatus::Failed,
-            )
-            .with_evidence(mismatches.join("; ")),
+            AcceptanceCriterion::new(criterion, ValidationStatus::Failed)
+                .with_evidence(mismatches.join("; ")),
         );
         report.evidence.push(
             EvidenceEntry::new(
                 EvidenceKind::Observation,
-                "Run evidence context did not match supplied validation inputs.",
+                "Run evidence context did not match the supplied validation scenario.",
             )
             .with_details(mismatches),
         );

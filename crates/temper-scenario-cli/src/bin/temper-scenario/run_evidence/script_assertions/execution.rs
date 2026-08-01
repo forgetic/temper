@@ -357,6 +357,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn script_context_retains_fixed_live_topology_compatibility_facts() {
+        let artifact: RunEvidenceArtifact = serde_json::from_value(json!({
+            "schema": "temper.scenario.run-evidence",
+            "version": 2,
+            "verdict": "failed",
+            "scenario": {
+                "name": "fixture",
+                "source": "ephemeral",
+                "source_description": "ephemeral validation bundle",
+                "scenario_path": "/tmp/fixture",
+                "manifest_path": "/tmp/fixture/scenario.toml",
+                "runner_id": "manifest",
+                "runner_selector": "runner.uses",
+                "runner_selection": "runner: `manifest` selected by runner.uses",
+                "tier": crate::run_context::LIVE_TIER,
+                "tier_description": crate::run_context::LIVE_TOPOLOGY_DESCRIPTION,
+                "topology": {}
+            },
+            "final_state": {}
+        }))
+        .expect("run evidence fixture");
+        let hook = ScriptHook {
+            id: "proof".to_string(),
+            required: true,
+            phase: "after-convergence".to_string(),
+            command: PathBuf::from("proof.sh"),
+            cwd: PathBuf::from("."),
+            timeout_ms: 1_000,
+            env_allow: Vec::new(),
+        };
+
+        let context = script_context(
+            &artifact,
+            &hook,
+            Path::new("/tmp/run-artifacts"),
+            Path::new("/tmp/hook-artifacts"),
+            Path::new("/tmp/hook-artifacts/context.json"),
+        );
+
+        assert_eq!(context["tier"], crate::run_context::LIVE_TIER);
+        assert_eq!(
+            context["run_evidence"]["scenario"]["tier_description"],
+            crate::run_context::LIVE_TOPOLOGY_DESCRIPTION
+        );
+    }
+
+    #[test]
     fn relative_artifact_paths_are_resolved_from_the_runner_directory() {
         let relative = Path::new("validation-artifacts/focused-pr/script-assertions");
         let resolved = absolute_artifact_path(relative).expect("resolve relative artifact path");

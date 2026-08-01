@@ -38,8 +38,11 @@ Run with the live command required by `AGENTS.md`:
 cargo dev-scenario-run scenarios/plan-centric-feature-branch
 ```
 
-Equivalent direct command after building `temper`:
+Equivalent direct command after building `temper` (the live topology is
+implicit):
 
 ```sh
-cargo run -p temper-scenario-cli -- run --tier live --temper-bin target/debug/temper scenarios/plan-centric-feature-branch
+cargo run -p temper-scenario-cli -- run \
+  --temper-bin target/debug/temper \
+  scenarios/plan-centric-feature-branch
 ```

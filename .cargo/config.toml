@@ -16,10 +16,10 @@
 # compile under a feature combo no other build shares and miss the cache
 # wholesale. Keep those aliases on `--all-targets` so the test build and the
 # lint pass key-match and share cached lib artifacts. `dev-scenario-check` and
-# the scenario run aliases are small scenario CLI lanes outside that cache path:
-# `dev-scenario-run`/`dev-scenario-run-live` require an explicit scenario path,
-# while `dev-scenario-validate-feature` resolves exactly one feature mapping and
-# runs it through the validation-grade live manifest topology.
+# the scenario run alias are small scenario CLI lanes outside that cache path:
+# `dev-scenario-run` requires an explicit scenario path, while
+# `dev-scenario-validate-feature` resolves exactly one feature mapping and runs
+# it through the validation-grade live manifest topology.
 #
 # (clippy/check still produce zero-byte leaf `.rmeta` that kache cannot cache,
 # so the leaf check-only targets always recompile; that cost is small and
@@ -36,8 +36,7 @@
 [alias]
 dev-check = "check --workspace --all-targets"
 dev-scenario-check = "run -p temper-scenario-cli -- check scenarios"
-dev-scenario-run = "run --quiet -p temper-dev --bin temper-dev -- dev-scenario-run-live"
-dev-scenario-run-live = "run --quiet -p temper-dev --bin temper-dev -- dev-scenario-run-live"
+dev-scenario-run = "run --quiet -p temper-dev --bin temper-dev -- dev-scenario-run"
 dev-scenario-validate-feature = "run --quiet -p temper-scenario-cli -- validate-feature"
 dev-benchmark-harness = "run --quiet -p temper-dev --bin temper-dev -- dev-benchmark-harness"
 dev-fmt = "fmt --all"

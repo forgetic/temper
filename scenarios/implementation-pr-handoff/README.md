@@ -7,9 +7,10 @@ title/body and that Temper preserves workflow metadata relating the PR back to
 its source code issue.
 
 The scenario uses real Forgejo, a registered host `forgejo-runner`, a real
-standalone `temper` process, and Jig fake LLM responses. The checked-in runner
-path is `runner.uses = "manifest"`; there is no hermetic MemoryForge or
-in-process compatibility runner for this scenario.
+standalone `temper` process, and Jig fake-LLM responses. The checked-in runner
+path is `runner.uses = "manifest"`, which always uses that implicit topology.
+MemoryForge, filesystem-forge, in-process, hermetic real-stack, and simulation
+coverage remain lower-level tests rather than scenario execution.
 
 ## Files
 
@@ -63,9 +64,15 @@ scenarios/implementation-pr-handoff/
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/implementation-pr-handoff
-cargo run -p temper-scenario-cli -- run --tier live --temper-bin target/debug/temper scenarios/implementation-pr-handoff
+cargo dev-scenario-run scenarios/implementation-pr-handoff
 ```
 
-An explicit hermetic tier request is rejected by the manifest runner. Use
-`cargo dev-scenario-run scenarios/implementation-pr-handoff` if you want the
-helper to build and pass the standalone `temper` binary.
+That Cargo alias builds and passes standalone Temper. It is the sole alias for a
+manual live scenario run. Automation with an existing binary may invoke the CLI
+directly:
+
+```sh
+cargo run -p temper-scenario-cli -- run \
+  --temper-bin target/debug/temper \
+  scenarios/implementation-pr-handoff
+```

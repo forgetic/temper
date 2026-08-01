@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use crate::run_context::ScenarioTier;
+use crate::run_context::LIVE_TIER;
 
 use super::model::{
     LEGACY_RUN_EVIDENCE_VERSION, RUN_EVIDENCE_SCHEMA, RUN_EVIDENCE_VERSION, RunEvidenceArtifact,
@@ -37,9 +37,9 @@ impl RunEvidenceArtifact {
                 self.scenario.source
             ));
         }
-        if ScenarioTier::parse(&self.scenario.tier).is_none() {
+        if self.scenario.tier != LIVE_TIER {
             diagnostics.push(format!(
-                "run evidence scenario.tier must be `hermetic` or `live`, got `{}`",
+                "run evidence scenario.tier must be `{LIVE_TIER}`, got `{}`",
                 self.scenario.tier
             ));
         }
@@ -94,15 +94,12 @@ impl RunEvidenceArtifact {
                     "passing run evidence is missing execution duration/status facts".to_string(),
                 );
             }
-            if self.verdict == RunEvidenceVerdict::Passed
-                && self.scenario.tier == "live"
-                && self.binary.is_none()
-            {
+            if self.verdict == RunEvidenceVerdict::Passed && self.binary.is_none() {
                 diagnostics.push(
                     "passing live run evidence is missing standalone binary identity".to_string(),
                 );
             }
-            if self.verdict == RunEvidenceVerdict::Passed && self.scenario.tier == "live" {
+            if self.verdict == RunEvidenceVerdict::Passed {
                 for (field, value) in [
                     ("topology.forge", self.scenario.topology.forge.as_deref()),
                     ("topology.runner", self.scenario.topology.runner.as_deref()),

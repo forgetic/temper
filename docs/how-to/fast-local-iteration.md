@@ -17,17 +17,18 @@ the same cheap check that runs in fast CI:
 cargo dev-scenario-check
 ```
 
-Exercise one explicit validation-grade live scenario. This builds a standalone
-`temper` binary, then runs real Forgejo + real `forgejo-runner` CI + real
-standalone Temper + Jig fake LLM agents through the live-only
-`runner.uses = "manifest"` path:
+Exercise one validation-grade scenario through the sole manual live-run alias.
+It builds standalone `temper`, then runs the one implicit topology: real Forgejo,
+a host `forgejo-runner` for CI, standalone Temper, and Jig fake-LLM agents via
+`runner.uses = "manifest"`:
 
 ```sh
 cargo dev-scenario-run scenarios/<scenario-name>
 ```
 
-The command has no default scenario. For an aggregate feature landing, resolve
-and run its sole mapping instead:
+The command has no default scenario, and no other Cargo alias runs a manual
+scenario. For an aggregate feature landing, resolve and run its sole mapping
+instead:
 
 ```sh
 cargo dev-scenario-validate-feature \
@@ -42,10 +43,10 @@ cargo dev-scenario-validate-feature \
 See [Run focused feature validation](run-focused-feature-validation.md) for the
 evidence and stale-head contract.
 
-The manifest runner intentionally rejects hermetic, MemoryForge-only, and
-in-process Temper substitutes. For fast local coverage, use focused crate tests
-or `cargo dev-test-quick`; do not cite those lower-confidence checks as
-validation-grade scenario evidence.
+The scenario CLI has no MemoryForge, filesystem-forge, in-process, hermetic
+real-stack, or simulation execution mode. Those remain the fast lower levels of
+the testing pyramid; use focused crate tests or `cargo dev-test-quick` for that
+coverage, but do not cite it as validation-grade scenario evidence.
 
 ## Tests
 

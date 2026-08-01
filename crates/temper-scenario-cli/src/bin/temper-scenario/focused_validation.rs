@@ -156,8 +156,6 @@ fn validation_args(args: &Args, resolved: &ResolvedFeatureScenario) -> Vec<Strin
         args.sha.clone(),
         "--scenario".to_string(),
         resolved.scenario_path.clone(),
-        "--tier".to_string(),
-        "live".to_string(),
         "--output-dir".to_string(),
         args.output_dir.display().to_string(),
         "--repo".to_string(),
@@ -387,4 +385,65 @@ fn usage_error<T>(message: String) -> Result<T, ()> {
 
 fn usage_error_message(message: impl std::fmt::Display) {
     eprintln!("temper-scenario validate-feature: {message}\n\n{USAGE}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use temper_scenario_core::{FeatureMappingChange, FeatureScenarioBaseComparison};
+
+    #[test]
+    fn focused_validator_args_preserve_mapping_without_a_tier() {
+        let args = Args {
+            feature: ForgeIssueKey::new("ai/temper", 824).expect("feature key"),
+            landing_base: "main".to_string(),
+            source_branch: "feature/824".to_string(),
+            pr_number: 42,
+            sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            output_dir: PathBuf::from("artifacts/focused"),
+            temper_bin: Some(PathBuf::from("custom-target/debug/temper")),
+        };
+        let resolved = ResolvedFeatureScenario {
+            schema: "temper.scenario.feature-mapping.v1".to_string(),
+            mapping_id: "ai/temper#824:proof".to_string(),
+            feature: args.feature.clone(),
+            plan: Some(ForgeIssueKey::new("ai/temper", 825).expect("plan key")),
+            scenario_name: "proof".to_string(),
+            scenario_path: "scenarios/proof".to_string(),
+            manifest_path: "scenarios/proof/scenario.toml".to_string(),
+            source_branch: args.source_branch.clone(),
+            head_sha: args.sha.clone(),
+            landing_base: args.landing_base.clone(),
+            landing_base_sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+            base_comparison: FeatureScenarioBaseComparison::New,
+            content_changed_from_base: true,
+            change_intent: FeatureMappingChange::New,
+            digest: "sha256:proof".to_string(),
+        };
+
+        let validation = validation_args(&args, &resolved);
+
+        assert_eq!(
+            validation,
+            [
+                "--pr",
+                "42",
+                "--sha",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--scenario",
+                "scenarios/proof",
+                "--output-dir",
+                "artifacts/focused",
+                "--repo",
+                "ai/temper",
+                "--target-kind",
+                "feature",
+                "--target-issue",
+                "824",
+                "--temper-bin",
+                "custom-target/debug/temper",
+            ]
+        );
+        assert!(!validation.iter().any(|arg| arg == "--tier"));
+    }
 }

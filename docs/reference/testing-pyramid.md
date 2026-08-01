@@ -97,8 +97,7 @@ Use the aliases in `.cargo/config.toml`:
 ```sh
 cargo dev-check          # fast workspace type check
 cargo dev-scenario-check # validate checked-in scenario manifests and local refs
-cargo dev-scenario-run scenarios/<name> # run one explicitly selected live scenario
-cargo dev-scenario-run-live scenarios/<name> # explicit name for the same lane
+cargo dev-scenario-run scenarios/<name> # sole manual alias; run implicit live topology
 cargo dev-scenario-validate-feature ... # resolve and run one exact-head mapping
 cargo dev-test-quick     # default non-ignored suite via nextest
 cargo dev-test-build     # prebuild all test binaries
@@ -117,10 +116,15 @@ The web UI is separate from Cargo:
 CI runs format, depgraph, file-size, ambient-env, build, scenario manifest
 checks, quick Rust tests, the full ignored/manual e2e lane, clippy, and then a
 separate web job for Vitest/build. Aggregate `feature/*` PRs into `main` also run
-the exact checked-out head through one resolved mapped live scenario and retain
-the mapping plus structured evidence. Manual live scenario runs require an
-explicit path; they select the live-only `manifest` runner and use real Forgejo
-+ real forgejo-runner CI + real Temper + Jig fake LLM.
+the exact checked-out head through one resolved mapped scenario and retain the
+mapping plus structured evidence. `cargo dev-scenario-run scenarios/<name>` is
+the sole manual scenario alias; it requires an explicit path and executes the
+implicit topology of real Forgejo, a host `forgejo-runner`, standalone Temper,
+and Jig fake-LLM agents.
+
+MemoryForge, filesystem-forge, in-process, hermetic real-stack, and simulation
+suites remain lower-level coverage. They are not alternate scenario CLI modes or
+feature-landing scenario evidence.
 
 ## Current effectiveness assessment
 

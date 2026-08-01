@@ -63,8 +63,6 @@ fn validate_workflow_live_with_missing_temper_bin_fails_clearly() {
         "deadbeef",
         "--scenario",
         &scenario.to_string_lossy(),
-        "--tier",
-        "live",
         "--temper-bin",
         &missing_temper.to_string_lossy(),
         "--output-dir",
@@ -94,6 +92,11 @@ fn validate_workflow_live_with_missing_temper_bin_fails_clearly() {
     .expect("failure evidence JSON");
     assert_eq!(evidence["version"], 2);
     assert_eq!(evidence["verdict"], "failed");
+    assert_eq!(evidence["scenario"]["tier"], "live");
+    assert_eq!(
+        evidence["scenario"]["tier_description"],
+        "real Forgejo + host `forgejo-runner` CI + standalone Temper + Jig fake-LLM agents"
+    );
     assert!(
         evidence["execution"]["failure"]
             .as_str()
@@ -167,9 +170,10 @@ fn validate_workflow_rejects_missing_runner_selector_before_live_setup() {
 }
 
 #[test]
-fn validate_workflow_rejects_unknown_tier_before_running() {
+fn validate_workflow_rejects_legacy_tier_before_running() {
     let dir = tempfile::tempdir().expect("tempdir");
     let scenario = workspace_root().join("scenarios/basic-delivery");
+    let output_dir = dir.path().join("validation-artifacts");
 
     let output = temper_scenario(&[
         "validate",
@@ -180,14 +184,16 @@ fn validate_workflow_rejects_unknown_tier_before_running() {
         "--scenario",
         &scenario.to_string_lossy(),
         "--output-dir",
-        &dir.path().join("validation-artifacts").to_string_lossy(),
-        "--tier",
-        "medium",
+        &output_dir.to_string_lossy(),
+        "--tier=live",
     ]);
 
-    assert!(!output.status.success(), "unknown tier should fail");
+    assert_eq!(output.status.code(), Some(64));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
     let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("unknown --tier `medium`"), "{stderr}");
-    assert!(stderr.contains("expected live or hermetic"), "{stderr}");
+    assert!(
+        stderr.contains("unexpected argument `--tier=live`"),
+        "{stderr}"
+    );
+    assert!(!output_dir.exists(), "scenario execution must not begin");
 }

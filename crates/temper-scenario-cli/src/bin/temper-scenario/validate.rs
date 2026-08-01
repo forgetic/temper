@@ -135,10 +135,10 @@ fn run_scenario_evidence(args: &Args, evidence_path: &Path) -> Result<RunOutcome
         ))
     })?;
 
-    let facts = ScenarioRunFacts::from_check_report(&report, args.tier);
-    let selected_runner = runner_registry::select_runner(manifest, args.tier)
+    let facts = ScenarioRunFacts::from_check_report(&report);
+    let selected_runner = runner_registry::select_runner(manifest)
         .map_err(|error| RunError::Message(error.message(&report.scenario_path)))?;
-    let temper_bin = resolve_temper_binary(&selected_runner, args).map_err(RunError::Message)?;
+    let temper_bin = resolve_temper_binary(args).map_err(RunError::Message)?;
 
     let evidence_context =
         run_evidence::RunEvidenceContext::from_check_report(&report, &facts, &selected_runner);
@@ -147,7 +147,6 @@ fn run_scenario_evidence(args: &Args, evidence_path: &Path) -> Result<RunOutcome
         &report.scenario_path,
         manifest_path,
         &facts,
-        args.tier,
         temper_bin.as_deref(),
         &evidence_context,
     ) {
@@ -210,13 +209,7 @@ fn run_scenario_evidence(args: &Args, evidence_path: &Path) -> Result<RunOutcome
     })
 }
 
-fn resolve_temper_binary(
-    selected_runner: &runner_registry::SelectedRunner,
-    args: &Args,
-) -> Result<Option<PathBuf>, String> {
-    if !selected_runner.requires_standalone_temper(args.tier) {
-        return Ok(args.temper_bin.clone());
-    }
+fn resolve_temper_binary(args: &Args) -> Result<Option<PathBuf>, String> {
     if let Some(path) = args.temper_bin.as_ref() {
         return Ok(Some(path.clone()));
     }
@@ -401,8 +394,6 @@ fn write_validation_artifacts(
         sha: args.sha.clone(),
         scenario: Some(args.scenario.clone()),
         run_evidence: Some(evidence_path.to_path_buf()),
-        tier: args.tier,
-        tier_explicit: args.tier_explicit,
         temper_bin: None,
         output_dir: args.output_dir.clone(),
     };

@@ -83,7 +83,7 @@ jobs:
         run: cargo dev-test-build
       - name: Scenario manifest check
         # Validate checked-in manifests and local fixture references without
-        # running either scenario execution tier.
+        # executing the implicit live scenario topology.
         run: cargo dev-scenario-check
       - name: Agent-session benchmark harness
         # Runs the real agent loop against deterministic Jig responses, then

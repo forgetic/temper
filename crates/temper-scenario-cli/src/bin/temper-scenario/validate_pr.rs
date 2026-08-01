@@ -9,7 +9,7 @@ use temper_scenario_core::{
     ValidationStatus, ValidationVerdict, check_scenario,
 };
 
-use super::run_context::{ScenarioRunFacts, ScenarioTier};
+use super::run_context::ScenarioRunFacts;
 
 #[path = "validate_pr/live.rs"]
 mod live;
@@ -23,20 +23,19 @@ const EX_USAGE: u8 = 64;
 const USAGE: &str = "\
 Write a temporary/manual post-merge validation Markdown report.
 
-Usage: temper-scenario validate-pr --pr <N> --sha <SHA> [--scenario <PATH>] [--run-evidence <PATH>] [--tier <live|hermetic>] [--temper-bin <PATH>] [--output-dir <DIR>]
+Usage: temper-scenario validate-pr --pr <N> --sha <SHA> [--scenario <PATH>] [--run-evidence <PATH>] [--temper-bin <PATH>] [--output-dir <DIR>]
 
 Options:
   --pr <N>             Pull request number under validation
   --sha <SHA>          Merged/main commit SHA under validation
   --scenario <PATH>     Scenario directory or manifest file to check, and run when supported unless --run-evidence is supplied
   --run-evidence <PATH>  Previous run-evidence JSON file or directory to cite instead of rerunning scenario evidence
-  --tier <live|hermetic>  Scenario confidence tier to run or compare (default: live)
-  --temper-bin <PATH>   Standalone `temper` binary for --tier live manifest scenarios
+  --temper-bin <PATH>   Standalone `temper` binary for manifest scenarios
   --output-dir <DIR>    Directory for the Markdown report (default: current directory)
   -h, --help           Print help
 
 The bridge records local scenario evidence when available, including scenario
-source, the selected confidence tier, and manifest topology. Pass
+source, the fixed live execution topology, and manifest topology. Pass
 `--run-evidence <PATH>` to render from a previous `temper-scenario run
 --evidence-out <PATH>` artifact without rerunning scenario evidence. Direct
 `--scenario` runs use the single public `manifest` runner on the validation-grade
@@ -90,8 +89,6 @@ pub(super) struct Args {
     pub(super) sha: String,
     pub(super) scenario: Option<PathBuf>,
     pub(super) run_evidence: Option<PathBuf>,
-    pub(super) tier: ScenarioTier,
-    pub(super) tier_explicit: bool,
     pub(super) temper_bin: Option<PathBuf>,
     pub(super) output_dir: PathBuf,
 }
@@ -120,7 +117,6 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
     let mut sha = None;
     let mut scenario = None;
     let mut run_evidence = None;
-    let mut tier = None;
     let mut temper_bin = None;
     let mut output_dir = None;
     let mut index = 0;
@@ -173,11 +169,6 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
                 }
                 index += 2;
             }
-            "--tier" => {
-                let value = flag_value(args, index, "--tier")?;
-                set_tier(&mut tier, value)?;
-                index += 2;
-            }
             "--temper-bin" => {
                 let value = flag_value(args, index, "--temper-bin")?;
                 set_temper_bin(&mut temper_bin, value)?;
@@ -209,14 +200,11 @@ fn parse_args(args: &[String]) -> Result<ParseResult, ()> {
         return Err(());
     };
 
-    let tier_explicit = tier.is_some();
     Ok(ParseResult::Args(Args {
         pr_number,
         sha,
         scenario,
         run_evidence,
-        tier: tier.unwrap_or(ScenarioTier::Live),
-        tier_explicit,
         temper_bin,
         output_dir: output_dir.unwrap_or_else(|| PathBuf::from(".")),
     }))
@@ -232,20 +220,6 @@ fn flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a st
         return Err(());
     }
     Ok(value)
-}
-
-fn set_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
-    let Some(parsed) = ScenarioTier::parse(value) else {
-        eprintln!(
-            "temper-scenario validate-pr: unknown --tier `{value}` (expected live or hermetic)\n\n{USAGE}"
-        );
-        return Err(());
-    };
-    if tier.replace(parsed).is_some() {
-        eprintln!("temper-scenario validate-pr: duplicate --tier option\n\n{USAGE}");
-        return Err(());
-    }
-    Ok(())
 }
 
 fn set_temper_bin(temper_bin: &mut Option<PathBuf>, value: &str) -> Result<(), ()> {
@@ -270,7 +244,6 @@ pub(super) fn build_report(args: &Args, output_path: &Path) -> Result<Validation
         )
         .with_detail(format!("pr: #{}", args.pr_number))
         .with_detail(format!("sha: `{}`", args.sha))
-        .with_detail(format!("requested scenario tier: {}", args.tier.as_str()))
         .with_details(
             args.run_evidence
                 .as_ref()
@@ -304,19 +277,12 @@ pub(super) fn build_report(args: &Args, output_path: &Path) -> Result<Validation
     ));
 
     if let Some(path) = args.run_evidence.as_deref() {
-        run_evidence::add_run_evidence_validation(
-            &mut report,
-            path,
-            args.scenario.as_deref(),
-            args.tier,
-            args.tier_explicit,
-        )?;
+        run_evidence::add_run_evidence_validation(&mut report, path, args.scenario.as_deref())?;
     } else {
         match args.scenario.as_deref() {
             Some(path) => add_scenario_validation(
                 &mut report,
                 path,
-                args.tier,
                 args.temper_bin.as_deref(),
                 &args.output_dir,
             )?,
@@ -332,7 +298,7 @@ pub(super) fn build_report(args: &Args, output_path: &Path) -> Result<Validation
                 );
                 report.acceptance_criteria.push(
                     AcceptanceCriterion::new(
-                        "A supplied scenario path is checked and, when supported, run at the requested tier, or a previous run-evidence artifact is ingested.",
+                        "A supplied scenario path is checked and run through the manifest topology, or a previous run-evidence artifact is ingested.",
                         ValidationStatus::Unproven,
                     )
                     .with_evidence("No --scenario or --run-evidence argument was provided."),
@@ -355,7 +321,6 @@ pub(super) fn build_report(args: &Args, output_path: &Path) -> Result<Validation
 fn add_scenario_validation(
     report: &mut ValidationReport,
     path: &Path,
-    tier: ScenarioTier,
     temper_bin: Option<&Path>,
     artifact_dir: &Path,
 ) -> Result<(), Error> {
@@ -369,7 +334,7 @@ fn add_scenario_validation(
         .as_ref()
         .map(|manifest| manifest.name.as_str())
         .unwrap_or("unknown");
-    let facts = ScenarioRunFacts::from_check_report(&check_report, tier);
+    let facts = ScenarioRunFacts::from_check_report(&check_report);
 
     report.validated_claims.push(
         ValidatedClaim::new(
@@ -413,7 +378,6 @@ fn add_scenario_validation(
         &check_report,
         &facts,
         scenario_name,
-        tier,
         temper_bin,
         artifact_dir,
     );

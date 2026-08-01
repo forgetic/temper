@@ -34,8 +34,8 @@ The script runs these commands in order and stops on the first failure:
 8. Drop linked test binaries from `target/debug` before linting
 9. `cargo dev-clippy`
 
-Use `cargo dev-scenario-check` plus an explicit live run such as
-`cargo dev-scenario-run scenarios/<name>` when your change touches scenario
+Use `cargo dev-scenario-check` plus the sole manual live-run alias,
+`cargo dev-scenario-run scenarios/<name>`, when your change touches scenario
 manifests, scenario runners, Forgejo/CI convergence, or validation evidence. For
 an aggregate feature head, use the mapped `cargo dev-scenario-validate-feature`
 command documented in

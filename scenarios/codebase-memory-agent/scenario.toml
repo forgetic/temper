@@ -263,5 +263,5 @@ compatible_changes = [
 ]
 requires_new_scenario_or_major_update = [
   "Removing workspace defaulting or safe-tool filtering from the validation contract.",
-  "Replacing the mandatory live Forgejo/Actions/Temper/Jig stack with a hermetic runner.",
+  "Replacing the mandatory live Forgejo/Actions/Temper/Jig stack with a lower-level test topology.",
 ]
