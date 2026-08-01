@@ -86,10 +86,7 @@ jobs:
         # stray reader. Compiles nothing.
         run: scripts/check-no-ambient-env.sh
       - name: Build
-        run: |
-          kache --version
-          cargo dev-test-build
-          kache report --since 30m --root "$PWD"
+        run: cargo dev-test-build
       - name: Scenario manifest check
         # Validate checked-in manifests and local fixture references without
         # executing the implicit live scenario topology.
