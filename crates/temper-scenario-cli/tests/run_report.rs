@@ -47,38 +47,32 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
-fn checked_in_manifest_scenarios_reject_explicit_hermetic_tier() {
-    for scenario_name in [
-        "basic-delivery",
-        "implementation-pr-handoff",
-        "codebase-memory-agent",
-    ] {
-        let scenario = workspace_root().join("scenarios").join(scenario_name);
+fn legacy_tier_spellings_are_usage_errors_for_every_runner_command() {
+    for command in ["run", "validate", "validate-pr"] {
+        for legacy_args in [
+            vec!["--tier", "live"],
+            vec!["--tier", "hermetic"],
+            vec!["--tier=live"],
+        ] {
+            let mut args = vec![command];
+            args.extend(legacy_args);
+            let output = temper_scenario(&args);
 
-        let output = temper_scenario(&["run", "--tier", "hermetic", &scenario.to_string_lossy()]);
-
-        assert!(
-            !output.status.success(),
-            "manifest runner must reject hermetic tier for {scenario_name}"
-        );
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "");
-        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-        assert!(
-            stderr.contains("unsupported tier `hermetic` for runner `manifest`"),
-            "{stderr}"
-        );
-        assert!(stderr.contains("runner.uses"), "{stderr}");
-        assert!(stderr.contains("supported tiers: live"), "{stderr}");
-        assert!(
-            stderr.contains("no hermetic, MemoryForge, or in-process substitute"),
-            "{stderr}"
-        );
-        assert!(!stderr.contains("basic-delivery (tiers"), "{stderr}");
+            assert_eq!(
+                output.status.code(),
+                Some(64),
+                "{command} should reject legacy args: {args:?}"
+            );
+            assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+            let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+            assert!(stderr.contains("unexpected"), "{stderr}");
+            assert!(stderr.contains("--tier"), "{stderr}");
+        }
     }
 }
 
 #[test]
-fn run_live_tier_with_missing_temper_binary_selects_manifest_only() {
+fn run_with_missing_temper_binary_selects_manifest_only() {
     let scenario = workspace_root().join("scenarios/basic-delivery");
     let missing_temper = tempfile::tempdir()
         .expect("tempdir")
@@ -87,8 +81,6 @@ fn run_live_tier_with_missing_temper_binary_selects_manifest_only() {
 
     let output = temper_scenario(&[
         "run",
-        "--tier",
-        "live",
         "--temper-bin",
         &missing_temper.to_string_lossy(),
         &scenario.to_string_lossy(),
@@ -142,7 +134,7 @@ fn run_rejects_retired_basic_delivery_runner_alias() {
     copy_dir_all(&workspace_root().join("scenarios/basic-delivery"), &bundle);
     set_runner_for_bundle(&bundle, Some("basic-delivery"));
 
-    let output = temper_scenario(&["run", "--tier", "live", &bundle.to_string_lossy()]);
+    let output = temper_scenario(&["run", &bundle.to_string_lossy()]);
 
     assert!(!output.status.success(), "retired alias should fail");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
@@ -155,43 +147,42 @@ fn run_rejects_retired_basic_delivery_runner_alias() {
         stderr.contains("no compatibility aliases are registered"),
         "{stderr}"
     );
-    assert!(stderr.contains("manifest (tiers: live)"), "{stderr}");
+    assert!(
+        stderr.contains("supported runner ids: manifest"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("basic-delivery (tiers"), "{stderr}");
 }
 
 #[test]
-fn run_help_documents_manifest_only_stack() {
-    let output = temper_scenario(&["run", "--help"]);
+fn runner_command_help_documents_the_fixed_manifest_topology() {
+    for command in ["run", "validate", "validate-pr"] {
+        let output = temper_scenario(&[command, "--help"]);
+        assert!(output.status.success(), "{command}: {:?}", output.status);
+        let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+        assert!(!stdout.contains("--tier"), "{command}: {stdout}");
+        assert!(!stdout.contains("confidence tier"), "{command}: {stdout}");
+        assert!(!stdout.contains("hermetic"), "{command}: {stdout}");
+    }
 
-    assert!(output.status.success(), "status: {:?}", output.status);
+    let output = temper_scenario(&["run", "--help"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(
-        stdout.contains("Usage: temper-scenario run [--tier <live|hermetic>] [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>"),
+        stdout.contains("Usage: temper-scenario run [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>"),
         "{stdout}"
     );
-    assert!(stdout.contains("default: live"), "{stdout}");
     assert!(
         stdout.contains("The only registered scenario runner is `manifest`"),
         "{stdout}"
     );
-    assert!(stdout.contains("real forgejo-runner CI"), "{stdout}");
+    assert!(stdout.contains("host `forgejo-runner` CI"), "{stdout}");
+    assert!(stdout.contains("standalone Temper"), "{stdout}");
+    assert!(stdout.contains("Jig fake-LLM agents"), "{stdout}");
     assert!(
         stdout.contains("legacy manifest `name` fallback has been removed"),
         "{stdout}"
     );
     assert!(!stdout.contains("basic-delivery`"), "{stdout}");
-}
-
-#[test]
-fn run_rejects_unknown_tier() {
-    let scenario = workspace_root().join("scenarios/basic-delivery");
-
-    let output = temper_scenario(&["run", "--tier", "medium", &scenario.to_string_lossy()]);
-
-    assert!(!output.status.success(), "unknown tier should fail");
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("unknown --tier `medium`"), "{stderr}");
-    assert!(stderr.contains("expected live or hermetic"), "{stderr}");
 }
 
 #[test]
@@ -209,8 +200,6 @@ fn validate_pr_live_missing_temper_binary_writes_failed_report() {
         "deadbeef",
         "--scenario",
         &scenario.to_string_lossy(),
-        "--tier",
-        "live",
         "--temper-bin",
         &missing_temper.to_string_lossy(),
         "--output-dir",

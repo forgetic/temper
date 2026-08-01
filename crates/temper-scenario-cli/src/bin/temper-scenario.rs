@@ -33,7 +33,7 @@ use temper_scenario_core::{
     discover_scenarios,
 };
 
-use run_context::{ScenarioRunFacts, ScenarioTier};
+use run_context::ScenarioRunFacts;
 
 const EX_USAGE: u8 = 64;
 const RUN_EVIDENCE_FILE: &str = "run-evidence.json";
@@ -48,7 +48,7 @@ Commands:
   check             Validate one scenario path or all scenarios under a scenarios directory
   scaffold          Create a minimal inherited feature scenario with local Jig data
   resolve-feature   Resolve one active feature-mapped scenario and emit deterministic JSON
-  run               Run a supported scenario at an explicit confidence tier
+  run               Run a scenario through the implicit live manifest topology
   validate          Run a scenario bundle and render validation artifacts from structured evidence
   validate-feature  Resolve and run one mapped scenario at an exact feature-landing head
   validate-pr       Write a temporary post-merge PR validation Markdown report
@@ -82,26 +82,23 @@ are scanned for immediate child scenario directories. Diagnostics are printed in
 a concise `path: error: field: message` form suitable for CI logs.";
 
 const RUN_USAGE: &str = "\
-Run a supported Temper scenario at an explicit confidence tier.
+Run a Temper scenario through the implicit live manifest topology.
 
-Usage: temper-scenario run [--tier <live|hermetic>] [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>
+Usage: temper-scenario run [--temper-bin <PATH>] [--evidence-out <PATH>] <SCENARIO_PATH>
 
 Arguments:
   SCENARIO_PATH  Scenario directory or manifest file to run
 
 Options:
-  --tier <live|hermetic>  Confidence tier to request (default: live)
-  --temper-bin <PATH>    Standalone `temper` binary for --tier live
+  --temper-bin <PATH>    Standalone `temper` binary for the manifest runner
   --evidence-out <PATH>  Write structured JSON run evidence to PATH
   -h, --help             Print help
 
-The only registered scenario runner is `manifest`, which boots the validation-grade
-stack: real Forgejo + real forgejo-runner CI + real Temper + Jig fake LLM. It is
-live-only and rejects hermetic, MemoryForge, or in-process substitutes instead
-of falling back.
+The only registered scenario runner is `manifest`, which boots real Forgejo,
+host `forgejo-runner` CI, standalone Temper, and Jig fake-LLM agents.
 
-For live manifests, pass --temper-bin <PATH>, set TEMPER_SCENARIO_TEMPER_BIN,
-or prebuild a sibling target-dir `temper`; `cargo dev-scenario-run <path>` builds it.\nManifests must select `[runner] uses = \"manifest\"`; the legacy manifest `name` fallback has been removed.";
+Pass --temper-bin <PATH>, set TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling
+target-dir `temper`; `cargo dev-scenario-run <path>` builds it.\nManifests must select `[runner] uses = \"manifest\"`; the legacy manifest `name` fallback has been removed.";
 
 fn main() -> ExitCode {
     run(env::args().skip(1))
@@ -275,9 +272,9 @@ fn run_command(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let facts = ScenarioRunFacts::from_check_report(&report, args.tier);
+    let facts = ScenarioRunFacts::from_check_report(&report);
 
-    let selected_runner = match runner_registry::select_runner(manifest, args.tier) {
+    let selected_runner = match runner_registry::select_runner(manifest) {
         Ok(runner) => runner,
         Err(error) => {
             eprintln!(
@@ -295,7 +292,6 @@ fn run_command(args: &[String]) -> ExitCode {
         &report.scenario_path,
         manifest_path,
         &facts,
-        args.tier,
         args.temper_bin.as_deref(),
         &evidence_context,
     );
@@ -480,7 +476,6 @@ fn parse_optional_path(
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct RunArgs {
     path: PathBuf,
-    tier: ScenarioTier,
     temper_bin: Option<PathBuf>,
     evidence_out: Option<PathBuf>,
 }
@@ -500,27 +495,11 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
     }
 
     let mut path = None;
-    let mut tier = None;
     let mut temper_bin = None;
     let mut evidence_out = None;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
-        if arg == "--tier" {
-            let value = run_flag_value(args, index, "--tier")?;
-            set_run_tier(&mut tier, value)?;
-            index += 2;
-            continue;
-        }
-        if let Some(value) = arg.strip_prefix("--tier=") {
-            if value.is_empty() {
-                eprintln!("temper-scenario run: --tier requires a value\n\n{RUN_USAGE}");
-                return Err(());
-            }
-            set_run_tier(&mut tier, value)?;
-            index += 1;
-            continue;
-        }
         if arg == "--temper-bin" {
             let value = run_flag_value(args, index, "--temper-bin")?;
             set_temper_bin(&mut temper_bin, value)?;
@@ -569,7 +548,6 @@ fn parse_run_args(args: &[String]) -> Result<RunParseResult, ()> {
 
     Ok(RunParseResult::Args(RunArgs {
         path,
-        tier: tier.unwrap_or(ScenarioTier::Live),
         temper_bin,
         evidence_out,
     }))
@@ -585,20 +563,6 @@ fn run_flag_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'
         return Err(());
     }
     Ok(value)
-}
-
-fn set_run_tier(tier: &mut Option<ScenarioTier>, value: &str) -> Result<(), ()> {
-    let Some(parsed) = ScenarioTier::parse(value) else {
-        eprintln!(
-            "temper-scenario run: unknown --tier `{value}` (expected live or hermetic)\n\n{RUN_USAGE}"
-        );
-        return Err(());
-    };
-    if tier.replace(parsed).is_some() {
-        eprintln!("temper-scenario run: duplicate --tier option\n\n{RUN_USAGE}");
-        return Err(());
-    }
-    Ok(())
 }
 
 fn set_temper_bin(temper_bin: &mut Option<PathBuf>, value: &str) -> Result<(), ()> {

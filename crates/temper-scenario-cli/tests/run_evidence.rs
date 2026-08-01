@@ -39,7 +39,7 @@ fn write_manifest_run_evidence(path: &Path, failed_assertion: bool) {
             "runner_selector": "runner.uses",
             "runner_selection": "runner: `manifest` selected by runner.uses",
             "tier": "live",
-            "tier_description": "validation-grade real Forgejo + real forgejo-runner CI + real Temper process + Jig fake LLM proof",
+            "tier_description": "real Forgejo + host `forgejo-runner` CI + standalone Temper + Jig fake-LLM agents",
             "topology": {
                 "kind": "single-repo-forgejo-standalone",
                 "forge": "forgejo",
@@ -177,6 +177,15 @@ fn validate_pr_ingests_manifest_run_evidence_without_rerunning_scenario() {
         markdown.contains("assertion passed `source-finalized`"),
         "{markdown}"
     );
+    assert!(
+        markdown.contains("execution topology: live (real Forgejo + host `forgejo-runner` CI + standalone Temper + Jig fake-LLM agents)"),
+        "{markdown}"
+    );
+    assert!(!markdown.contains("requested scenario tier"), "{markdown}");
+    assert!(
+        !markdown.contains("tier accepted from evidence"),
+        "{markdown}"
+    );
 }
 
 #[test]
@@ -217,6 +226,43 @@ fn validate_pr_ingests_failing_assertion_results() {
         "{markdown}"
     );
     assert!(markdown.contains("- Verdict: failed"), "{markdown}");
+}
+
+#[test]
+fn validate_pr_rejects_every_non_live_evidence_tier() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for tier in ["hermetic", "experimental"] {
+        let evidence = dir.path().join(format!("{tier}.run-evidence.json"));
+        write_manifest_run_evidence(&evidence, false);
+        let mut artifact: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&evidence).expect("read evidence fixture"))
+                .expect("evidence JSON");
+        artifact["scenario"]["tier"] = serde_json::Value::String(tier.to_string());
+        std::fs::write(&evidence, serde_json::to_vec_pretty(&artifact).unwrap())
+            .expect("rewrite evidence tier");
+
+        let output = temper_scenario(&[
+            "validate-pr",
+            "--pr",
+            "123",
+            "--sha",
+            "deadbeef",
+            "--run-evidence",
+            &evidence.to_string_lossy(),
+            "--output-dir",
+            &dir.path().join("reports").to_string_lossy(),
+        ]);
+
+        assert!(!output.status.success(), "tier {tier} must be rejected");
+        let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+        let markdown = std::fs::read_to_string(PathBuf::from(stdout.trim())).expect("read report");
+        assert!(
+            markdown.contains(&format!(
+                "run evidence scenario.tier must be `live`, got `{tier}`"
+            )),
+            "{markdown}"
+        );
+    }
 }
 
 #[test]

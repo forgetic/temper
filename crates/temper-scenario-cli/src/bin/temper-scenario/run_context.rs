@@ -6,40 +6,11 @@ use std::path::{Path, PathBuf};
 
 use temper_scenario_core::{CheckReport, DEFAULT_SCENARIOS_DIR, ScenarioTopology};
 
-/// Operator-selected confidence tier for `temper-scenario run`.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(super) enum ScenarioTier {
-    Hermetic,
-    Live,
-}
-
-impl ScenarioTier {
-    pub(super) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "hermetic" => Some(Self::Hermetic),
-            "live" => Some(Self::Live),
-            _ => None,
-        }
-    }
-
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Hermetic => "hermetic",
-            Self::Live => "live",
-        }
-    }
-
-    pub(super) fn description(self) -> &'static str {
-        match self {
-            Self::Hermetic => {
-                "unsupported legacy confidence selector; no registered scenario runner provides a hermetic, MemoryForge, or in-process substitute"
-            }
-            Self::Live => {
-                "validation-grade real Forgejo + real forgejo-runner CI + real Temper process + Jig fake LLM proof"
-            }
-        }
-    }
-}
+/// Compatibility value recorded for the only executable scenario topology.
+pub(super) const LIVE_TIER: &str = "live";
+/// Fixed description shared by run output, reports, and serialized evidence.
+pub(super) const LIVE_TOPOLOGY_DESCRIPTION: &str =
+    "real Forgejo + host `forgejo-runner` CI + standalone Temper + Jig fake-LLM agents";
 
 /// Classification of the scenario bundle path supplied by the operator.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -78,16 +49,15 @@ impl ScenarioSource {
     }
 }
 
-/// Source/tier/topology facts attached to a run and to validation evidence.
+/// Source and manifest-topology facts attached to a run and its evidence.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(super) struct ScenarioRunFacts {
     pub(super) source: ScenarioSource,
-    pub(super) tier: ScenarioTier,
     pub(super) topology: ScenarioTopology,
 }
 
 impl ScenarioRunFacts {
-    pub(super) fn from_check_report(check_report: &CheckReport, tier: ScenarioTier) -> Self {
+    pub(super) fn from_check_report(check_report: &CheckReport) -> Self {
         let topology = check_report
             .manifest
             .as_ref()
@@ -95,18 +65,13 @@ impl ScenarioRunFacts {
             .unwrap_or_default();
         Self {
             source: ScenarioSource::classify(&check_report.scenario_path),
-            tier,
             topology,
         }
     }
 
     pub(super) fn print_stdout(&self) {
         println!("source: {}", self.source.as_str());
-        println!(
-            "confidence tier: {} ({})",
-            self.tier.as_str(),
-            self.tier.description()
-        );
+        println!("execution topology: {LIVE_TIER} ({LIVE_TOPOLOGY_DESCRIPTION})");
         println!("manifest topology:");
         if self.topology.is_empty() {
             println!("  not declared");
@@ -120,11 +85,7 @@ impl ScenarioRunFacts {
     pub(super) fn evidence_details(&self) -> Vec<String> {
         let mut details = vec![
             format!("source: {}", self.source.as_str()),
-            format!(
-                "confidence tier: {} ({})",
-                self.tier.as_str(),
-                self.tier.description()
-            ),
+            format!("execution topology: {LIVE_TIER} ({LIVE_TOPOLOGY_DESCRIPTION})"),
         ];
         if self.topology.is_empty() {
             details.push("manifest topology: not declared".to_string());

@@ -7,7 +7,7 @@ use temper_scenario_core::{
     ValidationStatus, ValidationVerdict,
 };
 
-use crate::run_context::{ScenarioRunFacts, ScenarioTier};
+use crate::run_context::ScenarioRunFacts;
 use crate::runner_registry::{self, RunnerRegistryError};
 
 use super::live;
@@ -17,7 +17,6 @@ pub(super) fn add_scenario_run(
     check_report: &temper_scenario_core::CheckReport,
     facts: &ScenarioRunFacts,
     scenario_name: &str,
-    tier: ScenarioTier,
     temper_bin: Option<&Path>,
     artifact_dir: &Path,
 ) {
@@ -31,7 +30,7 @@ pub(super) fn add_scenario_run(
         }
     };
 
-    match runner_registry::select_runner(manifest, tier) {
+    match runner_registry::select_runner(manifest) {
         Ok(selected_runner) => live::add_supported_run(
             report,
             check_report,
@@ -60,9 +59,7 @@ fn add_unsupported_registry_selection(
 
     report.validated_claims.push(
         ValidatedClaim::new(
-            format!(
-                "Scenario `{scenario_name}` selects the public manifest runner and requested tier."
-            ),
+            format!("Scenario `{scenario_name}` selects the public manifest runner."),
             ValidationStatus::Failed,
         )
         .with_evidence(message.clone()),
