@@ -10,6 +10,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
+use crate::WatchdogTimerKind;
+
 /// Stable worker-owned boundaries at which an abrupt process restart can be
 /// injected.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -45,6 +47,16 @@ pub trait WorkerLifecycleHook: Send + Sync + 'static {
         &self,
         checkpoint: WorkerLifecycleCheckpoint,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+
+    /// Replaces one real watchdog delay when a deterministic fixture armed the
+    /// corresponding timer. Production hooks return `None` and retain the
+    /// ordinary runtime timer.
+    fn watchdog_timer(
+        &self,
+        _kind: WatchdogTimerKind,
+    ) -> Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>> {
+        None
+    }
 }
 
 #[derive(Default)]
