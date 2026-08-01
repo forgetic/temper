@@ -30,7 +30,7 @@ fn repository_ci_accepts_feature_branch_pull_request_targets() {
 }
 
 #[test]
-fn repository_ci_uses_an_isolated_persistent_pr_workspace() {
+fn repository_ci_uses_a_serialized_persistent_workspace() {
     let validate_job = CI_WORKFLOW
         .split_once("  validate:\n")
         .expect("CI declares the validate job")
@@ -39,14 +39,12 @@ fn repository_ci_uses_an_isolated_persistent_pr_workspace() {
         .expect("validate precedes web")
         .0;
     assert!(
-        validate_job.contains(
-            "working-directory: /var/tmp/temper-ci-workspaces/pr-${{ github.event.pull_request.number }}"
-        ),
+        validate_job.contains("working-directory: /var/tmp/temper-ci-workspace"),
         "CI should use a stable source path so Cargo can reuse fingerprints"
     );
     assert!(
-        validate_job.contains("group: temper-ci-${{ github.event.pull_request.number }}"),
-        "persistent workspaces must be isolated and serialized by PR"
+        validate_job.contains("group: temper-ci-rust"),
+        "the persistent workspace must be serialized across Rust CI jobs"
     );
     assert!(
         validate_job.contains("rsync -rlp --checksum --delete --exclude target/"),

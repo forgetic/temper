@@ -14,7 +14,7 @@ on:
 # Builds are cached transparently by the kache daemon (rustc-wrapper in
 # ~/.cargo/config.toml on the host runner), so a clean checkout still gets warm
 # builds for everything that emits real artifacts (rlibs, test executables, the
-# final binary). A persistent per-PR workspace also lets repeated CI runs reuse
+# final binary). A persistent host workspace also lets successive CI runs reuse
 # Cargo's path-sensitive fingerprints without paying kache's per-crate key cost.
 # Two caching notes drive the step layout below:
 #   1. Build and run the cacheable test executables BEFORE linting, so the
@@ -36,11 +36,11 @@ jobs:
   validate:
     runs-on: host
     concurrency:
-      group: temper-ci-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
+      group: temper-ci-rust
+      cancel-in-progress: false
     defaults:
       run:
-        working-directory: /var/tmp/temper-ci-workspaces/pr-${{ github.event.pull_request.number }}
+        working-directory: /var/tmp/temper-ci-workspace
     # Its system /tmp is also a small tmpfs shared with other workspaces, so the
     # first post-checkout step moves scratch data to disk-backed /var/tmp.
     steps:
@@ -48,14 +48,14 @@ jobs:
         # Bypass the default action mirror so a data.forgejo.org outage cannot
         # prevent this job from reaching the repository checkout.
         uses: https://github.com/actions/checkout@v4
-      - name: Refresh persistent PR workspace
+      - name: Refresh persistent CI workspace
         # Cargo fingerprints contain absolute source paths. Keep one stable path
-        # per PR so Cargo can reuse its target directly; kache supplies artifacts
-        # when that target is cold. The concurrency group prevents simultaneous
-        # mutation of a PR workspace.
+        # on the host so Cargo can reuse its target directly; kache supplies
+        # artifacts when that target is cold. The concurrency group prevents
+        # simultaneous mutation of the shared workspace.
         working-directory: ${{ github.workspace }}
         run: |
-          stable_workspace="/var/tmp/temper-ci-workspaces/pr-${{ github.event.pull_request.number }}"
+          stable_workspace="/var/tmp/temper-ci-workspace"
           mkdir -p "$stable_workspace"
           rsync -rlp --checksum --delete --exclude target/ \
             "$GITHUB_WORKSPACE/" "$stable_workspace/"
