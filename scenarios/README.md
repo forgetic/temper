@@ -26,7 +26,8 @@ runner:
 - `manifest` — validation-grade end-to-end execution. The checked-in
   `basic-delivery`, `forgejo-v16-api-ci`, `implementation-pr-handoff`,
   `codebase-memory-agent`, `model-failure-recovery`,
-  `plan-centric-feature-branch`, and `target-ux-e2e` scenarios declare
+  `plan-centric-feature-branch`, `implicit-live-scenario-cli`, and
+  `target-ux-e2e` scenarios declare
   `runner.uses = "manifest"`. Every run boots real Forgejo, a host
   `forgejo-runner` for Actions CI, a standalone `temper` process, and Jig fake
   LLM agents. MemoryForge, filesystem-forge, in-process, hermetic real-stack,
