@@ -57,7 +57,8 @@ jobs:
         run: |
           stable_workspace="/var/tmp/temper-ci-workspaces/pr-${{ github.event.pull_request.number }}"
           mkdir -p "$stable_workspace"
-          rsync -a --delete --exclude target/ "$GITHUB_WORKSPACE/" "$stable_workspace/"
+          rsync -rlp --checksum --delete --exclude target/ \
+            "$GITHUB_WORKSPACE/" "$stable_workspace/"
       - name: Prepare scratch directory
         # This Forgejo Actions runner does not provide the `runner.temp`
         # context. Use a short path outside the checkout so temporary git probes

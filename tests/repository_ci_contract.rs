@@ -49,7 +49,7 @@ fn repository_ci_uses_an_isolated_persistent_pr_workspace() {
         "persistent workspaces must be isolated and serialized by PR"
     );
     assert!(
-        validate_job.contains("rsync -a --delete --exclude target/"),
+        validate_job.contains("rsync -rlp --checksum --delete --exclude target/"),
         "CI should refresh sources without deleting the persistent Cargo target"
     );
 }
