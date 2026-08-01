@@ -12,7 +12,7 @@ where confidence comes from, not a coverage target.
 | Unit / component | 942 | 0 | 193 | `src` test modules in every crate |
 | Backend contract / integration | 271 | 0 | 37 | forge backend `tests/` dirs |
 | Hermetic workflow / role | 450 | 0 | 79 | workflow/engine/runner/worker |
-| Hermetic scenario | 19 | 0 | 4 | memory-forge delivery worlds |
+| Memory-forge delivery integration | 19 | 0 | 4 | memory-forge delivery worlds |
 | Hermetic process e2e | 5 | 0 | 2 | real daemon/fake agent |
 | Simulation / machine | 29 | 0 | 9 | sim and machine tests |
 | UI model/feed | 44 | 0 | 3 | web UI reducers/contracts |
@@ -23,6 +23,10 @@ where confidence comes from, not a coverage target.
 | Live provider smoke | 3 | 3 | 3 | real OAuth/provider request checks |
 
 Total: 1,982 test cases across 383 files; 17 are ignored live tests.
+
+The MemoryForge, filesystem-forge, in-process, hermetic real-stack, and
+simulation rows describe lower-level Rust suites. They are not selectable
+`temper-scenario` runners and do not provide feature-landing scenario evidence.
 
 ## By package
 
@@ -113,8 +117,8 @@ snapshot.
   routine proof after the hermetic suite passes. Current defaults are daemon
   topology with webhook/git auth and host-mode Actions status-only failure
   recovery, plus `temper init --apply` provisioning/config/daemon boot. The
-  single-process `temper run` scenarios were deleted after hermetic real-stack
-  tests covered their value: implementation-PR handoff in
+  root single-process `temper run` test stories were deleted after hermetic
+  real-stack tests covered their value: implementation-PR handoff in
   `crates/temper-testing/tests/hermetic_real_stack.rs` and provider
   server-error retry/requeue in the same hermetic real-stack suite.
 - **Manual/all-e2e live tests** hold the remaining ignored scenarios: extra root

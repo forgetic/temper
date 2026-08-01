@@ -7,11 +7,12 @@ operator lifecycle:
 temper init -> temper check -> temper plan -> temper apply -> temper serve
 ```
 
-It inherits the live `basic-delivery` manifest runner fixture so
-`temper-scenario run` stays on the existing Forgejo/Actions/Jig fake-LLM
-convention. The responsibility-based modules under `tests/target_ux/` add
-hermetic operator-contract evidence without starting another live stack or
-copying registry, transport, agent-invocation, or webhook unit suites.
+It inherits the implicit live `basic-delivery` manifest topology, so
+`temper-scenario run` uses real Forgejo, a host `forgejo-runner`, standalone
+Temper, and Jig fake-LLM agents. The responsibility-based modules under
+`tests/target_ux/` add lower-level hermetic operator-contract tests without
+starting another live stack or copying registry, transport, agent-invocation,
+or webhook unit suites.
 
 ## Inputs and static convergence
 

@@ -15,18 +15,17 @@ validator gate decides landing.
 
 The post-merge job checks out the merged `main` commit for the close event,
 runs the validation-grade live manifest lane for `scenarios/basic-delivery`,
-and writes a Markdown
-report with the temporary bridge. Both the direct run and the report record that
-this is the checked-in scenario corpus, the `live` confidence tier, the manifest
-topology, Forgejo URL, issue/PR numbers, CI evidence, convergence timing, fake
-LLM request counts, and log/artifact paths.
+and writes a Markdown report with the temporary bridge. Both the direct run and
+the report record that this is the checked-in scenario corpus, the fixed live
+manifest topology, Forgejo URL, issue/PR numbers, CI evidence, convergence
+timing, fake-LLM request counts, and log/artifact paths. The serialized
+`scenario.tier = "live"` value is a compatibility fact, not a command choice.
 
 ```sh
 cargo run -p temper-scenario-cli -- validate \
   --pr <merged-pr-number> \
   --sha <merged-main-sha> \
   --scenario scenarios/basic-delivery \
-  --tier live \
   --output-dir validation-artifacts/post-merge-pr-<merged-pr-number>
 ```
 
@@ -40,7 +39,6 @@ report rendering or inspect an intermediate artifact manually:
 
 ```sh
 cargo run -p temper-scenario-cli -- run \
-  --tier live \
   --temper-bin target/debug/temper \
   --evidence-out validation-artifacts/post-merge-pr-<merged-pr-number>/run-evidence.json \
   scenarios/basic-delivery
@@ -52,7 +50,7 @@ cargo run -p temper-scenario-cli -- validate-pr \
 ```
 
 When both `--scenario` and `--run-evidence` are supplied, `validate-pr` checks
-that the artifact's scenario, tier, source classification, and runner match the
+that the artifact's scenario, source classification, and runner match the
 supplied manifest but still does not rerun the scenario for report evidence. To
 validate a focused ephemeral bundle instead of the checked-in `basic-delivery`
 scenario, keep the same `validate` command and replace `--scenario` with the
@@ -72,7 +70,7 @@ Inside that artifact, the Markdown report uses this layout:
 
 ```text
 validation-artifacts/post-merge-pr-<merged-pr-number>/
-├── live-manifest-artifacts/              # live tier logs/artifacts when used
+├── live-manifest-artifacts/              # implicit live-topology logs/artifacts
 │   ├── init.log
 │   ├── repo-populate.log
 │   ├── standalone.log
@@ -115,15 +113,14 @@ cargo run -p temper-scenario-cli -- validate \
   --pr <merged-pr-number> \
   --sha "$(git rev-parse HEAD)" \
   --scenario scenarios/basic-delivery \
-  --tier live \
   --output-dir /tmp/temper-validation/pr-<merged-pr-number>
 ```
 
 Use the merged `main` SHA from the Forgejo run or PR page when reproducing an
 older broad regression report. The temporary report bridge records the supplied
 PR number and SHA; it does not fetch live Forgejo PR context or grant landing
-authority. The scenario command has no validation-grade hermetic substitute;
-use focused Rust tests for fast local coverage and reserve this report for the
-live manifest stack. A changed feature head must instead rerun the mapped
-pre-merge command; post-merge `basic-delivery` output cannot refresh stale
-feature evidence.
+authority. Lower-level MemoryForge, filesystem-forge, in-process, hermetic
+real-stack, and simulation tests are valuable fast coverage, but they do not
+produce this manifest scenario report. Reserve the report for the implicit live
+stack. A changed feature head must instead rerun the mapped pre-merge command;
+post-merge `basic-delivery` output cannot refresh stale feature evidence.

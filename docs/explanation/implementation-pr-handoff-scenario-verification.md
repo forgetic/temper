@@ -4,7 +4,12 @@ Target feature: #52 / PR #53, "Engineer PR handoff: carry agent-authored impleme
 
 ## Verdict
 
-**Pass when run on the live tier.** `scenarios/implementation-pr-handoff` selects `runner.uses = "manifest"` and uses real Forgejo, host `forgejo-runner` Actions CI readiness, a real standalone Temper process, and Jig fake LLM engineer responses. The previous MemoryForge/in-process runner is no longer selected by the scenario, and an explicit hermetic tier request is rejected.
+**Pass on the implicit live topology.**
+`scenarios/implementation-pr-handoff` declares `runner.uses = "manifest"` and
+uses real Forgejo, a host `forgejo-runner` for Actions CI readiness, a
+standalone Temper process, and Jig fake-LLM engineer responses. MemoryForge,
+filesystem-forge, in-process, hermetic real-stack, and simulation tests remain
+lower-level coverage and are not evidence from this landing scenario.
 
 ## Behavior contract
 
@@ -19,24 +24,25 @@ The scenario validates that:
 ## Commands
 
 ```sh
-cargo build --bin temper
 cargo run -p temper-scenario-cli -- check scenarios/implementation-pr-handoff
-cargo run -p temper-scenario-cli -- run --tier live \
-  --temper-bin target/debug/temper \
-  scenarios/implementation-pr-handoff
+cargo dev-scenario-run scenarios/implementation-pr-handoff
 ```
 
-Expected evidence includes the manifest runner selection, live topology/log paths, create and refresh PR evidence lines, and passing manifest assertions over final PR state plus structured observability events.
+`cargo dev-scenario-run scenarios/<name>` is the sole manual live-run alias. It
+builds standalone Temper and invokes the scenario through the implicit manifest
+topology. Expected evidence includes the manifest runner identity, topology/log
+paths, create and refresh PR evidence lines, and passing manifest assertions
+over final PR state plus structured observability events.
 
 Latest workspace validation for this port ran:
 
 ```sh
-target/debug/temper-scenario run --tier live \
+target/debug/temper-scenario run \
   --temper-bin target/debug/temper \
   scenarios/implementation-pr-handoff
 ```
 
-The run selected runner id `manifest`, passed on the live stack, and reported `assertions: passed (10 passed, 0 failed, 0 unsupported)` including `expect.created_pull_requests`, `expect.refreshed_pull_requests`, the `pr.opened`/`pr.updated` handoff events, and the create-then-refresh sequence.
+The run reported runner id `manifest`, passed on the implicit live stack, and reported `assertions: passed (10 passed, 0 failed, 0 unsupported)` including `expect.created_pull_requests`, `expect.refreshed_pull_requests`, the `pr.opened`/`pr.updated` handoff events, and the create-then-refresh sequence.
 
 ## Implementation notes
 

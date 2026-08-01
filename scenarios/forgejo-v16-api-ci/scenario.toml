@@ -156,6 +156,6 @@ compatible_changes = [
 ]
 requires_new_scenario_or_major_update = [
   "Changing the mapped feature, plan, or canonical feature branch.",
-  "Replacing the disposable Forgejo v16 stack or host runner with a mock or hermetic substitute.",
+  "Replacing the disposable Forgejo v16 stack or host runner with a mock test topology.",
   "Introducing scenario-name dispatch or non-declarative CI orchestration.",
 ]
