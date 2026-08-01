@@ -30,7 +30,7 @@ fn repository_ci_accepts_feature_branch_pull_request_targets() {
 }
 
 #[test]
-fn repository_ci_reclaims_oversized_shared_cache_before_disk_consumers() {
+fn repository_ci_uses_an_isolated_persistent_cargo_target() {
     let validate_job = CI_WORKFLOW
         .split_once("  validate:\n")
         .expect("CI declares the validate job")
@@ -38,29 +38,14 @@ fn repository_ci_reclaims_oversized_shared_cache_before_disk_consumers() {
         .split_once("  web:\n")
         .expect("validate precedes web")
         .0;
-    let web_job = CI_WORKFLOW
-        .split_once("  web:\n")
-        .expect("CI declares the web job")
-        .1;
-
-    for (job, first_consumer) in [
-        (validate_job, "      - name: Prepare scratch directory\n"),
-        (web_job, "      - name: Install (npm ci)\n"),
-    ] {
-        let gc_offset = job
-            .find("      - name: Reclaim shared build cache\n")
-            .expect("host job explicitly runs build-cache LRU eviction");
-        let consumer_offset = job
-            .find(first_consumer)
-            .expect("host job declares its first disk consumer");
+    assert!(
+        validate_job.contains("$HOME/.cache/temper-ci-target/$target_key"),
+        "CI should reuse Cargo metadata and artifacts across runs"
+    );
+    for discriminator in ["GITHUB_REPOSITORY", "GITHUB_WORKFLOW", "GITHUB_HEAD_REF"] {
         assert!(
-            gc_offset < consumer_offset,
-            "shared cache must be size-bounded before the job consumes disk"
-        );
-        let gc_step = &job[gc_offset..consumer_offset];
-        assert!(
-            gc_step.lines().any(|line| line.trim() == "run: kache gc"),
-            "shared cache reclamation must use configured LRU eviction"
+            validate_job.contains(discriminator),
+            "persistent targets must be isolated by {discriminator}"
         );
     }
 }
@@ -71,8 +56,8 @@ fn repository_ci_runs_e2e_from_repaired_captured_binaries() {
         .split_once("      - name: Test (all e2e)\n")
         .expect("CI declares the all-e2e step")
         .1
-        .split_once("      - name: Free linked test binaries\n")
-        .expect("the all-e2e step precedes linked-test cleanup")
+        .split_once("      - name: Lint\n")
+        .expect("the all-e2e step precedes lint")
         .0;
 
     assert!(
@@ -181,23 +166,5 @@ fn repository_ci_installs_locked_web_dependencies_without_advisory_network_calls
             .lines()
             .any(|line| line.trim() == "run: npm ci --no-audit --no-fund"),
         "web dependency installation must avoid non-gating advisory and funding network calls"
-    );
-}
-
-#[test]
-fn repository_ci_reclaims_linked_test_binaries_after_failure() {
-    let cleanup_step = CI_WORKFLOW
-        .split_once("      - name: Free linked test binaries\n")
-        .expect("CI declares linked-test cleanup")
-        .1
-        .split_once("      - name: Lint\n")
-        .expect("linked-test cleanup precedes lint")
-        .0;
-
-    assert!(
-        cleanup_step
-            .lines()
-            .any(|line| line.trim() == "if: ${{ always() }}"),
-        "linked test binaries must be reclaimed even when an earlier validation step fails"
     );
 }
