@@ -51,12 +51,17 @@ struct ArmedPause {
     release: OneshotReceiver<()>,
 }
 
+struct ArmedWatchdog {
+    fired: OneshotReceiver<()>,
+}
+
 /// One-shot named pause registry. No polling or elapsed-time assumptions are
 /// involved: the component announces arrival and waits on the matching permit.
 #[derive(Clone, Default)]
 pub struct PauseHooks {
     armed: Arc<Mutex<BTreeMap<PausePoint, ArmedPause>>>,
     reached: Arc<Mutex<BTreeMap<PausePoint, usize>>>,
+    watchdogs: Arc<Mutex<BTreeMap<temper_worker::WatchdogTimerKind, ArmedWatchdog>>>,
 }
 
 impl PauseHooks {
@@ -76,6 +81,16 @@ impl PauseHooks {
             arrived,
             release: Some(release),
         }
+    }
+
+    /// Arms one worker watchdog for explicit expiry by a deterministic test.
+    pub fn arm_watchdog(&self, kind: temper_worker::WatchdogTimerKind) -> WatchdogTrigger {
+        let (fire, fired) = oneshot();
+        self.watchdogs
+            .lock()
+            .expect("watchdog hook lock")
+            .insert(kind, ArmedWatchdog { fired });
+        WatchdogTrigger { fire: Some(fire) }
     }
 
     /// Announces a point and blocks only when that point was armed.
@@ -142,6 +157,33 @@ impl temper_worker::WorkerLifecycleHook for PauseHooks {
             }
         };
         Box::pin(async move { self.reach(point).await })
+    }
+
+    fn watchdog_timer(
+        &self,
+        kind: temper_worker::WatchdogTimerKind,
+    ) -> Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>> {
+        let armed = self
+            .watchdogs
+            .lock()
+            .expect("watchdog hook lock")
+            .remove(&kind)?;
+        Some(Box::pin(async move {
+            let _ = armed.fired.recv().await;
+        }))
+    }
+}
+
+/// Test-side control for one explicitly armed worker watchdog.
+pub struct WatchdogTrigger {
+    fire: Option<OneshotSender<()>>,
+}
+
+impl WatchdogTrigger {
+    pub fn fire(mut self) {
+        if let Some(fire) = self.fire.take() {
+            fire.send(());
+        }
     }
 }
 

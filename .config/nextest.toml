@@ -22,11 +22,20 @@ root-forgejo-e2e = { max-threads = 1 }
 # resource class and keeps the matrix serial if the profile's thread count is
 # overridden.
 native-process-fixtures = { max-threads = 1 }
+# Restart-phase worlds use explicit lifecycle and watchdog synchronization, so
+# four may safely divide an eight-thread host without timing-based contention.
+restart-cancellation-fixtures = { max-threads = 8 }
 
 [[profile.default.overrides]]
 filter = 'package(temper-testing) & binary(hermetic_real_stack) & test(/^restart_cancellation::/)'
-test-group = 'native-process-fixtures'
-threads-required = "num-cpus"
+test-group = 'restart-cancellation-fixtures'
+# Each synchronized helper world reserves two scheduler slots. The eight-slot
+# group caps the matrix at four independent worlds while leaving ordinary tests
+# room on larger hosts.
+threads-required = 2
+# Start the serialized slow path first so it overlaps the broad parallel suite
+# instead of extending the critical path after short tests have drained.
+priority = 100
 
 [[profile.default.overrides]]
 filter = 'package(temper-testing) & binary(hermetic_real_stack) & test(/^ownership_loss::/)'

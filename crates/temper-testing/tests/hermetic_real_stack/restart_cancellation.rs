@@ -119,6 +119,9 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
                 .expect("initial work enqueues"),
             1
         );
+        let watchdog = stack
+            .pause_hooks()
+            .arm_watchdog(temper_worker::WatchdogTimerKind::NoProgress);
         let running = stack.pause_hooks().arm(PausePoint::AgentSessionStarted);
         let phase_pause = (phase != CancellationRestartPhase::Running)
             .then(|| stack.pause_hooks().arm(phase.pause_point()));
@@ -126,6 +129,9 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
         stack.start_worker(&handle);
 
         let running = await_pause(&cx, running, "initial agent session").await;
+        if phase != CancellationRestartPhase::Running {
+            watchdog.fire();
+        }
         write_restart_dirty_state(&stack);
         let phase_reached = match phase_pause {
             Some(pause) => Some(await_pause(&cx, pause, "cancellation phase").await),
@@ -195,6 +201,9 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
                 stack.set_worker_liveness_limits(restart_watchdog_limits());
             }
             let retry_running = stack.pause_hooks().arm(PausePoint::AgentSessionStarted);
+            let retry_watchdog = stack
+                .pause_hooks()
+                .arm_watchdog(temper_worker::WatchdogTimerKind::NoProgress);
             // Observe the daemon's successful application boundary instead of
             // racing the worker's follow-up acknowledgement task. Retryable
             // replies do not reach this hook, so it still proves that the
@@ -211,6 +220,7 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
             );
             stack.start_worker(&handle);
             let retry_running = await_pause(&cx, retry_running, "timeout retry session").await;
+            retry_watchdog.fire();
             assert_restart_dirty_state(&stack);
             let retry_converged =
                 await_result_convergence(&cx, retry_converged, "retryable result application")
@@ -343,13 +353,13 @@ fn run_cancellation_restart_phase(phase: CancellationRestartPhase) {
 
 fn restart_watchdog_limits() -> WorkerLivenessLimits {
     WorkerLivenessLimits {
-        // Real helper-backed containment adds bounded process startup/join work
-        // to checkout preparation. A cold, loaded CI host can take more than
-        // two seconds to reach AgentSessionStarted, so leave enough startup
-        // headroom while keeping the no-progress cancellation test bounded.
-        max_no_progress: Duration::from_secs(5),
-        graceful_cancellation_grace: Duration::from_secs(1),
-        forced_termination_grace: Duration::from_secs(1),
+        // The deterministic hook holds the initial timer until the native
+        // agent reaches its session boundary, so this short limit measures
+        // stalled work rather than cold helper startup. The machine still
+        // checks the real deadline before accepting the fired completion.
+        max_no_progress: Duration::from_millis(10),
+        graceful_cancellation_grace: Duration::from_millis(100),
+        forced_termination_grace: Duration::from_millis(100),
         ..WorkerLivenessLimits::default()
     }
 }

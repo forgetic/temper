@@ -641,15 +641,22 @@ impl<E: JobExecutor + Send + Sync + 'static, T: Transport, S: Spawner>
                 kind,
                 delay,
             } => {
-                arm_timer(&self.spawner, &self.cq, delay, move || {
-                    WorkerCompletion::WatchdogTimer {
-                        job_id,
-                        attempt_id,
-                        generation,
-                        timer_generation,
-                        kind,
-                    }
-                });
+                let completion = move || WorkerCompletion::WatchdogTimer {
+                    job_id,
+                    attempt_id,
+                    generation,
+                    timer_generation,
+                    kind,
+                };
+                if let Some(timer) = self.lifecycle_hook.watchdog_timer(kind) {
+                    let cq = self.cq.clone();
+                    self.spawner.spawn_task(async move {
+                        timer.await;
+                        let _ = cq.send(completion());
+                    });
+                } else {
+                    arm_timer(&self.spawner, &self.cq, delay, completion);
+                }
             }
             WorkerRequest::ArmResultRecordTimer {
                 job_id,
