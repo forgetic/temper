@@ -30,7 +30,7 @@ fn repository_ci_accepts_feature_branch_pull_request_targets() {
 }
 
 #[test]
-fn repository_ci_uses_an_isolated_persistent_cargo_target() {
+fn repository_ci_uses_an_isolated_persistent_pr_workspace() {
     let validate_job = CI_WORKFLOW
         .split_once("  validate:\n")
         .expect("CI declares the validate job")
@@ -39,15 +39,19 @@ fn repository_ci_uses_an_isolated_persistent_cargo_target() {
         .expect("validate precedes web")
         .0;
     assert!(
-        validate_job.contains("$HOME/.cache/temper-ci-target/$target_key"),
-        "CI should reuse Cargo metadata and artifacts across runs"
+        validate_job.contains(
+            "working-directory: /var/tmp/temper-ci-workspaces/pr-${{ github.event.pull_request.number }}"
+        ),
+        "CI should use a stable source path so Cargo can reuse fingerprints"
     );
-    for discriminator in ["GITHUB_REPOSITORY", "GITHUB_WORKFLOW", "GITHUB_HEAD_REF"] {
-        assert!(
-            validate_job.contains(discriminator),
-            "persistent targets must be isolated by {discriminator}"
-        );
-    }
+    assert!(
+        validate_job.contains("group: temper-ci-${{ github.event.pull_request.number }}"),
+        "persistent workspaces must be isolated and serialized by PR"
+    );
+    assert!(
+        validate_job.contains("rsync -a --delete --exclude target/"),
+        "CI should refresh sources without deleting the persistent Cargo target"
+    );
 }
 
 #[test]

@@ -14,8 +14,8 @@ on:
 # Builds are cached transparently by the kache daemon (rustc-wrapper in
 # ~/.cargo/config.toml on the host runner), so a clean checkout still gets warm
 # builds for everything that emits real artifacts (rlibs, test executables, the
-# final binary). A persistent per-branch Cargo target also lets repeated CI runs
-# reuse Cargo's dependency graph without paying kache's per-crate key cost.
+# final binary). A persistent per-PR workspace also lets repeated CI runs reuse
+# Cargo's path-sensitive fingerprints without paying kache's per-crate key cost.
 # Two caching notes drive the step layout below:
 #   1. Build and run the cacheable test executables BEFORE linting, so the
 #      expensive shared lib compiles are warmed once and reused by clippy.
@@ -35,6 +35,12 @@ on:
 jobs:
   validate:
     runs-on: host
+    concurrency:
+      group: temper-ci-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: /var/tmp/temper-ci-workspaces/pr-${{ github.event.pull_request.number }}
     # Its system /tmp is also a small tmpfs shared with other workspaces, so the
     # first post-checkout step moves scratch data to disk-backed /var/tmp.
     steps:
@@ -42,19 +48,16 @@ jobs:
         # Bypass the default action mirror so a data.forgejo.org outage cannot
         # prevent this job from reaching the repository checkout.
         uses: https://github.com/actions/checkout@v4
-      - name: Select persistent Cargo target
-        # Keep workflows and branches isolated so concurrent validation cannot
-        # mutate binaries another job is running. kache still supplies artifacts
-        # across these directories; Cargo's target makes repeat runs near-no-op.
+      - name: Refresh persistent PR workspace
+        # Cargo fingerprints contain absolute source paths. Keep one stable path
+        # per PR so Cargo can reuse its target directly; kache supplies artifacts
+        # when that target is cold. The concurrency group prevents simultaneous
+        # mutation of a PR workspace.
+        working-directory: ${{ github.workspace }}
         run: |
-          target_key="$(printf '%s\0%s\0%s' \
-            "${GITHUB_REPOSITORY:-temper}" \
-            "${GITHUB_WORKFLOW:-ci}" \
-            "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-default}}" \
-            | sha256sum | cut -c1-24)"
-          cargo_target="$HOME/.cache/temper-ci-target/$target_key"
-          mkdir -p "$cargo_target"
-          echo "CARGO_TARGET_DIR=$cargo_target" >> "$GITHUB_ENV"
+          stable_workspace="/var/tmp/temper-ci-workspaces/pr-${{ github.event.pull_request.number }}"
+          mkdir -p "$stable_workspace"
+          rsync -a --delete --exclude target/ "$GITHUB_WORKSPACE/" "$stable_workspace/"
       - name: Prepare scratch directory
         # This Forgejo Actions runner does not provide the `runner.temp`
         # context. Use a short path outside the checkout so temporary git probes
