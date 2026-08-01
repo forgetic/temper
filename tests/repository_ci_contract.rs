@@ -53,7 +53,7 @@ fn repository_ci_uses_a_serialized_persistent_workspace() {
 }
 
 #[test]
-fn repository_ci_runs_e2e_from_repaired_captured_binaries() {
+fn repository_ci_runs_e2e_through_the_cargo_alias() {
     let e2e_step = CI_WORKFLOW
         .split_once("      - name: Test (all e2e)\n")
         .expect("CI declares the all-e2e step")
@@ -63,17 +63,33 @@ fn repository_ci_runs_e2e_from_repaired_captured_binaries() {
         .0;
 
     assert!(
-        e2e_step.lines().any(|line| {
-            line.trim() == "scripts/run-nextest-quick.sh --run-ignored only -P e2e"
-        }),
-        "the e2e lane must repair cached custom-harness modes after its Cargo build"
-    );
-    assert!(
-        !e2e_step
+        e2e_step
             .lines()
             .any(|line| line.trim() == "cargo dev-test-e2e-all"),
-        "a direct nextest alias can restore non-executable harnesses after permission repair"
+        "the e2e lane should use the repository's direct nextest alias"
     );
+}
+
+#[test]
+fn repository_ci_runs_tests_before_narrow_cargo_lanes() {
+    let build = CI_WORKFLOW
+        .find("run: cargo dev-test-build")
+        .expect("CI prebuilds the all-target test graph");
+    let quick = CI_WORKFLOW
+        .find("run: cargo dev-test-quick")
+        .expect("CI runs the quick nextest lane");
+    let e2e = CI_WORKFLOW
+        .find("cargo dev-test-e2e-all")
+        .expect("CI runs the all-e2e nextest lane");
+    let scenario = CI_WORKFLOW
+        .find("run: cargo dev-scenario-check")
+        .expect("CI checks scenario manifests");
+    let benchmark = CI_WORKFLOW
+        .find("run: cargo dev-benchmark-harness")
+        .expect("CI runs the benchmark harness");
+
+    assert!(build < quick && quick < e2e);
+    assert!(e2e < scenario && e2e < benchmark);
 }
 
 #[test]
@@ -156,7 +172,8 @@ fn repository_ci_preserves_focused_evidence_on_failure_and_broad_coverage() {
     assert!(upload.contains("path: ${{ env.FOCUSED_ARTIFACT_DIR }}/"));
 
     assert!(CI_WORKFLOW.contains("run: cargo dev-scenario-check"));
-    assert!(CI_WORKFLOW.contains("scripts/run-nextest-quick.sh --run-ignored only -P e2e"));
+    assert!(CI_WORKFLOW.contains("run: cargo dev-test-quick"));
+    assert!(CI_WORKFLOW.contains("cargo dev-test-e2e-all"));
 }
 
 #[test]

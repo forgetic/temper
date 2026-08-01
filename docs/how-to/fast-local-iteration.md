@@ -56,10 +56,9 @@ When behavior changes, run relevant tests. For the quick workspace suite:
 cargo dev-test-quick
 ```
 
-The required pre-PR lane uses `scripts/run-nextest-quick.sh` instead. That
-script captures nextest's final binaries-only build, repairs execute bits on
-cached custom harnesses, and then enumerates and runs the captured build without
-letting Cargo restore those artifacts again.
+The required pre-PR lane uses this same alias after `cargo dev-test-build`.
+The repository-local kache configuration bypasses caching for the three custom
+`harness = false` targets that kache 0.11 cannot classify as executables.
 
 To prebuild every workspace test harness and integration-test binary without
 running tests:

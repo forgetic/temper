@@ -1,0 +1,13 @@
+[cache]
+cache_executables = true
+
+# Cargo compiles `harness = false` test targets as extensionless executables
+# without passing either `--test` or `--crate-type bin` to rustc. Kache 0.11
+# cannot identify those outputs as executable when restoring them, so bypass
+# executable caching for these three sources until kache models that Cargo
+# invocation shape. Libraries and ordinary test executables remain cached.
+exclude = [
+    "crates/temper-agent-session/tests/benchmark_harness.rs",
+    "crates/temper-process-containment/tests/linux_supervisor.rs",
+    "crates/temper-process-containment/tests/windows_job.rs",
+]
