@@ -6,11 +6,14 @@ The manifest runner boots the validation-grade stack (real Forgejo, host `forgej
 
 The scenario-owned `jig/codebase-memory-agent.json` script supplies the complete coding-agent tool loop; no global Jig fixture or scenario-name selector supplies its responses.
 
-Run it with:
+Run it through the sole manual live-run alias:
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/codebase-memory-agent
-cargo run -p temper-scenario-cli -- run --tier live scenarios/codebase-memory-agent
+cargo dev-scenario-run scenarios/codebase-memory-agent
 ```
 
-Expected evidence includes structured Temper events for tool configuration/exposure/hiding, MCP server startup, `search_code` call/result, workspace diff production, and agent completion.
+The run uses the implicit manifest topology. Expected evidence includes
+structured Temper events for tool configuration/exposure/hiding, MCP server
+startup, `search_code` call/result, workspace diff production, and agent
+completion.

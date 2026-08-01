@@ -20,28 +20,31 @@ the operator workflow.
 
 ## Runnable scenarios
 
-`temper-scenario run` exposes one public runner:
+`temper-scenario run` has one implicit execution topology and one public
+runner:
 
-- `manifest` — live-only validation-grade e2e runner. The checked-in
+- `manifest` — validation-grade end-to-end execution. The checked-in
   `basic-delivery`, `forgejo-v16-api-ci`, `implementation-pr-handoff`,
   `codebase-memory-agent`, `model-failure-recovery`,
-  `plan-centric-feature-branch`, and `target-ux-e2e` scenarios select this runner
-  with
-  `runner.uses = "manifest"` and boot real Forgejo, real `forgejo-runner` CI, a
-  real standalone `temper` process, and Jig fake LLM agents.
-  Hermetic/MemoryForge/in-process substitutes are rejected, and no scenario-name
-  compatibility aliases are registered.
+  `plan-centric-feature-branch`, and `target-ux-e2e` scenarios declare
+  `runner.uses = "manifest"`. Every run boots real Forgejo, a host
+  `forgejo-runner` for Actions CI, a standalone `temper` process, and Jig fake
+  LLM agents. MemoryForge, filesystem-forge, in-process, hermetic real-stack,
+  and simulation coverage belong to the lower levels of the testing pyramid;
+  they are not scenario CLI modes or feature-landing scenario evidence. No
+  scenario-name compatibility aliases are registered.
 
-Run output always prints the scenario source classification, confidence tier, and
-manifest topology before the verdict. Bundles under this repository's
-`scenarios/` directory are labeled `checked-in scenario`; valid copied bundles
-outside that corpus are labeled `ephemeral validation bundle`. Live manifest
-output also includes the Forgejo URL, issue/PR numbers, CI job
-evidence when applicable, convergence timing, fake LLM request counts, structured
-Temper event facts, and log/artifact paths. Use
-`cargo dev-scenario-run scenarios/<name>` for an explicit manual live lane (it
-builds and passes the standalone `temper` binary). The command intentionally has
-no default scenario.
+Run output always prints the scenario source classification and the fixed live
+manifest topology before the verdict. For evidence-schema compatibility, the
+run artifact retains `scenario.tier = "live"` as a fixed descriptive fact, not a
+caller-selectable mode. Bundles under this repository's `scenarios/` directory
+are labeled `checked-in scenario`; valid copied bundles outside that corpus are
+labeled `ephemeral validation bundle`. Output also includes the Forgejo URL,
+issue/PR numbers, CI job evidence when applicable, convergence timing, fake LLM
+request counts, structured Temper event facts, and log/artifact paths.
+`cargo dev-scenario-run scenarios/<name>` is the sole Cargo alias for a manual
+live run; it builds and passes the standalone `temper` binary and intentionally
+has no default scenario.
 
 ### Single validator workflow command
 
@@ -56,7 +59,6 @@ cargo run -p temper-scenario-cli -- validate \
   --pr <merged-pr-number> \
   --sha <merged-main-sha> \
   --scenario /tmp/renamed-inherited-delivery \
-  --tier live \
   --output-dir /tmp/temper-validation/pr-<merged-pr-number>
 ```
 
@@ -120,16 +122,16 @@ validation report.
 `temper-scenario run` can also write a versioned JSON run-evidence artifact:
 
 ```sh
-temper-scenario run --tier live \
+temper-scenario run \
   --evidence-out validation-artifacts/run-evidence.json \
   scenarios/basic-delivery
 ```
 
 The artifact records the schema/version, scenario source classification,
-manifest path, scenario name, selected runner/tier/topology, resolved fixture
-paths, final issue/PR/CI facts observed by the runner, convergence data, and any
-known provider/log/artifact paths. `validate-pr` can render from that artifact
-without scraping stdout or rerunning the scenario:
+manifest path, scenario name, runner identity, fixed live topology facts,
+resolved fixture paths, final issue/PR/CI facts observed by the runner,
+convergence data, and any known provider/log/artifact paths. `validate-pr` can
+render from that artifact without scraping stdout or rerunning the scenario:
 
 ```sh
 temper-scenario validate-pr \
@@ -142,14 +144,14 @@ temper-scenario validate-pr \
 `--run-evidence` accepts either a JSON file or a directory containing
 `run-evidence.json` (or one `*.run-evidence.json` file). Supplying both
 `--scenario` and `--run-evidence` makes `validate-pr` re-check the manifest and
-report scenario/tier/runner/source mismatches, but it still does not rerun the
+report scenario, runner, or source mismatches, but it still does not rerun the
 scenario for evidence population. The older direct path remains available: omit
 `--run-evidence` and pass `--scenario <PATH>` when you want `validate-pr` to run
-a supported scenario itself.
+the supplied manifest scenario itself.
 
 ### Declarative expectation assertions
 
-After a supported runner completes, `temper-scenario run` evaluates manifest
+After the manifest runner completes, `temper-scenario run` evaluates manifest
 `[expect]` counts and `[[expect.checks]]` entries against the structured run
 evidence it just produced. Results are printed under an `assertions:` block and
 stored in the run-evidence JSON as `assertions.results[]`. A failed assertion
@@ -314,14 +316,15 @@ structured evidence and after declarative assertions have been evaluated.
 
 Temper writes a JSON context file and passes it as both the first script argument
 and `TEMPER_SCENARIO_CONTEXT`. The context contains the full `run_evidence`, the
-scenario/manifest paths, hook and run artifact directories, runner id, tier, and
-known provider facts such as Forgejo URL, repo slug, issue/PR number, head
-branch, and merged SHA. Scripts should read that context, assert one focused
-condition, print concise evidence, and exit non-zero on failure. They should not
-perform scenario orchestration, cleanup shared state, or require ambient
-credentials. The hook environment is cleared except for a minimal `PATH`,
-`LC_ALL`, Temper context variables, and extra variables named explicitly in
-`env`; allowlisted variables may not override Temper-managed names.
+scenario/manifest paths, hook and run artifact directories, runner id, fixed
+live evidence fact, and known provider facts such as Forgejo URL, repo slug,
+issue/PR number, head branch, and merged SHA. Scripts should read that context,
+assert one focused condition, print concise evidence, and exit non-zero on
+failure. They should not perform scenario orchestration, cleanup shared state,
+or require ambient credentials. The hook environment is cleared except for a
+minimal `PATH`, `LC_ALL`, Temper context variables, and extra variables named
+explicitly in `env`; allowlisted variables may not override Temper-managed
+names.
 
 Each hook has a required/default timeout (`timeout_ms`, default 30000, maximum
 600000). Stdout, stderr, status, and context paths are retained under the run
@@ -336,7 +339,7 @@ manifest paths are rejected by `check`/`run` before execution.
 Every post-merge validation run must produce a validation report: what target
 (PR, issue, epic, or aggregate) and commit/PR set was validated, which scenario
 or ad-hoc case was run, whether it came from the checked-in corpus or an
-ephemeral bundle, which confidence tier and manifest topology were used, what
+ephemeral bundle, the manifest runner and fixed live topology used, what
 commands or tooling ran, where logs/artifacts live, and the final pass/fail
 result. That report is the required deliverable for validation work.
 

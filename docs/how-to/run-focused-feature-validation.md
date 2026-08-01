@@ -25,12 +25,12 @@ cargo dev-scenario-validate-feature \
   --output-dir target/focused-validation
 ```
 
-The command always selects the live `manifest` runner. It uses real Forgejo,
-real host `forgejo-runner`, a standalone Temper binary from the checkout, and
-Jig fake-LLM agents. There is no validation-grade hermetic substitute.
+The command executes the implicit `manifest` topology: real Forgejo, a host
+`forgejo-runner`, a standalone Temper binary from the checkout, and Jig fake-LLM
+agents. This is the only scenario execution topology.
 
-Use `cargo dev-scenario-run scenarios/<name>` only for an explicit manual live
-run. It now requires the path and never defaults to `basic-delivery`.
+`cargo dev-scenario-run scenarios/<name>` is the sole manual live-run alias. It
+requires the path and never defaults to `basic-delivery`.
 
 ## CI evidence
 
@@ -74,13 +74,14 @@ pre-merge bridge and useful audit signal, but the workflow-native validator gate
 is the landing authority. The older `validate-pr` command remains manual report
 compatibility tooling, not authority.
 
-## Live scenarios versus hermetic tests
+## Implicit-live scenarios and lower-level tests
 
-Focused scenarios are isolated live real-stack proofs. They supplement rather
-than replace the repository's MemoryForge, filesystem-forge, in-process, and
-simulation tests. Those `hermetic` tests remain the cheapest place for workflow
-logic, edge cases, and failure interleavings. They must not be cited as the live
-exact-head scenario evidence required for feature landing.
+Focused scenarios are isolated real-stack proofs. They supplement rather than
+replace the repository's MemoryForge, filesystem-forge, in-process, hermetic
+real-stack, and simulation tests. Those lower-level tests remain the cheapest
+place for workflow logic, edge cases, and failure interleavings. They are not a
+scenario CLI mode and must not be cited as the exact-head scenario evidence
+required for feature landing.
 
 Whole-corpus `cargo dev-scenario-check` and the broad ignored live e2e lane stay
 separate. The former checks every manifest without execution; the latter keeps

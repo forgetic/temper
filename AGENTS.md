@@ -38,11 +38,17 @@ The script runs these commands in order and stops on the first failure:
 8. Drop linked test binaries from `target/debug` before linting
 9. `cargo dev-clippy`
 
-Run `cargo dev-scenario-check` or an explicit live run such as
-`cargo dev-scenario-run scenarios/<name>` separately when your change touches
+Run `cargo dev-scenario-check` or the sole manual live-run alias,
+`cargo dev-scenario-run scenarios/<name>`, separately when your change touches
 scenario manifests, scenario execution, Forgejo/CI convergence, or validation
-evidence. Aggregate feature heads use `cargo dev-scenario-validate-feature` as
-documented in `docs/how-to/run-focused-feature-validation.md`.
+evidence. Scenario execution has one implicit topology: real Forgejo, a host
+`forgejo-runner`, standalone Temper, and Jig fake-LLM agents. Aggregate feature
+heads use `cargo dev-scenario-validate-feature` as documented in
+`docs/how-to/run-focused-feature-validation.md`.
+
+MemoryForge, filesystem-forge, in-process, hermetic real-stack, and simulation
+tests remain lower-level coverage. They do not provide the mapped live scenario
+evidence required to land a feature.
 
 The full `cargo dev-test-e2e-all` lane is intentionally left to CI (or an
 explicit manual local run) so the default pre-PR check stays cheap.

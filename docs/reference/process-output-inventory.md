@@ -41,7 +41,7 @@ than being mistaken for production readers.
 | `temper-scenario-cli/tests/{cli,run_evidence,run_report,validate_workflow}.rs` | Inherently fixed fixture | CLI report/help JSON generated from checked-in bounded scenarios |
 | `temper-testing/src/live_basic_delivery/process.rs` | Not byte-bounded (audited) | Live capstone child; output is retained for failure evidence; not a production service reader |
 | `temper-testing/src/real_stack/git.rs` | Inherently fixed command | Hash/ref queries over a bounded hermetic fixture |
-| `temper-testing/tests/{daemon_worker,hermetic_real_stack/budget_retry}.rs` | Inherently fixed fixture | Hermetic daemon/worker and bounded budget scenarios |
+| `temper-testing/tests/{daemon_worker,hermetic_real_stack/budget_retry}.rs` | Inherently fixed fixture | Hermetic daemon/worker fixtures and bounded budget cases |
 | `temper-worker/tests/coding_executor/pr_repair.rs` | Inherently fixed fixture | Git assertions over a small temporary checkout |
 | `temper-worker/tests/coding_executor/support/{assertions,fake_agent,target_branch}.rs` | Inherently fixed fixture | Fixed fake-agent output and local hash/status assertions |
 | `temper-worker/tests/coding_worker_e2e/support.rs` | Inherently fixed fixture | Fixed fake agent and local temporary git repositories |

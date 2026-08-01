@@ -6,11 +6,11 @@ removing that example: a thin site-admin intake issue is triaged into ready code
 an engineer produces one implementation PR, Forgejo Actions CI passes, and the
 mechanical worker lands the PR.
 
-A validation-grade manifest runner exercises the topology described by the
-manifest: real Forgejo, real host-mode `forgejo-runner` CI, a real standalone
-`temper` process, and Jig fake LLM agents. The `manifest` runner is intentionally
-live-only; MemoryForge, hermetic, and in-process Temper substitutes are rejected
-so this scenario cannot be mistaken for lower-confidence validation.
+A validation-grade manifest runner exercises the one scenario topology described
+by the manifest: real Forgejo, a host `forgejo-runner` for CI, a standalone
+`temper` process, and Jig fake-LLM agents. MemoryForge, filesystem-forge,
+in-process, hermetic real-stack, and simulation tests remain lower-level
+coverage and do not count as scenario evidence.
 
 ## Files
 
@@ -55,27 +55,27 @@ scenarios/basic-delivery/
 
 ```sh
 cargo run -p temper-scenario-cli -- check scenarios/basic-delivery
-cargo dev-scenario-run scenarios/basic-delivery # live validation-grade manifest lane
+cargo dev-scenario-run scenarios/basic-delivery
 ```
 
-Direct live invocation is also supported when the standalone binary is already
-built or supplied by automation:
+`cargo dev-scenario-run scenarios/<name>` is the sole manual live-run alias. A
+direct invocation is also available when standalone Temper is already built or
+supplied by automation:
 
 ```sh
 cargo build --bin temper
 cargo run -p temper-scenario-cli -- run \
-  --tier live \
   --temper-bin target/debug/temper \
   scenarios/basic-delivery
 ```
 
-The live run output labels this bundle as `checked-in scenario`, reports the
-`live` confidence tier and `runner.uses = "manifest"` selection, prints the
-manifest topology, and then shows the Forgejo URL, issue/PR numbers, CI job
-evidence, convergence timing, fake LLM request counts, structured Temper JSON
-event log path, and other log/artifact paths. A copied bundle outside
-`scenarios/` runs with the live tier too and is labeled `ephemeral validation
-bundle`.
+The run output labels this bundle as `checked-in scenario`, reports
+`runner.uses = "manifest"` and the fixed live manifest topology, and then shows
+the Forgejo URL, issue/PR numbers, CI job evidence, convergence timing, fake LLM
+request counts, structured Temper JSON event log path, and other log/artifact
+paths. For evidence compatibility, `scenario.tier = "live"` remains a fixed
+fact rather than a command option. A copied bundle outside `scenarios/` uses the
+same implicit topology and is labeled `ephemeral validation bundle`.
 
 ## Provenance
 

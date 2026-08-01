@@ -11,9 +11,10 @@ current inventory, see [Testing pyramid](../reference/testing-pyramid.md) and
 2. **Contract next.** For Forge trait semantics or provider request mapping,
    add backend contract tests under the backend crate's `tests/` directory.
    Use mock HTTP clients for Forgejo/GitHub request shapes.
-3. **Hermetic scenario by default.** For workflow, engine, runner, worker, and
-   agent behavior, prefer memory/filesystem forges, in-process transports,
-   deterministic fake agents, jig fake LLMs, and local `file://` git.
+3. **Hermetic integration by default.** For workflow, engine, runner, worker,
+   and agent behavior, prefer MemoryForge or filesystem forges, in-process
+   transports, deterministic fake agents, Jig fake LLMs, and local `file://`
+   git.
 4. **Simulation for time and races.** Use `temper-sim` when behavior depends on
    timers, long-poll interleavings, retries, cancellation, or chaos. It has two
    worker fidelities: hand-rolled protocol simulants for cheap HTTP-path and
@@ -23,6 +24,10 @@ current inventory, see [Testing pyramid](../reference/testing-pyramid.md) and
 5. **Live e2e last.** Add ignored Forgejo/provider tests only for real webhooks,
    git auth, host-mode Actions CI, binary wiring, close-on-merge, or real
    provider credentials that no hermetic layer can prove.
+
+These Rust layers are lower-level product coverage, not execution modes for
+`temper-scenario`. Feature-landing scenario evidence comes from the implicit
+real-Forgejo/host-runner/standalone-Temper/Jig topology.
 
 ## Assertion ownership quick reference
 
