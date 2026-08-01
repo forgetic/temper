@@ -1,0 +1,38 @@
+schema = "temper.scenario.v1"
+name = "implicit-live-scenario-cli"
+status = "active"
+stability = "provisional"
+intent = "Prove that scenario commands expose one implicit live topology and reject the removed tier selector before execution."
+introduced_by = "#829"
+owner_area = "delivery-validation"
+timeout = 600
+
+[fixtures]
+extends = "scenarios/basic-delivery"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/implicit-live-scenario-cli.json"
+
+[validation]
+feature = "ai/temper#824"
+plan = "ai/temper#825"
+source_branch = "agent/pr-for-feature-824"
+change = "new"
+
+[feature_contract]
+claim = "Scenario execution is implicitly live: the public runner commands have no tier selector, fixed live evidence remains explicit, and one manual scenario-run alias reaches the manifest topology."
+stimulus = "Complete one inherited manifest delivery without a tier argument, then probe command help, legacy tier spellings, and repository alias declarations after convergence."
+observable = "Structured mapping, binary, live-topology, Jig, observability, assertion, artifact, CLI usage-error, and single-alias facts retained in the supplied artifact directory."
+assertion = "The outer no-tier run converges through real Forgejo, host forgejo-runner CI, standalone Temper, and Jig; help omits --tier; legacy tier forms fail with usage errors before execution; and no live-suffixed alias remains."
+runtime_budget_seconds = 600
+jig_script_path = "jig/implicit-live-scenario-cli.json"
+
+[[assertions]]
+id = "implicit-live-cli-and-single-alias-contract"
+kind = "command"
+command = "scripts/assert-implicit-live-cli.sh"
+phase = "after-convergence"
+timeout_ms = 30000
