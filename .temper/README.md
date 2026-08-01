@@ -13,16 +13,14 @@ The script runs these checks in order and stops on the first failure:
 2. Dependency-graph policy
 3. Rust file-size policy
 4. Ambient-environment access policy
-5. Cached custom-harness permission repair against mode-0644 fixtures
-6. Workspace test prebuild
-7. Quick nextest build, custom-harness repair, and test execution
-8. Linked test-binary cleanup
-9. Clippy
+5. Workspace test prebuild
+6. Quick nextest test execution
+7. Linked test-binary cleanup
+8. Clippy
 
-The quick nextest step captures a binaries-only build before repairing
-`benchmark_harness`, `linux_supervisor`, and `windows_job`. Nextest then reuses
-the captured Cargo and binary metadata, so no cache restoration can replace the
-repaired artifacts between the final build and test enumeration.
+The repository-local kache configuration excludes the three `harness = false`
+test targets that kache 0.11 cannot recognize as extensionless executables.
+The ordinary Cargo and nextest commands therefore need no permission repair.
 
 `.temper/pre-push.toml` wires the same script into Temper's `submit_for_pr`
 pre-push gate for writable engineer workspaces.
