@@ -95,6 +95,12 @@ fn repository_ci_runs_one_mapped_scenario_from_exact_feature_head() {
         .1;
 
     assert!(
+        focused_job.contains(
+            "if: ${{ startsWith(github.event.pull_request.head.ref, 'agent/pr-for-feature-') || startsWith(github.event.pull_request.head.ref, 'feature/') }}"
+        ),
+        "focused validation must skip ordinary pull-request branches"
+    );
+    assert!(
         focused_job.contains("ref: ${{ github.event.pull_request.head.sha }}")
             && focused_job.contains("fetch-depth: 0"),
         "focused validation must check out the exact head with its landing base available"
