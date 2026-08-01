@@ -84,24 +84,13 @@ pub(crate) async fn run(
 
     let plan_number = plan_number.to_string();
     let mut command = Command::new(&command_spec.program);
-    command.args(&command_spec.prefix_args).args([
-        OsStr::new("--pr"),
-        OsStr::new(&plan_number),
-        OsStr::new("--sha"),
-        OsStr::new(exact_head),
-        OsStr::new("--scenario"),
-        OsStr::new(scenario_path),
-        OsStr::new("--tier"),
-        OsStr::new("live"),
-        OsStr::new("--output-dir"),
-        output_dir.as_os_str(),
-        OsStr::new("--repo"),
-        OsStr::new(repo),
-        OsStr::new("--target-kind"),
-        OsStr::new("plan"),
-        OsStr::new("--target-issue"),
-        OsStr::new(&plan_number),
-    ]);
+    command.args(&command_spec.prefix_args).args(validator_args(
+        &plan_number,
+        exact_head,
+        scenario_path,
+        &output_dir,
+        repo,
+    ));
     command.current_dir(checkout);
     remove_forge_credentials(&mut command, credential_roles);
     for key in [
@@ -194,6 +183,31 @@ pub(crate) async fn run(
         body: Some(body),
         ..WorkspaceResult::default()
     })
+}
+
+fn validator_args(
+    plan_number: &str,
+    exact_head: &str,
+    scenario_path: &str,
+    output_dir: &Path,
+    repo: &str,
+) -> Vec<OsString> {
+    vec![
+        OsString::from("--pr"),
+        OsString::from(plan_number),
+        OsString::from("--sha"),
+        OsString::from(exact_head),
+        OsString::from("--scenario"),
+        OsString::from(scenario_path),
+        OsString::from("--output-dir"),
+        output_dir.as_os_str().to_owned(),
+        OsString::from("--repo"),
+        OsString::from(repo),
+        OsString::from("--target-kind"),
+        OsString::from("plan"),
+        OsString::from("--target-issue"),
+        OsString::from(plan_number),
+    ]
 }
 
 async fn prepare_native_workspace(
@@ -362,6 +376,42 @@ mod tests {
                 "validate",
             ]
         );
+    }
+
+    #[test]
+    fn native_validator_args_preserve_exact_mapping_without_a_tier() {
+        let args = validator_args(
+            "42",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "scenarios/proof",
+            Path::new("artifacts/focused"),
+            "ai/temper",
+        );
+        let args = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            [
+                "--pr",
+                "42",
+                "--sha",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "--scenario",
+                "scenarios/proof",
+                "--output-dir",
+                "artifacts/focused",
+                "--repo",
+                "ai/temper",
+                "--target-kind",
+                "plan",
+                "--target-issue",
+                "42",
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg == "--tier"));
     }
 
     #[test]

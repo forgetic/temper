@@ -54,7 +54,6 @@ jobs:
             --pr "$PR_NUMBER" \
             --sha "$MERGED_MAIN_SHA" \
             --scenario scenarios/basic-delivery \
-            --tier live \
             --output-dir "$VALIDATION_ARTIFACT_DIR"
           validate_status=$?
           set -e
