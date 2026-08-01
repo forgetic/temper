@@ -17,7 +17,7 @@ impl RunEvidenceArtifact {
             format!("source: {}", self.scenario.source_description),
             format!("manifest: `{}`", self.scenario.manifest_path),
             format!(
-                "confidence tier: {} ({})",
+                "execution topology: {} ({})",
                 self.scenario.tier, self.scenario.tier_description
             ),
             self.scenario.runner_selection.clone(),

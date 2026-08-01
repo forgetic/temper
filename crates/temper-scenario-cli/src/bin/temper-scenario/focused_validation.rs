@@ -156,8 +156,6 @@ fn validation_args(args: &Args, resolved: &ResolvedFeatureScenario) -> Vec<Strin
         args.sha.clone(),
         "--scenario".to_string(),
         resolved.scenario_path.clone(),
-        "--tier".to_string(),
-        "live".to_string(),
         "--output-dir".to_string(),
         args.output_dir.display().to_string(),
         "--repo".to_string(),

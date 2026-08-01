@@ -233,8 +233,10 @@ fn run_fails_clearly_when_runner_selector_is_missing() {
         stderr.contains("legacy scenario-name fallback has been removed"),
         "{stderr}"
     );
-    assert!(stderr.contains("supported runner ids:"), "{stderr}");
-    assert!(stderr.contains("manifest (tiers: live)"), "{stderr}");
+    assert!(
+        stderr.contains("supported runner ids: manifest"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -265,9 +267,11 @@ fn run_fails_clearly_for_unknown_runner_selector() {
         stderr.contains("unsupported runner `missing-runner` selected by runner.uses"),
         "{stderr}"
     );
-    assert!(stderr.contains("supported runner ids:"), "{stderr}");
-    assert!(stderr.contains("manifest (tiers: live)"), "{stderr}");
-    assert!(!stderr.contains("basic-delivery (tiers"), "{stderr}");
+    assert!(
+        stderr.contains("supported runner ids: manifest"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("basic-delivery"), "{stderr}");
 }
 
 #[test]

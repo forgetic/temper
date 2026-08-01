@@ -5,7 +5,7 @@ use std::process::Command;
 
 use temper_scenario_core::{CheckReport, ScenarioTopology, scenario_content_digest};
 
-use crate::run_context::ScenarioRunFacts;
+use crate::run_context::{LIVE_TIER, LIVE_TOPOLOGY_DESCRIPTION, ScenarioRunFacts};
 use crate::runner_registry::SelectedRunner;
 
 use super::model::{
@@ -64,8 +64,8 @@ impl RunEvidenceContext {
                 runner_id: selected_runner.id().to_string(),
                 runner_selector: selected_runner.selector_key().to_string(),
                 runner_selection: selected_runner.selection_detail(),
-                tier: facts.tier.as_str().to_string(),
-                tier_description: facts.tier.description().to_string(),
+                tier: LIVE_TIER.to_string(),
+                tier_description: LIVE_TOPOLOGY_DESCRIPTION.to_string(),
                 topology: TopologyEvidence::from_topology(&facts.topology),
             },
             fixtures,
