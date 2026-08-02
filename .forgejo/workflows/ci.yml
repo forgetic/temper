@@ -18,7 +18,9 @@ on:
 # Cargo's path-sensitive fingerprints without paying kache's per-crate key cost.
 # Two caching notes drive the step layout below:
 #   1. Build and run the cacheable test executables BEFORE linting, so the
-#      expensive shared lib compiles are warmed once and reused by clippy.
+#      expensive shared lib compiles are warmed once and reused by clippy. Keep
+#      lint immediately after the all-target quick lane, matching `.temper/pre-pr`,
+#      before narrower Cargo commands can change the active fingerprint set.
 #      Linked test binaries remain in the persistent target for the next run.
 #   2. Every cargo invocation on the build/test/lint cache path uses the SAME
 #      `--all-targets` scope so feature unification matches and the cached lib
@@ -94,6 +96,10 @@ jobs:
         # change the active feature/target fingerprint set and would make
         # nextest relink the workspace test binaries before running them.
         run: cargo dev-test-quick
+      - name: Lint
+        # Keep this adjacent to the all-target build/test lanes so local pre-PR
+        # Clippy artifacts key-match before narrower CI-only Cargo lanes run.
+        run: cargo dev-clippy
       - name: Test (e2e capstones)
         # The live e2e lane boots real Forgejo + CI runners and waits for
         # convergence. On a cold CI machine the fixture provisioning alone can
@@ -137,8 +143,6 @@ jobs:
         # verifies structural run/aggregate summaries and the harness disclaimer.
         # No provider credentials or timing thresholds belong in this lane.
         run: cargo dev-benchmark-harness
-      - name: Lint
-        run: cargo dev-clippy
       - name: Cleanup scratch directory
         if: ${{ always() }}
         run: |
