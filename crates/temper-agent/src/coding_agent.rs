@@ -53,6 +53,7 @@ mod error;
 mod forge;
 mod patch;
 mod prompt;
+mod prompt_lineage;
 mod result;
 mod run;
 mod runtime_limits;

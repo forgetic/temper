@@ -184,7 +184,13 @@ projection containing only normalized parent/dependency references, branch and
 correlation values, and persisted child identities. The agent renders the bundle
 into stable sections (primary, lineage, validation summaries, optional
 references, and diagnostics) instead of asking a model to interpret raw graph
-JSON.
+JSON. The primary body is always rendered in full. When mandatory ancestor
+bodies exceed 6,000 bytes in aggregate, the agent renders a deterministic
+decision-dense projection: constraints, architecture, risks, decisions,
+compatibility, evidence, and non-goals take precedence over repeated objective,
+acceptance, work-breakdown, validation-strategy, and test-mapping prose. The
+wire bundle remains unchanged and still carries the complete bounded snapshots.
+Small lineage bundles remain byte-for-byte authored.
 
 The historical singular carrier is still present at
 `WorkspaceContext.work_item.context`. It remains the original inner work-item
