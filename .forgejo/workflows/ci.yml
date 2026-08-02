@@ -29,8 +29,9 @@ on:
 #      after the build step, so they do not change that cache choreography. The
 #      validation-grade live scenario lane requires an explicit scenario path;
 #      aggregate feature PRs use the separate focused-feature-validation
-#      workflow. PR CI also preserves broad live coverage in the ignored e2e
-#      lane. The manifest check is additionally skipped unless its inputs or
+#      workflow. PR CI preserves two cross-cutting live capstones; the broader
+#      ignored/manual lane remains available explicitly. The manifest check is
+#      additionally skipped unless its inputs or
 #      implementation changed. Benchmark live mode remains explicit and
 #      credential-gated, never part of PR CI.
 jobs:
@@ -93,7 +94,7 @@ jobs:
         # change the active feature/target fingerprint set and would make
         # nextest relink the workspace test binaries before running them.
         run: cargo dev-test-quick
-      - name: Test (all e2e)
+      - name: Test (e2e capstones)
         # The live e2e lane boots real Forgejo + CI runners and waits for
         # convergence. On a cold CI machine the fixture provisioning alone can
         # take ~2min, so the budget needs headroom over the 300s default — but
@@ -105,7 +106,7 @@ jobs:
           TEMPER_TEST_CONVERGENCE_TIMEOUT_SECS: "300"
         run: |
           export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
-          cargo dev-test-e2e-all
+          cargo dev-test-e2e-capstones
       - name: Detect scenario manifest changes
         id: scenario-manifest-changes
         run: |
