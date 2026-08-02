@@ -128,6 +128,8 @@ snapshot.
   These scenarios are not deleted or deprecated by the slim full lane; they are
   explicit because they are slower, environment-sensitive, redundant with
   hermetic coverage, or useful mainly when debugging the live fixture stack.
+  This lane is manual rather than a universal PR gate; PR CI runs the two
+  default capstones and post-merge validation rotates through active manifests.
 - **Default hermetic real-stack tests** should absorb assertions about workflow
   logic, retry/idempotency, role routing, CLI artifact validation, worker/daemon
   protocol behavior, implementation-PR handoff, recovered-assignment ownership

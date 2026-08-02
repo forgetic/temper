@@ -14,8 +14,9 @@ binds evidence to the exact feature head and digest; the workflow-native
 validator gate decides landing.
 
 The post-merge job checks out the merged `main` commit for the close event,
-runs the validation-grade live manifest lane for `scenarios/basic-delivery`,
-and writes a Markdown report with the temporary bridge. Both the direct run and
+selects the least-recently-attempted active manifest from `scenarios/`, runs its
+validation-grade live lane, and writes a Markdown report with the temporary
+bridge. Never-run scenarios sort first. Both the direct run and
 the report record that this is the checked-in scenario corpus, the fixed live
 manifest topology, Forgejo URL, issue/PR numbers, CI evidence, convergence
 timing, fake-LLM request counts, and log/artifact paths. The serialized
@@ -25,7 +26,7 @@ timing, fake-LLM request counts, and log/artifact paths. The serialized
 cargo run -p temper-scenario-cli -- validate \
   --pr <merged-pr-number> \
   --sha <merged-main-sha> \
-  --scenario scenarios/basic-delivery \
+  --scenario scenarios/<selected-name> \
   --output-dir validation-artifacts/post-merge-pr-<merged-pr-number>
 ```
 
@@ -52,12 +53,22 @@ cargo run -p temper-scenario-cli -- validate-pr \
 When both `--scenario` and `--run-evidence` are supplied, `validate-pr` checks
 that the artifact's scenario, source classification, and runner match the
 supplied manifest but still does not rerun the scenario for report evidence. To
-validate a focused ephemeral bundle instead of the checked-in `basic-delivery`
+validate a focused ephemeral bundle instead of the checked-in selected
 scenario, keep the same `validate` command and replace `--scenario` with the
 bundle path; the [scenario authoring guide](../../scenarios/README.md#single-validator-workflow-command)
 shows both a config-only inherited bundle and a bundle with a small script hook.
 
 ## Where to find the report in CI
+
+### Scheduler state
+
+The workflow stores its small JSON ledger at
+`refs/temper/scenario-validation-state`, outside normal branch history. Each
+entry records the last attempt and the last successful run separately. The
+workflow is serialized and updates the ref with `--force-with-lease`; it records
+failed attempts too, preventing one broken scenario from starving the rest of
+the corpus. The uploaded artifact includes the selected scenario, previous and
+new state commits, and the resulting ledger.
 
 When artifact upload is available on the Forgejo runner, the workflow uploads
 the whole report directory as an artifact named:
@@ -112,7 +123,7 @@ mkdir -p /tmp/temper-validation/pr-<merged-pr-number>
 cargo run -p temper-scenario-cli -- validate \
   --pr <merged-pr-number> \
   --sha "$(git rev-parse HEAD)" \
-  --scenario scenarios/basic-delivery \
+  --scenario scenarios/<selected-name> \
   --output-dir /tmp/temper-validation/pr-<merged-pr-number>
 ```
 
@@ -123,4 +134,4 @@ authority. Lower-level MemoryForge, filesystem-forge, in-process, hermetic
 real-stack, and simulation tests are valuable fast coverage, but they do not
 produce this manifest scenario report. Reserve the report for the implicit live
 stack. A changed feature head must instead rerun the mapped pre-merge command;
-post-merge `basic-delivery` output cannot refresh stale feature evidence.
+post-merge regression output cannot refresh stale feature evidence.

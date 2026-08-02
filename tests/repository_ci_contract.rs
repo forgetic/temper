@@ -53,10 +53,10 @@ fn repository_ci_uses_a_serialized_persistent_workspace() {
 }
 
 #[test]
-fn repository_ci_runs_e2e_through_the_cargo_alias() {
+fn repository_ci_runs_e2e_capstones_through_the_cargo_alias() {
     let e2e_step = CI_WORKFLOW
-        .split_once("      - name: Test (all e2e)\n")
-        .expect("CI declares the all-e2e step")
+        .split_once("      - name: Test (e2e capstones)\n")
+        .expect("CI declares the e2e capstone step")
         .1
         .split_once("      - name: Lint\n")
         .expect("the all-e2e step precedes lint")
@@ -65,8 +65,8 @@ fn repository_ci_runs_e2e_through_the_cargo_alias() {
     assert!(
         e2e_step
             .lines()
-            .any(|line| line.trim() == "cargo dev-test-e2e-all"),
-        "the e2e lane should use the repository's direct nextest alias"
+            .any(|line| line.trim() == "cargo dev-test-e2e-capstones"),
+        "PR CI should run only the deliberate live capstones"
     );
 }
 
@@ -79,8 +79,8 @@ fn repository_ci_runs_tests_before_narrow_cargo_lanes() {
         .find("run: cargo dev-test-quick")
         .expect("CI runs the quick nextest lane");
     let e2e = CI_WORKFLOW
-        .find("cargo dev-test-e2e-all")
-        .expect("CI runs the all-e2e nextest lane");
+        .find("cargo dev-test-e2e-capstones")
+        .expect("CI runs the e2e capstone lane");
     let scenario = CI_WORKFLOW
         .find("run: cargo dev-scenario-check")
         .expect("CI checks scenario manifests");
@@ -190,6 +190,19 @@ fn live_scenario_lanes_reuse_the_host_fixture_cache() {
 }
 
 #[test]
+fn post_merge_validation_uses_serialized_durable_lru_state() {
+    assert!(POST_MERGE_WORKFLOW.contains("group: temper-post-merge-scenario-state"));
+    assert!(POST_MERGE_WORKFLOW.contains("cancel-in-progress: false"));
+    assert!(POST_MERGE_WORKFLOW.contains("scripts/run-post-merge-scenario.sh"));
+    assert!(!POST_MERGE_WORKFLOW.contains("--scenario scenarios/basic-delivery"));
+
+    let scheduler = include_str!("../scripts/run-post-merge-scenario.sh");
+    assert!(scheduler.contains("refs/temper/scenario-validation-state"));
+    assert!(scheduler.contains("last_attempted_at"));
+    assert!(scheduler.contains("--force-with-lease="));
+}
+
+#[test]
 fn repository_ci_preserves_focused_evidence_on_failure_and_broad_coverage() {
     let focused_job = FOCUSED_WORKFLOW
         .split_once("  focused-feature-validation:\n")
@@ -207,7 +220,7 @@ fn repository_ci_preserves_focused_evidence_on_failure_and_broad_coverage() {
 
     assert!(CI_WORKFLOW.contains("run: cargo dev-scenario-check"));
     assert!(CI_WORKFLOW.contains("run: cargo dev-test-quick"));
-    assert!(CI_WORKFLOW.contains("cargo dev-test-e2e-all"));
+    assert!(CI_WORKFLOW.contains("cargo dev-test-e2e-capstones"));
 }
 
 #[test]

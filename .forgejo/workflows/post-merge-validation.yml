@@ -8,10 +8,13 @@ on:
       - closed
 
 jobs:
-  basic-delivery-report:
-    name: basic-delivery validation report
+  scenario-regression-report:
+    name: least-recently-run scenario validation
     runs-on: host
     if: ${{ github.event.pull_request.merged == true }}
+    concurrency:
+      group: temper-post-merge-scenario-state
+      cancel-in-progress: false
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       MERGED_MAIN_SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
@@ -40,21 +43,18 @@ jobs:
           echo "Validating merged PR #${PR_NUMBER} at ${checked_out_sha}"
           echo "Validation artifact directory: ${VALIDATION_ARTIFACT_DIR}"
 
-      - name: Run live validator workflow
-        # Validation-grade lane: real Forgejo, host forgejo-runner, standalone
-        # temper, and Jig fake LLM agents. The cohesive validator command
-        # writes run evidence, retained logs, Markdown, and JSON output in one
-        # artifact directory, and builds/resolves standalone temper as needed.
+      - name: Run least-recently-run live scenario
+        # The scheduler reads its durable ledger from a dedicated Git ref,
+        # selects never-run and then least-recently-attempted active scenarios,
+        # runs the fixed live topology, and records the attempt with a
+        # lease-protected push even when validation fails.
         run: |
           set -eu
           export BENCH_FORGEJO_CACHE_DIR="$HOME/.cache/bench-forgejo"
           mkdir -p "$VALIDATION_ARTIFACT_DIR"
           set +e
-          cargo run -p temper-scenario-cli -- validate \
-            --pr "$PR_NUMBER" \
-            --sha "$MERGED_MAIN_SHA" \
-            --scenario scenarios/basic-delivery \
-            --output-dir "$VALIDATION_ARTIFACT_DIR"
+          scripts/run-post-merge-scenario.sh \
+            "$PR_NUMBER" "$MERGED_MAIN_SHA" "$VALIDATION_ARTIFACT_DIR"
           validate_status=$?
           set -e
           report_path="$VALIDATION_ARTIFACT_DIR/validation-pr-${PR_NUMBER}-${MERGED_MAIN_SHA}.md"

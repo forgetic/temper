@@ -114,8 +114,9 @@ The web UI is separate from Cargo:
 ```
 
 CI runs format, depgraph, file-size, ambient-env, build, scenario manifest
-checks, quick Rust tests, the full ignored/manual e2e lane, clippy, and then a
-separate web job for Vitest/build. Aggregate `feature/*` PRs into `main` also run
+checks, quick Rust tests, the two live e2e capstones, clippy, and then a
+separate web job for Vitest/build. The full ignored/manual e2e lane remains an
+explicit diagnostic command. Aggregate `feature/*` PRs into `main` also run
 the exact checked-out head through one resolved mapped scenario and retain the
 mapping plus structured evidence. `cargo dev-scenario-run scenarios/<name>` is
 the sole manual scenario alias; it requires an explicit path and executes the

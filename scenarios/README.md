@@ -577,8 +577,10 @@ workflow-native validator contract, but the workflow-native exact-head gate is
 the landing authority. Any feature-head change makes an older attempt stale.
 See [Run focused feature validation][focused-validation].
 
-The broad post-merge workflow remains a regression report and may still run
-`basic-delivery`; it is not the focused feature selector or landing authority.
+The broad post-merge workflow remains a regression report and runs the
+least-recently-attempted active scenario after each merge. Its durable scheduler
+ledger lives at `refs/temper/scenario-validation-state`; it is not the focused
+feature selector or landing authority.
 The [post-merge validator handoff][validator-handoff] describes the generic
 workflow architecture. `temper-scenario validate-pr` remains a temporary/manual
 report bridge. Scenario promotion also stays a separate follow-up from

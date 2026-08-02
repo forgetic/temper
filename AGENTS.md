@@ -48,8 +48,9 @@ MemoryForge, filesystem-forge, in-process, hermetic real-stack, and simulation
 tests remain lower-level coverage. They do not provide the mapped live scenario
 evidence required to land a feature.
 
-The full `cargo dev-test-e2e-all` lane is intentionally left to CI (or an
-explicit manual local run) so the default pre-PR check stays cheap.
+The full `cargo dev-test-e2e-all` lane is intentionally manual. PR CI runs the
+two cross-cutting live capstones, while post-merge validation rotates through
+the checked-in scenario corpus.
 
 ## Useful docs
 

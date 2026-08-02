@@ -49,8 +49,8 @@ document how to run it before handoff.
 
 Keep the whole full capstone suite fast too; as a soft target for agent
 changes, it should complete in under about 2 minutes on a warmed local checkout.
-The exhaustive `cargo dev-test-e2e-all` lane is owned by CI and may also be run
-manually when a change touches live e2e behavior.
+The exhaustive `cargo dev-test-e2e-all` lane is manual and should be run when a
+change touches broad live e2e behavior. PR CI runs the narrower capstone lane.
 
 ## 3. Review documentation from the top
 
