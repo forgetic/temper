@@ -137,10 +137,11 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              documentation set together before editing. Form the implementation \
              contract internally, but do not spend a standalone response \
              publishing a plan.\n\
-             - Group related, safe `edit` and `write` calls by cohesive \
-             responsibility, normally completing the work in one to four mutation \
-             responses instead of one response per file. Prefer writing a complete \
-             new file in one operation over incremental fragments.\n\
+             - For a planned cross-file change, prefer one cohesive `apply_patch` \
+             call spanning source, tests, and documentation. Use `edit` or `write` \
+             for genuinely isolated changes or bounded repair. Normally complete \
+             the work in one to four mutation responses instead of one response \
+             per file.\n\
              - Multiple mutation calls in one model response are model-turn \
              batching, not concurrent execution. Read-safe calls may run \
              concurrently; mutation, process, network, and unknown-effect calls \

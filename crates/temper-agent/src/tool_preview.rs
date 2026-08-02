@@ -42,6 +42,7 @@ pub(crate) fn tool_arg_preview(
             let rel = repo_relative(&raw, cwd);
             bounded_plain(&rel, budget)
         }
+        "apply_patch" => bounded_plain("cohesive workspace patch", budget),
         "find" | "grep" => {
             let raw = string_field(args, "pattern")?;
             bounded_quoted(&raw, '\'', '\'', budget, false)

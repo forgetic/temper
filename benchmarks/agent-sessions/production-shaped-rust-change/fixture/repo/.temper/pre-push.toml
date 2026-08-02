@@ -1,0 +1,10 @@
+version = 1
+
+[pre_push]
+required = true
+cwd = "repo"
+
+[[pre_push.commands]]
+id = "fixture-tests"
+argv = ["cargo", "test", "-q"]
+timeout_secs = 60

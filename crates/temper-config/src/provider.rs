@@ -95,6 +95,61 @@ pub fn provider_credentials_json(provider: &ProviderSettings) -> Option<String> 
     serde_json::to_string(&value).ok()
 }
 
+/// Builds the credential JSON forwarded to an out-of-process first-party agent.
+///
+/// Inline credentials use [`provider_credentials_json`]. An `OAuthFile` is a
+/// pi-format `auth.json`, so this reads only the configured provider entry and
+/// converts its millisecond expiry to the child protocol's seconds.
+pub fn provider_credentials_json_for_child(
+    provider: &ProviderSettings,
+) -> Result<Option<String>, String> {
+    let ProviderCredential::OAuthFile(path) = &provider.credential else {
+        return Ok(provider_credentials_json(provider));
+    };
+    let source = std::fs::read_to_string(path)
+        .map_err(|error| format!("read provider OAuth file `{}`: {error}", path.display()))?;
+    let document: serde_json::Value = serde_json::from_str(&source)
+        .map_err(|error| format!("parse provider OAuth file `{}`: {error}", path.display()))?;
+    let key = oauth_provider_key(provider.kind);
+    let entry = document
+        .get(key)
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| {
+            format!(
+                "provider OAuth file `{}` has no object entry `{key}`",
+                path.display()
+            )
+        })?;
+    let access = entry
+        .get("access")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "provider OAuth file `{}` has no access token",
+                path.display()
+            )
+        })?;
+    let expires = entry
+        .get("expires")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| {
+            format!(
+                "provider OAuth file `{}` has no integer expiry",
+                path.display()
+            )
+        })?;
+    let value = serde_json::json!({
+        "type": "oauth",
+        "access_token": access,
+        "refresh_token": entry.get("refresh").and_then(serde_json::Value::as_str),
+        "expires_at_unix_seconds": expires / 1_000,
+    });
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|error| format!("serialize provider OAuth credential: {error}"))
+}
+
 /// The `auth.json` provider key an OAuth credential is stored under.
 pub fn oauth_provider_key(kind: ProviderKind) -> &'static str {
     match kind {
@@ -234,5 +289,26 @@ mod tests {
             ))
             .is_none()
         );
+    }
+
+    #[test]
+    fn oauth_file_credential_json_selects_provider_and_converts_expiry() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("auth.json");
+        std::fs::write(
+            &path,
+            r#"{"openai-codex":{"type":"oauth","access":"acc","refresh":"ref","expires":1781371005373},"anthropic":{"type":"oauth","access":"other","expires":1}}"#,
+        )
+        .unwrap();
+        let provider = settings(ProviderKind::ChatGpt, ProviderCredential::OAuthFile(path));
+
+        let json = provider_credentials_json_for_child(&provider)
+            .unwrap()
+            .expect("credential JSON");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["type"], "oauth");
+        assert_eq!(value["access_token"], "acc");
+        assert_eq!(value["refresh_token"], "ref");
+        assert_eq!(value["expires_at_unix_seconds"], 1_781_371_005_i64);
     }
 }

@@ -246,6 +246,42 @@ fn pool_without_agent_profile_uses_legacy_provider_fallback() {
     );
 }
 
+#[test]
+fn legacy_oauth_file_is_forwarded_as_child_credential_json() {
+    let directory = tempfile::tempdir().unwrap();
+    let auth_file = directory.path().join("auth.json");
+    std::fs::write(
+        &auth_file,
+        r#"{"openai-codex":{"type":"oauth","access":"oauth-access","refresh":"oauth-refresh","expires":1781371005373}}"#,
+    )
+    .unwrap();
+    let mut resolved = resolved_with_codebase_memory(None);
+    resolved.agent.provider.kind = temper_config::ProviderKind::ChatGpt;
+    resolved.agent.provider.credential = temper_config::ProviderCredential::OAuthFile(auth_file);
+
+    let invocation =
+        agent_invocation_with_first_party_program(&resolved, &["benchmark-agent".to_string()])
+            .expect("OAuth file invocation");
+
+    assert_eq!(invocation.env.len(), 1);
+    assert_eq!(invocation.env[0].0, provider::PROVIDER_CREDENTIALS_ENV);
+    let credential = &invocation.env[0].1;
+    for expected in [
+        r#""type":"oauth""#,
+        r#""access_token":"oauth-access""#,
+        r#""refresh_token":"oauth-refresh""#,
+        r#""expires_at_unix_seconds":1781371005"#,
+    ] {
+        assert!(credential.contains(expected), "missing {expected}");
+    }
+    assert!(
+        !invocation
+            .command
+            .iter()
+            .any(|argument| argument.contains("oauth-access"))
+    );
+}
+
 fn resolved_with_profile_pool() -> Resolved {
     let config = Config {
         engine: EngineConfig {

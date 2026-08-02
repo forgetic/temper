@@ -1,0 +1,13 @@
+schema = "temper.benchmark.v1"
+name = "production-shaped-rust-change"
+fixture = "fixture"
+workspace_context = "workspace-context-lineage-curated.json"
+capture = "diagnostic"
+validation_command_prefixes = [["cd", "repo", "&&", "cargo", "test", "-q"]]
+post_run_commands = [["cargo", "test", "-q", "--manifest-path", "repo/Cargo.toml", "--target-dir", ".benchmark-target"]]
+jig_script = "jig.json"
+repetitions = 1
+
+[annotations]
+provider_region = "loopback"
+cache_warmth = "not-applicable"

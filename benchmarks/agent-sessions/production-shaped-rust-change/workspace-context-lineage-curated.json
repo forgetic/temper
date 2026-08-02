@@ -1,0 +1,24 @@
+{
+  "repos": [
+    {
+      "id": "production-shaped-rust-fixture",
+      "owner": "temper-benchmark",
+      "name": "production-shaped-rust-change",
+      "default_branch": "main",
+      "dir": "repo",
+      "access": "writable",
+      "base_branch": "main",
+      "branch_hint": "benchmark/production-shaped-rust-change"
+    }
+  ],
+  "work_item": {
+    "role": "engineer",
+    "queue": "code_ready",
+    "kind": "code",
+    "target": "Issue { number: ItemNumber(103) }",
+    "context": "Artifact context bundle (version 1, curated lineage):\nRepository: temper-benchmark/production-shaped-rust-change\n\nPrimary artifact:\n- issue #103 — Add configurable delivery-policy severities [open] kind=code labels=code, ready\n\n## Implementation contract\nExtend the dependency-free delivery-policy crate with public Severity (Advisory, Required), PolicyOptions, Rule, Violation, expanded Decision, and summary APIs. Preserve parse_policy, evaluate_labels, Decision.accepted, Decision.missing, and render_decision as compatibility surfaces. Compatibility results remain comma-separated required-only behavior and exact short strings `accepted` or `missing: <labels>`. New wrappers must delegate to the richer path.\n\nParse one rule per physical line as `severity:label`. Ignore blank lines and whole-line `#` comments. Split the first colon; trim fields; lowercase labels; reject missing colon, unknown severity, empty label, and duplicates after normalization. ParsePolicyError carries the one-based physical line and stable safe text. Add parse_policy_with_options.\n\nNormalize observed labels. In prefix mode, normalize and strip the configured prefix before matching; unprefixed observations do not match accidentally. Preserve declaration order in required and advisory violations. Normal mode blocks only on required violations; strict mode also blocks on advisories without moving them between buckets.\n\nKeep render_decision compatible. Add a stable detailed report: decision line, separate required/advisory lines using `none` for empty buckets and comma-space declaration order, then required/advisory/total counts. Expose the same counts as typed values.\n\nUpdate thin exports, focused parser/evaluator/report tests, one public integration workflow, README compatibility and rich-path examples, and CHANGELOG. Run `cargo fmt` and `cargo test -q`, inspect the complete diff, and call submit_for_pr.\n\nMandatory lineage (decision-dense projection):\n- feature #100 — Configurable delivery policy classification [open] kind=feature labels=feature, planned\n  - Why: downstream clients currently reimplement severity, namespace handling, normalization, ordering, and reporting inconsistently.\n  - Product boundary: severity is separate from portable label identity; repository namespace is an evaluation option. The crate stays serialization-agnostic and dependency-free.\n- plan #101 — Deliver configurable policy parsing, evaluation, and reports [open] kind=plan labels=plan, planned\n  - Architecture: model.rs owns public domain values; parser.rs syntax and compatibility adaptation; evaluate.rs matching and decisions; report.rs text projection; lib.rs only declarations/re-exports. Tests follow those responsibilities plus one integration workflow.\n  - Risks: compatibility drift, two evaluator paths, unstable diagnostics, wrong prefix-normalization stage. Centralize normalization and delegate compatibility wrappers.\n- design note #99 — Delivery labels across repository conventions [closed] kind=design\n  - Decisions: preserve declaration order, reject normalized duplicates across severities, and keep prefix processing out of parsing. Existing automation depends on public missing labels and exact short reports.\n- research #98 — Stable policy diagnostics and compatibility constraints [closed] kind=design\n  - Evidence retained: mixed-case duplicates and whitespace are common; line numbers include ignored lines; errors identify invalid values without echoing the whole policy. Strict mode changes acceptance only, not violation classification. Detailed output is stable text, not serialization.\n  - Non-goals: glob/regex matching, serde, filesystem or environment loading, exemptions, branch-aware behavior, automatic migration, sorting, inline comments, dependency or edition changes.\n\nFollow-up instructions:\n- Implement a real product diff; do not modify benchmark metadata or add bookkeeping markers.\n- Do not commit, push, or open a pull request; the harness owns publication.\n- Prefer cohesive mutation batches across implementation, tests, and docs.\n- Validate once after the planned implementation; any later mutation requires revalidation.\n- Review tracked and untracked deliverables, call submit_for_pr, then emit the WorkspaceResult JSON envelope."
+  },
+  "action": "open_pr",
+  "correlation_key": "benchmark-production-shaped-rust-change",
+  "checkout": "writable"
+}
