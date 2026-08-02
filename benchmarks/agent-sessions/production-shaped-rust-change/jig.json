@@ -1,0 +1,83 @@
+{
+  "sequence": [
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "inspect_model",
+            "name": "read",
+            "args": { "path": "repo/src/model.rs" }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "inspect_parser",
+            "name": "read",
+            "args": { "path": "repo/src/parser.rs" }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "inspect_evaluator",
+            "name": "read",
+            "args": { "path": "repo/src/evaluate.rs" }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "inspect_reporter",
+            "name": "read",
+            "args": { "path": "repo/src/report.rs" }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "cohesive_product_patch",
+            "name": "apply_patch",
+            "args": {
+              "patch": "diff --git a/repo/src/model.rs b/repo/src/model.rs\n--- a/repo/src/model.rs\n+++ b/repo/src/model.rs\n@@ -1,3 +1,4 @@\n+/// Required delivery labels parsed from repository policy.\n #[derive(Clone, Debug, Eq, PartialEq)]\n pub struct Policy {\n     pub required: Vec<String>,\ndiff --git a/repo/src/parser.rs b/repo/src/parser.rs\n--- a/repo/src/parser.rs\n+++ b/repo/src/parser.rs\n@@ -1,5 +1,6 @@\n use crate::Policy;\n \n+/// Parse the compatibility comma-separated policy syntax.\n pub fn parse_policy(input: &str) -> Policy {\n     Policy {\n         required: input\ndiff --git a/repo/src/evaluate.rs b/repo/src/evaluate.rs\n--- a/repo/src/evaluate.rs\n+++ b/repo/src/evaluate.rs\n@@ -1,5 +1,6 @@\n use crate::{Decision, Policy};\n \n+/// Evaluate observed labels against a parsed delivery policy.\n pub fn evaluate_labels(policy: &Policy, labels: &[&str]) -> Decision {\n     let missing = policy\n         .required\ndiff --git a/repo/src/report.rs b/repo/src/report.rs\n--- a/repo/src/report.rs\n+++ b/repo/src/report.rs\n@@ -1,5 +1,6 @@\n use crate::Decision;\n \n+/// Render a stable operator-facing delivery decision.\n pub fn render_decision(decision: &Decision) -> String {\n     if decision.accepted {\n         \"accepted\".to_string()\ndiff --git a/repo/README.md b/repo/README.md\n--- a/repo/README.md\n+++ b/repo/README.md\n@@ -2,3 +2,5 @@\n \n Parse a comma-separated set of required labels, evaluate an item, and render\n the decision.\n+\n+The public compatibility path remains documented directly on each API.\ndiff --git a/repo/CHANGELOG.md b/repo/CHANGELOG.md\n--- a/repo/CHANGELOG.md\n+++ b/repo/CHANGELOG.md\n@@ -3,3 +3,4 @@\n ## Unreleased\n \n - Initial required-label policy.\n+- Document the public compatibility API before its planned expansion.\n"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "validate_fixture",
+            "name": "bash",
+            "args": {
+              "command": "cd repo && cargo test -q",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "submit_benchmark",
+            "name": "submit_for_pr",
+            "args": {
+              "summary": "Applied and validated one cohesive six-file product patch"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "text": "{\"title\":\"Document delivery-policy compatibility APIs\",\"body\":\"# Implementation report\\n\\nApplied one cohesive patch across four Rust modules and two operator documents, then passed the fixture tests and submit gate.\",\"summary\":\"Validated the production-shaped cohesive patch path\"}"
+    }
+  ]
+}

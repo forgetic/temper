@@ -20,7 +20,7 @@ The no-verdict success path above remains preferred after a successful implement
 EFFICIENCY:
 - Scale discovery to the task. For non-local work, batch independent status, architecture, and search calls into one response; skip ritual discovery when the task is already localized.
 - Read the complete likely source, test, configuration, and documentation set together before editing. Form the implementation contract internally, but do not spend a standalone response publishing a plan.
-- Group related, safe `edit` and `write` calls by cohesive responsibility, normally completing the work in one to four mutation responses instead of one response per file. Prefer writing a complete new file in one operation over incremental fragments.
+- For a planned cross-file change, prefer one cohesive `apply_patch` call spanning source, tests, and documentation. Use `edit` or `write` for genuinely isolated changes or bounded repair. Normally complete the work in one to four mutation responses instead of one response per file.
 - Multiple mutation calls in one model response are model-turn batching, not concurrent execution. Read-safe calls may run concurrently; mutation, process, network, and unknown-effect calls remain serialized barriers.
 - Complete the planned source, tests, configuration, and documentation deliverables before running the formatter and focused authoritative test suite. Do not repeatedly check partial work.
 - If validation fails, perform bounded repair and focused revalidation without broad rediscovery. Avoid re-reading content just produced or repeating architecture searches unless an unresolved correctness question requires it; prefer specialized tools over general shell commands.
@@ -49,4 +49,4 @@ Work item context (JSON):
 {}
 
 TOOL NAMES
-read, ls, grep, find, bash, edit, write, submit_for_pr
+read, ls, grep, find, bash, apply_patch, edit, write, submit_for_pr

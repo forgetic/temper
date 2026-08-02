@@ -338,7 +338,8 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
         if tool.name == "edit" && tool.status == ToolStatusV1::Failed {
             failed_edits = failed_edits.saturating_add(1);
         }
-        if matches!(tool.name.as_str(), "write" | "edit") && tool.status == ToolStatusV1::Succeeded
+        if matches!(tool.name.as_str(), "write" | "edit" | "apply_patch")
+            && tool.status == ToolStatusV1::Succeeded
         {
             mutation_sequences.insert(event.seq);
             match event.turn {
@@ -350,7 +351,7 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
                 }
                 None => record_unavailable_structure(
                     event,
-                    "successful write/edit completion lacks turn identity; mutation-turn metrics are unavailable",
+                    "successful workspace mutation completion lacks turn identity; mutation-turn metrics are unavailable",
                     &mut mutation_turns_observable,
                     &mut diagnostics,
                 ),

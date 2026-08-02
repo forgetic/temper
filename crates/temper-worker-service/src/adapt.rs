@@ -242,7 +242,7 @@ fn agent_invocation_with_command_policy(
             )?;
             (command, env, first_party, profile.operation_limits)
         } else {
-            let (command, env) = legacy_agent_command_and_env(resolved, program);
+            let (command, env) = legacy_agent_command_and_env(resolved, program)?;
             (command, env, true, resolved.agent.operation_limits)
         };
 
@@ -286,7 +286,10 @@ pub fn selected_agent_runtime_limits(
     Ok(agent_runtime_limits(limits))
 }
 
-fn legacy_agent_command_and_env(resolved: &Resolved, program: &[String]) -> AgentCommandEnv {
+fn legacy_agent_command_and_env(
+    resolved: &Resolved,
+    program: &[String],
+) -> Result<AgentCommandEnv, String> {
     let agent = &resolved.agent;
 
     let mut command: Vec<String> = program.to_vec();
@@ -301,12 +304,12 @@ fn legacy_agent_command_and_env(resolved: &Resolved, program: &[String]) -> Agen
     }
 
     let mut env = Vec::new();
-    if let Some(json) = provider::provider_credentials_json(&agent.provider) {
+    if let Some(json) = provider::provider_credentials_json_for_child(&agent.provider)? {
         // I/O boundary: the one secret crosses into the spawned agent's env.
         env.push((provider::PROVIDER_CREDENTIALS_ENV.to_string(), json));
     }
 
-    (command, env)
+    Ok((command, env))
 }
 
 fn selected_agent_profile(

@@ -124,8 +124,7 @@ fn subagent_tools_register_parallel_safe_and_on_the_right_model() {
 #[test]
 fn tool_registry_writability_matches_capability() {
     // Constructing the registries must not panic and must be scoped to cwd.
-    // We can't easily introspect tool names, but we assert the writable mapping
-    // is what selects the edit/write tools.
+    // Assert that every mutation tool is selected only by writable authority.
     let cwd = std::env::temp_dir();
     let writable = tool_registry(Capability::CodingWorkspace, &cwd);
     let readonly = tool_registry(Capability::TriageWorkspace, &cwd);
@@ -133,6 +132,10 @@ fn tool_registry_writability_matches_capability() {
     let readonly_names: Vec<&str> = readonly.tools().iter().map(|tool| tool.name()).collect();
     assert!(writable_names.contains(&"write"));
     assert!(writable_names.contains(&"edit"));
+    assert!(writable_names.contains(&"apply_patch"));
+    assert!(!readonly_names.contains(&"write"));
+    assert!(!readonly_names.contains(&"edit"));
+    assert!(!readonly_names.contains(&"apply_patch"));
     assert!(!writable_names.contains(&"checkpoint"));
     assert!(!readonly_names.contains(&"checkpoint"));
     assert!(!writable_names.contains(&"publish_plan"));

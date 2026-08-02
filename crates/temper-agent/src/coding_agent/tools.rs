@@ -11,6 +11,7 @@ use tongs::tools::{
 
 use super::Capability;
 use super::forge::{ForgeContextHost, ForgeGetItemTool, ForgeListRelatedTool};
+use super::patch::ApplyPatchTool;
 use super::submit::{SubmitForPrCallback, SubmitForPrTool, submit_for_pr_available};
 use temper_agent_core::{AgentContainmentContext, ManagedBashTool, joined_filesystem_tool};
 use temper_protocol_agent::WorkspaceContext;
@@ -81,6 +82,7 @@ fn coding_tools_vec(
         Box::new(ManagedBashTool::with_containment(cwd, containment.clone())),
     ];
     if capability.is_writable() {
+        tools.push(joined_filesystem_tool(Box::new(ApplyPatchTool::new(cwd))));
         tools.push(joined_filesystem_tool(create_edit_tool(cwd)));
         tools.push(joined_filesystem_tool(create_write_tool(cwd)));
     }

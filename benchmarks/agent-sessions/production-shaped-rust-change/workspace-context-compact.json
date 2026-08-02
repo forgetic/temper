@@ -1,0 +1,24 @@
+{
+  "repos": [
+    {
+      "id": "production-shaped-rust-fixture",
+      "owner": "temper-benchmark",
+      "name": "production-shaped-rust-change",
+      "default_branch": "main",
+      "dir": "repo",
+      "access": "writable",
+      "base_branch": "main",
+      "branch_hint": "benchmark/production-shaped-rust-change"
+    }
+  ],
+  "work_item": {
+    "role": "engineer",
+    "queue": "code_ready",
+    "kind": "code",
+    "target": "Issue { number: ItemNumber(103) }",
+    "context": "Issue #103 — Add configurable delivery-policy severities\n\nExtend the delivery-policy crate from required labels to a configurable rule system. Add public Severity (Advisory, Required), PolicyOptions, Rule, Violation, and expanded Decision APIs. Preserve parse_policy and the existing required-label behavior as compatibility wrappers.\n\nParsing: accept one rule per line as `severity:label`; ignore blank lines and `#` comments; normalize labels with trim + lowercase; reject unknown severities, empty labels, and duplicate normalized labels with a typed ParsePolicyError carrying the one-based line and a stable message. Add parse_policy_with_options. PolicyOptions controls whether advisory violations affect acceptance and supplies an optional label prefix stripped before matching.\n\nEvaluation: normalize observed labels, apply the optional prefix, preserve declaration order, return separate required/advisory violations, and accept only when required violations are empty unless options promote advisories. Keep evaluate_labels compatible with comma-separated required rules.\n\nReporting: keep render_decision compatibility and add render_decision_with_options producing a stable multi-line report with decision, required violations, advisory violations, and counts. Add a public summary helper.\n\nUpdate lib exports, focused parser/evaluator/report tests, one integration workflow test, README examples/API compatibility notes, and CHANGELOG. Do not add dependencies. Keep modules cohesive and facades thin. Run `cargo fmt`, `cargo test -q`, inspect the complete diff, and call submit_for_pr."
+  },
+  "action": "open_pr",
+  "correlation_key": "benchmark-production-shaped-rust-change",
+  "checkout": "writable"
+}
