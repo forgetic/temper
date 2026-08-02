@@ -14,11 +14,21 @@ fn golden_bundles_round_trip() {
     for name in ["complete.json", "diagnostics-truncation.json"] {
         let json = fixture(name);
         let bundle: ArtifactContextBundle = serde_json::from_str(&json).expect("fixture parses");
-        assert_eq!(bundle.version, ARTIFACT_CONTEXT_VERSION);
+        assert!(is_supported_artifact_context_version(bundle.version));
         let round_trip = serde_json::to_value(&bundle).expect("bundle serializes");
         let golden: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert_eq!(round_trip, golden, "fixture {name} is canonical");
     }
+}
+
+#[test]
+fn artifact_context_version_support_is_exact() {
+    assert!(is_supported_artifact_context_version(
+        ARTIFACT_CONTEXT_VERSION
+    ));
+    assert!(!is_supported_artifact_context_version(
+        ARTIFACT_CONTEXT_VERSION + 1
+    ));
 }
 
 #[test]

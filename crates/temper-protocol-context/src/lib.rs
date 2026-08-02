@@ -11,6 +11,11 @@ use serde::{Deserialize, Serialize};
 /// Current [`ArtifactContextBundle`] schema version.
 pub const ARTIFACT_CONTEXT_VERSION: u32 = 1;
 
+/// Returns whether `version` is supported by this crate.
+pub const fn is_supported_artifact_context_version(version: u32) -> bool {
+    version == ARTIFACT_CONTEXT_VERSION
+}
+
 /// A versioned, explicitly categorized artifact-context bundle.
 ///
 /// The coordinating artifact is always identified by [`Self::primary`]. Its
