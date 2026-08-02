@@ -354,14 +354,24 @@ fn render_artifact_context(
     ));
 
     text.push_str("\nPrimary artifact:\n");
-    render_snapshot(text, &bundle.primary);
+    render_snapshot(text, &bundle.primary, None);
 
     text.push_str("\nMandatory lineage:\n");
     if bundle.lineage.is_empty() {
         text.push_str("- No mandatory ancestors.\n");
     } else {
-        for snapshot in &bundle.lineage {
-            render_snapshot(text, snapshot);
+        let curated = super::prompt_lineage::curate_lineage(&bundle.lineage);
+        if curated.is_some() {
+            text.push_str(
+                "- Projection: decision-dense; repeated planning prose omitted. Use Forge context follow-up for full bodies when available.\n",
+            );
+        }
+        for (index, snapshot) in bundle.lineage.iter().enumerate() {
+            render_snapshot(
+                text,
+                snapshot,
+                curated.as_ref().map(|bodies| bodies[index].as_str()),
+            );
         }
     }
 
@@ -428,7 +438,7 @@ fn render_artifact_context(
     }
 }
 
-fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
+fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot, body: Option<&str>) {
     text.push_str(&format!(
         "- {} — {} [{}] labels={}\n  Body:\n",
         reference_name(&snapshot.artifact),
@@ -442,8 +452,9 @@ fn render_snapshot(text: &mut String, snapshot: &ArtifactSnapshot) {
     ));
     // Keep authored Markdown byte-for-byte intact. The conditional newline is
     // only a delimiter for the renderer-owned section that follows it.
-    text.push_str(&snapshot.body);
-    if !snapshot.body.ends_with('\n') {
+    let body = body.unwrap_or(&snapshot.body);
+    text.push_str(body);
+    if !body.ends_with('\n') {
         text.push('\n');
     }
 

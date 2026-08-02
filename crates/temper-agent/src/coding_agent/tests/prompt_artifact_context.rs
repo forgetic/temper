@@ -115,6 +115,39 @@ fn compact_kind_overrides_legacy_and_legacy_kind_falls_back_once() {
     assert!(!lineage.contains("kind="));
 }
 
+#[test]
+fn large_lineage_renders_decision_dense_projection_without_trimming_primary() {
+    let mut context = parsed_fixture();
+    context.guidance = WorkspaceGuidance::default();
+    let repeated = "repeated planning prose ".repeat(90);
+    let ancestor_body = format!(
+        "## Objective\n{repeated}\n## Constraints\nKEEP_CONSTRAINT\n## Acceptance\n{repeated}\n## Architecture\nKEEP_ARCHITECTURE\n## Test mapping\n{repeated}\n## Non-goals\nKEEP_NON_GOAL"
+    );
+    context.artifact_context = Some(
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "repository": {"id":"repo-1", "path":"acme/service"},
+            "artifact_type":"issue",
+            "primary": snapshot("issue", 30, "Code", "PRIMARY_BODY_UNCHANGED", &["code"], "code"),
+            "lineage": [
+                snapshot("issue", 10, "Feature", &ancestor_body, &["feature"], "feature"),
+                snapshot("issue", 20, "Plan", &ancestor_body, &["plan"], "plan")
+            ],
+            "truncation":{"depth_exceeded":false,"count_exceeded":false,"content_truncated":false}
+        }))
+        .unwrap(),
+    );
+
+    let rendered = user_context(&context);
+    assert!(rendered.contains("PRIMARY_BODY_UNCHANGED"));
+    assert!(rendered.contains("Projection: decision-dense"));
+    assert_eq!(rendered.matches("KEEP_CONSTRAINT").count(), 2);
+    assert_eq!(rendered.matches("KEEP_ARCHITECTURE").count(), 2);
+    assert_eq!(rendered.matches("KEEP_NON_GOAL").count(), 2);
+    assert!(!rendered.contains("## Acceptance"));
+    assert!(!rendered.contains("## Test mapping"));
+}
+
 fn projected_lineage_context(bookkeeping: &str, expose_new_child: bool) -> WorkspaceContext {
     let mut context = parsed_fixture();
     context.guidance = WorkspaceGuidance::default();
