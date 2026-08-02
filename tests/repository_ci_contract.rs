@@ -58,8 +58,8 @@ fn repository_ci_runs_e2e_capstones_through_the_cargo_alias() {
         .split_once("      - name: Test (e2e capstones)\n")
         .expect("CI declares the e2e capstone step")
         .1
-        .split_once("      - name: Lint\n")
-        .expect("the all-e2e step precedes lint")
+        .split_once("      - name: Detect scenario manifest changes\n")
+        .expect("change detection follows the all-e2e step")
         .0;
 
     assert!(
@@ -78,6 +78,9 @@ fn repository_ci_runs_tests_before_narrow_cargo_lanes() {
     let quick = CI_WORKFLOW
         .find("run: cargo dev-test-quick")
         .expect("CI runs the quick nextest lane");
+    let lint = CI_WORKFLOW
+        .find("run: cargo dev-clippy")
+        .expect("CI runs clippy");
     let e2e = CI_WORKFLOW
         .find("cargo dev-test-e2e-capstones")
         .expect("CI runs the e2e capstone lane");
@@ -88,7 +91,7 @@ fn repository_ci_runs_tests_before_narrow_cargo_lanes() {
         .find("run: cargo dev-benchmark-harness")
         .expect("CI runs the benchmark harness");
 
-    assert!(build < quick && quick < e2e);
+    assert!(build < quick && quick < lint && lint < e2e);
     assert!(e2e < scenario && e2e < benchmark);
 }
 
