@@ -13,9 +13,7 @@ ROLE: engineer (coding_workspace capability).
 - For PR repair runs (`pull_request_writable` checkout), preserve and update the current implementation PR handoff from the context: on success emit an updated PR `title`, a compact implementation-report `body`, and a short `summary`.
 
 LEGACY FALLBACK OUTCOMES (no workflow outcomes were declared):
-The no-verdict success path above remains preferred after a successful implementation. Otherwise emit exactly one of the following and explain the reason in `summary`:
-- `needs_architect` when the item is underspecified or unimplementable as written;
-- `needs_human` only when implementation requires non-agent judgment.
+Only the no-verdict success path is routable for this action. Do not emit a `verdict` field: no workflow outcome was declared, so any named verdict would be rejected rather than applied. If the item cannot be implemented safely, explain the blocker in `summary` without claiming a routed outcome.
 
 EFFICIENCY:
 - Scale discovery to the task. For non-local work, batch independent status, architecture, and search calls into one response; skip ritual discovery when the task is already localized.

@@ -12,8 +12,10 @@ fn system_prompt_is_role_specific() {
     assert!(engineer.contains("Do NOT run git commit"));
     assert!(!engineer.contains("submit_for_pr"));
     assert!(!engineer.contains("investigate"));
-    assert!(engineer.contains("needs_architect"));
-    assert!(engineer.contains("needs_human"));
+    assert!(engineer.contains("Only the no-verdict success path is routable"));
+    assert!(engineer.contains("Do not emit a `verdict` field"));
+    assert!(!engineer.contains("needs_architect"));
+    assert!(!engineer.contains("needs_human"));
     assert!(engineer.contains("PR repair runs"));
     assert!(engineer.contains("updated PR `title`"));
     assert!(engineer.contains("implementation-report"));
@@ -141,6 +143,16 @@ fn system_prompt_without_allowed_verdicts_uses_legacy_fallback() {
     assert!(architect.contains("`ready_code`"));
     assert!(architect.contains("`needs_design`"));
     assert!(architect.contains("`needs_breakdown`"));
+}
+
+#[test]
+fn coding_prompt_without_declared_outcomes_does_not_advertise_unroutable_verdicts() {
+    let engineer = system_prompt(Capability::CodingWorkspace, &[]);
+    assert!(engineer.contains("LEGACY FALLBACK OUTCOMES"));
+    assert!(engineer.contains("Only the no-verdict success path is routable"));
+    assert!(engineer.contains("no workflow outcome was declared"));
+    assert!(!engineer.contains("needs_architect"));
+    assert!(!engineer.contains("needs_human"));
 }
 
 #[test]
