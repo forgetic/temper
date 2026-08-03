@@ -213,9 +213,7 @@ fn render_legacy_outcomes(prompt: &mut String, capability: Capability) {
     prompt.push_str("\nLEGACY FALLBACK OUTCOMES (no workflow outcomes were declared):\n");
     match capability {
         Capability::CodingWorkspace => prompt.push_str(
-            "The no-verdict success path above remains preferred after a successful implementation. Otherwise emit exactly one of the following and explain the reason in `summary`:\n\
-             - `needs_architect` when the item is underspecified or unimplementable as written;\n\
-             - `needs_human` only when implementation requires non-agent judgment.\n",
+            "Only the no-verdict success path is routable for this action. Do not emit a `verdict` field: no workflow outcome was declared, so any named verdict would be rejected rather than applied. If the item cannot be implemented safely, explain the blocker in `summary` without claiming a routed outcome.\n",
         ),
         Capability::TriageWorkspace => prompt.push_str(
             "Emit exactly one verdict:\n\
