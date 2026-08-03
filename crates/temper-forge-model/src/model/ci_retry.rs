@@ -1,5 +1,5 @@
 use crate::ids::{CiJobId, PullRequestId, RepositoryId};
-use crate::model::{CiJob, CiJobConclusion, CiJobStatus};
+use crate::model::{CiJob, CiJobConclusion, CiJobStatus, CiVerifiedFailureProof};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -19,6 +19,8 @@ pub struct CiRetryJobFingerprint {
     pub conclusion: Option<CiJobConclusion>,
     pub provider_conclusion: Option<String>,
     pub provider_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_failure: Option<CiVerifiedFailureProof>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -47,6 +49,7 @@ impl CiRetryJobSetFingerprint {
                 conclusion: job.conclusion,
                 provider_conclusion: job.provider_conclusion.clone(),
                 provider_reason: job.provider_reason.clone(),
+                verified_failure: job.verified_failure.clone(),
                 updated_at: job.updated_at,
             });
         }
@@ -225,6 +228,7 @@ mod tests {
             provider_reason: None,
             run_id: Some("run-7".into()),
             attempt: Some("2".into()),
+            verified_failure: None,
             url: None,
             created_at: DateTime::UNIX_EPOCH,
             started_at: None,

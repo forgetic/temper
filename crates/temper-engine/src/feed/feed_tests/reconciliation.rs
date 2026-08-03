@@ -95,6 +95,7 @@ fn seed_pr_ci(
             provider_reason: None,
             run_id: None,
             attempt: None,
+            verified_failure: None,
             url: None,
             created_at: chrono::DateTime::<chrono::Utc>::from_timestamp(1, 0).unwrap(),
             started_at: None,

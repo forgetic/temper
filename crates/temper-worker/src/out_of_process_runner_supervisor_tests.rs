@@ -440,11 +440,7 @@ fn hard_kill_writes_synthetic_cancelled_terminal_activity_and_reports_cleanup() 
     let _ = finish_cancelled_after_delayed_ack(future.as_mut(), &trace_config);
     let cleanup = cancellation.cleanup().expect("supervisor cleanup report");
     assert_eq!(cleanup.cancellation, Some(CancellationOutcome::HardKill));
-    assert!(matches!(
-        cleanup.containment.disposition(),
-        temper_process_containment::CleanupDisposition::Terminated
-            | temper_process_containment::CleanupDisposition::Killed
-    ));
+    assert!(cleanup.proves_quiescence());
     assert_cancelled_terminal(&trace_config);
 }
 

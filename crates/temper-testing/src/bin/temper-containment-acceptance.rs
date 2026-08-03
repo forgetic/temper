@@ -533,10 +533,17 @@ mod linux {
             BackendMode::ForcedSupervisor => ContainmentBackendKind::LinuxSupervisor,
             BackendMode::AutoCgroup => ContainmentBackendKind::LinuxCgroupV2,
         };
+        // The emergency registry sends cgroup.kill as soon as a hard-kill request
+        // arrives. The kernel can empty the cgroup before the process owner's
+        // cleanup inspection; the terminal reap and recursive-empty proof still
+        // fence completion, and FixtureCase::finish verifies every recorded PID.
+        let emergency_cgroup_kill_preempted_inspection =
+            matches!(mode, BackendMode::AutoCgroup) && trigger == CleanupTrigger::Watchdog;
         if report.backend() != expected_backend
             || report.trigger() != trigger
-            || report.disposition() == CleanupDisposition::AlreadyEmpty
-            || report.observed_survivors().is_empty()
+            || (!emergency_cgroup_kill_preempted_inspection
+                && (report.disposition() == CleanupDisposition::AlreadyEmpty
+                    || report.observed_survivors().is_empty()))
             || !matches!(report.recursive_empty(), RecursiveEmptyProof::Proven { .. })
         {
             return Err(io::Error::other(format!(

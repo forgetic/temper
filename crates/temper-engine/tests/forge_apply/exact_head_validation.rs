@@ -431,6 +431,7 @@ fn seed_success_ci(forge: &MemoryForge, repo: &RepositoryId, pull: &PullRequest)
             provider_reason: None,
             run_id: None,
             attempt: None,
+            verified_failure: None,
             url: None,
             created_at: timestamp,
             started_at: Some(timestamp),

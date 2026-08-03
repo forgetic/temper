@@ -433,6 +433,7 @@ mod tests {
             provider_reason: None,
             run_id: None,
             attempt: None,
+            verified_failure: None,
             url: None,
             created_at: now,
             started_at: None,

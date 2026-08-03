@@ -192,6 +192,7 @@ fn job(
         provider_reason: Some("runner process disappeared after host restart".into()),
         run_id: Some(run.into()),
         attempt: Some(attempt.into()),
+        verified_failure: None,
         url: Some(format!("https://forge.example/actions/runs/{run}")),
         created_at: now,
         started_at: Some(now - Duration::minutes(15)),
