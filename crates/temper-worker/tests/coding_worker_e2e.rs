@@ -204,6 +204,7 @@ fn accepted_submit_unchanged_workspace_runs_configured_gate_once() {
         "--pre-push-config".to_string(),
         "fail-if-rerun".to_string(),
         "--submit-before-result".to_string(),
+        "--submit-unchanged-twice".to_string(),
     ]));
     let executor_config = CodingExecutorConfig {
         workspace_root: fixture.workspace_root.clone(),
@@ -217,6 +218,31 @@ fn accepted_submit_unchanged_workspace_runs_configured_gate_once() {
     assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
     let marker = fixture.origin_show("refs/heads/agent/pr-for-code-7:.temper/pre-push-ran");
     assert_eq!(marker, "");
+}
+
+#[test]
+fn changed_workspace_invalidates_reuse_and_runs_configured_gate_again() {
+    let fixture = GitFixture::new();
+
+    let runner = Arc::new(OutOfProcessRunner::new(vec![
+        fake_agent_bin(),
+        "--pre-push-config".to_string(),
+        "pass".to_string(),
+        "--submit-before-result".to_string(),
+        "--mutate-and-resubmit".to_string(),
+    ]));
+    let executor_config = CodingExecutorConfig {
+        workspace_root: fixture.workspace_root.clone(),
+        git_base_url: fixture.git_base_url(),
+        role_identities: role_identities(),
+    };
+    let executor = Arc::new(CodingExecutor::new(executor_config, runner));
+
+    let result = run_until_result(coding_assign(&fixture), worker_config(), executor);
+
+    assert_eq!(result.status, ResultStatus::Success, "result: {result:?}");
+    let changed = fixture.origin_show("refs/heads/agent/pr-for-code-7:AFTER_FIRST_SUBMIT.md");
+    assert_eq!(changed, "fingerprint changed");
 }
 
 #[test]

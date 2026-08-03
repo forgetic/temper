@@ -19,24 +19,27 @@
 //! calls the forge API. The executor owns the final branch push.
 
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use temper_protocol_activity::ModelFailureV1;
 use temper_protocol_agent::{
     AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleEventV1, AgentLifecycleFrameV1,
-    AgentLifecycleScopeV1, SubmitForPrRequest, SubmitForPrResponse, WorkspaceContext,
+    AgentLifecycleScopeV1, WorkspaceContext,
 };
 use temper_protocol_worker::{
     FailureClass, ForgeContextErrorCode, ForgeContextOperation, ForgeContextResult,
 };
 
 use crate::executor::{AttemptFence, JobCancellation};
-use crate::pre_push::fingerprint::fingerprint_writable_repos_controlled;
-use crate::pre_push::{WorkspaceFingerprint, fingerprint_writable_repos_blocking};
 pub use temper_protocol_agent::WorkspaceResult;
 use temper_worker_io::EngineTime;
+
+mod submit_proof;
+pub use submit_proof::{
+    AcceptedSubmitProof, AcceptedSubmitProofStore, handle_submit_for_pr_with_proof,
+};
 
 /// Async worker-owned Forge reader. The exact job and attempt ids plus the
 /// attempt's irreversible publication fence are supplied by the executor,
@@ -262,205 +265,6 @@ impl AgentRunOutput {
     }
 }
 
-/// Host-owned evidence captured when a live `submit_for_pr` call was accepted.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AcceptedSubmitProof {
-    pub response: SubmitForPrResponse,
-    pub fingerprint: WorkspaceFingerprint,
-}
-
-#[derive(Clone, Default)]
-pub struct AcceptedSubmitProofStore {
-    inner: Arc<Mutex<Option<AcceptedSubmitProof>>>,
-}
-
-impl AcceptedSubmitProofStore {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn latest(&self) -> Option<AcceptedSubmitProof> {
-        self.inner
-            .lock()
-            .expect("accepted submit proof lock")
-            .clone()
-    }
-
-    /// Removes proof when its attempt fence closes. Side-channel handlers call
-    /// this both before and after joining so a late gate completion cannot be
-    /// accepted by a cancelled run.
-    pub fn clear(&self) {
-        *self.inner.lock().expect("accepted submit proof lock") = None;
-    }
-
-    /// Records an accepted host response with a fresh worker-owned fingerprint.
-    ///
-    /// If fingerprinting fails, the response is converted to a rejection so the
-    /// live agent is not told it may finish with proof the worker cannot later
-    /// verify.
-    pub fn record_response(
-        &self,
-        response: SubmitForPrResponse,
-        context: &WorkspaceContext,
-        cwd: &Path,
-    ) -> SubmitForPrResponse {
-        if !response.accepted {
-            return response;
-        }
-        let fingerprint = match fingerprint_writable_repos_blocking(context, cwd) {
-            Ok(fingerprint) => fingerprint,
-            Err(error) => {
-                return SubmitForPrResponse::rejected(format!(
-                    "submit_for_pr accepted but workspace proof could not be recorded: {error}"
-                ));
-            }
-        };
-        *self.inner.lock().expect("accepted submit proof lock") = Some(AcceptedSubmitProof {
-            response: response.clone(),
-            fingerprint,
-        });
-        response
-    }
-
-    /// Async attempt-owned variant. Cancelling while fingerprinting drops and
-    /// joins the active git process before the submit side channel quiesces.
-    pub async fn record_response_controlled(
-        &self,
-        response: SubmitForPrResponse,
-        context: &WorkspaceContext,
-        cwd: &Path,
-        fence: &AttemptFence,
-        cancellation: &JobCancellation,
-    ) -> SubmitForPrResponse {
-        if attempt_unavailable(fence, cancellation) {
-            self.clear();
-            return unavailable_submit_response();
-        }
-        if !response.accepted {
-            return response;
-        }
-        let fingerprint = match run_fenced(
-            self,
-            fence,
-            cancellation,
-            fingerprint_writable_repos_controlled(context, cwd, cancellation),
-        )
-        .await
-        {
-            Some(Ok(fingerprint)) => fingerprint,
-            Some(Err(error)) => {
-                return SubmitForPrResponse::rejected(format!(
-                    "submit_for_pr accepted but workspace proof could not be recorded: {error}"
-                ));
-            }
-            None => {
-                self.clear();
-                return unavailable_submit_response();
-            }
-        };
-        if attempt_unavailable(fence, cancellation) {
-            self.clear();
-            return unavailable_submit_response();
-        }
-        *self.inner.lock().expect("accepted submit proof lock") = Some(AcceptedSubmitProof {
-            response: response.clone(),
-            fingerprint,
-        });
-        response
-    }
-}
-
-/// Runs one in-process submit gate under the exact attempt's publication and
-/// cancellation controls. Dropping a gate or fingerprint future joins its
-/// managed process owners before this function returns the stable rejection.
-pub async fn handle_submit_for_pr_with_proof<F, Fut>(
-    store: &AcceptedSubmitProofStore,
-    fence: &AttemptFence,
-    cancellation: &JobCancellation,
-    handler: F,
-    request: SubmitForPrRequest,
-    context: WorkspaceContext,
-    cwd: PathBuf,
-) -> SubmitForPrResponse
-where
-    F: FnOnce(SubmitForPrRequest, WorkspaceContext, PathBuf) -> Fut,
-    Fut: Future<Output = SubmitForPrResponse>,
-{
-    if attempt_unavailable(fence, cancellation) {
-        store.clear();
-        return unavailable_submit_response();
-    }
-    let response = match run_fenced(
-        store,
-        fence,
-        cancellation,
-        handler(request, context.clone(), cwd.clone()),
-    )
-    .await
-    {
-        Some(response) => response,
-        None => return unavailable_submit_response(),
-    };
-    let response = store
-        .record_response_controlled(response, &context, &cwd, fence, cancellation)
-        .await;
-    if attempt_unavailable(fence, cancellation) {
-        // This second clear follows any joined gate/fingerprint owner, so a
-        // completion that raced fence closure cannot retain accepted proof.
-        store.clear();
-        unavailable_submit_response()
-    } else {
-        response
-    }
-}
-
-fn attempt_unavailable(fence: &AttemptFence, cancellation: &JobCancellation) -> bool {
-    !fence.is_open() || cancellation.is_cancelled()
-}
-
-fn unavailable_submit_response() -> SubmitForPrResponse {
-    SubmitForPrResponse::rejected(ATTEMPT_UNAVAILABLE_MESSAGE)
-}
-
-/// Polls one attempt-owned future until it completes or cancellation wins.
-/// Proof is cleared before handing a dropped managed future to its dedicated
-/// cleanup owner and again after that drop.
-async fn run_fenced<F: Future>(
-    store: &AcceptedSubmitProofStore,
-    fence: &AttemptFence,
-    cancellation: &JobCancellation,
-    future: F,
-) -> Option<F::Output> {
-    let mut future = Box::pin(future);
-    let mut cancelled = Box::pin(cancellation.cancelled());
-    let output = std::future::poll_fn(|cx| {
-        if attempt_unavailable(fence, cancellation) {
-            store.clear();
-            return std::task::Poll::Ready(None);
-        }
-        if cancelled.as_mut().poll(cx).is_ready() {
-            store.clear();
-            return std::task::Poll::Ready(None);
-        }
-        match future.as_mut().poll(cx) {
-            std::task::Poll::Ready(output) if !attempt_unavailable(fence, cancellation) => {
-                std::task::Poll::Ready(Some(output))
-            }
-            std::task::Poll::Ready(_) => {
-                store.clear();
-                std::task::Poll::Ready(None)
-            }
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    })
-    .await;
-    drop(future);
-    if output.is_none() {
-        store.clear();
-    }
-    output
-}
-
 /// Why an agent turn could not produce a [`WorkspaceResult`].
 ///
 /// Carries the [`FailureClass`] the executor reports to the daemon so the
@@ -543,7 +347,12 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::task::{Context, Poll, Waker};
 
-    use temper_protocol_agent::{PROTOCOL_VERSION, WorkspaceContext, WorkspaceWorkItem};
+    use temper_protocol_agent::{
+        PROTOCOL_VERSION, SubmitForPrRequest, SubmitForPrResponse, WorkspaceContext,
+        WorkspaceWorkItem,
+    };
+
+    use crate::pre_push::WorkspaceFingerprint;
 
     use super::*;
 

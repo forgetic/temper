@@ -118,6 +118,46 @@ fn main() {
                 "retry submit should be accepted: {second:?}"
             );
         }
+        if args.iter().any(|arg| arg == "--submit-unchanged-twice") {
+            assert!(first.accepted, "first submit should pass: {first:?}");
+            let second = submit_for_pr(address, &context, Some("unchanged retry"));
+            assert!(second.accepted, "unchanged retry should pass: {second:?}");
+            assert!(
+                second
+                    .message
+                    .contains("reused worker-observed pre-push gates"),
+                "unchanged retry should report reuse: {second:?}"
+            );
+            assert!(
+                second
+                    .gates
+                    .iter()
+                    .all(|gate| gate.exit_status == "reused" && gate.elapsed_ms == 0),
+                "unchanged retry should mark every gate reused: {second:?}"
+            );
+        }
+        if args.iter().any(|arg| arg == "--mutate-and-resubmit") {
+            assert!(first.accepted, "first submit should pass: {first:?}");
+            for repo in context.repos.iter().filter(|repo| repo.is_writable()) {
+                std::fs::write(
+                    workspace.join(&repo.dir).join("AFTER_FIRST_SUBMIT.md"),
+                    b"fingerprint changed\n",
+                )
+                .expect("write between submit attempts");
+            }
+            let second = submit_for_pr(address, &context, Some("changed retry"));
+            assert!(second.accepted, "changed retry should pass: {second:?}");
+            assert!(
+                !second
+                    .message
+                    .contains("reused worker-observed pre-push gates"),
+                "changed workspace must execute gates: {second:?}"
+            );
+            assert!(
+                second.gates.iter().all(|gate| gate.exit_status == "passed"),
+                "changed workspace should carry executed gates: {second:?}"
+            );
+        }
     }
 
     if args.iter().any(|arg| arg == "--mutate-after-submit") {

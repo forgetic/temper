@@ -567,14 +567,35 @@ impl OutOfProcessRunner {
                     let _ = task.response.send(response);
                 }
                 Next::SubmitRequest(Some(request)) if fence.is_open() => {
+                    let accepted_submit_for_reuse = accepted_submit.clone();
+                    let submit_for_pr = Arc::clone(&submit_for_pr);
+                    let submit_context = submit_context.clone();
+                    let submit_cwd = submit_cwd.clone();
+                    let submit_fence = fence.clone();
+                    let submit_cancellation = cancellation.clone();
                     pending_submit = Some(SubmitHostTask {
                         future: bounded_submit_future(
-                            submit_for_pr(
-                                request.request,
-                                submit_context.clone(),
-                                submit_cwd.clone(),
-                                cancellation.clone(),
-                            ),
+                            Box::pin(async move {
+                                if let Some(response) = accepted_submit_for_reuse
+                                    .reuse_response_controlled(
+                                        &submit_context,
+                                        &submit_cwd,
+                                        &submit_fence,
+                                        &submit_cancellation,
+                                    )
+                                    .await
+                                {
+                                    response
+                                } else {
+                                    submit_for_pr(
+                                        request.request,
+                                        submit_context,
+                                        submit_cwd,
+                                        submit_cancellation,
+                                    )
+                                    .await
+                                }
+                            }),
                             operation_timeout,
                         ),
                         response: request.response,
