@@ -241,7 +241,13 @@ pub fn run_standalone_shutdown_acceptance(
         scenario_run_id: &scenario_run_id,
     })?;
     assert_init_workflow_yaml_matches(&bundle_dir.join("workflow.yaml"), &request.scenario)?;
-    tune_init_config(&bundle_dir.join("config.toml"), 1, 1, None)?;
+    tune_init_config(
+        &bundle_dir.join("config.toml"),
+        1,
+        request.scenario.ci_poll_cadence.as_secs(),
+        1,
+        None,
+    )?;
     tune_shutdown_config(
         &bundle_dir.join("config.toml"),
         &ShutdownFixtureConfig {

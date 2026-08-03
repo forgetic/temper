@@ -61,6 +61,7 @@ pub(super) const PROVIDER_HEALTH_SECRET: &str = "temper-live-manifest-provider-h
 const DEFAULT_WORKSPACE_PREFIX: &str = "temper-basic-delivery-e2e";
 const DEFAULT_CONVERGENCE_SECS: u64 = 360;
 const DEFAULT_DAEMON_POLL_BACKSTOP_SECS: u64 = 600;
+const DEFAULT_CI_POLL_CADENCE_SECS: u64 = 60;
 const DEFAULT_MECHANICAL_CADENCE_SECS: u64 = 1;
 
 /// Explicit injection seam for the standalone `temper` binary used by the live
@@ -173,6 +174,8 @@ pub struct LiveManifestEvidence {
     pub convergence: Duration,
     pub total_elapsed: Duration,
     pub poll_backstop: Duration,
+    /// Secret-free cadence values read back from the generated standalone config.
+    pub effective_configuration: EffectiveConfigurationEvidence,
     pub fake_llm: FakeLlmEvidence,
     /// Complete terminal Forge PR inventory, including unexpected publications.
     pub forge_pull_requests: Vec<PullRequestEvidence>,
@@ -210,6 +213,12 @@ impl LiveManifestEvidence {
             format!(
                 "  convergence: {:?} (poll_backstop: {:?}, total: {:?})",
                 self.convergence, self.poll_backstop, self.total_elapsed
+            ),
+            format!(
+                "  effective_configuration: ci_poll_cadence_secs={} poll_cadence_secs={} mechanical_cadence_secs={}",
+                self.effective_configuration.ci_poll_cadence_secs,
+                self.effective_configuration.poll_cadence_secs,
+                self.effective_configuration.mechanical_cadence_secs
             ),
             format!("  stimuli: {}", self.stimuli.len()),
             format!(
@@ -284,6 +293,33 @@ impl LiveManifestEvidence {
         ]);
         lines.join("\n")
     }
+}
+
+/// Exact non-secret engine cadences used by the spawned standalone process.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EffectiveConfigurationEvidence {
+    pub ci_poll_cadence_secs: u64,
+    pub poll_cadence_secs: u64,
+    pub mechanical_cadence_secs: u64,
+}
+
+/// Secret-free projection of a verified ordinary CI-failure proof.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedFailureProofEvidence {
+    pub schema_version: u16,
+    pub category: String,
+    pub repository_id: String,
+    pub pull_request_id: Option<String>,
+    pub commit_sha: String,
+    pub run_id: String,
+    pub job_id: String,
+    pub attempt: String,
+    pub task_id: Option<String>,
+    pub producer_id: String,
+    pub issuer_id: String,
+    pub verification: String,
+    pub created_at: String,
+    pub expires_at: String,
 }
 
 /// Paths to logs/snapshots produced by the live harness.
@@ -361,6 +397,7 @@ pub struct CiJobEvidence {
     pub conclusion: Option<String>,
     pub provider_conclusion: Option<String>,
     pub url: Option<String>,
+    pub verified_failure: Option<VerifiedFailureProofEvidence>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

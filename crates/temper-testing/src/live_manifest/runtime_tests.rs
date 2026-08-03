@@ -125,7 +125,8 @@ fn recovery_tuning_adds_deadlines_to_minimal_init_config() {
         model_recovery_slo_secs: 7_200,
     };
 
-    tune_init_config(&path, 600, 1, Some(&recovery)).expect("tune recovery config");
+    let effective =
+        tune_init_config(&path, 600, 17, 1, Some(&recovery)).expect("tune recovery config");
 
     let tuned = std::fs::read_to_string(path).expect("tuned config");
     let parsed = tuned.parse::<toml::Value>().expect("tuned TOML");
@@ -133,6 +134,21 @@ fn recovery_tuning_adds_deadlines_to_minimal_init_config() {
         .as_table()
         .expect("created agent.deadlines table");
     assert_eq!(deadlines["model_retry_max_attempts"].as_integer(), Some(2));
+    assert_eq!(effective.poll_cadence_secs, 600);
+    assert_eq!(effective.ci_poll_cadence_secs, 17);
+    assert_eq!(effective.mechanical_cadence_secs, 1);
+    assert_eq!(
+        parsed["engine"]["poll_cadence_secs"].as_integer(),
+        Some(600)
+    );
+    assert_eq!(
+        parsed["engine"]["ci_poll_cadence_secs"].as_integer(),
+        Some(17)
+    );
+    assert_eq!(
+        parsed["engine"]["mechanical_cadence_secs"].as_integer(),
+        Some(1)
+    );
     assert_eq!(
         deadlines["model_retry_jitter_percent"].as_integer(),
         Some(0)
@@ -141,6 +157,74 @@ fn recovery_tuning_adds_deadlines_to_minimal_init_config() {
         parsed["worker"]["fresh_session_limit"].as_integer(),
         Some(1)
     );
+}
+
+#[test]
+fn verified_failure_is_projected_without_integrity_material() {
+    use temper_forge_model::{
+        CiFailureProofAttestation, CiFailureProofCoordinates, CiFailureProofSubject,
+        CiFailureProofVerification, CiJob, CiJobConclusion, CiJobId, CiJobStatus,
+        CiOrdinaryFailureCategory, CiVerifiedFailureProof, PullRequestId, RepositoryId,
+    };
+
+    let repository = RepositoryId::new("forgejo:acme/service");
+    let pull_request = PullRequestId::new("forgejo:acme/service:pull:7");
+    let created_at = "2026-07-26T12:00:00Z".parse().unwrap();
+    let expires_at = "2026-07-26T12:05:00Z".parse().unwrap();
+    let proof = CiVerifiedFailureProof::new(
+        CiOrdinaryFailureCategory::Test,
+        CiFailureProofSubject::new(
+            repository.clone(),
+            Some(pull_request.clone()),
+            "0123456789abcdef0123456789abcdef01234567",
+        )
+        .unwrap(),
+        CiFailureProofCoordinates::new("591", "42", "2", Some("9001")).unwrap(),
+        CiFailureProofAttestation::new(
+            "forgejo-actions",
+            "temper-proof-issuer",
+            CiFailureProofVerification::ProtectedProducer,
+        )
+        .unwrap(),
+        created_at,
+        expires_at,
+    )
+    .unwrap();
+    let job = CiJob {
+        id: CiJobId::new("portable-job"),
+        repo_id: repository,
+        pull_request_id: Some(pull_request),
+        commit_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        name: "test".to_string(),
+        status: CiJobStatus::Completed,
+        conclusion: Some(CiJobConclusion::Failure),
+        provider_conclusion: Some("failure".to_string()),
+        provider_reason: None,
+        run_id: Some("591".to_string()),
+        attempt: Some("2".to_string()),
+        verified_failure: Some(proof),
+        url: None,
+        created_at,
+        started_at: Some(created_at),
+        completed_at: Some(created_at),
+        updated_at: created_at,
+    };
+
+    let evidence = super::convergence::ci_job_evidence(&job);
+    let proof = evidence.verified_failure.expect("projected proof");
+    assert_eq!(proof.category, "test");
+    assert_eq!(proof.repository_id, "forgejo:acme/service");
+    assert_eq!(
+        proof.pull_request_id.as_deref(),
+        Some("forgejo:acme/service:pull:7")
+    );
+    assert_eq!(proof.run_id, "591");
+    assert_eq!(proof.job_id, "42");
+    assert_eq!(proof.attempt, "2");
+    assert_eq!(proof.task_id.as_deref(), Some("9001"));
+    assert_eq!(proof.producer_id, "forgejo-actions");
+    assert_eq!(proof.issuer_id, "temper-proof-issuer");
+    assert_eq!(proof.verification, "protected_producer");
 }
 
 fn step(id: &str, action: ManifestAction) -> ManifestStep {

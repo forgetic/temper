@@ -17,6 +17,7 @@ use verify::poll_plan_feature;
 
 use super::{
     CiJobEvidence, FinalStateEvidence, IssueEvidence, LiveManifestHarness, PullRequestEvidence,
+    VerifiedFailureProofEvidence,
 };
 
 const PLAN_TITLE: &str = "Plan plan-centric dogfood delivery";
@@ -94,6 +95,7 @@ pub struct PullRequestCiJobEvidence {
     pub conclusion: Option<String>,
     pub provider_conclusion: Option<String>,
     pub url: Option<String>,
+    pub verified_failure: Option<VerifiedFailureProofEvidence>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -197,6 +199,7 @@ pub(super) fn converge(
                 conclusion: job.conclusion.clone(),
                 provider_conclusion: job.provider_conclusion.clone(),
                 url: job.url.clone(),
+                verified_failure: job.verified_failure.clone(),
             })
             .collect(),
         ci_observations: Vec::new(),

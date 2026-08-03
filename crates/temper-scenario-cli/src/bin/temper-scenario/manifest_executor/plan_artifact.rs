@@ -142,6 +142,10 @@ pub(super) fn final_state(
                     conclusion: job.conclusion.clone(),
                     provider_conclusion: job.provider_conclusion.clone(),
                     url: job.url.clone(),
+                    verified_failure: job
+                        .verified_failure
+                        .as_ref()
+                        .map(super::live::verified_failure_proof),
                 })
                 .collect(),
             observations: Vec::new(),

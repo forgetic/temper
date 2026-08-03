@@ -10,7 +10,8 @@ pub use super::execution_plan::{
 };
 
 use super::{
-    DEFAULT_CONVERGENCE_SECS, DEFAULT_DAEMON_POLL_BACKSTOP_SECS, DEFAULT_MECHANICAL_CADENCE_SECS,
+    DEFAULT_CI_POLL_CADENCE_SECS, DEFAULT_CONVERGENCE_SECS, DEFAULT_DAEMON_POLL_BACKSTOP_SECS,
+    DEFAULT_MECHANICAL_CADENCE_SECS,
 };
 
 /// Resolved fixtures and typed actions needed by the live manifest topology.
@@ -28,6 +29,7 @@ pub struct ScenarioBundle {
     pub timeout: Duration,
     pub poll_cadence: Duration,
     pub poll_backstop: Duration,
+    pub ci_poll_cadence: Duration,
     pub mechanical_cadence: Duration,
     pub observability: ObservabilityFixture,
     pub recovery: Option<RecoveryFixture>,
@@ -83,6 +85,7 @@ impl ScenarioBundle {
             Duration::from_secs(DEFAULT_DAEMON_POLL_BACKSTOP_SECS),
         )?;
         let poll_cadence = live_harness_duration(&manifest, "poll_cadence", poll_backstop)?;
+        let ci_poll_cadence = live_ci_poll_cadence(&manifest)?;
         let mechanical_cadence = live_harness_duration(
             &manifest,
             "mechanical_cadence",
@@ -104,6 +107,7 @@ impl ScenarioBundle {
             timeout,
             poll_cadence,
             poll_backstop,
+            ci_poll_cadence,
             mechanical_cadence,
             observability,
             recovery,
@@ -542,6 +546,26 @@ fn live_harness_duration(
         .map(|value| duration_value(value, &format!("live_harness.{key}")))
         .transpose()
         .map(|duration| duration.unwrap_or(default))
+}
+
+fn live_ci_poll_cadence(manifest: &TomlValue) -> Result<Duration, String> {
+    let field = "live_harness.ci_poll_cadence";
+    let Some(value) = manifest
+        .get("live_harness")
+        .and_then(TomlValue::as_table)
+        .and_then(|table| table.get("ci_poll_cadence"))
+    else {
+        // Mirror standalone Temper's dedicated CI-poll default without
+        // inheriting from any other live-harness cadence.
+        return Ok(Duration::from_secs(DEFAULT_CI_POLL_CADENCE_SECS));
+    };
+    let duration = duration_value(value, field)?;
+    if !(1..=300).contains(&duration.as_secs()) || duration.subsec_nanos() != 0 {
+        return Err(format!(
+            "{field} must be a positive whole-second duration from 1 through 300 seconds"
+        ));
+    }
+    Ok(duration)
 }
 
 fn duration_value(value: &TomlValue, field: &str) -> Result<Duration, String> {

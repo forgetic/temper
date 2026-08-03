@@ -20,9 +20,10 @@ pub(super) use context::RunEvidenceContext;
 pub(super) use io::load_run_evidence;
 pub(super) use model::{
     ArtifactCollections, BinaryIdentityEvidence, CiJobEvidence, CiObservationEvidence,
-    CiRequestEvidence, CiStateEvidence, ConvergenceEvidence, ExecutionEvidence, FinalStateEvidence,
-    IssueStateEvidence, ObservabilityEvidence, ProviderEvidence, PullRequestStateEvidence,
-    RepositoryBranchStateEvidence, RepositoryStateEvidence, RunEvidenceArtifact,
-    RunEvidenceVerdict, StimulusEvidence, StructuredEventEvidence,
+    CiRequestEvidence, CiStateEvidence, ConvergenceEvidence, EffectiveConfigurationEvidence,
+    ExecutionEvidence, FinalStateEvidence, IssueStateEvidence, ObservabilityEvidence,
+    ProviderEvidence, PullRequestStateEvidence, RepositoryBranchStateEvidence,
+    RepositoryStateEvidence, RunEvidenceArtifact, RunEvidenceVerdict, StimulusEvidence,
+    StructuredEventEvidence, VerifiedFailureProofEvidence,
 };
 pub(super) use script_assertions::append_script_assertions;

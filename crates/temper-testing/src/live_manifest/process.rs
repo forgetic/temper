@@ -154,9 +154,10 @@ pub(super) fn assert_init_workflow_yaml_matches(
 pub(super) fn tune_init_config(
     config_path: &Path,
     poll_cadence_secs: u64,
+    ci_poll_cadence_secs: u64,
     mech_secs: u64,
     recovery: Option<&RecoveryFixture>,
-) -> Result<(), String> {
+) -> Result<super::EffectiveConfigurationEvidence, String> {
     let text = fs::read_to_string(config_path)
         .map_err(|error| format!("read {}: {error}", config_path.display()))?;
     let mut doc: TomlValue = text
@@ -169,6 +170,10 @@ pub(super) fn tune_init_config(
     engine.insert(
         "poll_cadence_secs".to_string(),
         TomlValue::Integer(poll_cadence_secs as i64),
+    );
+    engine.insert(
+        "ci_poll_cadence_secs".to_string(),
+        TomlValue::Integer(ci_poll_cadence_secs as i64),
     );
     engine.insert(
         "mechanical_cadence_secs".to_string(),
@@ -230,11 +235,37 @@ pub(super) fn tune_init_config(
             deadlines.insert(field.to_string(), TomlValue::Integer(value as i64));
         }
     }
-    fs::write(
-        config_path,
-        toml::to_string_pretty(&doc).map_err(|error| format!("serialize tuned config: {error}"))?,
-    )
-    .map_err(|error| format!("write tuned config {}: {error}", config_path.display()))
+    let serialized =
+        toml::to_string_pretty(&doc).map_err(|error| format!("serialize tuned config: {error}"))?;
+    fs::write(config_path, serialized)
+        .map_err(|error| format!("write tuned config {}: {error}", config_path.display()))?;
+    read_effective_configuration(config_path)
+}
+
+pub(super) fn read_effective_configuration(
+    config_path: &Path,
+) -> Result<super::EffectiveConfigurationEvidence, String> {
+    let text = fs::read_to_string(config_path)
+        .map_err(|error| format!("read back tuned config {}: {error}", config_path.display()))?;
+    let doc = text
+        .parse::<TomlValue>()
+        .map_err(|error| format!("parse tuned config {}: {error}", config_path.display()))?;
+    let engine = doc
+        .get("engine")
+        .and_then(TomlValue::as_table)
+        .ok_or_else(|| "tuned config.toml has no [engine] table".to_string())?;
+    let cadence = |field: &str| {
+        engine
+            .get(field)
+            .and_then(TomlValue::as_integer)
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| format!("tuned config engine.{field} is not a whole-second value"))
+    };
+    Ok(super::EffectiveConfigurationEvidence {
+        ci_poll_cadence_secs: cadence("ci_poll_cadence_secs")?,
+        poll_cadence_secs: cadence("poll_cadence_secs")?,
+        mechanical_cadence_secs: cadence("mechanical_cadence_secs")?,
+    })
 }
 
 pub(super) fn populate_repo(
