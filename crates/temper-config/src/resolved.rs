@@ -144,6 +144,20 @@ pub struct ForgeSettings {
     pub role_tokens: BTreeMap<String, SecretString>,
     /// Role → git identity, for the worker's per-role checkouts/pushes.
     pub role_identities: BTreeMap<String, GitIdentity>,
+    /// Optional resolved authenticated ordinary-failure evidence source.
+    pub ci_failure_evidence: Option<ForgeCiFailureEvidenceSettings>,
+}
+
+/// Runtime-safe resolved view of `[forge.ci_failure_evidence]`.
+#[derive(Debug, Clone)]
+pub struct ForgeCiFailureEvidenceSettings {
+    pub endpoint: String,
+    pub issuer: String,
+    pub protected_producers: Vec<String>,
+    pub bearer_token: SecretReference,
+    pub bearer_token_value: Option<SecretString>,
+    pub hmac_key: SecretReference,
+    pub hmac_key_value: Option<SecretString>,
 }
 
 /// The supported forge backends.

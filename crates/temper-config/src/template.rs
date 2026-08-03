@@ -38,6 +38,15 @@ url = \"http://localhost:3000\"
 # The admin/default user: the key into [forge.users.<admin>] in the credentials
 # file whose token becomes the engine's default forge identity.
 admin = \"bot\"
+# Optional stronger evidence for Forgejo v16 status-only failures. This is one
+# generic authenticated JSON endpoint; no log/UI/name parsing is used. Remote
+# endpoints must be HTTPS (loopback HTTP is accepted for a same-host runner).
+# [forge.ci_failure_evidence]
+# endpoint = \"https://ci-evidence.example/v1/forgejo-failures\"
+# issuer = \"runner-host\"
+# protected_producers = [\"protected-ci\"]
+# bearer_token = \"ci-evidence-read-token\"
+# hmac_key = \"ci-evidence-hmac-key\"
 [engine]
 # Bind address for the engine HTTP surface. `port` is shorthand for
 # 127.0.0.1:<port>; set `bind` for a non-loopback host.
@@ -155,6 +164,8 @@ token = \"<bot-rest-token>\"
 # [secrets]
 # forge-engine-token = \"<engine-forge-token>\"
 # webhook-secret = \"<webhook-hmac-secret>\"
+# ci-evidence-read-token = \"<independent-evidence-bearer-token>\"
+# ci-evidence-hmac-key = \"<protected-workflow-hmac-key>\"
 # agent-trace-read-token = \"<trace-query-bearer-token>\"
 #
 # Structured entries are also accepted:

@@ -11,7 +11,7 @@ use temper_engine::{
     WorkerPoolPolicy,
 };
 use temper_forge::RepositoryPath;
-use temper_forge::config::ForgejoConfig;
+use temper_forge::config::{ForgejoConfig, ForgejoFailureEvidenceConfig};
 use temper_workflow::{CompiledWorkflow, RoleId};
 
 /// Builds the token-authenticated Forgejo backend config from resolved settings.
@@ -27,7 +27,30 @@ pub fn forgejo_config(resolved: &Resolved) -> Result<ForgejoConfig, String> {
         .require_admin_token()
         .map_err(|error| error.to_string())?;
     // I/O boundary: the token is handed to the Forgejo HTTP client.
-    Ok(ForgejoConfig::new(url, token.expose_secret()))
+    let mut config = ForgejoConfig::new(url, token.expose_secret());
+    if let Some(source) = &resolved.forge.ci_failure_evidence {
+        let bearer = source.bearer_token_value.as_ref().ok_or_else(|| {
+            format!(
+                "forge.ci_failure_evidence.bearer_token references secret `{}` but it has no non-empty text value",
+                source.bearer_token.name
+            )
+        })?;
+        let hmac_key = source.hmac_key_value.as_ref().ok_or_else(|| {
+            format!(
+                "forge.ci_failure_evidence.hmac_key references secret `{}` but it has no non-empty text value",
+                source.hmac_key.name
+            )
+        })?;
+        let evidence = ForgejoFailureEvidenceConfig::new(
+            &source.endpoint,
+            bearer.expose_secret(),
+            hmac_key.expose_secret(),
+            &source.issuer,
+            source.protected_producers.iter().map(String::as_str),
+        )?;
+        config = config.with_failure_evidence(evidence);
+    }
+    Ok(config)
 }
 
 /// Builds the daemon runtime config from the resolved engine settings.
@@ -194,6 +217,54 @@ mod tests {
         let mut role_tokens = BTreeMap::new();
         role_tokens.insert("coder".to_string(), Secret::from("coder-token"));
         EngineConfig::new(daemon, forge, role_tokens)
+    }
+
+    #[test]
+    fn forge_adapter_carries_closed_failure_evidence_secrets_to_the_backend_only() {
+        let config = temper_config::Config {
+            forge: temper_config::ForgeConfig {
+                url: Some("https://forge.example".to_string()),
+                ci_failure_evidence: Some(temper_config::ForgeCiFailureEvidenceConfig {
+                    endpoint: "https://evidence.example/v1/failures".to_string(),
+                    issuer: "runner-host".to_string(),
+                    protected_producers: vec!["protected-ci".to_string()],
+                    bearer_token: "evidence-reader".to_string(),
+                    hmac_key: "evidence-hmac".to_string(),
+                }),
+                ..Default::default()
+            },
+            engine: temper_config::EngineConfig {
+                forge_token: Some("forge-token".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let credentials = temper_config::Credentials {
+            secrets: BTreeMap::from([
+                (
+                    "forge-token".to_string(),
+                    temper_config::NamedSecret::Raw("forge-secret".to_string()),
+                ),
+                (
+                    "evidence-reader".to_string(),
+                    temper_config::NamedSecret::Raw("reader-secret".to_string()),
+                ),
+                (
+                    "evidence-hmac".to_string(),
+                    temper_config::NamedSecret::Raw("integrity-secret".to_string()),
+                ),
+            ]),
+            ..Default::default()
+        };
+        let resolved = temper_config::resolve(&config, &credentials, &temper_config::NoEnv)
+            .expect("evidence config resolves");
+
+        let forge = forgejo_config(&resolved).expect("forge adapter succeeds");
+        assert!(forge.failure_evidence.is_some());
+        let debug = format!("{forge:?}");
+        for secret in ["forge-secret", "reader-secret", "integrity-secret"] {
+            assert!(!debug.contains(secret));
+        }
     }
 
     #[test]

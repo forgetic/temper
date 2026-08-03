@@ -8,6 +8,7 @@
 //! job, attempt, and task coordinates form the opaque identity. No repository-wide
 //! tasks, HTML, login, live-view, or response-order fallback participates.
 
+mod failure_evidence;
 mod fetch;
 mod jobs;
 
@@ -83,11 +84,15 @@ impl<C: HttpClient> ForgejoForge<C> {
             // `run.id` is the provider database id required by Forgejo 16 and
             // the only run coordinate used by the jobs route or opaque identity.
             let dtos = self.fetch_run_jobs(&repo, run.id).await?;
-            for dto in dtos {
-                if let Some(job) = job_to_ci_job(&repo, repo_id, run, &dto, &target) {
-                    jobs.push(job);
-                }
-            }
+            let mut run_jobs = dtos
+                .into_iter()
+                .filter_map(|dto| {
+                    job_to_ci_job(&repo, repo_id, run, &dto, &target).map(|job| (job, dto))
+                })
+                .collect::<Vec<_>>();
+            self.apply_verified_failure_evidence(repo_id, run.id, &mut run_jobs)
+                .await;
+            jobs.extend(run_jobs.into_iter().map(|(job, _)| job));
         }
 
         if let Some(status) = query.status {
@@ -135,6 +140,12 @@ impl<C: HttpClient> ForgejoForge<C> {
             return Ok(None);
         };
         let target = Target::default();
-        Ok(job_to_ci_job(&coord.repo, &repo_id, &run, &job, &target))
+        let Some(mapped) = job_to_ci_job(&coord.repo, &repo_id, &run, &job, &target) else {
+            return Ok(None);
+        };
+        let mut jobs = vec![(mapped, job)];
+        self.apply_verified_failure_evidence(&repo_id, run.id, &mut jobs)
+            .await;
+        Ok(jobs.pop().map(|(job, _)| job))
     }
 }
