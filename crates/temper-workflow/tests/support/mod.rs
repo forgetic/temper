@@ -245,6 +245,7 @@ pub fn seed_ci(
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at: ts("2026-05-29T00:00:00Z"),
         started_at: Some(ts("2026-05-29T00:00:30Z")),

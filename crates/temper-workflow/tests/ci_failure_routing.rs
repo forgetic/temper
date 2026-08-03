@@ -22,6 +22,7 @@ fn ci_job(name: &str, conclusion: CiJobConclusion) -> CiJob {
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at: timestamp(),
         started_at: None,

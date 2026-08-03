@@ -178,6 +178,7 @@ fn ci_job(fixture: &Fixture, head: &str, status: CiJobStatus) -> CiJob {
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at: "2026-07-21T11:59:00Z".parse().unwrap(),
         started_at: (status != CiJobStatus::Queued)

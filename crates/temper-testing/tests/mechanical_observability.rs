@@ -316,6 +316,7 @@ fn successful_ci(repo: &RepositoryId, pull_request: &temper_forge_model::PullReq
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at: ts("2026-07-13T12:00:00Z"),
         started_at: Some(ts("2026-07-13T12:00:01Z")),

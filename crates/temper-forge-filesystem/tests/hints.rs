@@ -21,6 +21,7 @@ fn completed_ci_job(repo_id: &temper_forge_model::RepositoryId) -> CiJob {
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at: timestamp(10),
         started_at: Some(timestamp(11)),

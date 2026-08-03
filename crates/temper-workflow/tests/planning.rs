@@ -334,6 +334,7 @@ fn ci_job(
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at: ts(),
         started_at: None,

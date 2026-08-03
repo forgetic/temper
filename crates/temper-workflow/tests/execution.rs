@@ -1,5 +1,4 @@
 //! Tests for runtime transition execution through a Forge backend (Phase 6).
-//!
 //! These drive the [`Executor`] against the deterministic in-memory backend:
 //! create a repository and artifacts, then execute transitions and assert the
 //! backend state, idempotency, and the typed failure classes.
@@ -819,6 +818,7 @@ fn basic_delivery_land_pr_closes_parent_code_issue() {
             provider_reason: None,
             run_id: None,
             attempt: None,
+            verified_failure: None,
             url: None,
             created_at: ts(),
             started_at: None,

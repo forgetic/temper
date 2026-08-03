@@ -46,6 +46,7 @@ fn ci_retry_fails_closed_without_guessing_a_forgejo_endpoint() {
         provider_reason: None,
         run_id: Some("12".into()),
         attempt: Some("2".into()),
+        verified_failure: None,
         url: None,
         created_at: now,
         started_at: Some(now),

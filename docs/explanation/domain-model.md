@@ -91,6 +91,13 @@ conclusion/reason text and opaque run/attempt identities for diagnostics and
 latest-attempt fingerprinting. Those additive fields are optional so legacy
 stored jobs continue to deserialize.
 
+A completed job may additionally carry a short-lived, versioned
+`CiVerifiedFailureProof` emitted by a protected producer and verified by the
+backend. Its typed category is limited to ordinary source, build, or test
+failure and is fenced to the repository, exact commit, optional pull request,
+and exact provider run/job/attempt/task coordinates. The proof is optional and
+does not itself derive or change the job's typed conclusion.
+
 ## Why a filesystem backend exists
 
 The filesystem backend is the reference backend for development and tests. It lets agents iterate quickly without network access, provider credentials, or rate limits. It should behave like a small deterministic Forge, not like an exact clone of any one provider.

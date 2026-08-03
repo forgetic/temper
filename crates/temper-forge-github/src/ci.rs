@@ -337,6 +337,7 @@ fn map_workflow_job(
         provider_reason,
         run_id,
         attempt,
+        verified_failure: None,
         url: dto.html_url.filter(|url| !url.is_empty()),
         created_at,
         started_at: dto.started_at,
