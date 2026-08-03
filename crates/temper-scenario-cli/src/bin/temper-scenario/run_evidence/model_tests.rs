@@ -71,9 +71,49 @@ fn legacy_ci_evidence_defaults_new_provenance_fields() {
 
     assert_eq!(state.jobs[0].job_id, None);
     assert_eq!(state.jobs[0].provider_run_id, None);
+    assert_eq!(state.jobs[0].verified_failure, None);
     assert!(state.observations.is_empty());
     assert!(state.requests.is_empty());
     assert_eq!(state.request_capture_dropped, None);
+}
+
+#[test]
+fn effective_configuration_and_verified_proof_round_trip_without_secrets() {
+    let configuration = EffectiveConfigurationEvidence {
+        ci_poll_cadence_secs: 1,
+        poll_cadence_secs: 600,
+        mechanical_cadence_secs: 7,
+    };
+    let proof = VerifiedFailureProofEvidence {
+        schema_version: 1,
+        category: "test".to_string(),
+        repository_id: "forgejo:acme/service".to_string(),
+        pull_request_id: Some("forgejo:acme/service:pull:7".to_string()),
+        commit_sha: "0123456789abcdef0123456789abcdef01234567".to_string(),
+        run_id: "591".to_string(),
+        job_id: "42".to_string(),
+        attempt: "2".to_string(),
+        task_id: Some("9001".to_string()),
+        producer_id: "forgejo-actions".to_string(),
+        issuer_id: "temper-proof-issuer".to_string(),
+        verification: "protected_producer".to_string(),
+        created_at: "2026-07-26T12:00:00+00:00".to_string(),
+        expires_at: "2026-07-26T12:05:00+00:00".to_string(),
+    };
+
+    let configuration_json = serde_json::to_string(&configuration).unwrap();
+    let proof_json = serde_json::to_string(&proof).unwrap();
+    assert_eq!(
+        serde_json::from_str::<EffectiveConfigurationEvidence>(&configuration_json).unwrap(),
+        configuration
+    );
+    assert_eq!(
+        serde_json::from_str::<VerifiedFailureProofEvidence>(&proof_json).unwrap(),
+        proof
+    );
+    for forbidden in ["signature", "credential", "secret", "token"] {
+        assert!(!proof_json.contains(forbidden), "{forbidden}: {proof_json}");
+    }
 }
 
 #[test]

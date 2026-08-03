@@ -9,8 +9,9 @@ use temper_workflow::parse_metadata_block;
 use super::codebase_memory::{FakeMcpServer, ToolConfiguration};
 use super::process::{
     ChildGuard, TemperInitRequest, assert_init_workflow_yaml_matches, convergence_timeout,
-    engine_block_on, free_port, mint_site_admin_token, populate_repo, run_temper_init,
-    spawn_temper_standalone, tune_init_config, wait_for_standalone, write_snapshot,
+    engine_block_on, free_port, mint_site_admin_token, populate_repo, read_effective_configuration,
+    run_temper_init, spawn_temper_standalone, tune_init_config, wait_for_standalone,
+    write_snapshot,
 };
 use super::runtime_fake::ManifestFake;
 use super::{
@@ -570,6 +571,9 @@ impl<'a> LiveExecutionContext<'a> {
             convergence: convergence.elapsed,
             total_elapsed: self.started.elapsed(),
             poll_backstop: self.harness.scenario.poll_backstop,
+            effective_configuration: read_effective_configuration(
+                &self.bundle_dir.join("config.toml"),
+            )?,
             fake_llm,
             forge_pull_requests,
             final_state: convergence.final_state,

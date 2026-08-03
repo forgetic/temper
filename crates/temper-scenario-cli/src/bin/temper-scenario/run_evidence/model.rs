@@ -25,6 +25,8 @@ pub(crate) struct RunEvidenceArtifact {
     pub(crate) fixtures: Vec<FixtureEvidence>,
     pub(crate) final_state: FinalStateEvidence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) effective_configuration: Option<EffectiveConfigurationEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) convergence: Option<ConvergenceEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) provider: Option<ProviderEvidence>,
@@ -61,6 +63,13 @@ impl RunEvidenceVerdict {
             Self::Inconclusive => "inconclusive",
         }
     }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct EffectiveConfigurationEvidence {
+    pub(crate) ci_poll_cadence_secs: u64,
+    pub(crate) poll_cadence_secs: u64,
+    pub(crate) mechanical_cadence_secs: u64,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -247,6 +256,29 @@ pub(crate) struct CiJobEvidence {
     pub(crate) provider_conclusion: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) verified_failure: Option<VerifiedFailureProofEvidence>,
+}
+
+/// Verified proof provenance with signatures, credentials, and source payloads omitted.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct VerifiedFailureProofEvidence {
+    pub(crate) schema_version: u16,
+    pub(crate) category: String,
+    pub(crate) repository_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pull_request_id: Option<String>,
+    pub(crate) commit_sha: String,
+    pub(crate) run_id: String,
+    pub(crate) job_id: String,
+    pub(crate) attempt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) task_id: Option<String>,
+    pub(crate) producer_id: String,
+    pub(crate) issuer_id: String,
+    pub(crate) verification: String,
+    pub(crate) created_at: String,
+    pub(crate) expires_at: String,
 }
 
 /// Bounded request provenance with values and unrelated headers omitted.

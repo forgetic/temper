@@ -13,6 +13,8 @@ mod checks;
 mod ci_provenance;
 #[path = "assertions/common.rs"]
 mod common;
+#[path = "assertions/effective_configuration.rs"]
+mod effective_configuration;
 #[path = "assertions/events.rs"]
 mod events;
 #[path = "assertions/issue.rs"]
@@ -27,6 +29,8 @@ mod repository;
 mod summary;
 #[path = "assertions/support.rs"]
 mod support;
+#[path = "assertions/verified_failure.rs"]
+mod verified_failure;
 
 pub(crate) fn evaluate_manifest_assertions(
     manifest_path: &Path,
@@ -42,6 +46,8 @@ pub(crate) fn evaluate_manifest_assertions(
     summary::evaluate_counts(expect, artifact, &mut results);
     checks::evaluate_checks(expect, artifact, &mut results);
     ci_provenance::evaluate(expect, artifact, &mut results);
+    effective_configuration::evaluate(expect, artifact, &mut results);
+    verified_failure::evaluate(expect, artifact, &mut results);
     events::evaluate_event_expectations(expect, artifact, &mut results);
     recovery::evaluate(expect, artifact, &mut results);
 
@@ -109,6 +115,84 @@ forbidden_requests = [
 ]
 "#;
 
+    const CADENCE_PROOF_MANIFEST: &str = r#"
+schema = "temper.scenario.v1"
+name = "ci-cadence-proof-contract"
+status = "active"
+stability = "provisional"
+intent = "Exercise effective cadence and verified-failure assertions."
+
+[runner]
+uses = "manifest"
+
+[expect]
+[expect.effective_configuration]
+id = "effective-cadences"
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 600
+mechanical_cadence_secs = 7
+
+[[expect.verified_failure_proof]]
+id = "ordinary-failure-proof"
+pull_request = "implementation"
+job_name = "status_only_failure"
+exactly = 1
+category = "test"
+producer_id = "forgejo-actions"
+issuer_id = "temper-proof-issuer"
+verification = "protected_producer"
+"#;
+
+    #[test]
+    fn effective_cadence_and_verified_failure_assertions_pass_exact_evidence() {
+        let artifact = proof_artifact();
+        let serialized = serde_json::to_string(&artifact).expect("artifact serializes");
+        let round_trip: RunEvidenceArtifact =
+            serde_json::from_str(&serialized).expect("artifact round trips");
+        assert_eq!(round_trip, artifact);
+        let assertions = evaluate(CADENCE_PROOF_MANIFEST, round_trip).expect("assertions evaluate");
+        assert_eq!(
+            assertions.status,
+            super::super::model::ASSERTION_STATUS_PASSED
+        );
+        assert_eq!(assertions.results.len(), 2);
+        assert!(
+            assertions
+                .results
+                .iter()
+                .all(|result| result.status == super::super::model::ASSERTION_STATUS_PASSED)
+        );
+    }
+
+    #[test]
+    fn cadence_and_proof_assertions_fail_mismatches_and_block_missing_facts() {
+        let mut mismatched = proof_artifact_json();
+        mismatched["effective_configuration"]["ci_poll_cadence_secs"] = json!(2);
+        mismatched["final_state"]["ci"]["jobs"][1]["verified_failure"]["attempt"] = json!("9");
+        let assertions =
+            evaluate(CADENCE_PROOF_MANIFEST, deserialize(mismatched)).expect("mismatches evaluate");
+        assert!(
+            assertions
+                .results
+                .iter()
+                .all(|result| result.status == super::super::model::ASSERTION_STATUS_FAILED)
+        );
+
+        let mut missing = proof_artifact_json();
+        missing["effective_configuration"] = JsonValue::Null;
+        missing["final_state"]["ci"]["jobs"][1]["verified_failure"]["pull_request_id"] =
+            JsonValue::Null;
+        let assertions =
+            evaluate(CADENCE_PROOF_MANIFEST, deserialize(missing)).expect("missing facts evaluate");
+        assert!(
+            assertions
+                .results
+                .iter()
+                .all(|result| result.status == super::super::model::ASSERTION_STATUS_MISSING_FACT)
+        );
+        assert_eq!(assertions.blocked_required, 2);
+    }
+
     #[test]
     fn manifest_ci_provenance_assertion_passes_supported_evidence() {
         let assertions = evaluate(MANIFEST, artifact()).expect("assertions evaluate");
@@ -158,6 +242,36 @@ forbidden_requests = [
 
     fn deserialize(value: JsonValue) -> RunEvidenceArtifact {
         serde_json::from_value(value).expect("artifact deserializes")
+    }
+
+    fn proof_artifact() -> RunEvidenceArtifact {
+        deserialize(proof_artifact_json())
+    }
+
+    fn proof_artifact_json() -> JsonValue {
+        let mut value = artifact_json();
+        value["effective_configuration"] = json!({
+            "ci_poll_cadence_secs": 1,
+            "poll_cadence_secs": 600,
+            "mechanical_cadence_secs": 7
+        });
+        value["final_state"]["ci"]["jobs"][1]["verified_failure"] = json!({
+            "schema_version": 1,
+            "category": "test",
+            "repository_id": "forgejo:acme/service",
+            "pull_request_id": "forgejo:acme/service:pull:7",
+            "commit_sha": "exact-head",
+            "run_id": "900",
+            "job_id": "32",
+            "attempt": "1",
+            "task_id": "42",
+            "producer_id": "forgejo-actions",
+            "issuer_id": "temper-proof-issuer",
+            "verification": "protected_producer",
+            "created_at": "2026-07-26T12:00:00+00:00",
+            "expires_at": "2026-07-26T12:05:00+00:00"
+        });
+        value
     }
 
     fn artifact_json() -> JsonValue {

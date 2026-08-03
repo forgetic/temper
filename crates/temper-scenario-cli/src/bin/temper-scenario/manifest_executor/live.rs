@@ -276,6 +276,11 @@ fn live_artifact(
         }
     };
     let mut artifact = context.artifact(final_state);
+    artifact.effective_configuration = Some(run_evidence::EffectiveConfigurationEvidence {
+        ci_poll_cadence_secs: evidence.effective_configuration.ci_poll_cadence_secs,
+        poll_cadence_secs: evidence.effective_configuration.poll_cadence_secs,
+        mechanical_cadence_secs: evidence.effective_configuration.mechanical_cadence_secs,
+    });
     artifact.convergence = Some(run_evidence::ConvergenceEvidence {
         startup_ms: Some(duration_ms(evidence.startup)),
         convergence_ms: Some(duration_ms(evidence.convergence)),
@@ -384,6 +389,28 @@ fn ci_job(
         conclusion: job.conclusion.clone(),
         provider_conclusion: job.provider_conclusion.clone(),
         url: job.url.clone(),
+        verified_failure: job.verified_failure.as_ref().map(verified_failure_proof),
+    }
+}
+
+pub(super) fn verified_failure_proof(
+    proof: &temper_testing::live_manifest::VerifiedFailureProofEvidence,
+) -> run_evidence::VerifiedFailureProofEvidence {
+    run_evidence::VerifiedFailureProofEvidence {
+        schema_version: proof.schema_version,
+        category: proof.category.clone(),
+        repository_id: proof.repository_id.clone(),
+        pull_request_id: proof.pull_request_id.clone(),
+        commit_sha: proof.commit_sha.clone(),
+        run_id: proof.run_id.clone(),
+        job_id: proof.job_id.clone(),
+        attempt: proof.attempt.clone(),
+        task_id: proof.task_id.clone(),
+        producer_id: proof.producer_id.clone(),
+        issuer_id: proof.issuer_id.clone(),
+        verification: proof.verification.clone(),
+        created_at: proof.created_at.clone(),
+        expires_at: proof.expires_at.clone(),
     }
 }
 
@@ -477,6 +504,12 @@ fn live_evidence_lines(
             evidence.convergence, evidence.poll_backstop, evidence.startup, evidence.total_elapsed
         ),
         format!(
+            "effective standalone configuration: ci_poll_cadence_secs={} poll_cadence_secs={} mechanical_cadence_secs={}",
+            evidence.effective_configuration.ci_poll_cadence_secs,
+            evidence.effective_configuration.poll_cadence_secs,
+            evidence.effective_configuration.mechanical_cadence_secs
+        ),
+        format!(
             "fake LLM: url={} architect_requests={} engineer_requests={} tester_requests={} log={}",
             evidence.fake_llm.base_url,
             evidence.fake_llm.architect_requests,
@@ -549,6 +582,22 @@ fn live_evidence_lines(
             job.provider_conclusion,
             job.url
         ));
+        if let Some(proof) = &job.verified_failure {
+            lines.push(format!(
+                "verified CI failure proof: category={} repository={} pull_request={:?} commit={} run={} job={} attempt={} task={:?} producer={} issuer={} verification={}",
+                proof.category,
+                proof.repository_id,
+                proof.pull_request_id,
+                proof.commit_sha,
+                proof.run_id,
+                proof.job_id,
+                proof.attempt,
+                proof.task_id,
+                proof.producer_id,
+                proof.issuer_id,
+                proof.verification
+            ));
+        }
     }
     for stimulus in &evidence.stimuli {
         lines.push(format!(

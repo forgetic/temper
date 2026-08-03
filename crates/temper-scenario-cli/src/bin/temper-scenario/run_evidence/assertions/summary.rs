@@ -412,6 +412,7 @@ mod tests {
                 repositories: Vec::new(),
                 ci: CiStateEvidence::default(),
             },
+            effective_configuration: None,
             convergence: None,
             provider: None,
             observability: Some(ObservabilityEvidence {

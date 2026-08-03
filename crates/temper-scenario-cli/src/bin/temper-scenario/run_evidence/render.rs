@@ -74,6 +74,14 @@ impl RunEvidenceArtifact {
             ));
         }
         details.extend(final_state_details(&self.final_state));
+        if let Some(configuration) = &self.effective_configuration {
+            details.push(format!(
+                "effective standalone configuration: ci_poll_cadence_secs={} poll_cadence_secs={} mechanical_cadence_secs={}",
+                configuration.ci_poll_cadence_secs,
+                configuration.poll_cadence_secs,
+                configuration.mechanical_cadence_secs
+            ));
+        }
         if let Some(convergence) = &self.convergence {
             details.extend(convergence_details(convergence));
         }
@@ -205,6 +213,22 @@ fn final_state_details(final_state: &FinalStateEvidence) -> Vec<String> {
             "final CI job: name={} status={} pr={:?} conclusion={:?} url={:?}",
             job.name, job.status, job.pull_request_number, job.conclusion, job.url
         ));
+        if let Some(proof) = &job.verified_failure {
+            details.push(format!(
+                "verified CI failure proof: category={} repository={} pull_request={:?} commit={} run={} job={} attempt={} task={:?} producer={} issuer={} verification={}",
+                proof.category,
+                proof.repository_id,
+                proof.pull_request_id,
+                proof.commit_sha,
+                proof.run_id,
+                proof.job_id,
+                proof.attempt,
+                proof.task_id,
+                proof.producer_id,
+                proof.issuer_id,
+                proof.verification
+            ));
+        }
     }
     details
 }

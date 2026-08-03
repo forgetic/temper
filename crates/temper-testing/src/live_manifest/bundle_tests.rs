@@ -29,6 +29,10 @@ fn loads_checked_in_live_manifest_bundle() {
         Duration::from_secs(DEFAULT_DAEMON_POLL_BACKSTOP_SECS)
     );
     assert_eq!(
+        bundle.ci_poll_cadence,
+        Duration::from_secs(DEFAULT_CI_POLL_CADENCE_SECS)
+    );
+    assert_eq!(
         bundle.mechanical_cadence,
         Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS)
     );
@@ -207,6 +211,68 @@ fn issue_bindings_and_existing_pr_parameters_are_runtime_actions() {
             && metadata_kind == "implementation_pr"
             && correlation_key == "$correlation:refresh"
     ));
+}
+
+#[test]
+fn live_ci_poll_cadence_accepts_boundaries_and_is_independent() {
+    for (value, expected) in [
+        (TomlValue::Integer(1), Duration::from_secs(1)),
+        (
+            TomlValue::String("300s".to_string()),
+            Duration::from_secs(300),
+        ),
+    ] {
+        let bundle = bundle_with_live_harness([
+            ("ci_poll_cadence", value),
+            ("poll_cadence", TomlValue::Integer(77)),
+            ("poll_backstop", TomlValue::Integer(88)),
+            ("mechanical_cadence", TomlValue::Integer(33)),
+        ])
+        .expect("valid dedicated CI cadence");
+        assert_eq!(bundle.ci_poll_cadence, expected);
+        assert_eq!(bundle.poll_cadence, Duration::from_secs(77));
+        assert_eq!(bundle.poll_backstop, Duration::from_secs(88));
+        assert_eq!(bundle.mechanical_cadence, Duration::from_secs(33));
+    }
+}
+
+#[test]
+fn live_ci_poll_cadence_rejects_every_invalid_value_class() {
+    for value in [
+        TomlValue::Integer(0),
+        TomlValue::Integer(-1),
+        TomlValue::Integer(301),
+        TomlValue::Float(1.5),
+        TomlValue::String("soon".to_string()),
+        TomlValue::String("1.5s".to_string()),
+        TomlValue::String("18446744073709551616s".to_string()),
+    ] {
+        let error = bundle_with_live_harness([("ci_poll_cadence", value)])
+            .expect_err("invalid dedicated CI cadence");
+        assert!(
+            error.contains("live_harness.ci_poll_cadence"),
+            "field-specific diagnostic: {error}"
+        );
+    }
+}
+
+fn bundle_with_live_harness<const N: usize>(
+    values: [(&str, TomlValue); N],
+) -> Result<ScenarioBundle, String> {
+    let scenario_path = scenarios_root().join("basic-delivery");
+    let manifest_path = scenario_path.join("scenario.toml");
+    let mut manifest = temper_scenario_core::load_resolved_manifest_toml(&manifest_path)
+        .expect("resolved basic manifest");
+    let root = manifest.as_table_mut().expect("manifest table");
+    let live = root
+        .entry("live_harness")
+        .or_insert_with(|| TomlValue::Table(toml::Table::new()))
+        .as_table_mut()
+        .expect("live harness table");
+    for (key, value) in values {
+        live.insert(key.to_string(), value);
+    }
+    ScenarioBundle::from_manifest(scenario_path, manifest_path, manifest)
 }
 
 fn scenarios_root() -> PathBuf {
