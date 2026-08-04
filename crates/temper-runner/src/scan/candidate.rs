@@ -1,6 +1,6 @@
 use temper_forge::{
-    CandidateLabelSelection, CandidateLifecycle, IssueCandidateQuery, ItemListDetails,
-    PullRequestCandidateQuery,
+    CandidateLabelSelection, CandidateLifecycle, CandidatePageRequest, IssueCandidateQuery,
+    ItemListDetails, PullRequestCandidateQuery,
 };
 use temper_workflow::{
     ArtifactTarget, CompiledWorkflow, GateCondition, QueueManifest, RoleId, ValidatedWorkflow,
@@ -286,6 +286,7 @@ fn issue_candidate(
         lifecycle,
         labels,
         details: ItemListDetails::summary(),
+        page: (lifecycle == CandidateLifecycle::Terminal).then(CandidatePageRequest::terminal),
     }
 }
 
@@ -297,5 +298,6 @@ fn pull_request_candidate(
         lifecycle,
         labels,
         details: ItemListDetails::summary(),
+        page: (lifecycle == CandidateLifecycle::Terminal).then(CandidatePageRequest::terminal),
     }
 }

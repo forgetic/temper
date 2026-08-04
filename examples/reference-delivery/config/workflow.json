@@ -535,6 +535,7 @@
     {
       "id": "landed_inbox",
       "artifact": "implementation_pr",
+      "terminal": true,
       "labels": [
         "landed"
       ]
@@ -542,6 +543,7 @@
     {
       "id": "owner_alignment",
       "artifact": "implementation_pr",
+      "terminal": true,
       "labels": [
         "alignment"
       ],

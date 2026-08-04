@@ -146,6 +146,14 @@ be absent for a queue to match. Use `excluded_labels` for temporary blockers
 that should pause a durable handoff queue without removing the handoff label
 itself (for example, keep `landing` while `merge-conflict` routes repair work).
 
+Queues are open-only by default. Set `terminal: true` only when the queue is an
+explicit closed/merged recovery or post-merge handoff. Periodic terminal
+discovery uses only that queue's positive `labels`/`any_of` labels; exclusions,
+state declarations, effects, and gate labels do not widen terminal interest. A
+condition-only terminal queue falls back to its artifact kind's identifying
+labels. Validation rejects a terminal queue that would require an unlabelled
+all-terminal scan.
+
 ## Native gate conditions
 
 Runtime signal conditions are read fresh from the Forge and are never projected

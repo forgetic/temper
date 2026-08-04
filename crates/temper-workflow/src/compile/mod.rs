@@ -169,6 +169,8 @@ pub struct QueueManifest {
     pub labels: Vec<LabelId>,
     pub excluded_labels: Vec<LabelId>,
     pub any_of: Vec<QueueLabelSet>,
+    /// Explicit permission to evaluate this queue on terminal artifacts.
+    pub terminal: bool,
     pub min_depth: Option<u32>,
     pub max_age: Option<Duration>,
     pub condition: Option<GateCondition>,
@@ -289,6 +291,7 @@ fn compile_queues(workflow: &ValidatedWorkflow) -> Vec<QueueManifest> {
             labels: queue.labels.clone(),
             excluded_labels: queue.excluded_labels.clone(),
             any_of: queue.any_of.clone(),
+            terminal: queue.terminal,
             min_depth: queue.min_depth,
             max_age: queue.max_age,
             condition: queue.condition.clone(),

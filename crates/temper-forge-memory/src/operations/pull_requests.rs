@@ -15,10 +15,11 @@ use crate::lists::{
 use crate::reviews::{list_reviews, request_reviewers, submit_review};
 use crate::util::{check_expected_version, next_comment_number, next_item_number};
 use temper_forge_model::{
-    CandidateLifecycle, ChangeKind, Comment, CreateComment, CreatePullRequest,
+    CandidateLifecycle, CandidatePosition, ChangeKind, Comment, CreateComment, CreatePullRequest,
     CreatePullRequestReview, ForgeError, ForgeResult, ItemNumber, MergePullRequest, MergeRecord,
-    PullRequest, PullRequestCandidateQuery, PullRequestId, PullRequestQuery, PullRequestReview,
-    PullRequestState, RepositoryId, RequestReviewers, UpdatePullRequest, Version,
+    PullRequest, PullRequestCandidatePage, PullRequestCandidateQuery, PullRequestId,
+    PullRequestQuery, PullRequestReview, PullRequestState, RepositoryId, RequestReviewers,
+    UpdatePullRequest, Version, paginate_candidate_items,
 };
 
 pub(crate) fn list_pull_requests(
@@ -51,7 +52,7 @@ pub(crate) fn list_pull_request_candidates(
     forge: &MemoryForge,
     repo_id: &RepositoryId,
     query: PullRequestCandidateQuery,
-) -> ForgeResult<Vec<PullRequest>> {
+) -> ForgeResult<PullRequestCandidatePage> {
     let labels = query.labels.normalized()?;
     let mut inner = forge.lock();
     inner.faults.take(FaultOp::ListPullRequests)?;
@@ -80,8 +81,20 @@ pub(crate) fn list_pull_request_candidates(
             pull_request.dependencies.clear();
         }
     }
-    sort_pull_requests_by_number(&mut pull_requests);
-    Ok(pull_requests)
+    let raw_count = pull_requests.len();
+    paginate_candidate_items(
+        pull_requests,
+        raw_count,
+        repo_id,
+        query.lifecycle,
+        query.labels,
+        query.page,
+        |pull_request| CandidatePosition {
+            updated_at: pull_request.updated_at,
+            number: pull_request.number,
+            id: pull_request.id.clone(),
+        },
+    )
 }
 
 pub(crate) fn create_pull_request(

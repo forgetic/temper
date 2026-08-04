@@ -9,8 +9,8 @@ use crate::validated::{GateCondition, ValidatedTransition, ValidatedWorkflow};
 use crate::{ArtifactTarget, workflow_interest};
 use std::time::Instant;
 use temper_forge::{
-    CandidateLabelSelection, CandidateLifecycle, Forge, Issue, IssueCandidateQuery,
-    ItemListDetails, PullRequest, PullRequestCandidateQuery, RepositoryId,
+    CandidateLabelSelection, CandidateLifecycle, CandidatePageRequest, Forge, Issue,
+    IssueCandidateQuery, ItemListDetails, PullRequest, PullRequestCandidateQuery, RepositoryId,
 };
 
 pub(crate) struct CandidateLoad {
@@ -377,6 +377,7 @@ fn issue_candidate(lifecycle: CandidateLifecycle, labels: Vec<String>) -> IssueC
         lifecycle,
         labels: CandidateLabelSelection::AnyOf(labels),
         details: ItemListDetails::summary(),
+        page: (lifecycle == CandidateLifecycle::Terminal).then(CandidatePageRequest::terminal),
     }
 }
 
@@ -388,5 +389,6 @@ fn pull_request_candidate(
         lifecycle,
         labels: CandidateLabelSelection::AnyOf(labels),
         details: ItemListDetails::summary(),
+        page: (lifecycle == CandidateLifecycle::Terminal).then(CandidatePageRequest::terminal),
     }
 }

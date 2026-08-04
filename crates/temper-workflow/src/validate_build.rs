@@ -161,6 +161,7 @@ fn build_queue(queue: &crate::spec::RawQueue) -> ValidatedQueue {
                 labels: label_set.labels.iter().map(LabelId::new).collect(),
             })
             .collect(),
+        terminal: queue.terminal,
         min_depth: queue.min_depth,
         max_age: queue
             .max_age
