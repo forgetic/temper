@@ -1,0 +1,130 @@
+{
+  "phases": [
+    {
+      "name": "engineer-ci-repair",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer",
+          "Queue: pr_ci_failed"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_hold_initial_head_for_observation",
+                "name": "bash",
+                "args": {
+                  "command": "sleep 20"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_repair_service_entrypoint",
+                "name": "write",
+                "args": {
+                  "path": "service/src/service.sh",
+                  "content": "#!/bin/sh\nset -eu\necho 'service ready'\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_submit_exact_head_repair",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "Repaired the same PR with a parseable service entrypoint."
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Add checked service entrypoint\",\"body\":\"# Implementation report\\n\\nRepaired the ordinary source-check failure on the existing PR.\",\"summary\":\"Repaired the same PR with a parseable service entrypoint.\"}"
+        }
+      ]
+    },
+    {
+      "name": "architect-triage",
+      "when": {
+        "messages_contain": [
+          "ROLE: architect"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_architect_inspect_service",
+                "name": "bash",
+                "args": {
+                  "command": "find service -maxdepth 3 -type f -print | sort"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"verdict\":\"ready_code\",\"body\":\"## Code spec\\n\\nAdd `src/service.sh` as a minimal checked service entrypoint. It must pass the repository's ordinary `sh -n` source check.\"}"
+        }
+      ]
+    },
+    {
+      "name": "engineer-implementation",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_write_initial_service_entrypoint",
+                "name": "write",
+                "args": {
+                  "path": "service/src/service.sh",
+                  "content": "#!/bin/sh\nif then\n  echo 'unreachable'\nfi\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_submit_initial_implementation",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "Added the checked service entrypoint."
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Add checked service entrypoint\",\"body\":\"# Implementation report\\n\\nAdded the checked service entrypoint.\",\"summary\":\"Added the checked service entrypoint.\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -74,6 +74,14 @@ impl RunEvidenceArtifact {
             ));
         }
         details.extend(final_state_details(&self.final_state));
+        if let Some(configuration) = &self.effective_configuration {
+            details.push(format!(
+                "effective standalone configuration: ci_poll_cadence_secs={} poll_cadence_secs={} mechanical_cadence_secs={}",
+                configuration.ci_poll_cadence_secs,
+                configuration.poll_cadence_secs,
+                configuration.mechanical_cadence_secs
+            ));
+        }
         if let Some(convergence) = &self.convergence {
             details.extend(convergence_details(convergence));
         }
@@ -204,6 +212,67 @@ fn final_state_details(final_state: &FinalStateEvidence) -> Vec<String> {
         details.push(format!(
             "final CI job: name={} status={} pr={:?} conclusion={:?} url={:?}",
             job.name, job.status, job.pull_request_number, job.conclusion, job.url
+        ));
+        if let Some(proof) = &job.verified_failure {
+            details.push(format!(
+                "verified CI failure proof: category={} repository={} pull_request={:?} commit={} run={} job={} attempt={} task={:?} producer={} issuer={} verification={}",
+                proof.category,
+                proof.repository_id,
+                proof.pull_request_id,
+                proof.commit_sha,
+                proof.run_id,
+                proof.job_id,
+                proof.attempt,
+                proof.task_id,
+                proof.producer_id,
+                proof.issuer_id,
+                proof.verification
+            ));
+        }
+    }
+    for head in &final_state.ci.heads {
+        details.push(format!(
+            "CI head: phase={} sha={} observed_after_ms={} observations={}",
+            head.phase,
+            head.head_sha,
+            head.observed_after_ms,
+            head.observations.len()
+        ));
+        for job in &head.jobs {
+            details.push(format!(
+                "CI head job: phase={} name={} status={} run={:?} attempt={:?} commit={:?} conclusion={:?} provider_conclusion={:?}",
+                head.phase,
+                job.name,
+                job.status,
+                job.provider_run_id,
+                job.provider_attempt,
+                job.commit_sha,
+                job.conclusion,
+                job.provider_conclusion
+            ));
+            if let Some(proof) = &job.verified_failure {
+                details.push(format!(
+                    "CI head verified failure: phase={} category={} run={} job={} attempt={} task={:?} producer={} issuer={} verification={}",
+                    head.phase,
+                    proof.category,
+                    proof.run_id,
+                    proof.job_id,
+                    proof.attempt,
+                    proof.task_id,
+                    proof.producer_id,
+                    proof.issuer_id,
+                    proof.verification
+                ));
+            }
+        }
+    }
+    if let Some(service) = &final_state.ci.failure_evidence {
+        details.push(format!(
+            "CI failure evidence service: path={} issuer={} protected_producers={:?} published_proofs={}",
+            service.endpoint_path,
+            service.issuer,
+            service.protected_producers,
+            service.published_proofs
         ));
     }
     details

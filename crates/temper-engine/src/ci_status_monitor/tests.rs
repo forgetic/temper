@@ -419,6 +419,7 @@ fn terminal_job(
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at: timestamp("2026-07-21T11:59:00Z"),
         started_at: Some(timestamp("2026-07-21T11:59:10Z")),

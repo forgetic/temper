@@ -143,6 +143,7 @@ fn ci_job(
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at,
         started_at: Some(created_at + Duration::seconds(30)),

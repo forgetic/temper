@@ -36,7 +36,7 @@ pub use client::{
     EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpRequestProvenance,
     HttpRequestProvenanceSnapshot, HttpResponse,
 };
-pub use config::{CasMode, DEFAULT_PAGE_LIMIT, ForgejoConfig};
+pub use config::{CasMode, DEFAULT_PAGE_LIMIT, ForgejoConfig, ForgejoFailureEvidenceConfig};
 pub use provision::{ROLE_PASSWORD, admin_token_via_basic_auth};
 pub use read_only_basic::ReadOnlyBasicAuthClient;
 

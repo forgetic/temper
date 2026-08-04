@@ -82,6 +82,7 @@ impl RunEvidenceContext {
             execution: None,
             fixtures: self.fixtures.clone(),
             final_state,
+            effective_configuration: None,
             convergence: None,
             provider: None,
             observability: None,

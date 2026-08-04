@@ -24,10 +24,10 @@ the operator workflow.
 runner:
 
 - `manifest` — validation-grade end-to-end execution. The checked-in
-  `basic-delivery`, `forgejo-v16-api-ci`, `implementation-pr-handoff`,
-  `codebase-memory-agent`, `model-failure-recovery`,
-  `plan-centric-feature-branch`, `implicit-live-scenario-cli`, and
-  `target-ux-e2e` scenarios declare
+  `basic-delivery`, `forgejo-exact-head-ci-repair`, `forgejo-v16-api-ci`,
+  `implementation-pr-handoff`, `codebase-memory-agent`,
+  `model-failure-recovery`, `plan-centric-feature-branch`,
+  `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
   `runner.uses = "manifest"`. Every run boots real Forgejo, a host
   `forgejo-runner` for Actions CI, a standalone `temper` process, and Jig fake
   LLM agents. MemoryForge, filesystem-forge, in-process, hermetic real-stack,
@@ -118,6 +118,31 @@ Hook context, stdout, stderr, and status files are retained under
 `<output-dir>/script-assertions/` and are also cited from the run evidence and
 validation report.
 
+### Live harness polling cadence
+
+Live manifests can tune all three standalone wake cadences independently:
+
+```toml
+[live_harness]
+ci_poll_cadence = "1s"       # dedicated exact-head CI status polling
+poll_cadence = "600s"        # broad role-feed polling
+mechanical_cadence = "7s"    # mechanical work backstop
+```
+
+`live_harness.ci_poll_cadence` accepts only positive whole-second values from
+1 through 300 seconds (integer seconds or duration literals such as `"1s"` or
+`"5m"`). Zero, negative, fractional, malformed, overflowing, and larger values
+are rejected with a `live_harness.ci_poll_cadence` diagnostic. Omitting the
+field preserves standalone Temper's 60-second dedicated CI cadence. It is never
+inferred from `poll_cadence`, `poll_backstop`, `mechanical_cadence`, a scenario
+name, or the environment.
+
+The harness writes the three values to `engine.ci_poll_cadence_secs`,
+`engine.poll_cadence_secs`, and `engine.mechanical_cadence_secs`, then reads them
+back before starting standalone Temper. Run evidence retains that secret-free
+record as `effective_configuration`; these are the values actually used, not
+just the manifest request.
+
 ### Structured run evidence
 
 `temper-scenario run` can also write a versioned JSON run-evidence artifact:
@@ -130,9 +155,14 @@ temper-scenario run \
 
 The artifact records the schema/version, scenario source classification,
 manifest path, scenario name, runner identity, fixed live topology facts,
-resolved fixture paths, final issue/PR/CI facts observed by the runner,
-convergence data, and any known provider/log/artifact paths. `validate-pr` can
-render from that artifact without scraping stdout or rerunning the scenario:
+resolved fixture paths, the exact effective dedicated-CI/role-feed/mechanical
+cadences, final issue/PR/CI facts observed by the runner, convergence data, and
+any known provider/log/artifact paths. Verified ordinary-failure CI jobs also
+retain `verified_failure` with repository, PR, head commit, run, job, attempt,
+optional task, category, bounded producer/issuer identities, verification mode,
+and validity timestamps. Signatures, credentials, source records, and secrets
+have no run-evidence field. `validate-pr` can render from that artifact without
+scraping stdout or rerunning the scenario:
 
 ```sh
 temper-scenario validate-pr \
@@ -192,12 +222,52 @@ evidence:
   fields such as `event`, `artifact_ref`, `pr_ref`, `source_artifact`,
   `transition`, `action`, handoff metadata/title/body-source fields, and CI
   `conclusion`.
+- `[expect.effective_configuration]` requires exact
+  `ci_poll_cadence_secs`, `poll_cadence_secs`, and
+  `mechanical_cadence_secs` values from the read-back standalone configuration.
+- `[[expect.verified_failure_proof]]` selects a PR and CI `job_name`, requires a
+  positive `exactly` count, correlates proof head/run/attempt coordinates with
+  the enclosing PR and job, and can assert exact category, repository/PR/run/job/
+  attempt/task, producer, issuer, and verification values. A missing effective
+  record, proof, PR/head/run/job/attempt coordinate, or issuer metadata is a
+  blocking missing fact for required assertions.
 - `[[expect.ci_provenance]]` asserts provider-neutral CI identities, repeated
   observations, exact-head ownership, job outcomes, and bounded request rules.
   Request evidence retains method/path/query-key names, JSON acceptance, and
   authentication scheme/presence only; token values and unrelated headers are
   never serialized. Missing observations, identity fields, request capture, or
   a nonzero dropped-request count blocks a required assertion.
+- `[expect.ci_repair]` correlates named initial and repaired head snapshots,
+  requires their order and difference, can count protected-workflow proof
+  publications, rejects stale failure proof on repaired jobs, and compares
+  convergence timing with the effective broad role-feed cadence. Missing head,
+  publication, configuration, or timing evidence blocks a required assertion.
+
+A focused dedicated-CI contract can assert both retained configuration and
+verified proof provenance without scenario-specific Rust dispatch:
+
+```toml
+[expect.effective_configuration]
+id = "three-independent-cadences"
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 600
+mechanical_cadence_secs = 7
+
+[[expect.verified_failure_proof]]
+id = "ordinary-test-failure"
+pull_request = "implementation"
+job_name = "test"
+exactly = 1
+category = "test"
+producer_id = "forgejo-actions"
+issuer_id = "temper-proof-issuer"
+verification = "protected_producer"
+```
+
+Repository, PR, commit, run, job, attempt, and optional task can also be given
+as exact string fields when fixture identities are known. The assertion always
+requires complete retained repository/PR/head/run/job/attempt provenance even
+when only issuer/category fields are declared.
 
 A strict provider API contract can be expressed without scenario-specific
 runner code:

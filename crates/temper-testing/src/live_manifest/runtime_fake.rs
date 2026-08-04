@@ -41,7 +41,8 @@ impl ManifestFake {
         let script_path = script_path.to_path_buf();
         match strategy {
             ConvergenceStrategy::SinglePullRequest
-            | ConvergenceStrategy::ImplementationPrTerminalCi => Ok(Self::Single {
+            | ConvergenceStrategy::ImplementationPrTerminalCi
+            | ConvergenceStrategy::CiPollExactHeadRepair => Ok(Self::Single {
                 fake: SinglePullRequestFake::start(&script_path, late_stream_failure)?,
                 script_path,
             }),
@@ -114,7 +115,8 @@ impl ManifestFake {
         match (strategy, self) {
             (
                 ConvergenceStrategy::SinglePullRequest
-                | ConvergenceStrategy::ImplementationPrTerminalCi,
+                | ConvergenceStrategy::ImplementationPrTerminalCi
+                | ConvergenceStrategy::CiPollExactHeadRepair,
                 Self::Single { fake, .. },
             ) => {
                 if fake.architect_requests() < 2 {
@@ -133,7 +135,8 @@ impl ManifestFake {
             }
             (
                 ConvergenceStrategy::SinglePullRequest
-                | ConvergenceStrategy::ImplementationPrTerminalCi,
+                | ConvergenceStrategy::ImplementationPrTerminalCi
+                | ConvergenceStrategy::CiPollExactHeadRepair,
                 _,
             ) => Err(
                 "single implementation PR convergence requires its declared Jig runtime"

@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 /// Maximum UTF-8 byte length retained for a provider-supplied CI conclusion or reason.
 pub const MAX_CI_PROVIDER_EVIDENCE_BYTES: usize = 256;
 
+mod verified_failure;
+
+pub use verified_failure::*;
+
 /// Execution status for a CI job.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -80,6 +84,9 @@ pub struct CiJob {
     /// Opaque provider attempt identity within `run_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attempt: Option<String>,
+    /// Verified, bounded ordinary-failure proof; absent for legacy/provider-only evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_failure: Option<CiVerifiedFailureProof>,
     pub url: Option<String>,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -148,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_ci_job_json_defaults_terminal_evidence_and_identity() {
+    fn legacy_ci_job_json_defaults_proof_and_preserves_typed_conclusion() {
         let legacy = json!({
             "id": "ci-1",
             "repo_id": "repo-1",
@@ -168,6 +175,8 @@ mod tests {
         assert_eq!(job.provider_reason, None);
         assert_eq!(job.run_id, None);
         assert_eq!(job.attempt, None);
+        assert_eq!(job.verified_failure, None);
+        assert_eq!(job.conclusion, Some(CiJobConclusion::Failure));
     }
 
     #[test]
@@ -192,6 +201,7 @@ mod tests {
         });
         let job: CiJob = serde_json::from_value(value).unwrap();
         assert_eq!(job.conclusion, Some(CiJobConclusion::RunnerLost));
+        assert_eq!(job.verified_failure, None);
         assert_eq!(serde_json::to_value(job).unwrap()["attempt"], "3");
     }
 
@@ -209,6 +219,7 @@ mod tests {
             provider_reason: None,
             run_id: None,
             attempt: None,
+            verified_failure: None,
             url: None,
             created_at: DateTime::UNIX_EPOCH,
             started_at: None,

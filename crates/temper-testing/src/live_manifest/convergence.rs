@@ -1,8 +1,9 @@
 use std::time::{Duration, Instant};
 
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_forge_forgejo::{ForgejoConfig, ForgejoFailureEvidenceConfig, ForgejoForge};
 use temper_forge_model::{
-    CiJob, CiJobConclusion, CiJobQuery, CiJobStatus, CreateIssue, Issue, IssueState, ItemNumber,
+    CiFailureProofVerification, CiJob, CiJobConclusion, CiJobQuery, CiJobStatus,
+    CiOrdinaryFailureCategory, CiVerifiedFailureProof, CreateIssue, Issue, IssueState, ItemNumber,
     PullRequest, PullRequestQuery, PullRequestState, RepositoryId, RepositoryPath, UserId,
 };
 use temper_workflow::{CiStatus, parse_metadata_block};
@@ -11,12 +12,15 @@ use super::fake_llm::{architect_body, engineer_summary};
 use super::process::{ChildGuard, engine_block_on};
 use super::{
     CiJobEvidence, CiObservationEvidence, ENGINEER, FinalStateEvidence, IntakeFixture,
-    IssueEvidence, PullRequestEvidence, RepoFixture,
+    IssueEvidence, PullRequestEvidence, RepoFixture, VerifiedFailureProofEvidence,
 };
 
+#[path = "convergence/repair.rs"]
+mod repair;
 #[path = "convergence/terminal_ci.rs"]
 mod terminal_ci;
 
+pub(super) use repair::drive_ci_poll_exact_head_repair_convergence;
 pub(super) use terminal_ci::drive_implementation_pr_terminal_ci_convergence;
 
 const REQUEST_PROVENANCE_CAPACITY: usize = 4096;
@@ -26,6 +30,20 @@ const ASSERT_POLL: Duration = Duration::from_secs(1);
 pub(super) fn admin_forge(base_url: &str, admin_token: &str, repo: &RepoFixture) -> ForgejoForge {
     ForgejoForge::new(
         ForgejoConfig::new(base_url, admin_token).with_default_repo(&repo.owner, &repo.name),
+    )
+    .with_request_provenance(REQUEST_PROVENANCE_CAPACITY)
+}
+
+pub(super) fn admin_forge_with_evidence(
+    base_url: &str,
+    admin_token: &str,
+    repo: &RepoFixture,
+    evidence: ForgejoFailureEvidenceConfig,
+) -> ForgejoForge {
+    ForgejoForge::new(
+        ForgejoConfig::new(base_url, admin_token)
+            .with_default_repo(&repo.owner, &repo.name)
+            .with_failure_evidence(evidence),
     )
     .with_request_provenance(REQUEST_PROVENANCE_CAPACITY)
 }
@@ -341,6 +359,7 @@ async fn assert_converged(
             ci_observation_evidence(&first_ci_observation),
             ci_observation_evidence(&second_ci_observation),
         ],
+        ci_heads: Vec::new(),
     })
 }
 
@@ -521,6 +540,37 @@ pub(super) fn ci_job_evidence(job: &CiJob) -> CiJobEvidence {
         conclusion: job.conclusion.map(|conclusion| format!("{conclusion:?}")),
         provider_conclusion: job.provider_conclusion.clone(),
         url: job.url.clone(),
+        verified_failure: job.verified_failure.as_ref().map(verified_failure_evidence),
+    }
+}
+
+fn verified_failure_evidence(proof: &CiVerifiedFailureProof) -> VerifiedFailureProofEvidence {
+    let category = match proof.category() {
+        CiOrdinaryFailureCategory::Source => "source",
+        CiOrdinaryFailureCategory::Build => "build",
+        CiOrdinaryFailureCategory::Test => "test",
+    };
+    let verification = match proof.attestation().verification() {
+        CiFailureProofVerification::ProtectedProducer => "protected_producer",
+    };
+    VerifiedFailureProofEvidence {
+        schema_version: proof.schema_version(),
+        category: category.to_string(),
+        repository_id: proof.subject().repo_id().as_str().to_string(),
+        pull_request_id: proof
+            .subject()
+            .pull_request_id()
+            .map(|id| id.as_str().to_string()),
+        commit_sha: proof.subject().commit_sha().to_string(),
+        run_id: proof.coordinates().run_id().to_string(),
+        job_id: proof.coordinates().job_id().to_string(),
+        attempt: proof.coordinates().attempt().to_string(),
+        task_id: proof.coordinates().task_id().map(str::to_string),
+        producer_id: proof.attestation().producer_id().to_string(),
+        issuer_id: proof.attestation().issuer_id().to_string(),
+        verification: verification.to_string(),
+        created_at: proof.created_at().to_rfc3339(),
+        expires_at: proof.expires_at().to_rfc3339(),
     }
 }
 

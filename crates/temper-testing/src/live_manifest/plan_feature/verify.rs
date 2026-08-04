@@ -377,6 +377,7 @@ async fn merged_pr_ci_evidence(
                 conclusion: job.conclusion,
                 provider_conclusion: job.provider_conclusion,
                 url: job.url,
+                verified_failure: job.verified_failure,
             }
         }));
     }

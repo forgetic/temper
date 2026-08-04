@@ -188,6 +188,7 @@ pub(super) fn job_to_ci_job(
         provider_reason,
         run_id: Some(run.id.to_string()),
         attempt: Some(job.attempt.to_string()),
+        verified_failure: None,
         url,
         created_at,
         started_at: None,

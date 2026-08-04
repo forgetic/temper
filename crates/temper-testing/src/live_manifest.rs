@@ -11,6 +11,7 @@ mod bundle;
 mod codebase_memory;
 mod convergence;
 mod execution_plan;
+mod failure_evidence;
 mod fake_llm;
 mod handoff;
 mod late_stream_jig;
@@ -36,6 +37,7 @@ pub use bundle::{
     LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan, ManifestStep,
     ObservabilityFixture, RecoveryFixture, RepoFixture, ScenarioBundle,
 };
+pub use failure_evidence::{CiFailureEvidenceFixture, LiveCiFailureEvidence};
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
 pub use plan_feature::{
     IssueState as PlanIssueState, LivePlanFeatureEvidence,
@@ -61,6 +63,7 @@ pub(super) const PROVIDER_HEALTH_SECRET: &str = "temper-live-manifest-provider-h
 const DEFAULT_WORKSPACE_PREFIX: &str = "temper-basic-delivery-e2e";
 const DEFAULT_CONVERGENCE_SECS: u64 = 360;
 const DEFAULT_DAEMON_POLL_BACKSTOP_SECS: u64 = 600;
+const DEFAULT_CI_POLL_CADENCE_SECS: u64 = 60;
 const DEFAULT_MECHANICAL_CADENCE_SECS: u64 = 1;
 
 /// Explicit injection seam for the standalone `temper` binary used by the live
@@ -173,6 +176,8 @@ pub struct LiveManifestEvidence {
     pub convergence: Duration,
     pub total_elapsed: Duration,
     pub poll_backstop: Duration,
+    /// Secret-free cadence values read back from the generated standalone config.
+    pub effective_configuration: EffectiveConfigurationEvidence,
     pub fake_llm: FakeLlmEvidence,
     /// Complete terminal Forge PR inventory, including unexpected publications.
     pub forge_pull_requests: Vec<PullRequestEvidence>,
@@ -181,6 +186,8 @@ pub struct LiveManifestEvidence {
     /// Forge observer. This includes the CI reads retained in `final_state`.
     pub ci_requests: Vec<CiRequestEvidence>,
     pub ci_request_capture_dropped: usize,
+    /// Secret-free protected-workflow publication and service facts.
+    pub ci_failure_evidence: Option<LiveCiFailureEvidence>,
     pub handoff: Option<LiveHandoffEvidence>,
     pub codebase_memory: Option<LiveCodebaseMemoryEvidence>,
     pub plan_feature: Option<LivePlanFeatureEvidence>,
@@ -210,6 +217,12 @@ impl LiveManifestEvidence {
             format!(
                 "  convergence: {:?} (poll_backstop: {:?}, total: {:?})",
                 self.convergence, self.poll_backstop, self.total_elapsed
+            ),
+            format!(
+                "  effective_configuration: ci_poll_cadence_secs={} poll_cadence_secs={} mechanical_cadence_secs={}",
+                self.effective_configuration.ci_poll_cadence_secs,
+                self.effective_configuration.poll_cadence_secs,
+                self.effective_configuration.mechanical_cadence_secs
             ),
             format!("  stimuli: {}", self.stimuli.len()),
             format!(
@@ -262,6 +275,24 @@ impl LiveManifestEvidence {
                 job.url
             ));
         }
+        for head in &self.final_state.ci_heads {
+            lines.push(format!(
+                "  ci_head: phase={} sha={} observed_after_ms={} observations={}",
+                head.phase,
+                head.head_sha,
+                head.observed_after_ms,
+                head.observations.len()
+            ));
+        }
+        if let Some(service) = &self.ci_failure_evidence {
+            lines.push(format!(
+                "  ci_failure_evidence: path={} issuer={} protected_producers={:?} published_proofs={}",
+                service.endpoint_path,
+                service.issuer,
+                service.protected_producers,
+                service.published_proofs
+            ));
+        }
         lines.push(format!(
             "  ci_request_provenance: retained={} dropped={}",
             self.ci_requests.len(),
@@ -284,6 +315,33 @@ impl LiveManifestEvidence {
         ]);
         lines.join("\n")
     }
+}
+
+/// Exact non-secret engine cadences used by the spawned standalone process.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EffectiveConfigurationEvidence {
+    pub ci_poll_cadence_secs: u64,
+    pub poll_cadence_secs: u64,
+    pub mechanical_cadence_secs: u64,
+}
+
+/// Secret-free projection of a verified ordinary CI-failure proof.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedFailureProofEvidence {
+    pub schema_version: u16,
+    pub category: String,
+    pub repository_id: String,
+    pub pull_request_id: Option<String>,
+    pub commit_sha: String,
+    pub run_id: String,
+    pub job_id: String,
+    pub attempt: String,
+    pub task_id: Option<String>,
+    pub producer_id: String,
+    pub issuer_id: String,
+    pub verification: String,
+    pub created_at: String,
+    pub expires_at: String,
 }
 
 /// Paths to logs/snapshots produced by the live harness.
@@ -327,6 +385,8 @@ pub struct FinalStateEvidence {
     /// stable across observations. Strategies that do not observe CI leave this
     /// empty and strict provenance assertions fail closed.
     pub ci_observations: Vec<CiObservationEvidence>,
+    /// Named exact-head histories retained by repair scenarios.
+    pub ci_heads: Vec<CiHeadEvidence>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -361,12 +421,23 @@ pub struct CiJobEvidence {
     pub conclusion: Option<String>,
     pub provider_conclusion: Option<String>,
     pub url: Option<String>,
+    pub verified_failure: Option<VerifiedFailureProofEvidence>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CiObservationEvidence {
     pub matching_provider_run: bool,
     pub jobs: Vec<CiJobEvidence>,
+}
+
+/// CI observations retained for one named PR-head phase.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CiHeadEvidence {
+    pub phase: String,
+    pub head_sha: String,
+    pub observed_after_ms: u64,
+    pub jobs: Vec<CiJobEvidence>,
+    pub observations: Vec<CiObservationEvidence>,
 }
 
 /// Redacted request metadata. Header and query values are intentionally absent.

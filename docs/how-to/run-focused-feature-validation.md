@@ -48,8 +48,9 @@ The retained artifact is named
 
 - `feature-scenario-mapping.json`, including the mapping id, scenario, exact
   head, landing base, and resolved content digest;
-- `run-evidence.json`, including topology, binary, assertion, final-state, and
-  retained-path facts;
+- `run-evidence.json`, including topology, binary, assertion, final-state,
+  retained-path facts, the exact read-back dedicated-CI/role-feed/mechanical
+  cadences, and any verified ordinary-failure proof provenance;
 - `validation-pr-<pr>-<head>.json`, the structured
   `temper.validator.result.v2` payload;
 - `focused-validation-audit.json`, joining the mapping and validator result for
@@ -59,7 +60,19 @@ The retained artifact is named
 
 The upload step uses `always()`. A missing mapping, stale head, live execution
 failure, missing evidence, unsupported required assertion, or failed required
-assertion therefore fails the job without discarding diagnostics.
+assertion therefore fails the job without discarding diagnostics. For dedicated
+CI polling scenarios, operators should require both
+`[expect.effective_configuration]` (all three exact cadence values) and
+`[[expect.verified_failure_proof]]` (the selected job and bounded issuer/
+verification expectations). Missing configuration, proof, or repository/PR/
+head/run/job/attempt coordinates is intentionally inconclusive and blocking;
+it must never be treated as a passing absence.
+
+Verified-failure evidence is diagnostic after backend authentication: retained
+records contain category, exact subject/execution coordinates, producer/issuer,
+verification mode, and validity timestamps, but no credential, signature,
+source record, log text, or secret. Preserve `run-evidence.json` rather than
+reconstructing this trust decision from rendered logs.
 
 ## Stale evidence and authority
 

@@ -200,8 +200,50 @@ fn forge_config_schema() -> Value {
                 "admin",
                 string_schema("Default forge user key from credentials.toml."),
             ),
+            ("ci_failure_evidence", forge_ci_failure_evidence_schema()),
         ],
     )
+}
+
+fn forge_ci_failure_evidence_schema() -> Value {
+    let mut schema = closed_object_schema(
+        "Authenticated generic source of protected-workflow ordinary CI-failure statements.",
+        [
+            (
+                "endpoint",
+                string_schema("Absolute HTTPS or loopback HTTP evidence endpoint."),
+            ),
+            (
+                "issuer",
+                string_schema("Authorized signed-statement issuer identity."),
+            ),
+            (
+                "protected_producers",
+                string_array_schema("Allowlisted protected producer identities."),
+            ),
+            (
+                "bearer_token",
+                string_schema("Named secret for endpoint acquisition authentication."),
+            ),
+            (
+                "hmac_key",
+                string_schema("Named secret for statement HMAC-SHA256 verification."),
+            ),
+        ],
+    );
+    schema["required"] = Value::Array(
+        [
+            "endpoint",
+            "issuer",
+            "protected_producers",
+            "bearer_token",
+            "hmac_key",
+        ]
+        .into_iter()
+        .map(Value::from)
+        .collect(),
+    );
+    schema
 }
 
 fn engine_config_schema() -> Value {

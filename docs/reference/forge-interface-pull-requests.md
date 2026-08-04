@@ -113,6 +113,54 @@ registered but has no assigned jobs yet, and is independent of a job-status
 filter that removes every returned job. `list_ci_jobs` remains the jobs-only
 convenience operation for callers that do not reason about missing CI.
 
+### Verified ordinary-failure proof
+
+`CiJob::verified_failure` is an optional, provider-neutral proof that a protected
+producer observed an ordinary source, build, or test failure. Schema version 1
+contains only:
+
+- the typed `source`, `build`, or `test` category;
+- typed repository identity, exact 40- or 64-hex commit SHA, and optional typed
+  pull-request identity;
+- opaque provider run, job, and attempt coordinates plus optional task identity
+  (task identity is required when the provider exposes it, including Forgejo);
+- bounded protected-producer and issuer identities;
+- creation and exclusive-expiry timestamps no more than 15 minutes apart; and
+- typed `protected_producer` verification provenance.
+
+Every retained identity is trimmed, restricted to ASCII letters, digits, `-`,
+`_`, `.`, `:`, `/`, and `@`, and limited to 128 UTF-8 bytes. Exact coordinates
+are rejected rather than truncated. Unknown fields and unsupported schema
+versions are rejected. Signatures, credentials, raw secrets, logs, UI text,
+workflow or repository names, scenario identity, and free-form descriptions are
+not part of the schema. Verification errors identify only a field/bound and do
+not echo rejected values.
+
+The proof record is not a credential and its presence is not authenticity. A
+backend may attach one only after it has authenticated a configured issuer,
+verified record integrity through a trusted channel, checked that the producer
+is allowlisted and protected from untrusted workflow changes, and correlated
+every subject and execution coordinate against the provider's authoritative
+job. Signatures, credentials, and the source record are discarded after that
+check. Stored or deserialized proof data alone must never manufacture a typed
+conclusion; providers without equivalent verified evidence continue their
+existing behavior.
+
+A protected producer may assert only that its own completed execution ended in
+an ordinary source/build/test failure at the exact coordinates in the proof. It
+may not infer a result from logs, prose, UI state, names, missing output, or
+incomplete execution. Runner loss, timeout, cancellation, startup failure,
+infrastructure failure, or any incomplete/ambiguous execution cannot become
+ordinary `Failure`, even if the provider exposes a generic red status. Those
+states remain their specific non-ordinary conclusion or `Unknown` and use the
+recovery-required route.
+
+Proof freshness uses a closed creation and open expiry interval. Consumers must
+validate freshness and every coordinate before using verified evidence. The
+portable aggregate remains unchanged: `CiStatus::from_jobs` selects ordinary
+repair only from `CiJobConclusion::Failure`; a proof attached to any other
+conclusion does not alter routing.
+
 ## Exact-attempt CI retry
 
 `CiRetryRequest::new` requires a repository, pull request, non-empty exact head
@@ -120,8 +168,8 @@ SHA, opaque run and attempt identities, and at least one freshly read job. Every
 job must carry those same repository/PR/head/run/attempt coordinates. The
 constructor canonicalizes the authoritative latest job set into a deterministic
 fingerprint containing stable job identity, status, typed and provider terminal
-evidence, and update time. Empty sets, duplicate IDs, and widened coordinates
-are rejected.
+evidence, verified-failure proof, and update time. Empty sets, duplicate IDs,
+and widened coordinates are rejected.
 
 `retry_ci_attempt` is a fenced provider side effect, not a generic workflow
 trigger. Before mutation a backend must re-read the pull request head, exact run

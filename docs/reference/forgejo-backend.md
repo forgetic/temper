@@ -344,12 +344,85 @@ repository-wide tasks, HTML, login, or live-view fallback. Status filtering and
 sorting remain deterministic, and `get_ci_job` re-reads the encoded provider run
 and exact provider job/attempt/task identity.
 
-Forgejo 16 job rows expose status but no separate detailed conclusion/reason. A
-bare `failure` therefore remains terminal `unknown` and recovery-required; it is
-not reinterpreted as ordinary source/test failure. Explicit success,
-cancellation, interruption, timeout, runner loss, startup failure,
-action-required, neutral, and skipped statuses retain their portable categories.
-Provider evidence is control-sanitized and bounded before it is exposed.
+Forgejo 16 job rows expose status but no separate detailed conclusion/reason, and
+host-mode `forgejo-runner` does not add a separately authenticated completion
+category to that API. A bare `failure` therefore remains terminal `unknown` and
+recovery-required; it is not reinterpreted as ordinary source/test failure.
+Explicit success, cancellation, interruption, timeout, runner loss, startup
+failure, action-required, neutral, and skipped statuses retain their portable
+categories. Provider evidence is control-sanitized and bounded before it is
+exposed.
+
+#### Configured protected-workflow failure statements
+
+Because neither the Forgejo v16 API nor the host runner provides a suitable
+native carrier, the backend supports exactly one stronger-evidence mechanism:
+a configured generic JSON endpoint. It is disabled unless
+`[forge.ci_failure_evidence]` supplies all of:
+
+```toml
+[forge.ci_failure_evidence]
+endpoint = "https://ci-evidence.example/v1/forgejo-failures"
+issuer = "runner-host"
+protected_producers = ["protected-ci"]
+bearer_token = "ci-evidence-read-token"
+hmac_key = "ci-evidence-hmac-key"
+```
+
+`bearer_token` and `hmac_key` are names in the selected credentials/secret
+source, never literal secrets. The evidence endpoint is independent of the
+Forgejo REST identity. A remote endpoint must use HTTPS; `http://localhost` and
+`http://127.0.0.1` are accepted only for the same-host runner topology. The
+backend never reads evidence configuration or credentials from ambient
+environment variables and never authenticates evidence with a scenario, repo,
+workflow, or Forgejo role identity.
+
+The protected workflow serializes one compact JSON statement, computes
+HMAC-SHA256 over those exact UTF-8 bytes, and publishes the statement plus
+signature to the configured evidence service. The integrity key must be
+available only to an allowlisted workflow whose definition and secret access
+are protected from pull-request changes. Untrusted PR code must not receive the
+key. The acquisition bearer credential is separate and read-only. A response to
+`GET <endpoint>?repository_id=<opaque-id>&run_id=<provider-id>` has this closed
+shape:
+
+```json
+{
+  "schema_version": 1,
+  "records": [{
+    "statement": "{...compact statement JSON...}",
+    "hmac_sha256": "sha256=<64 lowercase or uppercase hex digits>"
+  }]
+}
+```
+
+The statement schema is also closed. It contains `schema_version = 1`, one of
+`source|build|test`, typed repository and optional PR IDs, exact 40- or 64-hex
+head SHA, run/job/attempt/task IDs, producer and issuer IDs, and creation/expiry
+timestamps. The backend verifies response bounds and schema, HMAC integrity,
+configured issuer and producer authorization, the closed/open freshness window,
+and every authoritative job coordinate. Forgejo's task identity is mandatory.
+Acquisition occurs only after strict run/head matching and validation of all
+per-run job rows. One proof can strengthen only its exact completed bare-failure
+attempt; success and non-ordinary terminal categories are never overridden.
+
+Malformed, oversized, unauthenticated, unauthorized, stale, future, expired,
+duplicate-coordinate, contradictory, or mismatched evidence is ignored. Any
+malformed, integrity-invalid, unauthorized, duplicate, or contradictory record
+invalidates that complete acquisition batch, preventing a valid-looking sibling
+from masking it. Missing endpoints, non-2xx responses, and transport failures
+also leave the Forgejo result `unknown`; ordinary CI list/get operations remain
+available. Warnings expose only one of the bounded diagnostic codes
+`unavailable`, `oversized`, `malformed`, `unsupported_schema`,
+`invalid_integrity`, `unauthorized_issuer`, `unauthorized_producer`,
+`invalid_proof`, `duplicate_coordinate`, or `uncorrelated`. Response bodies,
+statement values, credentials, and signatures are never included.
+
+`list_ci_jobs_with_presence`, `list_ci_jobs`, and `get_ci_job` all use this same
+post-correlation path. They retain identical typed conclusion and
+`verified_failure` provenance, opaque IDs, latest-attempt behavior, sorting, and
+matching-run presence. With this source absent or unusable—including historical
+run 591—the status-only result remains `unknown` and recovery-required.
 
 Exact-attempt retry remains `unsupported` on Forgejo. The backend validates that
 the portable repository and PR IDs name the same repository, then fails closed

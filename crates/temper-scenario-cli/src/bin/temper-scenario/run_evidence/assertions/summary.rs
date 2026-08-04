@@ -412,6 +412,7 @@ mod tests {
                 repositories: Vec::new(),
                 ci: CiStateEvidence::default(),
             },
+            effective_configuration: None,
             convergence: None,
             provider: None,
             observability: Some(ObservabilityEvidence {
@@ -437,6 +438,7 @@ mod tests {
         fields.insert("action".to_string(), action.to_string());
         StructuredEventEvidence {
             sequence,
+            timestamp: String::new(),
             event: event.to_string(),
             service: Some("engine".to_string()),
             target: Some("temper::engine".to_string()),

@@ -121,6 +121,7 @@ fn retry_request() -> CiRetryRequest {
         provider_reason: Some("runner disconnected".into()),
         run_id: Some("12".into()),
         attempt: Some("2".into()),
+        verified_failure: None,
         url: Some("https://github.com/acme/widgets/runs/300".into()),
         created_at,
         started_at: Some(started_at),

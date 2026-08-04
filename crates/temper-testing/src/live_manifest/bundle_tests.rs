@@ -29,6 +29,10 @@ fn loads_checked_in_live_manifest_bundle() {
         Duration::from_secs(DEFAULT_DAEMON_POLL_BACKSTOP_SECS)
     );
     assert_eq!(
+        bundle.ci_poll_cadence,
+        Duration::from_secs(DEFAULT_CI_POLL_CADENCE_SECS)
+    );
+    assert_eq!(
         bundle.mechanical_cadence,
         Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS)
     );
@@ -59,6 +63,10 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
         (
             "forgejo-v16-api-ci",
             ConvergenceStrategy::ImplementationPrTerminalCi,
+        ),
+        (
+            "forgejo-exact-head-ci-repair",
+            ConvergenceStrategy::CiPollExactHeadRepair,
         ),
         ("codebase-memory-agent", ConvergenceStrategy::CodebaseMemory),
         (
@@ -109,6 +117,69 @@ fn forgejo_v16_api_ci_bundle_owns_two_job_terminal_workflow() {
         bundle.repo.ci_source,
         fs::read_to_string(&bundle.repo.ci_seed_path).expect("seeded CI workflow")
     );
+}
+
+#[test]
+fn exact_head_repair_bundle_owns_protected_failure_proof_and_three_cadences() {
+    let bundle = ScenarioBundle::load(scenarios_root().join("forgejo-exact-head-ci-repair"))
+        .expect("exact-head CI repair bundle");
+
+    assert_eq!(
+        bundle.execution.convergence,
+        ConvergenceStrategy::CiPollExactHeadRepair
+    );
+    assert_eq!(bundle.ci_poll_cadence, Duration::from_secs(1));
+    assert_eq!(bundle.poll_cadence, Duration::from_secs(600));
+    assert_eq!(bundle.mechanical_cadence, Duration::from_secs(600));
+    let failure = bundle
+        .ci_failure_evidence
+        .expect("protected failure evidence fixture");
+    assert_eq!(failure.issuer, "temper-live-evidence");
+    assert_eq!(failure.protected_producers, ["forgejo-actions-protected"]);
+    assert!(bundle.repo.ci_source.contains("sh -n \"$source_path\""));
+    assert!(bundle.repo.ci_source.contains("exit \"$ordinary_status\""));
+    assert!(!bundle.repo.ci_source.contains("actions/checkout"));
+}
+
+#[test]
+fn failure_evidence_manifest_vocabulary_is_closed_and_validated() {
+    let valid = TomlValue::Table(toml::Table::from_iter([
+        (
+            "issuer".to_string(),
+            TomlValue::String("issuer-1".to_string()),
+        ),
+        (
+            "protected_producers".to_string(),
+            TomlValue::Array(vec![TomlValue::String("producer-1".to_string())]),
+        ),
+    ]));
+    assert!(
+        bundle_with_live_harness([("ci_failure_evidence", valid)])
+            .expect("valid failure evidence fixture")
+            .ci_failure_evidence
+            .is_some()
+    );
+
+    for invalid in [
+        TomlValue::Table(toml::Table::from_iter([(
+            "unknown".to_string(),
+            TomlValue::String("value".to_string()),
+        )])),
+        TomlValue::Table(toml::Table::from_iter([
+            (
+                "issuer".to_string(),
+                TomlValue::String("bad identity!".to_string()),
+            ),
+            ("protected_producers".to_string(), TomlValue::Array(vec![])),
+        ])),
+    ] {
+        let error = bundle_with_live_harness([("ci_failure_evidence", invalid)])
+            .expect_err("invalid failure evidence fixture");
+        assert!(
+            error.contains("live_harness.ci_failure_evidence"),
+            "{error}"
+        );
+    }
 }
 
 #[test]
@@ -207,6 +278,68 @@ fn issue_bindings_and_existing_pr_parameters_are_runtime_actions() {
             && metadata_kind == "implementation_pr"
             && correlation_key == "$correlation:refresh"
     ));
+}
+
+#[test]
+fn live_ci_poll_cadence_accepts_boundaries_and_is_independent() {
+    for (value, expected) in [
+        (TomlValue::Integer(1), Duration::from_secs(1)),
+        (
+            TomlValue::String("300s".to_string()),
+            Duration::from_secs(300),
+        ),
+    ] {
+        let bundle = bundle_with_live_harness([
+            ("ci_poll_cadence", value),
+            ("poll_cadence", TomlValue::Integer(77)),
+            ("poll_backstop", TomlValue::Integer(88)),
+            ("mechanical_cadence", TomlValue::Integer(33)),
+        ])
+        .expect("valid dedicated CI cadence");
+        assert_eq!(bundle.ci_poll_cadence, expected);
+        assert_eq!(bundle.poll_cadence, Duration::from_secs(77));
+        assert_eq!(bundle.poll_backstop, Duration::from_secs(88));
+        assert_eq!(bundle.mechanical_cadence, Duration::from_secs(33));
+    }
+}
+
+#[test]
+fn live_ci_poll_cadence_rejects_every_invalid_value_class() {
+    for value in [
+        TomlValue::Integer(0),
+        TomlValue::Integer(-1),
+        TomlValue::Integer(301),
+        TomlValue::Float(1.5),
+        TomlValue::String("soon".to_string()),
+        TomlValue::String("1.5s".to_string()),
+        TomlValue::String("18446744073709551616s".to_string()),
+    ] {
+        let error = bundle_with_live_harness([("ci_poll_cadence", value)])
+            .expect_err("invalid dedicated CI cadence");
+        assert!(
+            error.contains("live_harness.ci_poll_cadence"),
+            "field-specific diagnostic: {error}"
+        );
+    }
+}
+
+fn bundle_with_live_harness<const N: usize>(
+    values: [(&str, TomlValue); N],
+) -> Result<ScenarioBundle, String> {
+    let scenario_path = scenarios_root().join("basic-delivery");
+    let manifest_path = scenario_path.join("scenario.toml");
+    let mut manifest = temper_scenario_core::load_resolved_manifest_toml(&manifest_path)
+        .expect("resolved basic manifest");
+    let root = manifest.as_table_mut().expect("manifest table");
+    let live = root
+        .entry("live_harness")
+        .or_insert_with(|| TomlValue::Table(toml::Table::new()))
+        .as_table_mut()
+        .expect("live harness table");
+    for (key, value) in values {
+        live.insert(key.to_string(), value);
+    }
+    ScenarioBundle::from_manifest(scenario_path, manifest_path, manifest)
 }
 
 fn scenarios_root() -> PathBuf {

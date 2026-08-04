@@ -28,6 +28,7 @@ fn ci_job(
         provider_reason: None,
         run_id: None,
         attempt: None,
+        verified_failure: None,
         url: None,
         created_at: timestamp(created_at),
         started_at: (status != CiJobStatus::Queued).then_some(timestamp(created_at + 1)),

@@ -1,0 +1,178 @@
+name: exact-head-ordinary-source-check
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  ordinary-source-check:
+    name: ordinary-source-check
+    runs-on: host
+    steps:
+      - name: run ordinary source check and publish verified evidence only on failure
+        env:
+          EVIDENCE_ENDPOINT: ${{ secrets.TEMPER_CI_EVIDENCE_ENDPOINT }}
+          EVIDENCE_PUBLISH_TOKEN: ${{ secrets.TEMPER_CI_EVIDENCE_PUBLISH_TOKEN }}
+          EVIDENCE_HMAC_KEY: ${{ secrets.TEMPER_CI_EVIDENCE_HMAC_KEY }}
+          EVIDENCE_ISSUER: ${{ secrets.TEMPER_CI_EVIDENCE_ISSUER }}
+          EVIDENCE_PRODUCER: ${{ secrets.TEMPER_CI_EVIDENCE_PRODUCER }}
+        run: |
+          set -eu
+          source_path="$(mktemp)"
+          trap 'rm -f "$source_path"' EXIT
+          python3 - "$source_path" <<'PY'
+          import base64
+          import json
+          import os
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          api = os.environ["GITHUB_API_URL"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          path = urllib.parse.quote("src/service.sh", safe="/")
+          ref = urllib.parse.quote(sha, safe="")
+          request = urllib.request.Request(
+              f"{api}/repos/{repo}/contents/{path}?ref={ref}",
+              headers={
+                  "Authorization": f"token {token}",
+                  "Accept": "application/json",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=10) as response:
+              document = json.load(response)
+          if document.get("encoding") != "base64":
+              raise RuntimeError("exact-head source content was not base64 encoded")
+          with open(sys.argv[1], "wb") as source:
+              source.write(base64.b64decode(document["content"], validate=True))
+          PY
+
+          set +e
+          sh -n "$source_path"
+          ordinary_status=$?
+          set -e
+          if [ "$ordinary_status" -eq 0 ]; then
+            echo "ordinary source check passed at ${GITHUB_SHA}"
+            exit 0
+          fi
+
+          echo "ordinary source check failed at ${GITHUB_SHA}; publishing exact-attempt evidence"
+          python3 - <<'PY'
+          import datetime
+          import hashlib
+          import hmac
+          import json
+          import os
+          import time
+          import urllib.parse
+          import urllib.request
+
+          api = os.environ["GITHUB_API_URL"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          headers = {
+              "Authorization": f"token {token}",
+              "Accept": "application/json",
+          }
+
+          def get_json(path):
+              request = urllib.request.Request(f"{api}{path}", headers=headers)
+              with urllib.request.urlopen(request, timeout=10) as response:
+                  return json.load(response)
+
+          runs_document = get_json(f"/repos/{repo}/actions/runs?limit=50")
+          runs = runs_document.get("workflow_runs", runs_document.get("runs", []))
+          matching_runs = [
+              run
+              for run in runs
+              if (run.get("head_sha") or run.get("commit_sha")) == sha
+          ]
+          if not matching_runs:
+              raise RuntimeError(f"no authoritative Actions run found for {sha}")
+          run = max(matching_runs, key=lambda value: int(value["id"]))
+          run_id = str(run["id"])
+
+          job = None
+          for _ in range(20):
+              jobs = get_json(f"/repos/{repo}/actions/runs/{run_id}/jobs")
+              if isinstance(jobs, dict):
+                  jobs = jobs.get("jobs", [])
+              job = next(
+                  (
+                      value
+                      for value in jobs
+                      if value.get("name") == "ordinary-source-check"
+                      and int(value.get("id", 0)) > 0
+                      and int(value.get("task_id", 0)) > 0
+                  ),
+                  None,
+              )
+              if job is not None:
+                  break
+              time.sleep(0.25)
+          if job is None:
+              raise RuntimeError("ordinary-source-check provider job coordinates were unavailable")
+
+          pulls = get_json(f"/repos/{repo}/pulls?state=open&limit=50")
+          pull = next(
+              (value for value in pulls if value.get("head", {}).get("sha") == sha),
+              None,
+          )
+          if pull is None:
+              raise RuntimeError(f"no open pull request owns exact head {sha}")
+
+          now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+          expires = now + datetime.timedelta(minutes=10)
+          statement = json.dumps(
+              {
+                  "schema_version": 1,
+                  "category": "source",
+                  "repository_id": f"forgejo:{repo}",
+                  "pull_request_id": f"forgejo:{repo}:pull:{pull['number']}",
+                  "commit_sha": sha,
+                  "run_id": run_id,
+                  "job_id": str(job["id"]),
+                  "attempt": str(job["attempt"]),
+                  "task_id": str(job["task_id"]),
+                  "producer_id": os.environ["EVIDENCE_PRODUCER"],
+                  "issuer_id": os.environ["EVIDENCE_ISSUER"],
+                  "created_at": now.isoformat().replace("+00:00", "Z"),
+                  "expires_at": expires.isoformat().replace("+00:00", "Z"),
+              },
+              separators=(",", ":"),
+              sort_keys=True,
+          )
+          signature = hmac.new(
+              os.environ["EVIDENCE_HMAC_KEY"].encode(),
+              statement.encode(),
+              hashlib.sha256,
+          ).hexdigest()
+          body = json.dumps(
+              {
+                  "schema_version": 1,
+                  "records": [
+                      {
+                          "statement": statement,
+                          "hmac_sha256": f"sha256={signature}",
+                      }
+                  ],
+              },
+              separators=(",", ":"),
+          ).encode()
+          request = urllib.request.Request(
+              os.environ["EVIDENCE_ENDPOINT"],
+              data=body,
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {os.environ['EVIDENCE_PUBLISH_TOKEN']}",
+                  "Accept": "application/json",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=10) as response:
+              if response.status not in (200, 201, 204):
+                  raise RuntimeError(f"evidence publication returned HTTP {response.status}")
+          PY
+          exit "$ordinary_status"

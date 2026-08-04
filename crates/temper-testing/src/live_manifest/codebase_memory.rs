@@ -226,6 +226,7 @@ async fn assert_codebase_memory_converged(
             .map(super::convergence::ci_job_evidence)
             .collect(),
         ci_observations: vec![ci_observation_evidence(&ci_observation)],
+        ci_heads: Vec::new(),
     })
 }
 
