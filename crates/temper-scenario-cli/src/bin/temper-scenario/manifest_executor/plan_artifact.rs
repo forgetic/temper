@@ -149,6 +149,8 @@ pub(super) fn final_state(
                 })
                 .collect(),
             observations: Vec::new(),
+            heads: Vec::new(),
+            failure_evidence: None,
             requests: super::live::ci_requests(evidence),
             request_capture_dropped: Some(evidence.ci_request_capture_dropped),
         },

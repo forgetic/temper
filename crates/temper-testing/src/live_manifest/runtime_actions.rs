@@ -192,6 +192,18 @@ impl LiveExecutionContext<'_> {
             &self.bundle_dir.join("workflow.yaml"),
             &self.harness.scenario,
         )?;
+        let failure_evidence = self
+            .harness
+            .scenario
+            .ci_failure_evidence
+            .as_ref()
+            .map(|fixture| {
+                super::super::failure_evidence::FailureEvidenceServer::start(
+                    fixture.clone(),
+                    self.workspace.join("logs/ci-failure-evidence.jsonl"),
+                )
+            })
+            .transpose()?;
         tune_init_config(
             &self.bundle_dir.join("config.toml"),
             self.harness.scenario.poll_cadence.as_secs(),
@@ -199,6 +211,14 @@ impl LiveExecutionContext<'_> {
             self.harness.scenario.mechanical_cadence.as_secs(),
             self.harness.scenario.recovery.as_ref(),
         )?;
+        if let Some(evidence) = &failure_evidence {
+            evidence.configure_temper_bundle(&self.bundle_dir)?;
+            evidence.configure_repository_actions(
+                server.base_url(),
+                required_ref(&self.admin_token, "forgejo.provision")?,
+                &self.harness.scenario.repo,
+            )?;
+        }
         if let Some(configuration) = &self.tool_configuration {
             let mcp = required_ref(&self.mcp, "mcp.fake_codebase_memory.start")?;
             super::super::codebase_memory::tune_codebase_memory_config(
@@ -217,11 +237,20 @@ impl LiveExecutionContext<'_> {
         wait_for_standalone(&mut standalone)?;
 
         let admin_token = required_ref(&self.admin_token, "forgejo.provision")?;
-        let forge = super::super::convergence::admin_forge(
-            server.base_url(),
-            admin_token,
-            &self.harness.scenario.repo,
-        );
+        let forge = if let Some(evidence) = &failure_evidence {
+            super::super::convergence::admin_forge_with_evidence(
+                server.base_url(),
+                admin_token,
+                &self.harness.scenario.repo,
+                evidence.backend_config()?,
+            )
+        } else {
+            super::super::convergence::admin_forge(
+                server.base_url(),
+                admin_token,
+                &self.harness.scenario.repo,
+            )
+        };
         let repository = engine_block_on(super::super::convergence::repository(
             &forge,
             &self.harness.scenario.repo,
@@ -229,6 +258,7 @@ impl LiveExecutionContext<'_> {
         self.forge = Some(forge);
         self.repository = Some(repository);
         self.standalone = Some(standalone);
+        self.failure_evidence = failure_evidence;
         Ok(())
     }
 

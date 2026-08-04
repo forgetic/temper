@@ -16,6 +16,7 @@ const SUPPORTED_FIELDS: &[&str] = &[
     "id",
     "required",
     "pull_request",
+    "head",
     "job_name",
     "exactly",
     "category",
@@ -141,10 +142,39 @@ fn evaluate_one(
         builder = builder.passed(note);
     }
     let pull = selected.pull_request;
-    let jobs = jobs_for_pull(artifact, pull.number)
-        .into_iter()
-        .filter(|job| same_normalized(&job.name, job_name))
-        .collect::<Vec<_>>();
+    let selected_head = expectation.get("head").and_then(Value::as_str);
+    let (jobs, proof_head) = if let Some(phase) = selected_head {
+        let matching = artifact
+            .final_state
+            .ci
+            .heads
+            .iter()
+            .filter(|head| same_normalized(&head.phase, phase))
+            .collect::<Vec<_>>();
+        let [head] = matching.as_slice() else {
+            return builder
+                .missing_fact(format!(
+                    "run evidence requires exactly one `{phase}` CI head, found {}",
+                    matching.len()
+                ))
+                .build();
+        };
+        (
+            head.jobs
+                .iter()
+                .filter(|job| same_normalized(&job.name, job_name))
+                .collect::<Vec<_>>(),
+            Some(head.head_sha.as_str()),
+        )
+    } else {
+        (
+            jobs_for_pull(artifact, pull.number)
+                .into_iter()
+                .filter(|job| same_normalized(&job.name, job_name))
+                .collect::<Vec<_>>(),
+            pull.head_sha.as_deref(),
+        )
+    };
     if jobs.is_empty() {
         return builder
             .missing_fact(format!(
@@ -170,7 +200,7 @@ fn evaluate_one(
             ));
             continue;
         };
-        builder = evaluate_complete_proof(builder, proof, job, pull.head_sha.as_deref());
+        builder = evaluate_complete_proof(builder, proof, job, proof_head);
         builder = evaluate_expected_fields(builder, expectation, proof);
     }
     builder.build()

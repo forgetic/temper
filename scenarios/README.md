@@ -24,10 +24,10 @@ the operator workflow.
 runner:
 
 - `manifest` — validation-grade end-to-end execution. The checked-in
-  `basic-delivery`, `forgejo-v16-api-ci`, `implementation-pr-handoff`,
-  `codebase-memory-agent`, `model-failure-recovery`,
-  `plan-centric-feature-branch`, `implicit-live-scenario-cli`, and
-  `target-ux-e2e` scenarios declare
+  `basic-delivery`, `forgejo-exact-head-ci-repair`, `forgejo-v16-api-ci`,
+  `implementation-pr-handoff`, `codebase-memory-agent`,
+  `model-failure-recovery`, `plan-centric-feature-branch`,
+  `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
   `runner.uses = "manifest"`. Every run boots real Forgejo, a host
   `forgejo-runner` for Actions CI, a standalone `temper` process, and Jig fake
   LLM agents. MemoryForge, filesystem-forge, in-process, hermetic real-stack,
@@ -237,6 +237,11 @@ evidence:
   authentication scheme/presence only; token values and unrelated headers are
   never serialized. Missing observations, identity fields, request capture, or
   a nonzero dropped-request count blocks a required assertion.
+- `[expect.ci_repair]` correlates named initial and repaired head snapshots,
+  requires their order and difference, can count protected-workflow proof
+  publications, rejects stale failure proof on repaired jobs, and compares
+  convergence timing with the effective broad role-feed cadence. Missing head,
+  publication, configuration, or timing evidence blocks a required assertion.
 
 A focused dedicated-CI contract can assert both retained configuration and
 verified proof provenance without scenario-specific Rust dispatch:

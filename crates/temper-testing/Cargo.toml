@@ -94,6 +94,8 @@ temper-protocol-worker = { path = "../temper-protocol-worker" }
 temper-workflow = { path = "../temper-workflow" }
 # Forgejo provisioning drives async REST on the engine runtime; a shared
 # fixture crate owns the blocking server/runner lifecycle and cache management.
+getrandom = "0.3"
+hmac = "0.12"
 sha2 = "0.10"
 # Phase 2 provisioning commits workflow file(s) via the Forgejo contents API,
 # which accepts base64-encoded bodies. Also used by ignored Forgejo smoke tests

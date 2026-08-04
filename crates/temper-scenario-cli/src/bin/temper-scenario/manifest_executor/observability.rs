@@ -80,11 +80,12 @@ fn capture_structured_events(
                 .unwrap_or_default()
                 .to_string();
             records.push((
-                timestamp,
+                timestamp.clone(),
                 source_index,
                 line_index,
                 run_evidence::StructuredEventEvidence {
                     sequence: 0,
+                    timestamp: timestamp.clone(),
                     event: event.to_string(),
                     service: fact_fields.get("service").cloned(),
                     target: record

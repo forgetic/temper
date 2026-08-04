@@ -56,6 +56,7 @@ pub(in crate::live_manifest) fn drive_implementation_pr_terminal_ci_convergence(
             ci_observation_evidence(&first.observation),
             ci_observation_evidence(&second_observation),
         ],
+        ci_heads: Vec::new(),
     })
 }
 

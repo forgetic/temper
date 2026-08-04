@@ -1,0 +1,275 @@
+schema = "temper.scenario.v1"
+name = "forgejo-exact-head-ci-repair"
+status = "active"
+stability = "provisional"
+intent = "Prove dedicated exact-head CI polling routes one verified ordinary Forgejo failure to repair the same PR before broad polling."
+introduced_by = "#855"
+owner_area = "delivery-validation"
+timeout = "10m"
+
+[runner]
+uses = "manifest"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[live_harness]
+ci_poll_cadence = "1s"
+poll_cadence = "600s"
+poll_backstop = "600s"
+mechanical_cadence = "600s"
+
+[live_harness.ci_failure_evidence]
+issuer = "temper-live-evidence"
+protected_producers = ["forgejo-actions-protected"]
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[jig]
+script_path = "jig/forgejo-exact-head-ci-repair.json"
+
+[workflow]
+name = "forgejo-exact-head-ci-repair"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/service"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "intake"
+repo = "service"
+kind = "intake"
+title = "Add a checked service entrypoint"
+body = "config/intake-issue.md"
+author = "site_admin"
+labels = []
+created_after = "standalone_ready"
+
+[[agents]]
+role = "architect"
+kind = "llm"
+mode = "scripted-fake"
+tool = "triage_workspace"
+queues = ["triage"]
+expected_verdict = "ready_code"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready", "pr_ci_failed"]
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["raw_intake", "landing"]
+
+[validation]
+feature = "ai/temper#850"
+plan = "ai/temper#851"
+source_branch = "agent/pr-for-feature-850"
+change = "new"
+
+[feature_contract]
+claim = "A one-second dedicated CI poll uses verified exact-head ordinary-failure evidence to route an engineer repair without waiting for the 600-second broad role feed."
+stimulus = "Open one implementation PR whose protected real Actions job publishes signed source-failure evidence after an ordinary source check fails, then repair that same PR with a passing head."
+observable = "Structured CI-poll events and timing, initial and repaired heads, run/job/attempt proof and request provenance, three effective cadences, and terminal Forge state."
+assertion = "Exactly one PR fails with verified evidence, enters pr_ci_failed from ci_poll, advances to a clean passing head, merges, and closes its issue before broad polling."
+runtime_budget_seconds = 600
+jig_script_path = "jig/forgejo-exact-head-ci-repair.json"
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start disposable Forgejo v16 for the isolated service repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner."
+
+[[steps]]
+id = "configure-jig-agents"
+action = "jig.fake_llm"
+roles = ["architect", "engineer"]
+script_path = "jig/forgejo-exact-head-ci-repair.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-intake-issue"
+action = "issue.seed"
+issue_id = "intake"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-exact-head-repair"
+action = "workflow.wait_convergence"
+strategy = "ci-poll-exact-head-repair"
+until = "one implementation PR fails with verified evidence, advances to a passing repaired head, merges, and closes its source issue"
+
+[expect]
+templates = ["single-pr-merged-source-closed", "no-duplicate-prs"]
+outcome = "Dedicated CI polling detects a verified ordinary failure and repairs one exact-head PR before broad polling."
+merged_pull_requests = 1
+closed_parent_issues = 1
+created_pull_requests = 1
+
+[expect.effective_configuration]
+id = "three-independent-effective-cadences"
+required = true
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 600
+mechanical_cadence_secs = 600
+
+[expect.ci_repair]
+id = "exact-head-failure-repair-causality"
+required = true
+initial_head = "initial"
+repaired_head = "repaired"
+heads_differ = true
+published_proofs = 1
+stale_failure_absent_from_repaired = true
+completed_before_poll_cadence = true
+
+[[expect.checks]]
+required = true
+id = "source-issue-closed-without-human-parking"
+artifact = "issue:intake"
+state = "closed"
+labels = ["code"]
+labels_cleared = ["needs-human", "ready", "in-progress"]
+
+[[expect.checks]]
+required = true
+id = "same-implementation-pr-merged-cleanly"
+artifact = "pull_request:implementation"
+state = "merged"
+labels = ["implementation"]
+labels_cleared = ["landing", "needs-human"]
+ci = "passed"
+
+[[expect.count]]
+required = true
+id = "one-implementation-pr-publication"
+event = "pr.opened"
+action = "created"
+group_by = ["source_artifact"]
+exactly = 1
+
+[[expect.events]]
+required = true
+id = "verified-failure-routed-by-dedicated-ci-poll"
+event = "ci.completed"
+pr_ref = "$implementation_pr"
+conclusion = "failure"
+role = "engineer"
+fields."trigger.source" = "ci_poll"
+fields.queue = "pr_ci_failed"
+
+[[expect.sequence]]
+required = true
+id = "one-pr-fails-repairs-and-lands"
+scope = "source_artifact"
+events = [
+  { event = "pr.opened", action = "created", source_artifact = "$source_artifact" },
+  { event = "ci.completed", pr_ref = "$implementation_pr", conclusion = "failure", fields = { "trigger.source" = "ci_poll", queue = "pr_ci_failed", role = "engineer" } },
+  { event = "ci.completed", pr_ref = "$implementation_pr", conclusion = "success" },
+  { event = "pr.merged", pr_ref = "$implementation_pr" },
+  { event = "item.resolved", artifact_ref = "$source_artifact" },
+]
+
+[[expect.verified_failure_proof]]
+id = "initial-ordinary-source-failure-proof"
+required = true
+pull_request = "implementation"
+head = "initial"
+job_name = "ordinary-source-check"
+exactly = 1
+category = "source"
+producer_id = "forgejo-actions-protected"
+issuer_id = "temper-live-evidence"
+verification = "protected_producer"
+
+[[expect.ci_provenance]]
+id = "initial-failed-head-provenance"
+required = true
+pull_request = "implementation"
+head = "initial"
+matching_provider_run = true
+materialized_jobs = true
+job_count = 1
+provider_run_count = 1
+stable_identities = true
+exact_head = true
+job_outcomes = [
+  { name = "ordinary-source-check", status = "completed", conclusion = "failure", provider_conclusion = "failure", exactly = 1 },
+]
+required_requests = [
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
+  { method = "GET", route_contains = "/v1/forgejo-failures", authentication_scheme = "bearer", accepts_json = true, query_keys = ["repository_id", "run_id"] },
+  { method = "POST", route = "/v1/forgejo-failures", authentication_scheme = "bearer", accepts_json = true },
+]
+
+[[expect.ci_provenance]]
+id = "repaired-passing-head-provenance"
+required = true
+pull_request = "implementation"
+head = "repaired"
+matching_provider_run = true
+materialized_jobs = true
+job_count = 1
+provider_run_count = 1
+stable_identities = true
+exact_head = true
+job_outcomes = [
+  { name = "ordinary-source-check", status = "completed", conclusion = "success", provider_conclusion = "success", exactly = 1 },
+]
+required_requests = [
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
+]
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Tighten retained proof, request, or timing assertions without changing the exact-head repair path.",
+  "Update scenario-owned Jig or CI fixture details while preserving one failed and one repaired head on the same PR.",
+]
+requires_new_scenario_or_major_update = [
+  "Changing the mapped feature, plan, or canonical feature branch.",
+  "Replacing real Forgejo, the host runner, standalone Temper, or Jig agents with mocks.",
+  "Weakening the separate status-only Unknown contract in scenarios/forgejo-v16-api-ci.",
+]

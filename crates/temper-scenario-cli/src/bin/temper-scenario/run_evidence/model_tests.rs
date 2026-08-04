@@ -122,6 +122,8 @@ fn serialized_request_provenance_contains_no_header_or_query_values() {
         completed_jobs: None,
         jobs: Vec::new(),
         observations: Vec::new(),
+        heads: Vec::new(),
+        failure_evidence: None,
         requests: vec![CiRequestEvidence {
             method: "GET".to_string(),
             path: "/api/v1/repos/acme/service/actions/runs".to_string(),

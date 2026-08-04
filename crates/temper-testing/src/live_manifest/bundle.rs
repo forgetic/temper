@@ -8,6 +8,7 @@ pub use super::execution_plan::{
     AgentFixture, ConvergenceStrategy, LateStreamFailureBurst, LateStreamFailureFixture,
     ManifestAction, ManifestExecutionPlan, ManifestStep,
 };
+pub use super::failure_evidence::CiFailureEvidenceFixture;
 
 use super::{
     DEFAULT_CI_POLL_CADENCE_SECS, DEFAULT_CONVERGENCE_SECS, DEFAULT_DAEMON_POLL_BACKSTOP_SECS,
@@ -33,6 +34,7 @@ pub struct ScenarioBundle {
     pub mechanical_cadence: Duration,
     pub observability: ObservabilityFixture,
     pub recovery: Option<RecoveryFixture>,
+    pub ci_failure_evidence: Option<CiFailureEvidenceFixture>,
 }
 
 impl ScenarioBundle {
@@ -93,6 +95,7 @@ impl ScenarioBundle {
         )?;
         let observability = observability_fixture(&manifest)?;
         let recovery = recovery_fixture(&manifest)?;
+        let ci_failure_evidence = super::failure_evidence::fixture_from_manifest(&manifest)?;
 
         Ok(Self {
             scenario_path,
@@ -111,6 +114,7 @@ impl ScenarioBundle {
             mechanical_cadence,
             observability,
             recovery,
+            ci_failure_evidence,
         })
     }
 

@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use temper_forge_forgejo::{ForgejoConfig, ForgejoForge};
+use temper_forge_forgejo::{ForgejoConfig, ForgejoFailureEvidenceConfig, ForgejoForge};
 use temper_forge_model::{
     CiFailureProofVerification, CiJob, CiJobConclusion, CiJobQuery, CiJobStatus,
     CiOrdinaryFailureCategory, CiVerifiedFailureProof, CreateIssue, Issue, IssueState, ItemNumber,
@@ -15,9 +15,12 @@ use super::{
     IssueEvidence, PullRequestEvidence, RepoFixture, VerifiedFailureProofEvidence,
 };
 
+#[path = "convergence/repair.rs"]
+mod repair;
 #[path = "convergence/terminal_ci.rs"]
 mod terminal_ci;
 
+pub(super) use repair::drive_ci_poll_exact_head_repair_convergence;
 pub(super) use terminal_ci::drive_implementation_pr_terminal_ci_convergence;
 
 const REQUEST_PROVENANCE_CAPACITY: usize = 4096;
@@ -27,6 +30,20 @@ const ASSERT_POLL: Duration = Duration::from_secs(1);
 pub(super) fn admin_forge(base_url: &str, admin_token: &str, repo: &RepoFixture) -> ForgejoForge {
     ForgejoForge::new(
         ForgejoConfig::new(base_url, admin_token).with_default_repo(&repo.owner, &repo.name),
+    )
+    .with_request_provenance(REQUEST_PROVENANCE_CAPACITY)
+}
+
+pub(super) fn admin_forge_with_evidence(
+    base_url: &str,
+    admin_token: &str,
+    repo: &RepoFixture,
+    evidence: ForgejoFailureEvidenceConfig,
+) -> ForgejoForge {
+    ForgejoForge::new(
+        ForgejoConfig::new(base_url, admin_token)
+            .with_default_repo(&repo.owner, &repo.name)
+            .with_failure_evidence(evidence),
     )
     .with_request_provenance(REQUEST_PROVENANCE_CAPACITY)
 }
@@ -342,6 +359,7 @@ async fn assert_converged(
             ci_observation_evidence(&first_ci_observation),
             ci_observation_evidence(&second_ci_observation),
         ],
+        ci_heads: Vec::new(),
     })
 }
 
