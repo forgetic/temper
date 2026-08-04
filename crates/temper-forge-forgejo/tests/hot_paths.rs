@@ -144,12 +144,11 @@ fn assert_no_all_history_lists(requests: &[HttpRequest]) {
 }
 
 #[test]
-fn reference_workflow_bounded_reconciliation_uses_four_one_page_buckets() {
+fn reference_workflow_bounded_reconciliation_uses_explicit_terminal_buckets() {
     let client = MockHttpClient::new();
-    // The checked-in 17-label workflow has both artifact kinds and both
-    // lifecycle states populated in its interest plan. Empty provider pages
-    // keep this assertion focused on aggregate list shape, not enrichment.
-    for _ in 0..4 {
+    // Open issue/PR discovery stays level-triggered. Only the explicitly
+    // terminal post-merge PR queues add a closed bucket.
+    for _ in 0..3 {
         client.push_response(200, "[]");
     }
 
@@ -171,8 +170,8 @@ fn reference_workflow_bounded_reconciliation_uses_four_one_page_buckets() {
     assert_no_all_history_lists(&requests);
     assert_eq!(
         requests.len(),
-        4,
-        "17 labels must collapse to issue/PR x open/terminal buckets"
+        3,
+        "historical issue labels must not create a terminal issue bucket"
     );
     assert!(requests.iter().all(|request| {
         request.method == HttpMethod::Get && request.path == candidate_search_path()
@@ -182,7 +181,7 @@ fn reference_workflow_bounded_reconciliation_uses_four_one_page_buckets() {
             .iter()
             .filter(|request| has_query(request, "type", "issues"))
             .count(),
-        2
+        1
     );
     assert_eq!(
         requests
@@ -203,7 +202,7 @@ fn reference_workflow_bounded_reconciliation_uses_four_one_page_buckets() {
             .iter()
             .filter(|request| has_query(request, "state", "closed"))
             .count(),
-        2
+        1
     );
     assert!(requests.iter().all(|request| {
         query_value(request, "labels").is_some() || has_query(request, "state", "open")

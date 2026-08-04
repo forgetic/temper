@@ -55,11 +55,13 @@ fn candidate_queries_default_to_open_unfiltered_summary() {
     assert_eq!(issue.lifecycle, CandidateLifecycle::Open);
     assert_eq!(issue.labels, CandidateLabelSelection::Unfiltered);
     assert_eq!(issue.details, ItemListDetails::summary());
+    assert_eq!(issue.page, None);
 
     let pull = PullRequestCandidateQuery::default();
     assert_eq!(pull.lifecycle, CandidateLifecycle::Open);
     assert_eq!(pull.labels, CandidateLabelSelection::Unfiltered);
     assert_eq!(pull.details, ItemListDetails::summary());
+    assert_eq!(pull.page, None);
 
     let decoded_issue: IssueCandidateQuery = serde_json::from_str("{}").unwrap();
     let decoded_pull: PullRequestCandidateQuery = serde_json::from_str("{}").unwrap();

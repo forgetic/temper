@@ -1,19 +1,42 @@
-//! Shared workflow-derived label interest for candidate discovery.
+//! Shared workflow-derived interest for candidate discovery.
 //!
-//! Role scans and bounded reconciliation have different local queue matching
-//! rules, but they must agree on which workflow labels can keep terminal work
-//! recoverable. This module is the single derivation boundary for that policy.
+//! Open discovery remains level-triggered from all declared workflow labels.
+//! Terminal discovery is opt-in: only queues declaring `terminal: true`
+//! contribute positive labels. Historical states, exclusions, transition
+//! effects, and gate labels never become periodic terminal interest by merely
+//! existing in the workflow.
 
-use crate::{
-    ArtifactTarget, Effect, GateCondition, LabelId, ValidatedTransition, ValidatedWorkflow,
-};
+use crate::{ArtifactTarget, LabelId, ValidatedWorkflow};
+
+/// Platform-owned durable evidence recovered independently of ordinary queue
+/// label history.
+///
+/// These evidence classes are exact durable records or explicitly declared
+/// recovery mechanisms. They are not inferred from every historical workflow
+/// label and therefore do not widen periodic terminal candidate queries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlatformRecoveryEvidence {
+    IncompleteJournal,
+    DurableAssignment,
+    DurableLease,
+    ProviderOrCiRecovery,
+    IncompleteFanOut,
+    DependencyGate,
+    DeclaredPostMergeQueue,
+}
+
+/// Durable recovery classes owned by the runtime rather than queue history.
+pub const PLATFORM_DURABLE_RECOVERY_EVIDENCE: &[PlatformRecoveryEvidence] = &[
+    PlatformRecoveryEvidence::IncompleteJournal,
+    PlatformRecoveryEvidence::DurableAssignment,
+    PlatformRecoveryEvidence::DurableLease,
+    PlatformRecoveryEvidence::ProviderOrCiRecovery,
+    PlatformRecoveryEvidence::IncompleteFanOut,
+    PlatformRecoveryEvidence::DependencyGate,
+    PlatformRecoveryEvidence::DeclaredPostMergeQueue,
+];
 
 /// Workflow-wide candidate-discovery interest.
-///
-/// `open_labels` contains every declared workflow label for broad labelled
-/// reconciliation. `terminal_labels(target)` is narrower: it includes labels
-/// used by states, queues (positive, excluded, any-of, and label conditions),
-/// transition effects, and gate conditions that can apply to that Forge target.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorkflowInterest {
     targets: Vec<ArtifactTarget>,
@@ -62,7 +85,7 @@ impl WorkflowInterest {
         &self.open_labels
     }
 
-    /// Bounded terminal/recovery labels for one Forge target.
+    /// Explicit, positive terminal/recovery labels for one Forge target.
     pub fn terminal_labels(&self, target: ArtifactTarget) -> &[String] {
         match target {
             ArtifactTarget::Issue => &self.issue_terminal_labels,
@@ -87,11 +110,50 @@ fn workflow_targets(workflow: &ValidatedWorkflow) -> Vec<ArtifactTarget> {
 }
 
 fn terminal_labels(workflow: &ValidatedWorkflow, target: ArtifactTarget) -> Vec<String> {
-    let mut interest = Vec::new();
-    record_state_labels(workflow, target, &mut interest);
-    record_queue_labels(workflow, target, &mut interest);
-    record_transition_effect_labels(workflow, target, &mut interest);
-    record_gate_condition_labels(workflow, target, &mut interest);
+    let mut interest = Vec::<LabelId>::new();
+    for queue in workflow.queues().iter().filter(|queue| queue.terminal) {
+        let queue_targets_target = queue.artifacts.iter().any(|artifact| {
+            workflow
+                .artifact_kind(artifact)
+                .is_some_and(|kind| kind.target == target)
+        });
+        if !queue_targets_target {
+            continue;
+        }
+
+        let has_complete_positive_evidence = !queue.labels.is_empty()
+            || (!queue.any_of.is_empty()
+                && queue.any_of.iter().all(|branch| !branch.labels.is_empty()));
+        let mut positive = Vec::new();
+        if has_complete_positive_evidence {
+            for label in &queue.labels {
+                push_label(&mut positive, label);
+            }
+            for branch in &queue.any_of {
+                for label in &branch.labels {
+                    push_label(&mut positive, label);
+                }
+            }
+        } else {
+            // A condition-only queue or empty any-of branch has no complete
+            // positive projection. Validation guarantees every selected kind
+            // then has identifying labels, which form the narrowest portable
+            // discovery fallback without dropping the unlabelled branch.
+            for artifact in &queue.artifacts {
+                let Some(kind) = workflow.artifact_kind(artifact) else {
+                    continue;
+                };
+                if kind.target == target {
+                    for label in &kind.identifying_labels {
+                        push_label(&mut positive, label);
+                    }
+                }
+            }
+        }
+        for label in positive {
+            push_label(&mut interest, &label);
+        }
+    }
 
     workflow
         .labels()
@@ -99,156 +161,6 @@ fn terminal_labels(workflow: &ValidatedWorkflow, target: ArtifactTarget) -> Vec<
         .filter(|label| interest.contains(label))
         .map(|label| label.as_str().to_string())
         .collect()
-}
-
-fn record_state_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for dimension in workflow.state_dimensions() {
-        for state in &dimension.states {
-            if !state_allows_target(workflow, state, target) {
-                continue;
-            }
-            if let Some(label) = &state.label {
-                push_label(labels, label);
-            }
-        }
-    }
-}
-
-fn record_queue_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for queue in workflow.queues() {
-        if !queue.artifacts.iter().any(|artifact| {
-            workflow
-                .artifact_kind(artifact)
-                .is_some_and(|kind| kind.target == target)
-        }) {
-            continue;
-        }
-        for label in queue.labels.iter().chain(&queue.excluded_labels) {
-            push_label(labels, label);
-        }
-        for label_set in &queue.any_of {
-            for label in &label_set.labels {
-                push_label(labels, label);
-            }
-        }
-        if let Some(condition) = &queue.condition {
-            if let Some(label) = condition_label(workflow, condition) {
-                push_label(labels, label);
-            }
-        }
-    }
-}
-
-fn record_transition_effect_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for transition in workflow.transitions() {
-        if !transition_targets(workflow, transition, target) {
-            continue;
-        }
-        for effect in &transition.effects {
-            if let Some(label) = effect_label(effect) {
-                push_label(labels, label);
-            }
-        }
-    }
-}
-
-fn record_gate_condition_labels(
-    workflow: &ValidatedWorkflow,
-    target: ArtifactTarget,
-    labels: &mut Vec<LabelId>,
-) {
-    for gate in workflow.gates() {
-        if !workflow.transitions().iter().any(|transition| {
-            transition.requires_gates.contains(&gate.id)
-                && transition_targets(workflow, transition, target)
-        }) {
-            continue;
-        }
-        if let Some(condition) = &gate.condition {
-            if let Some(label) = condition_label(workflow, condition) {
-                push_label(labels, label);
-            }
-        }
-    }
-}
-
-fn state_allows_target(
-    workflow: &ValidatedWorkflow,
-    state: &crate::ValidatedState,
-    target: ArtifactTarget,
-) -> bool {
-    state.artifacts.is_empty()
-        || state.artifacts.iter().any(|artifact| {
-            workflow
-                .artifact_kind(artifact)
-                .is_some_and(|kind| kind.target == target)
-        })
-}
-
-fn transition_targets(
-    workflow: &ValidatedWorkflow,
-    transition: &ValidatedTransition,
-    target: ArtifactTarget,
-) -> bool {
-    workflow
-        .artifact_kind(&transition.artifact)
-        .is_some_and(|kind| kind.target == target)
-}
-
-fn condition_label<'a>(
-    workflow: &'a ValidatedWorkflow,
-    condition: &'a GateCondition,
-) -> Option<&'a LabelId> {
-    match condition {
-        GateCondition::LabelPresent(label) => Some(label),
-        GateCondition::StateEquals { dimension, state } => workflow
-            .state_dimensions()
-            .iter()
-            .find(|candidate| &candidate.id == dimension)?
-            .states
-            .iter()
-            .find(|candidate| &candidate.id == state)?
-            .label
-            .as_ref(),
-        GateCondition::DependenciesResolved
-        | GateCondition::CiPassed
-        | GateCondition::CiFailed
-        | GateCondition::CiRecoveryRequired
-        | GateCondition::ReviewApproved
-        | GateCondition::ReviewChangesRequested
-        | GateCondition::ExactHeadValidation => None,
-    }
-}
-
-fn effect_label(effect: &Effect) -> Option<&LabelId> {
-    match effect {
-        Effect::AddLabel(label)
-        | Effect::RemoveLabel(label)
-        | Effect::RemoveLabelIfPresent(label) => Some(label),
-        Effect::SetAssignee(_)
-        | Effect::RemoveAssignee(_)
-        | Effect::CreateComment { .. }
-        | Effect::CreatePullRequest { .. }
-        | Effect::RequestReviewers { .. }
-        | Effect::SubmitReview { .. }
-        | Effect::SetBody { .. }
-        | Effect::AttachReview { .. }
-        | Effect::CreateIssues { .. }
-        | Effect::MergePullRequest
-        | Effect::CloseParentIssues => None,
-    }
 }
 
 fn push_label(labels: &mut Vec<LabelId>, label: &LabelId) {

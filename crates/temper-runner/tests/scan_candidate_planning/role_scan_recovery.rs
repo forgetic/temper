@@ -279,6 +279,7 @@ fn open_all_fallback_queues_still_find_open_unlabelled_candidates() {
             lifecycle: CandidateLifecycle::Open,
             labels: CandidateLabelSelection::Unfiltered,
             details: ItemListDetails::summary(),
+            page: None,
         }]
     );
 }

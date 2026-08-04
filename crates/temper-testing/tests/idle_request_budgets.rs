@@ -249,8 +249,8 @@ fn long_lived_mechanical_trigger_warm_pass_has_candidate_lists_only() {
         .saturating_add(forge.count(CountedForgeOp::ListPullRequestCandidates));
     assert_eq!(
         candidate_lists_after.saturating_sub(candidate_lists_before),
-        6,
-        "warm reference pass re-reads four reconciliation and two automation buckets"
+        5,
+        "warm reference pass re-reads three reconciliation and two automation buckets"
     );
     assert_eq!(
         forge.exact_issue_reads().len(),

@@ -20,10 +20,11 @@ use async_trait::async_trait;
 use temper_forge_model::{
     CiJob, CiJobId, CiJobListing, CiJobQuery, CiRetryOutcome, CiRetryRequest, Comment,
     CreateComment, CreateIssue, CreatePullRequest, CreatePullRequestReview, CreateRepository,
-    Forge, ForgeResult, Issue, IssueCandidateQuery, IssueId, IssueQuery, ItemListDetails,
-    ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest, PullRequestCandidateQuery,
-    PullRequestId, PullRequestQuery, PullRequestReview, Repository, RepositoryId, RepositoryPath,
-    RepositoryQuery, RequestReviewers, UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
+    Forge, ForgeResult, Issue, IssueCandidatePage, IssueCandidateQuery, IssueId, IssueQuery,
+    ItemListDetails, ItemNumber, Label, MergePullRequest, MergeRecord, PullRequest,
+    PullRequestCandidatePage, PullRequestCandidateQuery, PullRequestId, PullRequestQuery,
+    PullRequestReview, Repository, RepositoryId, RepositoryPath, RepositoryQuery, RequestReviewers,
+    UpdateIssue, UpdatePullRequest, UpsertLabel, User, UserId,
 };
 
 #[async_trait]
@@ -85,7 +86,7 @@ impl Forge for MemoryForge {
         &self,
         repo_id: &RepositoryId,
         query: IssueCandidateQuery,
-    ) -> ForgeResult<Vec<Issue>> {
+    ) -> ForgeResult<IssueCandidatePage> {
         issues::list_issue_candidates(self, repo_id, query)
     }
 
@@ -178,7 +179,7 @@ impl Forge for MemoryForge {
         &self,
         repo_id: &RepositoryId,
         query: PullRequestCandidateQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
+    ) -> ForgeResult<PullRequestCandidatePage> {
         pull_requests::list_pull_request_candidates(self, repo_id, query)
     }
 

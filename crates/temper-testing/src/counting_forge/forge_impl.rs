@@ -85,7 +85,7 @@ impl<F: Forge> Forge for CountingForge<F> {
         &self,
         repo_id: &RepositoryId,
         query: IssueCandidateQuery,
-    ) -> ForgeResult<Vec<Issue>> {
+    ) -> ForgeResult<IssueCandidatePage> {
         self.record_issue_candidate_query(&query);
         self.perform(CountedForgeOp::ListIssueCandidates, async {
             let overrides = self
@@ -93,13 +93,13 @@ impl<F: Forge> Forge for CountingForge<F> {
                 .lock()
                 .expect("issue candidate overrides mutex")
                 .clone();
-            Ok(self
-                .inner
-                .list_issue_candidates(repo_id, query)
-                .await?
-                .into_iter()
-                .map(|issue| overrides.get(&issue.id).cloned().unwrap_or(issue))
-                .collect())
+            let mut page = self.inner.list_issue_candidates(repo_id, query).await?;
+            for issue in &mut page.items {
+                if let Some(projected) = overrides.get(&issue.id) {
+                    *issue = projected.clone();
+                }
+            }
+            Ok(page)
         })
         .await
     }
@@ -237,16 +237,17 @@ impl<F: Forge> Forge for CountingForge<F> {
         &self,
         repo_id: &RepositoryId,
         query: PullRequestCandidateQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
+    ) -> ForgeResult<PullRequestCandidatePage> {
         self.record_pull_request_candidate_query(&query);
         self.perform(CountedForgeOp::ListPullRequestCandidates, async {
-            Ok(self
+            let mut page = self
                 .inner
                 .list_pull_request_candidates(repo_id, query)
-                .await?
-                .into_iter()
-                .map(|pull_request| self.project_pull_request(pull_request))
-                .collect())
+                .await?;
+            for pull_request in &mut page.items {
+                *pull_request = self.project_pull_request(pull_request.clone());
+            }
+            Ok(page)
         })
         .await
     }

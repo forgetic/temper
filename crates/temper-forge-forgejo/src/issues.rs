@@ -19,9 +19,10 @@ use crate::{ForgejoForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use temper_forge_model::{
-    CandidateLifecycle, Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue,
-    IssueCandidateQuery, IssueId, IssueQuery, IssueState, ItemListDetails, ItemNumber,
-    ItemSortField, RepositoryId, SortDirection, UpdateIssue, UserId,
+    CandidateLabelSelection, CandidateLifecycle, CandidatePosition, Comment, CreateComment,
+    CreateIssue, ForgeError, ForgeResult, Issue, IssueCandidatePage, IssueCandidateQuery, IssueId,
+    IssueQuery, IssueState, ItemListDetails, ItemNumber, ItemSortField, RepositoryId,
+    SortDirection, UpdateIssue, UserId, paginate_candidate_items,
 };
 
 impl<C: HttpClient> ForgejoForge<C> {
@@ -75,22 +76,20 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(issues)
     }
 
-    /// Lists one lifecycle bucket of issue candidates through Forgejo's issue
-    /// label index.
-    ///
-    /// The repository-scoped issue endpoint applies multiple label names as an
-    /// all-of filter despite its API documentation describing any-of semantics.
-    /// A multi-label candidate bucket therefore uses the owner-scoped search
-    /// endpoint, whose label filter is genuinely any-of, and rejects rows from
-    /// sibling repositories locally. Single-label and unfiltered buckets stay
-    /// on the repository endpoint. Either shape costs one request per page.
+    /// Lists issue candidates through Forgejo's any-label search index.
+    /// Multi-label buckets use owner search plus repository filtering; single
+    /// labels and unfiltered buckets stay on the repository endpoint.
     pub async fn list_issue_candidates(
         &self,
         repo_id: &RepositoryId,
         query: IssueCandidateQuery,
-    ) -> ForgeResult<Vec<Issue>> {
+    ) -> ForgeResult<IssueCandidatePage> {
         let repo = parse_repository_id(repo_id)?;
         let labels = query.labels.normalized()?;
+        let normalized_selection = labels.clone().map_or(
+            CandidateLabelSelection::Unfiltered,
+            CandidateLabelSelection::AnyOf,
+        );
         let state = match query.lifecycle {
             CandidateLifecycle::Open => "open",
             CandidateLifecycle::Terminal => "closed",
@@ -98,6 +97,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         let rows = self
             .list_candidate_issue_rows(&repo, state, "issues", labels.as_deref())
             .await?;
+        let raw_count = rows.len();
 
         let expected_state = match query.lifecycle {
             CandidateLifecycle::Open => IssueState::Open,
@@ -126,12 +126,25 @@ impl<C: HttpClient> ForgejoForge<C> {
                 .cmp(&right.number)
                 .then_with(|| left.id.cmp(&right.id))
         });
+        let mut page = paginate_candidate_items(
+            issues,
+            raw_count,
+            repo_id,
+            query.lifecycle,
+            normalized_selection,
+            query.page,
+            |issue| CandidatePosition {
+                updated_at: issue.updated_at,
+                number: issue.number,
+                id: issue.id.clone(),
+            },
+        )?;
         if query.details.dependencies {
-            for issue in &mut issues {
+            for issue in &mut page.items {
                 issue.dependencies = self.load_item_dependencies(&repo, issue.number).await?;
             }
         }
-        Ok(issues)
+        Ok(page)
     }
 
     /// Looks up an issue by stable backend identifier.

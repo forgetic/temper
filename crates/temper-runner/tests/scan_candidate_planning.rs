@@ -47,6 +47,7 @@ const PLANNER_FIXTURE: &str = r#"
       "id": "branchy",
       "artifact": "code",
       "labels": ["ready"],
+      "terminal": true,
       "any_of": [{ "labels": ["urgent"] }, { "labels": ["bug"] }]
     },
     {

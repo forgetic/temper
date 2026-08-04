@@ -277,6 +277,11 @@ pub struct RawQueue {
     /// addition to the common `labels` list.
     #[serde(default)]
     pub any_of: Vec<RawQueueLabelSet>,
+    /// Whether periodic discovery may evaluate this queue on terminal
+    /// (closed or merged) artifacts. Terminal queues must have positive label
+    /// evidence or select only artifact kinds with identifying labels.
+    #[serde(default)]
+    pub terminal: bool,
     /// Optional depth threshold before the queue should be serviced.
     #[serde(default)]
     pub min_depth: Option<u32>,

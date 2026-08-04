@@ -135,7 +135,10 @@ pub use ids::{
     ArtifactKindId, ExternalToolId, GateId, LabelId, QueueId, RoleId, StateDimensionId, StateId,
     TransitionId, ValidationBindingId, VerdictId,
 };
-pub use interest::{WorkflowInterest, workflow_interest};
+pub use interest::{
+    PLATFORM_DURABLE_RECOVERY_EVIDENCE, PlatformRecoveryEvidence, WorkflowInterest,
+    workflow_interest,
+};
 pub use interrupted_ci::{InterruptedCiDiagnosticState, InterruptedCiRecoveryState};
 pub use journal::{
     CommandId, CommandJournal, CommandRecord, CommandState, InMemoryJournal, JournalError,

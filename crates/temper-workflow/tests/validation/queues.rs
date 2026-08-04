@@ -16,6 +16,7 @@ fn multi_artifact_disjunctive_queue_validates() {
                 labels: vec!["needs-review".to_string()],
             },
         ],
+        terminal: false,
         min_depth: None,
         max_age: None,
         condition: None,

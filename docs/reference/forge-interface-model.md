@@ -55,11 +55,11 @@ over broad list queries; an `Ok(None)` target is treated as absent.
 
 ## List and query semantics
 
-List methods return all visible resources matching the query; the interface has
-no pagination contract. List queries may include one optional sort. Backends
-must apply the requested primary sort and deterministic tie-breaks such as item
-number or stable ID. If sort is absent, backends should still return
-deterministic results.
+Ordinary list methods return all visible resources matching the query. Candidate
+discovery is the exception: it has an explicit resumable page contract below.
+List queries may include one optional sort. Backends must apply the requested
+primary sort and deterministic tie-breaks such as item number or stable ID. If
+sort is absent, backends should still return deterministic results.
 
 `RepositoryQuery` supports sorting by path, creation time, or update time.
 `IssueQuery` and `PullRequestQuery` support state, **conjunctive (all-of)**
@@ -74,14 +74,39 @@ bucket (`Open` or `Terminal`) and either `Unfiltered` or a non-empty
 `AnyOf(Vec<String>)` label selection. `Terminal` means closed issues and both
 closed and merged pull requests. Candidate detail defaults to `summary()`.
 `AnyOf` labels are normalized and deduplicated; results are unioned by typed
-stable identity and sorted by item number then stable ID. Compatibility
-backends may perform one ordinary conjunctive list per normalized label/state.
-Thus candidate reads can intentionally return a superset while queue matching
-continues to enforce label conjunctions and any-of branches locally.
+stable identity.
+
+Candidate methods return `CandidatePage`, including `items`, `raw_count`,
+`returned_count`, `overflow`, `exhausted`, and an optional typed continuation.
+A `CandidatePageRequest` limit must be between 1 and 1,000. Rows are ordered by
+`updated_at`, item number, and typed stable ID, so equal timestamps have stable
+tie-breaks. The first page freezes a high-water boundary in its continuation;
+later pages return positions after the prior page but never beyond that
+boundary. Concurrent newer additions are deferred to the next sweep instead of
+displacing or hiding older eligible rows. Continuations are bound to the
+repository, lifecycle, and normalized labels and cannot be reused across
+repositories or query shapes. `raw_count` is the number of backend rows
+considered before identity deduplication and page truncation; `returned_count`
+is exactly the number of returned items.
+
+An open query without `page` remains exhaustive, so every actionable poll stays
+level-triggered rather than becoming a newest-only truncation. A terminal query
+without an explicit request still receives the fixed default ceiling of 100;
+periodic terminal planners attach that request explicitly so the bound is
+visible in query plans. Compatibility backends may perform one ordinary
+conjunctive list per normalized label/state and apply the observable page
+contract after their union.
 
 Unfiltered candidate discovery is intended for open default-kind intake.
-Bounded workflow planning never emits an unfiltered terminal bucket, avoiding
-unlabelled closed/merged history reads.
+Workflow validation rejects a `terminal: true` queue when neither its positive
+labels nor its selected artifact kinds' identifying labels can bound discovery.
+Periodic planning derives terminal interest only from explicit positive labels
+of terminal queues, using identifying labels only for a condition-only terminal
+queue. State labels, exclusions, transition effects, and gate labels do not
+implicitly become terminal interest. Incomplete journals, durable assignments
+and leases, provider/CI recovery, incomplete fan-out, and dependency-gated
+recovery remain platform-owned durable evidence rather than generic historical
+queue-label drift.
 
 For a backend with provider-side any-label support, one-page request budgets are
 therefore constant: broad role discovery and bounded reconciliation each use at

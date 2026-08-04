@@ -74,21 +74,23 @@ fn audit_uses_shared_bounded_terminal_interest() {
 }
 
 #[test]
-fn basic_delivery_landing_recovery_is_bounded_to_handoff_labels() {
+fn basic_delivery_without_a_terminal_queue_emits_no_terminal_query() {
     let workflow = workflow_from_json(BASIC_FIXTURE);
     let compiled = workflow.compile();
     let audit = candidate_query_plan(&workflow, &compiled, None, ScanMode::Audit);
 
-    assert!(!has_pull_request_query(
-        &audit.pull_request_queries,
-        CandidateLifecycle::Terminal,
-        &["implementation"]
-    ));
-    assert!(has_pull_request_query(
-        &audit.pull_request_queries,
-        CandidateLifecycle::Terminal,
-        &["landing"]
-    ));
+    assert!(
+        audit
+            .issue_queries
+            .iter()
+            .all(|query| query.lifecycle == CandidateLifecycle::Open)
+    );
+    assert!(
+        audit
+            .pull_request_queries
+            .iter()
+            .all(|query| query.lifecycle == CandidateLifecycle::Open)
+    );
 
     let automated = candidate_query_plan(&workflow, &compiled, None, ScanMode::Automated);
     assert_eq!(automated.pull_request_queries.len(), 1);

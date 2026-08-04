@@ -392,11 +392,19 @@ fn candidate_has_label(labels: &CandidateLabelSelection, label: &str) -> bool {
 fn is_bounded_issue_query(query: &IssueCandidateQuery) -> bool {
     matches!(query.labels, CandidateLabelSelection::AnyOf(_))
         && query.details == ItemListDetails::summary()
+        && match query.lifecycle {
+            CandidateLifecycle::Open => query.page.is_none(),
+            CandidateLifecycle::Terminal => query.page.is_some(),
+        }
 }
 
 fn is_bounded_pull_request_query(query: &PullRequestCandidateQuery) -> bool {
     matches!(query.labels, CandidateLabelSelection::AnyOf(_))
         && query.details == ItemListDetails::summary()
+        && match query.lifecycle {
+            CandidateLifecycle::Open => query.page.is_none(),
+            CandidateLifecycle::Terminal => query.page.is_some(),
+        }
 }
 
 fn assert_observed_bounded_summary_queries<F: Forge>(crash: &CrashForge<F>) {

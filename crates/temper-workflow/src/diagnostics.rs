@@ -212,6 +212,12 @@ pub enum Diagnostic {
     },
     /// A queue did not select any artifact kinds.
     EmptyQueueArtifacts { queue: String },
+    /// A terminal-capable queue has neither positive labels nor identifying
+    /// labels, which would require an unfiltered all-terminal scan.
+    UnfilteredTerminalQueue {
+        queue: String,
+        artifacts: Vec<String>,
+    },
     /// A queue automation transition does not authorize its declared actor.
     QueueAutomationUnauthorized {
         queue: String,
@@ -367,6 +373,7 @@ impl Diagnostic {
             | Diagnostic::DuplicateRoleExternalTool { .. }
             | Diagnostic::UndeclaredReference { .. }
             | Diagnostic::EmptyQueueArtifacts { .. }
+            | Diagnostic::UnfilteredTerminalQueue { .. }
             | Diagnostic::QueueAutomationUnauthorized { .. }
             | Diagnostic::QueueAutomationArtifactMismatch { .. }
             | Diagnostic::QueueAutomationExecutorUndeclared { .. }
@@ -412,6 +419,11 @@ impl fmt::Display for Diagnostic {
             Diagnostic::EmptyQueueArtifacts { queue } => {
                 write!(formatter, "queue `{queue}` selects no artifact kinds")
             }
+            Diagnostic::UnfilteredTerminalQueue { queue, artifacts } => write!(
+                formatter,
+                "terminal queue `{queue}` has no positive discovery labels and selects unlabelled artifact kind(s) {}; this would require an unfiltered all-terminal scan",
+                artifacts.join(", ")
+            ),
             Diagnostic::QueueAutomationUnauthorized {
                 queue,
                 actor,
