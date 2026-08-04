@@ -126,10 +126,17 @@ fn cleanup_events_have_expected_severity_bounded_evidence_and_redaction() {
         Some("token=secret-token-sentinel".to_string()),
     );
 
+    let mut recovered =
+        ContainmentEvent::from_cleanup(&context, &completed, 0, None, 0, 0).unwrap();
+    let ContainmentEvent::CleanupCompleted(recovered_event) = &mut recovered else {
+        panic!("expected completed cleanup event")
+    };
+    recovered_event.disposition = "terminated";
     let events = [
         ContainmentEvent::from_cleanup(&context, &blocked, 1, None, 0, 0).unwrap(),
         ContainmentEvent::from_cleanup(&context, &shutdown_blocked, 1, None, 0, 0).unwrap(),
         ContainmentEvent::from_cleanup(&context, &completed, 0, None, 0, 0).unwrap(),
+        recovered,
         ContainmentEvent::from_fallback(&context, &fallback),
         ContainmentEvent::startup("worker-1", &startup),
     ];
@@ -144,6 +151,15 @@ fn cleanup_events_have_expected_severity_bounded_evidence_and_redaction() {
     assert_eq!(captured[2]["level"], "DEBUG");
     assert_eq!(captured[3]["level"], "WARN");
     assert_eq!(captured[4]["level"], "WARN");
+    assert_eq!(captured[5]["level"], "WARN");
+    assert_eq!(
+        captured[2]["fields"]["message"],
+        "descendant cleanup found no remaining processes; recursive-empty proof established"
+    );
+    assert_eq!(
+        captured[3]["fields"]["message"],
+        "descendant processes required termination; recursive-empty proof established"
+    );
 
     let fields = &captured[0]["fields"];
     assert_eq!(fields["worker_id"], "worker-1");

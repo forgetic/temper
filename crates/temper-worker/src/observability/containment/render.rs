@@ -47,11 +47,10 @@ pub(super) fn emit_cleanup_blocked(event: &CleanupBlocked) {
 
 pub(super) fn emit_cleanup_completed(event: &CleanupCompleted) {
     let owner = &event.owner;
-    let recovered = event.disposition != "already_empty"
-        || event.recovered_inspection_failures > 0
-        || event.omitted_inspection_failures > 0;
+    let inspection_failures =
+        event.recovered_inspection_failures > 0 || event.omitted_inspection_failures > 0;
     macro_rules! emit {
-        ($level:expr) => {
+        ($level:expr, $message:literal) => {
             tracing::event!(
                 target: "temper::worker",
                 $level,
@@ -80,14 +79,25 @@ pub(super) fn emit_cleanup_completed(event: &CleanupCompleted) {
                 omitted_survivors = event.omitted_survivors,
                 recovered_inspection_failures = event.recovered_inspection_failures,
                 omitted_inspection_failures = event.omitted_inspection_failures,
-                "descendant cleanup completed with recursive-empty proof"
+                $message
             );
         };
     }
-    if recovered {
-        emit!(tracing::Level::WARN);
+    if event.disposition != "already_empty" {
+        emit!(
+            tracing::Level::WARN,
+            "descendant processes required termination; recursive-empty proof established"
+        );
+    } else if inspection_failures {
+        emit!(
+            tracing::Level::WARN,
+            "descendant cleanup recovered from inspection failures; recursive-empty proof established"
+        );
     } else {
-        emit!(tracing::Level::DEBUG);
+        emit!(
+            tracing::Level::DEBUG,
+            "descendant cleanup found no remaining processes; recursive-empty proof established"
+        );
     }
 }
 
