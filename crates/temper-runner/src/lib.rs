@@ -104,8 +104,11 @@ pub use observability::{
 pub use scan::{
     ArtifactAddress, AutomatedWorkItem, CandidateQueryPlan, CiStatusObservation,
     LoadedTargetedArtifact, ScanError, ScanMode, TargetedArtifactSnapshot, TargetedRoleScan,
-    WorkItem, candidate_query_plan, load_targeted_artifact, read_ci_status_observations, scan,
-    scan_audit, scan_automated_queues, scan_role, scan_role_audit, scan_role_wake, scan_roles_wake,
+    TerminalDiscoveryBucket, TerminalDiscoveryBucketSnapshot, TerminalDiscoveryCommitOutcome,
+    TerminalDiscoveryContinuation, TerminalDiscoveryPageCommit, TerminalDiscoveryPolicy,
+    TerminalDiscoverySnapshot, TerminalDiscoveryState, TerminalDiscoveryStateError, WorkItem,
+    candidate_query_plan, load_targeted_artifact, read_ci_status_observations, scan, scan_audit,
+    scan_automated_queues, scan_role, scan_role_audit, scan_role_wake, scan_roles_wake,
     targeted_automated_work_items, targeted_role_work_items,
 };
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};

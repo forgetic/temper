@@ -85,9 +85,11 @@ later pages return positions after the prior page but never beyond that
 boundary. Concurrent newer additions are deferred to the next sweep instead of
 displacing or hiding older eligible rows. Continuations are bound to the
 repository, lifecycle, and normalized labels and cannot be reused across
-repositories or query shapes. `raw_count` is the number of backend rows
-considered before identity deduplication and page truncation; `returned_count`
-is exactly the number of returned items.
+repositories or query shapes. Providers that need page offsets in addition to
+the portable position may attach a bounded opaque backend cursor; callers
+preserve it verbatim and compatibility backends leave it absent. `raw_count` is
+the number of backend rows considered before identity deduplication and page
+truncation; `returned_count` is exactly the number of returned items.
 
 An open query without `page` remains exhaustive, so every actionable poll stays
 level-triggered rather than becoming a newest-only truncation. A terminal query
@@ -117,6 +119,19 @@ populated bucket by its page count; it never changes the bucket count or falls
 back to per-label lists. Compatibility backends may spend more provider calls
 inside a bucket as documented above, but portable callers still issue one
 candidate operation per logical bucket.
+
+The runner exposes a clone-shared `TerminalDiscoveryState` for long-lived
+runtime owners. It is repository-keyed and bounds repository count, query
+buckets, retained exact targets, and workflow-fingerprint size. Each bucket
+retains its frozen boundary, typed continuation, and failure/overflow/completion
+flags; the repository retains a deterministic bounded set of exact recovery
+targets. Workflow changes reset sweep authority;
+failed pages keep the last committed cursor; non-advancing positions restart
+that bucket. A newly constructed owner is cold, so process restart requires a
+new complete sweep before authority is reported instead of repeatedly treating
+the newest page as complete. Targeted webhooks and local mutations can retain
+bounded exact targets or invalidate repository authority without coupling role
+and mechanical worker lifetimes.
 
 `CiJobQuery` supports pull request, commit SHA, status, and
 sorting by name, creation time, or update time. All populated `CiJobQuery`

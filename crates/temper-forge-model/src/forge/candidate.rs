@@ -129,6 +129,13 @@ pub struct CandidateContinuation<I> {
     pub labels: CandidateLabelSelection,
     pub boundary: CandidatePosition<I>,
     pub after: CandidatePosition<I>,
+    /// Opaque backend cursor used when a provider needs more than the portable
+    /// timestamp/identity position to resume a large timestamp tie.
+    ///
+    /// Callers preserve this value verbatim. Compatibility backends may leave
+    /// it empty and rely only on `boundary` and `after`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_cursor: Option<String>,
 }
 
 /// Optional bounded-page request attached to a candidate query.
@@ -157,7 +164,8 @@ impl<I> CandidatePageRequest<I> {
         Self::first(DEFAULT_TERMINAL_CANDIDATE_PAGE_SIZE)
     }
 
-    fn validate(&self) -> ForgeResult<()> {
+    /// Validates the portable row ceiling before a backend sends any request.
+    pub fn validate(&self) -> ForgeResult<()> {
         if self.limit == 0 || self.limit > MAX_CANDIDATE_PAGE_SIZE {
             return Err(ForgeError::InvalidRequest(format!(
                 "candidate page limit must be between 1 and {MAX_CANDIDATE_PAGE_SIZE}"
@@ -313,6 +321,7 @@ where
             labels,
             boundary: boundary.expect("overflowing candidate page has a boundary"),
             after: after.expect("overflowing candidate page returned at least one row"),
+            backend_cursor: None,
         })
     } else {
         None

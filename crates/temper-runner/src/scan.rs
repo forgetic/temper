@@ -7,6 +7,7 @@
 
 mod candidate;
 mod ci;
+mod discovery_state;
 mod query;
 
 use chrono::{DateTime, Utc};
@@ -26,6 +27,11 @@ pub use candidate::{
     CandidateQueryPlan, ScanMode, candidate_query_plan, candidate_query_plan_for_roles,
 };
 pub use ci::{CiStatusObservation, read_ci_status_observations};
+pub use discovery_state::{
+    TerminalDiscoveryBucket, TerminalDiscoveryBucketSnapshot, TerminalDiscoveryCommitOutcome,
+    TerminalDiscoveryContinuation, TerminalDiscoveryPageCommit, TerminalDiscoveryPolicy,
+    TerminalDiscoverySnapshot, TerminalDiscoveryState, TerminalDiscoveryStateError,
+};
 
 /// Explicit issue-or-pull-request address used by item-scoped scans.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

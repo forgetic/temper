@@ -9,11 +9,9 @@ use crate::ids::format_pull_request_id;
 use crate::map::map_issue;
 use crate::types::IssueDto;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
 use temper_forge_model::{
-    BranchRef, CandidateLabelSelection, CandidateLifecycle, CandidatePosition, ItemSortField,
-    PullRequestCandidatePage, PullRequestCandidateQuery, PullRequestQuery, PullRequestState,
-    SortDirection, paginate_candidate_items,
+    BranchRef, CandidateLifecycle, CandidatePage, ItemSortField, PullRequestCandidatePage,
+    PullRequestCandidateQuery, PullRequestQuery, PullRequestState, SortDirection,
 };
 
 impl<C: HttpClient> ForgejoForge<C> {
@@ -47,17 +45,12 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(pulls)
     }
 
-    /// Lists one lifecycle bucket of pull-request candidates through Forgejo's
-    /// issue label index. Multi-label buckets use the owner-scoped search index
-    /// because the repository issue endpoint treats multiple labels as all-of;
-    /// foreign-repository rows are discarded before materialization. A terminal
-    /// bucket still uses one `state=closed` discovery request and separates
-    /// portable closed and merged states locally.
+    /// Lists one lifecycle bucket of pull-request candidates through bounded,
+    /// repository-isolated issue-index pages.
     ///
-    /// Unambiguous summary rows are materialized directly. A closed row without
-    /// a usable merge marker retains the established exact `/pulls/{number}`
-    /// fallback before lifecycle and label filtering. No unlabelled pull
-    /// history request is used as a fallback.
+    /// The provider page is selected before summary materialization. Therefore
+    /// an ambiguous historical row outside the retained page can never add a
+    /// `/pulls/{number}` fallback request.
     pub async fn list_pull_request_candidates(
         &self,
         repo_id: &RepositoryId,
@@ -65,28 +58,30 @@ impl<C: HttpClient> ForgejoForge<C> {
     ) -> ForgeResult<PullRequestCandidatePage> {
         let repo = parse_repository_id(repo_id)?;
         let labels = query.labels.normalized()?;
-        let normalized_selection = labels.clone().map_or(
-            CandidateLabelSelection::Unfiltered,
-            CandidateLabelSelection::AnyOf,
-        );
-        let state = match query.lifecycle {
-            CandidateLifecycle::Open => "open",
-            CandidateLifecycle::Terminal => "closed",
-        };
-        let rows = self
-            .list_candidate_issue_rows(&repo, state, "pulls", labels.as_deref())
+        let row_page = self
+            .list_candidate_issue_rows(
+                &repo,
+                query.lifecycle,
+                "pulls",
+                labels.as_deref(),
+                query.page,
+                |number| format_pull_request_id(&repo, number),
+            )
             .await?;
-        let raw_count = rows.len();
+        let CandidatePage {
+            items: rows,
+            continuation,
+            exhausted,
+            overflow,
+            raw_count,
+            ..
+        } = row_page;
 
-        let mut rows_by_number = BTreeMap::new();
+        let mut pulls = Vec::new();
         for row in rows {
-            if row.is_pull_request() {
-                rows_by_number.entry(row.number).or_insert(row);
+            if !row.is_pull_request() {
+                continue;
             }
-        }
-
-        let mut by_id = BTreeMap::new();
-        for row in rows_by_number.into_values() {
             let number = ItemNumber::new(row.number);
             let pull = if pr_issue_row_can_answer_candidate_query(
                 &row,
@@ -101,37 +96,23 @@ impl<C: HttpClient> ForgejoForge<C> {
             let Some(pull) = pull else {
                 continue;
             };
-            if !pull_matches_candidate_query(&pull, query.lifecycle, labels.as_deref()) {
-                continue;
+            if pull_matches_candidate_query(&pull, query.lifecycle, labels.as_deref()) {
+                pulls.push(pull);
             }
-            by_id.entry(pull.id.clone()).or_insert(pull);
         }
-
-        let mut pulls = by_id.into_values().collect::<Vec<_>>();
-        pulls.sort_by(|left, right| {
-            left.number
-                .cmp(&right.number)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        let mut page = paginate_candidate_items(
-            pulls,
-            raw_count,
-            repo_id,
-            query.lifecycle,
-            normalized_selection,
-            query.page,
-            |pull| CandidatePosition {
-                updated_at: pull.updated_at,
-                number: pull.number,
-                id: pull.id.clone(),
-            },
-        )?;
         if query.details.dependencies {
-            for pull in &mut page.items {
+            for pull in &mut pulls {
                 pull.dependencies = self.load_item_dependencies(&repo, pull.number).await?;
             }
         }
-        Ok(page)
+        Ok(CandidatePage {
+            returned_count: pulls.len(),
+            items: pulls,
+            continuation,
+            exhausted,
+            overflow,
+            raw_count,
+        })
     }
 
     /// Lists pull requests through the `/pulls` endpoint for queries without a
