@@ -134,6 +134,7 @@ pub fn build_config(inputs: &ConfigInputs) -> Config {
         kind: inputs.forge_kind.clone(),
         url: inputs.forge_url.clone(),
         admin: inputs.admin_user.clone(),
+        ci_failure_evidence: None,
     };
 
     let engine = EngineConfig {

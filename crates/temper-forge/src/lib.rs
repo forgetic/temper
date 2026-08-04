@@ -43,7 +43,9 @@ pub use temper_forge_model::*;
 pub mod config {
     /// Forgejo backend configuration ([`new`](ForgejoConfig::new) plus
     /// `with_*` builder options) and conditional-write mode.
-    pub use temper_forge_forgejo::{CasMode as ForgejoCasMode, ForgejoConfig};
+    pub use temper_forge_forgejo::{
+        CasMode as ForgejoCasMode, ForgejoConfig, ForgejoFailureEvidenceConfig,
+    };
     /// GitHub backend configuration.
     pub use temper_forge_github::{CasMode as GitHubCasMode, GitHubConfig};
 

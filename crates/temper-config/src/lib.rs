@@ -84,8 +84,8 @@ pub use resolved::{
 pub use schema::{
     AgentConfig, AgentCredentials, AgentDeadlineConfig, AgentProfileConfig, AgentProviderConfig,
     AgentToolsConfig, AgentTraceConfig, CodebaseMemoryToolConfig, Config, Credentials,
-    DeploymentConfig, EngineConfig, ForgeConfig, ForgeCredentials, ForgeUser, ModelMap,
-    NamedSecret, NamedSecretEntry, ObservabilityConfig, PathsConfig,
+    DeploymentConfig, EngineConfig, ForgeCiFailureEvidenceConfig, ForgeConfig, ForgeCredentials,
+    ForgeUser, ModelMap, NamedSecret, NamedSecretEntry, ObservabilityConfig, PathsConfig,
     ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
     WorkerPoolConfig, WorkflowConfig,
 };

@@ -9,6 +9,7 @@ description = "Forgejo-backed Forge implementation (best-effort, offline-tested)
 [dependencies]
 async-trait.workspace = true
 skein.workspace = true
+hmac = "0.12"
 tracing = { workspace = true }
 chrono.workspace = true
 temper-forge-model = { path = "../temper-forge-model" }
@@ -19,6 +20,7 @@ base64 = "0.22"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+sha2 = "0.10"
 
 [dev-dependencies]
 bench-forgejo = { git = "https://git.ekanayaka.io/ai/bench.git", rev = "174d0d7a8eddc0c68f39bb9c34b79c70f6657554" }

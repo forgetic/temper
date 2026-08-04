@@ -24,6 +24,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use temper_protocol_activity::CaptureModeV1;
 
+mod ci_failure_evidence;
+pub use ci_failure_evidence::ForgeCiFailureEvidenceConfig;
+
 /// The schema version this binary reads and writes. A file declaring any other
 /// version is rejected with a clear message (see [`crate::load`]).
 pub const SCHEMA_VERSION: u32 = 1;
@@ -183,13 +186,10 @@ pub struct ForgeConfig {
     /// becomes the daemon's default forge identity and drives provisioning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admin: Option<String>,
-}
-
-impl ForgeConfig {
-    /// `true` when every field is unset, so the section can be omitted entirely.
-    fn is_empty(&self) -> bool {
-        self.kind.is_none() && self.url.is_none() && self.admin.is_none()
-    }
+    /// Optional authenticated generic source of protected-workflow ordinary
+    /// CI-failure statements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_failure_evidence: Option<ForgeCiFailureEvidenceConfig>,
 }
 
 /// `[engine]` — the orchestrator: what to orchestrate and how often.

@@ -29,6 +29,7 @@ use crate::deadline_resolve::{
 };
 use crate::env::EnvLookup;
 use crate::error::ConfigError;
+use crate::resolve::ci_failure_evidence::resolve_ci_failure_evidence;
 use crate::resolved::{
     AgentSettings, AgentToolSettings, Capability, CodebaseMemoryIndex, CodebaseMemoryMode,
     CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
@@ -77,6 +78,8 @@ const DEFAULT_CODEBASE_MEMORY_STARTUP_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_CODEBASE_MEMORY_INDEX_TIMEOUT_SECS: u64 = 30;
 
 pub use crate::resolve_options::ResolveOptions;
+
+mod ci_failure_evidence;
 
 /// Resolves a full deployment from the config and credentials files. The
 /// injected environment is consulted only for `$HOME` / `$XDG_*` path expansion,
@@ -136,7 +139,8 @@ pub fn resolve_with_options(
         credentials,
         &roles,
         engine_secrets.forge_token_value.clone(),
-    );
+        options,
+    )?;
     Ok(Resolved {
         deployment,
         paths,
@@ -197,7 +201,8 @@ fn resolve_forge(
     credentials: &Credentials,
     roles: &BTreeSet<String>,
     named_admin_token: Option<SecretString>,
-) -> ForgeSettings {
+    options: &ResolveOptions,
+) -> Result<ForgeSettings, ConfigError> {
     let url = trimmed(config.forge.url.as_deref()).map(|url| url.trim_end_matches('/').to_string());
 
     let admin = trimmed(config.forge.admin.as_deref());
@@ -226,13 +231,21 @@ fn resolve_forge(
         }
     }
 
-    ForgeSettings {
+    let ci_failure_evidence = config
+        .forge
+        .ci_failure_evidence
+        .as_ref()
+        .map(|source| resolve_ci_failure_evidence(source, credentials, options))
+        .transpose()?;
+
+    Ok(ForgeSettings {
         kind: ForgeKind::Forgejo,
         url,
         admin_token,
         role_tokens,
         role_identities,
-    }
+        ci_failure_evidence,
+    })
 }
 
 fn role_token(credentials: &Credentials, role: &str) -> Option<String> {

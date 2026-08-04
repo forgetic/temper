@@ -258,7 +258,12 @@ impl HttpClient for EngineHttpClient {
         let normalized_path = normalize_path(&request.path);
         let operation = format!("{method} {normalized_path}");
         let started = Instant::now();
-        let mut url = format!("{}{}", self.base_url, request.path);
+        let mut url = if request.path.starts_with("https://") || request.path.starts_with("http://")
+        {
+            request.path.clone()
+        } else {
+            format!("{}{}", self.base_url, request.path)
+        };
         if !request.query.is_empty() {
             url.push('?');
             url.push_str(&temper_engine_io::http::encode_query(&request.query));

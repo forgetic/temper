@@ -715,6 +715,7 @@ workspace = "~/.local/state/temper/workspace"
 mod agent_traces;
 mod ci_poll_cadence;
 mod deadlines;
+mod failure_evidence;
 mod secret_references;
 mod target_sections;
 
