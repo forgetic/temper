@@ -94,24 +94,34 @@ the supported Forgejo API contract. Ordinary `IssueQuery.labels` and
 interpret the single comma-separated provider filter as OR, the backend applies
 a final local all-label check.
 
-Consolidated candidate reads use Forgejo's provider-side any-label search, with
-one request shape per lifecycle bucket. The repository-scoped
-`/repos/{owner}/{repo}/issues` endpoint may apply multiple label names as all-of
-even though its API description says any-of. Consequently, a candidate
-bucket with multiple interest labels uses the owner-scoped
-`/repos/issues/search?owner=...&labels=...` index and locally rejects rows whose
-embedded repository identity is not the requested repository. Single-label and
-unfiltered buckets stay on the repository endpoint. Rows are always locally
-retained only when they carry at least one requested label. Issue buckets send
+Consolidated candidate reads preserve provider-side any-label behavior without
+letting sibling repositories consume a bounded page. Forgejo's
+repository-scoped `/repos/{owner}/{repo}/issues` endpoint applies multiple label
+names inconsistently across supported versions, while owner-scoped search can
+fill a page with rows from another repository. Temper therefore uses one
+single-label stream per normalized any-of label on the exact repository
+endpoint and merges/deduplicates those streams locally. Unfiltered buckets use
+one exact-repository stream. The backend accepts at most 32 normalized label
+streams per bucket.
+
+Every stream sends `sort=updated&direction=asc`. Provider page offsets are
+retained only while traversing one equal-timestamp tie; advancing the inclusive
+`since` timestamp resets that stream to page one. A bounded first page freezes a
+provider `before` boundary; continuations retain that boundary and send `since`
+for the last committed timestamp. A small opaque backend cursor records provider
+page movement so equal timestamps do not restart at page one. Issue buckets send
 `type=issues`; PR buckets send `type=pulls`. Open buckets send `state=open`.
 Terminal issue buckets send `state=closed`, while terminal PR discovery also
-sends just one `state=closed` request and locally separates portable `Closed`
-and `Merged` rows. Terminal workflow planning always supplies labels, and the
-backend never substitutes an unlabelled issue or pull-history read for labelled
-discovery. Every bucket follows the shared `limit`/`page` pagination loop,
-deduplicates rows repeated across pages, and returns deterministic number/ID
-order. Thus a one-page bucket costs one provider list request regardless of
-interest-label count.
+sends just `state=closed` and locally separates portable `Closed` and `Merged`
+rows. Terminal workflow planning always supplies labels, and the backend never
+substitutes an unlabelled issue or pull-history read for labelled discovery.
+
+Unpaged open discovery remains exhaustive and level-triggered. A terminal or
+explicitly paged bucket decodes at most 1,001 provider rows and sends at most 64
+provider list requests, regardless of repository history. Continuation is
+returned only after the complete bounded window succeeds; transport, status, or
+decode failure advances nothing. Rows are ordered oldest update first with
+number and typed id tie-breaks, then deterministically deduplicated.
 
 Summary list calls (`details.dependencies=false`) skip dependency N+1s;
 labelled PR summary rows may also omit branch refs, head/base SHAs, requested
@@ -122,37 +132,18 @@ closed/merged filtering. Exact PR summary reads similarly perform only
 `/pulls/{number}` and return empty dependencies; exact full reads additionally
 use `/issues/{number}/dependencies`.
 
-The checked-in 17-label `reference-delivery` workflow locks these one-page
-provider ceilings:
+The checked-in 17-label `reference-delivery` workflow remains bounded by the
+fixed per-page provider ceilings above. Exact request count depends on the
+number of populated normalized label streams rather than on terminal-history
+cardinality. Summary exact reads remain separately bounded by retained rows.
 
-| Consumer | Candidate-list requests |
-| --- | ---: |
-| broad role discovery | <= 4 populated issue/PR lifecycle buckets |
-| bounded reconciliation | <= 4 populated issue/PR lifecycle buckets |
-| automated discovery | <= 2 populated open issue/PR buckets |
-| second unchanged mechanical pass | 6 for the reference workflow; 0 exact artifact and 0 dependency requests |
-
-Terminal requests always include workflow-derived labels. The only candidate
-row allowed to add a summary exact read is a closed PR row whose issue-index
-merge marker is ambiguous. Cold dependency-gated reconciliation may additionally
-perform one full exact read per uncached source; the long-lived mechanical cache
-removes those reads on an unchanged warm pass and forcibly refreshes them within
-15 minutes.
-
-The ignored local benchmark runs that cold/warm pair against the cached Forgejo
-fixture and the real HTTP client:
-
-```sh
-cargo test -p temper-testing --test idle_request_budgets \
-  local_forgejo_two_pass_idle_broad_benchmark \
-  -- --ignored --exact --nocapture
-```
-
-It prints each broad-pass duration and normalized warm-pass method/path counts,
-then enforces the warm shape above. The first invocation may populate the pinned
-Forgejo binary cache (or use `TEMPER_FORGEJO_BINARY`); default CI never starts a
-server. Additional pages multiply requests per bucket. They do not reintroduce
-one request per workflow label.
+Terminal requests always include workflow-derived labels. An ambiguous closed
+PR row may add a summary exact read only after that row is retained in the
+current bounded page; historical rows beyond the continuation window add no
+`/pulls/{number}` traffic. Cold dependency-gated reconciliation may
+additionally perform one full exact read per uncached source; the long-lived
+mechanical cache removes those reads on an unchanged warm pass and forcibly
+refreshes them within 15 minutes.
 
 ### Labels and assignees are set-like but Forgejo wants label ids
 

@@ -179,4 +179,32 @@ impl<C: HttpClient> ForgejoForge<C> {
         }
         Ok(items)
     }
+
+    /// Fetches exactly one explicitly numbered provider page.
+    ///
+    /// Candidate traversal owns its own fixed request and row budgets and
+    /// cannot use `list_all`: doing so would make one logical terminal page
+    /// grow with repository history. Unlike ordinary checked operations, a
+    /// failed candidate page is not retried inside this primitive: it consumes
+    /// one request and leaves continuation retry ownership to the discovery
+    /// coordinator.
+    pub(crate) async fn list_page<T: DeserializeOwned>(
+        &self,
+        context: &str,
+        path: &str,
+        mut query: Vec<(String, String)>,
+        limit: usize,
+        page: u32,
+    ) -> ForgeResult<Vec<T>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        query.push(("limit".to_string(), limit.to_string()));
+        query.push(("page".to_string(), page.to_string()));
+        let response = self.send(HttpMethod::Get, path, query, None).await?;
+        if !response.is_success() {
+            return Err(error::map_status_error(context, &response));
+        }
+        Self::decode(context, &response)
+    }
 }
