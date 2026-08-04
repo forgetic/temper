@@ -11,6 +11,7 @@ mod bundle;
 mod codebase_memory;
 mod convergence;
 mod execution_plan;
+mod failure_evidence;
 mod fake_llm;
 mod handoff;
 mod late_stream_jig;
@@ -36,6 +37,7 @@ pub use bundle::{
     LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan, ManifestStep,
     ObservabilityFixture, RecoveryFixture, RepoFixture, ScenarioBundle,
 };
+pub use failure_evidence::{CiFailureEvidenceFixture, LiveCiFailureEvidence};
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
 pub use plan_feature::{
     IssueState as PlanIssueState, LivePlanFeatureEvidence,
@@ -184,6 +186,8 @@ pub struct LiveManifestEvidence {
     /// Forge observer. This includes the CI reads retained in `final_state`.
     pub ci_requests: Vec<CiRequestEvidence>,
     pub ci_request_capture_dropped: usize,
+    /// Secret-free protected-workflow publication and service facts.
+    pub ci_failure_evidence: Option<LiveCiFailureEvidence>,
     pub handoff: Option<LiveHandoffEvidence>,
     pub codebase_memory: Option<LiveCodebaseMemoryEvidence>,
     pub plan_feature: Option<LivePlanFeatureEvidence>,
@@ -269,6 +273,24 @@ impl LiveManifestEvidence {
                 job.status,
                 job.conclusion,
                 job.url
+            ));
+        }
+        for head in &self.final_state.ci_heads {
+            lines.push(format!(
+                "  ci_head: phase={} sha={} observed_after_ms={} observations={}",
+                head.phase,
+                head.head_sha,
+                head.observed_after_ms,
+                head.observations.len()
+            ));
+        }
+        if let Some(service) = &self.ci_failure_evidence {
+            lines.push(format!(
+                "  ci_failure_evidence: path={} issuer={} protected_producers={:?} published_proofs={}",
+                service.endpoint_path,
+                service.issuer,
+                service.protected_producers,
+                service.published_proofs
             ));
         }
         lines.push(format!(
@@ -363,6 +385,8 @@ pub struct FinalStateEvidence {
     /// stable across observations. Strategies that do not observe CI leave this
     /// empty and strict provenance assertions fail closed.
     pub ci_observations: Vec<CiObservationEvidence>,
+    /// Named exact-head histories retained by repair scenarios.
+    pub ci_heads: Vec<CiHeadEvidence>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -404,6 +428,16 @@ pub struct CiJobEvidence {
 pub struct CiObservationEvidence {
     pub matching_provider_run: bool,
     pub jobs: Vec<CiJobEvidence>,
+}
+
+/// CI observations retained for one named PR-head phase.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CiHeadEvidence {
+    pub phase: String,
+    pub head_sha: String,
+    pub observed_after_ms: u64,
+    pub jobs: Vec<CiJobEvidence>,
+    pub observations: Vec<CiObservationEvidence>,
 }
 
 /// Redacted request metadata. Header and query values are intentionally absent.

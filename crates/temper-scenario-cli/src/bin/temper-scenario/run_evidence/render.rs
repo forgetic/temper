@@ -230,6 +230,51 @@ fn final_state_details(final_state: &FinalStateEvidence) -> Vec<String> {
             ));
         }
     }
+    for head in &final_state.ci.heads {
+        details.push(format!(
+            "CI head: phase={} sha={} observed_after_ms={} observations={}",
+            head.phase,
+            head.head_sha,
+            head.observed_after_ms,
+            head.observations.len()
+        ));
+        for job in &head.jobs {
+            details.push(format!(
+                "CI head job: phase={} name={} status={} run={:?} attempt={:?} commit={:?} conclusion={:?} provider_conclusion={:?}",
+                head.phase,
+                job.name,
+                job.status,
+                job.provider_run_id,
+                job.provider_attempt,
+                job.commit_sha,
+                job.conclusion,
+                job.provider_conclusion
+            ));
+            if let Some(proof) = &job.verified_failure {
+                details.push(format!(
+                    "CI head verified failure: phase={} category={} run={} job={} attempt={} task={:?} producer={} issuer={} verification={}",
+                    head.phase,
+                    proof.category,
+                    proof.run_id,
+                    proof.job_id,
+                    proof.attempt,
+                    proof.task_id,
+                    proof.producer_id,
+                    proof.issuer_id,
+                    proof.verification
+                ));
+            }
+        }
+    }
+    if let Some(service) = &final_state.ci.failure_evidence {
+        details.push(format!(
+            "CI failure evidence service: path={} issuer={} protected_producers={:?} published_proofs={}",
+            service.endpoint_path,
+            service.issuer,
+            service.protected_producers,
+            service.published_proofs
+        ));
+    }
     details
 }
 

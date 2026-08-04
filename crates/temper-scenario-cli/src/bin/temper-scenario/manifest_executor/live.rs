@@ -15,9 +15,13 @@ use crate::run_evidence;
 
 #[path = "live/artifacts.rs"]
 mod artifacts;
+#[path = "live/ci.rs"]
+mod ci;
 
 use super::observability::capture_observability;
 use artifacts::{RetainedLogPaths, copy_report_artifacts, stimulus_log_paths};
+use ci::{ci_job, ci_observation};
+pub(super) use ci::{ci_requests, verified_failure_proof};
 
 const PRIMARY_TEMPER_BIN_ENV: &str = "TEMPER_SCENARIO_TEMPER_BIN";
 const COMPAT_TEMPER_BIN_ENV: &str = "TEMPER_BIN";
@@ -177,6 +181,8 @@ fn live_artifact(
                 completed_jobs: Some(0),
                 jobs: Vec::new(),
                 observations: Vec::new(),
+                heads: Vec::new(),
+                failure_evidence: None,
                 requests: ci_requests(evidence),
                 request_capture_dropped: Some(evidence.ci_request_capture_dropped),
             },
@@ -261,15 +267,43 @@ fn live_artifact(
                     .final_state
                     .ci_observations
                     .iter()
-                    .map(|observation| run_evidence::CiObservationEvidence {
-                        matching_provider_run: Some(observation.matching_provider_run),
-                        jobs: observation
+                    .map(|observation| {
+                        ci_observation(observation, evidence.final_state.pull_request.number)
+                    })
+                    .collect(),
+                heads: evidence
+                    .final_state
+                    .ci_heads
+                    .iter()
+                    .map(|head| run_evidence::CiHeadEvidence {
+                        phase: head.phase.clone(),
+                        head_sha: head.head_sha.clone(),
+                        observed_after_ms: head.observed_after_ms,
+                        jobs: head
                             .jobs
                             .iter()
                             .map(|job| ci_job(job, evidence.final_state.pull_request.number))
                             .collect(),
+                        observations: head
+                            .observations
+                            .iter()
+                            .map(|observation| {
+                                ci_observation(
+                                    observation,
+                                    evidence.final_state.pull_request.number,
+                                )
+                            })
+                            .collect(),
                     })
                     .collect(),
+                failure_evidence: evidence.ci_failure_evidence.as_ref().map(|service| {
+                    run_evidence::CiFailureEvidenceServiceEvidence {
+                        endpoint_path: service.endpoint_path.clone(),
+                        issuer: service.issuer.clone(),
+                        protected_producers: service.protected_producers.clone(),
+                        published_proofs: service.published_proofs,
+                    }
+                }),
                 requests: ci_requests(evidence),
                 request_capture_dropped: Some(evidence.ci_request_capture_dropped),
             },
@@ -372,61 +406,6 @@ fn live_artifact(
         })
         .collect();
     artifact
-}
-
-fn ci_job(
-    job: &temper_testing::live_manifest::CiJobEvidence,
-    pull_request_number: u64,
-) -> run_evidence::CiJobEvidence {
-    run_evidence::CiJobEvidence {
-        job_id: Some(job.job_id.clone()),
-        provider_run_id: job.provider_run_id.clone(),
-        provider_attempt: job.provider_attempt.clone(),
-        commit_sha: Some(job.commit_sha.clone()),
-        name: job.name.clone(),
-        status: job.status.clone(),
-        pull_request_number: Some(pull_request_number),
-        conclusion: job.conclusion.clone(),
-        provider_conclusion: job.provider_conclusion.clone(),
-        url: job.url.clone(),
-        verified_failure: job.verified_failure.as_ref().map(verified_failure_proof),
-    }
-}
-
-pub(super) fn verified_failure_proof(
-    proof: &temper_testing::live_manifest::VerifiedFailureProofEvidence,
-) -> run_evidence::VerifiedFailureProofEvidence {
-    run_evidence::VerifiedFailureProofEvidence {
-        schema_version: proof.schema_version,
-        category: proof.category.clone(),
-        repository_id: proof.repository_id.clone(),
-        pull_request_id: proof.pull_request_id.clone(),
-        commit_sha: proof.commit_sha.clone(),
-        run_id: proof.run_id.clone(),
-        job_id: proof.job_id.clone(),
-        attempt: proof.attempt.clone(),
-        task_id: proof.task_id.clone(),
-        producer_id: proof.producer_id.clone(),
-        issuer_id: proof.issuer_id.clone(),
-        verification: proof.verification.clone(),
-        created_at: proof.created_at.clone(),
-        expires_at: proof.expires_at.clone(),
-    }
-}
-
-pub(super) fn ci_requests(evidence: &LiveManifestEvidence) -> Vec<run_evidence::CiRequestEvidence> {
-    evidence
-        .ci_requests
-        .iter()
-        .map(|request| run_evidence::CiRequestEvidence {
-            method: request.method.clone(),
-            path: request.path.clone(),
-            query_keys: request.query_keys.clone(),
-            authentication_present: request.authentication_present,
-            authentication_scheme: request.authentication_scheme.clone(),
-            accepts_json: request.accepts_json,
-        })
-        .collect()
 }
 
 fn binary_identity(path: &Path) -> Option<run_evidence::BinaryIdentityEvidence> {
@@ -598,6 +577,52 @@ fn live_evidence_lines(
                 proof.verification
             ));
         }
+    }
+    for head in &evidence.final_state.ci_heads {
+        lines.push(format!(
+            "CI head: phase={} sha={} observed_after_ms={} observations={}",
+            head.phase,
+            head.head_sha,
+            head.observed_after_ms,
+            head.observations.len()
+        ));
+        for job in &head.jobs {
+            lines.push(format!(
+                "CI head job: phase={} id={} run={:?} attempt={:?} commit={} name={} status={} conclusion={:?} provider_conclusion={:?}",
+                head.phase,
+                job.job_id,
+                job.provider_run_id,
+                job.provider_attempt,
+                job.commit_sha,
+                job.name,
+                job.status,
+                job.conclusion,
+                job.provider_conclusion
+            ));
+            if let Some(proof) = &job.verified_failure {
+                lines.push(format!(
+                    "CI head verified failure: phase={} category={} run={} job={} attempt={} task={:?} producer={} issuer={} verification={}",
+                    head.phase,
+                    proof.category,
+                    proof.run_id,
+                    proof.job_id,
+                    proof.attempt,
+                    proof.task_id,
+                    proof.producer_id,
+                    proof.issuer_id,
+                    proof.verification
+                ));
+            }
+        }
+    }
+    if let Some(service) = &evidence.ci_failure_evidence {
+        lines.push(format!(
+            "CI failure evidence service: path={} issuer={} protected_producers={:?} published_proofs={}",
+            service.endpoint_path,
+            service.issuer,
+            service.protected_producers,
+            service.published_proofs
+        ));
     }
     for stimulus in &evidence.stimuli {
         lines.push(format!(

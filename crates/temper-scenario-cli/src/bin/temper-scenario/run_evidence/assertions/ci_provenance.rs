@@ -16,6 +16,7 @@ const SUPPORTED_FIELDS: &[&str] = &[
     "id",
     "required",
     "pull_request",
+    "head",
     "matching_provider_run",
     "materialized_jobs",
     "job_count",
@@ -104,13 +105,41 @@ fn evaluate_one(
         builder = builder.passed(note);
     }
     let pull = selected.pull_request;
-    let jobs = jobs_for_pull_request(artifact, pull.number);
+    let selected_head = expectation.get("head").and_then(Value::as_str);
+    let (jobs, observations, exact_head_sha) = if let Some(phase) = selected_head {
+        let matching = artifact
+            .final_state
+            .ci
+            .heads
+            .iter()
+            .filter(|head| same_normalized(&head.phase, phase))
+            .collect::<Vec<_>>();
+        let [head] = matching.as_slice() else {
+            return builder
+                .missing_fact(format!(
+                    "run evidence requires exactly one `{phase}` CI head, found {}",
+                    matching.len()
+                ))
+                .build();
+        };
+        (
+            head.jobs.iter().collect::<Vec<_>>(),
+            head.observations.as_slice(),
+            Some(head.head_sha.as_str()),
+        )
+    } else {
+        (
+            jobs_for_pull_request(artifact, pull.number),
+            artifact.final_state.ci.observations.as_slice(),
+            pull.head_sha.as_deref(),
+        )
+    };
     let mut evaluated = 0usize;
 
     if let Some(value) = expectation.get("matching_provider_run") {
         evaluated += 1;
         builder = match value.as_bool() {
-            Some(expected) => evaluate_matching_run(builder, expected, artifact),
+            Some(expected) => evaluate_matching_run(builder, expected, observations),
             None => builder.failed("matching_provider_run must be a boolean"),
         };
     }
@@ -132,16 +161,16 @@ fn evaluate_one(
     if let Some(value) = expectation.get("stable_identities") {
         evaluated += 1;
         builder = match value.as_bool() {
-            Some(expected) => evaluate_stable_identities(builder, expected, artifact, pull.number),
+            Some(expected) => {
+                evaluate_stable_identities(builder, expected, artifact, observations, pull.number)
+            }
             None => builder.failed("stable_identities must be a boolean"),
         };
     }
     if let Some(value) = expectation.get("exact_head") {
         evaluated += 1;
         builder = match value.as_bool() {
-            Some(expected) => {
-                evaluate_exact_head(builder, expected, pull.head_sha.as_deref(), &jobs)
-            }
+            Some(expected) => evaluate_exact_head(builder, expected, exact_head_sha, &jobs),
             None => builder.failed("exact_head must be a boolean"),
         };
     }
@@ -220,9 +249,8 @@ fn observation_jobs_for_pull_request<'a>(
 fn evaluate_matching_run(
     mut builder: ResultBuilder,
     expected: bool,
-    artifact: &RunEvidenceArtifact,
+    observations: &[super::super::model::CiObservationEvidence],
 ) -> ResultBuilder {
-    let observations = &artifact.final_state.ci.observations;
     if observations.is_empty() {
         return builder.missing_fact("run evidence has no CI provider-run observations");
     }
@@ -325,9 +353,9 @@ fn evaluate_stable_identities(
     builder: ResultBuilder,
     expected: bool,
     artifact: &RunEvidenceArtifact,
+    observations: &[super::super::model::CiObservationEvidence],
     pull_request_number: u64,
 ) -> ResultBuilder {
-    let observations = &artifact.final_state.ci.observations;
     if observations.len() < 2 {
         return builder.missing_fact(format!(
             "stable CI identity requires at least 2 observations, found {}",

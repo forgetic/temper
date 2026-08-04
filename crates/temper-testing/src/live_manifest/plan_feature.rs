@@ -203,6 +203,7 @@ pub(super) fn converge(
             })
             .collect(),
         ci_observations: Vec::new(),
+        ci_heads: Vec::new(),
     };
     Ok((final_state, plan_feature))
 }

@@ -223,6 +223,10 @@ pub(crate) struct CiStateEvidence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) observations: Vec<CiObservationEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) heads: Vec<CiHeadEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failure_evidence: Option<CiFailureEvidenceServiceEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) requests: Vec<CiRequestEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request_capture_dropped: Option<usize>,
@@ -234,6 +238,26 @@ pub(crate) struct CiObservationEvidence {
     pub(crate) matching_provider_run: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) jobs: Vec<CiJobEvidence>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CiHeadEvidence {
+    pub(crate) phase: String,
+    pub(crate) head_sha: String,
+    pub(crate) observed_after_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) jobs: Vec<CiJobEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) observations: Vec<CiObservationEvidence>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CiFailureEvidenceServiceEvidence {
+    pub(crate) endpoint_path: String,
+    pub(crate) issuer: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) protected_producers: Vec<String>,
+    pub(crate) published_proofs: usize,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -365,6 +389,8 @@ pub(crate) struct ObservabilityEvidence {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StructuredEventEvidence {
     pub(crate) sequence: usize,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) timestamp: String,
     pub(crate) event: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) service: Option<String>,

@@ -64,6 +64,10 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
             "forgejo-v16-api-ci",
             ConvergenceStrategy::ImplementationPrTerminalCi,
         ),
+        (
+            "forgejo-exact-head-ci-repair",
+            ConvergenceStrategy::CiPollExactHeadRepair,
+        ),
         ("codebase-memory-agent", ConvergenceStrategy::CodebaseMemory),
         (
             "implementation-pr-handoff",
@@ -113,6 +117,69 @@ fn forgejo_v16_api_ci_bundle_owns_two_job_terminal_workflow() {
         bundle.repo.ci_source,
         fs::read_to_string(&bundle.repo.ci_seed_path).expect("seeded CI workflow")
     );
+}
+
+#[test]
+fn exact_head_repair_bundle_owns_protected_failure_proof_and_three_cadences() {
+    let bundle = ScenarioBundle::load(scenarios_root().join("forgejo-exact-head-ci-repair"))
+        .expect("exact-head CI repair bundle");
+
+    assert_eq!(
+        bundle.execution.convergence,
+        ConvergenceStrategy::CiPollExactHeadRepair
+    );
+    assert_eq!(bundle.ci_poll_cadence, Duration::from_secs(1));
+    assert_eq!(bundle.poll_cadence, Duration::from_secs(600));
+    assert_eq!(bundle.mechanical_cadence, Duration::from_secs(600));
+    let failure = bundle
+        .ci_failure_evidence
+        .expect("protected failure evidence fixture");
+    assert_eq!(failure.issuer, "temper-live-evidence");
+    assert_eq!(failure.protected_producers, ["forgejo-actions-protected"]);
+    assert!(bundle.repo.ci_source.contains("sh -n \"$source_path\""));
+    assert!(bundle.repo.ci_source.contains("exit \"$ordinary_status\""));
+    assert!(!bundle.repo.ci_source.contains("actions/checkout"));
+}
+
+#[test]
+fn failure_evidence_manifest_vocabulary_is_closed_and_validated() {
+    let valid = TomlValue::Table(toml::Table::from_iter([
+        (
+            "issuer".to_string(),
+            TomlValue::String("issuer-1".to_string()),
+        ),
+        (
+            "protected_producers".to_string(),
+            TomlValue::Array(vec![TomlValue::String("producer-1".to_string())]),
+        ),
+    ]));
+    assert!(
+        bundle_with_live_harness([("ci_failure_evidence", valid)])
+            .expect("valid failure evidence fixture")
+            .ci_failure_evidence
+            .is_some()
+    );
+
+    for invalid in [
+        TomlValue::Table(toml::Table::from_iter([(
+            "unknown".to_string(),
+            TomlValue::String("value".to_string()),
+        )])),
+        TomlValue::Table(toml::Table::from_iter([
+            (
+                "issuer".to_string(),
+                TomlValue::String("bad identity!".to_string()),
+            ),
+            ("protected_producers".to_string(), TomlValue::Array(vec![])),
+        ])),
+    ] {
+        let error = bundle_with_live_harness([("ci_failure_evidence", invalid)])
+            .expect_err("invalid failure evidence fixture");
+        assert!(
+            error.contains("live_harness.ci_failure_evidence"),
+            "{error}"
+        );
+    }
 }
 
 #[test]
