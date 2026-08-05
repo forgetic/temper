@@ -19,37 +19,34 @@ import time
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "normal"
 log_path = sys.argv[2] if len(sys.argv) > 2 else ""
-projects_arg = sys.argv[3] if len(sys.argv) > 3 else '{"projects": []}'
 if mode == "hang":
     time.sleep(60)
     sys.exit(0)
 
-try:
-    parsed = json.loads(projects_arg)
-    projects = parsed.get("projects", parsed if isinstance(parsed, list) else [])
-except Exception:
-    projects = []
+provider_name = "other-provider" if mode == "incompatible-name" else "codebase-memory-mcp"
+provider_version = "0.8.1" if mode == "incompatible-version" else "0.9.0"
+capabilities = {} if mode == "incompatible-capability" else {"tools": {}}
 
-state_path = log_path + ".projects.json" if log_path else ""
+index_properties = {
+    "repo_path": {"type": "string"},
+    "name": {"type": "string"},
+}
+if mode == "incompatible-schema":
+    del index_properties["name"]
 
-def current_projects():
-    if mode.startswith("index-rediscovers") and state_path and os.path.exists(state_path):
-        with open(state_path, "r", encoding="utf-8") as handle:
-            parsed = json.load(handle)
-        return parsed.get("projects", parsed if isinstance(parsed, list) else [])
-    return projects
+search_project_property = "repo" if mode == "repo-schema" else "project"
 
 TOOLS = [
-    {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, search_project_property: {"type": "string"}}, "required": ["query", search_project_property] if mode == "repo-schema" else ["query"]}},
     {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
     {"name": "list_projects", "description": "List projects", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
+    {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "detect_changes", "description": "Detect changes", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
     {"name": "delete_project", "description": "Delete project", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "manage_adr", "description": "Write ADRs", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "ingest_traces", "description": "Ingest traces", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "query_graph", "description": "Raw graph query", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "index_repository", "description": "Index arbitrary path", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}}}},
+    {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": index_properties, "required": ["repo_path"]}},
 ]
 
 def send(value):
@@ -60,7 +57,10 @@ def log_tool(name, args):
     if not log_path:
         return
     with open(log_path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"name": name, "arguments": args}, sort_keys=True) + "\n")
+        handle.write(json.dumps({"name": name, "arguments": args, "pid": os.getpid()}, sort_keys=True) + "\n")
+
+def tool_result(request_id, payload, is_error=False):
+    send({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": payload}], "isError": is_error}})
 
 for line in sys.stdin:
     if not line.strip():
@@ -70,7 +70,7 @@ for line in sys.stdin:
         continue
     method = request.get("method")
     if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "fake-codebase-memory", "version": "1"}, "capabilities": {"tools": {}}}})
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": provider_name, "version": provider_version}, "capabilities": capabilities}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
@@ -79,26 +79,44 @@ for line in sys.stdin:
         args = params.get("arguments") or {}
         log_tool(name, args)
         if name == "list_projects":
-            payload = json.dumps({"projects": current_projects()}, sort_keys=True)
+            if mode == "global-list-hang":
+                time.sleep(60)
+            tool_result(request["id"], json.dumps({"projects": [{"name": "unrelated", "path": "/tmp/unrelated"}]}))
+        elif name == "index_status":
+            project = args.get("project", "")
+            if mode == "discovery-hang":
+                time.sleep(60)
+            elif mode == "discovery-malformed":
+                tool_result(request["id"], "not-json")
+            elif mode == "discovery-error":
+                tool_result(request["id"], json.dumps({"status": "backend_unavailable", "message": "project not found while backend unavailable"}), True)
+            elif mode in ("missing", "index-hang", "index-error", "background-budget-success", "background-budget-timeout"):
+                tool_result(request["id"], json.dumps({"project": project, "status": "missing"}), True)
+            elif mode == "stale":
+                tool_result(request["id"], json.dumps({"project": project, "status": "stale"}))
+            else:
+                tool_result(request["id"], json.dumps({"project": project, "status": "fresh"}))
         elif name == "index_repository":
             repo_path = args.get("repo_path", "")
-            if not isinstance(repo_path, str) or not repo_path:
-                payload = "index_repository requires repo_path"
-                send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": payload}], "isError": True}})
+            project = args.get("name", "")
+            if not isinstance(repo_path, str) or not repo_path or not isinstance(project, str) or not project:
+                tool_result(request["id"], "index_repository requires repo_path and stable name", True)
                 continue
+            if mode in ("background-budget-success", "background-budget-timeout"):
+                time.sleep(0.15)
             if mode == "index-hang":
                 time.sleep(60)
-            if mode == "index-rediscovers-slow":
-                time.sleep(0.15)
-            if mode.startswith("index-rediscovers") and state_path:
-                with open(state_path, "w", encoding="utf-8") as handle:
-                    json.dump({"projects": [{"name": "generated-project", "root_path": repo_path}]}, handle)
-                payload = json.dumps({"project": {"root_path": repo_path}}, sort_keys=True)
+            if mode == "index-error":
+                tool_result(request["id"], "index failed", True)
             else:
-                payload = json.dumps({"project": {"id": "indexed:" + repo_path, "name": "indexed-" + os.path.basename(repo_path), "repo_path": repo_path}}, sort_keys=True)
+                tool_result(request["id"], json.dumps({"project": project, "repo_path": repo_path, "status": "fresh"}))
         else:
+            if mode == "background-budget-success":
+                time.sleep(0.05)
+            elif mode == "background-budget-timeout":
+                time.sleep(0.20)
             payload = f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": payload}], "isError": False}})
+            tool_result(request["id"], payload)
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
 "#,

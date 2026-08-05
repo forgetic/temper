@@ -1,29 +1,157 @@
-use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use temper_protocol_agent::WorkspaceRepository;
 
-#[derive(Clone, Debug, Default)]
-pub(in crate::codebase_memory) struct IndexedProject {
-    pub(in crate::codebase_memory) id: Option<String>,
-    pub(in crate::codebase_memory) name: Option<String>,
-    pub(in crate::codebase_memory) path: Option<PathBuf>,
-    aliases: BTreeSet<String>,
-    pub(in crate::codebase_memory) stale: Option<bool>,
+use crate::mcp::{McpError, McpToolCallResult, StdioMcpClient};
+
+use super::WorkspaceScope;
+
+const MAX_TARGETED_DISCOVERY_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::codebase_memory) enum TargetedProjectState {
+    Missing,
+    Stale,
+    Fresh,
 }
 
-impl IndexedProject {
-    pub(super) fn names(&self) -> BTreeSet<String> {
-        let mut names = self.aliases.clone();
-        if let Some(id) = &self.id {
-            names.insert(id.clone());
-        }
-        if let Some(name) = &self.name {
-            names.insert(name.clone());
-        }
-        names
+/// Looks up only the host-derived provider keys for this workspace. Results are
+/// accumulated before they are applied so any timeout or malformed response
+/// leaves every repository discovery-unavailable and cannot trigger a partial
+/// indexing pass.
+pub(in crate::codebase_memory) async fn discover_workspace_projects(
+    client: &StdioMcpClient,
+    timeout: Duration,
+    scope: &WorkspaceScope,
+) -> Result<Vec<TargetedProjectState>, McpError> {
+    let mut states = Vec::with_capacity(scope.projects.len());
+    let started = std::time::Instant::now();
+    for project in &scope.projects {
+        let remaining =
+            timeout
+                .checked_sub(started.elapsed())
+                .ok_or_else(|| McpError::Timeout {
+                    method: "tools/call index_status".to_string(),
+                    timeout,
+                })?;
+        let result = client
+            .call_tool(
+                "index_status",
+                json!({ "project": project.provider_key }),
+                remaining,
+            )
+            .await?;
+        states.push(parse_targeted_status(
+            &result,
+            &project.provider_key,
+            project.git_head.as_deref(),
+        )?);
     }
+    Ok(states)
+}
+
+fn parse_targeted_status(
+    result: &McpToolCallResult,
+    provider_key: &str,
+    checkout_head: Option<&str>,
+) -> Result<TargetedProjectState, McpError> {
+    if result.text.len() > MAX_TARGETED_DISCOVERY_BYTES {
+        return Err(discovery_protocol_error(
+            provider_key,
+            "targeted response exceeded 65536 bytes",
+        ));
+    }
+    let value: Value = serde_json::from_str(result.text.trim()).map_err(|error| {
+        discovery_protocol_error(provider_key, &format!("response was not JSON: {error}"))
+    })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| discovery_protocol_error(provider_key, "response must be a JSON object"))?;
+
+    if result.is_error {
+        if response_is_missing(object) {
+            return Ok(TargetedProjectState::Missing);
+        }
+        return Err(discovery_protocol_error(
+            provider_key,
+            "provider returned a tool error without an explicit missing status",
+        ));
+    }
+    if response_is_missing(object) {
+        return Ok(TargetedProjectState::Missing);
+    }
+    if let Some(actual) = string_field(object, &["project", "id", "name"]) {
+        if actual != provider_key {
+            return Err(discovery_protocol_error(
+                provider_key,
+                "response identified a different provider project",
+            ));
+        }
+    }
+
+    if bool_field(
+        object,
+        &[
+            "stale",
+            "outdated",
+            "needs_index",
+            "needsIndex",
+            "has_changes",
+            "hasChanges",
+        ],
+    ) == Some(true)
+    {
+        return Ok(TargetedProjectState::Stale);
+    }
+
+    let status = string_field(object, &["status", "state"])
+        .map(|status| status.to_ascii_lowercase())
+        .ok_or_else(|| discovery_protocol_error(provider_key, "response omitted status/state"))?;
+    if matches!(
+        status.as_str(),
+        "stale" | "outdated" | "dirty" | "changed" | "needs_index" | "needs-index"
+    ) {
+        return Ok(TargetedProjectState::Stale);
+    }
+    if !matches!(
+        status.as_str(),
+        "ready" | "fresh" | "complete" | "completed" | "indexed"
+    ) {
+        return Err(discovery_protocol_error(
+            provider_key,
+            &format!("response reported unsupported status `{status}`"),
+        ));
+    }
+
+    if let (Some(checkout_head), Some(indexed_head)) = (
+        checkout_head,
+        object
+            .get("git")
+            .and_then(Value::as_object)
+            .and_then(|git| string_field(git, &["head_sha", "headSha", "commit"])),
+    ) {
+        if checkout_head != indexed_head {
+            return Ok(TargetedProjectState::Stale);
+        }
+    }
+    Ok(TargetedProjectState::Fresh)
+}
+
+fn response_is_missing(object: &Map<String, Value>) -> bool {
+    string_field(object, &["status", "state"]).is_some_and(|status| {
+        matches!(
+            status.to_ascii_lowercase().as_str(),
+            "missing" | "not_found" | "not-found" | "not_indexed" | "not-indexed"
+        )
+    })
+}
+
+fn discovery_protocol_error(provider_key: &str, message: &str) -> McpError {
+    McpError::Protocol(format!(
+        "targeted codebase-memory discovery for `{provider_key}` failed: {message}"
+    ))
 }
 
 pub(super) fn resolve_repo_root(
@@ -212,101 +340,6 @@ fn validate_relative_model_path(key: &str, path: &str) -> std::result::Result<()
     Ok(())
 }
 
-pub(in crate::codebase_memory) fn parse_indexed_projects(text: &str) -> Vec<IndexedProject> {
-    let Ok(value) = serde_json::from_str::<Value>(text.trim()) else {
-        return Vec::new();
-    };
-    let mut projects = Vec::new();
-    collect_indexed_projects(&value, &mut projects);
-    projects
-}
-
-fn collect_indexed_projects(value: &Value, projects: &mut Vec<IndexedProject>) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                collect_indexed_projects(item, projects);
-            }
-        }
-        Value::Object(object) => {
-            if let Some(project) = indexed_project_from_object(object) {
-                projects.push(project);
-                return;
-            }
-            for key in ["project", "projects", "items", "data", "result"] {
-                if let Some(value) = object.get(key) {
-                    collect_indexed_projects(value, projects);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn indexed_project_from_object(object: &Map<String, Value>) -> Option<IndexedProject> {
-    let has_project_shape = [
-        "id",
-        "project_id",
-        "projectId",
-        "name",
-        "project",
-        "project_name",
-        "path",
-        "root",
-        "repo_path",
-        "repository_path",
-        "root_path",
-        "rootPath",
-    ]
-    .iter()
-    .any(|key| object.contains_key(*key));
-    if !has_project_shape {
-        return None;
-    }
-
-    let id = string_field(object, &["id", "project_id", "projectId"]);
-    let name = string_field(object, &["name", "project", "project_name", "projectName"]);
-    let path = string_field(
-        object,
-        &[
-            "path",
-            "root",
-            "repo_path",
-            "repoPath",
-            "repository_path",
-            "repositoryPath",
-            "root_path",
-            "rootPath",
-            "workspace_path",
-            "workspacePath",
-        ],
-    )
-    .map(PathBuf::from);
-    let mut aliases = BTreeSet::new();
-    for key in ["alias", "aliases", "repo", "repository", "display_name"] {
-        collect_string_values(object.get(key), &mut aliases);
-    }
-    let stale = bool_field(
-        object,
-        &[
-            "stale",
-            "outdated",
-            "needs_index",
-            "needsIndex",
-            "has_changes",
-            "hasChanges",
-        ],
-    );
-
-    Some(IndexedProject {
-        id,
-        name,
-        path,
-        aliases,
-        stale,
-    })
-}
-
 fn string_field(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| {
         object
@@ -328,21 +361,4 @@ fn bool_field(object: &Map<String, Value>, keys: &[&str]) -> Option<bool> {
         },
         _ => None,
     })
-}
-
-fn collect_string_values(value: Option<&Value>, values: &mut BTreeSet<String>) {
-    match value {
-        Some(Value::String(value)) => {
-            let value = value.trim();
-            if !value.is_empty() {
-                values.insert(value.to_string());
-            }
-        }
-        Some(Value::Array(items)) => {
-            for item in items {
-                collect_string_values(Some(item), values);
-            }
-        }
-        _ => {}
-    }
 }

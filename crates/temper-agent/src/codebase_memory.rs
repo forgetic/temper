@@ -9,7 +9,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -27,11 +27,19 @@ use temper_agent_core::AgentContainmentContext;
 
 mod background;
 mod indexing;
+mod provider;
 mod scope;
+mod tool;
 mod tool_schema;
 
-use indexing::{discover_indexed_projects, prepare_indexes};
-use scope::WorkspaceScope;
+use indexing::prepare_indexes;
+use provider::validate_provider_contract;
+use scope::{WorkspaceScope, discover_workspace_projects};
+#[cfg(test)]
+use tool::{
+    classify_input_failure, classify_mcp_error, classify_provider_failure,
+    codebase_memory_failure_output,
+};
 use tool_schema::{default_project_key, description_for, scoped_parameters};
 
 /// Maximum UTF-8 bytes returned to the model from one MCP tool call.
@@ -320,42 +328,47 @@ async fn start_toolset(
         model_visible: false,
         repo_root: &scope.primary_root().display().to_string(),
     });
-    let client =
+    let discovery_client =
         StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
-    emit_mcp_server_started(McpServerStarted {
-        tool_name: "codebase_memory",
-        command: &config.command,
-        repo_root: &scope.primary_root().display().to_string(),
-    });
-    let advertised = client.list_tools(startup_timeout).await?;
+    let discovery_tools = discovery_client.list_tools(startup_timeout).await?;
+    validate_provider_contract(&discovery_client, &discovery_tools)?;
     let mut setup_notes = Vec::new();
 
-    if advertised_tool(&advertised, "list_projects") {
-        match discover_indexed_projects(&client, startup_timeout).await {
-            Ok(discovered) => scope.apply_discovered_projects(discovered, true),
-            Err(error) if config.mode == CodebaseMemoryMode::Auto => {
-                setup_notes.push(format!(
-                    "could not read codebase-memory project list; aliases use prepared repo names only: {error}"
-                ));
-                scope.apply_discovered_projects(Vec::new(), false);
-            }
-            Err(error) => return Err(error),
+    match discover_workspace_projects(&discovery_client, startup_timeout, &scope).await {
+        Ok(states) => scope.apply_targeted_discovery(states),
+        Err(error) if config.mode == CodebaseMemoryMode::Auto => {
+            scope.mark_discovery_unavailable();
+            setup_notes.push(format!(
+                "safe targeted project discovery was unavailable; indexing was skipped for every prepared repo and no path-keyed fallback was attempted: {error}"
+            ));
         }
-    } else {
-        scope.apply_discovered_projects(Vec::new(), false);
+        Err(error) => return Err(error),
     }
 
     setup_notes.extend(
         prepare_indexes(
             config,
-            &client,
             &mcp_config,
-            &advertised,
+            &discovery_tools,
             &mut scope,
             containment,
         )
         .await?,
     );
+
+    // Discovery requests and their timeouts are process-fatal in the stdio
+    // client. Never clone that process into model-visible wrappers, even after
+    // successful discovery: initialize and validate a fresh serving client.
+    drop(discovery_client);
+    let client =
+        StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
+    let advertised = client.list_tools(startup_timeout).await?;
+    validate_provider_contract(&client, &advertised)?;
+    emit_mcp_server_started(McpServerStarted {
+        tool_name: "codebase_memory",
+        command: &config.command,
+        repo_root: &scope.primary_root().display().to_string(),
+    });
     scope.rebuild_alias_map();
     let prompt_status = scope.prompt_status(config.index, &setup_notes);
     let scope = Arc::new(scope);
@@ -470,6 +483,9 @@ struct McpToolResult<'a> {
     is_error: bool,
     truncated: bool,
     result_preview: &'a str,
+    readiness_wait_ms: u64,
+    graph_execution_ms: u64,
+    duration_ms: u64,
 }
 
 fn emit_agent_tool_configured(ev: AgentToolConfigured<'_>) {
@@ -563,6 +579,9 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         is_error = ev.is_error,
         truncated = ev.truncated,
         result.preview = ev.result_preview,
+        readiness.wait_ms = ev.readiness_wait_ms,
+        graph.execution_ms = ev.graph_execution_ms,
+        duration_ms = ev.duration_ms,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,
@@ -659,215 +678,6 @@ impl CodebaseMemoryTool {
             call_timeout,
             scope,
         }
-    }
-}
-
-#[async_trait]
-impl Tool for CodebaseMemoryTool {
-    fn name(&self) -> &str {
-        &self.public_name
-    }
-
-    fn label(&self) -> &str {
-        &self.public_name
-    }
-
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn parameters(&self) -> Value {
-        self.parameters.clone()
-    }
-
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read()
-    }
-
-    async fn execute(
-        &self,
-        _tool_call_id: &str,
-        input: Value,
-        _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
-    ) -> Result<ToolOutput> {
-        let scope = Arc::clone(&self.scope);
-        let mcp_name = self.mcp_name.clone();
-        let default_project_key = self.default_project_key;
-        let wait_timeout = self.call_timeout;
-        let input = match skein::runtime::spawn_blocking(move || {
-            scope.prepare_tool_input(&mcp_name, default_project_key, input, wait_timeout)
-        })
-        .await
-        {
-            Ok(input) => input,
-            Err(message) => {
-                return Ok(codebase_memory_failure_output(
-                    classify_input_failure(&message),
-                    None,
-                ));
-            }
-        };
-
-        if self.mcp_name == "list_projects" {
-            return Ok(self.scope.list_projects_output());
-        }
-
-        let mcp_project = input
-            .get("project")
-            .or_else(|| input.get("repo"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let argument_preview = redacted_preview(&input.to_string(), 240);
-        emit_mcp_tool_called(McpToolCalled {
-            tool_name: &self.public_name,
-            mcp_tool: &self.mcp_name,
-            mcp_project: &mcp_project,
-            repo_root: &self.scope.primary_root().display().to_string(),
-            argument_preview: &argument_preview,
-        });
-
-        let result = match self
-            .client
-            .call_tool(&self.mcp_name, input, self.call_timeout)
-            .await
-        {
-            Ok(result) => result,
-            Err(error) => {
-                return Ok(codebase_memory_failure_output(
-                    classify_mcp_error(&error),
-                    None,
-                ));
-            }
-        };
-        let bounded = bound_text(&result.text, MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
-        let result_preview = redacted_preview(&bounded.text, 240);
-        emit_mcp_tool_result(McpToolResult {
-            tool_name: &self.public_name,
-            mcp_tool: &self.mcp_name,
-            mcp_project: &mcp_project,
-            is_error: result.is_error,
-            truncated: bounded.truncated,
-            result_preview: &result_preview,
-        });
-        if result.is_error {
-            let category = classify_provider_failure(&bounded.text);
-            return Ok(codebase_memory_failure_output(category, Some(bounded.text)));
-        }
-        Ok(ToolOutput {
-            content: vec![ContentBlock::Text(TextContent {
-                text: bounded.text,
-                text_signature: None,
-            })],
-            details: Some(json!({
-                "mcp_tool": self.mcp_name,
-                "truncated": bounded.truncated,
-                "workspace_scope": self.scope.details_json(),
-            })),
-            is_error: result.is_error,
-        })
-    }
-}
-
-struct BoundedText {
-    text: String,
-    truncated: bool,
-}
-
-fn codebase_memory_failure_output(
-    category: ToolFailureCategory,
-    model_text: Option<String>,
-) -> ToolOutput {
-    let diagnostic = ToolFailureDiagnostic::codebase_memory(category);
-    let text = model_text.unwrap_or_else(|| {
-        format!(
-            "{}; use read, grep, find, or other conventional discovery instead",
-            diagnostic.message
-        )
-    });
-    ToolOutput {
-        content: vec![ContentBlock::Text(TextContent {
-            text,
-            text_signature: None,
-        })],
-        // The shell accepts only this source/category marker and reconstructs
-        // retryability, fallback guidance, and the fixed safe message itself.
-        details: Some(json!({
-            SAFE_TOOL_FAILURE_DETAIL_KEY: {
-                "source": "codebase_memory",
-                "category": category.as_str(),
-            }
-        })),
-        is_error: true,
-    }
-}
-
-fn classify_input_failure(message: &str) -> ToolFailureCategory {
-    let lowered = message.to_ascii_lowercase();
-    if lowered.contains("index") && lowered.contains("fail") {
-        ToolFailureCategory::IndexFailure
-    } else if lowered.contains("not ready") {
-        ToolFailureCategory::ProjectNotReady
-    } else {
-        ToolFailureCategory::InvalidModelInput
-    }
-}
-
-fn classify_mcp_error(error: &McpError) -> ToolFailureCategory {
-    match error {
-        McpError::Spawn { .. } => ToolFailureCategory::ConfigurationStartup,
-        McpError::Io { .. } | McpError::Cancelled { .. } => ToolFailureCategory::Transport,
-        McpError::Timeout { .. } => ToolFailureCategory::Timeout,
-        McpError::ProcessExited { .. } => ToolFailureCategory::ProcessExit,
-        McpError::Json { .. }
-        | McpError::Rpc { .. }
-        | McpError::ProtocolOverflow { .. }
-        | McpError::Protocol(_) => ToolFailureCategory::ProviderProtocol,
-    }
-}
-
-fn classify_provider_failure(message: &str) -> ToolFailureCategory {
-    let lowered = message.to_ascii_lowercase();
-    if lowered.contains("timed out") || lowered.contains("timeout") {
-        ToolFailureCategory::Timeout
-    } else if lowered.contains("index") && (lowered.contains("fail") || lowered.contains("error")) {
-        ToolFailureCategory::IndexFailure
-    } else if lowered.contains("project")
-        && (lowered.contains("not ready")
-            || lowered.contains("not found")
-            || lowered.contains("missing")
-            || lowered.contains("unknown"))
-    {
-        ToolFailureCategory::ProjectNotReady
-    } else if lowered.contains("invalid input")
-        || lowered.contains("invalid argument")
-        || lowered.contains("invalid parameter")
-    {
-        ToolFailureCategory::InvalidModelInput
-    } else {
-        ToolFailureCategory::ProviderProtocol
-    }
-}
-
-fn bound_text(input: &str, max_bytes: usize) -> BoundedText {
-    if input.len() <= max_bytes {
-        return BoundedText {
-            text: input.to_string(),
-            truncated: false,
-        };
-    }
-
-    let notice = format!("\n[codebase-memory output truncated to {max_bytes} bytes]");
-    let content_budget = max_bytes.saturating_sub(notice.len());
-    let mut end = content_budget.min(input.len());
-    while end > 0 && !input.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut text = input[..end].to_string();
-    text.push_str(&notice);
-    BoundedText {
-        text,
-        truncated: true,
     }
 }
 
