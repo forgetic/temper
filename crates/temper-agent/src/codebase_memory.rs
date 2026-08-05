@@ -26,11 +26,13 @@ use temper_agent_core::AgentContainmentContext;
 
 mod background;
 mod indexing;
+mod provider;
 mod scope;
 mod tool_schema;
 
-use indexing::{discover_indexed_projects, prepare_indexes};
-use scope::WorkspaceScope;
+use indexing::prepare_indexes;
+use provider::validate_provider_contract;
+use scope::{WorkspaceScope, discover_workspace_projects};
 use tool_schema::{default_project_key, description_for, scoped_parameters};
 
 /// Maximum UTF-8 bytes returned to the model from one MCP tool call.
@@ -319,42 +321,38 @@ async fn start_toolset(
         model_visible: false,
         repo_root: &scope.primary_root().display().to_string(),
     });
-    let client =
+    let mut client =
         StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
     emit_mcp_server_started(McpServerStarted {
         tool_name: "codebase_memory",
         command: &config.command,
         repo_root: &scope.primary_root().display().to_string(),
     });
-    let advertised = client.list_tools(startup_timeout).await?;
+    let mut advertised = client.list_tools(startup_timeout).await?;
+    validate_provider_contract(&client, &advertised)?;
     let mut setup_notes = Vec::new();
 
-    if advertised_tool(&advertised, "list_projects") {
-        match discover_indexed_projects(&client, startup_timeout).await {
-            Ok(discovered) => scope.apply_discovered_projects(discovered, true),
-            Err(error) if config.mode == CodebaseMemoryMode::Auto => {
-                setup_notes.push(format!(
-                    "could not read codebase-memory project list; aliases use prepared repo names only: {error}"
-                ));
-                scope.apply_discovered_projects(Vec::new(), false);
-            }
-            Err(error) => return Err(error),
+    match discover_workspace_projects(&client, startup_timeout, &scope).await {
+        Ok(states) => scope.apply_targeted_discovery(states),
+        Err(error) if config.mode == CodebaseMemoryMode::Auto => {
+            scope.mark_discovery_unavailable();
+            setup_notes.push(format!(
+                "safe targeted project discovery was unavailable; indexing was skipped for every prepared repo and no path-keyed fallback was attempted: {error}"
+            ));
+            // A request timeout contains the MCP child, so replace the client
+            // before exposing read-only tools. Re-validate the replacement but
+            // deliberately do not retry unknown discovery or index from it.
+            client =
+                StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone())
+                    .await?;
+            advertised = client.list_tools(startup_timeout).await?;
+            validate_provider_contract(&client, &advertised)?;
         }
-    } else {
-        scope.apply_discovered_projects(Vec::new(), false);
+        Err(error) => return Err(error),
     }
 
-    setup_notes.extend(
-        prepare_indexes(
-            config,
-            &client,
-            &mcp_config,
-            &advertised,
-            &mut scope,
-            containment,
-        )
-        .await?,
-    );
+    setup_notes
+        .extend(prepare_indexes(config, &mcp_config, &advertised, &mut scope, containment).await?);
     scope.rebuild_alias_map();
     let prompt_status = scope.prompt_status(config.index, &setup_notes);
     let scope = Arc::new(scope);
