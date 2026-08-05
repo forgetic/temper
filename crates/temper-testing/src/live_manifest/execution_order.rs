@@ -115,6 +115,16 @@ pub(super) fn validate_action_order(
                     }
                 }
             }
+            ManifestAction::SeedTerminalHistory { fixture } => {
+                prerequisite(temper_started, "temper.launch_standalone")?;
+                prerequisite(repository_seeded, "repo.seed")?;
+                if !issue_bindings.insert(fixture.actionable_issue_id.as_str()) {
+                    return Err(format!(
+                        "step `{}` reuses issue id or binding `{}`",
+                        step.id, fixture.actionable_issue_id
+                    ));
+                }
+            }
             ManifestAction::SeedPullRequest {
                 source_issue_id, ..
             } => {

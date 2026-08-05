@@ -17,7 +17,7 @@ use super::runtime_fake::ManifestFake;
 use super::{
     ConvergenceStrategy, FinalStateEvidence, LiveCodebaseMemoryEvidence, LiveHandoffEvidence,
     LiveLogPaths, LiveManifestEvidence, LiveManifestHarness, LivePlanFeatureEvidence,
-    ManifestAction, ManifestStep, StimulusKind, StimulusOutcome,
+    LiveTerminalHistoryEvidence, ManifestAction, ManifestStep, StimulusKind, StimulusOutcome,
 };
 use crate::forgejo_runtime::RunWorkspace;
 use crate::forgejo_server::{ForgejoRunner, ForgejoServer, start_cached_bare_admin_server};
@@ -81,6 +81,7 @@ struct LiveExecutionContext<'a> {
     initial_default_branch_sha: Option<String>,
     stimuli: Vec<StimulusOutcome>,
     convergence: Option<ConvergenceOutput>,
+    terminal_history: Option<LiveTerminalHistoryEvidence>,
 }
 
 struct ConvergenceOutput {
@@ -129,6 +130,7 @@ impl<'a> LiveExecutionContext<'a> {
             initial_default_branch_sha: None,
             stimuli: Vec::new(),
             convergence: None,
+            terminal_history: None,
         }
     }
 
@@ -158,6 +160,7 @@ impl<'a> LiveExecutionContext<'a> {
                 binding.as_deref(),
                 after_pr_binding.as_deref(),
             ),
+            ManifestAction::SeedTerminalHistory { fixture } => self.seed_terminal_history(fixture),
             ManifestAction::SeedPullRequest {
                 repo_id,
                 source_issue_id,
@@ -473,6 +476,27 @@ impl<'a> LiveExecutionContext<'a> {
                     )?;
                     (state, None, None, Some(evidence))
                 }
+                ConvergenceStrategy::HistoryIndependentTerminalRecovery => {
+                    let history = self.terminal_history.as_ref().ok_or_else(|| {
+                        "history-independent convergence requires history.seed_terminal evidence"
+                            .to_string()
+                    })?;
+                    let state = super::terminal_history::converge(
+                        forge,
+                        repository,
+                        ItemNumber::new(history.actionable_issue_number),
+                        ItemNumber::new(history.actionable_pull_request_number),
+                        &mut standalone,
+                        timeout,
+                        &self.logs.standalone_log,
+                    )?;
+                    let (actionable_recovered, cold_authority_rebuilt) =
+                        super::terminal_history::recovery_observations(&self.logs.standalone_log);
+                    let history = self.terminal_history.as_mut().expect("checked above");
+                    history.actionable_recovered = actionable_recovered;
+                    history.cold_authority_rebuilt = cold_authority_rebuilt;
+                    (state, None, None, None)
+                }
             })
         })();
         self.standalone = Some(standalone);
@@ -546,6 +570,7 @@ pub(super) fn action_name(action: &ManifestAction) -> &'static str {
         ManifestAction::StartJig { .. } => "jig.fake_llm",
         ManifestAction::LaunchTemper { .. } => "temper.launch_standalone",
         ManifestAction::SeedIssue { .. } => "issue.seed",
+        ManifestAction::SeedTerminalHistory { .. } => "history.seed_terminal",
         ManifestAction::SeedPullRequest { .. } => "pr.seed_existing",
         ManifestAction::StartCodebaseMemoryMcp { .. } => "mcp.fake_codebase_memory.start",
         ManifestAction::ConfigureAgentTools { .. } => "agent.tools.configure",

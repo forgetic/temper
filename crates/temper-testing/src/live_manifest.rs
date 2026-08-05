@@ -26,6 +26,7 @@ mod standalone_shutdown;
 mod stimuli;
 #[cfg(test)]
 mod stimulus_manifest_tests;
+mod terminal_history;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,7 +36,7 @@ use crate::forgejo_runtime::RunWorkspace;
 pub use bundle::{
     AgentFixture, ConvergenceStrategy, IntakeFixture, LateStreamFailureBurst,
     LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan, ManifestStep,
-    ObservabilityFixture, RecoveryFixture, RepoFixture, ScenarioBundle,
+    ObservabilityFixture, RecoveryFixture, RepoFixture, ScenarioBundle, TerminalHistorySeedFixture,
 };
 pub use failure_evidence::{CiFailureEvidenceFixture, LiveCiFailureEvidence};
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
@@ -191,8 +192,26 @@ pub struct LiveManifestEvidence {
     pub handoff: Option<LiveHandoffEvidence>,
     pub codebase_memory: Option<LiveCodebaseMemoryEvidence>,
     pub plan_feature: Option<LivePlanFeatureEvidence>,
+    /// Scenario-seeded terminal-history shape and webhook-isolation facts.
+    pub terminal_history: Option<LiveTerminalHistoryEvidence>,
     pub stimuli: Vec<StimulusOutcome>,
     pub logs: LiveLogPaths,
+}
+
+/// Structured facts from a bounded terminal-history seed action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveTerminalHistoryEvidence {
+    pub actionable_issue_number: u64,
+    pub actionable_pull_request_number: u64,
+    pub first_history_pull_request_number: u64,
+    pub target_closed_issues: usize,
+    pub target_closed_pull_requests: usize,
+    pub sibling_repo_slug: String,
+    pub sibling_closed_issues: usize,
+    pub webhook_delivery: String,
+    pub actionable_older_than_history: bool,
+    pub actionable_recovered: bool,
+    pub cold_authority_rebuilt: bool,
 }
 
 impl LiveManifestEvidence {
@@ -291,6 +310,21 @@ impl LiveManifestEvidence {
                 service.issuer,
                 service.protected_producers,
                 service.published_proofs
+            ));
+        }
+        if let Some(history) = &self.terminal_history {
+            lines.push(format!(
+                "  terminal_history: actionable_issue=#{} actionable_pr=#{} target_closed_issues={} target_closed_prs={} sibling={} sibling_closed_issues={} webhook={} older={} recovered={} cold_authority_rebuilt={}",
+                history.actionable_issue_number,
+                history.actionable_pull_request_number,
+                history.target_closed_issues,
+                history.target_closed_pull_requests,
+                history.sibling_repo_slug,
+                history.sibling_closed_issues,
+                history.webhook_delivery,
+                history.actionable_older_than_history,
+                history.actionable_recovered,
+                history.cold_authority_rebuilt,
             ));
         }
         lines.push(format!(

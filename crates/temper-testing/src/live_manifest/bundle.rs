@@ -6,7 +6,7 @@ use toml::Value as TomlValue;
 
 pub use super::execution_plan::{
     AgentFixture, ConvergenceStrategy, LateStreamFailureBurst, LateStreamFailureFixture,
-    ManifestAction, ManifestExecutionPlan, ManifestStep,
+    ManifestAction, ManifestExecutionPlan, ManifestStep, TerminalHistorySeedFixture,
 };
 pub use super::failure_evidence::CiFailureEvidenceFixture;
 

@@ -21,6 +21,9 @@ use super::process::{
 use super::{LiveLogPaths, ScenarioBundle, TemperCommand};
 use crate::forgejo_server::{ForgejoRunner, ForgejoServer};
 
+#[path = "stimuli/discovery.rs"]
+mod discovery;
+
 /// One validated stimulus selected entirely by manifest data.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StimulusSpec {
@@ -52,6 +55,10 @@ pub enum StimulusKind {
         artifact: String,
         deliveries: u64,
     },
+    WaitDiscoveryWarm {
+        role_passes: usize,
+        mechanical_passes: usize,
+    },
     /// Observe (without mutating) a durable provider-recovery generation.
     WaitProviderDeferred {
         artifact: String,
@@ -73,6 +80,7 @@ impl StimulusKind {
             Self::CiFailure { .. } => "ci.fail",
             Self::CiRecovery { .. } => "ci.recover",
             Self::RepeatDelivery { .. } => "delivery.repeat",
+            Self::WaitDiscoveryWarm { .. } => "discovery.wait_warm",
             Self::WaitProviderDeferred { .. } => "provider.wait_deferred",
             Self::ProviderHealthWake { .. } => "provider.health_wake",
         }
@@ -132,6 +140,12 @@ pub trait StimulusRuntime {
         &mut self,
         artifact: &str,
         deliveries: u64,
+        timeout: Duration,
+    ) -> Result<String, String>;
+    fn wait_discovery_warm(
+        &mut self,
+        role_passes: usize,
+        mechanical_passes: usize,
         timeout: Duration,
     ) -> Result<String, String>;
     fn wait_provider_deferred(
@@ -296,6 +310,10 @@ fn dispatch(stimulus: &StimulusSpec, runtime: &mut impl StimulusRuntime) -> Resu
             artifact,
             deliveries,
         } => runtime.repeat_delivery(artifact, *deliveries, stimulus.timeout),
+        StimulusKind::WaitDiscoveryWarm {
+            role_passes,
+            mechanical_passes,
+        } => runtime.wait_discovery_warm(*role_passes, *mechanical_passes, stimulus.timeout),
         StimulusKind::WaitProviderDeferred {
             artifact,
             generation,
@@ -451,6 +469,21 @@ impl StimulusRuntime for LiveStimulusRuntime<'_> {
         Ok(format!(
             "replayed {deliveries} bounded provider deliveries for `{artifact}`"
         ))
+    }
+
+    fn wait_discovery_warm(
+        &mut self,
+        role_passes: usize,
+        mechanical_passes: usize,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        discovery::wait_until_warm(
+            &self.resources.logs.standalone_log,
+            self.resources.standalone,
+            role_passes,
+            mechanical_passes,
+            timeout,
+        )
     }
 
     fn wait_provider_deferred(
@@ -695,6 +728,18 @@ mod tests {
             self.calls
                 .push(format!("delivery.repeat:{artifact}:{deliveries}"));
             Ok(format!("delivered {deliveries} bounded duplicate wakes"))
+        }
+
+        fn wait_discovery_warm(
+            &mut self,
+            role_passes: usize,
+            mechanical_passes: usize,
+            _: Duration,
+        ) -> Result<String, String> {
+            self.calls.push(format!(
+                "discovery.wait_warm:{role_passes}:{mechanical_passes}"
+            ));
+            Ok("warm discovery observed".to_string())
         }
 
         fn wait_provider_deferred(

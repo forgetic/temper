@@ -55,7 +55,13 @@ fn capture_structured_events(
             let Some(fields) = record.get("fields").and_then(JsonValue::as_object) else {
                 continue;
             };
-            let Some(event) = fields.get("event").and_then(JsonValue::as_str) else {
+            // Measurements are structured evidence too. Preserve their stable
+            // name as the event selector when the producer has no `event` field.
+            let Some(event) = fields
+                .get("event")
+                .or_else(|| fields.get("measurement"))
+                .and_then(JsonValue::as_str)
+            else {
                 continue;
             };
             let mut fact_fields = BTreeMap::new();
@@ -96,6 +102,72 @@ fn capture_structured_events(
                 },
             ));
         }
+    }
+    if let Some(history) = &evidence.terminal_history {
+        let fields = BTreeMap::from([
+            ("event".to_string(), "history.seeded".to_string()),
+            (
+                "scenario.run_id".to_string(),
+                evidence.scenario_run_id.clone(),
+            ),
+            (
+                "history.actionable_issue_number".to_string(),
+                history.actionable_issue_number.to_string(),
+            ),
+            (
+                "history.actionable_pull_request_number".to_string(),
+                history.actionable_pull_request_number.to_string(),
+            ),
+            (
+                "history.first_irrelevant_pull_request_number".to_string(),
+                history.first_history_pull_request_number.to_string(),
+            ),
+            (
+                "history.target_closed_issues".to_string(),
+                history.target_closed_issues.to_string(),
+            ),
+            (
+                "history.target_closed_pull_requests".to_string(),
+                history.target_closed_pull_requests.to_string(),
+            ),
+            (
+                "history.sibling_repo".to_string(),
+                history.sibling_repo_slug.clone(),
+            ),
+            (
+                "history.sibling_closed_issues".to_string(),
+                history.sibling_closed_issues.to_string(),
+            ),
+            (
+                "history.webhook_delivery".to_string(),
+                history.webhook_delivery.clone(),
+            ),
+            (
+                "history.actionable_older_than_history".to_string(),
+                history.actionable_older_than_history.to_string(),
+            ),
+            (
+                "history.actionable_recovered".to_string(),
+                history.actionable_recovered.to_string(),
+            ),
+            (
+                "history.cold_authority_rebuilt".to_string(),
+                history.cold_authority_rebuilt.to_string(),
+            ),
+        ]);
+        records.push((
+            String::new(),
+            standalone_logs.len(),
+            0,
+            run_evidence::StructuredEventEvidence {
+                sequence: 0,
+                timestamp: String::new(),
+                event: "history.seeded".to_string(),
+                service: Some("scenario-harness".to_string()),
+                target: Some("temper::scenario".to_string()),
+                fields,
+            },
+        ));
     }
     records.sort_by(|left, right| (&left.0, left.1, left.2).cmp(&(&right.0, right.1, right.2)));
     records
