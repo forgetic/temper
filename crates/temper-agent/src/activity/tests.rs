@@ -308,6 +308,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 bytes: 23,
                 truncated: false,
                 failure: None,
+                codebase_memory_timing: None,
             },
         });
         sink.emit(AgentEvent::ToolEnd {
@@ -322,6 +323,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 bytes: 66,
                 truncated: true,
                 failure: None,
+                codebase_memory_timing: None,
             },
         });
         sink.emit(AgentEvent::ToolStart {
@@ -339,6 +341,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 bytes: secret.len() as u64,
                 truncated: true,
                 failure: None,
+                codebase_memory_timing: None,
             },
         });
         let json =

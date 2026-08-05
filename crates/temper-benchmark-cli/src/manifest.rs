@@ -14,6 +14,8 @@ mod security;
 use security::{InputKind, resolve_declared_path, validate_context_repositories};
 pub(crate) use security::{validate_fixture_tree, validate_relative_path};
 
+use crate::GraphDecisionKindV1;
+
 /// Schema identifier for an agent-session benchmark manifest.
 pub const BENCHMARK_MANIFEST_SCHEMA: &str = "temper.benchmark.v1";
 
@@ -36,6 +38,14 @@ pub struct BenchmarkManifestV1 {
     /// Prefixes which identify successful agent validation commands in traces.
     #[serde(default)]
     pub validation_command_prefixes: Vec<Vec<String>>,
+    /// Shell command prefixes explicitly classified as conventional discovery
+    /// by this benchmark's decision-relevance rubric.
+    #[serde(default)]
+    pub discovery_command_prefixes: Vec<Vec<String>>,
+    /// Expected decision targets used to classify graph results as consumed or
+    /// irrelevant without treating RPC success as usefulness.
+    #[serde(default)]
+    pub graph_decision_targets: Vec<GraphDecisionTargetV1>,
     /// Commands run by the benchmark host after the measured agent session.
     #[serde(default)]
     pub post_run_commands: Vec<Vec<String>>,
@@ -58,6 +68,18 @@ pub struct BenchmarkAnnotationsV1 {
     pub provider_region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_warmth: Option<String>,
+}
+
+/// One fixture-owned target which a graph result may inform. `result_contains`
+/// defaults to `target`, allowing a fixture to distinguish a result marker from
+/// the path later selected by a read or mutation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphDecisionTargetV1 {
+    pub target: String,
+    pub kind: GraphDecisionKindV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_contains: Option<String>,
 }
 
 /// A manifest after all declared inputs have been securely resolved.
@@ -259,6 +281,11 @@ fn validate_manifest_values(manifest: &BenchmarkManifestV1) -> Result<(), Benchm
         "validation_command_prefixes",
         &manifest.validation_command_prefixes,
     )?;
+    validate_argv_lists(
+        "discovery_command_prefixes",
+        &manifest.discovery_command_prefixes,
+    )?;
+    validate_graph_targets(&manifest.graph_decision_targets)?;
     validate_argv_lists("post_run_commands", &manifest.post_run_commands)?;
     validate_annotation(
         "provider_region",
@@ -280,6 +307,22 @@ fn validate_argv_lists(
         if argv.iter().any(|argument| argument.contains('\0')) {
             return Err(BenchmarkManifestError::Invalid(format!(
                 "`{field}[{index}]` contains a NUL byte"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_graph_targets(targets: &[GraphDecisionTargetV1]) -> Result<(), BenchmarkManifestError> {
+    for (index, target) in targets.iter().enumerate() {
+        if target.target.trim().is_empty()
+            || target
+                .result_contains
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(BenchmarkManifestError::Invalid(format!(
+                "`graph_decision_targets[{index}]` target and result marker must not be empty"
             )));
         }
     }

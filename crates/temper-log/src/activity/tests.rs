@@ -193,6 +193,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
                     truncated: false,
                 })),
                 failure: None,
+                codebase_memory_timing: None,
             }),
         ),
         event(

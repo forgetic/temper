@@ -1,6 +1,14 @@
-use temper_protocol_activity::{CapturedContentV1, InlineContentV1};
+use temper_agent_core::CodebaseMemoryTiming;
+use temper_protocol_activity::{CapturedContentV1, CodebaseMemoryTimingV1, InlineContentV1};
 
 use super::{nonempty, sanitized_text};
+
+pub(super) fn graph_timing(timing: Option<CodebaseMemoryTiming>) -> Option<CodebaseMemoryTimingV1> {
+    timing.map(|timing| CodebaseMemoryTimingV1 {
+        readiness_wait_ms: timing.readiness_wait_ms,
+        graph_execution_ms: timing.graph_execution_ms,
+    })
+}
 
 pub(super) fn captured_tool_result(
     name: &str,

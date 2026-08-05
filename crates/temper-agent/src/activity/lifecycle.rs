@@ -521,6 +521,7 @@ mod tests {
                 bytes: 99,
                 truncated: false,
                 failure: None,
+                codebase_memory_timing: None,
             },
         });
         sink.emit(AgentEvent::Steered { count: 1 });

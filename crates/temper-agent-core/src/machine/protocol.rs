@@ -212,6 +212,14 @@ impl ToolFailureDiagnostic {
     }
 }
 
+/// Content-free timing metadata accepted only from Temper's trusted
+/// codebase-memory wrappers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CodebaseMemoryTiming {
+    pub readiness_wait_ms: u64,
+    pub graph_execution_ms: u64,
+}
+
 /// Bounded, text-only metadata derived from a tool result plus an optional
 /// trusted codebase-memory diagnostic. The original byte count and truncation
 /// bit let capture projections describe omitted content without retaining
@@ -222,6 +230,7 @@ pub struct ToolResultMetadata {
     pub bytes: u64,
     pub truncated: bool,
     pub failure: Option<ToolFailureDiagnostic>,
+    pub codebase_memory_timing: Option<CodebaseMemoryTiming>,
 }
 
 /// A live streaming fragment of a model response, forwarded by the shell.

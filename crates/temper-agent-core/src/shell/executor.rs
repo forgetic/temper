@@ -16,8 +16,9 @@ use tongs::tools::ToolRegistry;
 
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
-    CODEBASE_MEMORY_TOOL_PREFIX, OperationGeneration, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallStatus,
-    ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
+    CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, OperationGeneration,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
+    ToolResultMetadata,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
@@ -441,9 +442,11 @@ const TOOL_RESULT_PREVIEW_BYTES: usize = 4 * 1024;
 
 /// Extract a bounded text-only candidate from a tool result. Generic structured
 /// details, signatures, images, and arbitrary JSON never enter the event
-/// protocol. A codebase-memory wrapper may contribute only a stable category.
+/// protocol. A codebase-memory wrapper may contribute only a stable category
+/// and bounded numeric timing fields.
 fn bounded_tool_result(name: &str, output: &tongs::tools::ToolOutput) -> ToolResultMetadata {
     let failure = safe_tool_failure(name, output);
+    let codebase_memory_timing = codebase_memory_timing(name, output);
     let text = output
         .content
         .iter()
@@ -460,6 +463,7 @@ fn bounded_tool_result(name: &str, output: &tongs::tools::ToolOutput) -> ToolRes
             bytes,
             truncated: false,
             failure,
+            codebase_memory_timing,
         };
     }
     let (preview, truncated) = truncate_utf8(&text, TOOL_RESULT_PREVIEW_BYTES);
@@ -468,7 +472,22 @@ fn bounded_tool_result(name: &str, output: &tongs::tools::ToolOutput) -> ToolRes
         bytes,
         truncated,
         failure,
+        codebase_memory_timing,
     }
+}
+
+fn codebase_memory_timing(
+    name: &str,
+    output: &tongs::tools::ToolOutput,
+) -> Option<CodebaseMemoryTiming> {
+    if !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+        return None;
+    }
+    let timing = output.details.as_ref()?.get("timing")?;
+    Some(CodebaseMemoryTiming {
+        readiness_wait_ms: timing.get("readiness_wait_ms")?.as_u64()?,
+        graph_execution_ms: timing.get("graph_execution_ms")?.as_u64()?,
+    })
 }
 
 fn safe_tool_failure(

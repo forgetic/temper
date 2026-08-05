@@ -58,9 +58,14 @@ fixture = {fixture}
 workspace_context = "context.json"
 capture = "diagnostic"
 validation_command_prefixes = [["cargo", "test"], ["./.temper/pre-pr"]]
+discovery_command_prefixes = [["git", "grep"]]
 post_run_commands = [["cargo", "test", "-p", "fixture"]]
 jig_script = "jig.json"
 repetitions = 2
+
+[[graph_decision_targets]]
+target = "one/src/lib.rs"
+kind = "implementation"
 
 [annotations]
 provider_region = "local"
@@ -94,6 +99,14 @@ fn manifest_resolves_inputs_relative_to_its_own_directory() {
 
     assert_eq!(manifest.manifest().name, "secure-workspace");
     assert_eq!(manifest.manifest().repetitions, 2);
+    assert_eq!(
+        manifest.manifest().discovery_command_prefixes[0],
+        ["git", "grep"]
+    );
+    assert_eq!(
+        manifest.manifest().graph_decision_targets[0].target,
+        "one/src/lib.rs"
+    );
     assert_eq!(
         manifest.manifest().annotations.provider_region.as_deref(),
         Some("local")

@@ -413,10 +413,18 @@ fn finalize_repetition(
         .iter()
         .map(|argv| argv.join(" "))
         .collect();
+    let discovery_prefixes = manifest
+        .manifest()
+        .discovery_command_prefixes
+        .iter()
+        .map(|argv| argv.join(" "))
+        .collect();
     let mut summary = analyze_trace(
         &trace,
         &AnalyzeOptions {
             validation_command_prefixes: prefixes,
+            discovery_command_prefixes: discovery_prefixes,
+            graph_decision_targets: manifest.manifest().graph_decision_targets.clone(),
         },
     );
     summary.benchmark = Some(BenchmarkRunV1 {
