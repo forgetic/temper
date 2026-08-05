@@ -402,19 +402,21 @@ pub(crate) async fn read_reconciliation_candidates<F: Forge + ?Sized>(
         issue_queries: reconciliation.issue_queries,
         pull_request_queries: reconciliation.pull_request_queries,
     };
-    discovery::read_candidate_summaries(
+    let mut measurement = discovery::CandidateDiscoveryMeasurement::new(forge, &plan);
+    let result = discovery::read_candidate_summaries(
         forge,
         repo,
         workflow,
         &plan,
-        "mechanical",
-        "reconciliation",
         now,
         Some((discovery, TerminalDiscoveryRead::Advance)),
         exact_targets,
         true,
+        &mut measurement,
     )
-    .await
+    .await;
+    measurement.emit(forge, repo, "mechanical", "reconciliation", result.is_ok());
+    result
 }
 
 /// Loads and classifies exactly one explicitly typed artifact.

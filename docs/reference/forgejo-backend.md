@@ -133,15 +133,31 @@ closed/merged filtering. Exact PR summary reads similarly perform only
 use `/issues/{number}/dependencies`.
 
 The checked-in 17-label `reference-delivery` workflow remains bounded by the
-fixed per-page provider ceilings above. Exact request count depends on the
-number of populated normalized label streams rather than on terminal-history
-cardinality. Summary exact reads remain separately bounded by retained rows.
+fixed per-pass provider ceilings above. Exact request count depends on populated
+normalized label streams, not on total terminal-history cardinality. Overflow
+commits a typed continuation and returns control to the wake coordinator; it
+never extends the current list traversal beyond 64 requests or 1,001 decoded
+rows. A default 100-row PR page can additionally make at most 100 exact summary
+reads when every retained row lacks an unambiguous merge marker, so the full
+terminal bucket remains at or below a fixed 164 provider requests. With the portable
+100-row retained page, `N` matching terminal rows need at most `ceil(N/100)` successful cold generations. Summary exact reads remain
+separately bounded by rows in that provider-retained page.
+
+Continuation and retained-target state live in the runner, not this stateless
+backend. The default runner owner bounds 64 repositories, eight buckets and 256
+exact targets per repository. Process restart is cold. Workflow-fingerprint or
+bucket changes, non-advancing/provider anomalies, and local workflow mutations
+invalidate sweep authority; failed HTTP/status/decode pages preserve the last
+committed cursor. Targeted webhooks retain a bounded exact target but do not
+short-circuit the next periodic sweep. Explicit deep audit uses ordinary
+whole-history lists and is intentionally outside all periodic row/request and
+latency guarantees.
 
 Terminal requests always include workflow-derived labels. An ambiguous closed
-PR row may add a summary exact read only after that row is retained in the
-current bounded page; historical rows beyond the continuation window add no
-`/pulls/{number}` traffic. Cold dependency-gated reconciliation may
-additionally perform one full exact read per uncached source; the long-lived
+PR row may add a summary exact read only after it enters the current bounded
+provider page; ambiguous history beyond the continuation window adds no
+`/pulls/{number}` traffic. Cold dependency-gated reconciliation may additionally
+perform one full exact read per uncached retained source; the long-lived
 mechanical cache removes those reads on an unchanged warm pass and forcibly
 refreshes them within 15 minutes.
 

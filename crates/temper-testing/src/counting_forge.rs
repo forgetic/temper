@@ -73,10 +73,19 @@ pub struct ExactPullRequestRead {
 pub struct ForgeReadShape {
     /// Consolidated issue/PR candidate-list calls.
     pub candidate_list_calls: usize,
+    pub issue_candidate_list_calls: usize,
+    pub pull_request_candidate_list_calls: usize,
     /// Exact artifact reads that requested summary detail only.
     pub exact_summary_reads: usize,
     /// Exact artifact reads that requested dependency-enriched full detail.
     pub exact_full_reads: usize,
+    pub exact_issue_reads: usize,
+    pub exact_pull_request_reads: usize,
+    /// Full exact reads that can hydrate native dependency relations.
+    pub dependency_detail_reads: usize,
+    pub ci_reads: usize,
+    pub review_reads: usize,
+    pub comment_reads: usize,
 }
 
 pub struct CountingForge<F: Forge> {
@@ -297,12 +306,26 @@ impl<F: Forge> CountingForge<F> {
                     .filter(|read| read.details.dependencies)
                     .count(),
             );
+        let issue_candidate_list_calls = self.count(CountedForgeOp::ListIssueCandidates);
+        let pull_request_candidate_list_calls =
+            self.count(CountedForgeOp::ListPullRequestCandidates);
         ForgeReadShape {
-            candidate_list_calls: self
-                .count(CountedForgeOp::ListIssueCandidates)
-                .saturating_add(self.count(CountedForgeOp::ListPullRequestCandidates)),
+            candidate_list_calls: issue_candidate_list_calls
+                .saturating_add(pull_request_candidate_list_calls),
+            issue_candidate_list_calls,
+            pull_request_candidate_list_calls,
             exact_summary_reads,
             exact_full_reads,
+            exact_issue_reads: exact_issue_reads.len(),
+            exact_pull_request_reads: exact_pull_request_reads.len(),
+            dependency_detail_reads: exact_full_reads,
+            ci_reads: self
+                .count(CountedForgeOp::ListCiJobs)
+                .saturating_add(self.count(CountedForgeOp::GetCiJob)),
+            review_reads: self.count(CountedForgeOp::ListPullRequestReviews),
+            comment_reads: self
+                .count(CountedForgeOp::ListIssueComments)
+                .saturating_add(self.count(CountedForgeOp::ListPullRequestComments)),
         }
     }
 

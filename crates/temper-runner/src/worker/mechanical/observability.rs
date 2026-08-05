@@ -113,6 +113,11 @@ pub(super) fn log_mechanical_reconciliation_summary(
         mechanical.scope = "broad",
         mode = reconciliation_mode_name(mode),
         snapshot_count = saturating_u64(report.snapshot_count),
+        hydrated_artifact_count = saturating_u64(report.snapshot_count),
+        exact_detail_read_count = report
+            .cache_stats
+            .misses
+            .saturating_add(report.cache_stats.forced_refreshes),
         detail_cache.hit_count = report.cache_stats.hits,
         detail_cache.miss_count = report.cache_stats.misses,
         detail_cache.forced_refresh_count = report.cache_stats.forced_refreshes,

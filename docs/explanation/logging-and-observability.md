@@ -258,16 +258,33 @@ inherited `wake.run_id` without a second admission or execution path.
 
 Broad list work additionally emits `measurement=candidate.discovery` exactly
 once per consumer pass. Its fields are `repo`, `candidate.consumer=role|mechanical`,
-`candidate.scope=normal|wake|audit|reconciliation|automation`, numeric
-`candidate.logical_bucket_count`, numeric `candidate.unique_count` before local
-classification/queue filtering, `outcome`, and numeric `duration_ms`. When the
+`candidate.scope=normal|wake|audit|reconciliation|automation`, and these numeric
+cardinality stages:
+
+- `candidate.logical_bucket_count`: planned lifecycle/type buckets;
+- `candidate.logical_query_count`: buckets actually sent this pass (completed or
+  retained-only terminal buckets are not sent);
+- `candidate.raw_provider_row_count` and `candidate.unique_row_count` (also
+  available under the compatibility name `candidate.unique_count`): rows before
+  and after typed-identity deduplication;
+- `candidate.retained_row_count`: rows that survived terminal recovery interest;
+- `candidate.hydrated_artifact_count` and `candidate.exact_detail_read_count`:
+  retained artifacts and exact issue/PR detail operations that crossed the
+  summary boundary;
+- `candidate.continuation_bucket_count`, `candidate.overflow_bucket_count`, and
+  `candidate.completed_bucket_count`.
+
+Boolean `candidate.discovery_cache_reused`, `candidate.discovery_complete`, and
+`candidate.retained_overflow` expose continuation authority and bounded target
+retention. `outcome` and numeric `duration_ms` complete the record. When the
 backend exposes a counter, `candidate.provider_request_total` is the actual
-provider request delta around candidate-list calls and
-`candidate.provider_requests_available=true`; otherwise the numeric total is
-zero and the availability flag is false. This measurement performs no Forge I/O.
+provider request delta and `candidate.provider_requests_available=true`;
+otherwise the numeric total is zero and the availability flag is false. This
+measurement performs no Forge I/O and inherits the admitted `wake.run_id`.
 
 Broad reconciliation also emits `measurement=mechanical.reconciliation` with
-numeric `snapshot_count` and cache fields `detail_cache.hit_count`,
+numeric `snapshot_count`, `hydrated_artifact_count`, and
+`exact_detail_read_count`, plus cache fields `detail_cache.hit_count`,
 `detail_cache.miss_count`, `detail_cache.forced_refresh_count`,
 `detail_cache.invalidation_count`, and `detail_cache.eviction_count`. Candidate,
 cache, and phase records run under the admitted wake span and therefore inherit
@@ -312,12 +329,17 @@ journalctl -u temper -o cat | jq -c \
    {phase:."mechanical.phase",scope:."mechanical.scope",outcome,duration_ms,
     requests:(if ."provider.requests_available" then ."provider.request_total" else null end)}'
 
-# Candidate volume, logical buckets, and provider list traffic for one wake.
+# Candidate cardinality, continuation state, and provider traffic for one wake.
 journalctl -u temper -o cat | jq -c \
   'select(.measurement=="candidate.discovery" and
           (.span."wake.run_id" // ."wake.run_id")=="acme/widgets:17") |
    {consumer:."candidate.consumer",scope:."candidate.scope",
-    buckets:."candidate.logical_bucket_count",unique:."candidate.unique_count",
+    buckets:."candidate.logical_bucket_count",queries:."candidate.logical_query_count",
+    raw:."candidate.raw_provider_row_count",unique:."candidate.unique_row_count",
+    retained:."candidate.retained_row_count",hydrated:."candidate.hydrated_artifact_count",
+    exact:."candidate.exact_detail_read_count",reused:."candidate.discovery_cache_reused",
+    continuations:."candidate.continuation_bucket_count",overflow:."candidate.overflow_bucket_count",
+    complete:."candidate.discovery_complete",
     requests:(if ."candidate.provider_requests_available" then ."candidate.provider_request_total" else null end),
     outcome,duration_ms}'
 
@@ -341,14 +363,26 @@ journalctl -u temper -o cat | jq -c \
 
 If a phase is slow, inspect its matching `candidate.discovery` first: a logical
 bucket count above four for role/reconciliation (or above two for automation) is
-a planning regression; a larger provider delta with the same logical count
-usually means pagination. Compare the provider delta with Forge HTTP records
-carrying the same `wake.run_id`. A high delta points to query shape or fan-out;
-a small delta with high `duration_ms` points to slow individual provider calls.
-Cache misses are expected on cold startup, fingerprint change, or invalidation;
-unchanged warm passes should report hits, while forced refreshes prove the
-15-minute missed-hint convergence bound is active. When
-`provider.requests_available=false`, count the correlated HTTP `operation`
+a planning regression. `logical_query_count` may be lower while completed
+terminal buckets or a retained-only consumer reuse discovery state. Forgejo
+bounds every terminal bucket to at most 1,001 decoded rows and 64 provider list
+requests in one pass. A default PR page can add at most 100 exact summary reads
+for ambiguous merge markers, preserving a 164-request total worst case. Overflow
+therefore appears as a continuation rather than unbounded same-pass pagination. Compare the provider delta with Forge HTTP
+records carrying the same `wake.run_id`. Raw rows growing while retained,
+hydrated, and exact counts remain flat is expected during a cold history sweep;
+any hydration growth from irrelevant rows is an N+1 regression. A small delta
+with high `duration_ms` points to slow individual provider calls.
+
+Cache misses are expected on cold startup, workflow-fingerprint change, or
+explicit invalidation. A process restart discards continuation memory and starts
+a new frozen sweep; provider failures preserve the last committed cursor.
+Unchanged warm passes should report discovery/cache reuse and detail-cache hits,
+while forced refreshes prove the 15-minute missed-hint convergence bound is
+active. `retained_overflow=true` means the deterministic 256-target repository
+bound was hit and requires operator inspection. Whole-history diagnosis remains
+an explicit deep audit and is intentionally outside these periodic budgets.
+When `provider.requests_available=false`, count the correlated HTTP `operation`
 records instead. A repeated eligible `gate.evaluated` record proves only that
 state was read; look for a paired landing-attempt `started` and terminal record
 to prove Temper actually tried the merge.

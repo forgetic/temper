@@ -337,16 +337,37 @@ async fn read_reconciliation_candidate_summaries<F: Forge + ?Sized>(
         .saturating_add(plan.pull_request_queries.len());
     let mut issues = Vec::new();
     let mut pull_requests = Vec::new();
+    let mut logical_query_count = 0usize;
+    let mut raw_provider_row_count = 0usize;
+    let mut continuation_bucket_count = 0usize;
+    let mut overflow_bucket_count = 0usize;
+    let mut completed_bucket_count = 0usize;
     let result: Result<(), ReconcileError> = async {
         for query in &plan.issue_queries {
-            issues.extend(forge.list_issue_candidates(repo_id, query.clone()).await?);
+            logical_query_count = logical_query_count.saturating_add(1);
+            let page = forge.list_issue_candidates(repo_id, query.clone()).await?;
+            raw_provider_row_count = raw_provider_row_count.saturating_add(page.raw_count);
+            continuation_bucket_count =
+                continuation_bucket_count.saturating_add(usize::from(page.continuation.is_some()));
+            overflow_bucket_count =
+                overflow_bucket_count.saturating_add(usize::from(page.overflow));
+            completed_bucket_count =
+                completed_bucket_count.saturating_add(usize::from(page.exhausted));
+            issues.extend(page);
         }
         for query in &plan.pull_request_queries {
-            pull_requests.extend(
-                forge
-                    .list_pull_request_candidates(repo_id, query.clone())
-                    .await?,
-            );
+            logical_query_count = logical_query_count.saturating_add(1);
+            let page = forge
+                .list_pull_request_candidates(repo_id, query.clone())
+                .await?;
+            raw_provider_row_count = raw_provider_row_count.saturating_add(page.raw_count);
+            continuation_bucket_count =
+                continuation_bucket_count.saturating_add(usize::from(page.continuation.is_some()));
+            overflow_bucket_count =
+                overflow_bucket_count.saturating_add(usize::from(page.overflow));
+            completed_bucket_count =
+                completed_bucket_count.saturating_add(usize::from(page.exhausted));
+            pull_requests.extend(page);
         }
         Ok(())
     }
@@ -368,9 +389,21 @@ async fn read_reconciliation_candidate_summaries<F: Forge + ?Sized>(
         candidate.consumer = "mechanical",
         candidate.scope = "reconciliation",
         candidate.logical_bucket_count = saturating_u64(logical_bucket_count),
+        candidate.logical_query_count = saturating_u64(logical_query_count),
+        candidate.raw_provider_row_count = saturating_u64(raw_provider_row_count),
+        candidate.unique_count = saturating_u64(unique_count),
+        candidate.unique_row_count = saturating_u64(unique_count),
+        candidate.retained_row_count = saturating_u64(unique_count),
+        candidate.hydrated_artifact_count = 0_u64,
+        candidate.exact_detail_read_count = 0_u64,
+        candidate.discovery_cache_reused = false,
+        candidate.continuation_bucket_count = saturating_u64(continuation_bucket_count),
+        candidate.overflow_bucket_count = saturating_u64(overflow_bucket_count),
+        candidate.completed_bucket_count = saturating_u64(completed_bucket_count),
+        candidate.discovery_complete = completed_bucket_count == logical_bucket_count,
+        candidate.retained_overflow = false,
         candidate.provider_request_total = provider_requests.unwrap_or(0),
         candidate.provider_requests_available = provider_requests.is_some(),
-        candidate.unique_count = saturating_u64(unique_count),
         outcome,
         duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         "candidate discovery {outcome} for mechanical/reconciliation"

@@ -213,6 +213,31 @@ when its fingerprint is unchanged. Thus polling remains sufficient for
 convergence after webhook loss: the cache changes request shape, never the
 fresh-state correctness model or the executor's mandatory pre-mutation read.
 
+Terminal discovery is a frozen, oldest-first continuation sweep, not a
+newest-only limit. A periodic pass plans at most four lifecycle/type buckets.
+Forgejo allows no terminal bucket more than 1,001 decoded rows or 64 provider
+list requests in one pass. A default 100-row PR page can add at most 100 exact
+summary reads when every retained row has ambiguous merge state, for a
+worst-case 164 provider requests per terminal bucket. Overflow commits a
+continuation and schedules another coordinator generation. At the portable 100-row page size, recovery authority
+for `N` matching rows takes at most `ceil(N/100)` successful generations.
+Concurrent rows beyond the frozen boundary wait for the next sweep, so they do
+not displace old recovery evidence.
+
+The continuation owner is volatile and bounded: by default 64 repositories,
+eight terminal buckets and 256 retained exact targets per repository, and a
+256-byte workflow fingerprint. Restart is deliberately cold and rebuilds
+complete authority. Workflow/bucket changes, non-advancing provider state, and
+local recovery or automation mutations invalidate the sweep; a failed page does
+not advance its last committed cursor. Bounded retained targets survive
+invalidation, and deterministic overflow is observable. These rules bound
+memory and per-pass traffic, not total cold-recovery generations.
+
+Normal polls never widen to all terminal history. `DeepAudit` is the explicit,
+operator-requested whole-history boundary and intentionally carries no periodic
+request, row, or latency guarantee. Webhooks only accelerate exact targets and
+cannot weaken this restart/recovery contract.
+
 ### Portable push, if ever needed
 
 Do not add a notification method to `Forge`. If backend-agnostic push is wanted,

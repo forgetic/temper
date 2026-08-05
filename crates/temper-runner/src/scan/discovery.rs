@@ -17,6 +17,146 @@ use temper_forge::{
 use temper_log::strip_provider_scheme;
 use temper_workflow::ValidatedWorkflow;
 
+/// Per-pass candidate cardinality and traversal measurement.
+///
+/// Provider rows may be duplicated across any-label streams, while only rows
+/// that survive terminal recovery interest are retained for later hydration.
+pub(super) struct CandidateDiscoveryMeasurement {
+    started: Instant,
+    provider_requests_before: Option<u64>,
+    logical_bucket_count: usize,
+    logical_query_count: usize,
+    raw_provider_row_count: usize,
+    unique_rows: BTreeSet<ArtifactAddress>,
+    retained_rows: BTreeSet<ArtifactAddress>,
+    hydrated_artifact_count: usize,
+    exact_detail_read_count: usize,
+    discovery_cache_reused: bool,
+    continuation_bucket_count: usize,
+    overflow_bucket_count: usize,
+    completed_bucket_count: usize,
+    discovery_complete: bool,
+    retained_overflow: bool,
+}
+
+impl CandidateDiscoveryMeasurement {
+    pub(super) fn new<F: Forge + ?Sized>(forge: &F, plan: &CandidateQueryPlan) -> Self {
+        Self {
+            started: Instant::now(),
+            provider_requests_before: forge.provider_request_count(),
+            logical_bucket_count: plan
+                .issue_queries
+                .len()
+                .saturating_add(plan.pull_request_queries.len()),
+            logical_query_count: 0,
+            raw_provider_row_count: 0,
+            unique_rows: BTreeSet::new(),
+            retained_rows: BTreeSet::new(),
+            hydrated_artifact_count: 0,
+            exact_detail_read_count: 0,
+            discovery_cache_reused: false,
+            continuation_bucket_count: 0,
+            overflow_bucket_count: 0,
+            completed_bucket_count: 0,
+            discovery_complete: false,
+            retained_overflow: false,
+        }
+    }
+
+    pub(super) fn record_exact_detail_read(&mut self) {
+        self.exact_detail_read_count = self.exact_detail_read_count.saturating_add(1);
+    }
+
+    pub(super) fn record_hydrated_artifact(&mut self) {
+        self.hydrated_artifact_count = self.hydrated_artifact_count.saturating_add(1);
+    }
+
+    pub(super) fn emit<F: Forge + ?Sized>(
+        &self,
+        forge: &F,
+        repo: &RepositoryId,
+        consumer: &'static str,
+        scope: &'static str,
+        success: bool,
+    ) {
+        let provider_requests = self.provider_requests_before.and_then(|before| {
+            forge
+                .provider_request_count()
+                .map(|after| after.saturating_sub(before))
+        });
+        let outcome = if success { "success" } else { "failed" };
+        tracing::debug!(
+            target: "temper::worker",
+            measurement = "candidate.discovery",
+            repo = strip_provider_scheme(repo.as_str()),
+            candidate.consumer = consumer,
+            candidate.scope = scope,
+            candidate.logical_bucket_count = saturating_u64(self.logical_bucket_count),
+            candidate.logical_query_count = saturating_u64(self.logical_query_count),
+            candidate.raw_provider_row_count = saturating_u64(self.raw_provider_row_count),
+            candidate.unique_count = saturating_u64(self.unique_rows.len()),
+            candidate.unique_row_count = saturating_u64(self.unique_rows.len()),
+            candidate.retained_row_count = saturating_u64(self.retained_rows.len()),
+            candidate.hydrated_artifact_count = saturating_u64(self.hydrated_artifact_count),
+            candidate.exact_detail_read_count = saturating_u64(self.exact_detail_read_count),
+            candidate.discovery_cache_reused = self.discovery_cache_reused,
+            candidate.continuation_bucket_count = saturating_u64(self.continuation_bucket_count),
+            candidate.overflow_bucket_count = saturating_u64(self.overflow_bucket_count),
+            candidate.completed_bucket_count = saturating_u64(self.completed_bucket_count),
+            candidate.discovery_complete = self.discovery_complete,
+            candidate.retained_overflow = self.retained_overflow,
+            candidate.provider_request_total = provider_requests.unwrap_or(0),
+            candidate.provider_requests_available = provider_requests.is_some(),
+            outcome,
+            duration_ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            "candidate discovery {outcome} for {consumer}/{scope}"
+        );
+    }
+
+    fn record_query(&mut self) {
+        self.logical_query_count = self.logical_query_count.saturating_add(1);
+    }
+
+    fn record_issue_page(&mut self, page: &IssueCandidatePage) {
+        self.raw_provider_row_count = self.raw_provider_row_count.saturating_add(page.raw_count);
+        self.unique_rows.extend(
+            page.items
+                .iter()
+                .map(|issue| ArtifactAddress::issue(issue.number)),
+        );
+    }
+
+    fn record_pull_request_page(&mut self, page: &PullRequestCandidatePage) {
+        self.raw_provider_row_count = self.raw_provider_row_count.saturating_add(page.raw_count);
+        self.unique_rows.extend(
+            page.items
+                .iter()
+                .map(|pull_request| ArtifactAddress::pull_request(pull_request.number)),
+        );
+    }
+
+    fn observe_snapshot(&mut self, snapshot: &TerminalDiscoverySnapshot) {
+        self.discovery_cache_reused = snapshot.cache_reused;
+        self.continuation_bucket_count = snapshot
+            .buckets
+            .values()
+            .filter(|bucket| bucket.continuation.is_some())
+            .count();
+        self.overflow_bucket_count = snapshot
+            .buckets
+            .values()
+            .filter(|bucket| bucket.overflow)
+            .count();
+        self.completed_bucket_count = snapshot
+            .buckets
+            .values()
+            .filter(|bucket| bucket.complete)
+            .count();
+        self.discovery_complete = snapshot.authoritative;
+        self.retained_overflow = snapshot.retained_overflow;
+    }
+}
+
 pub(super) fn initialize_terminal_discovery(
     discovery: &TerminalDiscoveryState,
     repo: &RepositoryId,
@@ -38,19 +178,12 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
     repo: &RepositoryId,
     workflow: &ValidatedWorkflow,
     query_plan: &CandidateQueryPlan,
-    consumer: &'static str,
-    scope: &'static str,
     now: DateTime<Utc>,
     discovery: Option<(&TerminalDiscoveryState, TerminalDiscoveryRead)>,
     exact_targets: &[ArtifactAddress],
     include_filtered_terminal_summaries: bool,
+    measurement: &mut CandidateDiscoveryMeasurement,
 ) -> Result<(Vec<Issue>, Vec<PullRequest>), ScanError> {
-    let started = Instant::now();
-    let provider_requests_before = forge.provider_request_count();
-    let logical_bucket_count = query_plan
-        .issue_queries
-        .len()
-        .saturating_add(query_plan.pull_request_queries.len());
     let owned_state = discovery.is_none().then(TerminalDiscoveryState::default);
     let (discovery, terminal_read) = match discovery {
         Some(discovery) => discovery,
@@ -61,6 +194,7 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
     };
     let fingerprint = workflow_fingerprint(workflow);
     let snapshot = initialize_terminal_discovery(discovery, repo, workflow, query_plan)?;
+    measurement.observe_snapshot(&snapshot);
     let retained = snapshot
         .retained_targets
         .iter()
@@ -75,6 +209,8 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
         for target in exact {
             match target.kind {
                 temper_forge::HintArtifactKind::Issue => {
+                    measurement.exact_detail_read_count =
+                        measurement.exact_detail_read_count.saturating_add(1);
                     let issue = forge
                         .get_issue_by_number_with_details(
                             repo,
@@ -86,6 +222,9 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                         discovery.remove_exact_target(repo, target);
                         continue;
                     };
+                    measurement.hydrated_artifact_count =
+                        measurement.hydrated_artifact_count.saturating_add(1);
+                    measurement.unique_rows.insert(target);
                     let terminal = issue.state == IssueState::Closed;
                     let actionable = !terminal
                         || temper_workflow::terminal_issue_recovery_interest(workflow, &issue);
@@ -93,10 +232,13 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                         discovery.remove_exact_target(repo, target);
                     }
                     if forced.contains(&target) || actionable {
+                        measurement.retained_rows.insert(target);
                         issues.push(issue);
                     }
                 }
                 temper_forge::HintArtifactKind::PullRequest => {
+                    measurement.exact_detail_read_count =
+                        measurement.exact_detail_read_count.saturating_add(1);
                     let pull_request = forge
                         .get_pull_request_by_number_with_details(
                             repo,
@@ -108,6 +250,9 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                         discovery.remove_exact_target(repo, target);
                         continue;
                     };
+                    measurement.hydrated_artifact_count =
+                        measurement.hydrated_artifact_count.saturating_add(1);
+                    measurement.unique_rows.insert(target);
                     let terminal = pull_request.state != PullRequestState::Open;
                     let actionable = !terminal
                         || temper_workflow::terminal_pull_request_recovery_interest(
@@ -118,6 +263,7 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                         discovery.remove_exact_target(repo, target);
                     }
                     if forced.contains(&target) || actionable {
+                        measurement.retained_rows.insert(target);
                         pull_requests.push(pull_request);
                     }
                 }
@@ -126,13 +272,18 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
 
         for query in &query_plan.issue_queries {
             if query.lifecycle == CandidateLifecycle::Open {
-                issues.extend(
-                    forge
-                        .list_issue_candidates(repo, query.clone())
-                        .await?
-                        .into_iter()
-                        .filter(|issue| issue.state == IssueState::Open),
+                measurement.record_query();
+                let page = forge.list_issue_candidates(repo, query.clone()).await?;
+                measurement.record_issue_page(&page);
+                let open = page
+                    .into_iter()
+                    .filter(|issue| issue.state == IssueState::Open)
+                    .collect::<Vec<_>>();
+                measurement.retained_rows.extend(
+                    open.iter()
+                        .map(|issue| ArtifactAddress::issue(issue.number)),
                 );
+                issues.extend(open);
                 continue;
             }
             let bucket =
@@ -156,6 +307,7 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                 }
                 None => None,
             };
+            measurement.record_query();
             let page = match forge.list_issue_candidates(repo, query).await {
                 Ok(page) => page,
                 Err(error) => {
@@ -165,6 +317,7 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                     return Err(error.into());
                 }
             };
+            measurement.record_issue_page(&page);
             let retained_targets = page
                 .items
                 .iter()
@@ -172,6 +325,9 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                 .filter(|issue| temper_workflow::terminal_issue_recovery_interest(workflow, issue))
                 .map(|issue| ArtifactAddress::issue(issue.number))
                 .collect::<Vec<_>>();
+            measurement
+                .retained_rows
+                .extend(retained_targets.iter().copied());
             let page_items = page
                 .items
                 .iter()
@@ -197,13 +353,20 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
 
         for query in &query_plan.pull_request_queries {
             if query.lifecycle == CandidateLifecycle::Open {
-                pull_requests.extend(
-                    forge
-                        .list_pull_request_candidates(repo, query.clone())
-                        .await?
-                        .into_iter()
-                        .filter(|pull_request| pull_request.state == PullRequestState::Open),
+                measurement.record_query();
+                let page = forge
+                    .list_pull_request_candidates(repo, query.clone())
+                    .await?;
+                measurement.record_pull_request_page(&page);
+                let open = page
+                    .into_iter()
+                    .filter(|pull_request| pull_request.state == PullRequestState::Open)
+                    .collect::<Vec<_>>();
+                measurement.retained_rows.extend(
+                    open.iter()
+                        .map(|pull_request| ArtifactAddress::pull_request(pull_request.number)),
                 );
+                pull_requests.extend(open);
                 continue;
             }
             let bucket = TerminalDiscoveryBucket::pull_requests(query.labels.clone())
@@ -230,6 +393,7 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                 }
                 None => None,
             };
+            measurement.record_query();
             let page = match forge.list_pull_request_candidates(repo, query).await {
                 Ok(page) => page,
                 Err(error) => {
@@ -239,6 +403,7 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                     return Err(error.into());
                 }
             };
+            measurement.record_pull_request_page(&page);
             let retained_targets = page
                 .items
                 .iter()
@@ -248,6 +413,9 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
                 })
                 .map(|pull_request| ArtifactAddress::pull_request(pull_request.number))
                 .collect::<Vec<_>>();
+            measurement
+                .retained_rows
+                .extend(retained_targets.iter().copied());
             let page_items = page
                 .items
                 .iter()
@@ -277,27 +445,11 @@ pub(crate) async fn read_candidate_summaries<F: Forge + ?Sized>(
 
     normalize_issue_candidates(&mut issues);
     normalize_pull_request_candidates(&mut pull_requests);
-    let unique_count = issues.len().saturating_add(pull_requests.len());
-    let provider_requests = provider_requests_before.and_then(|before| {
-        forge
-            .provider_request_count()
-            .map(|after| after.saturating_sub(before))
-    });
-    let outcome = if result.is_ok() { "success" } else { "failed" };
-    tracing::debug!(
-        target: "temper::worker",
-        measurement = "candidate.discovery",
-        repo = strip_provider_scheme(repo.as_str()),
-        candidate.consumer = consumer,
-        candidate.scope = scope,
-        candidate.logical_bucket_count = saturating_u64(logical_bucket_count),
-        candidate.provider_request_total = provider_requests.unwrap_or(0),
-        candidate.provider_requests_available = provider_requests.is_some(),
-        candidate.unique_count = saturating_u64(unique_count),
-        outcome,
-        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        "candidate discovery {outcome} for {consumer}/{scope}"
-    );
+    if let Some(snapshot) = discovery.snapshot(repo) {
+        let cache_reused = measurement.discovery_cache_reused;
+        measurement.observe_snapshot(&snapshot);
+        measurement.discovery_cache_reused = cache_reused;
+    }
     result?;
     Ok((issues, pull_requests))
 }

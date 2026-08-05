@@ -323,13 +323,25 @@ backend has no portable request counter; use Forge HTTP `operation` records with
 the same wake id instead.
 
 Broad role and mechanical list work emits `measurement=candidate.discovery`.
-Use `candidate.logical_bucket_count`, `candidate.unique_count`,
-`candidate.provider_request_total`, and `duration_ms` to separate workflow
-breadth, candidate volume, pagination/provider traffic, and latency. For the
-17-label reference workflow, role and reconciliation discovery each stay at no
-more than four one-page buckets; automation adds its two populated open buckets.
-Pagination multiplies provider requests per bucket but never by label or role
-count.
+Use the numeric bucket/query, raw/unique/retained, hydrated/exact-detail, and
+continuation/overflow/completion counts together with
+`candidate.discovery_cache_reused`, `candidate.provider_request_total`, and
+`duration_ms`. For the 17-label reference workflow, role and reconciliation
+discovery each plan no more than four lifecycle/type buckets; automation plans
+at most two open buckets. A Forgejo terminal bucket decodes at most 1,001 rows
+and makes at most 64 provider list requests; a default 100-row PR page may add
+100 exact summary reads for ambiguous merge markers. Thus even that worst case
+stays at or below 164 provider requests in one pass. Additional history advances
+through later coordinator generations instead of increasing that ceiling.
+
+Discovery state is in-memory and repository scoped. The default owner holds at
+most 64 repositories, eight terminal buckets per repository, and 256 retained
+exact targets; a restart is cold and repeats a complete frozen sweep. A workflow
+fingerprint change, provider anomaly, or local recovery/automation mutation
+invalidates sweep authority while preserving bounded exact recovery targets.
+With page size 100, a cold bucket containing `N` matching rows needs at most
+`ceil(N/100)` successful generations. Deep audit is the deliberate whole-history
+operator boundary and is not covered by periodic request budgets.
 
 Broad reconciliation emits `measurement=mechanical.reconciliation` with numeric
 `detail_cache.hit_count`, `miss_count`, `forced_refresh_count`,
@@ -346,10 +358,14 @@ cargo test -p temper-testing --test idle_request_budgets \
   -- --ignored --exact --nocapture
 ```
 
-It prints cold/warm durations and normalized warm method/path counts, then
-requires six one-page candidate lists and no per-artifact exact or
-`/dependencies` requests on the warm pass. See the
-[Forgejo backend reference](forgejo-backend.md) for bucket and pagination details.
+It prints zero-history and substantial-history seed, cold-sweep generation, and
+warm-pass durations plus normalized warm method/path counts. Both warm shapes
+must remain below the same fixed terminal-page ceiling, with no per-artifact
+exact, dependency, CI, review, or comment reads for inert history. The cold
+sweep may require multiple generations; each generation retains the same
+per-pass ceiling and deterministic continuation. See the
+[Forgejo backend reference](forgejo-backend.md) for row/request bounds and
+invalidation details.
 
 `gate.evaluated` is also debug: repeated lines are repeatable read-side
 observations, not merge execution. Actual direct merge execution is paired as
