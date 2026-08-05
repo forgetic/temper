@@ -1,3 +1,4 @@
+mod health;
 mod indexing;
 #[path = "test_support.rs"]
 mod test_support;
@@ -55,9 +56,39 @@ fn codebase_memory_failures_are_classified_without_retaining_source_text() {
             McpError::Protocol("provider cache SECRET".to_string()),
             ToolFailureCategory::ProviderProtocol,
         ),
+        (
+            McpError::Json {
+                operation: "encode request",
+                message: "model input SECRET".to_string(),
+            },
+            ToolFailureCategory::InvalidModelInput,
+        ),
+        (
+            McpError::Json {
+                operation: "decode response",
+                message: "provider SECRET".to_string(),
+            },
+            ToolFailureCategory::ProviderProtocol,
+        ),
+        (
+            McpError::Rpc {
+                method: "tools/call".to_string(),
+                message: r#"{"code":-32602,"message":"Invalid params SECRET"}"#.to_string(),
+            },
+            ToolFailureCategory::InvalidModelInput,
+        ),
+        (
+            McpError::ProtocolOverflow {
+                direction: "outbound",
+                resource: "record bytes",
+                limit: 10,
+                observed: 11,
+            },
+            ToolFailureCategory::InvalidModelInput,
+        ),
     ];
     for (error, expected) in cases {
-        let output = codebase_memory_failure_output(classify_mcp_error(&error), None);
+        let output = codebase_memory_failure_output(classify_mcp_error(&error));
         assert!(output.is_error);
         assert_eq!(
             output
@@ -87,6 +118,14 @@ fn codebase_memory_failures_are_classified_without_retaining_source_text() {
     assert_eq!(
         classify_provider_failure("invalid argument contains repository SECRET"),
         ToolFailureCategory::InvalidModelInput
+    );
+    assert_eq!(
+        classify_provider_failure("project not found"),
+        ToolFailureCategory::ProjectNotReady
+    );
+    assert_eq!(
+        classify_provider_failure("no matches"),
+        ToolFailureCategory::ProviderProtocol
     );
 }
 
@@ -360,6 +399,17 @@ fn codebase_memory_rejects_unknown_aliases_and_unsafe_paths() {
             assert!(!rendered.contains("../secret"));
             assert!(!rendered.contains("other/repo"));
         }
+
+        let output = search
+            .execute(
+                "valid-after-local-errors",
+                json!({"query": "still healthy"}),
+                None,
+            )
+            .await
+            .expect("query-local failures leave the shared client healthy");
+        assert!(!output.is_error);
+        assert_eq!(calls_named(&log_path, "search_code").len(), 1);
     });
 }
 

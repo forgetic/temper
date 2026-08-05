@@ -2,6 +2,7 @@ use super::super::*;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use temper_protocol_agent::{
     CodebaseMemoryIndex, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
     WorkspaceWorkItem,
@@ -115,8 +116,19 @@ for line in sys.stdin:
                 time.sleep(0.05)
             elif mode == "background-budget-timeout":
                 time.sleep(0.20)
-            payload = f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
-            tool_result(request["id"], payload)
+            elif mode == "graph-timeout":
+                time.sleep(60)
+            if mode == "graph-systemic":
+                tool_result(request["id"], "provider protocol is unusable SECRET", True)
+            elif mode == "graph-errors" and args.get("query") == "invalid":
+                tool_result(request["id"], "invalid argument: query-local SECRET", True)
+            elif mode == "graph-errors" and args.get("query") == "systemic":
+                tool_result(request["id"], "unusable provider state Authorization: Bearer SECRET", True)
+            elif mode == "graph-errors" and args.get("query") == "empty":
+                tool_result(request["id"], "")
+            else:
+                payload = f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
+                tool_result(request["id"], payload)
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
 "#,
@@ -248,5 +260,33 @@ pub(super) fn wait_for_calls_named(log_path: &Path, name: &str, count: usize) ->
             return calls;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    let exists = Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !exists {
+        return false;
+    }
+    fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| stat.rsplit_once(") ").map(|(_, rest)| rest.to_string()))
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|state| state != 'Z')
+}
+
+pub(super) fn wait_for_process_exit(pid: u32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while process_alive(pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "MCP process {pid} survived circuit-open cleanup"
+        );
+        std::thread::yield_now();
     }
 }

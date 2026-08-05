@@ -12,6 +12,7 @@ mod protocol;
 pub use client::{
     McpCancellationHandle, McpError, McpServerMetadata, StdioMcpClient, StdioMcpServerConfig,
 };
+pub(crate) use connection::MAX_MCP_RECORD_BYTES;
 pub use protocol::{McpToolCallResult, McpToolDescriptor};
 
 #[cfg(test)]

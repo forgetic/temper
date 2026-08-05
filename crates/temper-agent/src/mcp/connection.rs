@@ -17,7 +17,7 @@ mod cleanup;
 pub(super) use cleanup::ProcessControl;
 
 /// Maximum JSON bytes in one inbound or outbound newline-delimited MCP record.
-pub(super) const MAX_MCP_RECORD_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_MCP_RECORD_BYTES: usize = 1024 * 1024;
 /// Maximum unread records retained between the stdout reader and requester.
 pub(super) const MAX_MCP_QUEUED_RECORDS: usize = 16;
 

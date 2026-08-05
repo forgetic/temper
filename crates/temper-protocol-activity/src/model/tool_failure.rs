@@ -32,7 +32,9 @@ impl ToolFailureCategoryV1 {
             Self::ProcessExit => "codebase-memory provider process exited",
             Self::ProviderProtocol => "codebase-memory provider or protocol request failed",
             Self::InvalidModelInput => "codebase-memory request input was invalid",
-            Self::CircuitOpen => "codebase-memory is disabled for this run after repeated failures",
+            Self::CircuitOpen => {
+                "codebase-memory is disabled for this run after a systemic failure"
+            }
         }
     }
 

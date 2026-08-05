@@ -1,5 +1,10 @@
 use super::*;
 
+// Reserve space for the JSON-RPC envelope, tool name, request id, and newline.
+// This keeps oversized model input on the local side of the process-fatal MCP
+// record bound.
+const MCP_REQUEST_ENVELOPE_RESERVE_BYTES: usize = 4 * 1024;
+
 #[derive(Clone, Copy, Debug)]
 struct MonotonicCallBudget {
     started: Instant,
@@ -57,14 +62,24 @@ impl Tool for CodebaseMemoryTool {
         input: Value,
         _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
     ) -> Result<ToolOutput> {
+        let budget = MonotonicCallBudget::new(self.call_timeout);
+        if let Some(cause) = self.health.open_cause() {
+            return Ok(self.circuit_open_output(cause, ToolCallTimings::default()));
+        }
+
         let scope = Arc::clone(&self.scope);
         let mcp_name = self.mcp_name.clone();
         let default_project_key = self.default_project_key;
-        let budget = MonotonicCallBudget::new(self.call_timeout);
         let readiness_started = Instant::now();
+        let Some(readiness_budget) = budget.remaining().and_then(readiness_budget) else {
+            let timings = ToolCallTimings {
+                duration_ms: budget.elapsed_ms(),
+                ..ToolCallTimings::default()
+            };
+            return Ok(self.failed_output("", ToolFailureCategory::Timeout, timings));
+        };
         let input = match skein::runtime::spawn_blocking(move || {
-            let remaining = budget.remaining().unwrap_or(Duration::ZERO);
-            scope.prepare_tool_input(&mcp_name, default_project_key, input, remaining)
+            scope.prepare_tool_input(&mcp_name, default_project_key, input, readiness_budget)
         })
         .await
         {
@@ -76,10 +91,7 @@ impl Tool for CodebaseMemoryTool {
                     duration_ms: budget.elapsed_ms(),
                 };
                 let category = classify_input_failure(&message);
-                emit_failed_mcp_tool_result(self, "", category, timings);
-                return Ok(codebase_memory_failure_output_with_timings(
-                    category, None, timings,
-                ));
+                return Ok(self.failed_output("", category, timings));
             }
         };
         let readiness_wait_ms = duration_ms(readiness_started.elapsed());
@@ -94,7 +106,61 @@ impl Tool for CodebaseMemoryTool {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let argument_preview = redacted_preview(&input.to_string(), 240);
+        let serialized_input = input.to_string();
+        if serialized_input.len()
+            > MAX_MCP_RECORD_BYTES.saturating_sub(MCP_REQUEST_ENVELOPE_RESERVE_BYTES)
+        {
+            let timings = ToolCallTimings {
+                readiness_wait_ms,
+                graph_execution_ms: 0,
+                duration_ms: budget.elapsed_ms(),
+            };
+            return Ok(self.failed_output(
+                &mcp_project,
+                ToolFailureCategory::InvalidModelInput,
+                timings,
+            ));
+        }
+
+        let Some(gate_budget) = budget.remaining().and_then(completion_budget) else {
+            let timings = ToolCallTimings {
+                readiness_wait_ms,
+                graph_execution_ms: 0,
+                duration_ms: budget.elapsed_ms(),
+            };
+            return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
+        };
+        let _rpc_guard = match temper_agent_io::timeout(gate_budget, self.health.acquire_rpc())
+            .await
+        {
+            Ok(guard) => guard,
+            Err(_) => {
+                let timings = ToolCallTimings {
+                    readiness_wait_ms,
+                    graph_execution_ms: 0,
+                    duration_ms: budget.elapsed_ms(),
+                };
+                return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
+            }
+        };
+        if let Some(cause) = self.health.open_cause() {
+            let timings = ToolCallTimings {
+                readiness_wait_ms,
+                graph_execution_ms: 0,
+                duration_ms: budget.elapsed_ms(),
+            };
+            return Ok(self.circuit_open_output(cause, timings));
+        }
+
+        let Some(execution_budget) = budget.remaining().and_then(completion_budget) else {
+            let timings = ToolCallTimings {
+                readiness_wait_ms,
+                graph_execution_ms: 0,
+                duration_ms: budget.elapsed_ms(),
+            };
+            return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
+        };
+        let argument_preview = redacted_preview(&serialized_input, 240);
         emit_mcp_tool_called(McpToolCalled {
             tool_name: &self.public_name,
             mcp_tool: &self.mcp_name,
@@ -103,41 +169,11 @@ impl Tool for CodebaseMemoryTool {
             argument_preview: &argument_preview,
         });
 
-        let Some(remaining) = budget.remaining() else {
-            let timings = ToolCallTimings {
-                readiness_wait_ms,
-                graph_execution_ms: 0,
-                duration_ms: budget.elapsed_ms(),
-            };
-            emit_failed_mcp_tool_result(self, &mcp_project, ToolFailureCategory::Timeout, timings);
-            return Ok(codebase_memory_failure_output_with_timings(
-                ToolFailureCategory::Timeout,
-                None,
-                timings,
-            ));
-        };
-        // Leave a small completion margin so the typed result wins the generic
-        // shell timeout instead of being dropped at an equal deadline.
-        let execution_margin = (remaining / 20).min(Duration::from_millis(10));
-        let execution_budget = remaining.saturating_sub(execution_margin);
-        if execution_budget.is_zero() {
-            let timings = ToolCallTimings {
-                readiness_wait_ms,
-                graph_execution_ms: 0,
-                duration_ms: budget.elapsed_ms(),
-            };
-            emit_failed_mcp_tool_result(self, &mcp_project, ToolFailureCategory::Timeout, timings);
-            return Ok(codebase_memory_failure_output_with_timings(
-                ToolFailureCategory::Timeout,
-                None,
-                timings,
-            ));
-        }
         let graph_started = Instant::now();
         let result = match temper_agent_io::timeout(
             execution_budget,
             self.client
-                .call_tool(&self.mcp_name, input, self.call_timeout),
+                .call_tool(&self.mcp_name, input, execution_budget),
         )
         .await
         {
@@ -149,10 +185,7 @@ impl Tool for CodebaseMemoryTool {
                     duration_ms: budget.elapsed_ms(),
                 };
                 let category = classify_mcp_error(&error);
-                emit_failed_mcp_tool_result(self, &mcp_project, category, timings);
-                return Ok(codebase_memory_failure_output_with_timings(
-                    category, None, timings,
-                ));
+                return Ok(self.failed_output(&mcp_project, category, timings));
             }
             Err(_) => {
                 let timings = ToolCallTimings {
@@ -160,17 +193,7 @@ impl Tool for CodebaseMemoryTool {
                     graph_execution_ms: duration_ms(graph_started.elapsed()),
                     duration_ms: budget.elapsed_ms(),
                 };
-                emit_failed_mcp_tool_result(
-                    self,
-                    &mcp_project,
-                    ToolFailureCategory::Timeout,
-                    timings,
-                );
-                return Ok(codebase_memory_failure_output_with_timings(
-                    ToolFailureCategory::Timeout,
-                    None,
-                    timings,
-                ));
+                return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
             }
         };
         let timings = ToolCallTimings {
@@ -179,26 +202,23 @@ impl Tool for CodebaseMemoryTool {
             duration_ms: budget.elapsed_ms(),
         };
         let bounded = bound_text(&result.text, MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
+        if result.is_error {
+            let category = classify_provider_failure(&bounded.text);
+            return Ok(self.failed_output(&mcp_project, category, timings));
+        }
+
         let result_preview = redacted_preview(&bounded.text, 240);
         emit_mcp_tool_result(McpToolResult {
             tool_name: &self.public_name,
             mcp_tool: &self.mcp_name,
             mcp_project: &mcp_project,
-            is_error: result.is_error,
+            is_error: false,
             truncated: bounded.truncated,
             result_preview: &result_preview,
             readiness_wait_ms: timings.readiness_wait_ms,
             graph_execution_ms: timings.graph_execution_ms,
             duration_ms: timings.duration_ms,
         });
-        if result.is_error {
-            let category = classify_provider_failure(&bounded.text);
-            return Ok(codebase_memory_failure_output_with_timings(
-                category,
-                Some(bounded.text),
-                timings,
-            ));
-        }
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {
                 text: bounded.text,
@@ -214,9 +234,51 @@ impl Tool for CodebaseMemoryTool {
                     "duration_ms": timings.duration_ms,
                 },
             })),
-            is_error: result.is_error,
+            is_error: false,
         })
     }
+}
+
+impl CodebaseMemoryTool {
+    fn failed_output(
+        &self,
+        mcp_project: &str,
+        category: ToolFailureCategory,
+        timings: ToolCallTimings,
+    ) -> ToolOutput {
+        self.health.record_failure(category);
+        emit_failed_mcp_tool_result(self, mcp_project, category, timings);
+        codebase_memory_failure_output_with_timings(category, timings, None)
+    }
+
+    fn circuit_open_output(
+        &self,
+        cause: ToolFailureCategory,
+        timings: ToolCallTimings,
+    ) -> ToolOutput {
+        emit_failed_mcp_tool_result(self, "", ToolFailureCategory::CircuitOpen, timings);
+        codebase_memory_failure_output_with_timings(
+            ToolFailureCategory::CircuitOpen,
+            timings,
+            Some(cause),
+        )
+    }
+}
+
+fn completion_budget(remaining: Duration) -> Option<Duration> {
+    // Leave a small completion margin so the typed result wins the generic
+    // shell timeout instead of being dropped at an equal deadline.
+    let margin = (remaining / 20).min(Duration::from_millis(10));
+    let budget = remaining.saturating_sub(margin);
+    (!budget.is_zero()).then_some(budget)
+}
+
+fn readiness_budget(remaining: Duration) -> Option<Duration> {
+    // Readiness may legitimately consume almost the whole call budget. Keep a
+    // narrow margin only for projecting its typed not-ready/index result.
+    let margin = (remaining / 100).min(Duration::from_millis(2));
+    let budget = remaining.saturating_sub(margin);
+    (!budget.is_zero()).then_some(budget)
 }
 
 struct BoundedText {
@@ -251,43 +313,45 @@ fn emit_failed_mcp_tool_result(
 }
 
 #[cfg(test)]
-pub(super) fn codebase_memory_failure_output(
-    category: ToolFailureCategory,
-    model_text: Option<String>,
-) -> ToolOutput {
-    codebase_memory_failure_output_with_timings(category, model_text, ToolCallTimings::default())
+pub(super) fn codebase_memory_failure_output(category: ToolFailureCategory) -> ToolOutput {
+    codebase_memory_failure_output_with_timings(category, ToolCallTimings::default(), None)
 }
 
 fn codebase_memory_failure_output_with_timings(
     category: ToolFailureCategory,
-    model_text: Option<String>,
     timings: ToolCallTimings,
+    circuit_cause: Option<ToolFailureCategory>,
 ) -> ToolOutput {
     let diagnostic = ToolFailureDiagnostic::codebase_memory(category);
-    let text = model_text.unwrap_or_else(|| {
-        format!(
-            "{}; use read, grep, find, or other conventional discovery instead",
-            diagnostic.message
-        )
+    let text = format!(
+        "{}; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead",
+        diagnostic.message
+    );
+    let mut details = json!({
+        SAFE_TOOL_FAILURE_DETAIL_KEY: {
+            "source": "codebase_memory",
+            "category": category.as_str(),
+        },
+        "timing": {
+            "readiness_wait_ms": timings.readiness_wait_ms,
+            "graph_execution_ms": timings.graph_execution_ms,
+            "duration_ms": timings.duration_ms,
+        },
     });
+    if let Some(cause) = circuit_cause {
+        details["circuit"] = json!({
+            "scope": "codebase_memory_toolset_run",
+            "opened_by": cause.as_str(),
+        });
+    }
     ToolOutput {
         content: vec![ContentBlock::Text(TextContent {
             text,
             text_signature: None,
         })],
-        // The shell accepts only this source/category marker and reconstructs
+        // The shell accepts only the source/category marker and reconstructs
         // retryability, fallback guidance, and the fixed safe message itself.
-        details: Some(json!({
-            SAFE_TOOL_FAILURE_DETAIL_KEY: {
-                "source": "codebase_memory",
-                "category": category.as_str(),
-            },
-            "timing": {
-                "readiness_wait_ms": timings.readiness_wait_ms,
-                "graph_execution_ms": timings.graph_execution_ms,
-                "duration_ms": timings.duration_ms,
-            },
-        })),
+        details: Some(details),
         is_error: true,
     }
 }
@@ -309,11 +373,29 @@ pub(super) fn classify_mcp_error(error: &McpError) -> ToolFailureCategory {
         McpError::Io { .. } | McpError::Cancelled { .. } => ToolFailureCategory::Transport,
         McpError::Timeout { .. } => ToolFailureCategory::Timeout,
         McpError::ProcessExited { .. } => ToolFailureCategory::ProcessExit,
+        McpError::Json { operation, .. } if *operation == "encode request" => {
+            ToolFailureCategory::InvalidModelInput
+        }
+        McpError::Rpc { message, .. } if explicitly_invalid_input(message) => {
+            ToolFailureCategory::InvalidModelInput
+        }
+        McpError::ProtocolOverflow { direction, .. } if *direction == "outbound" => {
+            ToolFailureCategory::InvalidModelInput
+        }
         McpError::Json { .. }
         | McpError::Rpc { .. }
         | McpError::ProtocolOverflow { .. }
         | McpError::Protocol(_) => ToolFailureCategory::ProviderProtocol,
     }
+}
+
+fn explicitly_invalid_input(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    lowered.contains("-32602")
+        || lowered.contains("invalid input")
+        || lowered.contains("invalid argument")
+        || lowered.contains("invalid parameter")
+        || lowered.contains("invalid params")
 }
 
 pub(super) fn classify_provider_failure(message: &str) -> ToolFailureCategory {
@@ -329,10 +411,7 @@ pub(super) fn classify_provider_failure(message: &str) -> ToolFailureCategory {
             || lowered.contains("unknown"))
     {
         ToolFailureCategory::ProjectNotReady
-    } else if lowered.contains("invalid input")
-        || lowered.contains("invalid argument")
-        || lowered.contains("invalid parameter")
-    {
+    } else if explicitly_invalid_input(message) {
         ToolFailureCategory::InvalidModelInput
     } else {
         ToolFailureCategory::ProviderProtocol
