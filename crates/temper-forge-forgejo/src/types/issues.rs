@@ -1,7 +1,6 @@
 //! Forgejo issue-row DTOs (issues, the PR-as-issue marker, dependency refs).
 
 use super::{LabelDto, UserDto};
-use crate::ids::RepoCoord;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
@@ -67,15 +66,6 @@ impl IssueDto {
     /// Reports whether this row is a pull request masquerading as an issue.
     pub(crate) fn is_pull_request(&self) -> bool {
         self.pull_request.is_some()
-    }
-
-    /// Reports whether an owner-scoped search row belongs to the requested
-    /// repository. Search responses always carry this identity; missing
-    /// metadata is rejected rather than misattributed to the requested repo.
-    pub(crate) fn is_in_repository(&self, repo: &RepoCoord) -> bool {
-        self.repository.as_ref().is_some_and(|candidate| {
-            candidate.name == repo.name && candidate.full_name == repo.path_segment()
-        })
     }
 }
 

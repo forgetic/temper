@@ -12,8 +12,11 @@ use thiserror::Error;
 
 mod candidate;
 pub use candidate::{
-    CandidateLabelSelection, CandidateLabels, CandidateLifecycle, CandidateLifecycleBucket,
-    IssueCandidateQuery, PullRequestCandidateQuery,
+    CandidateContinuation, CandidateLabelSelection, CandidateLabels, CandidateLifecycle,
+    CandidateLifecycleBucket, CandidatePage, CandidatePageRequest, CandidatePosition,
+    DEFAULT_TERMINAL_CANDIDATE_PAGE_SIZE, IssueCandidatePage, IssueCandidateQuery,
+    MAX_CANDIDATE_PAGE_SIZE, PullRequestCandidatePage, PullRequestCandidateQuery,
+    paginate_candidate_items,
 };
 
 /// Result type returned by Forge operations.
@@ -282,15 +285,19 @@ pub trait Forge: Send + Sync {
 
     /// Lists a consolidated lifecycle bucket of issue candidates.
     ///
-    /// The compatibility fallback normalizes and deduplicates `AnyOf` labels,
-    /// performs one existing conjunctive list call per label/state, unions by
-    /// stable issue identity, and returns deterministic number/ID order.
+    /// Results use deterministic frozen pages. Open queries may be exhaustive;
+    /// terminal queries always receive at least the portable default ceiling.
+    /// The compatibility fallback unions normalized `AnyOf` label lists.
     async fn list_issue_candidates(
         &self,
         repo_id: &RepositoryId,
         query: IssueCandidateQuery,
-    ) -> ForgeResult<Vec<Issue>> {
+    ) -> ForgeResult<IssueCandidatePage> {
         let labels = query.labels.normalized()?;
+        let normalized_selection = labels.clone().map_or(
+            CandidateLabelSelection::Unfiltered,
+            CandidateLabelSelection::AnyOf,
+        );
         let state = match query.lifecycle {
             CandidateLifecycle::Open => IssueState::Open,
             CandidateLifecycle::Terminal => IssueState::Closed,
@@ -299,6 +306,7 @@ pub trait Forge: Send + Sync {
             .map(|labels| labels.into_iter().map(|label| vec![label]).collect())
             .unwrap_or_else(|| vec![Vec::new()]);
         let mut by_id = std::collections::BTreeMap::new();
+        let mut raw_count = 0usize;
         for labels in label_queries {
             for issue in self
                 .list_issues(
@@ -312,6 +320,7 @@ pub trait Forge: Send + Sync {
                 )
                 .await?
             {
+                raw_count = raw_count.saturating_add(1);
                 by_id.entry(issue.id.clone()).or_insert(issue);
             }
         }
@@ -321,7 +330,19 @@ pub trait Forge: Send + Sync {
                 .cmp(&right.number)
                 .then_with(|| left.id.cmp(&right.id))
         });
-        Ok(issues)
+        candidate::paginate_candidate_items(
+            issues,
+            raw_count,
+            repo_id,
+            query.lifecycle,
+            normalized_selection,
+            query.page,
+            |issue| CandidatePosition {
+                updated_at: issue.updated_at,
+                number: issue.number,
+                id: issue.id.clone(),
+            },
+        )
     }
 
     /// Creates an issue in a repository.
@@ -432,14 +453,18 @@ pub trait Forge: Send + Sync {
 
     /// Lists a consolidated lifecycle bucket of pull-request candidates.
     ///
-    /// The deterministic compatibility fallback follows the issue fallback and
-    /// reads both closed and merged states for a terminal bucket.
+    /// The frozen-page compatibility fallback reads both closed and merged
+    /// states before typed-identity deduplication.
     async fn list_pull_request_candidates(
         &self,
         repo_id: &RepositoryId,
         query: PullRequestCandidateQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
+    ) -> ForgeResult<PullRequestCandidatePage> {
         let labels = query.labels.normalized()?;
+        let normalized_selection = labels.clone().map_or(
+            CandidateLabelSelection::Unfiltered,
+            CandidateLabelSelection::AnyOf,
+        );
         let states: &[PullRequestState] = match query.lifecycle {
             CandidateLifecycle::Open => &[PullRequestState::Open],
             CandidateLifecycle::Terminal => &[PullRequestState::Closed, PullRequestState::Merged],
@@ -448,6 +473,7 @@ pub trait Forge: Send + Sync {
             .map(|labels| labels.into_iter().map(|label| vec![label]).collect())
             .unwrap_or_else(|| vec![Vec::new()]);
         let mut by_id = std::collections::BTreeMap::new();
+        let mut raw_count = 0usize;
         for state in states {
             for labels in &label_queries {
                 for pull_request in self
@@ -462,6 +488,7 @@ pub trait Forge: Send + Sync {
                     )
                     .await?
                 {
+                    raw_count = raw_count.saturating_add(1);
                     by_id.entry(pull_request.id.clone()).or_insert(pull_request);
                 }
             }
@@ -472,7 +499,19 @@ pub trait Forge: Send + Sync {
                 .cmp(&right.number)
                 .then_with(|| left.id.cmp(&right.id))
         });
-        Ok(pull_requests)
+        candidate::paginate_candidate_items(
+            pull_requests,
+            raw_count,
+            repo_id,
+            query.lifecycle,
+            normalized_selection,
+            query.page,
+            |pull_request| CandidatePosition {
+                updated_at: pull_request.updated_at,
+                number: pull_request.number,
+                id: pull_request.id.clone(),
+            },
+        )
     }
 
     /// Creates a pull request in a repository.

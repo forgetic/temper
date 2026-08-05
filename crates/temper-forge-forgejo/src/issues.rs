@@ -17,11 +17,11 @@ use crate::pulls::response_validator;
 use crate::types::IssueDto;
 use crate::{ForgejoForge, HttpClient, HttpMethod};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use temper_forge_model::{
-    CandidateLifecycle, Comment, CreateComment, CreateIssue, ForgeError, ForgeResult, Issue,
-    IssueCandidateQuery, IssueId, IssueQuery, IssueState, ItemListDetails, ItemNumber,
-    ItemSortField, RepositoryId, SortDirection, UpdateIssue, UserId,
+    CandidateLifecycle, CandidatePage, Comment, CreateComment, CreateIssue, ForgeError,
+    ForgeResult, Issue, IssueCandidatePage, IssueCandidateQuery, IssueId, IssueQuery, IssueState,
+    ItemListDetails, ItemNumber, ItemSortField, RepositoryId, SortDirection, UpdateIssue, UserId,
 };
 
 impl<C: HttpClient> ForgejoForge<C> {
@@ -75,63 +75,63 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(issues)
     }
 
-    /// Lists one lifecycle bucket of issue candidates through Forgejo's issue
-    /// label index.
-    ///
-    /// The repository-scoped issue endpoint applies multiple label names as an
-    /// all-of filter despite its API documentation describing any-of semantics.
-    /// A multi-label candidate bucket therefore uses the owner-scoped search
-    /// endpoint, whose label filter is genuinely any-of, and rejects rows from
-    /// sibling repositories locally. Single-label and unfiltered buckets stay
-    /// on the repository endpoint. Either shape costs one request per page.
+    /// Lists issue candidates through repository-isolated Forgejo index pages.
+    /// Terminal pages are provider-bounded before materialization; rows outside
+    /// the retained page cannot add dependency or exact reads.
     pub async fn list_issue_candidates(
         &self,
         repo_id: &RepositoryId,
         query: IssueCandidateQuery,
-    ) -> ForgeResult<Vec<Issue>> {
+    ) -> ForgeResult<IssueCandidatePage> {
         let repo = parse_repository_id(repo_id)?;
         let labels = query.labels.normalized()?;
-        let state = match query.lifecycle {
-            CandidateLifecycle::Open => "open",
-            CandidateLifecycle::Terminal => "closed",
-        };
-        let rows = self
-            .list_candidate_issue_rows(&repo, state, "issues", labels.as_deref())
+        let row_page = self
+            .list_candidate_issue_rows(
+                &repo,
+                query.lifecycle,
+                "issues",
+                labels.as_deref(),
+                query.page,
+                |number| crate::ids::format_issue_id(&repo, number),
+            )
             .await?;
-
         let expected_state = match query.lifecycle {
             CandidateLifecycle::Open => IssueState::Open,
             CandidateLifecycle::Terminal => IssueState::Closed,
         };
-        let mut rows_by_number = BTreeMap::new();
-        for row in rows {
-            if !row.is_pull_request() {
-                rows_by_number.entry(row.number).or_insert(row);
-            }
-        }
+        let CandidatePage {
+            items: rows,
+            continuation,
+            exhausted,
+            overflow,
+            raw_count,
+            ..
+        } = row_page;
 
-        let mut by_id = BTreeMap::new();
-        for row in rows_by_number.into_values() {
-            let issue = self.materialize_issue(&repo, row, None);
-            if issue.state != expected_state || !matches_any_label(&issue.labels, labels.as_deref())
-            {
+        let mut issues = Vec::new();
+        for row in rows {
+            if row.is_pull_request() {
                 continue;
             }
-            by_id.entry(issue.id.clone()).or_insert(issue);
+            let issue = self.materialize_issue(&repo, row, None);
+            if issue.state == expected_state && matches_any_label(&issue.labels, labels.as_deref())
+            {
+                issues.push(issue);
+            }
         }
-
-        let mut issues = by_id.into_values().collect::<Vec<_>>();
-        issues.sort_by(|left, right| {
-            left.number
-                .cmp(&right.number)
-                .then_with(|| left.id.cmp(&right.id))
-        });
         if query.details.dependencies {
             for issue in &mut issues {
                 issue.dependencies = self.load_item_dependencies(&repo, issue.number).await?;
             }
         }
-        Ok(issues)
+        Ok(CandidatePage {
+            returned_count: issues.len(),
+            items: issues,
+            continuation,
+            exhausted,
+            overflow,
+            raw_count,
+        })
     }
 
     /// Looks up an issue by stable backend identifier.

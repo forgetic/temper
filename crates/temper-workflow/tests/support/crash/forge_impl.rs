@@ -64,7 +64,7 @@ impl<F: Forge> Forge for CrashForge<F> {
         &self,
         repo_id: &RepositoryId,
         query: IssueCandidateQuery,
-    ) -> ForgeResult<Vec<Issue>> {
+    ) -> ForgeResult<IssueCandidatePage> {
         let n = self.tick(ForgeOp::ListIssueCandidates);
         self.issue_candidate_queries
             .lock()
@@ -230,7 +230,7 @@ impl<F: Forge> Forge for CrashForge<F> {
         &self,
         repo_id: &RepositoryId,
         query: PullRequestCandidateQuery,
-    ) -> ForgeResult<Vec<PullRequest>> {
+    ) -> ForgeResult<PullRequestCandidatePage> {
         let n = self.tick(ForgeOp::ListPullRequestCandidates);
         self.pull_request_candidate_queries
             .lock()

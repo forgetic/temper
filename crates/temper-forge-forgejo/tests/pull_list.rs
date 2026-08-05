@@ -5,7 +5,7 @@ mod support;
 use support::{MockHttpClient, OWNER, REPO, block_on, forge, repo_id};
 use temper_forge_forgejo::{ForgejoConfig, ForgejoForge, HttpMethod};
 use temper_forge_model::{
-    CandidateLabelSelection, CandidateLifecycle, ItemListDetails, ItemNumber,
+    CandidateLabelSelection, CandidateLifecycle, CandidatePageRequest, ItemListDetails, ItemNumber,
     PullRequestCandidateQuery, PullRequestQuery, PullRequestState,
 };
 
@@ -163,23 +163,22 @@ fn ordinary_multi_label_pull_request_query_remains_conjunctive() {
 }
 
 #[test]
-fn terminal_pull_candidates_share_one_labelled_closed_discovery_request() {
+fn terminal_pull_candidates_use_repository_isolated_label_streams() {
     let client = MockHttpClient::new();
     client.push_response(
         200,
         format!(
-            "[{},{},{},{}]",
+            "[{}]",
             pr_issue_json_with_merge(2, "closed", r#"[{"id":2,"name":"queued"}]"#, Some(true)),
+        ),
+    );
+    client.push_response(
+        200,
+        format!(
+            "[{},{},{}]",
             pr_issue_json_with_merge(1, "closed", r#"[{"id":1,"name":"ready"}]"#, Some(false)),
             pr_issue_json_with_merge(3, "closed", r#"[{"id":3,"name":"other"}]"#, Some(true)),
-            pr_issue_json_with_merge_in_repository(
-                4,
-                "closed",
-                r#"[{"id":1,"name":"ready"}]"#,
-                Some(true),
-                "acme",
-                "sibling"
-            ),
+            pr_issue_json_with_merge(1, "closed", r#"[{"id":1,"name":"ready"}]"#, Some(false)),
         ),
     );
     let forge = forge(client.clone());
@@ -206,30 +205,26 @@ fn terminal_pull_candidates_share_one_labelled_closed_discovery_request() {
         vec![(1, PullRequestState::Closed), (2, PullRequestState::Merged)]
     );
     let requests = client.recorded();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request.path == format!("/api/v1/repos/{OWNER}/{REPO}/issues")
+            && request.query.contains(&("state".into(), "closed".into()))
+            && request.query.contains(&("type".into(), "pulls".into()))
+            && request.query.contains(&("sort".into(), "updated".into()))
+            && request.query.contains(&("direction".into(), "asc".into()))
+    }));
     assert_eq!(
-        requests.len(),
-        1,
-        "closed and merged share one provider read"
-    );
-    assert_eq!(requests[0].path, "/api/v1/repos/issues/search");
-    assert!(requests[0].query.contains(&("owner".into(), OWNER.into())));
-    assert!(
-        requests[0]
-            .query
-            .contains(&("state".into(), "closed".into()))
-    );
-    assert!(requests[0].query.contains(&("type".into(), "pulls".into())));
-    assert!(
-        requests[0]
-            .query
-            .contains(&("labels".into(), "queued,ready".into()))
-    );
-    assert!(
-        !requests.iter().any(|request| {
-            request.query.contains(&("state".into(), "closed".into()))
-                && !request.query.iter().any(|(key, _)| key == "labels")
-        }),
-        "terminal discovery must not issue an unlabelled closed list"
+        requests
+            .iter()
+            .map(|request| request
+                .query
+                .iter()
+                .find(|(key, _)| key == "labels")
+                .expect("label stream")
+                .1
+                .as_str())
+            .collect::<Vec<_>>(),
+        vec!["queued", "ready"]
     );
     assert!(
         !requests
@@ -284,22 +279,51 @@ fn terminal_pull_candidates_fetch_only_ambiguous_rows_exactly() {
 }
 
 #[test]
-fn paginated_pull_candidates_deduplicate_without_per_label_reads() {
+fn bounded_pull_page_never_fetches_an_out_of_page_ambiguous_row() {
     let client = MockHttpClient::new();
     client.push_response(
         200,
         format!(
-            "[{}]",
-            pr_issue_json(2, "open", r#"[{"id":1,"name":"ready"}]"#)
+            "[{},{}]",
+            pr_issue_json(1, "closed", r#"[{"id":1,"name":"ready"}]"#),
+            pr_issue_json(2, "closed", r#"[{"id":1,"name":"ready"}]"#)
         ),
     );
-    client.push_response(
-        200,
-        format!(
-            "[{}]",
-            pr_issue_json(2, "open", r#"[{"id":1,"name":"ready"}]"#)
-        ),
+    client.push_response(200, pr_json(1, "closed", r#"[{"id":1,"name":"ready"}]"#));
+    let config = ForgejoConfig::new("https://forge.example.com", "test-token").with_page_limit(2);
+    let forge = ForgejoForge::with_client(config, client.clone());
+
+    let pulls = block_on(forge.list_pull_request_candidates(
+        &repo_id(),
+        PullRequestCandidateQuery {
+            lifecycle: CandidateLifecycle::Terminal,
+            labels: CandidateLabelSelection::AnyOf(vec!["ready".into()]),
+            page: Some(CandidatePageRequest::first(1)),
+            ..PullRequestCandidateQuery::default()
+        },
+    ))
+    .unwrap();
+
+    assert_eq!(pulls.len(), 1);
+    assert_eq!(pulls[0].number, ItemNumber::new(1));
+    assert!(pulls.overflow);
+    let requests = client.recorded();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].path,
+        format!("/api/v1/repos/{OWNER}/{REPO}/pulls/1")
     );
+    assert!(
+        requests
+            .iter()
+            .all(|request| { request.path != format!("/api/v1/repos/{OWNER}/{REPO}/pulls/2") })
+    );
+}
+
+#[test]
+fn open_pull_candidates_deduplicate_across_repository_label_streams() {
+    let client = MockHttpClient::new();
+    // Normalized stream order is queued, then ready.
     client.push_response(
         200,
         format!(
@@ -307,8 +331,16 @@ fn paginated_pull_candidates_deduplicate_without_per_label_reads() {
             pr_issue_json(1, "open", r#"[{"id":2,"name":"queued"}]"#)
         ),
     );
+    client.push_response(
+        200,
+        format!(
+            "[{},{}]",
+            pr_issue_json(2, "open", r#"[{"id":1,"name":"ready"}]"#),
+            pr_issue_json(2, "open", r#"[{"id":1,"name":"ready"}]"#)
+        ),
+    );
     client.push_response(200, "[]");
-    let config = ForgejoConfig::new("https://forge.example.com", "test-token").with_page_limit(1);
+    let config = ForgejoConfig::new("https://forge.example.com", "test-token").with_page_limit(2);
     let forge = ForgejoForge::with_client(config, client.clone());
 
     let pulls = block_on(forge.list_pull_request_candidates(
@@ -328,13 +360,10 @@ fn paginated_pull_candidates_deduplicate_without_per_label_reads() {
         vec![1, 2]
     );
     let requests = client.recorded();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 3);
     assert!(requests.iter().all(|request| {
-        request.path == "/api/v1/repos/issues/search"
-            && request.query.contains(&("owner".into(), OWNER.into()))
-            && request
-                .query
-                .contains(&("labels".into(), "queued,ready".into()))
+        request.path == format!("/api/v1/repos/{OWNER}/{REPO}/issues")
+            && request.query.contains(&("sort".into(), "updated".into()))
     }));
 }
 

@@ -22,11 +22,13 @@ pub mod model;
 pub use admin::{AccessGrant, ForgeAdmin, NewUser, TokenScope, WebhookSpec};
 pub use content::{CommitFile, CreateBranch, EnsureRepository, ForgeContent};
 pub use forge::{
-    CandidateLabelSelection, CandidateLabels, CandidateLifecycle, CandidateLifecycleBucket,
-    CiJobQuery, CiJobSort, CiJobSortField, Forge, ForgeError, ForgeResult, IssueCandidateQuery,
-    IssueQuery, ItemListDetails, ItemNumberNamespace, ItemSort, ItemSortField,
-    PullRequestCandidateQuery, PullRequestQuery, RepositoryQuery, RepositorySort,
-    RepositorySortField, SortDirection,
+    CandidateContinuation, CandidateLabelSelection, CandidateLabels, CandidateLifecycle,
+    CandidateLifecycleBucket, CandidatePage, CandidatePageRequest, CandidatePosition, CiJobQuery,
+    CiJobSort, CiJobSortField, DEFAULT_TERMINAL_CANDIDATE_PAGE_SIZE, Forge, ForgeError,
+    ForgeResult, IssueCandidatePage, IssueCandidateQuery, IssueQuery, ItemListDetails,
+    ItemNumberNamespace, ItemSort, ItemSortField, MAX_CANDIDATE_PAGE_SIZE,
+    PullRequestCandidatePage, PullRequestCandidateQuery, PullRequestQuery, RepositoryQuery,
+    RepositorySort, RepositorySortField, SortDirection, paginate_candidate_items,
 };
 pub use hint::*;
 pub use ids::*;

@@ -27,6 +27,46 @@ pub(super) fn check_role_external_tools(spec: &RawWorkflowSpec, diagnostics: &mu
     }
 }
 
+/// Rejects a terminal queue whose discovery superset would be unlabelled.
+///
+/// Positive common/alternative labels are sufficient evidence. A condition-only
+/// queue may fall back to artifact-kind identifying labels, but a catch-all kind
+/// has no bounded terminal representation and is therefore rejected.
+pub(super) fn check_terminal_queue_contract(
+    spec: &RawWorkflowSpec,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let artifacts = spec
+        .artifact_kinds
+        .iter()
+        .map(|artifact| (artifact.id.as_str(), artifact))
+        .collect::<HashMap<_, _>>();
+    for queue in spec.queues.iter().filter(|queue| queue.terminal) {
+        let has_positive_labels = !queue.labels.is_empty()
+            || (!queue.any_of.is_empty()
+                && queue.any_of.iter().all(|branch| !branch.labels.is_empty()));
+        if has_positive_labels {
+            continue;
+        }
+        let unlabelled = queue
+            .artifacts
+            .iter()
+            .filter(|artifact| {
+                artifacts
+                    .get(artifact.as_str())
+                    .is_some_and(|kind| kind.identifying_labels.is_empty())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unlabelled.is_empty() {
+            diagnostics.push(Diagnostic::UnfilteredTerminalQueue {
+                queue: queue.id.clone(),
+                artifacts: unlabelled,
+            });
+        }
+    }
+}
+
 /// Checks semantic consistency of queue automation declarations once simple
 /// undeclared-reference diagnostics have been collected.
 pub(super) fn check_queue_automation_contract(

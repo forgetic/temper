@@ -27,6 +27,7 @@ runner:
   `basic-delivery`, `forgejo-exact-head-ci-repair`, `forgejo-v16-api-ci`,
   `implementation-pr-handoff`, `codebase-memory-agent`,
   `model-failure-recovery`, `plan-centric-feature-branch`,
+  `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
   `runner.uses = "manifest"`. Every run boots real Forgejo, a host
   `forgejo-runner` for Actions CI, a standalone `temper` process, and Jig fake

@@ -32,6 +32,10 @@ mod request;
 mod types;
 mod version;
 
+pub use candidate_index::{
+    MAX_CANDIDATE_LABEL_STREAMS, MAX_CANDIDATE_PROVIDER_REQUESTS, MAX_CANDIDATE_PROVIDER_ROWS,
+    MAX_PERIODIC_TERMINAL_CANDIDATE_PROVIDER_REQUESTS,
+};
 pub use client::{
     EngineHttpClient, HttpClient, HttpError, HttpMethod, HttpRequest, HttpRequestProvenance,
     HttpRequestProvenanceSnapshot, HttpResponse,

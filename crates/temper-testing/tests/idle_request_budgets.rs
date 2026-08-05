@@ -4,13 +4,21 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use temper_engine::{CoordinatedMechanical, MechanicalBackstopConfig, MechanicalTrigger};
-use temper_forge_forgejo::{EngineHttpClient, ForgejoConfig, ForgejoForge};
+use temper_forge_forgejo::{
+    EngineHttpClient, ForgejoConfig, ForgejoForge,
+    MAX_PERIODIC_TERMINAL_CANDIDATE_PROVIDER_REQUESTS,
+};
 use temper_forge_memory::MemoryForge;
 use temper_forge_model::{
-    CandidateLabelSelection, CandidateLifecycle, CreateIssue, CreateRepository, Forge,
-    ItemNumberNamespace, PullRequest, RepositoryId, RepositoryPath,
+    CandidateLabelSelection, CandidateLifecycle, CommitFile, CreateBranch, CreateIssue,
+    CreateRepository, Forge, ForgeContent, IssueState, ItemNumberNamespace, MergeMethod,
+    MergePullRequest, PullRequest, RepositoryId, RepositoryPath, UpdateIssue, UpsertLabel,
 };
-use temper_runner::{RepositorySet, RepositoryTarget, scan_automated_queues, scan_roles_wake};
+use temper_runner::{
+    MechanicalWorker, RepositorySet, RepositoryTarget, TerminalDiscoveryRead,
+    TerminalDiscoveryState, Worker, scan_automated_queues, scan_roles_wake,
+    scan_roles_wake_with_discovery,
+};
 use temper_testing::block_on;
 use temper_testing::counting_forge::{CountedForgeOp, CountingForge};
 use temper_testing::counting_http::CountingHttpClient;
@@ -249,8 +257,8 @@ fn long_lived_mechanical_trigger_warm_pass_has_candidate_lists_only() {
         .saturating_add(forge.count(CountedForgeOp::ListPullRequestCandidates));
     assert_eq!(
         candidate_lists_after.saturating_sub(candidate_lists_before),
-        6,
-        "warm reference pass re-reads four reconciliation and two automation buckets"
+        5,
+        "warm reference pass re-reads three reconciliation and two automation buckets"
     );
     assert_eq!(
         forge.exact_issue_reads().len(),
@@ -269,103 +277,16 @@ fn long_lived_mechanical_trigger_warm_pass_has_candidate_lists_only() {
     );
 }
 
+#[path = "idle_request_budgets/history_independence.rs"]
+mod history_independence;
+
+#[test]
+fn repeated_mechanical_and_role_budgets_ignore_large_labelled_terminal_history() {
+    history_independence::assert_repeated_mechanical_and_role_budgets_ignore_large_labelled_terminal_history();
+}
+
 #[test]
 #[ignore = "boots cached local Forgejo; run the documented idle-scan benchmark command"]
 fn local_forgejo_two_pass_idle_broad_benchmark() {
-    temper_engine_io::block_on(async move {
-        let cached = skein::runtime::spawn_blocking(
-            temper_testing::forgejo_server::start_cached_provisioned_server,
-        )
-        .await
-        .expect("cached Forgejo fixture starts");
-        let server = cached.server;
-        let provisioned = cached.provisioned;
-        let base_url = server.base_url().to_string();
-        let setup = ForgejoForge::new(ForgejoConfig::new(&base_url, &provisioned.admin_token));
-        let dependency = setup
-            .create_issue(
-                &provisioned.repository,
-                CreateIssue {
-                    title: "Idle benchmark unresolved dependency".into(),
-                    body: String::new(),
-                    labels: vec!["design".into(), "draft".into()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("benchmark dependency is created");
-        let blocked = setup
-            .create_issue(
-                &provisioned.repository,
-                CreateIssue {
-                    title: "Idle benchmark blocked code".into(),
-                    body: String::new(),
-                    labels: vec!["code".into(), "blocked".into()],
-                    assignees: Vec::new(),
-                },
-            )
-            .await
-            .expect("benchmark source is created");
-        setup
-            .add_issue_dependency(&blocked.id, dependency.number)
-            .await
-            .expect("benchmark dependency link is created");
-
-        let client = CountingHttpClient::new(EngineHttpClient::new(&base_url));
-        let forge = Arc::new(ForgejoForge::with_client(
-            ForgejoConfig::new(&base_url, &provisioned.admin_token),
-            client.clone(),
-        ));
-        let path = RepositoryPath::new(&provisioned.owner, &provisioned.name);
-        let target = RepositoryTarget::new(provisioned.repository.clone(), path.clone());
-        let trigger = MechanicalTrigger::new(
-            Arc::clone(&forge),
-            Arc::new(temper_testing::workflow()),
-            MechanicalBackstopConfig {
-                repositories: RepositorySet::new(vec![target]),
-                cadence: Duration::from_secs(300),
-                lease_policy: LeasePolicy::new(chrono::Duration::minutes(30)),
-                pull_request_merge_observer: None,
-            },
-            Arc::new(|| temper_testing::ts("2026-05-29T00:00:00Z")),
-        );
-
-        let cold_started = Instant::now();
-        trigger
-            .run_coordinated_broad(path.clone())
-            .await
-            .expect("cold broad pass succeeds");
-        let cold_duration = cold_started.elapsed();
-        let warm_start_index = client.request_count();
-        let warm_started = Instant::now();
-        trigger
-            .run_coordinated_broad(path)
-            .await
-            .expect("warm broad pass succeeds");
-        let warm_duration = warm_started.elapsed();
-
-        println!("phase=broad.cold duration_ms={}", cold_duration.as_millis());
-        println!("phase=broad.warm duration_ms={}", warm_duration.as_millis());
-        for (method_path, count) in client.normalized_method_path_counts_since(warm_start_index) {
-            println!("warm_requests count={count} {method_path}");
-        }
-
-        let warm_shape = client.forgejo_read_shape_since(warm_start_index);
-        assert_eq!(
-            warm_shape.candidate_list_requests, 6,
-            "warm reference pass retains bounded summary discovery: {warm_shape:?}"
-        );
-        assert_eq!(
-            warm_shape.exact_artifact_reads, 0,
-            "warm pass must not reload per-artifact exact detail: {warm_shape:?}"
-        );
-        assert_eq!(
-            warm_shape.dependency_requests, 0,
-            "warm pass must not reload native dependencies: {warm_shape:?}"
-        );
-        assert_eq!(
-            warm_shape.other_reads, 0,
-            "idle warm pass must contain only candidate lists: {warm_shape:?}"
-        );
-    });
+    history_independence::run_local_forgejo_two_pass_idle_broad_benchmark();
 }

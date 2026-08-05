@@ -89,6 +89,7 @@ pub fn validate(spec: &RawWorkflowSpec) -> Result<ValidatedWorkflow, ValidationE
     references::check_state_dimensions(spec, &labels, &artifacts, &mut diagnostics);
     contracts::check_role_external_tools(spec, &mut diagnostics);
     contracts::check_default_artifact_kinds(spec, &mut diagnostics);
+    contracts::check_terminal_queue_contract(spec, &mut diagnostics);
     contracts::check_queue_automation_contract(spec, &roles, &mut diagnostics);
     queue_actions::check_queue_action_contract(spec, &roles, &mut diagnostics);
     contracts::check_validation_binding_contract(spec, &roles, &artifacts, &mut diagnostics);

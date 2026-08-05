@@ -9,7 +9,11 @@ use observability::{
 use super::automation;
 use super::{Progress, Worker, WorkerError, saturating_u32, saturating_u64};
 use crate::coding_workspace::ExternalToolExecutors;
-use crate::scan::{ArtifactAddress, TargetedArtifactSnapshot, load_targeted_artifact};
+use crate::scan::{
+    ArtifactAddress, TargetedArtifactSnapshot, TerminalDiscoveryState, load_targeted_artifact,
+    prepare_terminal_discovery_generation, read_reconciliation_candidates,
+    retain_terminal_discovery_target,
+};
 use crate::worker::PullRequestMergeObserver;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -18,8 +22,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use temper_forge::{ChangeKind, Forge, ForgeError, HintArtifactKind, ItemNumber, RepositoryId};
 use temper_workflow::{
     Applier, ApplyOutcome, ArtifactSnapshot, AssignmentConverger, CompiledWorkflow,
-    DefaultRecoveryPolicy, Executor, LeaseManager, LeasePolicy, ReconciliationDetailCache,
-    ReconciliationMode, RecoveryAction, RecoveryPolicy, ValidatedWorkflow, parse_metadata_block,
+    DefaultRecoveryPolicy, Executor, LeaseManager, LeasePolicy, ReconcileError,
+    ReconciliationDetailCache, ReconciliationMode, RecoveryAction, RecoveryPolicy,
+    ValidatedWorkflow, parse_metadata_block,
 };
 
 /// Controller-plane worker that runs mechanical recovery and automation.
@@ -48,6 +53,7 @@ pub struct MechanicalWorker<
     journal: &'a J,
     policy: P,
     reconciliation_detail_cache: ReconciliationDetailCache,
+    terminal_discovery: TerminalDiscoveryState,
     /// Workspace executors the actor roles of workspace-backed automations can
     /// invoke. Empty when no executor is bound; such automations no-op until a
     /// binding exists, never failing the tick.
@@ -107,6 +113,7 @@ where
             journal,
             policy,
             reconciliation_detail_cache: ReconciliationDetailCache::default(),
+            terminal_discovery: TerminalDiscoveryState::default(),
             external_tool_executors: ExternalToolExecutors::new(),
             pull_request_merge_observer: None,
             advisory_actions: AtomicU64::new(0),
@@ -117,6 +124,12 @@ where
     /// the cache share the same bounded entries.
     pub fn with_reconciliation_detail_cache(mut self, cache: ReconciliationDetailCache) -> Self {
         self.reconciliation_detail_cache = cache;
+        self
+    }
+
+    /// Binds repository sweep authority owned by the surrounding runtime.
+    pub fn with_terminal_discovery_state(mut self, discovery: TerminalDiscoveryState) -> Self {
+        self.terminal_discovery = discovery;
         self
     }
 
@@ -170,6 +183,13 @@ where
         change: ChangeKind,
     ) -> Result<Progress, WorkerError> {
         let address = ArtifactAddress::new(artifact_kind, item);
+        retain_terminal_discovery_target(
+            &self.terminal_discovery,
+            self.repo,
+            self.workflow,
+            &self.compiled,
+            address,
+        )?;
         let targeted = measure_mechanical_phase(
             self.forge,
             self.repo,
@@ -249,6 +269,8 @@ where
         )
         .await?;
         let Some((targeted_snapshots, automation_items)) = targeted else {
+            self.terminal_discovery
+                .remove_exact_target(self.repo, address);
             return Ok(Progress::unchanged());
         };
 
@@ -274,6 +296,7 @@ where
         if automation_progress.changed {
             self.reconciliation_detail_cache
                 .invalidate_repository(self.repo);
+            self.terminal_discovery.invalidate_repository(self.repo);
         }
         let reconciliation_progress = measure_mechanical_phase(
             self.forge,
@@ -291,12 +314,15 @@ where
             },
         )
         .await?;
-        Ok(Progress {
+        let progress = Progress {
             changed: automation_progress.changed || reconciliation_progress.changed,
             actions: automation_progress
                 .actions
                 .saturating_add(reconciliation_progress.actions),
-        })
+        };
+        self.terminal_discovery
+            .remove_exact_target(self.repo, address);
+        Ok(progress)
     }
 
     /// Runs bounded reconciliation using exactly the supplied artifact snapshots.
@@ -329,6 +355,9 @@ where
                 self.repo,
                 &outcome,
             ));
+        if !outcome.applied.is_empty() {
+            self.terminal_discovery.invalidate_repository(self.repo);
+        }
         Ok(Progress {
             changed: !outcome.applied.is_empty(),
             actions: saturating_u32(outcome.applied.len()),
@@ -346,6 +375,9 @@ where
         now: DateTime<Utc>,
         mode: ReconciliationMode,
     ) -> Result<Progress, WorkerError> {
+        if mode == ReconciliationMode::Bounded {
+            prepare_terminal_discovery_generation(&self.terminal_discovery, self.repo);
+        }
         let reconciliation_progress = measure_mechanical_phase(
             self.forge,
             self.repo,
@@ -356,11 +388,36 @@ where
                 let reconciler = self.workflow.reconciler(&self.policy);
                 let mut report = match mode {
                     ReconciliationMode::Bounded => {
+                        let entries = self.journal.list().await.map_err(ReconcileError::from)?;
+                        let mut forced_sources = entries
+                            .iter()
+                            .filter(|entry| entry.state.is_incomplete())
+                            .map(|entry| entry.target)
+                            .collect::<Vec<_>>();
+                        forced_sources.sort();
+                        forced_sources.dedup();
+                        let exact_targets = forced_sources
+                            .iter()
+                            .copied()
+                            .map(artifact_address)
+                            .collect::<Vec<_>>();
+                        let (issues, pull_requests) = read_reconciliation_candidates(
+                            self.forge,
+                            self.repo,
+                            self.workflow,
+                            now,
+                            &self.terminal_discovery,
+                            &exact_targets,
+                        )
+                        .await?;
                         reconciler
-                            .reconcile_with_detail_cache(
+                            .reconcile_discovered_candidates_with_detail_cache(
                                 self.forge,
                                 self.repo,
-                                self.journal,
+                                &entries,
+                                issues,
+                                pull_requests,
+                                &forced_sources,
                                 now,
                                 &self.reconciliation_detail_cache,
                             )
@@ -397,6 +454,9 @@ where
                         self.repo,
                         &outcome,
                     ));
+                if !outcome.applied.is_empty() {
+                    self.terminal_discovery.invalidate_repository(self.repo);
+                }
                 if !outcome.advisory.is_empty() {
                     self.advisory_actions
                         .fetch_add(saturating_u64(outcome.advisory.len()), Ordering::Relaxed);
@@ -465,6 +525,7 @@ where
         if automation_progress.changed {
             self.reconciliation_detail_cache
                 .invalidate_repository(self.repo);
+            self.terminal_discovery.invalidate_repository(self.repo);
         }
         Ok(combine_progress(
             reconciliation_progress,
@@ -487,6 +548,15 @@ where
 
     fn name(&self) -> &str {
         &self.name
+    }
+}
+
+fn artifact_address(source: temper_workflow::ArtifactSource) -> ArtifactAddress {
+    match source {
+        temper_workflow::ArtifactSource::Issue { number } => ArtifactAddress::issue(number),
+        temper_workflow::ArtifactSource::PullRequest { number } => {
+            ArtifactAddress::pull_request(number)
+        }
     }
 }
 

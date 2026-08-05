@@ -2,8 +2,7 @@
 
 use crate::observability::gate_summary;
 use chrono::{DateTime, Utc};
-use std::time::Instant;
-use temper_forge::{Forge, Issue, PullRequest, RepositoryId};
+use temper_forge::{Forge, IssueState, PullRequestState, RepositoryId};
 use temper_log::emit::{CiCompleted, GateEvaluated, emit_ci_completed, emit_gate_evaluated};
 use temper_log::{WorkItemRef, strip_provider_scheme};
 use temper_workflow::plan::{matches_queue_cheap, matches_queue_with};
@@ -16,7 +15,18 @@ use temper_workflow::{
 use super::candidate::{
     self, CandidateQueryPlan, ScanMode, candidate_query_plan, candidate_query_plan_for_roles,
 };
-use super::{AutomatedWorkItem, ScanError, TargetedArtifactSnapshot, WorkItem};
+use super::discovery::{CandidateDiscoveryMeasurement, read_candidate_summaries};
+use super::{
+    ArtifactAddress, AutomatedWorkItem, ScanError, TargetedArtifactSnapshot,
+    TerminalDiscoveryState, WorkItem,
+};
+
+/// Whether this consumer may advance one page of each shared terminal sweep.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalDiscoveryRead {
+    Advance,
+    RetainedOnly,
+}
 
 pub(super) async fn scan_inner<F: Forge + ?Sized>(
     forge: &F,
@@ -26,6 +36,7 @@ pub(super) async fn scan_inner<F: Forge + ?Sized>(
     now: DateTime<Utc>,
     role: Option<&RoleId>,
     mode: ScanMode,
+    discovery: Option<(&TerminalDiscoveryState, TerminalDiscoveryRead)>,
 ) -> Result<Vec<WorkItem>, ScanError> {
     let role_filter = match role {
         Some(id) => match compiled.role(id) {
@@ -50,6 +61,9 @@ pub(super) async fn scan_inner<F: Forge + ?Sized>(
         "role",
         scan_mode_name(mode),
         false,
+        now,
+        discovery,
+        &[],
     )
     .await?;
     Ok(work_items(&queues, &artifacts, now, role_filter))
@@ -63,6 +77,7 @@ pub(super) async fn scan_roles_inner<F: Forge + ?Sized>(
     now: DateTime<Utc>,
     roles: &[RoleId],
     mode: ScanMode,
+    discovery: Option<(&TerminalDiscoveryState, TerminalDiscoveryRead)>,
 ) -> Result<Vec<WorkItem>, ScanError> {
     let queues = candidate::queues_for_roles(compiled, roles);
     if queues.is_empty() {
@@ -79,6 +94,9 @@ pub(super) async fn scan_roles_inner<F: Forge + ?Sized>(
         "role",
         scan_mode_name(mode),
         false,
+        now,
+        discovery,
+        &[],
     )
     .await?;
     Ok(work_items_for_roles(&queues, &artifacts, now, roles))
@@ -106,6 +124,9 @@ pub(super) async fn scan_automated_inner<F: Forge + ?Sized>(
         "mechanical",
         "automation",
         true,
+        now,
+        None,
+        &[],
     )
     .await?;
     Ok(automated_work_items(&queues, &artifacts, now))
@@ -181,8 +202,10 @@ async fn targeted_artifacts<F: Forge + ?Sized>(
         queues,
         classified,
         Some(snapshot),
+        !snapshot.is_open(),
         &mut artifacts,
         emit_ci_completed,
+        None,
     )
     .await?;
     Ok(artifacts)
@@ -198,123 +221,81 @@ async fn read_artifacts<F: Forge + ?Sized>(
     consumer: &'static str,
     scope: &'static str,
     emit_ci_completed: bool,
+    now: DateTime<Utc>,
+    discovery: Option<(&TerminalDiscoveryState, TerminalDiscoveryRead)>,
+    exact_targets: &[ArtifactAddress],
 ) -> Result<Vec<ScannedArtifact>, ScanError> {
     let classifier = Classifier::new(workflow);
     let mut artifacts = Vec::new();
-    let (issues, pull_requests) =
-        read_candidate_summaries(forge, repo, query_plan, consumer, scope).await?;
-
-    for issue in issues {
-        let Ok(classified) = classifier.classify_issue(&issue) else {
-            continue;
-        };
-        push_candidate(
-            forge,
-            repo,
-            workflow,
-            queues,
-            classified,
-            None,
-            &mut artifacts,
-            emit_ci_completed,
-        )
-        .await?;
-    }
-
-    for pull_request in pull_requests {
-        let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
-            continue;
-        };
-        push_candidate(
-            forge,
-            repo,
-            workflow,
-            queues,
-            classified,
-            None,
-            &mut artifacts,
-            emit_ci_completed,
-        )
-        .await?;
-    }
-
-    artifacts.sort_by_key(scanned_order_key);
-    Ok(artifacts)
-}
-
-async fn read_candidate_summaries<F: Forge + ?Sized>(
-    forge: &F,
-    repo: &RepositoryId,
-    query_plan: &CandidateQueryPlan,
-    consumer: &'static str,
-    scope: &'static str,
-) -> Result<(Vec<Issue>, Vec<PullRequest>), ScanError> {
-    let started = Instant::now();
-    let provider_requests_before = forge.provider_request_count();
-    let logical_bucket_count = query_plan
-        .issue_queries
-        .len()
-        .saturating_add(query_plan.pull_request_queries.len());
-    let mut issues = Vec::new();
-    let mut pull_requests = Vec::new();
-    let result: Result<(), ScanError> = async {
-        for query in &query_plan.issue_queries {
-            issues.extend(forge.list_issue_candidates(repo, query.clone()).await?);
+    let mut measurement = CandidateDiscoveryMeasurement::new(forge, query_plan);
+    let candidates = read_candidate_summaries(
+        forge,
+        repo,
+        workflow,
+        query_plan,
+        now,
+        discovery,
+        exact_targets,
+        false,
+        &mut measurement,
+    )
+    .await;
+    let (issues, pull_requests) = match candidates {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            measurement.emit(forge, repo, consumer, scope, false);
+            return Err(error);
         }
-        for query in &query_plan.pull_request_queries {
-            pull_requests.extend(
-                forge
-                    .list_pull_request_candidates(repo, query.clone())
-                    .await?,
-            );
+    };
+
+    let result: Result<(), ScanError> = async {
+        for issue in issues {
+            let terminal = issue.state == IssueState::Closed;
+            let Ok(classified) = classifier.classify_issue(&issue) else {
+                continue;
+            };
+            push_candidate(
+                forge,
+                repo,
+                workflow,
+                queues,
+                classified,
+                None,
+                terminal,
+                &mut artifacts,
+                emit_ci_completed,
+                Some(&mut measurement),
+            )
+            .await?;
+        }
+
+        for pull_request in pull_requests {
+            let terminal = pull_request.state != PullRequestState::Open;
+            let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
+                continue;
+            };
+            push_candidate(
+                forge,
+                repo,
+                workflow,
+                queues,
+                classified,
+                None,
+                terminal,
+                &mut artifacts,
+                emit_ci_completed,
+                Some(&mut measurement),
+            )
+            .await?;
         }
         Ok(())
     }
     .await;
 
-    normalize_issue_candidates(&mut issues);
-    normalize_pull_request_candidates(&mut pull_requests);
-    let unique_count = issues.len().saturating_add(pull_requests.len());
-    let provider_requests = provider_requests_before.and_then(|before| {
-        forge
-            .provider_request_count()
-            .map(|after| after.saturating_sub(before))
-    });
-    let outcome = if result.is_ok() { "success" } else { "failed" };
-    tracing::debug!(
-        target: "temper::worker",
-        measurement = "candidate.discovery",
-        repo = strip_provider_scheme(repo.as_str()),
-        candidate.consumer = consumer,
-        candidate.scope = scope,
-        candidate.logical_bucket_count = saturating_u64(logical_bucket_count),
-        candidate.provider_request_total = provider_requests.unwrap_or(0),
-        candidate.provider_requests_available = provider_requests.is_some(),
-        candidate.unique_count = saturating_u64(unique_count),
-        outcome,
-        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        "candidate discovery {outcome} for {consumer}/{scope}"
-    );
+    measurement.emit(forge, repo, consumer, scope, result.is_ok());
     result?;
-    Ok((issues, pull_requests))
-}
-
-fn normalize_issue_candidates(issues: &mut Vec<Issue>) {
-    issues.sort_by(|left, right| {
-        left.number
-            .cmp(&right.number)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    issues.dedup_by(|left, right| left.id == right.id);
-}
-
-fn normalize_pull_request_candidates(pull_requests: &mut Vec<PullRequest>) {
-    pull_requests.sort_by(|left, right| {
-        left.number
-            .cmp(&right.number)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    pull_requests.dedup_by(|left, right| left.id == right.id);
+    artifacts.sort_by_key(scanned_order_key);
+    Ok(artifacts)
 }
 
 fn scan_mode_name(mode: ScanMode) -> &'static str {
@@ -326,10 +307,6 @@ fn scan_mode_name(mode: ScanMode) -> &'static str {
     }
 }
 
-fn saturating_u64(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn push_candidate<F: Forge + ?Sized>(
     forge: &F,
@@ -338,8 +315,10 @@ async fn push_candidate<F: Forge + ?Sized>(
     queues: &[&QueueManifest],
     classified: ClassifiedArtifact,
     snapshot: Option<&TargetedArtifactSnapshot>,
+    terminal: bool,
     artifacts: &mut Vec<ScannedArtifact>,
     emit_ci_completed: bool,
+    mut measurement: Option<&mut CandidateDiscoveryMeasurement>,
 ) -> Result<(), ScanError> {
     // Staging and human-attention state are global automation barriers. An
     // interrupted-CI operation that installed its own barrier remains visible
@@ -347,17 +326,18 @@ async fn push_candidate<F: Forge + ?Sized>(
     // deduplicated audit and marker cleanup.
     let interrupted_ci_parking = classified.metadata.interrupted_ci_recovery.is_some()
         && queues.iter().any(|queue| {
-            matches!(
-                queue.condition.as_ref(),
-                Some(temper_workflow::GateCondition::CiRecoveryRequired)
-            )
+            (!terminal || queue.terminal)
+                && matches!(
+                    queue.condition.as_ref(),
+                    Some(temper_workflow::GateCondition::CiRecoveryRequired)
+                )
         });
     if classified.metadata.staged
         || (requires_human_attention(&classified.labels) && !interrupted_ci_parking)
     {
         return Ok(());
     }
-    let Some(needs) = signal_needs_for_candidate(queues, &classified) else {
+    let Some(needs) = signal_needs_for_candidate(queues, &classified, terminal) else {
         return Ok(());
     };
     let (classified, signals) = if needs.is_empty() {
@@ -383,7 +363,10 @@ async fn push_candidate<F: Forge + ?Sized>(
         }?;
         (classified, signals)
     } else {
-        match workflow
+        if let Some(measurement) = measurement.as_mut() {
+            measurement.record_exact_detail_read();
+        }
+        let fresh = match workflow
             .executor(forge)
             .read_classified_gate_signals_with_needs(repo, classified.source, needs)
             .await
@@ -391,7 +374,11 @@ async fn push_candidate<F: Forge + ?Sized>(
             Ok(fresh) => fresh,
             Err(ExecutionError::Classification(_)) => return Ok(()),
             Err(error) => return Err(error.into()),
+        };
+        if let Some(measurement) = measurement {
+            measurement.record_hydrated_artifact();
         }
+        fresh
     };
 
     emit_pr_gate_evaluated(repo, &classified, &signals, needs, emit_ci_completed);
@@ -401,10 +388,11 @@ async fn push_candidate<F: Forge + ?Sized>(
     // exact interrupted-CI cleanup path remains eligible.
     let interrupted_ci_parking = classified.metadata.interrupted_ci_recovery.is_some()
         && queues.iter().any(|queue| {
-            matches!(
-                queue.condition.as_ref(),
-                Some(temper_workflow::GateCondition::CiRecoveryRequired)
-            )
+            (!terminal || queue.terminal)
+                && matches!(
+                    queue.condition.as_ref(),
+                    Some(temper_workflow::GateCondition::CiRecoveryRequired)
+                )
         });
     if requires_human_attention(&classified.labels) && !interrupted_ci_parking {
         return Ok(());
@@ -412,6 +400,7 @@ async fn push_candidate<F: Forge + ?Sized>(
     artifacts.push(ScannedArtifact {
         classified,
         signals,
+        terminal,
     });
     Ok(())
 }
@@ -493,11 +482,12 @@ fn emit_pr_gate_evaluated(
 fn signal_needs_for_candidate(
     queues: &[&QueueManifest],
     artifact: &ClassifiedArtifact,
+    terminal: bool,
 ) -> Option<SignalNeeds> {
     let mut matched = false;
     let mut needs = SignalNeeds::none();
     for &queue in queues {
-        if matches_queue_cheap(queue, artifact) {
+        if (!terminal || queue.terminal) && matches_queue_cheap(queue, artifact) {
             matched = true;
             needs = needs.union(SignalNeeds::for_queue(queue));
         }
@@ -581,7 +571,10 @@ fn active_members<'a>(
 ) -> Vec<&'a ClassifiedArtifact> {
     let members: Vec<&ClassifiedArtifact> = artifacts
         .iter()
-        .filter(|artifact| matches_queue_with(queue, &artifact.classified, &artifact.signals))
+        .filter(|artifact| {
+            (!artifact.terminal || queue.terminal)
+                && matches_queue_with(queue, &artifact.classified, &artifact.signals)
+        })
         .map(|artifact| &artifact.classified)
         .collect();
     if queue_active(queue, &members, now) {
@@ -614,6 +607,7 @@ fn emit_member_items(
 struct ScannedArtifact {
     classified: ClassifiedArtifact,
     signals: GateSignals,
+    terminal: bool,
 }
 
 fn scanned_order_key(artifact: &ScannedArtifact) -> (u64, u8) {

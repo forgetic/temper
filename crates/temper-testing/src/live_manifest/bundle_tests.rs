@@ -77,6 +77,10 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
             "plan-centric-feature-branch",
             ConvergenceStrategy::PlanFeatureLanding,
         ),
+        (
+            "history-independent-terminal-recovery",
+            ConvergenceStrategy::HistoryIndependentTerminalRecovery,
+        ),
     ] {
         let bundle = ScenarioBundle::load(scenarios_root().join(name))
             .unwrap_or_else(|error| panic!("load {name}: {error}"));
@@ -91,11 +95,12 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
         jig_core::ScriptFile::load(bundle.jig_script_path())
             .unwrap_or_else(|error| panic!("parse {name} Jig script: {error}"));
         assert!(
-            bundle
-                .execution
-                .steps
-                .iter()
-                .any(|step| matches!(step.action, ManifestAction::SeedIssue { .. })),
+            bundle.execution.steps.iter().any(|step| {
+                matches!(
+                    step.action,
+                    ManifestAction::SeedIssue { .. } | ManifestAction::SeedTerminalHistory { .. }
+                )
+            }),
             "{name} has a typed issue seed"
         );
     }

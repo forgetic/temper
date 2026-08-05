@@ -10,6 +10,8 @@ use super::stimuli::{StimulusKind, StimulusSpec};
 mod execution_links;
 #[path = "execution_order.rs"]
 mod execution_order;
+#[path = "execution_plan/terminal_history.rs"]
+mod terminal_history;
 
 use execution_links::validate_action_links;
 use execution_order::validate_action_order;
@@ -149,6 +151,9 @@ pub enum ManifestAction {
         binding: Option<String>,
         after_pr_binding: Option<String>,
     },
+    SeedTerminalHistory {
+        fixture: TerminalHistorySeedFixture,
+    },
     SeedPullRequest {
         repo_id: String,
         source_issue_id: String,
@@ -184,6 +189,7 @@ impl ManifestAction {
             Self::StartJig { .. } => "jig.fake_llm",
             Self::LaunchTemper { .. } => "temper.launch_standalone",
             Self::SeedIssue { .. } => "issue.seed",
+            Self::SeedTerminalHistory { .. } => "history.seed_terminal",
             Self::SeedPullRequest { .. } => "pr.seed_existing",
             Self::StartCodebaseMemoryMcp { .. } => "mcp.fake_codebase_memory.start",
             Self::ConfigureAgentTools { .. } => "agent.tools.configure",
@@ -201,6 +207,7 @@ pub enum ConvergenceStrategy {
     CodebaseMemory,
     ImplementationPrHandoff,
     PlanFeatureLanding,
+    HistoryIndependentTerminalRecovery,
 }
 
 impl ConvergenceStrategy {
@@ -212,6 +219,9 @@ impl ConvergenceStrategy {
             "codebase-memory" => Some(Self::CodebaseMemory),
             "implementation-pr-handoff" => Some(Self::ImplementationPrHandoff),
             "plan-feature-landing" => Some(Self::PlanFeatureLanding),
+            "history-independent-terminal-recovery" => {
+                Some(Self::HistoryIndependentTerminalRecovery)
+            }
             _ => None,
         }
     }
@@ -240,6 +250,21 @@ pub struct AgentFixture {
     pub mode: String,
     pub tool: Option<String>,
     pub queues: Vec<String>,
+}
+
+/// Bounded bulk terminal-history fixture owned by one manifest action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalHistorySeedFixture {
+    pub repo_id: String,
+    pub actionable_issue_id: String,
+    pub target_closed_issues: usize,
+    pub target_closed_pull_requests: usize,
+    pub inert_issue_labels: Vec<String>,
+    pub inert_pull_request_labels: Vec<String>,
+    pub sibling_repo_slug: String,
+    pub sibling_closed_issues: usize,
+    pub sibling_issue_labels: Vec<String>,
+    pub omit_webhooks: bool,
 }
 
 fn validate_live_topology(manifest: &TomlValue) -> Result<(), String> {
@@ -334,6 +359,7 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             binding: optional_table_string(table, "bind", &field)?,
             after_pr_binding: optional_table_string(table, "after_pr_binding", &field)?,
         }),
+        "history.seed_terminal" => terminal_history::parse(table, index),
         "pr.seed_existing" => Ok(ManifestAction::SeedPullRequest {
             repo_id: required_table_string(table, "repo", &field)?,
             source_issue_id: required_table_string(table, "source_issue_id", &field)?,
@@ -358,7 +384,7 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             let raw = required_table_string(table, "strategy", &field)?;
             let strategy = ConvergenceStrategy::parse(&raw).ok_or_else(|| {
                 format!(
-                    "{field}.strategy `{raw}` is unknown; expected single-pull-request, implementation-pr-terminal-ci, ci-poll-exact-head-repair, codebase-memory, implementation-pr-handoff, or plan-feature-landing"
+                    "{field}.strategy `{raw}` is unknown; expected single-pull-request, implementation-pr-terminal-ci, ci-poll-exact-head-repair, codebase-memory, implementation-pr-handoff, plan-feature-landing, or history-independent-terminal-recovery"
                 )
             })?;
             Ok(ManifestAction::WaitForConvergence { strategy })
@@ -368,6 +394,7 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
         | "ci.fail"
         | "ci.recover"
         | "delivery.repeat"
+        | "discovery.wait_warm"
         | "provider.wait_deferred"
         | "provider.health_wake" => Ok(ManifestAction::Stimulus(parse_stimulus(
             name, table, index,
@@ -519,6 +546,11 @@ fn parse_stimulus(action: &str, table: &toml::Table, index: usize) -> Result<Sti
             artifact: required_table_string(table, "artifact", &field)?,
             deliveries: bounded_integer(table, "deliveries", &field, 2, 2, MAX_DELIVERIES)?,
         },
+        "discovery.wait_warm" => StimulusKind::WaitDiscoveryWarm {
+            role_passes: bounded_integer(table, "role_passes", &field, 2, 1, 10)? as usize,
+            mechanical_passes: bounded_integer(table, "mechanical_passes", &field, 2, 1, 10)?
+                as usize,
+        },
         "provider.wait_deferred" => StimulusKind::WaitProviderDeferred {
             artifact: required_table_string(table, "artifact", &field)?,
             generation: bounded_integer(table, "generation", &field, 1, 1, 1_000_000)? as u32,
@@ -631,11 +663,10 @@ fn validate_required_actions(steps: &[ManifestStep]) -> Result<(), String> {
         .iter()
         .map(|step| step.action.kind())
         .collect::<BTreeSet<_>>();
-    let missing = [
+    let mut missing = [
         "forgejo.provision",
         "forgejo_runner.ready",
         "repo.seed",
-        "issue.seed",
         "jig.fake_llm",
         "temper.launch_standalone",
         "workflow.wait_convergence",
@@ -643,6 +674,9 @@ fn validate_required_actions(steps: &[ManifestStep]) -> Result<(), String> {
     .into_iter()
     .filter(|action| !actions.contains(action))
     .collect::<Vec<_>>();
+    if !actions.contains("issue.seed") && !actions.contains("history.seed_terminal") {
+        missing.push("issue.seed or history.seed_terminal");
+    }
     if missing.is_empty() {
         Ok(())
     } else {
@@ -666,6 +700,18 @@ fn validate_strategy_actions(
     let has_pr_seed = steps
         .iter()
         .any(|step| matches!(step.action, ManifestAction::SeedPullRequest { .. }));
+    let has_terminal_history = steps
+        .iter()
+        .any(|step| matches!(step.action, ManifestAction::SeedTerminalHistory { .. }));
+    let has_restart = steps.iter().any(|step| {
+        matches!(
+            step.action,
+            ManifestAction::Stimulus(StimulusSpec {
+                kind: StimulusKind::RestartTemper,
+                ..
+            })
+        )
+    });
     match strategy {
         ConvergenceStrategy::CodebaseMemory if !(has_mcp && has_tool_config) => Err(
             "codebase-memory convergence requires mcp.fake_codebase_memory.start and agent.tools.configure actions"
@@ -674,6 +720,11 @@ fn validate_strategy_actions(
         ConvergenceStrategy::ImplementationPrHandoff if !has_pr_seed => Err(
             "implementation-pr-handoff convergence requires a pr.seed_existing action".to_string(),
         ),
+        ConvergenceStrategy::HistoryIndependentTerminalRecovery
+            if !(has_terminal_history && has_restart) =>
+        {
+            Err("history-independent-terminal-recovery convergence requires history.seed_terminal and temper.restart actions".to_string())
+        }
         _ => Ok(()),
     }
 }

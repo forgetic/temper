@@ -124,8 +124,11 @@ fn issue_list_path() -> String {
     format!("/api/v1/repos/{OWNER}/{REPO}/issues")
 }
 
-fn candidate_search_path() -> &'static str {
-    "/api/v1/repos/issues/search"
+fn candidate_stream_count(selection: &CandidateLabelSelection) -> usize {
+    selection
+        .normalized()
+        .expect("validated candidate labels")
+        .map_or(1, |labels| labels.len())
 }
 
 fn pull_list_path() -> String {
@@ -144,69 +147,88 @@ fn assert_no_all_history_lists(requests: &[HttpRequest]) {
 }
 
 #[test]
-fn reference_workflow_bounded_reconciliation_uses_four_one_page_buckets() {
+fn reference_workflow_bounded_reconciliation_uses_explicit_terminal_buckets() {
     let client = MockHttpClient::new();
-    // The checked-in 17-label workflow has both artifact kinds and both
-    // lifecycle states populated in its interest plan. Empty provider pages
-    // keep this assertion focused on aggregate list shape, not enrichment.
-    for _ in 0..4 {
-        client.push_response(200, "[]");
-    }
-
     let forge = forge(client.clone());
     let workflow = workflow();
     let policy = DefaultRecoveryPolicy;
     let journal = InMemoryJournal::new();
+    let reconciler = workflow.reconciler(&policy);
+    let plan = reconciler.candidate_query_plan();
+    let expected_issue_requests = plan
+        .issue_queries
+        .iter()
+        .map(|query| candidate_stream_count(&query.labels))
+        .sum::<usize>();
+    let expected_pull_requests = plan
+        .pull_request_queries
+        .iter()
+        .map(|query| candidate_stream_count(&query.labels))
+        .sum::<usize>();
+    let expected_requests = expected_issue_requests + expected_pull_requests;
+    for _ in 0..expected_requests {
+        client.push_response(200, "[]");
+    }
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
-        &forge,
-        &repo_id(),
-        &journal,
-        ts("2026-05-29T00:00:00Z"),
-    ))
-    .expect("bounded reconciliation succeeds");
+    let report =
+        block_on(reconciler.reconcile(&forge, &repo_id(), &journal, ts("2026-05-29T00:00:00Z")))
+            .expect("bounded reconciliation succeeds");
 
     assert_eq!(report.snapshot_count, 0);
     let requests = client.recorded();
     assert_no_all_history_lists(&requests);
-    assert_eq!(
-        requests.len(),
-        4,
-        "17 labels must collapse to issue/PR x open/terminal buckets"
+    assert_eq!(requests.len(), expected_requests);
+    assert!(
+        requests.iter().all(|request| {
+            request.method == HttpMethod::Get && request.path == issue_list_path()
+        })
     );
-    assert!(requests.iter().all(|request| {
-        request.method == HttpMethod::Get && request.path == candidate_search_path()
-    }));
     assert_eq!(
         requests
             .iter()
             .filter(|request| has_query(request, "type", "issues"))
             .count(),
-        2
+        expected_issue_requests
     );
     assert_eq!(
         requests
             .iter()
             .filter(|request| has_query(request, "type", "pulls"))
             .count(),
-        2
+        expected_pull_requests
     );
+    let expected_open = plan
+        .issue_queries
+        .iter()
+        .filter(|query| query.lifecycle == CandidateLifecycle::Open)
+        .map(|query| candidate_stream_count(&query.labels))
+        .chain(
+            plan.pull_request_queries
+                .iter()
+                .filter(|query| query.lifecycle == CandidateLifecycle::Open)
+                .map(|query| candidate_stream_count(&query.labels)),
+        )
+        .sum::<usize>();
+    let expected_terminal = expected_requests - expected_open;
     assert_eq!(
         requests
             .iter()
             .filter(|request| has_query(request, "state", "open"))
             .count(),
-        2
+        expected_open
     );
     assert_eq!(
         requests
             .iter()
             .filter(|request| has_query(request, "state", "closed"))
             .count(),
-        2
+        expected_terminal
     );
     assert!(requests.iter().all(|request| {
         query_value(request, "labels").is_some() || has_query(request, "state", "open")
+    }));
+    assert!(requests.iter().all(|request| {
+        has_query(request, "sort", "updated") && has_query(request, "direction", "asc")
     }));
     assert!(
         !requests
@@ -220,13 +242,20 @@ fn reference_terminal_pr_bucket_adds_exact_read_only_for_ambiguous_row() {
     let client = MockHttpClient::new();
     let unambiguous =
         pr_issue_json_with_merge(7, "closed", "", &["implementation", "landed"], Some(true));
-    client.push_response(
-        200,
-        format!(
-            "[{unambiguous},{}]",
-            pr_issue_json(8, "closed", "", &["implementation", "landed"]),
-        ),
-    );
+    let forge = forge(client.clone());
+    let workflow = workflow();
+    let labels = workflow_interest(&workflow)
+        .terminal_labels(temper_workflow::ArtifactTarget::PullRequest)
+        .to_vec();
+    for _ in 0..labels.len() {
+        client.push_response(
+            200,
+            format!(
+                "[{unambiguous},{}]",
+                pr_issue_json(8, "closed", "", &["implementation", "landed"]),
+            ),
+        );
+    }
     client.push_response(
         200,
         serde_json::json!({
@@ -244,17 +273,12 @@ fn reference_terminal_pr_bucket_adds_exact_read_only_for_ambiguous_row() {
         })
         .to_string(),
     );
-    let forge = forge(client.clone());
-    let workflow = workflow();
-    let labels = workflow_interest(&workflow)
-        .terminal_labels(temper_workflow::ArtifactTarget::PullRequest)
-        .to_vec();
 
     let pulls = block_on(forge.list_pull_request_candidates(
         &repo_id(),
         PullRequestCandidateQuery {
             lifecycle: CandidateLifecycle::Terminal,
-            labels: CandidateLabelSelection::AnyOf(labels),
+            labels: CandidateLabelSelection::AnyOf(labels.clone()),
             ..PullRequestCandidateQuery::default()
         },
     ))
@@ -262,11 +286,19 @@ fn reference_terminal_pr_bucket_adds_exact_read_only_for_ambiguous_row() {
 
     assert_eq!(pulls.len(), 2);
     let requests = client.recorded();
-    assert_eq!(requests.len(), 2, "one bucket plus one ambiguous fallback");
-    assert_eq!(requests[0].path, candidate_search_path());
-    assert!(query_value(&requests[0], "labels").is_some());
     assert_eq!(
-        requests[1].path,
+        requests.len(),
+        labels.len() + 1,
+        "one exact repository stream per label plus one ambiguous fallback"
+    );
+    assert!(requests[..labels.len()].iter().all(|request| {
+        request.path == issue_list_path()
+            && query_value(request, "labels").is_some()
+            && has_query(request, "sort", "updated")
+            && has_query(request, "direction", "asc")
+    }));
+    assert_eq!(
+        requests[labels.len()].path,
         format!("/api/v1/repos/{OWNER}/{REPO}/pulls/8")
     );
     assert!(

@@ -174,6 +174,7 @@ fn close_parent_issues_effect_validates() {
         labels: Vec::new(),
         excluded_labels: Vec::new(),
         any_of: Vec::new(),
+        terminal: false,
         min_depth: None,
         max_age: None,
         condition: None,

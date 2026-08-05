@@ -600,6 +600,14 @@ impl Daemon {
         });
     }
 
+    /// Admits the next bounded terminal page through the same repository
+    /// coordinator as poll and webhook work.
+    pub(crate) fn schedule_discovery_continuation(&self, repo: RepositoryPath) {
+        let _ = self.cq.send(DaemonCompletion::ScheduleWake {
+            request: WakeRequest::broad(repo, BroadMode::Poll),
+        });
+    }
+
     /// Explicitly schedules a broad startup recovery pass for one configured
     /// repository. Wake state itself is intentionally not persisted, so
     /// startup broad scans and periodic poll backstops recover hints lost on a

@@ -1,0 +1,176 @@
+schema = "temper.scenario.v1"
+name = "history-independent-terminal-recovery"
+status = "active"
+stability = "provisional"
+intent = "Prove bounded polling recovers one old terminal artifact independently of newer closed workflow history and reconstructs authority after restart."
+introduced_by = "#863"
+owner_area = "delivery-validation"
+timeout = "15m"
+
+[runner]
+uses = "manifest"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "history-independent-terminal-recovery"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/history-bound"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "actionable"
+repo = "service"
+kind = "code"
+title = "Old terminal artifact requires abandoned-lease recovery"
+body = "config/actionable-issue.md"
+author = "site_admin"
+labels = ["code"]
+created_after = "standalone_ready"
+
+[[agents]]
+role = "architect"
+kind = "llm"
+mode = "scripted-fake"
+tool = "triage_workspace"
+queues = ["landed_inbox"]
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["terminal_issue_recovery", "landed_inbox"]
+
+[live_harness]
+ci_poll_cadence = "300s"
+poll_cadence = "1s"
+poll_backstop = "600s"
+mechanical_cadence = "1s"
+
+[validation]
+feature = "ai/temper#863"
+plan = "ai/temper#864"
+source_branch = "agent/pr-for-feature-863"
+change = "new"
+
+[feature_contract]
+claim = "Periodic terminal discovery has a fixed per-pass request and hydration ceiling independent of accumulated closed workflow history, while polling and restart recovery remain complete."
+stimulus = "Create one old merged PR with an expired durable lease while Temper is offline, then create 220 newer target issues, 120 newer target PRs, and 220 sibling-repository rows; run repeated warm role/mechanical passes, restart standalone Temper, and repeat."
+observable = "Structured history seed, candidate.discovery, mechanical.phase, continuation, cache, provider-request, hydration, webhook-omission, convergence, and stimulus evidence from real Forgejo and standalone Temper."
+assertion = "Polling recovers the old target without a webhook, irrelevant rows are never hydrated, every pass remains within the 340-request/one-hydration scenario ceiling, sibling rows cannot starve the target, and restart rebuilds authoritative discovery."
+runtime_budget_seconds = 900
+jig_script_path = "jig/history-independent-terminal-recovery.json"
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start disposable real Forgejo for the bounded-history proof."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register the real host forgejo-runner; fixture CI is manual-only."
+
+[[steps]]
+id = "configure-jig"
+action = "jig.fake_llm"
+roles = ["architect"]
+script_path = "jig/history-independent-terminal-recovery.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-bounded-terminal-history"
+action = "history.seed_terminal"
+repo = "service"
+actionable_issue_id = "actionable"
+closed_issues = 220
+closed_pull_requests = 120
+issue_labels = ["code", "planned", "validated"]
+pull_request_labels = ["implementation", "landed", "planned", "validated"]
+sibling_repo = "acme/history-noise"
+sibling_closed_issues = 220
+sibling_issue_labels = ["code", "planned", "validated"]
+omit_webhooks = true
+
+[[steps]]
+id = "observe-first-cold-sweep-and-warm-reuse"
+action = "discovery.wait_warm"
+role_passes = 2
+mechanical_passes = 2
+timeout_ms = 240000
+max_attempts = 1
+
+[[steps]]
+id = "restart-standalone-for-cold-rebuild"
+action = "temper.restart"
+timeout_ms = 90000
+max_attempts = 1
+
+[[steps]]
+id = "observe-restarted-cold-sweep-and-warm-reuse"
+action = "discovery.wait_warm"
+role_passes = 2
+mechanical_passes = 2
+timeout_ms = 240000
+max_attempts = 1
+
+[[steps]]
+id = "wait-for-history-independent-recovery"
+action = "workflow.wait_convergence"
+strategy = "history-independent-terminal-recovery"
+until = "the expired lease is recovered and restarted standalone discovery becomes authoritative"
+
+[expect]
+outcome = "The old recovery target is found only by bounded polling; warm passes stay fixed-cost and restart reconstructs complete authority."
+
+[[assertions]]
+id = "history-independent-request-and-hydration-budgets"
+kind = "command"
+command = "scripts/assert-history-independent-recovery.sh"
+phase = "after-convergence"
+timeout_ms = 30000
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Tighten scenario-owned structured assertions without raising fixed budgets.",
+  "Increase inert history cardinality while preserving the old-target-first seed order.",
+]
+requires_new_scenario_or_major_update = [
+  "Changing the mapped feature, plan, or inherited feature branch.",
+  "Replacing real Forgejo or standalone Temper with a unit-only fixture.",
+  "Delivering the actionable artifact by webhook or removing the restart proof.",
+]

@@ -1,0 +1,7 @@
+name: scenario-fixture-ci
+on: [workflow_dispatch]
+jobs:
+  fixture:
+    runs-on: host
+    steps:
+      - run: echo "terminal history fixture has no push-triggered CI"

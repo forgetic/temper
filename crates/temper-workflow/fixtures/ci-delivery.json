@@ -227,6 +227,26 @@
       "labels": [
         "needs-owner"
       ]
+    },
+    {
+      "id": "blocked_terminal_recovery",
+      "artifact": "code",
+      "labels": [
+        "blocked"
+      ],
+      "condition": {
+        "kind": "dependencies_resolved"
+      },
+      "terminal": true
+    },
+    {
+      "id": "post_merge_recovery",
+      "artifact": "implementation_pr",
+      "any_of": [
+        { "labels": ["landed"] },
+        { "labels": ["alignment"] }
+      ],
+      "terminal": true
     }
   ],
   "transitions": [

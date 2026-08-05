@@ -9,9 +9,9 @@ use crate::metadata::next_timestamp;
 use crate::record_ids::{issue_comment_id, issue_id};
 use crate::validation::check_expected_version;
 use temper_forge_model::{
-    CandidateLifecycle, ChangeKind, Comment, CreateComment, CreateIssue, ForgeError, ForgeResult,
-    Issue, IssueCandidateQuery, IssueId, IssueQuery, IssueState, ItemNumber, RepositoryId,
-    UpdateIssue, Version,
+    CandidateLifecycle, CandidatePosition, ChangeKind, Comment, CreateComment, CreateIssue,
+    ForgeError, ForgeResult, Issue, IssueCandidatePage, IssueCandidateQuery, IssueId, IssueQuery,
+    IssueState, ItemNumber, RepositoryId, UpdateIssue, Version, paginate_candidate_items,
 };
 
 pub(crate) fn list_issues(
@@ -42,7 +42,7 @@ pub(crate) fn list_issue_candidates(
     forge: &FilesystemForge,
     repo_id: &RepositoryId,
     query: IssueCandidateQuery,
-) -> ForgeResult<Vec<Issue>> {
+) -> ForgeResult<IssueCandidatePage> {
     let labels = query.labels.normalized()?;
     forge.require_repository(repo_id)?;
     let mut issues = forge
@@ -65,8 +65,20 @@ pub(crate) fn list_issue_candidates(
             issue.dependencies.clear();
         }
     }
-    sort_issues_by_number(&mut issues);
-    Ok(issues)
+    let raw_count = issues.len();
+    paginate_candidate_items(
+        issues,
+        raw_count,
+        repo_id,
+        query.lifecycle,
+        query.labels,
+        query.page,
+        |issue| CandidatePosition {
+            updated_at: issue.updated_at,
+            number: issue.number,
+            id: issue.id.clone(),
+        },
+    )
 }
 
 pub(crate) fn create_issue(
