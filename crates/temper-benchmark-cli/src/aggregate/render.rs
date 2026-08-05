@@ -25,12 +25,12 @@ pub fn render_aggregate_markdown(aggregate: &BenchmarkAggregateV1) -> String {
     ));
     render_metric_table(
         &mut report,
-        "Structural metrics",
+        "Correctness, discovery, and structural metrics",
         PRIMARY_METRICS,
         &aggregate.metrics,
     );
     report.push_str(
-        "## Advisory timings\n\nTiming values are advisory and are not pass/fail gates.\n\n",
+        "## Advisory timings\n\nTiming values are advisory; graph, model, tool, and wall timings are not pass/fail gates.\n\n",
     );
     render_metric_rows(&mut report, ADVISORY_METRICS, &aggregate.metrics);
     report

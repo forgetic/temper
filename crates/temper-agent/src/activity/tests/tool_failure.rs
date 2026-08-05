@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use temper_agent_core::{
-    AgentEvent, ModelIdentity, ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
-    ToolResultMetadata,
+    AgentEvent, CodebaseMemoryTiming, ModelIdentity, ToolCallStatus, ToolFailureCategory,
+    ToolFailureDiagnostic, ToolResultMetadata,
 };
 use temper_protocol_activity::{
     AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1, CapturedContentV1,
@@ -41,6 +41,10 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                 bytes: 223,
                 truncated: true,
                 failure: None,
+                codebase_memory_timing: Some(CodebaseMemoryTiming {
+                    readiness_wait_ms: 1,
+                    graph_execution_ms: 3,
+                }),
             },
         });
         let mut failure = ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::ProcessExit);
@@ -55,6 +59,10 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                 bytes: 10_000,
                 truncated: true,
                 failure: Some(failure),
+                codebase_memory_timing: Some(CodebaseMemoryTiming {
+                    readiness_wait_ms: 2,
+                    graph_execution_ms: 3,
+                }),
             },
         });
 
@@ -78,6 +86,13 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
             assert!(result.text.len() <= 64);
             assert!(result.truncated);
         }
+        assert_eq!(
+            finished[0]
+                .codebase_memory_timing
+                .unwrap()
+                .graph_execution_ms,
+            3
+        );
         assert_eq!(finished[1].result, None);
         let diagnostic = finished[1].failure.as_ref().expect("typed failure");
         assert_eq!(diagnostic.category, ToolFailureCategoryV1::ProcessExit);

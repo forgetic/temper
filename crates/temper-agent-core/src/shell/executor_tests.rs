@@ -108,6 +108,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
                 bytes: 14,
                 truncated: false,
                 failure: None,
+                codebase_memory_timing: None,
             },
         } if id == "call-1" && name == "fake" && preview == "bounded result"
     ));
@@ -139,6 +140,41 @@ fn bounded_tool_metadata_is_utf8_safe_and_omits_structured_details() {
             .as_deref()
             .unwrap_or_default()
             .contains("must-not-enter-preview")
+    );
+}
+
+#[test]
+fn only_codebase_memory_tools_retain_numeric_graph_timings() {
+    let output = ToolOutput {
+        content: Vec::new(),
+        details: Some(serde_json::json!({
+            "timing": {
+                "readiness_wait_ms": 12,
+                "graph_execution_ms": 34,
+                "secret": "must-not-enter-events"
+            }
+        })),
+        is_error: false,
+    };
+
+    assert_eq!(
+        bounded_tool_result("read", &output).codebase_memory_timing,
+        None
+    );
+    assert_eq!(
+        bounded_tool_result("codebase_memory_search_graph", &output).codebase_memory_timing,
+        Some(CodebaseMemoryTiming {
+            readiness_wait_ms: 12,
+            graph_execution_ms: 34,
+        })
+    );
+    let malformed = ToolOutput {
+        details: Some(serde_json::json!({"timing": {"readiness_wait_ms": "12"}})),
+        ..output
+    };
+    assert_eq!(
+        bounded_tool_result("codebase_memory_search_graph", &malformed).codebase_memory_timing,
+        None
     );
 }
 

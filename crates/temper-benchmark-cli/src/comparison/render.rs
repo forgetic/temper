@@ -14,11 +14,11 @@ pub fn render_comparison_markdown(comparison: &BenchmarkComparisonV1) -> String 
     report.push('\n');
     render_comparison_table(
         &mut report,
-        "Primary structural metrics",
+        "Primary correctness, discovery, and structural metrics",
         &comparison.primary,
     );
     report.push_str(
-        "## Advisory timings\n\nModel, tool, and wall timings are advisory and are not pass/fail gates.\n\n",
+        "## Advisory timings\n\nGraph, model, tool, and wall timings are advisory and are not pass/fail gates.\n\n",
     );
     render_comparison_rows(&mut report, &comparison.advisory);
     if !comparison.other.is_empty() {

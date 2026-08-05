@@ -5,7 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use super::CapturedContentV1;
 
 /// Stable failure categories emitted by Temper's codebase-memory bridge.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolFailureCategoryV1 {
     ConfigurationStartup,
@@ -80,6 +80,14 @@ impl ToolFailureDiagnosticV1 {
     }
 }
 
+/// Monotonic timing components emitted by a codebase-memory wrapper.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodebaseMemoryTimingV1 {
+    pub readiness_wait_ms: u64,
+    pub graph_execution_ms: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolStartedV1 {
@@ -100,6 +108,8 @@ pub struct ToolFinishedV1 {
     pub result: Option<CapturedContentV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<ToolFailureDiagnosticV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase_memory_timing: Option<CodebaseMemoryTimingV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

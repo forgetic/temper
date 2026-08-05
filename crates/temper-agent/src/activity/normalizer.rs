@@ -27,7 +27,7 @@ pub(super) use model_failure::map_diagnostic;
 use model_failure::{normalize_finish, retry_code, status as map_model_status};
 use terminal::scope_terminal;
 use tool_failure::{map_tool_failure, map_tool_status};
-use tool_result::captured_tool_result;
+use tool_result::{captured_tool_result, graph_timing};
 
 struct NormalizerState {
     current_turn: Option<u32>,
@@ -506,6 +506,7 @@ impl NormalizingEventSink {
                 duration_ms,
                 result,
                 failure,
+                codebase_memory_timing: graph_timing(metadata.codebase_memory_timing),
             }),
         );
     }

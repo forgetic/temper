@@ -148,6 +148,24 @@ pub(super) fn event(
                     ));
                 }
             }
+            if let Some(timing) = value.codebase_memory_timing {
+                if !value.name.starts_with("codebase_memory_") {
+                    return Err(invalid_event(
+                        &format!("{path}.data.codebase_memory_timing"),
+                        "is reserved for trusted codebase-memory tool names",
+                    ));
+                }
+                if timing
+                    .readiness_wait_ms
+                    .saturating_add(timing.graph_execution_ms)
+                    > value.duration_ms
+                {
+                    return Err(invalid_event(
+                        &format!("{path}.data.codebase_memory_timing"),
+                        "components cannot exceed total tool-call duration",
+                    ));
+                }
+            }
             Ok(())
         }
         Event::SteeringApplied(value) => optional_content(

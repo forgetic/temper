@@ -78,6 +78,7 @@ fn old_tool_finished_events_omit_the_optional_failure() {
     let parsed: ToolFinishedV1 = serde_json::from_value(legacy.clone()).unwrap();
     assert_eq!(parsed.failure, None);
     assert_eq!(parsed.result, None);
+    assert_eq!(parsed.codebase_memory_timing, None);
     assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
 }
 
@@ -91,6 +92,10 @@ fn tool_failures_validate_only_on_non_success_boundaries() {
         duration_ms: 50,
         result: None,
         failure: Some(diagnostic(ToolFailureCategoryV1::Timeout)),
+        codebase_memory_timing: Some(CodebaseMemoryTimingV1 {
+            readiness_wait_ms: 10,
+            graph_execution_ms: 40,
+        }),
     });
     event.validate().expect("failed tool diagnostic validates");
 
@@ -113,5 +118,11 @@ fn tool_failures_validate_only_on_non_success_boundaries() {
     };
     finished.status = ToolStatusV1::Failed;
     finished.name = "bash".into();
+    finished.failure = None;
+    finished
+        .codebase_memory_timing
+        .as_mut()
+        .unwrap()
+        .graph_execution_ms = 41;
     assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
 }
