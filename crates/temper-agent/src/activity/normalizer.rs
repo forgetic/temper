@@ -12,8 +12,7 @@ use temper_protocol_activity::{
     MODEL_CALL_RETRY_FAILURE_MESSAGE, ModelCallFinishedV1, ModelCallRetryingV1, ModelCallStartedV1,
     OutputDeltaV1, PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1,
     PromptToolDefinitionV1, ScopeFinishedV1, ScopeStartedV1, SteeringAppliedV1, SteeringSourceV1,
-    StopReasonV1, ToolFinishedV1, ToolStartedV1, ToolStatusV1, TurnFinishedV1, TurnStartedV1,
-    UsageV1,
+    StopReasonV1, ToolFinishedV1, ToolStartedV1, TurnFinishedV1, TurnStartedV1, UsageV1,
 };
 use tongs::model::{ContentBlock, StopReason};
 use tongs::provider::ToolDef;
@@ -22,10 +21,12 @@ use super::{ActivityClock, ProjectionSet};
 
 mod model_failure;
 mod terminal;
+mod tool_failure;
 mod tool_result;
 pub(super) use model_failure::map_diagnostic;
 use model_failure::{normalize_finish, retry_code, status as map_model_status};
 use terminal::scope_terminal;
+use tool_failure::{map_tool_failure, map_tool_status};
 use tool_result::captured_tool_result;
 
 struct NormalizerState {
@@ -478,21 +479,24 @@ impl NormalizingEventSink {
         metadata: temper_agent_core::ToolResultMetadata,
     ) {
         // Never transport generic process output. Read-only bounded text tools
-        // are eligible in transcript modes. `submit_for_pr` exposes only a
-        // fixed acceptance marker, never the host message or gate output.
-        let result = if matches!(
-            self.policy.capture,
-            CaptureModeV1::Transcript | CaptureModeV1::Diagnostic
-        ) {
+        // and successful codebase-memory graph tools are eligible in transcript
+        // modes. Failed output is represented only by its typed safe diagnostic.
+        // `submit_for_pr` exposes only a fixed marker, never host gate output.
+        let result = if status == ToolCallStatus::Succeeded
+            && matches!(
+                self.policy.capture,
+                CaptureModeV1::Transcript | CaptureModeV1::Diagnostic
+            ) {
             captured_tool_result(
                 &name,
-                metadata.preview,
+                metadata.preview.clone(),
                 metadata.truncated,
                 self.policy.max_inline_bytes as usize,
             )
         } else {
             None
         };
+        let failure = metadata.failure.map(map_tool_failure);
         self.project(
             state.current_turn,
             AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
@@ -501,6 +505,7 @@ impl NormalizingEventSink {
                 status: map_tool_status(status),
                 duration_ms,
                 result,
+                failure,
             }),
         );
     }
@@ -542,14 +547,6 @@ impl EventSink for NormalizingEventSink {
 
 fn turn_number(turn: usize) -> u32 {
     u32::try_from(turn).unwrap_or(u32::MAX)
-}
-
-fn map_tool_status(status: ToolCallStatus) -> ToolStatusV1 {
-    match status {
-        ToolCallStatus::Succeeded => ToolStatusV1::Succeeded,
-        ToolCallStatus::Failed => ToolStatusV1::Failed,
-        ToolCallStatus::Cancelled => ToolStatusV1::Cancelled,
-    }
 }
 
 fn map_stop_reason(reason: StopReason) -> StopReasonV1 {

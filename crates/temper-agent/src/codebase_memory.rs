@@ -13,11 +13,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use temper_agent_core::{SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory, ToolFailureDiagnostic};
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
     WorkspaceContext,
 };
-use tongs::error::{Error, Result};
+use tongs::error::Result;
 use tongs::model::{ContentBlock, TextContent};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
 
@@ -693,11 +694,19 @@ impl Tool for CodebaseMemoryTool {
         let mcp_name = self.mcp_name.clone();
         let default_project_key = self.default_project_key;
         let wait_timeout = self.call_timeout;
-        let input = skein::runtime::spawn_blocking(move || {
+        let input = match skein::runtime::spawn_blocking(move || {
             scope.prepare_tool_input(&mcp_name, default_project_key, input, wait_timeout)
         })
         .await
-        .map_err(|message| Error::tool(self.public_name.clone(), message))?;
+        {
+            Ok(input) => input,
+            Err(message) => {
+                return Ok(codebase_memory_failure_output(
+                    classify_input_failure(&message),
+                    None,
+                ));
+            }
+        };
 
         if self.mcp_name == "list_projects" {
             return Ok(self.scope.list_projects_output());
@@ -718,11 +727,19 @@ impl Tool for CodebaseMemoryTool {
             argument_preview: &argument_preview,
         });
 
-        let result = self
+        let result = match self
             .client
             .call_tool(&self.mcp_name, input, self.call_timeout)
             .await
-            .map_err(|error| Error::tool(self.public_name.clone(), error))?;
+        {
+            Ok(result) => result,
+            Err(error) => {
+                return Ok(codebase_memory_failure_output(
+                    classify_mcp_error(&error),
+                    None,
+                ));
+            }
+        };
         let bounded = bound_text(&result.text, MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
         let result_preview = redacted_preview(&bounded.text, 240);
         emit_mcp_tool_result(McpToolResult {
@@ -733,6 +750,10 @@ impl Tool for CodebaseMemoryTool {
             truncated: bounded.truncated,
             result_preview: &result_preview,
         });
+        if result.is_error {
+            let category = classify_provider_failure(&bounded.text);
+            return Ok(codebase_memory_failure_output(category, Some(bounded.text)));
+        }
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {
                 text: bounded.text,
@@ -751,6 +772,81 @@ impl Tool for CodebaseMemoryTool {
 struct BoundedText {
     text: String,
     truncated: bool,
+}
+
+fn codebase_memory_failure_output(
+    category: ToolFailureCategory,
+    model_text: Option<String>,
+) -> ToolOutput {
+    let diagnostic = ToolFailureDiagnostic::codebase_memory(category);
+    let text = model_text.unwrap_or_else(|| {
+        format!(
+            "{}; use read, grep, find, or other conventional discovery instead",
+            diagnostic.message
+        )
+    });
+    ToolOutput {
+        content: vec![ContentBlock::Text(TextContent {
+            text,
+            text_signature: None,
+        })],
+        // The shell accepts only this source/category marker and reconstructs
+        // retryability, fallback guidance, and the fixed safe message itself.
+        details: Some(json!({
+            SAFE_TOOL_FAILURE_DETAIL_KEY: {
+                "source": "codebase_memory",
+                "category": category.as_str(),
+            }
+        })),
+        is_error: true,
+    }
+}
+
+fn classify_input_failure(message: &str) -> ToolFailureCategory {
+    let lowered = message.to_ascii_lowercase();
+    if lowered.contains("index") && lowered.contains("fail") {
+        ToolFailureCategory::IndexFailure
+    } else if lowered.contains("not ready") {
+        ToolFailureCategory::ProjectNotReady
+    } else {
+        ToolFailureCategory::InvalidModelInput
+    }
+}
+
+fn classify_mcp_error(error: &McpError) -> ToolFailureCategory {
+    match error {
+        McpError::Spawn { .. } => ToolFailureCategory::ConfigurationStartup,
+        McpError::Io { .. } | McpError::Cancelled { .. } => ToolFailureCategory::Transport,
+        McpError::Timeout { .. } => ToolFailureCategory::Timeout,
+        McpError::ProcessExited { .. } => ToolFailureCategory::ProcessExit,
+        McpError::Json { .. }
+        | McpError::Rpc { .. }
+        | McpError::ProtocolOverflow { .. }
+        | McpError::Protocol(_) => ToolFailureCategory::ProviderProtocol,
+    }
+}
+
+fn classify_provider_failure(message: &str) -> ToolFailureCategory {
+    let lowered = message.to_ascii_lowercase();
+    if lowered.contains("timed out") || lowered.contains("timeout") {
+        ToolFailureCategory::Timeout
+    } else if lowered.contains("index") && (lowered.contains("fail") || lowered.contains("error")) {
+        ToolFailureCategory::IndexFailure
+    } else if lowered.contains("project")
+        && (lowered.contains("not ready")
+            || lowered.contains("not found")
+            || lowered.contains("missing")
+            || lowered.contains("unknown"))
+    {
+        ToolFailureCategory::ProjectNotReady
+    } else if lowered.contains("invalid input")
+        || lowered.contains("invalid argument")
+        || lowered.contains("invalid parameter")
+    {
+        ToolFailureCategory::InvalidModelInput
+    } else {
+        ToolFailureCategory::ProviderProtocol
+    }
 }
 
 fn bound_text(input: &str, max_bytes: usize) -> BoundedText {

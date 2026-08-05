@@ -192,6 +192,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
                     text: "PRIVATE_TOKEN=secret".into(),
                     truncated: false,
                 })),
+                failure: None,
             }),
         ),
         event(

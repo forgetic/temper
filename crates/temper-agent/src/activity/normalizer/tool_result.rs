@@ -17,7 +17,7 @@ pub(super) fn captured_tool_result(
             })
         });
     }
-    if !matches!(name, "read" | "ls" | "grep" | "find") {
+    if !matches!(name, "read" | "ls" | "grep" | "find") && !name.starts_with("codebase_memory_") {
         return None;
     }
     let mut inline = sanitized_text(&value, maximum_bytes);
