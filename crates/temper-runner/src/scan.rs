@@ -7,6 +7,7 @@
 
 mod candidate;
 mod ci;
+mod discovery;
 mod discovery_state;
 mod query;
 
@@ -32,6 +33,7 @@ pub use discovery_state::{
     TerminalDiscoveryContinuation, TerminalDiscoveryPageCommit, TerminalDiscoveryPolicy,
     TerminalDiscoverySnapshot, TerminalDiscoveryState, TerminalDiscoveryStateError,
 };
+pub use query::TerminalDiscoveryRead;
 
 /// Explicit issue-or-pull-request address used by item-scoped scans.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -203,7 +205,17 @@ pub async fn scan<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
     now: DateTime<Utc>,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    query::scan_inner(forge, repo, workflow, compiled, now, None, ScanMode::Normal).await
+    query::scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        None,
+        ScanMode::Normal,
+        None,
+    )
+    .await
 }
 
 /// Scans all workflow-visible artifacts and returns work for one role.
@@ -225,6 +237,30 @@ pub async fn scan_role<F: Forge + ?Sized>(
         now,
         Some(role),
         ScanMode::Normal,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn scan_role_with_discovery<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    role: &RoleId,
+    discovery: &TerminalDiscoveryState,
+) -> Result<Vec<WorkItem>, ScanError> {
+    query::scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Normal,
+        Some((discovery, TerminalDiscoveryRead::Advance)),
     )
     .await
 }
@@ -247,6 +283,30 @@ pub async fn scan_role_wake<F: Forge + ?Sized>(
         now,
         Some(role),
         ScanMode::Wake,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn scan_role_wake_with_discovery<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    role: &RoleId,
+    discovery: &TerminalDiscoveryState,
+) -> Result<Vec<WorkItem>, ScanError> {
+    query::scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Wake,
+        Some((discovery, TerminalDiscoveryRead::Advance)),
     )
     .await
 }
@@ -261,7 +321,100 @@ pub async fn scan_roles_wake<F: Forge + ?Sized>(
     now: DateTime<Utc>,
     roles: &[RoleId],
 ) -> Result<Vec<WorkItem>, ScanError> {
-    query::scan_roles_inner(forge, repo, workflow, compiled, now, roles, ScanMode::Wake).await
+    query::scan_roles_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        roles,
+        ScanMode::Wake,
+        None,
+    )
+    .await
+}
+
+/// Shared-state broad role scan. Mechanical and role lanes use
+/// [`TerminalDiscoveryRead::RetainedOnly`] after another lane has already
+/// advanced the generation's bounded provider page.
+#[allow(clippy::too_many_arguments)]
+pub async fn scan_roles_wake_with_discovery<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    roles: &[RoleId],
+    discovery: &TerminalDiscoveryState,
+    terminal_read: TerminalDiscoveryRead,
+) -> Result<Vec<WorkItem>, ScanError> {
+    query::scan_roles_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        roles,
+        ScanMode::Wake,
+        Some((discovery, terminal_read)),
+    )
+    .await
+}
+
+/// Starts a new poll sweep only after the previous one became authoritative.
+/// Incomplete continuations are never reset by a reconstructed consumer.
+pub fn prepare_terminal_discovery_generation(
+    discovery: &TerminalDiscoveryState,
+    repo: &RepositoryId,
+) -> bool {
+    discovery
+        .snapshot(repo)
+        .is_some_and(|snapshot| snapshot.authoritative)
+        && discovery.invalidate_repository(repo)
+}
+
+/// Registers one exact webhook/local-mutation target without making the hint
+/// authoritative. The next broad generation still advances provider polling.
+pub fn retain_terminal_discovery_target(
+    discovery: &TerminalDiscoveryState,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    target: ArtifactAddress,
+) -> Result<bool, ScanError> {
+    let plan = candidate_query_plan(workflow, compiled, None, ScanMode::Wake);
+    discovery::initialize_terminal_discovery(discovery, repo, workflow, &plan)?;
+    discovery
+        .retain_exact_target(repo, target)
+        .map_err(|error| ScanError::InvalidWorkflow(error.to_string()))
+}
+
+pub(crate) async fn read_reconciliation_candidates<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    now: DateTime<Utc>,
+    discovery: &TerminalDiscoveryState,
+    exact_targets: &[ArtifactAddress],
+) -> Result<(Vec<Issue>, Vec<PullRequest>), ScanError> {
+    let reconciliation = temper_workflow::reconciliation_candidate_query_plan(workflow);
+    let plan = CandidateQueryPlan {
+        issue_queries: reconciliation.issue_queries,
+        pull_request_queries: reconciliation.pull_request_queries,
+    };
+    discovery::read_candidate_summaries(
+        forge,
+        repo,
+        workflow,
+        &plan,
+        "mechanical",
+        "reconciliation",
+        now,
+        Some((discovery, TerminalDiscoveryRead::Advance)),
+        exact_targets,
+        true,
+    )
+    .await
 }
 
 /// Loads and classifies exactly one explicitly typed artifact.
@@ -391,7 +544,17 @@ pub async fn scan_audit<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
     now: DateTime<Utc>,
 ) -> Result<Vec<WorkItem>, ScanError> {
-    query::scan_inner(forge, repo, workflow, compiled, now, None, ScanMode::Audit).await
+    query::scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        None,
+        ScanMode::Audit,
+        None,
+    )
+    .await
 }
 
 /// Runs an audit scan but emits work only for one role.
@@ -411,6 +574,30 @@ pub async fn scan_role_audit<F: Forge + ?Sized>(
         now,
         Some(role),
         ScanMode::Audit,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn scan_role_audit_with_discovery<F: Forge + ?Sized>(
+    forge: &F,
+    repo: &RepositoryId,
+    workflow: &ValidatedWorkflow,
+    compiled: &CompiledWorkflow,
+    now: DateTime<Utc>,
+    role: &RoleId,
+    discovery: &TerminalDiscoveryState,
+) -> Result<Vec<WorkItem>, ScanError> {
+    query::scan_inner(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        Some(role),
+        ScanMode::Audit,
+        Some((discovery, TerminalDiscoveryRead::Advance)),
     )
     .await
 }

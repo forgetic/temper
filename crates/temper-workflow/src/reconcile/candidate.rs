@@ -109,16 +109,58 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         F: Forge + ?Sized,
     {
         let plan = self.candidate_query_plan();
+        let (issue_candidates, pull_request_candidates) =
+            read_reconciliation_candidate_summaries(forge, repo_id, &plan).await?;
+        self.load_candidate_snapshots_from_items(
+            forge,
+            repo_id,
+            issue_candidates,
+            pull_request_candidates,
+            now,
+            cache,
+            &[],
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn load_candidate_snapshots_from_items<F>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        mut issue_candidates: Vec<Issue>,
+        mut pull_request_candidates: Vec<PullRequest>,
+        now: chrono::DateTime<chrono::Utc>,
+        cache: Option<&ReconciliationDetailCache>,
+        forced_sources: &[crate::ArtifactSource],
+    ) -> Result<CandidateLoad, ReconcileError>
+    where
+        F: Forge + ?Sized,
+    {
+        let state_index =
+            DependencyStateIndex::from_candidates(&issue_candidates, &pull_request_candidates);
+        issue_candidates.retain(|issue| {
+            let source = crate::ArtifactSource::Issue {
+                number: issue.number,
+            };
+            issue.state == temper_forge::IssueState::Open
+                || forced_sources.contains(&source)
+                || crate::terminal_issue_recovery_interest(self.workflow, issue)
+        });
+        pull_request_candidates.retain(|pull_request| {
+            let source = crate::ArtifactSource::PullRequest {
+                number: pull_request.number,
+            };
+            pull_request.state == temper_forge::PullRequestState::Open
+                || forced_sources.contains(&source)
+                || crate::terminal_pull_request_recovery_interest(self.workflow, pull_request)
+        });
         let classifier = Classifier::new(self.workflow);
         let mut cache_stats = ReconciliationDetailCacheStats::default();
         if let Some(cache) = cache {
             cache.begin_pass(now, &mut cache_stats);
         }
-        let (issue_candidates, pull_request_candidates) =
-            read_reconciliation_candidate_summaries(forge, repo_id, &plan).await?;
 
-        let state_index =
-            DependencyStateIndex::from_candidates(&issue_candidates, &pull_request_candidates);
         let mut snapshots = Vec::new();
         for issue in issue_candidates {
             if let Some(snapshot) = self
@@ -172,6 +214,9 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
     where
         F: Forge + ?Sized,
     {
+        if !candidate_is_mechanically_visible(&issue.labels, &issue.body) {
+            return Ok(Some(ArtifactSnapshot::from_issue(&issue)));
+        }
         if self.issue_candidate_needs_dependency_detail(classifier, &issue) {
             if let Some(dependencies) =
                 cache.and_then(|cache| cache.issue_dependencies(repo_id, &issue, now, stats))
@@ -215,6 +260,9 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
     where
         F: Forge + ?Sized,
     {
+        if !candidate_is_mechanically_visible(&pull_request.labels, &pull_request.body) {
+            return Ok(Some(ArtifactSnapshot::from_pull_request(&pull_request)));
+        }
         if self.pull_request_candidate_needs_dependency_detail(classifier, &pull_request) {
             if let Some(dependencies) = cache.and_then(|cache| {
                 cache.pull_request_dependencies(repo_id, &pull_request, now, stats)
@@ -358,6 +406,14 @@ fn repository_label(repo_id: &RepositoryId) -> &str {
 
 fn saturating_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn candidate_is_mechanically_visible(labels: &[String], body: &str) -> bool {
+    !crate::requires_human_attention(labels)
+        && !crate::parse_metadata_block(body)
+            .ok()
+            .flatten()
+            .is_some_and(|metadata| metadata.staged)
 }
 
 fn requires_dependency_gate(

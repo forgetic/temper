@@ -137,7 +137,7 @@ pub use ids::{
 };
 pub use interest::{
     PLATFORM_DURABLE_RECOVERY_EVIDENCE, PlatformRecoveryEvidence, WorkflowInterest,
-    workflow_interest,
+    terminal_issue_recovery_interest, terminal_pull_request_recovery_interest, workflow_interest,
 };
 pub use interrupted_ci::{InterruptedCiDiagnosticState, InterruptedCiRecoveryState};
 pub use journal::{

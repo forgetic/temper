@@ -15,7 +15,9 @@ use crate::classify::{ArtifactSource, Classifier};
 use crate::dependency_state::{self, DependencyStateIndex};
 use crate::journal::{CommandJournal, CommandRecord};
 use crate::plan::DependencyStatus;
-use temper_forge::{Forge, IssueQuery, ItemNumber, PullRequestQuery, RepositoryId};
+use temper_forge::{
+    Forge, Issue, IssueQuery, ItemNumber, PullRequest, PullRequestQuery, RepositoryId,
+};
 
 impl<P: RecoveryPolicy> Reconciler<'_, P> {
     /// Runs bounded reconciliation without listing the whole repository.
@@ -50,6 +52,49 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
     {
         self.reconcile_bounded_candidates(forge, repo_id, journal, now, Some(cache))
             .await
+    }
+
+    /// Reconciles one runner-owned bounded discovery page plus exact retained
+    /// and journal targets. `entries` and candidate items are already
+    /// deduplicated by the caller, so this path performs no second candidate or
+    /// journal-target read before cheap filtering and dependency enrichment.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn reconcile_discovered_candidates_with_detail_cache<F>(
+        &self,
+        forge: &F,
+        repo_id: &RepositoryId,
+        entries: &[CommandRecord],
+        issue_candidates: Vec<Issue>,
+        pull_request_candidates: Vec<PullRequest>,
+        forced_sources: &[ArtifactSource],
+        now: chrono::DateTime<chrono::Utc>,
+        cache: &ReconciliationDetailCache,
+    ) -> Result<ReconcileReport, ReconcileError>
+    where
+        F: Forge + ?Sized,
+    {
+        let candidates = self
+            .load_candidate_snapshots_from_items(
+                forge,
+                repo_id,
+                issue_candidates,
+                pull_request_candidates,
+                now,
+                Some(cache),
+                forced_sources,
+            )
+            .await?;
+        Ok(self
+            .reconcile_loaded_snapshots(
+                forge,
+                repo_id,
+                candidates.snapshots,
+                entries,
+                now,
+                Some(&candidates.state_index),
+                candidates.cache_stats,
+            )
+            .await)
     }
 
     async fn reconcile_bounded_candidates<F, J>(
@@ -261,6 +306,7 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         let classifier = Classifier::new(self.workflow);
         let artifacts = snapshots
             .iter()
+            .filter(|snapshot| snapshot_is_dependency_visible(snapshot))
             .filter_map(|snapshot| {
                 classifier
                     .classify_snapshot_with_dependencies(
@@ -275,6 +321,14 @@ impl<P: RecoveryPolicy> Reconciler<'_, P> {
         dependency_state::status_for_artifacts_with_index(forge, repo_id, &artifacts, state_index)
             .await
     }
+}
+
+fn snapshot_is_dependency_visible(snapshot: &ArtifactSnapshot) -> bool {
+    !crate::requires_human_attention(&snapshot.labels)
+        && !crate::parse_metadata_block(&snapshot.body)
+            .ok()
+            .flatten()
+            .is_some_and(|metadata| metadata.staged)
 }
 
 fn normalize_snapshots(snapshots: &mut Vec<ArtifactSnapshot>) {

@@ -5,7 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_forge::{Forge, HintArtifactKind, Repository};
-use temper_runner::{ArtifactAddress, ScanError, scan_roles_wake};
+use temper_runner::{
+    ArtifactAddress, ScanError, TerminalDiscoveryRead, TerminalDiscoveryState,
+    scan_roles_wake_with_discovery,
+};
 use temper_workflow::{CompiledWorkflow, QueueId, RoleId, ValidatedWorkflow};
 
 use super::recovery::recover_advanced_pull_request_assignments_for_roles;
@@ -34,13 +37,25 @@ pub(crate) async fn enqueue_scanned_roles_wake<F: Forge + ?Sized>(
     compiled: &CompiledWorkflow,
     now: chrono::DateTime<chrono::Utc>,
     roles: &[RoleId],
+    discovery: &TerminalDiscoveryState,
+    terminal_read: TerminalDiscoveryRead,
 ) -> Result<BroadRoleFeedResult, ScanError> {
     let repo = &repository.id;
     recover_advanced_pull_request_assignments_for_roles(daemon, forge, repo, workflow, roles)
         .await?;
 
     let repo_label = format!("{}/{}", repository.owner, repository.name);
-    let items = scan_roles_wake(forge, repo, workflow, compiled, now, roles).await?;
+    let items = scan_roles_wake_with_discovery(
+        forge,
+        repo,
+        workflow,
+        compiled,
+        now,
+        roles,
+        discovery,
+        terminal_read,
+    )
+    .await?;
     let mut current_job_ids = roles
         .iter()
         .cloned()

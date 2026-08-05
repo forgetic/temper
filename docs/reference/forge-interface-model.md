@@ -133,6 +133,28 @@ the newest page as complete. Targeted webhooks and local mutations can retain
 bounded exact targets or invalidate repository authority without coupling role
 and mechanical worker lifetimes.
 
+The engine binds this owner to both mechanical reconciliation and broad role
+feeds. One coordinator-admitted broad generation advances at most one page per
+populated terminal bucket; if mechanical reconciliation advanced that page,
+the role lane consumes only retained exact targets instead of issuing a second
+page. An overflowing page schedules another broad generation through the same
+wake coordinator. Startup keeps scheduling these generations until every bucket
+is authoritative. With the default page size, a frozen bucket containing `N`
+rows completes within `ceil(N / 100)` successful generations. A terminal change
+created beyond the current frozen boundary is visited in the next sweep, so a
+dropped webhook is bounded by the next periodic generation plus one complete
+`ceil(N / 100)` sweep (provider failures retain the cursor and use the normal
+coordinator retry policy).
+
+Candidate summaries are lifecycle-checked, classified, matched against explicit
+`terminal: true` queues or durable recovery metadata, and screened for staging
+and `needs-human` before any gate, dependency-detail, CI, review, comment, or
+relation hydration. Only surviving terminal candidates become retained exact
+targets. Incomplete journal targets are unioned with that set before typed exact
+reads. `needs-human` remains inert except for its owned interrupted-CI cleanup
+path, and ordinary closed state-label drift remains exclusive to the
+operator-requested `DeepAudit` path.
+
 `CiJobQuery` supports pull request, commit SHA, status, and
 sorting by name, creation time, or update time. All populated `CiJobQuery`
 filters compose conjunctively: when pull request and commit SHA are both set,

@@ -12,12 +12,16 @@ use std::sync::Arc;
 
 use temper_forge::{ChangeKind, Forge, HintArtifactKind, Repository, RepositoryId, RepositoryPath};
 use temper_log::WorkItemRef;
-use temper_protocol_worker::Artifact;
-use temper_runner::ArtifactAddress;
+use temper_runner::{
+    ArtifactAddress, TerminalDiscoveryRead, TerminalDiscoveryState,
+    prepare_terminal_discovery_generation, retain_terminal_discovery_target,
+};
 use temper_workflow::{CiState, CiStatus, CompiledWorkflow, RoleId, ValidatedWorkflow};
 
+mod execution;
 mod missing_ci_recovery;
 
+use self::execution::{artifact_kind, execute_mechanical_work, protocol_artifact, repository_key};
 use self::missing_ci_recovery::{MissingCiRecoveryOutcome, recover_missing_current_head_ci};
 
 use crate::RoleFeedTarget;
@@ -28,7 +32,6 @@ use crate::webhook::WebhookConfig;
 use super::machine::DaemonCompletion;
 use super::wake_coordinator::{
     CiWakeFacts, WakeLane, WakeOutcome, WakeScope, WakeTargets, WakeWork, merge_change_kind,
-    prioritized_targets,
 };
 #[cfg(test)]
 use super::wake_scope::WakeTarget;
@@ -91,6 +94,11 @@ impl Daemon {
         mechanical: Option<Arc<dyn CoordinatedMechanical>>,
     ) -> Self {
         let has_mechanical = mechanical.is_some();
+        let mechanical_discovery = mechanical
+            .as_ref()
+            .and_then(|mechanical| mechanical.terminal_discovery_state());
+        let mechanical_owns_discovery = mechanical_discovery.is_some();
+        let terminal_discovery = mechanical_discovery.unwrap_or_default();
         let configuration = wake_repositories(&wake_targets, has_mechanical);
         let routes = configuration
             .repositories
@@ -120,6 +128,8 @@ impl Daemon {
             compiled,
             routes,
             repositories: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            terminal_discovery,
+            mechanical_owns_discovery,
             clock,
             mechanical,
         });
@@ -208,6 +218,8 @@ struct ForgeWakeExecutor<F: Forge + Send + Sync + ?Sized + 'static> {
     /// Repository representations are loaded by stable id at most once per
     /// configured route, then reused by targeted and broad enrichment.
     repositories: Arc<std::sync::Mutex<BTreeMap<String, Repository>>>,
+    terminal_discovery: TerminalDiscoveryState,
+    mechanical_owns_discovery: bool,
     clock: WallClock,
     mechanical: Option<Arc<dyn CoordinatedMechanical>>,
 }
@@ -309,6 +321,27 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
         }
 
         let mut failures = Vec::new();
+        let broad_requested = mechanical_broad || !broad_roles.is_empty();
+        if (!mechanical_broad || !self.mechanical_owns_discovery) && !broad_roles.is_empty() {
+            prepare_terminal_discovery_generation(&self.terminal_discovery, &route.id);
+        }
+        let mut exact_targets = targeted_roles.keys().copied().collect::<BTreeSet<_>>();
+        exact_targets.extend(
+            mechanical_targets
+                .keys()
+                .map(|(kind, number)| ArtifactAddress::new(*kind, *number)),
+        );
+        for address in exact_targets {
+            if let Err(error) = retain_terminal_discovery_target(
+                &self.terminal_discovery,
+                &route.id,
+                self.workflow.as_ref(),
+                self.compiled.as_ref(),
+                address,
+            ) {
+                failures.push(format!("targeted discovery update failed: {error}"));
+            }
+        }
         let now = (self.clock)();
 
         // A recovery-required terminal result is not ordinary role work. It
@@ -404,6 +437,12 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
                 self.compiled.as_ref(),
                 now,
                 &roles,
+                &self.terminal_discovery,
+                if mechanical_broad && self.mechanical_owns_discovery {
+                    TerminalDiscoveryRead::RetainedOnly
+                } else {
+                    TerminalDiscoveryRead::Advance
+                },
             )
             .await
             {
@@ -483,6 +522,15 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> ForgeWakeExecutor<F> {
         }
 
         if failures.is_empty() {
+            if broad_requested
+                && self
+                    .terminal_discovery
+                    .snapshot(&route.id)
+                    .is_some_and(|snapshot| !snapshot.authoritative)
+            {
+                self.daemon
+                    .schedule_discovery_continuation(route.path.clone());
+            }
             WakeOutcome::Succeeded
         } else {
             WakeOutcome::Failed {
@@ -553,42 +601,6 @@ fn emit_ci_wake_observation(
     });
 }
 
-async fn execute_mechanical_work(
-    mechanical: Option<&Arc<dyn CoordinatedMechanical>>,
-    repo: &RepositoryPath,
-    targets: &WakeTargets,
-    broad: bool,
-    failures: &mut Vec<String>,
-) -> bool {
-    let Some(mechanical) = mechanical else {
-        return false;
-    };
-    let mut changed = false;
-
-    for ((kind, number), change) in prioritized_targets(targets) {
-        let address = ArtifactAddress::new(kind, number);
-        match mechanical
-            .run_coordinated_targeted(repo.clone(), address, change)
-            .await
-        {
-            Ok(target_changed) => changed |= target_changed,
-            Err(error) => failures.push(format!(
-                "targeted mechanical wake failed for {}#{}: {error}",
-                artifact_kind(address.kind),
-                address.number
-            )),
-        }
-    }
-
-    if broad {
-        match mechanical.run_coordinated_broad(repo.clone()).await {
-            Ok(broad_changed) => changed |= broad_changed,
-            Err(error) => failures.push(format!("broad mechanical wake failed: {error}")),
-        }
-    }
-    changed
-}
-
 impl<F: Forge + Send + Sync + ?Sized + 'static> WakeExecutor for ForgeWakeExecutor<F> {
     fn run(
         &self,
@@ -601,29 +613,13 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> WakeExecutor for ForgeWakeExecut
             compiled: Arc::clone(&self.compiled),
             routes: self.routes.clone(),
             repositories: Arc::clone(&self.repositories),
+            terminal_discovery: self.terminal_discovery.clone(),
+            mechanical_owns_discovery: self.mechanical_owns_discovery,
             clock: self.clock.clone(),
             mechanical: self.mechanical.clone(),
         });
         Box::pin(async move { this.execute(work).await })
     }
-}
-
-fn protocol_artifact(address: ArtifactAddress) -> Artifact {
-    Artifact {
-        item: serde_json::json!(address.number.get()),
-        kind: artifact_kind(address.kind).to_string(),
-    }
-}
-
-fn artifact_kind(kind: HintArtifactKind) -> &'static str {
-    match kind {
-        HintArtifactKind::Issue => "issue",
-        HintArtifactKind::PullRequest => "pull_request",
-    }
-}
-
-fn repository_key(repo: &RepositoryPath) -> String {
-    format!("{}/{}", repo.owner, repo.name)
 }
 
 #[cfg(test)]

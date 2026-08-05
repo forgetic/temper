@@ -9,7 +9,8 @@ use chrono::{DateTime, Utc};
 use temper_forge::{ChangeHint, Forge, ForgeError};
 use temper_runner::{
     ArtifactAddress, MultiRepoMechanicalWorker, MultiRepoTickReport, Progress,
-    PullRequestMergeObserver, RepositoryJournal, RepositorySet, WorkerError,
+    PullRequestMergeObserver, RepositoryJournal, RepositorySet, TerminalDiscoveryState,
+    WorkerError,
 };
 use temper_workflow::{
     InMemoryJournal, LeasePolicy, ReconciliationDetailCache, ReconciliationDetailCachePolicy,
@@ -72,10 +73,14 @@ pub async fn run_mechanical_backstop_tick<F: Forge + ?Sized>(
     scope: &MechanicalScope,
 ) -> Result<Progress, WorkerError> {
     let cache = ReconciliationDetailCache::default();
-    run_mechanical_backstop_tick_with_cache(forge, workflow, now, config, journals, scope, cache)
-        .await
+    let discovery = TerminalDiscoveryState::default();
+    run_mechanical_backstop_tick_with_cache(
+        forge, workflow, now, config, journals, scope, cache, discovery,
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_mechanical_backstop_tick_with_cache<F: Forge + ?Sized>(
     forge: &F,
     workflow: &ValidatedWorkflow,
@@ -84,6 +89,7 @@ async fn run_mechanical_backstop_tick_with_cache<F: Forge + ?Sized>(
     journals: &[InMemoryJournal],
     scope: &MechanicalScope,
     cache: ReconciliationDetailCache,
+    discovery: TerminalDiscoveryState,
 ) -> Result<Progress, WorkerError> {
     if journals.len() != config.repositories.repositories().len() {
         let error = setup_error(format!(
@@ -112,7 +118,9 @@ async fn run_mechanical_backstop_tick_with_cache<F: Forge + ?Sized>(
         journal_bindings,
         config.lease_policy,
     ) {
-        Ok(worker) => worker.with_reconciliation_detail_cache(cache),
+        Ok(worker) => worker
+            .with_reconciliation_detail_cache(cache)
+            .with_terminal_discovery_state(discovery),
         Err(error) => {
             let error = setup_error(format!("mechanical backstop setup failed: {error}"));
             tracing::warn!(target: "temper_daemon", %error, "mechanical backstop tick failed");
@@ -151,6 +159,7 @@ pub struct MechanicalTrigger<F: Forge + Send + Sync + ?Sized + 'static> {
     config: MechanicalBackstopConfig,
     journals: Arc<Vec<InMemoryJournal>>,
     reconciliation_detail_cache: ReconciliationDetailCache,
+    terminal_discovery: TerminalDiscoveryState,
     clock: crate::WallClock,
 }
 
@@ -162,6 +171,7 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> Clone for MechanicalTrigger<F> {
             config: self.config.clone(),
             journals: Arc::clone(&self.journals),
             reconciliation_detail_cache: self.reconciliation_detail_cache.clone(),
+            terminal_discovery: self.terminal_discovery.clone(),
             clock: self.clock.clone(),
         }
     }
@@ -207,6 +217,7 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
             config,
             journals,
             reconciliation_detail_cache: ReconciliationDetailCache::new(cache_policy),
+            terminal_discovery: TerminalDiscoveryState::default(),
             clock,
         }
     }
@@ -215,6 +226,11 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
     /// invalidation wiring.
     pub fn reconciliation_detail_cache(&self) -> ReconciliationDetailCache {
         self.reconciliation_detail_cache.clone()
+    }
+
+    /// Returns the long-lived repository discovery owner shared with role feeds.
+    pub fn terminal_discovery_state(&self) -> TerminalDiscoveryState {
+        self.terminal_discovery.clone()
     }
 
     /// Runs one pass admitted by the daemon coordinator.
@@ -235,6 +251,7 @@ impl<F: Forge + Send + Sync + ?Sized + 'static> MechanicalTrigger<F> {
             &self.journals,
             &scope,
             self.reconciliation_detail_cache.clone(),
+            self.terminal_discovery.clone(),
         )
         .await
     }

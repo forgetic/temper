@@ -6,7 +6,12 @@
 //! effects, and gate labels never become periodic terminal interest by merely
 //! existing in the workflow.
 
-use crate::{ArtifactTarget, LabelId, ValidatedWorkflow};
+use crate::{
+    ArtifactSource, ArtifactTarget, ClassifiedArtifact, Classifier, GateCondition, LabelId,
+    ValidatedWorkflow, WorkflowMetadata, matches_queue_cheap, parse_metadata_block,
+    requires_human_attention,
+};
+use temper_forge::{Issue, PullRequest};
 
 /// Platform-owned durable evidence recovered independently of ordinary queue
 /// label history.
@@ -97,6 +102,104 @@ impl WorkflowInterest {
 /// Derives the shared candidate-discovery interest for `workflow`.
 pub fn workflow_interest(workflow: &ValidatedWorkflow) -> WorkflowInterest {
     WorkflowInterest::from_workflow(workflow)
+}
+
+/// Returns whether a terminal issue carries explicit queue or durable recovery
+/// interest. This predicate intentionally uses only candidate-summary fields;
+/// callers can apply it before dependency, CI, review, comment, relation, or
+/// exact-detail reads.
+pub fn terminal_issue_recovery_interest(workflow: &ValidatedWorkflow, issue: &Issue) -> bool {
+    terminal_recovery_interest(
+        workflow,
+        ArtifactSource::Issue {
+            number: issue.number,
+        },
+        &issue.labels,
+        &issue.body,
+        &issue.dependencies,
+    )
+}
+
+/// Pull-request counterpart of [`terminal_issue_recovery_interest`].
+pub fn terminal_pull_request_recovery_interest(
+    workflow: &ValidatedWorkflow,
+    pull_request: &PullRequest,
+) -> bool {
+    terminal_recovery_interest(
+        workflow,
+        ArtifactSource::PullRequest {
+            number: pull_request.number,
+        },
+        &pull_request.labels,
+        &pull_request.body,
+        &pull_request.dependencies,
+    )
+}
+
+fn terminal_recovery_interest(
+    workflow: &ValidatedWorkflow,
+    source: ArtifactSource,
+    labels: &[String],
+    body: &str,
+    dependencies: &[temper_forge::ItemNumber],
+) -> bool {
+    let metadata = match parse_metadata_block(body) {
+        Ok(metadata) => metadata.unwrap_or_default(),
+        Err(_) => return false,
+    };
+    if metadata.staged {
+        return false;
+    }
+    // Interrupted-CI parking owns its attention barrier and must be able to
+    // finish exact cleanup. Every unrelated needs-human artifact stays inert.
+    if requires_human_attention(labels) && metadata.interrupted_ci_recovery.is_none() {
+        return false;
+    }
+    if metadata_has_durable_recovery(&metadata) {
+        return true;
+    }
+
+    let Ok(classified) = Classifier::new(workflow).classify_snapshot_with_dependencies(
+        source,
+        labels,
+        body,
+        dependencies,
+    ) else {
+        return false;
+    };
+    workflow
+        .queues()
+        .iter()
+        .any(|queue| queue.terminal && matches_queue_cheap(queue, &classified))
+        || dependency_recovery_declared(workflow, &classified)
+}
+
+fn metadata_has_durable_recovery(metadata: &WorkflowMetadata) -> bool {
+    metadata.assignment.is_some()
+        || metadata.lease.is_some()
+        || metadata.provider_recovery.is_some()
+        || metadata.missing_ci_recovery.is_some()
+        || metadata.interrupted_ci_recovery.is_some()
+        || metadata
+            .create_issue_intents
+            .values()
+            .any(|intent| !intent.completed)
+}
+
+fn dependency_recovery_declared(
+    workflow: &ValidatedWorkflow,
+    artifact: &ClassifiedArtifact,
+) -> bool {
+    !artifact.relations.is_empty()
+        && workflow.transitions().iter().any(|transition| {
+            transition.artifact == artifact.kind
+                && transition.requires_gates.iter().any(|required| {
+                    workflow.gates().iter().any(|gate| {
+                        gate.id == *required
+                            && matches!(gate.condition, Some(GateCondition::DependenciesResolved))
+                    })
+                })
+        })
 }
 
 fn workflow_targets(workflow: &ValidatedWorkflow) -> Vec<ArtifactTarget> {
