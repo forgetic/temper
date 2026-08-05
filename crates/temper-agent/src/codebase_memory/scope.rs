@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
+
+use sha2::{Digest, Sha256};
 
 use serde_json::{Map, Value, json};
 use temper_protocol_agent::{CodebaseMemoryIndex, WorkspaceContext, WorkspaceRepository};
@@ -12,8 +15,11 @@ use super::indexing::index_setting;
 
 #[path = "discovery.rs"]
 mod discovery;
-pub(super) use discovery::{IndexedProject, parse_indexed_projects};
-use discovery::{alias_looks_like_filesystem_path, resolve_repo_root, validate_safe_model_paths};
+pub(super) use discovery::discover_workspace_projects;
+use discovery::{
+    TargetedProjectState, alias_looks_like_filesystem_path, resolve_repo_root,
+    validate_safe_model_paths,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct WorkspaceScope {
@@ -52,54 +58,21 @@ impl WorkspaceScope {
         Ok(scope)
     }
 
-    pub(super) fn apply_discovered_projects(
-        &mut self,
-        discovered: Vec<IndexedProject>,
-        discovery_available: bool,
-    ) {
-        for project in &mut self.projects {
-            let matched = discovered
-                .iter()
-                .find(|indexed| project.matches_indexed_project(indexed))
-                .cloned();
-            match matched {
-                Some(indexed) => {
-                    let stale = indexed.stale.unwrap_or(false);
-                    project.apply_indexed_project(indexed);
-                    project.index_state = if stale {
-                        ProjectIndexState::Stale
-                    } else {
-                        ProjectIndexState::Fresh
-                    };
-                }
-                None if discovery_available => {
-                    project.index_state = ProjectIndexState::Missing;
-                }
-                None => {
-                    project.index_state = ProjectIndexState::Unknown;
-                }
-            }
+    pub(super) fn apply_targeted_discovery(&mut self, states: Vec<TargetedProjectState>) {
+        debug_assert_eq!(states.len(), self.projects.len());
+        for (project, state) in self.projects.iter_mut().zip(states) {
+            project.index_state = match state {
+                TargetedProjectState::Missing => ProjectIndexState::Missing,
+                TargetedProjectState::Stale => ProjectIndexState::Stale,
+                TargetedProjectState::Fresh => ProjectIndexState::Fresh,
+            };
         }
-        self.rebuild_alias_map();
     }
 
-    pub(super) fn apply_matching_discovered_project(
-        &mut self,
-        project_index: usize,
-        discovered: Vec<IndexedProject>,
-    ) -> bool {
-        let Some(project) = self.projects.get(project_index) else {
-            return false;
-        };
-        let matched = discovered
-            .into_iter()
-            .find(|indexed| project.matches_indexed_project(indexed));
-        let Some(indexed) = matched else {
-            return false;
-        };
-        let applied_actual_project = self.projects[project_index].apply_indexed_project(indexed);
-        self.rebuild_alias_map();
-        applied_actual_project
+    pub(super) fn mark_discovery_unavailable(&mut self) {
+        for project in &mut self.projects {
+            project.index_state = ProjectIndexState::DiscoveryUnavailable;
+        }
     }
 
     pub(super) fn rebuild_alias_map(&mut self) {
@@ -129,15 +102,6 @@ impl WorkspaceScope {
             .enumerate()
             .filter_map(|(index, project)| project.index_state.needs_index().then_some(index))
             .collect()
-    }
-
-    pub(super) fn display_project_list(&self, indices: &[usize]) -> String {
-        indices
-            .iter()
-            .filter_map(|index| self.projects.get(*index))
-            .map(|project| project.canonical_alias.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
     }
 
     pub(super) fn primary(&self) -> &ScopedProject {
@@ -354,7 +318,8 @@ pub(super) struct ScopedProject {
     repo_id: String,
     dir: String,
     pub(super) root: PathBuf,
-    actual_project: String,
+    pub(super) provider_key: String,
+    pub(super) git_head: Option<String>,
     pub(super) index_state: ProjectIndexState,
     pub(super) background_index: Option<BackgroundIndex>,
 }
@@ -368,6 +333,8 @@ impl ScopedProject {
     ) -> std::result::Result<Self, String> {
         let canonical_alias = format!("{}/{}", repo.owner, repo.name);
         let root = resolve_repo_root(repo, single_repo, workspace_root)?;
+        let provider_key = provider_key_for_repo(repo);
+        let git_head = current_git_head(&root);
         let project = Self {
             primary,
             canonical_alias: canonical_alias.clone(),
@@ -375,8 +342,9 @@ impl ScopedProject {
             repo_id: repo.id.clone(),
             dir: repo.dir.clone(),
             root,
-            actual_project: canonical_alias,
-            index_state: ProjectIndexState::Unknown,
+            provider_key,
+            git_head,
+            index_state: ProjectIndexState::DiscoveryUnavailable,
             background_index: None,
         };
         Ok(project)
@@ -397,35 +365,11 @@ impl ScopedProject {
         aliases
     }
 
-    fn matches_indexed_project(&self, indexed: &IndexedProject) -> bool {
-        if let Some(path) = &indexed.path {
-            return path_equivalent(path, &self.root)
-                || (!path.is_absolute()
-                    && (path == Path::new(&self.dir) || path == Path::new(&self.name)));
-        }
-        for name in indexed.names() {
-            if self.aliases().contains(&name) {
-                return true;
-            }
-        }
-        false
-    }
-
-    pub(super) fn apply_indexed_project(&mut self, indexed: IndexedProject) -> bool {
-        if let Some(actual_project) = actual_project_from_indexed(indexed) {
-            self.actual_project = actual_project;
-            self.background_index = None;
-            true
-        } else {
-            false
-        }
-    }
-
     fn actual_project(&self) -> String {
         self.background_index
             .as_ref()
             .and_then(BackgroundIndex::actual_project)
-            .unwrap_or_else(|| self.actual_project.clone())
+            .unwrap_or_else(|| self.provider_key.clone())
     }
 
     fn index_state(&self) -> ProjectIndexState {
@@ -445,9 +389,9 @@ impl ScopedProject {
                 self.canonical_alias
             )
         })?;
-        if background.actual_project().is_none() && self.actual_project == self.canonical_alias {
+        if background.actual_project().is_none() {
             return Err(format!(
-                "codebase-memory project `{}` is not ready: background indexing finished without reporting a project id",
+                "codebase-memory project `{}` is not ready: background stable upsert finished without confirming its provider key",
                 self.canonical_alias
             ));
         }
@@ -465,16 +409,9 @@ impl ScopedProject {
     }
 }
 
-pub(super) fn actual_project_from_indexed(indexed: IndexedProject) -> Option<String> {
-    indexed
-        .id
-        .filter(|id| !id.trim().is_empty())
-        .or_else(|| indexed.name.filter(|name| !name.trim().is_empty()))
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ProjectIndexState {
-    Unknown,
+    DiscoveryUnavailable,
     Missing,
     Stale,
     Fresh,
@@ -484,15 +421,12 @@ pub(super) enum ProjectIndexState {
 
 impl ProjectIndexState {
     fn needs_index(self) -> bool {
-        matches!(
-            self,
-            Self::Unknown | Self::Missing | Self::Stale | Self::IndexFailed
-        )
+        matches!(self, Self::Missing | Self::Stale)
     }
 
     fn as_prompt_text(self) -> &'static str {
         match self {
-            Self::Unknown => "unknown (project discovery unavailable)",
+            Self::DiscoveryUnavailable => "discovery unavailable; indexing was not attempted",
             Self::Missing => "missing from codebase-memory index",
             Self::Stale => "stale according to codebase-memory project metadata",
             Self::Fresh => "fresh/non-stale",
@@ -502,28 +436,35 @@ impl ProjectIndexState {
     }
 }
 
-fn path_equivalent(left: &Path, right: &Path) -> bool {
-    normalize_path(left) == normalize_path(right)
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    path.canonicalize()
-        .unwrap_or_else(|_| lexical_normalize(path))
-}
-
-fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::RootDir | Component::Prefix(_) => normalized.push(component.as_os_str()),
-        }
+fn current_git_head(root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    normalized
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|head| head.trim().to_string())
+        .filter(|head| !head.is_empty())
+}
+
+pub(super) fn provider_key_for_repo(repo: &WorkspaceRepository) -> String {
+    let mut digest = Sha256::new();
+    for (label, value) in [
+        (b"id".as_slice(), repo.id.as_bytes()),
+        (b"owner".as_slice(), repo.owner.as_bytes()),
+        (b"name".as_slice(), repo.name.as_bytes()),
+    ] {
+        digest.update((label.len() as u64).to_be_bytes());
+        digest.update(label);
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value);
+    }
+    format!("temper-v1-{:x}", digest.finalize())
 }
 
 fn value_kind(value: &Value) -> &'static str {

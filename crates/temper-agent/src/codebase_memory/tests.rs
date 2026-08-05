@@ -96,6 +96,7 @@ fn codebase_memory_bridge_wraps_allowed_tool_and_filters_destructive_tools() {
     let workspace = tempfile::tempdir().expect("workspace");
     let log_path = workspace.path().join("mcp.log");
     let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    let provider_key = scope::provider_key_for_repo(&context.repos[0]);
     let repo_path = workspace.path().join("demo");
     let projects =
         json!({"projects": [{"id": "project-demo", "name": "acme/demo", "path": repo_path}]});
@@ -147,7 +148,7 @@ fn codebase_memory_bridge_wraps_allowed_tool_and_filters_destructive_tools() {
         assert!(!output.is_error);
         assert!(text.contains("search_code result"));
         assert!(text.contains("needle"));
-        assert!(text.contains("project-demo"));
+        assert!(text.contains(&provider_key));
         assert!(text.contains("output truncated"));
         assert!(text.len() <= MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
     });
@@ -162,6 +163,8 @@ fn codebase_memory_workspace_aliases_default_primary_and_filter_project_list() {
         workspace.path(),
         &[("acme", "app", "app"), ("acme", "lib", "lib")],
     );
+    let app_key = scope::provider_key_for_repo(&context.repos[0]);
+    let lib_key = scope::provider_key_for_repo(&context.repos[1]);
     let projects = json!({"projects": [
         {"id": "cbm-app", "name": "app-index", "path": workspace.path().join("app")},
         {"id": "cbm-lib", "name": "lib-index", "path": workspace.path().join("lib")},
@@ -212,9 +215,9 @@ fn codebase_memory_workspace_aliases_default_primary_and_filter_project_list() {
 
         let search_calls = calls_named(&log_path, "search_code");
         assert_eq!(search_calls.len(), 3);
-        assert_eq!(search_calls[0]["arguments"]["project"], "cbm-app");
-        assert_eq!(search_calls[1]["arguments"]["project"], "cbm-lib");
-        assert_eq!(search_calls[2]["arguments"]["project"], "cbm-lib");
+        assert_eq!(search_calls[0]["arguments"]["project"], app_key);
+        assert_eq!(search_calls[1]["arguments"]["project"], lib_key);
+        assert_eq!(search_calls[2]["arguments"]["project"], lib_key);
         assert!(search_calls[2]["arguments"].get("repo").is_none());
 
         let list = tools
@@ -236,11 +239,64 @@ fn codebase_memory_workspace_aliases_default_primary_and_filter_project_list() {
 }
 
 #[test]
+fn codebase_memory_normalizes_aliases_for_advertised_repo_schemas() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("repo-schema.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    let provider_key = scope::provider_key_for_repo(&context.repos[0]);
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "repo-schema",
+                &log_path,
+                json!({}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("repo-schema provider starts");
+        let search = toolset
+            .into_tools()
+            .into_iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search wrapper present");
+        let parameters = search.parameters();
+        assert_eq!(
+            parameters["properties"]["project"]["enum"],
+            parameters["properties"]["repo"]["enum"]
+        );
+        assert_eq!(parameters["required"], json!(["query"]));
+
+        let output = search
+            .execute(
+                "project-alias",
+                json!({"query": "needle", "project": "acme/demo"}),
+                None,
+            )
+            .await
+            .expect("project alias is normalized onto provider repo input");
+        assert!(!output.is_error);
+        let calls = calls_named(&log_path, "search_code");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["arguments"]["repo"], provider_key);
+        assert!(calls[0]["arguments"].get("project").is_none());
+    });
+}
+
+#[test]
 fn codebase_memory_rejects_unknown_aliases_and_unsafe_paths() {
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");
     let log_path = workspace.path().join("mcp.log");
     let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    let provider_key = scope::provider_key_for_repo(&context.repos[0]);
     let projects = json!({"projects": [{"id": "cbm-demo", "name": "demo-index", "path": workspace.path().join("demo")}]});
 
     temper_agent_io::block_on(async move {
@@ -269,6 +325,10 @@ fn codebase_memory_rejects_unknown_aliases_and_unsafe_paths() {
             (
                 "unknown",
                 json!({ "query": "Widget", "project": "other/repo" }),
+            ),
+            (
+                "provider-key",
+                json!({ "query": "Widget", "project": provider_key }),
             ),
             (
                 "path-alias",

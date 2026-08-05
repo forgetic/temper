@@ -383,6 +383,29 @@ fn oversized_outbound_record_is_typed_and_contains_server() {
 }
 
 #[test]
+fn initialize_metadata_is_retained_with_hard_string_and_capability_bounds() {
+    let capabilities = (0..40)
+        .map(|index| (format!("capability-{index:02}"), json!({})))
+        .collect::<serde_json::Map<_, _>>();
+    let metadata = super::client::parse_initialize_metadata(json!({
+        "protocolVersion": "p".repeat(256),
+        "serverInfo": {
+            "name": "é".repeat(100),
+            "version": "v".repeat(256),
+        },
+        "capabilities": capabilities,
+    }))
+    .expect("object initialize result");
+
+    assert_eq!(metadata.protocol_version.unwrap().len(), 128);
+    let name = metadata.name.unwrap();
+    assert!(name.len() <= 128);
+    assert!(name.is_char_boundary(name.len()));
+    assert_eq!(metadata.version.unwrap().len(), 128);
+    assert_eq!(metadata.capabilities.len(), 32);
+}
+
+#[test]
 fn codebase_memory_bridge_mcp_initializes_lists_and_calls() {
     let _serial = PROCESS_TEST_LOCK
         .lock()
@@ -392,6 +415,13 @@ fn codebase_memory_bridge_mcp_initializes_lists_and_calls() {
         let client = connect(fake_command(&dir, None))
             .await
             .expect("connect fake MCP server");
+        let metadata = client
+            .server_metadata()
+            .expect("initialize metadata retained");
+        assert_eq!(metadata.protocol_version.as_deref(), Some("2024-11-05"));
+        assert_eq!(metadata.name.as_deref(), Some("fake"));
+        assert_eq!(metadata.version.as_deref(), Some("1"));
+        assert!(metadata.advertises_capability("tools"));
         let tools = client
             .list_tools(Duration::from_secs(1))
             .await

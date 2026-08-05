@@ -126,7 +126,7 @@ temper-agent-core = ["temper-agent-io", "temper-process-containment"]
 # zero internal deps, so no implementation leaks across tiers; but it IS an
 # additional upstream protocol. Drop it from this list if you want CI to force
 # the agent down to exactly one protocol crate.
-temper-agent = ["temper-agent-core", "temper-protocol-activity", "temper-protocol-agent", "temper-protocol-interaction", "temper-verdict"]
+temper-agent = ["temper-agent-core", "temper-agent-io", "temper-protocol-activity", "temper-protocol-agent", "temper-protocol-interaction", "temper-verdict"]
 
 # ===========================================================================
 # COMPOSITION ROOT + shared test harnesses — span tiers by design, so they get
