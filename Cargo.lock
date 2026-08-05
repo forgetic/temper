@@ -1656,6 +1656,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "sha2",
  "skein",
  "temper-agent-core",
  "temper-agent-io",

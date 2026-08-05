@@ -21,6 +21,7 @@ temper-agent-core = { path = "../temper-agent-core" }
 temper-protocol-activity = { path = "../temper-protocol-activity" }
 temper-protocol-interaction = { path = "../temper-protocol-interaction" }
 uuid.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 futures.workspace = true

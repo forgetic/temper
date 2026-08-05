@@ -32,6 +32,37 @@ Temper-specific limits flag and remain under bounded worker fallback
 supervision. Profile deadline overrides inherit field-by-field from
 `[agent.deadlines]` before the file is written.
 
+### Codebase-memory provider contract
+
+When `--tool-config` enables `codebase_memory`, Temper supports
+`codebase-memory-mcp` version 0.9.0 or newer. Initialization must identify that
+provider in `serverInfo`, advertise the MCP `tools` capability, and expose:
+
+- `index_status` with a required string `project` input and a bounded JSON
+  result that explicitly classifies the requested identity as missing, stale,
+  or fresh; and
+- `index_repository` with required string `repo_path` and a string `name`
+  input. Version 0.9.0 defines `name` as the stable, idempotent upsert identity,
+  so concurrent calls with the same name converge rather than create
+  path-keyed projects.
+
+Temper retains only bounded initialize metadata (provider/protocol strings and
+top-level capability names) and validates the advertised tool schemas before
+project discovery. It derives the provider project key from a SHA-256 digest of
+the host-controlled repository `id`, `owner`, and `name`; checkout path, branch,
+role, correlation key, and work item are not inputs. Model-facing aliases stay
+limited to prepared-workspace repository identities and are translated to that
+provider project key internally.
+
+Startup calls `index_status` only for those derived identities; it never reads
+an unfiltered provider inventory. Only an explicit missing or stale result may
+start indexing. A timeout, malformed response, unknown status, or incompatible
+provider marks discovery unavailable and causes zero `index_repository` calls.
+Auto mode either disables an incompatible provider with upgrade guidance or,
+for an unknown discovery result, exposes a fresh read-only MCP client with the
+skip reason in prompt status. Required mode fails setup. Neither mode falls
+back to path-keyed creation.
+
 The side-channel listeners exist only for that run, accept bounded JSON, and
 are stopped when the child exits. Standalone calls the same host callbacks
 in-process rather than opening sockets. Every carrier binds the callbacks to

@@ -1,5 +1,6 @@
 //! Stdio MCP client and child-process lifecycle management.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -18,6 +19,29 @@ use super::protocol::{
 
 /// MCP protocol version sent in the initialize request.
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+
+const MAX_METADATA_STRING_BYTES: usize = 128;
+const MAX_CAPABILITY_NAMES: usize = 32;
+
+/// Bounded provider metadata retained from the MCP `initialize` result.
+///
+/// Only identity and top-level capability names are retained. This gives
+/// integrations enough information to enforce a provider contract without
+/// keeping an attacker-controlled initialize document alive for the process
+/// lifetime.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct McpServerMetadata {
+    pub protocol_version: Option<String>,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub capabilities: BTreeSet<String>,
+}
+
+impl McpServerMetadata {
+    pub fn advertises_capability(&self, capability: &str) -> bool {
+        self.capabilities.contains(capability)
+    }
+}
 
 /// Spawn settings for a stdio MCP server.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -243,6 +267,7 @@ impl StdioMcpClient {
             inner: Arc::new(ClientInner {
                 connection: Mutex::new(connection),
                 control,
+                server_metadata: Mutex::new(None),
             }),
             call_timeout: config.call_timeout,
         })
@@ -269,6 +294,15 @@ impl StdioMcpClient {
 
     pub fn call_timeout(&self) -> Duration {
         self.call_timeout
+    }
+
+    /// Returns the bounded metadata captured during MCP initialization.
+    pub fn server_metadata(&self) -> Option<McpServerMetadata> {
+        self.inner
+            .server_metadata
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub fn child_id(&self) -> u32 {
@@ -323,7 +357,8 @@ impl StdioMcpClient {
 
     fn initialize_blocking(&self, timeout: Duration) -> Result<(), McpError> {
         let result = self.request_blocking("initialize", initialize_params(), timeout)?;
-        validate_initialize(result)
+        let metadata = parse_initialize_metadata(result)?;
+        self.store_server_metadata(metadata)
     }
 
     fn notify_initialized_blocking(&self, timeout: Duration) -> Result<(), McpError> {
@@ -345,7 +380,18 @@ impl StdioMcpClient {
         let result = self
             .request("initialize", initialize_params(), timeout)
             .await?;
-        validate_initialize(result)
+        let metadata = parse_initialize_metadata(result)?;
+        self.store_server_metadata(metadata)
+    }
+
+    fn store_server_metadata(&self, metadata: McpServerMetadata) -> Result<(), McpError> {
+        *self
+            .inner
+            .server_metadata
+            .lock()
+            .map_err(|_| McpError::Protocol("MCP metadata lock poisoned".to_string()))? =
+            Some(metadata);
+        Ok(())
     }
 
     async fn notify_initialized(&self, timeout: Duration) -> Result<(), McpError> {
@@ -414,19 +460,46 @@ fn initialize_params() -> Value {
     })
 }
 
-fn validate_initialize(result: Value) -> Result<(), McpError> {
-    if result.is_object() {
-        Ok(())
-    } else {
-        Err(McpError::Protocol(
-            "initialize result must be a JSON object".to_string(),
-        ))
+pub(super) fn parse_initialize_metadata(result: Value) -> Result<McpServerMetadata, McpError> {
+    let object = result
+        .as_object()
+        .ok_or_else(|| McpError::Protocol("initialize result must be a JSON object".to_string()))?;
+    let server_info = object.get("serverInfo").and_then(Value::as_object);
+    let capabilities = object
+        .get("capabilities")
+        .and_then(Value::as_object)
+        .map(|capabilities| {
+            capabilities
+                .keys()
+                .take(MAX_CAPABILITY_NAMES)
+                .map(|name| bounded_metadata_string(name))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(McpServerMetadata {
+        protocol_version: bounded_optional_string(object.get("protocolVersion")),
+        name: server_info.and_then(|info| bounded_optional_string(info.get("name"))),
+        version: server_info.and_then(|info| bounded_optional_string(info.get("version"))),
+        capabilities,
+    })
+}
+
+fn bounded_optional_string(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).map(bounded_metadata_string)
+}
+
+fn bounded_metadata_string(value: &str) -> String {
+    let mut end = value.len().min(MAX_METADATA_STRING_BYTES);
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
     }
+    value[..end].to_string()
 }
 
 struct ClientInner {
     connection: Mutex<Connection>,
     control: Arc<ProcessControl>,
+    server_metadata: Mutex<Option<McpServerMetadata>>,
 }
 
 impl Drop for ClientInner {
