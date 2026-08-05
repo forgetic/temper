@@ -3,7 +3,10 @@
 use super::{Progress, Worker, WorkerError};
 use crate::agent::{Agent, RoleTools};
 use crate::observability::work_item_ref;
-use crate::scan::{WorkItem, scan_role, scan_role_audit, scan_role_wake};
+use crate::scan::{
+    TerminalDiscoveryState, WorkItem, prepare_terminal_discovery_generation,
+    scan_role_audit_with_discovery, scan_role_wake_with_discovery, scan_role_with_discovery,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -20,6 +23,7 @@ pub struct RoleWorker<'a, F: Forge + ?Sized> {
     role: RoleId,
     agent: Arc<dyn Agent<F> + 'a>,
     tools: RoleTools<'a, F>,
+    terminal_discovery: TerminalDiscoveryState,
 }
 
 impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
@@ -44,7 +48,14 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
             role,
             agent,
             tools,
+            terminal_discovery: TerminalDiscoveryState::default(),
         }
+    }
+
+    /// Binds repository discovery authority owned beyond this worker instance.
+    pub fn with_terminal_discovery_state(mut self, discovery: TerminalDiscoveryState) -> Self {
+        self.terminal_discovery = discovery;
+        self
     }
 
     /// Workflow role serviced by this worker.
@@ -112,37 +123,41 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
         tools: &RoleTools<'_, F>,
         mode: RoleScanMode,
     ) -> Result<Progress, WorkerError> {
+        prepare_terminal_discovery_generation(&self.terminal_discovery, self.repo);
         let items = match mode {
             RoleScanMode::Normal => {
-                scan_role(
+                scan_role_with_discovery(
                     self.forge,
                     self.repo,
                     self.workflow,
                     self.compiled,
                     now,
                     &self.role,
+                    &self.terminal_discovery,
                 )
                 .await?
             }
             RoleScanMode::Wake => {
-                scan_role_wake(
+                scan_role_wake_with_discovery(
                     self.forge,
                     self.repo,
                     self.workflow,
                     self.compiled,
                     now,
                     &self.role,
+                    &self.terminal_discovery,
                 )
                 .await?
             }
             RoleScanMode::Audit => {
-                scan_role_audit(
+                scan_role_audit_with_discovery(
                     self.forge,
                     self.repo,
                     self.workflow,
                     self.compiled,
                     now,
                     &self.role,
+                    &self.terminal_discovery,
                 )
                 .await?
             }
@@ -160,6 +175,9 @@ impl<'a, F: Forge + ?Sized> RoleWorker<'a, F> {
         let mut progress = Progress::unchanged();
         for item in items {
             progress.record(self.agent.service(&item, tools).await?);
+        }
+        if progress.changed {
+            self.terminal_discovery.invalidate_repository(self.repo);
         }
         Ok(progress)
     }

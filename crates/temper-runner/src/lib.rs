@@ -106,9 +106,12 @@ pub use scan::{
     LoadedTargetedArtifact, ScanError, ScanMode, TargetedArtifactSnapshot, TargetedRoleScan,
     TerminalDiscoveryBucket, TerminalDiscoveryBucketSnapshot, TerminalDiscoveryCommitOutcome,
     TerminalDiscoveryContinuation, TerminalDiscoveryPageCommit, TerminalDiscoveryPolicy,
-    TerminalDiscoverySnapshot, TerminalDiscoveryState, TerminalDiscoveryStateError, WorkItem,
-    candidate_query_plan, load_targeted_artifact, read_ci_status_observations, scan, scan_audit,
-    scan_automated_queues, scan_role, scan_role_audit, scan_role_wake, scan_roles_wake,
+    TerminalDiscoveryRead, TerminalDiscoverySnapshot, TerminalDiscoveryState,
+    TerminalDiscoveryStateError, WorkItem, candidate_query_plan, load_targeted_artifact,
+    prepare_terminal_discovery_generation, read_ci_status_observations,
+    retain_terminal_discovery_target, scan, scan_audit, scan_automated_queues, scan_role,
+    scan_role_audit, scan_role_audit_with_discovery, scan_role_wake, scan_role_wake_with_discovery,
+    scan_role_with_discovery, scan_roles_wake, scan_roles_wake_with_discovery,
     targeted_automated_work_items, targeted_role_work_items,
 };
 pub use signal::{CiError, CiPolicy, CiSink, CiWorker, PassCiPolicy};

@@ -112,7 +112,7 @@ fn targeted_issue_reads_only_the_selected_namespace_and_filters_roles() {
 }
 
 #[test]
-fn targeted_closed_issue_and_queue_miss_still_use_one_exact_fetch() {
+fn targeted_closed_issue_and_queue_miss_still_use_one_exact_fetch_without_terminal_dispatch() {
     for close in [false, true] {
         let forge = MemoryForge::new();
         let repo = new_repo(&forge);
@@ -134,7 +134,7 @@ fn targeted_closed_issue_and_queue_miss_still_use_one_exact_fetch() {
             &[RoleId::new("engineer")],
         )
         .expect("issue classifies");
-        assert_eq!(scan.work_items.is_empty(), !close);
+        assert!(scan.work_items.is_empty());
         assert_eq!(counting.count(CountedForgeOp::GetIssueByNumber), 1);
         assert_eq!(counting.count(CountedForgeOp::GetPullRequestByNumber), 0);
         assert_no_broad_queries(&counting);

@@ -2,7 +2,7 @@
 
 use super::report::MultiRepoTickReport;
 use super::repository_set::{RepositorySet, RepositoryTarget};
-use crate::{Agent, Progress, RoleWorker, Worker, WorkerError};
+use crate::{Agent, Progress, RoleWorker, TerminalDiscoveryState, Worker, WorkerError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
@@ -18,6 +18,7 @@ pub struct MultiRepoRoleWorker<'a, F: Forge + ?Sized> {
     role: RoleId,
     agent: Arc<dyn Agent<F> + 'a>,
     context: ExecutionContext,
+    terminal_discovery: TerminalDiscoveryState,
 }
 
 impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
@@ -39,7 +40,14 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
             role,
             agent,
             context,
+            terminal_discovery: TerminalDiscoveryState::default(),
         }
+    }
+
+    /// Binds one repository-keyed owner across reconstructed role workers.
+    pub fn with_terminal_discovery_state(mut self, discovery: TerminalDiscoveryState) -> Self {
+        self.terminal_discovery = discovery;
+        self
     }
 
     pub fn repositories(&self) -> &RepositorySet {
@@ -190,7 +198,8 @@ impl<'a, F: Forge + ?Sized> MultiRepoRoleWorker<'a, F> {
                 self.role.clone(),
                 Arc::clone(&self.agent),
                 self.context.clone(),
-            );
+            )
+            .with_terminal_discovery_state(self.terminal_discovery.clone());
             let tick_result = match (mode, tick_id) {
                 (RoleTickMode::Normal, Some(tick_id)) => {
                     worker.tick_with_observability_tick_id(now, tick_id).await

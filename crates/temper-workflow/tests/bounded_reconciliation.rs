@@ -173,7 +173,7 @@ fn dependency_gated_candidate_with_native_dependencies_is_reloaded_before_scan()
 }
 
 #[test]
-fn bounded_candidate_discovery_finds_impossible_state_on_closed_artifact_once() {
+fn ordinary_closed_state_drift_is_reserved_for_deep_audit() {
     let root = TestRoot::new();
     let forge = root.forge();
     let repo = new_repo(&forge);
@@ -184,36 +184,32 @@ fn bounded_candidate_discovery_finds_impossible_state_on_closed_artifact_once() 
     let journal = InMemoryJournal::new();
     let crash = CrashForge::new(forge.clone(), vec![]);
 
-    let report = block_on(workflow.reconciler(&policy).reconcile(
+    let bounded = block_on(workflow.reconciler(&policy).reconcile(
         &crash,
         &repo,
         &journal,
         ts("2026-05-29T00:05:00Z"),
     ))
-    .expect("closed labelled artifact is a bounded candidate");
-
-    let impossible = report
-        .findings
-        .iter()
-        .filter(|finding| {
-            matches!(
-                finding,
-                ReconcileFinding::ImpossibleState {
-                    target: ArtifactSource::Issue { number },
-                    ..
-                } if *number == issue
-            )
-        })
-        .count();
-    assert_eq!(impossible, 1, "overlapping label queries must deduplicate");
-    assert!(crash.issue_queries().is_empty());
-    assert!(
-        crash
-            .issue_candidate_queries()
-            .iter()
-            .any(|query| query.lifecycle == CandidateLifecycle::Terminal)
-    );
+    .expect("bounded reconciliation filters ordinary terminal drift");
+    assert!(bounded.is_clean());
     assert_observed_bounded_summary_queries(&crash);
+
+    let audit = block_on(workflow.reconciler(&policy).reconcile_deep_audit(
+        &crash,
+        &repo,
+        &journal,
+        ts("2026-05-29T00:06:00Z"),
+    ))
+    .expect("deep audit loads terminal history");
+    assert!(audit.findings.iter().any(|finding| {
+        matches!(
+            finding,
+            ReconcileFinding::ImpossibleState {
+                target: ArtifactSource::Issue { number },
+                ..
+            } if *number == issue
+        )
+    }));
 }
 
 #[test]

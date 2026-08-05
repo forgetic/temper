@@ -3,8 +3,8 @@
 use super::report::{MultiRepoConfigError, MultiRepoTickReport, RepositoryJournal};
 use super::repository_set::{RepositorySet, RepositoryTarget, hinted_paths, path_key};
 use crate::{
-    ExternalToolExecutors, MechanicalWorker, Progress, PullRequestMergeObserver, Worker,
-    WorkerError,
+    ExternalToolExecutors, MechanicalWorker, Progress, PullRequestMergeObserver,
+    TerminalDiscoveryState, Worker, WorkerError,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -30,6 +30,7 @@ pub struct MultiRepoMechanicalWorker<
     lease_policy: LeasePolicy,
     policy: P,
     reconciliation_detail_cache: ReconciliationDetailCache,
+    terminal_discovery: TerminalDiscoveryState,
     external_tool_executors: ExternalToolExecutors,
     pull_request_merge_observer: Option<Arc<dyn PullRequestMergeObserver>>,
 }
@@ -101,6 +102,7 @@ where
             lease_policy,
             policy,
             reconciliation_detail_cache: ReconciliationDetailCache::default(),
+            terminal_discovery: TerminalDiscoveryState::default(),
             external_tool_executors: ExternalToolExecutors::new(),
             pull_request_merge_observer: None,
         })
@@ -110,6 +112,12 @@ where
     /// per-repository workers and subsequent ticks.
     pub fn with_reconciliation_detail_cache(mut self, cache: ReconciliationDetailCache) -> Self {
         self.reconciliation_detail_cache = cache;
+        self
+    }
+
+    /// Binds shared terminal traversal state across per-repository workers.
+    pub fn with_terminal_discovery_state(mut self, discovery: TerminalDiscoveryState) -> Self {
+        self.terminal_discovery = discovery;
         self
     }
 
@@ -211,6 +219,7 @@ where
                 self.policy.clone(),
             )
             .with_reconciliation_detail_cache(self.reconciliation_detail_cache.clone())
+            .with_terminal_discovery_state(self.terminal_discovery.clone())
             .with_external_tool_executors(self.external_tool_executors.clone());
             if let Some(observer) = &self.pull_request_merge_observer {
                 worker = worker.with_pull_request_merge_observer(Arc::clone(observer));
@@ -259,6 +268,7 @@ where
                 self.policy.clone(),
             )
             .with_reconciliation_detail_cache(self.reconciliation_detail_cache.clone())
+            .with_terminal_discovery_state(self.terminal_discovery.clone())
             .with_external_tool_executors(self.external_tool_executors.clone());
             if let Some(observer) = &self.pull_request_merge_observer {
                 worker = worker.with_pull_request_merge_observer(Arc::clone(observer));

@@ -83,6 +83,11 @@ pub(crate) trait WakeExecutor: Send + Sync {
 /// reports whether the pass mutated workflow state, allowing the coordinator to
 /// wake subscribed roles even when the provider drops the mutation webhook.
 pub trait CoordinatedMechanical: Send + Sync {
+    /// Shared terminal discovery owner used by role and mechanical broad lanes.
+    fn terminal_discovery_state(&self) -> Option<temper_runner::TerminalDiscoveryState> {
+        None
+    }
+
     /// Executes repository-wide mechanical reconciliation and reports whether
     /// it changed workflow state.
     fn run_coordinated_broad(
@@ -103,6 +108,10 @@ pub trait CoordinatedMechanical: Send + Sync {
 impl<F: temper_forge::Forge + Send + Sync + ?Sized + 'static> CoordinatedMechanical
     for crate::MechanicalTrigger<F>
 {
+    fn terminal_discovery_state(&self) -> Option<temper_runner::TerminalDiscoveryState> {
+        Some(crate::MechanicalTrigger::terminal_discovery_state(self))
+    }
+
     fn run_coordinated_broad(
         &self,
         repo: RepositoryPath,
