@@ -544,6 +544,22 @@ fn live_evidence_lines(
             "metadata kind verified: implementation_pr".to_string(),
         ]);
     }
+    if let Some(history) = evidence.terminal_history.as_ref() {
+        lines.push(format!(
+            "terminal history: actionable_issue=#{} actionable_pr=#{} first_irrelevant_pr=#{} target_closed_issues={} target_closed_prs={} sibling={} sibling_closed_issues={} webhook={} older={} recovered={} cold_authority_rebuilt={}",
+            history.actionable_issue_number,
+            history.actionable_pull_request_number,
+            history.first_history_pull_request_number,
+            history.target_closed_issues,
+            history.target_closed_pull_requests,
+            history.sibling_repo_slug,
+            history.sibling_closed_issues,
+            history.webhook_delivery,
+            history.actionable_older_than_history,
+            history.actionable_recovered,
+            history.cold_authority_rebuilt,
+        ));
+    }
     lines.push(format!(
         "CI jobs: {} completed job(s)",
         evidence.final_state.ci_jobs.len()

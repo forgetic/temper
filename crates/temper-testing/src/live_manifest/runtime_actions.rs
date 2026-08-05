@@ -297,9 +297,85 @@ impl LiveExecutionContext<'_> {
             repo,
             &self.logs.repo_populate_log,
         )?;
+        let forge = required_ref(&self.forge, "temper.launch_standalone")?;
+        let repository = required_ref(&self.repository, "temper.launch_standalone")?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match engine_block_on(forge.get_branch_head(repository, &repo.default_branch)) {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < deadline => {}
+                Err(_) if Instant::now() < deadline => {}
+                Ok(None) => {
+                    return Err(format!(
+                        "seeded default branch `{}` was not visible through Forgejo within 30s",
+                        repo.default_branch
+                    ));
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "read seeded default branch `{}` through Forgejo: {error}",
+                        repo.default_branch
+                    ));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
         self.initial_default_branch_sha = Some(super::super::plan_feature::local_checkout_head(
             &self.workspace.path().join("repo-seed").join(&repo.name),
         )?);
+        Ok(())
+    }
+
+    pub(super) fn seed_terminal_history(
+        &mut self,
+        fixture: &super::super::TerminalHistorySeedFixture,
+    ) -> Result<(), String> {
+        require(
+            self.terminal_history.is_none(),
+            "terminal history has already been seeded",
+        )?;
+        require(
+            fixture.repo_id == self.harness.scenario.repo.id,
+            &format!(
+                "history.seed_terminal references unavailable repository `{}`",
+                fixture.repo_id
+            ),
+        )?;
+        required_mut(&mut self.standalone, "temper.launch_standalone")?.kill_and_wait()?;
+        // Every history row is created while the listener is absent. Forgejo
+        // may attempt delivery, but no targeted wake can reach Temper.
+        let pre_seed_log = self
+            .logs
+            .standalone_log
+            .with_file_name("standalone.before-history-seed.log");
+        std::fs::copy(&self.logs.standalone_log, &pre_seed_log).map_err(|error| {
+            format!(
+                "archive pre-history standalone log {} to {}: {error}",
+                self.logs.standalone_log.display(),
+                pre_seed_log.display()
+            )
+        })?;
+
+        let result = super::super::terminal_history::seed(
+            required_ref(&self.forge, "temper.launch_standalone")?,
+            required_ref(&self.repository, "temper.launch_standalone")?,
+            &self.harness.scenario,
+            fixture,
+        )?;
+        self.issues
+            .insert(fixture.actionable_issue_id.clone(), result.actionable_issue);
+        self.issue_order.push(result.actionable_issue);
+        self.terminal_history = Some(result.evidence);
+
+        let mut standalone = spawn_temper_standalone(
+            &self.harness.temper,
+            &self.bundle_dir,
+            &self.logs.standalone_log,
+            &self.harness.scenario.observability,
+            &self.scenario_run_id,
+        )?;
+        wait_for_standalone(&mut standalone)?;
+        self.standalone = Some(standalone);
         Ok(())
     }
 }

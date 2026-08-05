@@ -42,7 +42,8 @@ impl ManifestFake {
         match strategy {
             ConvergenceStrategy::SinglePullRequest
             | ConvergenceStrategy::ImplementationPrTerminalCi
-            | ConvergenceStrategy::CiPollExactHeadRepair => Ok(Self::Single {
+            | ConvergenceStrategy::CiPollExactHeadRepair
+            | ConvergenceStrategy::HistoryIndependentTerminalRecovery => Ok(Self::Single {
                 fake: SinglePullRequestFake::start(&script_path, late_stream_failure)?,
                 script_path,
             }),
