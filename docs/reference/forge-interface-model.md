@@ -110,28 +110,35 @@ and leases, provider/CI recovery, incomplete fan-out, and dependency-gated
 recovery remain platform-owned durable evidence rather than generic historical
 queue-label drift.
 
-For a backend with provider-side any-label support, one-page request budgets are
-therefore constant: broad role discovery and bounded reconciliation each use at
-most four populated buckets (issue/PR x open/terminal), independent of workflow
-label and configured-role counts. Automated discovery is open-only and adds at
-most its populated issue and pull-request buckets. Pagination multiplies each
-populated bucket by its page count; it never changes the bucket count or falls
-back to per-label lists. Compatibility backends may spend more provider calls
-inside a bucket as documented above, but portable callers still issue one
-candidate operation per logical bucket.
+A caller still issues at most four populated logical buckets for broad role or
+bounded reconciliation discovery (issue/PR x open/terminal), independent of
+workflow-label and configured-role counts; automated discovery adds at most its
+populated issue and pull-request open buckets. `logical bucket` is distinct from
+provider requests inside a backend operation. Forgejo fixes each terminal list
+traversal at 1,001 decoded rows and 64 provider requests. A default 100-row PR
+page can add at most 100 exact summary reads for ambiguous merge markers, so the
+complete terminal operation remains at or below 164 provider requests. If the page
+overflows, its continuation is committed and the next coordinator generation
+resumes it; terminal-history cardinality can increase cold recovery generations
+but cannot increase one pass's provider ceiling. Compatibility in-memory/filesystem
+backends may assemble the portable page locally, but hosted production adapters
+must document an equivalent fixed provider boundary rather than hide exhaustive
+pagination behind one logical operation.
 
 The runner exposes a clone-shared `TerminalDiscoveryState` for long-lived
-runtime owners. It is repository-keyed and bounds repository count, query
-buckets, retained exact targets, and workflow-fingerprint size. Each bucket
-retains its frozen boundary, typed continuation, and failure/overflow/completion
-flags; the repository retains a deterministic bounded set of exact recovery
-targets. Workflow changes reset sweep authority;
-failed pages keep the last committed cursor; non-advancing positions restart
-that bucket. A newly constructed owner is cold, so process restart requires a
-new complete sweep before authority is reported instead of repeatedly treating
-the newest page as complete. Targeted webhooks and local mutations can retain
-bounded exact targets or invalidate repository authority without coupling role
-and mechanical worker lifetimes.
+runtime owners. Its default bounds are 64 repositories, eight query buckets and
+256 retained exact targets per repository, plus a 256-byte workflow fingerprint.
+Each bucket retains its frozen boundary, typed continuation, and
+failure/overflow/completion flags; the repository retains exact recovery targets
+in deterministic address order and reports overflow instead of growing memory.
+A workflow-fingerprint or bucket-set change resets sweep authority. Failed pages
+keep the last committed cursor; non-advancing positions restart that bucket;
+explicit provider anomalies and local recovery/automation mutations invalidate
+the repository sweep while preserving bounded exact targets. A newly constructed
+owner is cold, so process restart requires a new complete sweep before authority
+is reported instead of repeatedly treating the newest page as complete.
+Targeted webhooks can retain exact targets, but webhook delivery never replaces
+the periodic sweep.
 
 The engine binds this owner to both mechanical reconciliation and broad role
 feeds. One coordinator-admitted broad generation advances at most one page per
@@ -154,6 +161,12 @@ targets. Incomplete journal targets are unioned with that set before typed exact
 reads. `needs-human` remains inert except for its owned interrupted-CI cleanup
 path, and ordinary closed state-label drift remains exclusive to the
 operator-requested `DeepAudit` path.
+
+The explicit `DeepAudit` reconciliation path is the whole-history boundary. It
+is operator requested, invalidates dependency-detail reuse for that repository,
+and intentionally does not claim the periodic provider-request, row, duration,
+or recovery-latency budgets above. Ordinary polls never fall back to deep audit
+when continuation state is cold, overflowing, failed, or invalidated.
 
 `CiJobQuery` supports pull request, commit SHA, status, and
 sorting by name, creation time, or update time. All populated `CiJobQuery`

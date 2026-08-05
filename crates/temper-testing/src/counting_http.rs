@@ -9,10 +9,19 @@ use temper_forge_forgejo::{HttpClient, HttpError, HttpMethod, HttpRequest, HttpR
 pub struct ForgejoReadShape {
     /// GETs against issue/PR collection endpoints, including owner search.
     pub candidate_list_requests: usize,
+    pub issue_candidate_list_requests: usize,
+    pub pull_request_candidate_list_requests: usize,
+    /// Owner-scoped search is separate so repository-isolation regressions are visible.
+    pub owner_search_requests: usize,
     /// Exact issue/PR representation GETs, excluding dependency endpoints.
     pub exact_artifact_reads: usize,
+    pub exact_issue_reads: usize,
+    pub exact_pull_request_reads: usize,
     /// Native `/dependencies` GETs.
     pub dependency_requests: usize,
+    pub ci_requests: usize,
+    pub review_requests: usize,
+    pub comment_requests: usize,
     /// Other GET traffic, retained so a warm-idle assertion cannot hide N+1s.
     pub other_reads: usize,
 }
@@ -76,10 +85,39 @@ impl<C> CountingHttpClient<C> {
             }
             if is_dependency_path(&request.path) {
                 shape.dependency_requests = shape.dependency_requests.saturating_add(1);
-            } else if is_exact_artifact_path(&request.path) {
+            } else if is_ci_path(&request.path) {
+                shape.ci_requests = shape.ci_requests.saturating_add(1);
+            } else if is_review_path(&request.path) {
+                shape.review_requests = shape.review_requests.saturating_add(1);
+            } else if is_comment_path(&request.path) {
+                shape.comment_requests = shape.comment_requests.saturating_add(1);
+            } else if let Some(kind) = exact_artifact_kind(&request.path) {
                 shape.exact_artifact_reads = shape.exact_artifact_reads.saturating_add(1);
+                match kind {
+                    ArtifactPathKind::Issue => {
+                        shape.exact_issue_reads = shape.exact_issue_reads.saturating_add(1);
+                    }
+                    ArtifactPathKind::PullRequest => {
+                        shape.exact_pull_request_reads =
+                            shape.exact_pull_request_reads.saturating_add(1);
+                    }
+                }
             } else if is_candidate_list_path(&request.path) {
                 shape.candidate_list_requests = shape.candidate_list_requests.saturating_add(1);
+                if request.path == "/api/v1/repos/issues/search" {
+                    shape.owner_search_requests = shape.owner_search_requests.saturating_add(1);
+                } else if request
+                    .query
+                    .iter()
+                    .any(|(key, value)| key == "type" && value == "pulls")
+                    || path_segments(&request.path).last() == Some(&"pulls")
+                {
+                    shape.pull_request_candidate_list_requests =
+                        shape.pull_request_candidate_list_requests.saturating_add(1);
+                } else {
+                    shape.issue_candidate_list_requests =
+                        shape.issue_candidate_list_requests.saturating_add(1);
+                }
             } else {
                 shape.other_reads = shape.other_reads.saturating_add(1);
             }
@@ -149,12 +187,39 @@ fn is_candidate_list_path(path: &str) -> bool {
         && matches!(segments[5], "issues" | "pulls")
 }
 
-fn is_exact_artifact_path(path: &str) -> bool {
+#[derive(Clone, Copy)]
+enum ArtifactPathKind {
+    Issue,
+    PullRequest,
+}
+
+fn exact_artifact_kind(path: &str) -> Option<ArtifactPathKind> {
     let segments = path_segments(path);
-    segments.len() == 7
-        && segments[..3] == ["api", "v1", "repos"]
-        && matches!(segments[5], "issues" | "pulls")
-        && segments[6].bytes().all(|byte| byte.is_ascii_digit())
+    if segments.len() != 7
+        || segments[..3] != ["api", "v1", "repos"]
+        || !segments[6].bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    match segments[5] {
+        "issues" => Some(ArtifactPathKind::Issue),
+        "pulls" => Some(ArtifactPathKind::PullRequest),
+        _ => None,
+    }
+}
+
+fn is_ci_path(path: &str) -> bool {
+    path_segments(path)
+        .iter()
+        .any(|segment| *segment == "actions")
+}
+
+fn is_review_path(path: &str) -> bool {
+    path_segments(path).last() == Some(&"reviews")
+}
+
+fn is_comment_path(path: &str) -> bool {
+    path_segments(path).last() == Some(&"comments")
 }
 
 fn is_dependency_path(path: &str) -> bool {
@@ -229,6 +294,15 @@ mod tests {
                     HttpMethod::Get,
                     "/api/v1/repos/acme/widgets/issues/42/dependencies",
                 ),
+                request(HttpMethod::Get, "/api/v1/repos/acme/widgets/actions/runs"),
+                request(
+                    HttpMethod::Get,
+                    "/api/v1/repos/acme/widgets/pulls/17/reviews",
+                ),
+                request(
+                    HttpMethod::Get,
+                    "/api/v1/repos/acme/widgets/issues/42/comments",
+                ),
                 request(HttpMethod::Patch, "/api/v1/repos/acme/widgets/issues/42"),
             ] {
                 client.execute(request).await.expect("request succeeds");
@@ -239,8 +313,16 @@ mod tests {
             client.forgejo_read_shape_since(0),
             ForgejoReadShape {
                 candidate_list_requests: 2,
+                issue_candidate_list_requests: 1,
+                pull_request_candidate_list_requests: 0,
+                owner_search_requests: 1,
                 exact_artifact_reads: 1,
+                exact_issue_reads: 0,
+                exact_pull_request_reads: 1,
                 dependency_requests: 1,
+                ci_requests: 1,
+                review_requests: 1,
+                comment_requests: 1,
                 other_reads: 0,
             }
         );

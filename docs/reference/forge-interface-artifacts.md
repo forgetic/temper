@@ -75,7 +75,14 @@ same `ItemListDetails` budget as list and candidate queries. `summary()` returns
 the complete workflow/body representation but may omit native dependency
 enrichment. The historical exact methods retain full detail. Candidate reads
 are lifecycle-bucketed any-label discovery; ordinary list labels remain
-conjunctive. See [model and query semantics](forge-interface-model.md).
+conjunctive. Open queries are level-triggered. Terminal queries return frozen,
+typed continuation pages and expose raw/returned/overflow/completion counts.
+Production hosted adapters must impose a documented fixed provider boundary per
+terminal operation. Forgejo decodes at most 1,001 rows and performs at most 64
+list requests; a default 100-row PR page may add 100 exact summary reads for
+ambiguous merge markers, giving a 164-request worst case. Overflow resumes in a
+later generation rather than extending one periodic pass. The full ordering, restart, invalidation, memory, and deep-audit contract is in
+[the interface model](forge-interface-model.md).
 
 `update_issue_from_snapshot(current, input)` carries a previously validated
 `Issue` into a mutation. Successful calls return the committed representation

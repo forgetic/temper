@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use temper_forge_model::{
     CandidateContinuation, CandidateLabelSelection, CandidateLifecycle, CandidatePage,
-    CandidatePageRequest, CandidatePosition, ForgeError, ForgeResult, ItemNumber,
-    MAX_CANDIDATE_PAGE_SIZE, paginate_candidate_items,
+    CandidatePageRequest, CandidatePosition, DEFAULT_TERMINAL_CANDIDATE_PAGE_SIZE, ForgeError,
+    ForgeResult, ItemNumber, MAX_CANDIDATE_PAGE_SIZE, paginate_candidate_items,
 };
 
 /// Hard ceiling on provider requests made by one bounded candidate page.
@@ -17,6 +17,14 @@ use temper_forge_model::{
 /// The ceiling covers pagination needed to move through duplicate rows and
 /// equal timestamps. It is independent of terminal-history cardinality.
 pub const MAX_CANDIDATE_PROVIDER_REQUESTS: usize = 64;
+
+/// Provider-request ceiling for one default periodic terminal candidate bucket.
+///
+/// In addition to bounded list traversal, every row in a retained PR page may
+/// require one exact summary read when Forgejo omits its closed/merged marker.
+/// Issue buckets and unambiguous PR pages remain below this worst-case bound.
+pub const MAX_PERIODIC_TERMINAL_CANDIDATE_PROVIDER_REQUESTS: usize =
+    MAX_CANDIDATE_PROVIDER_REQUESTS + DEFAULT_TERMINAL_CANDIDATE_PAGE_SIZE;
 
 /// Hard ceiling on decoded provider rows considered by one bounded page.
 /// One look-ahead row is enough to establish portable overflow.

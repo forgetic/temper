@@ -7,9 +7,13 @@ use chrono::Duration;
 use temper_forge_memory::{FaultOp, MemoryForge};
 use temper_forge_model::{
     BranchRef, ChangeKind, CiJob, CiJobConclusion, CiJobId, CiJobStatus, CreateIssue,
-    CreatePullRequest, CreateRepository, Forge, HintArtifactKind, RepositoryId, UserId,
+    CreatePullRequest, CreateRepository, Forge, HintArtifactKind, MergeMethod, MergePullRequest,
+    RepositoryId, UserId,
 };
-use temper_runner::{MechanicalWorker, Worker, scan_roles_wake};
+use temper_runner::{
+    MechanicalWorker, TerminalDiscoveryRead, TerminalDiscoveryState, Worker, scan_roles_wake,
+    scan_roles_wake_with_discovery,
+};
 use temper_testing::counting_forge::CountingForge;
 use temper_testing::{block_on, ts};
 use temper_workflow::{InMemoryJournal, LeasePolicy, RawWorkflowSpec, RoleId, ValidatedWorkflow};

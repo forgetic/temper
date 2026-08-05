@@ -15,7 +15,7 @@ use temper_workflow::{
 use super::candidate::{
     self, CandidateQueryPlan, ScanMode, candidate_query_plan, candidate_query_plan_for_roles,
 };
-use super::discovery::read_candidate_summaries;
+use super::discovery::{CandidateDiscoveryMeasurement, read_candidate_summaries};
 use super::{
     ArtifactAddress, AutomatedWorkItem, ScanError, TargetedArtifactSnapshot,
     TerminalDiscoveryState, WorkItem,
@@ -205,6 +205,7 @@ async fn targeted_artifacts<F: Forge + ?Sized>(
         !snapshot.is_open(),
         &mut artifacts,
         emit_ci_completed,
+        None,
     )
     .await?;
     Ok(artifacts)
@@ -226,58 +227,73 @@ async fn read_artifacts<F: Forge + ?Sized>(
 ) -> Result<Vec<ScannedArtifact>, ScanError> {
     let classifier = Classifier::new(workflow);
     let mut artifacts = Vec::new();
-    let (issues, pull_requests) = read_candidate_summaries(
+    let mut measurement = CandidateDiscoveryMeasurement::new(forge, query_plan);
+    let candidates = read_candidate_summaries(
         forge,
         repo,
         workflow,
         query_plan,
-        consumer,
-        scope,
         now,
         discovery,
         exact_targets,
         false,
+        &mut measurement,
     )
-    .await?;
+    .await;
+    let (issues, pull_requests) = match candidates {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            measurement.emit(forge, repo, consumer, scope, false);
+            return Err(error);
+        }
+    };
 
-    for issue in issues {
-        let terminal = issue.state == IssueState::Closed;
-        let Ok(classified) = classifier.classify_issue(&issue) else {
-            continue;
-        };
-        push_candidate(
-            forge,
-            repo,
-            workflow,
-            queues,
-            classified,
-            None,
-            terminal,
-            &mut artifacts,
-            emit_ci_completed,
-        )
-        .await?;
+    let result: Result<(), ScanError> = async {
+        for issue in issues {
+            let terminal = issue.state == IssueState::Closed;
+            let Ok(classified) = classifier.classify_issue(&issue) else {
+                continue;
+            };
+            push_candidate(
+                forge,
+                repo,
+                workflow,
+                queues,
+                classified,
+                None,
+                terminal,
+                &mut artifacts,
+                emit_ci_completed,
+                Some(&mut measurement),
+            )
+            .await?;
+        }
+
+        for pull_request in pull_requests {
+            let terminal = pull_request.state != PullRequestState::Open;
+            let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
+                continue;
+            };
+            push_candidate(
+                forge,
+                repo,
+                workflow,
+                queues,
+                classified,
+                None,
+                terminal,
+                &mut artifacts,
+                emit_ci_completed,
+                Some(&mut measurement),
+            )
+            .await?;
+        }
+        Ok(())
     }
+    .await;
 
-    for pull_request in pull_requests {
-        let terminal = pull_request.state != PullRequestState::Open;
-        let Ok(classified) = classifier.classify_pull_request(&pull_request) else {
-            continue;
-        };
-        push_candidate(
-            forge,
-            repo,
-            workflow,
-            queues,
-            classified,
-            None,
-            terminal,
-            &mut artifacts,
-            emit_ci_completed,
-        )
-        .await?;
-    }
-
+    measurement.emit(forge, repo, consumer, scope, result.is_ok());
+    result?;
     artifacts.sort_by_key(scanned_order_key);
     Ok(artifacts)
 }
@@ -302,6 +318,7 @@ async fn push_candidate<F: Forge + ?Sized>(
     terminal: bool,
     artifacts: &mut Vec<ScannedArtifact>,
     emit_ci_completed: bool,
+    mut measurement: Option<&mut CandidateDiscoveryMeasurement>,
 ) -> Result<(), ScanError> {
     // Staging and human-attention state are global automation barriers. An
     // interrupted-CI operation that installed its own barrier remains visible
@@ -346,7 +363,10 @@ async fn push_candidate<F: Forge + ?Sized>(
         }?;
         (classified, signals)
     } else {
-        match workflow
+        if let Some(measurement) = measurement.as_mut() {
+            measurement.record_exact_detail_read();
+        }
+        let fresh = match workflow
             .executor(forge)
             .read_classified_gate_signals_with_needs(repo, classified.source, needs)
             .await
@@ -354,7 +374,11 @@ async fn push_candidate<F: Forge + ?Sized>(
             Ok(fresh) => fresh,
             Err(ExecutionError::Classification(_)) => return Ok(()),
             Err(error) => return Err(error.into()),
+        };
+        if let Some(measurement) = measurement {
+            measurement.record_hydrated_artifact();
         }
+        fresh
     };
 
     emit_pr_gate_evaluated(repo, &classified, &signals, needs, emit_ci_completed);
