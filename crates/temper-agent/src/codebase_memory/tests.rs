@@ -21,6 +21,76 @@ fn model_visible_mcp_calls_are_clamped_to_the_generic_tool_deadline() {
 }
 
 #[test]
+fn codebase_memory_failures_are_classified_without_retaining_source_text() {
+    let cases = [
+        (
+            McpError::Spawn {
+                command: "command --token=SECRET".to_string(),
+                message: "stderr SECRET".to_string(),
+            },
+            ToolFailureCategory::ConfigurationStartup,
+        ),
+        (
+            McpError::Io {
+                operation: "read response",
+                message: "transport SECRET".to_string(),
+            },
+            ToolFailureCategory::Transport,
+        ),
+        (
+            McpError::Timeout {
+                method: "tools/call".to_string(),
+                timeout: Duration::from_secs(1),
+            },
+            ToolFailureCategory::Timeout,
+        ),
+        (
+            McpError::ProcessExited {
+                method: "tools/call".to_string(),
+                status: Some("SECRET".to_string()),
+            },
+            ToolFailureCategory::ProcessExit,
+        ),
+        (
+            McpError::Protocol("provider cache SECRET".to_string()),
+            ToolFailureCategory::ProviderProtocol,
+        ),
+    ];
+    for (error, expected) in cases {
+        let output = codebase_memory_failure_output(classify_mcp_error(&error), None);
+        assert!(output.is_error);
+        assert_eq!(
+            output
+                .details
+                .as_ref()
+                .and_then(|details| { details[SAFE_TOOL_FAILURE_DETAIL_KEY]["category"].as_str() }),
+            Some(expected.as_str())
+        );
+        let rendered = format!(
+            "{} {}",
+            serde_json::to_string(&output.details).unwrap(),
+            output_text(&output)
+        );
+        assert!(!rendered.contains("SECRET"));
+        assert!(!rendered.contains("command --token"));
+        assert!(!rendered.contains("provider cache"));
+    }
+
+    assert_eq!(
+        classify_input_failure("background indexing failed: repository SECRET"),
+        ToolFailureCategory::IndexFailure
+    );
+    assert_eq!(
+        classify_input_failure("project is not ready: repository SECRET"),
+        ToolFailureCategory::ProjectNotReady
+    );
+    assert_eq!(
+        classify_provider_failure("invalid argument contains repository SECRET"),
+        ToolFailureCategory::InvalidModelInput
+    );
+}
+
+#[test]
 fn codebase_memory_bridge_wraps_allowed_tool_and_filters_destructive_tools() {
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");
@@ -195,68 +265,41 @@ fn codebase_memory_rejects_unknown_aliases_and_unsafe_paths() {
             .find(|tool| tool.name() == "codebase_memory_search_code")
             .expect("search wrapper present");
 
-        let unknown = match search
-            .execute(
+        for (call_id, input) in [
+            (
                 "unknown",
                 json!({ "query": "Widget", "project": "other/repo" }),
-                None,
-            )
-            .await
-        {
-            Ok(_) => panic!("unknown aliases are rejected"),
-            Err(error) => error,
-        };
-        assert!(
-            unknown
-                .to_string()
-                .contains("unknown codebase-memory project/repo alias")
-        );
-
-        let path_alias = match search
-            .execute(
+            ),
+            (
                 "path-alias",
                 json!({ "query": "Widget", "repo": "/tmp/demo" }),
-                None,
-            )
-            .await
-        {
-            Ok(_) => panic!("filesystem paths are not project aliases"),
-            Err(error) => error,
-        };
-        assert!(
-            path_alias
-                .to_string()
-                .contains("filesystem paths are not accepted")
-        );
-
-        let unsafe_path = match search
-            .execute(
+            ),
+            (
                 "unsafe-path",
                 json!({ "query": "Widget", "path": "/etc/passwd" }),
-                None,
-            )
-            .await
-        {
-            Ok(_) => panic!("absolute paths are rejected"),
-            Err(error) => error,
-        };
-        assert!(unsafe_path.to_string().contains("repository-relative path"));
-        let nested_unsafe_path = match search
-            .execute(
+            ),
+            (
                 "nested-unsafe-path",
                 json!({ "query": "Widget", "filters": {"path": "../secret"} }),
-                None,
-            )
-            .await
-        {
-            Ok(_) => panic!("nested parent paths are rejected"),
-            Err(error) => error,
-        };
-        assert!(
-            nested_unsafe_path
-                .to_string()
-                .contains("selected workspace repository")
-        );
+            ),
+        ] {
+            let output = search
+                .execute(call_id, input, None)
+                .await
+                .expect("invalid input becomes a model-visible tool failure");
+            assert!(output.is_error);
+            assert!(output_text(&output).contains("request input was invalid"));
+            assert_eq!(
+                output.details.as_ref().and_then(|details| {
+                    details[SAFE_TOOL_FAILURE_DETAIL_KEY]["category"].as_str()
+                }),
+                Some("invalid_model_input")
+            );
+            let rendered = serde_json::to_string(&output.details).unwrap();
+            assert!(!rendered.contains("/etc/passwd"));
+            assert!(!rendered.contains("../secret"));
+            assert!(!rendered.contains("other/repo"));
+        }
     });
 }
 

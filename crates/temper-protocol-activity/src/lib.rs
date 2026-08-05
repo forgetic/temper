@@ -47,6 +47,8 @@ pub const MODEL_CALL_RETRY_FAILURE_MESSAGE: &str = "model call failed; retry sch
 
 /// Absolute wire limit for any inline captured value.
 pub const MAX_INLINE_CONTENT_BYTES: usize = 16 * 1024;
+/// Absolute wire limit for a sanitized tool-failure summary.
+pub const MAX_TOOL_FAILURE_MESSAGE_BYTES: usize = 512;
 /// Absolute wire limit for a single transported blob attachment.
 pub const MAX_BLOB_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 /// Absolute JSON wire limit for one attachment-bearing child record.
