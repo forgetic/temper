@@ -552,6 +552,53 @@ fn codebase_memory_tool_config_schema() -> Value {
                 "index_timeout_secs",
                 positive_integer_schema("Indexing timeout in seconds."),
             ),
+            ("retention", codebase_memory_retention_config_schema()),
+        ],
+    )
+}
+
+fn codebase_memory_retention_config_schema() -> Value {
+    closed_object_schema(
+        "Host-controlled bounded retention for obsolete Temper-owned provider projects.",
+        [
+            ("enabled", bool_schema("Enable worker-owned maintenance.")),
+            (
+                "max_obsolete_projects",
+                integer_schema(
+                    "Maximum obsolete ephemeral projects retained by count.",
+                    Some(10_000),
+                ),
+            ),
+            (
+                "max_age_days",
+                bounded_positive_integer_schema("Maximum obsolete project age in days.", 3_650),
+            ),
+            (
+                "maintenance_interval_secs",
+                positive_integer_schema("Delay between worker maintenance passes."),
+            ),
+            (
+                "maintenance_timeout_secs",
+                bounded_positive_integer_schema(
+                    "Absolute provider-operation budget for one pass.",
+                    300,
+                ),
+            ),
+            (
+                "inventory_page_size",
+                bounded_positive_integer_schema(
+                    "Maximum records requested per inventory page.",
+                    200,
+                ),
+            ),
+            (
+                "max_inventory_pages",
+                bounded_positive_integer_schema("Maximum inventory pages followed per pass.", 100),
+            ),
+            (
+                "max_deletions_per_run",
+                bounded_positive_integer_schema("Maximum provider projects deleted per pass.", 100),
+            ),
         ],
     )
 }

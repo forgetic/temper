@@ -248,6 +248,7 @@ mod tests {
                 index: CodebaseMemoryIndex::Off,
                 startup_timeout_secs: 1,
                 index_timeout_secs: 1,
+                retention: Default::default(),
             }),
         }
     }

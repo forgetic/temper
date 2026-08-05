@@ -129,8 +129,12 @@ pub(super) async fn orchestrate(
     daemon: &Daemon,
     worker: &mut WorkerComponentHandle,
     server: &mut EngineHttpServer,
-    trace_retention: &mut Option<TraceRetentionTask>,
+    background_tasks: (
+        &mut Option<TraceRetentionTask>,
+        &mut Option<temper_worker_service::CodebaseMemoryMaintenanceTask>,
+    ),
 ) -> Result<(), String> {
+    let (trace_retention, codebase_memory_maintenance) = background_tasks;
     let deadline = StandaloneShutdownDeadline::from_signal(signal_received_at, budget)?;
     let emergency = worker.emergency_shutdown_handle();
     let coordinator = match StandaloneShutdownCoordinator::arm(deadline, emergency.clone()) {
@@ -177,6 +181,13 @@ pub(super) async fn orchestrate(
         }
     };
     let daemon_blockers = daemon_shutdown.report().blockers.clone();
+
+    if let Some(task) = codebase_memory_maintenance.take() {
+        // Admission is now fenced, and the independent OS watchdog is armed.
+        // No new assignment can race this join, and a wedged provider cannot
+        // escape the one signal-relative standalone shutdown bound.
+        task.stop();
+    }
 
     // Start HTTP drain only after worker registry intake and every current
     // AttemptFence are closed. Worker cooperative, forced, and hard escalation

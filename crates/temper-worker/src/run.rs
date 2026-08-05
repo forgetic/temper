@@ -133,6 +133,19 @@ pub struct WorkerComponentHandle {
     forced_termination_grace: Duration,
 }
 
+/// Cloneable read-only probe used by host-owned maintenance. A conservative
+/// probe treats any registered attempt as active, regardless of phase.
+#[derive(Clone, Default)]
+pub struct WorkerActivityProbe {
+    task_registry: WorkerTaskRegistry,
+}
+
+impl WorkerActivityProbe {
+    pub fn has_active_work(&self) -> bool {
+        !self.task_registry.is_empty()
+    }
+}
+
 /// Cloneable, synchronous authority used by standalone's dedicated OS
 /// watchdog. Ordinary split-worker shutdown never constructs this handle.
 #[derive(Clone)]
@@ -147,6 +160,13 @@ impl WorkerEmergencyShutdownHandle {
 }
 
 impl WorkerComponentHandle {
+    /// Returns a registry-backed maintenance suppression probe.
+    pub fn activity_probe(&self) -> WorkerActivityProbe {
+        WorkerActivityProbe {
+            task_registry: self.task_registry.clone(),
+        }
+    }
+
     /// Gracefully stops intake, fences active attempts, applies configured
     /// escalation deadlines, and joins every worker-owned task.
     pub async fn shutdown(mut self) {

@@ -196,12 +196,23 @@ fn codebase_memory_tool_config_round_trips_and_filters_roles() {
             "roles": ["engineer"],
             "index": "background",
             "startup_timeout_secs": 5,
-            "index_timeout_secs": 30
+            "index_timeout_secs": 30,
+            "retention": {
+                "enabled": true,
+                "max_obsolete_projects": 64,
+                "max_age_days": 30,
+                "maintenance_interval_secs": 3600,
+                "maintenance_timeout_secs": 30,
+                "inventory_page_size": 50,
+                "max_inventory_pages": 20,
+                "max_deletions_per_run": 16
+            }
         }
     }"#;
     let config = AgentToolConfig::from_json(json).expect("parse tool config");
     assert!(config.enabled_for_role("engineer"));
     assert!(!config.enabled_for_role("architect"));
+    assert!(config.codebase_memory.as_ref().unwrap().retention.enabled);
     let rendered = config.to_json().expect("serialize tool config");
     assert_eq!(AgentToolConfig::from_json(&rendered).unwrap(), config);
 }

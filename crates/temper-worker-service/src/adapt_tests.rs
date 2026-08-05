@@ -60,6 +60,12 @@ fn agent_invocation_carries_resolved_tool_config_when_enabled() {
         index: Some("blocking".to_string()),
         startup_timeout_secs: Some(7),
         index_timeout_secs: Some(90),
+        retention: temper_config::CodebaseMemoryRetentionConfig {
+            max_obsolete_projects: Some(5),
+            max_age_days: Some(8),
+            max_deletions_per_run: Some(2),
+            ..Default::default()
+        },
     }));
 
     let invocation =
@@ -73,6 +79,10 @@ fn agent_invocation_carries_resolved_tool_config_when_enabled() {
     assert_eq!(codebase_memory.index, CodebaseMemoryIndex::Blocking);
     assert_eq!(codebase_memory.startup_timeout_secs, 7);
     assert_eq!(codebase_memory.index_timeout_secs, 90);
+    assert!(codebase_memory.retention.enabled);
+    assert_eq!(codebase_memory.retention.max_obsolete_projects, 5);
+    assert_eq!(codebase_memory.retention.max_age_days, 8);
+    assert_eq!(codebase_memory.retention.max_deletions_per_run, 2);
 }
 
 #[test]

@@ -539,6 +539,7 @@ fn test_tool_config() -> AgentToolConfig {
             index: CodebaseMemoryIndex::Background,
             startup_timeout_secs: 5,
             index_timeout_secs: 30,
+            retention: Default::default(),
         }),
     }
 }

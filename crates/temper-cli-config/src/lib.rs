@@ -580,6 +580,32 @@ fn render(resolved: &Resolved) -> String {
         resolved.agent.operation_limits.model_idle_timeout.as_secs()
     );
     let _ = writeln!(out, "  profiles     = {}", resolved.agent.profiles.len());
+    match resolved.agent.tools.codebase_memory.as_ref() {
+        Some(tool) => {
+            let retention = tool.retention;
+            let _ = writeln!(
+                out,
+                "  codebase_memory = mode {}, index {}, retention {}, max_obsolete {}, max_age_days {}, interval_secs {}, timeout_secs {}, page_size {}, max_pages {}, delete_cap {}",
+                tool.mode.as_str(),
+                tool.index.as_str(),
+                if retention.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                retention.max_obsolete_projects,
+                retention.max_age_days,
+                retention.maintenance_interval_secs,
+                retention.maintenance_timeout_secs,
+                retention.inventory_page_size,
+                retention.max_inventory_pages,
+                retention.max_deletions_per_run,
+            );
+        }
+        None => {
+            let _ = writeln!(out, "  codebase_memory = disabled");
+        }
+    }
     for (name, profile) in &resolved.agent.profiles {
         let command = if profile.command.is_empty() {
             "(unset)".to_string()
@@ -636,6 +662,38 @@ mod tests {
         )
         .expect("config resolves");
         render(&resolved)
+    }
+
+    #[test]
+    fn config_show_displays_effective_codebase_memory_retention() {
+        let config = temper_config::Config {
+            agent: temper_config::AgentConfig {
+                tools: temper_config::AgentToolsConfig {
+                    codebase_memory: Some(temper_config::CodebaseMemoryToolConfig {
+                        mode: Some("auto".to_string()),
+                        retention: temper_config::CodebaseMemoryRetentionConfig {
+                            max_obsolete_projects: Some(7),
+                            max_age_days: Some(9),
+                            max_deletions_per_run: Some(3),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = temper_config::resolve(
+            &config,
+            &temper_config::Credentials::default(),
+            &temper_config::NoEnv,
+        )
+        .expect("config resolves");
+        let shown = render(&resolved);
+        assert!(shown.contains("codebase_memory = mode auto, index background, retention enabled"));
+        assert!(shown.contains("max_obsolete 7, max_age_days 9"));
+        assert!(shown.contains("delete_cap 3"));
     }
 
     #[test]

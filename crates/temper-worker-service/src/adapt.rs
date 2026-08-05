@@ -18,6 +18,7 @@ use temper_worker::workspace::RoleGitIdentity;
 use temper_worker::{
     AgentToolConfig, CodebaseMemoryIndex as ProtocolCodebaseMemoryIndex,
     CodebaseMemoryMode as ProtocolCodebaseMemoryMode,
+    CodebaseMemoryRetentionPolicy as ProtocolCodebaseMemoryRetentionPolicy,
     CodebaseMemoryToolConfig as ProtocolCodebaseMemoryToolConfig, WorkerAgentTraceConfig,
     WorkerAuth,
 };
@@ -435,6 +436,16 @@ pub fn agent_tool_config(resolved: &Resolved) -> Option<AgentToolConfig> {
             },
             startup_timeout_secs: tool.startup_timeout_secs,
             index_timeout_secs: tool.index_timeout_secs,
+            retention: ProtocolCodebaseMemoryRetentionPolicy {
+                enabled: tool.retention.enabled,
+                max_obsolete_projects: tool.retention.max_obsolete_projects,
+                max_age_days: tool.retention.max_age_days,
+                maintenance_interval_secs: tool.retention.maintenance_interval_secs,
+                maintenance_timeout_secs: tool.retention.maintenance_timeout_secs,
+                inventory_page_size: tool.retention.inventory_page_size,
+                max_inventory_pages: tool.retention.max_inventory_pages,
+                max_deletions_per_run: tool.retention.max_deletions_per_run,
+            },
         }
     });
 

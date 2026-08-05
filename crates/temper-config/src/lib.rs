@@ -75,19 +75,20 @@ pub use resolve::{ResolveOptions, env_role_key, resolve, resolve_with_options};
 pub use resolved::{
     AgentModelRetryLimits, AgentOperationLimits, AgentProfileSettings, AgentSettings,
     AgentToolSettings, AgentTraceSettings, Capability, CodebaseMemoryIndex, CodebaseMemoryMode,
-    CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
-    ForgeSettings, GitIdentity, ObservabilitySettings, PathSettings, ProviderCredential,
-    ProviderKind, ProviderSettings, RepoPath, Resolved, STANDALONE_FINAL_KILL_ALLOWANCE,
-    STANDALONE_HTTP_DRAIN_ALLOWANCE, SecretReference, SessionRecoverySettings,
-    WorkerLivenessLimits, WorkerPoolSettings, WorkerSettings,
+    CodebaseMemoryRetentionSettings, CodebaseMemoryToolSettings, DeploymentSettings,
+    DeploymentTopology, EngineSettings, ForgeKind, ForgeSettings, GitIdentity,
+    ObservabilitySettings, PathSettings, ProviderCredential, ProviderKind, ProviderSettings,
+    RepoPath, Resolved, STANDALONE_FINAL_KILL_ALLOWANCE, STANDALONE_HTTP_DRAIN_ALLOWANCE,
+    SecretReference, SessionRecoverySettings, WorkerLivenessLimits, WorkerPoolSettings,
+    WorkerSettings,
 };
 pub use schema::{
     AgentConfig, AgentCredentials, AgentDeadlineConfig, AgentProfileConfig, AgentProviderConfig,
-    AgentToolsConfig, AgentTraceConfig, CodebaseMemoryToolConfig, Config, Credentials,
-    DeploymentConfig, EngineConfig, ForgeCiFailureEvidenceConfig, ForgeConfig, ForgeCredentials,
-    ForgeUser, ModelMap, NamedSecret, NamedSecretEntry, ObservabilityConfig, PathsConfig,
-    ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION, WorkerConfig as WorkerFileConfig,
-    WorkerPoolConfig, WorkflowConfig,
+    AgentToolsConfig, AgentTraceConfig, CodebaseMemoryRetentionConfig, CodebaseMemoryToolConfig,
+    Config, Credentials, DeploymentConfig, EngineConfig, ForgeCiFailureEvidenceConfig, ForgeConfig,
+    ForgeCredentials, ForgeUser, ModelMap, NamedSecret, NamedSecretEntry, ObservabilityConfig,
+    PathsConfig, ProviderCredential as ProviderCredentialFile, SCHEMA_VERSION,
+    WorkerConfig as WorkerFileConfig, WorkerPoolConfig, WorkflowConfig,
 };
 pub use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
 pub use template::{config_template, credentials_template};

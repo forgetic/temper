@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use temper_protocol_activity::CaptureModeV1;
 
 mod ci_failure_evidence;
+mod codebase_memory;
 pub use ci_failure_evidence::ForgeCiFailureEvidenceConfig;
+pub use codebase_memory::{CodebaseMemoryRetentionConfig, CodebaseMemoryToolConfig};
 
 /// The schema version this binary reads and writes. A file declaring any other
 /// version is rejected with a clear message (see [`crate::load`]).
@@ -493,34 +495,6 @@ impl AgentToolsConfig {
     pub(crate) fn is_empty(&self) -> bool {
         self.codebase_memory.is_none()
     }
-}
-
-/// `[agent.tools.codebase_memory]` — process-boundary settings for the
-/// codebase-memory MCP toolset.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CodebaseMemoryToolConfig {
-    /// Tool mode: `off`, `auto`, or `required`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
-    /// MCP server command to spawn for the bridge.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    /// Additional command arguments.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args: Option<Vec<String>>,
-    /// Workflow roles that receive this tool; `*` matches all roles.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub roles: Option<Vec<String>>,
-    /// Indexing behavior: `off`, `background`, or `blocking`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index: Option<String>,
-    /// Startup timeout in seconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub startup_timeout_secs: Option<u64>,
-    /// Indexing timeout in seconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub index_timeout_secs: Option<u64>,
 }
 
 /// `[agent.profiles.<name>]` — target-era named agent execution profile.
