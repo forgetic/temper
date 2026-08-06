@@ -332,13 +332,18 @@ pub(super) fn tune_codebase_memory_config(
         TomlValue::Array(vec![
             TomlValue::String("-u".to_string()),
             TomlValue::String(fake_mcp.script_path.display().to_string()),
+            TomlValue::String("--state".to_string()),
+            TomlValue::String(fake_mcp.state_path.display().to_string()),
+            TomlValue::String("--log".to_string()),
             TomlValue::String(fake_mcp.log_path.display().to_string()),
-            TomlValue::String("demo".to_string()),
-            TomlValue::String(fake_mcp.project.clone()),
+            TomlValue::String("--mode".to_string()),
+            TomlValue::String("stateful".to_string()),
+            TomlValue::String("--safe-tools-json".to_string()),
             TomlValue::String(
                 serde_json::to_string(&fake_mcp.safe_tools)
                     .map_err(|error| format!("serialize declared safe MCP tools: {error}"))?,
             ),
+            TomlValue::String("--hidden-tools-json".to_string()),
             TomlValue::String(
                 serde_json::to_string(&fake_mcp.hidden_tools)
                     .map_err(|error| format!("serialize declared hidden MCP tools: {error}"))?,
@@ -365,19 +370,20 @@ pub(super) fn tune_codebase_memory_config(
 
 pub(super) struct FakeMcpServer {
     pub(super) script_path: PathBuf,
+    pub(super) state_path: PathBuf,
     pub(super) log_path: PathBuf,
-    pub(super) project: String,
     pub(super) safe_tools: Vec<String>,
     pub(super) hidden_tools: Vec<String>,
 }
 
 pub(super) fn write_fake_mcp(
     root: &Path,
-    project: &str,
+    _project: &str,
     safe_tools: &[String],
     hidden_tools: &[String],
 ) -> Result<FakeMcpServer, String> {
     let script_path = root.join("fake-codebase-memory-mcp.py");
+    let state_path = root.join("fake-codebase-memory-state.json");
     let log_path = root.join("logs/fake-codebase-memory-mcp.jsonl");
     fs::write(&script_path, FAKE_MCP_SCRIPT)
         .map_err(|error| format!("write fake MCP server {}: {error}", script_path.display()))?;
@@ -389,8 +395,8 @@ pub(super) fn write_fake_mcp(
         .map_err(|error| format!("create fake MCP log {}: {error}", log_path.display()))?;
     Ok(FakeMcpServer {
         script_path,
+        state_path,
         log_path,
-        project: project.to_string(),
         safe_tools: safe_tools.to_vec(),
         hidden_tools: hidden_tools.to_vec(),
     })
@@ -409,24 +415,36 @@ fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
             mcp.log_path.display()
         ));
     }
-    if search[0]
-        .arguments
-        .get("project")
-        .and_then(JsonValue::as_str)
-        != Some(mcp.project.as_str())
-    {
-        return Err(format!(
-            "search_code did not receive declared project {}: {:?}",
-            mcp.project, search[0].arguments
-        ));
-    }
     let index = calls
         .iter()
         .filter(|call| call.name == "index_repository")
         .collect::<Vec<_>>();
-    if index.len() != 1 || index[0].arguments.get("repo_path").is_none() {
+    let indexed_project = index
+        .first()
+        .and_then(|call| call.arguments.get("name"))
+        .and_then(JsonValue::as_str);
+    if index.len() != 1
+        || index[0].arguments.get("repo_path").is_none()
+        || indexed_project.is_none()
+    {
         return Err(format!(
-            "index_repository was not exercised internally with repo_path: {calls:?}"
+            "stable index_repository was not exercised internally with repo_path and name: {calls:?}"
+        ));
+    }
+    if search[0]
+        .arguments
+        .get("project")
+        .and_then(JsonValue::as_str)
+        != indexed_project
+    {
+        return Err(format!(
+            "search_code did not reuse indexed stable project {:?}: {:?}",
+            indexed_project, search[0].arguments
+        ));
+    }
+    if calls.iter().any(|call| call.name == "list_projects") {
+        return Err(format!(
+            "normal startup called the global project inventory: {calls:?}"
         ));
     }
     Ok(())
