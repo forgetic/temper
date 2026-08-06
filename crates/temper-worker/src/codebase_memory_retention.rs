@@ -8,82 +8,16 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 use temper_protocol_agent::CodebaseMemoryRetentionPolicy;
 
-/// One provider inventory record. Optional fields are retained so incomplete
-/// provider metadata can be reported and force a deletion-free pass.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct CodebaseMemoryProjectRecord {
-    pub project: Option<String>,
-    pub repo_path: Option<PathBuf>,
-    pub updated_at_unix_secs: Option<u64>,
-    pub ownership: Option<String>,
-}
-
-/// One bounded provider inventory page.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CodebaseMemoryProjectPage {
-    pub cache_instance_id: Option<String>,
-    pub projects: Vec<CodebaseMemoryProjectRecord>,
-    pub next_cursor: Option<String>,
-}
-
-/// Host-only provider operations used by retention.
-pub trait CodebaseMemoryMaintenanceProvider {
-    fn inventory_page(
-        &mut self,
-        cursor: Option<&str>,
-        limit: u32,
-        deadline: Instant,
-    ) -> Result<CodebaseMemoryProjectPage, String>;
-
-    fn delete_project(&mut self, project: &str, deadline: Instant) -> Result<(), String>;
-}
-
-/// Canonical workspace layout facts supplied by the worker.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CodebaseMemoryRetentionScope {
-    pub workspace_root: PathBuf,
-    pub roles: BTreeSet<String>,
-    pub repository_dirs: BTreeSet<String>,
-}
-
-/// A record and the conservative reason for its disposition.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct CodebaseMemoryRetentionRecordResult {
-    pub project: String,
-    pub repo_path: Option<PathBuf>,
-    pub reason: String,
-}
-
-/// An isolated provider deletion failure.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct CodebaseMemoryRetentionFailure {
-    pub record: CodebaseMemoryRetentionRecordResult,
-    pub error: String,
-}
-
-/// Structured result of one retention pass.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct CodebaseMemoryRetentionReport {
-    pub cache_instance_id: Option<String>,
-    pub inventory_complete: bool,
-    pub no_op_reason: Option<String>,
-    pub preserved: Vec<CodebaseMemoryRetentionRecordResult>,
-    pub candidates: Vec<CodebaseMemoryRetentionRecordResult>,
-    pub deleted: Vec<CodebaseMemoryRetentionRecordResult>,
-    pub failed: Vec<CodebaseMemoryRetentionFailure>,
-}
-
-impl CodebaseMemoryRetentionReport {
-    pub fn no_op(reason: impl Into<String>) -> Self {
-        Self {
-            no_op_reason: Some(reason.into()),
-            ..Self::default()
-        }
-    }
-}
+#[path = "codebase_memory_retention/report.rs"]
+mod report;
+pub use report::{
+    CodebaseMemoryMaintenanceProvider, CodebaseMemoryProjectPage, CodebaseMemoryProjectRecord,
+    CodebaseMemoryRetentionFailure, CodebaseMemoryRetentionOutcome,
+    CodebaseMemoryRetentionRecordResult, CodebaseMemoryRetentionReport,
+    CodebaseMemoryRetentionScope,
+};
 
 /// Runs one bounded retention pass.
 ///
@@ -97,15 +31,18 @@ pub fn maintain_obsolete_codebase_memory_indexes(
     now_unix_secs: u64,
     active_work: &dyn Fn() -> bool,
 ) -> CodebaseMemoryRetentionReport {
-    let deadline = Instant::now() + Duration::from_secs(policy.maintenance_timeout_secs);
-    maintain_obsolete_codebase_memory_indexes_until(
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(policy.maintenance_timeout_secs);
+    let mut report = maintain_obsolete_codebase_memory_indexes_until(
         provider,
         policy,
         scope,
         now_unix_secs,
         active_work,
         deadline,
-    )
+    );
+    report.duration_ms = duration_ms(started.elapsed());
+    report
 }
 
 /// Deadline-injected form used by the provider adapter so process startup,
@@ -119,37 +56,58 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
     deadline: Instant,
 ) -> CodebaseMemoryRetentionReport {
     if !policy.enabled {
-        return CodebaseMemoryRetentionReport::no_op("retention policy is disabled");
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
+            "retention policy is disabled",
+            CodebaseMemoryRetentionOutcome::Disabled,
+        )
+        .with_policy(policy);
     }
     if active_work() {
-        return CodebaseMemoryRetentionReport::no_op(
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
             "active worker assignments suppress provider maintenance",
-        );
+            CodebaseMemoryRetentionOutcome::SuppressedActiveWork,
+        )
+        .with_policy(policy);
     }
     let workspace_root = match scope.workspace_root.canonicalize() {
         Ok(root) => root,
         Err(error) => {
-            return CodebaseMemoryRetentionReport::no_op(format!(
-                "canonical workspace root is unavailable: {error}"
-            ));
+            return CodebaseMemoryRetentionReport::no_op_with_outcome(
+                format!("canonical workspace root is unavailable: {error}"),
+                CodebaseMemoryRetentionOutcome::SafetyNoOp,
+            )
+            .with_policy(policy);
         }
     };
-    let mut report = CodebaseMemoryRetentionReport::default();
+    let mut report = CodebaseMemoryRetentionReport {
+        policy: Some(policy),
+        inventory_attempted: true,
+        deleted_estimated_bytes: Some(0),
+        ..CodebaseMemoryRetentionReport::default()
+    };
     let mut records = Vec::new();
     let mut cursor = None;
     let mut seen_cursors = BTreeSet::new();
     let mut seen_projects = BTreeSet::new();
+    let inventory_started = Instant::now();
 
     for _ in 0..policy.max_inventory_pages {
+        report.inventory_duration_ms = duration_ms(inventory_started.elapsed());
         if active_work() {
             return inventory_no_op(
                 report,
                 records,
                 "active worker assignments appeared during inventory",
+                CodebaseMemoryRetentionOutcome::SuppressedActiveWork,
             );
         }
         if Instant::now() >= deadline {
-            return inventory_no_op(report, records, "maintenance inventory deadline expired");
+            return inventory_no_op(
+                report,
+                records,
+                "maintenance inventory deadline expired",
+                CodebaseMemoryRetentionOutcome::TimedOut,
+            );
         }
         let page = match provider.inventory_page(
             cursor.as_deref(),
@@ -158,19 +116,30 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
         ) {
             Ok(page) => page,
             Err(error) => {
+                report.inventory_duration_ms = duration_ms(inventory_started.elapsed());
                 return inventory_no_op(
                     report,
                     records,
                     format!("provider inventory was uncertain: {error}"),
+                    CodebaseMemoryRetentionOutcome::DiscoveryFailed,
                 );
             }
         };
+        report.inventory_duration_ms = duration_ms(inventory_started.elapsed());
+        if let Some(reported) = page.cache_bytes {
+            report.cache_bytes = Some(
+                report
+                    .cache_bytes
+                    .map_or(reported, |known| known.max(reported)),
+            );
+        }
         if page.projects.len() > policy.inventory_page_size as usize {
             records.extend(page.projects);
             return inventory_no_op(
                 report,
                 records,
                 "provider returned more records than the negotiated page bound",
+                CodebaseMemoryRetentionOutcome::InventoryUncertain,
             );
         }
         let Some(instance) = page.cache_instance_id.as_deref().and_then(nonempty) else {
@@ -179,6 +148,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                 report,
                 records,
                 "provider omitted its cache instance identity",
+                CodebaseMemoryRetentionOutcome::InventoryUncertain,
             );
         };
         match report.cache_instance_id.as_deref() {
@@ -188,6 +158,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                     report,
                     records,
                     "provider cache instance changed during inventory",
+                    CodebaseMemoryRetentionOutcome::InventoryUncertain,
                 );
             }
             None => report.cache_instance_id = Some(instance.to_string()),
@@ -200,6 +171,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                     report,
                     records,
                     "provider returned incomplete project identity metadata",
+                    CodebaseMemoryRetentionOutcome::InventoryUncertain,
                 );
             };
             if record.repo_path.is_none() || record.updated_at_unix_secs.is_none() {
@@ -208,6 +180,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                     report,
                     records,
                     "provider returned incomplete project lifecycle metadata",
+                    CodebaseMemoryRetentionOutcome::InventoryUncertain,
                 );
             }
             if !seen_projects.insert(project.to_string()) {
@@ -216,6 +189,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                     report,
                     records,
                     "provider returned a duplicate project identity",
+                    CodebaseMemoryRetentionOutcome::InventoryUncertain,
                 );
             }
         }
@@ -229,18 +203,26 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
             break;
         };
         if !seen_cursors.insert(next.to_string()) {
-            return inventory_no_op(report, records, "provider inventory cursor repeated");
+            return inventory_no_op(
+                report,
+                records,
+                "provider inventory cursor repeated",
+                CodebaseMemoryRetentionOutcome::InventoryUncertain,
+            );
         }
     }
 
+    report.inventory_duration_ms = duration_ms(inventory_started.elapsed());
     if !report.inventory_complete {
         return inventory_no_op(
             report,
             records,
             "provider inventory exceeded the configured page bound",
+            CodebaseMemoryRetentionOutcome::InventoryUncertain,
         );
     }
 
+    report.inventory_record_count = records.len();
     let mut eligible = Vec::new();
     for record in records {
         match classify(&record, &workspace_root, scope) {
@@ -251,11 +233,13 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                 project,
                 path,
                 updated,
+                estimated_bytes,
             } => {
                 if updated > now_unix_secs {
                     report.preserved.push(CodebaseMemoryRetentionRecordResult {
                         project,
                         repo_path: Some(path),
+                        estimated_bytes,
                         reason: "project timestamp is in the future; lifecycle age is uncertain"
                             .to_string(),
                     });
@@ -264,6 +248,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                         project,
                         path,
                         updated,
+                        estimated_bytes,
                     });
                 }
             }
@@ -302,6 +287,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
             report.preserved.push(CodebaseMemoryRetentionRecordResult {
                 project: eligible.project,
                 repo_path: Some(eligible.path),
+                estimated_bytes: eligible.estimated_bytes,
                 reason: "within configured age and count bounds".to_string(),
             });
         }
@@ -316,6 +302,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
         .map(|(record, reason)| CodebaseMemoryRetentionRecordResult {
             project: record.project.clone(),
             repo_path: Some(record.path.clone()),
+            estimated_bytes: record.estimated_bytes,
             reason: (*reason).to_string(),
         })
         .collect();
@@ -324,6 +311,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
         let result = CodebaseMemoryRetentionRecordResult {
             project: candidate.project.clone(),
             repo_path: Some(candidate.path),
+            estimated_bytes: candidate.estimated_bytes,
             reason: reason.to_string(),
         };
         if position >= policy.max_deletions_per_run as usize {
@@ -338,6 +326,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                 "active worker assignments appeared; remaining deletions were suppressed"
                     .to_string(),
             );
+            report.outcome = CodebaseMemoryRetentionOutcome::SuppressedActiveWork;
             report.preserved.push(CodebaseMemoryRetentionRecordResult {
                 reason: "active work appeared before deletion".to_string(),
                 ..result
@@ -345,6 +334,9 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
             continue;
         }
         if Instant::now() >= deadline {
+            report.no_op_reason =
+                Some("maintenance deadline expired; remaining deletions were deferred".to_string());
+            report.outcome = CodebaseMemoryRetentionOutcome::TimedOut;
             report.preserved.push(CodebaseMemoryRetentionRecordResult {
                 reason: "deferred after the maintenance deadline".to_string(),
                 ..result
@@ -352,13 +344,27 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
             continue;
         }
         match provider.delete_project(&candidate.project, deadline) {
-            Ok(()) => report.deleted.push(result),
+            Ok(()) => {
+                report.deleted_estimated_bytes =
+                    match (report.deleted_estimated_bytes, result.estimated_bytes) {
+                        (Some(total), Some(bytes)) => Some(total.saturating_add(bytes)),
+                        _ => None,
+                    };
+                report.deleted.push(result);
+            }
             Err(error) => report.failed.push(CodebaseMemoryRetentionFailure {
                 record: result,
                 error,
             }),
         }
     }
+    report.outcome = if !report.failed.is_empty() {
+        CodebaseMemoryRetentionOutcome::PartialFailure
+    } else if report.no_op_reason.is_some() {
+        report.outcome
+    } else {
+        CodebaseMemoryRetentionOutcome::Completed
+    };
     report
 }
 
@@ -366,10 +372,13 @@ fn inventory_no_op(
     mut report: CodebaseMemoryRetentionReport,
     records: Vec<CodebaseMemoryProjectRecord>,
     reason: impl Into<String>,
+    outcome: CodebaseMemoryRetentionOutcome,
 ) -> CodebaseMemoryRetentionReport {
     let reason = reason.into();
     report.no_op_reason = Some(reason.clone());
+    report.outcome = outcome;
     report.inventory_complete = false;
+    report.inventory_record_count = records.len();
     report.preserved.extend(records.iter().map(|record| {
         CodebaseMemoryRetentionRecordResult {
             project: record
@@ -377,6 +386,7 @@ fn inventory_no_op(
                 .clone()
                 .unwrap_or_else(|| "<missing>".to_string()),
             repo_path: record.repo_path.clone(),
+            estimated_bytes: record.estimated_bytes,
             reason: reason.clone(),
         }
     }));
@@ -394,6 +404,7 @@ enum Classification {
         project: String,
         path: PathBuf,
         updated: u64,
+        estimated_bytes: Option<u64>,
     },
 }
 
@@ -401,6 +412,7 @@ struct EligibleRecord {
     project: String,
     path: PathBuf,
     updated: u64,
+    estimated_bytes: Option<u64>,
 }
 
 fn classify(
@@ -462,6 +474,7 @@ fn classify(
         project: project.to_string(),
         path: path.clone(),
         updated,
+        estimated_bytes: record.estimated_bytes,
     }
 }
 
@@ -505,8 +518,13 @@ fn record_result(
             .clone()
             .unwrap_or_else(|| "<missing>".to_string()),
         repo_path: record.repo_path.clone(),
+        estimated_bytes: record.estimated_bytes,
         reason: reason.into(),
     }
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

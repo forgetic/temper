@@ -9,7 +9,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -26,13 +26,17 @@ use temper_agent_core::AgentContainmentContext;
 
 mod background;
 mod indexing;
+mod lifecycle_observability;
 mod provider;
 mod scope;
 mod tool_schema;
 
 use indexing::prepare_indexes;
+use lifecycle_observability::{
+    DiscoveryEvidence, DiscoveryOutcome, FailureCategory, emit_discovery, emit_identity_selected,
+};
 use provider::validate_provider_contract;
-use scope::{WorkspaceScope, discover_workspace_projects};
+use scope::{TargetedProjectState, WorkspaceScope, discover_workspace_projects};
 use tool_schema::{default_project_key, description_for, scoped_parameters};
 
 /// Maximum UTF-8 bytes returned to the model from one MCP tool call.
@@ -319,22 +323,63 @@ async fn start_toolset(
         mode: codebase_memory_mode(config.mode),
         index: codebase_memory_index(config.index),
         model_visible: false,
-        repo_root: &scope.primary_root().display().to_string(),
     });
     let mut client =
         StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
-    emit_mcp_server_started(McpServerStarted {
-        tool_name: "codebase_memory",
-        command: &config.command,
-        repo_root: &scope.primary_root().display().to_string(),
-    });
     let mut advertised = client.list_tools(startup_timeout).await?;
     validate_provider_contract(&client, &advertised)?;
+    let metadata = client.server_metadata().unwrap_or_default();
+    emit_mcp_server_started(McpServerStarted {
+        tool_name: "codebase_memory",
+        provider_name: metadata.name.as_deref().unwrap_or(""),
+        provider_version: metadata.version.as_deref().unwrap_or(""),
+    });
     let mut setup_notes = Vec::new();
 
+    let discovery_started = Instant::now();
     match discover_workspace_projects(&client, startup_timeout, &scope).await {
-        Ok(states) => scope.apply_targeted_discovery(states),
-        Err(error) if config.mode == CodebaseMemoryMode::Auto => {
+        Ok(discovery) => {
+            emit_discovery(DiscoveryEvidence {
+                method: "index_status",
+                inventory: "targeted",
+                duration: discovery_started.elapsed(),
+                outcome: DiscoveryOutcome::Success,
+                record_count: discovery.states.len(),
+                cache_bytes: discovery.cache_bytes,
+                failure: FailureCategory::None,
+            });
+            for (project, state) in scope.projects.iter().zip(&discovery.states) {
+                let identity_outcome = match state {
+                    TargetedProjectState::Missing => "missing",
+                    TargetedProjectState::Stale => "stale",
+                    TargetedProjectState::Fresh => "reused",
+                    TargetedProjectState::Migrated => "migrated",
+                };
+                emit_identity_selected(
+                    &project.canonical_alias,
+                    &project.provider_key,
+                    identity_outcome,
+                );
+            }
+            scope.apply_targeted_discovery(discovery.states);
+        }
+        Err(discovery_failure) if config.mode == CodebaseMemoryMode::Auto => {
+            let error = &discovery_failure.error;
+            let failure = FailureCategory::from(error);
+            let outcome = if failure == FailureCategory::Timeout {
+                DiscoveryOutcome::Timeout
+            } else {
+                DiscoveryOutcome::Failure
+            };
+            emit_discovery(DiscoveryEvidence {
+                method: "index_status",
+                inventory: "targeted",
+                duration: discovery_started.elapsed(),
+                outcome,
+                record_count: discovery_failure.record_count,
+                cache_bytes: discovery_failure.cache_bytes,
+                failure,
+            });
             scope.mark_discovery_unavailable();
             setup_notes.push(format!(
                 "safe targeted project discovery was unavailable; indexing was skipped for every prepared repo and no path-keyed fallback was attempted: {error}"
@@ -348,7 +393,24 @@ async fn start_toolset(
             advertised = client.list_tools(startup_timeout).await?;
             validate_provider_contract(&client, &advertised)?;
         }
-        Err(error) => return Err(error),
+        Err(discovery_failure) => {
+            let failure = FailureCategory::from(&discovery_failure.error);
+            let outcome = if failure == FailureCategory::Timeout {
+                DiscoveryOutcome::Timeout
+            } else {
+                DiscoveryOutcome::Failure
+            };
+            emit_discovery(DiscoveryEvidence {
+                method: "index_status",
+                inventory: "targeted",
+                duration: discovery_started.elapsed(),
+                outcome,
+                record_count: discovery_failure.record_count,
+                cache_bytes: discovery_failure.cache_bytes,
+                failure,
+            });
+            return Err(discovery_failure.error);
+        }
     }
 
     setup_notes
@@ -381,7 +443,6 @@ async fn start_toolset(
             tool_name: &public_name,
             mcp_tool: &descriptor.name,
             model_visible: true,
-            repo_root: &scope.primary_root().display().to_string(),
             mcp_project: &scope.primary_actual_project(),
         });
         registered_tool_metadata.push(CodebaseMemoryToolMetadata {
@@ -426,7 +487,6 @@ struct AgentToolConfigured<'a> {
     mode: &'a str,
     index: &'a str,
     model_visible: bool,
-    repo_root: &'a str,
 }
 
 struct AgentToolExposed<'a> {
@@ -434,7 +494,6 @@ struct AgentToolExposed<'a> {
     tool_name: &'a str,
     mcp_tool: &'a str,
     model_visible: bool,
-    repo_root: &'a str,
     mcp_project: &'a str,
 }
 
@@ -448,16 +507,14 @@ struct AgentToolHidden<'a> {
 
 struct McpServerStarted<'a> {
     tool_name: &'a str,
-    command: &'a str,
-    repo_root: &'a str,
+    provider_name: &'a str,
+    provider_version: &'a str,
 }
 
 struct McpToolCalled<'a> {
     tool_name: &'a str,
     mcp_tool: &'a str,
     mcp_project: &'a str,
-    repo_root: &'a str,
-    argument_preview: &'a str,
 }
 
 struct McpToolResult<'a> {
@@ -466,7 +523,6 @@ struct McpToolResult<'a> {
     mcp_project: &'a str,
     is_error: bool,
     truncated: bool,
-    result_preview: &'a str,
 }
 
 fn emit_agent_tool_configured(ev: AgentToolConfigured<'_>) {
@@ -479,7 +535,6 @@ fn emit_agent_tool_configured(ev: AgentToolConfigured<'_>) {
         tool.model_visible = ev.model_visible,
         mode = ev.mode,
         index = ev.index,
-        repo.root = ev.repo_root,
         "agent:   tool configured: {} role={} mode={} index={}",
         ev.tool_name,
         ev.role,
@@ -497,7 +552,6 @@ fn emit_agent_tool_exposed(ev: AgentToolExposed<'_>) {
         tool.name = ev.tool_name,
         mcp.tool = ev.mcp_tool,
         tool.model_visible = ev.model_visible,
-        repo.root = ev.repo_root,
         mcp.project = ev.mcp_project,
         "agent:   tool exposed: {} -> {}",
         ev.tool_name,
@@ -527,8 +581,8 @@ fn emit_mcp_server_started(ev: McpServerStarted<'_>) {
         service = "agent",
         event = "mcp.server.started",
         tool.name = ev.tool_name,
-        command = ev.command,
-        repo.root = ev.repo_root,
+        provider.name = ev.provider_name,
+        provider.version = ev.provider_version,
         "agent:   MCP server started: {}",
         ev.tool_name,
     );
@@ -542,8 +596,6 @@ fn emit_mcp_tool_called(ev: McpToolCalled<'_>) {
         tool.name = ev.tool_name,
         mcp.tool = ev.mcp_tool,
         mcp.project = ev.mcp_project,
-        repo.root = ev.repo_root,
-        argument.preview = ev.argument_preview,
         "agent:   MCP tool called: {}",
         ev.mcp_tool,
     );
@@ -559,51 +611,10 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         mcp.project = ev.mcp_project,
         is_error = ev.is_error,
         truncated = ev.truncated,
-        result.preview = ev.result_preview,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,
     );
-}
-
-fn redacted_preview(text: &str, max_chars: usize) -> String {
-    if contains_secret_like(text) {
-        return "<redacted>".to_string();
-    }
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() <= max_chars {
-        return normalized;
-    }
-    if max_chars == 0 {
-        return String::new();
-    }
-    if max_chars == 1 {
-        return "…".to_string();
-    }
-    let mut preview = normalized.chars().take(max_chars - 1).collect::<String>();
-    preview.push('…');
-    preview
-}
-
-fn contains_secret_like(text: &str) -> bool {
-    let lowered = text.to_ascii_lowercase();
-    [
-        "token=",
-        "token:",
-        "password=",
-        "password:",
-        "secret=",
-        "secret:",
-        "authorization=",
-        "authorization:",
-        "bearer ",
-        "api_key=",
-        "api-key=",
-        "auth=",
-        "-----begin ",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
 }
 
 fn codebase_memory_mode(mode: CodebaseMemoryMode) -> &'static str {
@@ -707,13 +718,10 @@ impl Tool for CodebaseMemoryTool {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let argument_preview = redacted_preview(&input.to_string(), 240);
         emit_mcp_tool_called(McpToolCalled {
             tool_name: &self.public_name,
             mcp_tool: &self.mcp_name,
             mcp_project: &mcp_project,
-            repo_root: &self.scope.primary_root().display().to_string(),
-            argument_preview: &argument_preview,
         });
 
         let result = self
@@ -722,14 +730,12 @@ impl Tool for CodebaseMemoryTool {
             .await
             .map_err(|error| Error::tool(self.public_name.clone(), error))?;
         let bounded = bound_text(&result.text, MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
-        let result_preview = redacted_preview(&bounded.text, 240);
         emit_mcp_tool_result(McpToolResult {
             tool_name: &self.public_name,
             mcp_tool: &self.mcp_name,
             mcp_project: &mcp_project,
             is_error: result.is_error,
             truncated: bounded.truncated,
-            result_preview: &result_preview,
         });
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {

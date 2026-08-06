@@ -56,9 +56,10 @@ pub use codebase_memory_maintenance::{
 };
 pub use codebase_memory_retention::{
     CodebaseMemoryMaintenanceProvider, CodebaseMemoryProjectPage, CodebaseMemoryProjectRecord,
-    CodebaseMemoryRetentionFailure, CodebaseMemoryRetentionRecordResult,
-    CodebaseMemoryRetentionReport, CodebaseMemoryRetentionScope,
-    maintain_obsolete_codebase_memory_indexes, maintain_obsolete_codebase_memory_indexes_until,
+    CodebaseMemoryRetentionFailure, CodebaseMemoryRetentionOutcome,
+    CodebaseMemoryRetentionRecordResult, CodebaseMemoryRetentionReport,
+    CodebaseMemoryRetentionScope, maintain_obsolete_codebase_memory_indexes,
+    maintain_obsolete_codebase_memory_indexes_until,
 };
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig, NativeValidatorCommand};
 pub use config::{

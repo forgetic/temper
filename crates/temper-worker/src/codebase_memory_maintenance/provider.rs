@@ -424,6 +424,10 @@ fn parse_inventory_page(value: &Value) -> Result<CodebaseMemoryProjectPage, Stri
         .collect::<Result<Vec<_>, _>>()?;
     Ok(CodebaseMemoryProjectPage {
         cache_instance_id: string_field(object, &["cache_instance_id", "cacheInstanceId"]),
+        cache_bytes: u64_field(
+            object,
+            &["cache_bytes", "cacheBytes", "total_bytes", "totalBytes"],
+        ),
         projects,
         next_cursor: string_field(object, &["next_cursor", "nextCursor"]),
     })
@@ -465,11 +469,34 @@ fn parse_project_record(value: &Value) -> Result<CodebaseMemoryProjectRecord, St
     let ownership = string_field(object, &["ownership", "managed_by", "managedBy"]).or_else(|| {
         metadata.and_then(|value| string_field(value, &["ownership", "managed_by", "managedBy"]))
     });
+    let estimated_bytes = u64_field(
+        object,
+        &[
+            "estimated_bytes",
+            "estimatedBytes",
+            "size_bytes",
+            "sizeBytes",
+        ],
+    )
+    .or_else(|| {
+        metadata.and_then(|value| {
+            u64_field(
+                value,
+                &[
+                    "estimated_bytes",
+                    "estimatedBytes",
+                    "size_bytes",
+                    "sizeBytes",
+                ],
+            )
+        })
+    });
     Ok(CodebaseMemoryProjectRecord {
         project,
         repo_path,
         updated_at_unix_secs,
         ownership,
+        estimated_bytes,
     })
 }
 
@@ -482,6 +509,12 @@ fn string_field(object: &Map<String, Value>, fields: &[&str]) -> Option<String> 
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     })
+}
+
+fn u64_field(object: &Map<String, Value>, fields: &[&str]) -> Option<u64> {
+    fields
+        .iter()
+        .find_map(|field| object.get(*field).and_then(Value::as_u64))
 }
 
 fn unix_timestamp_field(object: &Map<String, Value>, fields: &[&str]) -> Option<u64> {
