@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -27,9 +27,15 @@ use super::convergence::{
 };
 use super::{ENGINEER, FinalStateEvidence, LiveCodebaseMemoryEvidence};
 
+#[path = "codebase_memory/lifecycle_fixture.rs"]
+mod lifecycle_fixture;
+
 const MEMORY_FILE: &str = "MEMORY_NOTES.md";
 const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_SEARCH_RESULT";
 const ENGINEER_SUMMARY: &str = "Used codebase memory search result before writing MEMORY_NOTES.md.";
+const AGENT_MCP_CLIENT: &str = "temper-agent";
+const MAINTENANCE_MCP_CLIENT: &str = "temper-worker-maintenance";
+const UNINITIALIZED_MCP_CLIENT: &str = "<uninitialized>";
 
 pub(super) fn converge(
     forge: &ForgejoForge,
@@ -88,8 +94,8 @@ fn validate_lifecycle(mcp: &FakeMcpServer) -> Result<Option<String>, String> {
         roles: BTreeSet::from(["engineer".to_string()]),
         repository_dirs: BTreeSet::from(["demo".to_string()]),
     };
-    fs::create_dir_all(&scope.workspace_root)
-        .map_err(|error| format!("create lifecycle workspace root: {error}"))?;
+    fs::create_dir_all(scope.workspace_root.join("engineer/active/demo"))
+        .map_err(|error| format!("create active lifecycle workspace: {error}"))?;
     let policy = CodebaseMemoryRetentionPolicy {
         enabled: true,
         max_obsolete_projects: 64,
@@ -562,7 +568,7 @@ pub(super) fn write_fake_mcp(
         .map_err(|error| format!("create fake MCP log {}: {error}", log_path.display()))?;
     let lifecycle_fixture = fixture == Some("stable-lifecycle");
     let seed_json = if lifecycle_fixture {
-        serde_json::to_string(&lifecycle_seed(root))
+        serde_json::to_string(&lifecycle_fixture::seed(root))
             .map_err(|error| format!("serialize lifecycle MCP seed: {error}"))?
     } else {
         "{}".to_string()
@@ -579,47 +585,25 @@ pub(super) fn write_fake_mcp(
     })
 }
 
-fn lifecycle_seed(root: &Path) -> JsonValue {
-    let projects = (0..320)
-        .map(|index| serde_json::json!({
-            "project": format!("legacy-temper-{index:03}"),
-            "repo_path": root.join("workspaces/engineer").join(format!("old-{index:03}/demo")).display().to_string(),
-            "status": "stale",
-            "updated_at_unix_secs": 1,
-            "ownership": "temper",
-            "estimated_bytes": 4096
-        }))
-        .chain([
-            serde_json::json!({"project":"temper-v1-protected","repo_path":root.join("workspaces/engineer/stable/demo").display().to_string(),"status":"fresh","ownership":"temper","estimated_bytes":8192}),
-            serde_json::json!({"project":"unrelated-project","repo_path":"/opt/unrelated/repo","status":"stale","estimated_bytes":2048}),
-            serde_json::json!({"project":"ambiguous-project","status":"stale","estimated_bytes":1024}),
-            serde_json::json!({"project":"active-project","repo_path":root.join("workspaces/engineer/active/demo").display().to_string(),"status":"stale","ownership":"temper","indexing_active":true,"estimated_bytes":4096}),
-        ])
-        .collect::<Vec<_>>();
-    serde_json::json!({
-        "cache_instance_id": "scenario-lifecycle-cache-v1",
-        "cache_bytes": 1_327_104,
-        "now_unix_secs": 2_000_000_000u64,
-        "projects": projects
-    })
-}
-
 fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
     let calls = logged_tool_calls(&mcp.log_path)?;
+    validate_mcp_calls(&calls)
+}
+
+fn validate_mcp_calls(calls: &[McpToolCallEvidence]) -> Result<(), String> {
     let search = calls
         .iter()
-        .filter(|call| call.name == "search_code")
+        .filter(|call| call.client == AGENT_MCP_CLIENT && call.name == "search_code")
         .collect::<Vec<_>>();
     if search.len() != 1 {
         return Err(format!(
-            "expected one search_code MCP call, found {} in {}",
-            search.len(),
-            mcp.log_path.display()
+            "expected one agent search_code MCP call, found {}: {calls:?}",
+            search.len()
         ));
     }
     let index = calls
         .iter()
-        .filter(|call| call.name == "index_repository")
+        .filter(|call| call.client == AGENT_MCP_CLIENT && call.name == "index_repository")
         .collect::<Vec<_>>();
     let indexed_project = index
         .first()
@@ -644,12 +628,13 @@ fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
             indexed_project, search[0].arguments
         ));
     }
-    if calls
+    if let Some(call) = calls
         .iter()
-        .any(|call| call.name == "list_projects" && call.arguments.get("limit").is_none())
+        .find(|call| call.name == "list_projects" && call.client != MAINTENANCE_MCP_CLIENT)
     {
         return Err(format!(
-            "normal startup called the unbounded global project inventory: {calls:?}"
+            "normal startup called the global project inventory as `{}`: {calls:?}",
+            call.client
         ));
     }
     Ok(())
@@ -657,6 +642,7 @@ fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
 
 #[derive(Debug)]
 struct McpToolCallEvidence {
+    client: String,
     name: String,
     arguments: JsonValue,
 }
@@ -664,17 +650,49 @@ struct McpToolCallEvidence {
 fn logged_tool_calls(path: &Path) -> Result<Vec<McpToolCallEvidence>, String> {
     let raw = fs::read_to_string(path)
         .map_err(|error| format!("read MCP call log {}: {error}", path.display()))?;
-    Ok(raw
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| {
-            let value = serde_json::from_str::<JsonValue>(line).ok()?;
-            let name = value.get("tool")?.as_str()?.to_string();
-            let arguments = value.get("arguments").cloned().unwrap_or(JsonValue::Null);
-            Some(McpToolCallEvidence { name, arguments })
-        })
-        .collect())
+    let mut clients = BTreeMap::new();
+    let mut legacy_client = UNINITIALIZED_MCP_CLIENT.to_string();
+    let mut calls = Vec::new();
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        let Some(value) = serde_json::from_str::<JsonValue>(line).ok() else {
+            continue;
+        };
+        let Some(name) = value.get("tool").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let arguments = value.get("arguments").cloned().unwrap_or(JsonValue::Null);
+        let process_id = value.get("pid").and_then(JsonValue::as_u64);
+        if name == "initialize" {
+            let client = arguments
+                .get("clientInfo")
+                .and_then(|info| info.get("name"))
+                .and_then(JsonValue::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or(UNINITIALIZED_MCP_CLIENT)
+                .to_string();
+            if let Some(process_id) = process_id {
+                clients.insert(process_id, client);
+            } else {
+                legacy_client = client;
+            }
+            continue;
+        }
+        let client = process_id
+            .and_then(|process_id| clients.get(&process_id))
+            .unwrap_or(&legacy_client)
+            .clone();
+        calls.push(McpToolCallEvidence {
+            client,
+            name: name.to_string(),
+            arguments,
+        });
+    }
+    Ok(calls)
 }
+
+#[cfg(test)]
+#[path = "codebase_memory/tests.rs"]
+mod tests;
 
 pub(super) struct CodebaseMemoryFake {
     fake: FakeLlm,

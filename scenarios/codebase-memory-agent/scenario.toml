@@ -87,7 +87,7 @@ description = "Register and require the real host forgejo-runner / Actions CI wo
 [[steps]]
 id = "start-fake-codebase-memory-mcp"
 action = "mcp.fake_codebase_memory.start"
-project = "actual-demo-project"
+project = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a"
 lifecycle_profile = "stable-lifecycle"
 advertises_safe_tools = ["search_code", "list_projects", "index_status"]
 advertises_hidden_tools = ["index_repository", "delete_project"]
@@ -180,7 +180,7 @@ event = "agent.tool.exposed"
 fields."tool.name" = "codebase_memory_search_code"
 fields."mcp.tool" = "search_code"
 fields."tool.model_visible" = true
-fields."mcp.project" = "actual-demo-project"
+fields."mcp.project" = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a"
 
 [[expect.events]]
 required = true
@@ -210,7 +210,7 @@ id = "search-code-called-with-default-project"
 event = "mcp.tool.called"
 fields."tool.name" = "codebase_memory_search_code"
 fields."mcp.tool" = "search_code"
-fields."mcp.project" = "actual-demo-project"
+fields."mcp.project" = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a"
 
 [[expect.events]]
 required = true
@@ -218,8 +218,8 @@ id = "fake-mcp-result-observed"
 event = "mcp.tool.result"
 fields."tool.name" = "codebase_memory_search_code"
 fields."mcp.tool" = "search_code"
-fields."mcp.project" = "actual-demo-project"
-fields."result.preview" = "FAKE_MCP_SEARCH_RESULT project=actual-demo-project query=WidgetService"
+fields."mcp.project" = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a"
+fields.is_error = false
 
 [[expect.events]]
 required = true
@@ -242,7 +242,7 @@ events = [
   { event = "agent.tool.configured", fields = { "tool.name" = "codebase_memory" } },
   { event = "mcp.server.started", fields = { "tool.name" = "codebase_memory" } },
   { event = "agent.tool.exposed", fields = { "tool.name" = "codebase_memory_search_code" } },
-  { event = "mcp.tool.called", fields = { "mcp.tool" = "search_code", "mcp.project" = "actual-demo-project" } },
+  { event = "mcp.tool.called", fields = { "mcp.tool" = "search_code", "mcp.project" = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code" } },
   { event = "agent.finished", role = "engineer" },
   { event = "workspace.diff.produced", fields = { "file.path" = "MEMORY_NOTES.md" } },
@@ -262,7 +262,7 @@ fake_mcp_tools = ["search_code", "list_projects", "index_status", "index_reposit
 model_callable_safe_tools = ["codebase_memory_search_code", "codebase_memory_list_projects", "codebase_memory_index_status"]
 model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
 default_project = "acme/demo"
-actual_project = "actual-demo-project"
+actual_project = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a"
 search_code_call_omits_project = true
 expected_output_name = "MEMORY_NOTES.md"
 expected_result = "FAKE_MCP_SEARCH_RESULT"
