@@ -200,6 +200,10 @@ fn confirmed_missing_projects_use_stable_blocking_upsert_and_repeated_roots_conv
         "checkout paths differ while the upsert key remains stable"
     );
     assert!(calls_named(&log_path, "list_projects").is_empty());
+    let snapshot = provider_snapshot(&dir);
+    assert_eq!(snapshot["projects"].as_object().unwrap().len(), 1);
+    assert_eq!(snapshot["counters"]["project_creations"], 1);
+    assert_eq!(snapshot["counters"]["upsert_writes"], 2);
 }
 
 #[test]

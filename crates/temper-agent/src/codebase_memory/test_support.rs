@@ -7,111 +7,17 @@ use temper_protocol_agent::{
     WorkspaceWorkItem,
 };
 
+const FAKE_MCP_SCRIPT: &str =
+    include_str!("../../../temper-testing/src/live_manifest/fake_codebase_memory_mcp.py");
+
+/// Writes the same persistent fake provider used by live-manifest tests.
+/// Every process launched from this fixture shares one lock-protected state
+/// file, while each test still owns an isolated temporary cache.
 pub(super) fn fake_server_script() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("fake_codebase_memory_mcp.py"),
-        r#"
-import json
-import os
-import sys
-import time
-
-mode = sys.argv[1] if len(sys.argv) > 1 else "normal"
-log_path = sys.argv[2] if len(sys.argv) > 2 else ""
-if mode == "hang":
-    time.sleep(60)
-    sys.exit(0)
-
-provider_name = "other-provider" if mode == "incompatible-name" else "codebase-memory-mcp"
-provider_version = "0.8.1" if mode == "incompatible-version" else "0.9.0"
-capabilities = {} if mode == "incompatible-capability" else {"tools": {}}
-
-index_properties = {
-    "repo_path": {"type": "string"},
-    "name": {"type": "string"},
-}
-if mode == "incompatible-schema":
-    del index_properties["name"]
-
-TOOLS = [
-    {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
-    {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
-    {"name": "list_projects", "description": "List projects", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
-    {"name": "detect_changes", "description": "Detect changes", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
-    {"name": "delete_project", "description": "Delete project", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "manage_adr", "description": "Write ADRs", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "ingest_traces", "description": "Ingest traces", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "query_graph", "description": "Raw graph query", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": index_properties, "required": ["repo_path"]}},
-]
-
-def send(value):
-    sys.stdout.write(json.dumps(value) + "\n")
-    sys.stdout.flush()
-
-def log_tool(name, args):
-    if not log_path:
-        return
-    with open(log_path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps({"name": name, "arguments": args}, sort_keys=True) + "\n")
-
-def tool_result(request_id, payload, is_error=False):
-    send({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": payload}], "isError": is_error}})
-
-for line in sys.stdin:
-    if not line.strip():
-        continue
-    request = json.loads(line)
-    if "id" not in request:
-        continue
-    method = request.get("method")
-    if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": provider_name, "version": provider_version}, "capabilities": capabilities}})
-    elif method == "tools/list":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
-    elif method == "tools/call":
-        params = request.get("params", {})
-        name = params.get("name")
-        args = params.get("arguments") or {}
-        log_tool(name, args)
-        if name == "list_projects":
-            if mode == "global-list-hang":
-                time.sleep(60)
-            tool_result(request["id"], json.dumps({"projects": [{"name": "unrelated", "path": "/tmp/unrelated"}]}))
-        elif name == "index_status":
-            project = args.get("project", "")
-            if mode == "discovery-hang":
-                time.sleep(60)
-            elif mode == "discovery-malformed":
-                tool_result(request["id"], "not-json")
-            elif mode == "discovery-error":
-                tool_result(request["id"], json.dumps({"status": "backend_unavailable", "message": "project not found while backend unavailable"}), True)
-            elif mode in ("missing", "index-hang", "index-error"):
-                tool_result(request["id"], json.dumps({"project": project, "status": "missing"}), True)
-            elif mode == "stale":
-                tool_result(request["id"], json.dumps({"project": project, "status": "stale"}))
-            else:
-                tool_result(request["id"], json.dumps({"project": project, "status": "fresh"}))
-        elif name == "index_repository":
-            repo_path = args.get("repo_path", "")
-            project = args.get("name", "")
-            if not isinstance(repo_path, str) or not repo_path or not isinstance(project, str) or not project:
-                tool_result(request["id"], "index_repository requires repo_path and stable name", True)
-                continue
-            if mode == "index-hang":
-                time.sleep(60)
-            if mode == "index-error":
-                tool_result(request["id"], "index failed", True)
-            else:
-                tool_result(request["id"], json.dumps({"project": project, "repo_path": repo_path, "status": "fresh"}))
-        else:
-            payload = f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
-            tool_result(request["id"], payload)
-    else:
-        send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
-"#,
+        FAKE_MCP_SCRIPT,
     )
     .expect("write fake server");
     dir
@@ -119,6 +25,17 @@ for line in sys.stdin:
 
 pub(super) fn script_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("fake_codebase_memory_mcp.py")
+}
+
+pub(super) fn provider_state_path(dir: &tempfile::TempDir) -> PathBuf {
+    dir.path().join("provider-state.json")
+}
+
+pub(super) fn provider_snapshot(dir: &tempfile::TempDir) -> Value {
+    let path = provider_state_path(dir);
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read provider snapshot {}: {error}", path.display()));
+    serde_json::from_str(&raw).expect("provider snapshot is JSON")
 }
 
 pub(super) fn config(
@@ -129,17 +46,36 @@ pub(super) fn config(
     log_path: &Path,
     projects: Value,
 ) -> AgentToolConfig {
+    config_with_args(dir, mode, index, server_mode, log_path, projects, &[])
+}
+
+pub(super) fn config_with_args(
+    dir: &tempfile::TempDir,
+    mode: CodebaseMemoryMode,
+    index: CodebaseMemoryIndex,
+    server_mode: &str,
+    log_path: &Path,
+    projects: Value,
+    extra_args: &[&str],
+) -> AgentToolConfig {
+    let mut args = vec![
+        "-u".to_string(),
+        script_path(dir).display().to_string(),
+        "--state".to_string(),
+        provider_state_path(dir).display().to_string(),
+        "--log".to_string(),
+        log_path.display().to_string(),
+        "--mode".to_string(),
+        server_mode.to_string(),
+        "--seed-json".to_string(),
+        projects.to_string(),
+    ];
+    args.extend(extra_args.iter().map(|arg| (*arg).to_string()));
     AgentToolConfig {
         codebase_memory: Some(CodebaseMemoryToolConfig {
             mode,
             command: "python3".to_string(),
-            args: vec![
-                "-u".to_string(),
-                script_path(dir).display().to_string(),
-                server_mode.to_string(),
-                log_path.display().to_string(),
-                projects.to_string(),
-            ],
+            args,
             roles: vec!["engineer".to_string()],
             index,
             startup_timeout_secs: 1,
