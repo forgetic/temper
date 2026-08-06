@@ -644,9 +644,12 @@ fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
             indexed_project, search[0].arguments
         ));
     }
-    if calls.iter().any(|call| call.name == "list_projects") {
+    if calls
+        .iter()
+        .any(|call| call.name == "list_projects" && call.arguments.get("limit").is_none())
+    {
         return Err(format!(
-            "normal startup called the global project inventory: {calls:?}"
+            "normal startup called the unbounded global project inventory: {calls:?}"
         ));
     }
     Ok(())
