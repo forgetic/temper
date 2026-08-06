@@ -54,3 +54,8 @@ Harness output proves condition plumbing, graph evidence classification, safe
 bounded failure, exact diff validation, and deterministic correctness only. Jig
 timing and token values are not live effectiveness evidence and must not be used
 to claim the criterion was met.
+
+The first privacy-reviewed production-provider trial report is
+[`live-evidence-2026-08-06.md`](live-evidence-2026-08-06.md). It records failed
+or unavailable gates and explicitly blocks deployment; it is not a passing
+baseline.
