@@ -31,8 +31,7 @@ use crate::env::EnvLookup;
 use crate::error::ConfigError;
 use crate::resolve::ci_failure_evidence::resolve_ci_failure_evidence;
 use crate::resolved::{
-    AgentSettings, AgentToolSettings, Capability, CodebaseMemoryIndex, CodebaseMemoryMode,
-    CodebaseMemoryToolSettings, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
+    AgentSettings, Capability, DeploymentSettings, DeploymentTopology, EngineSettings, ForgeKind,
     ForgeSettings, GitIdentity, PathSettings, ProviderKind, ProviderSettings, RepoPath, Resolved,
     WorkerSettings,
 };
@@ -71,15 +70,12 @@ const DEFAULT_HEARTBEAT_MS: u64 = 10_000;
 /// free of any runtime-crate dependency. A drift test in the binary asserts they
 /// agree.
 const DEFAULT_MAX_ITERATIONS: usize = 250;
-const DEFAULT_CODEBASE_MEMORY_MODE: &str = "auto";
-const DEFAULT_CODEBASE_MEMORY_COMMAND: &str = "codebase-memory-mcp";
-const DEFAULT_CODEBASE_MEMORY_INDEX: &str = "background";
-const DEFAULT_CODEBASE_MEMORY_STARTUP_TIMEOUT_SECS: u64 = 5;
-const DEFAULT_CODEBASE_MEMORY_INDEX_TIMEOUT_SECS: u64 = 30;
 
 pub use crate::resolve_options::ResolveOptions;
 
 mod ci_failure_evidence;
+mod codebase_memory;
+use codebase_memory::resolve_agent_tools;
 
 /// Resolves a full deployment from the config and credentials files. The
 /// injected environment is consulted only for `$HOME` / `$XDG_*` path expansion,
@@ -606,117 +602,6 @@ fn resolve_agent(
         tools,
         profiles,
     })
-}
-
-fn resolve_agent_tools(config: &Config) -> Result<AgentToolSettings, ConfigError> {
-    let codebase_memory = config
-        .agent
-        .tools
-        .codebase_memory
-        .as_ref()
-        .map(resolve_codebase_memory_tool)
-        .transpose()?
-        .flatten();
-    Ok(AgentToolSettings { codebase_memory })
-}
-
-fn resolve_codebase_memory_tool(
-    raw: &crate::schema::CodebaseMemoryToolConfig,
-) -> Result<Option<CodebaseMemoryToolSettings>, ConfigError> {
-    let mode = parse_codebase_memory_mode(
-        &trimmed(raw.mode.as_deref()).unwrap_or_else(|| DEFAULT_CODEBASE_MEMORY_MODE.to_string()),
-    )?;
-    let Some(mode) = mode else {
-        return Ok(None);
-    };
-
-    let command = match raw.command.as_deref() {
-        Some(command) if command.trim().is_empty() => {
-            return Err(ConfigError::invalid(
-                "agent.tools.codebase_memory.command must not be empty when enabled",
-            ));
-        }
-        Some(command) => command.trim().to_string(),
-        None => DEFAULT_CODEBASE_MEMORY_COMMAND.to_string(),
-    };
-
-    let args = raw
-        .args
-        .as_deref()
-        .map(|args| dedup_strings(args.iter().filter_map(|arg| trimmed(Some(arg.as_str())))))
-        .unwrap_or_default();
-    let roles = match raw.roles.as_deref() {
-        Some(roles) => resolve_codebase_memory_roles(roles)?,
-        None => vec!["*".to_string()],
-    };
-    let index = parse_codebase_memory_index(
-        &trimmed(raw.index.as_deref()).unwrap_or_else(|| DEFAULT_CODEBASE_MEMORY_INDEX.to_string()),
-    )?;
-    let startup_timeout_secs = positive_secs_value(
-        raw.startup_timeout_secs
-            .unwrap_or(DEFAULT_CODEBASE_MEMORY_STARTUP_TIMEOUT_SECS),
-        "agent.tools.codebase_memory.startup_timeout_secs",
-    )?;
-    let index_timeout_secs = positive_secs_value(
-        raw.index_timeout_secs
-            .unwrap_or(DEFAULT_CODEBASE_MEMORY_INDEX_TIMEOUT_SECS),
-        "agent.tools.codebase_memory.index_timeout_secs",
-    )?;
-
-    Ok(Some(CodebaseMemoryToolSettings {
-        mode,
-        command,
-        args,
-        roles,
-        index,
-        startup_timeout_secs,
-        index_timeout_secs,
-    }))
-}
-
-fn parse_codebase_memory_mode(raw: &str) -> Result<Option<CodebaseMemoryMode>, ConfigError> {
-    match raw {
-        "off" => Ok(None),
-        "auto" => Ok(Some(CodebaseMemoryMode::Auto)),
-        "required" => Ok(Some(CodebaseMemoryMode::Required)),
-        other => Err(ConfigError::invalid(format!(
-            "invalid agent.tools.codebase_memory.mode `{other}` (expected `off`, `auto`, or `required`)"
-        ))),
-    }
-}
-
-fn parse_codebase_memory_index(raw: &str) -> Result<CodebaseMemoryIndex, ConfigError> {
-    match raw {
-        "off" => Ok(CodebaseMemoryIndex::Off),
-        "background" => Ok(CodebaseMemoryIndex::Background),
-        "blocking" => Ok(CodebaseMemoryIndex::Blocking),
-        other => Err(ConfigError::invalid(format!(
-            "invalid agent.tools.codebase_memory.index `{other}` (expected `off`, `background`, or `blocking`)"
-        ))),
-    }
-}
-
-fn resolve_codebase_memory_roles(raw: &[String]) -> Result<Vec<String>, ConfigError> {
-    let mut roles = Vec::with_capacity(raw.len());
-    for role in raw {
-        let role = role.trim();
-        if role.is_empty() {
-            return Err(ConfigError::invalid(
-                "agent.tools.codebase_memory.roles entries must not be empty",
-            ));
-        }
-        roles.push(role.to_string());
-    }
-    Ok(dedup_strings(roles))
-}
-
-fn positive_secs_value(value: u64, field: &str) -> Result<u64, ConfigError> {
-    if value == 0 {
-        return Err(ConfigError::invalid(format!(
-            "{field} must be greater than zero"
-        )));
-    }
-    Ok(value)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

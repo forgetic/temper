@@ -365,6 +365,11 @@ async fn run_async(
 
     let mut worker =
         start_shared_worker(handle.clone(), worker_config, executor, transport, traces);
+    let mut codebase_memory_maintenance =
+        temper_worker_service::spawn_codebase_memory_maintenance_task(
+            temper_worker_service::codebase_memory_maintenance_config(resolved),
+            worker.activity_probe(),
+        );
 
     // §7 planes-up line (engine + worker + agent all on this loop) and the
     // workflow's global per-role concurrency limits.
@@ -456,7 +461,7 @@ async fn run_async(
         &daemon,
         &mut worker,
         &mut server,
-        &mut trace_retention,
+        (&mut trace_retention, &mut codebase_memory_maintenance),
     )
     .await
 }

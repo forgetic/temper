@@ -42,7 +42,12 @@ pub use temper_protocol_context::{
 };
 use temper_verdict::{VerdictChildView, VerdictContracts, VerdictResultView};
 
+mod codebase_memory;
 mod forge;
+pub use codebase_memory::{
+    CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryRetentionPolicy,
+    CodebaseMemoryToolConfig,
+};
 pub use forge::{
     FORGE_CONTEXT_ADDRESS_FLAG, ForgeContextRequest, ForgeContextResponse, ForgeContextToolOutcome,
 };
@@ -187,7 +192,7 @@ pub const TOOL_CONFIG_FLAG: &str = "--tool-config";
 /// The top-level object is intentionally small and future-friendly:
 ///
 /// ```json
-/// {"codebase_memory":{"mode":"auto","command":"codebase-memory-mcp","args":[],"roles":["*"],"index":"background","startup_timeout_secs":5,"index_timeout_secs":30}}
+/// {"codebase_memory":{"mode":"auto","command":"codebase-memory-mcp","args":[],"roles":["*"],"index":"background","startup_timeout_secs":5,"index_timeout_secs":30,"retention":{"enabled":true,"max_obsolete_projects":64,"max_age_days":30,"maintenance_interval_secs":3600,"maintenance_timeout_secs":30,"inventory_page_size":50,"max_inventory_pages":20,"max_deletions_per_run":16}}}
 /// ```
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolConfig {
@@ -221,63 +226,6 @@ impl AgentToolConfig {
         }
         Ok(())
     }
-}
-
-/// Resolved codebase-memory MCP tool settings.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct CodebaseMemoryToolConfig {
-    pub mode: CodebaseMemoryMode,
-    pub command: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub roles: Vec<String>,
-    pub index: CodebaseMemoryIndex,
-    pub startup_timeout_secs: u64,
-    pub index_timeout_secs: u64,
-}
-
-impl CodebaseMemoryToolConfig {
-    pub fn applies_to_role(&self, role: &str) -> bool {
-        self.roles
-            .iter()
-            .any(|allowed| allowed == "*" || allowed == role)
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        if self.command.trim().is_empty() {
-            return Err("codebase_memory.command must not be empty".to_string());
-        }
-        if self.startup_timeout_secs == 0 {
-            return Err(
-                "codebase_memory.startup_timeout_secs must be greater than zero".to_string(),
-            );
-        }
-        if self.index_timeout_secs == 0 {
-            return Err("codebase_memory.index_timeout_secs must be greater than zero".to_string());
-        }
-        for role in &self.roles {
-            if role.trim().is_empty() {
-                return Err("codebase_memory.roles entries must not be empty".to_string());
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CodebaseMemoryMode {
-    Auto,
-    Required,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CodebaseMemoryIndex {
-    Off,
-    Background,
-    Blocking,
 }
 
 /// The provider credential the worker hands the agent via
