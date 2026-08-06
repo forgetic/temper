@@ -281,3 +281,4 @@ pub fn labels(mut labels: Vec<String>) -> Vec<String> {
     labels.sort();
     labels
 }
+pub use temper_worker::dispatch_linux_supervisor_helper;

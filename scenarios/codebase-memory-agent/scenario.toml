@@ -1,7 +1,7 @@
 schema = "temper.scenario.v1"
 name = "codebase-memory-agent"
 status = "active"
-intent = "Validate the codebase-memory MCP tool path through the live manifest runner and real Temper agent/tool configuration."
+intent = "Validate stable codebase-memory identity, bounded lifecycle cleanup, and post-recovery model tool availability through the live stack."
 introduced_by = "#82"
 owner_area = "agent-tools"
 stability = "provisional"
@@ -74,6 +74,7 @@ description = "Register and require the real host forgejo-runner / Actions CI wo
 id = "start-fake-codebase-memory-mcp"
 action = "mcp.fake_codebase_memory.start"
 project = "actual-demo-project"
+lifecycle_profile = "stable-lifecycle"
 advertises_safe_tools = ["search_code", "list_projects", "index_status"]
 advertises_hidden_tools = ["index_repository", "delete_project"]
 

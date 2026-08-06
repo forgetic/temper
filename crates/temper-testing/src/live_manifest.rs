@@ -407,6 +407,7 @@ pub struct LiveCodebaseMemoryEvidence {
     pub mcp_search_calls: usize,
     pub safe_tools: Vec<String>,
     pub hidden_tools: Vec<String>,
+    pub lifecycle: Option<String>,
 }
 
 /// Terminal Forge state proving the scenario converged.

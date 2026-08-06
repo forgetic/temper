@@ -178,9 +178,10 @@ impl<'a> LiveExecutionContext<'a> {
             ),
             ManifestAction::StartCodebaseMemoryMcp {
                 project,
+                fixture,
                 safe_tools,
                 hidden_tools,
-            } => self.start_mcp(project, safe_tools, hidden_tools),
+            } => self.start_mcp(project, fixture.as_deref(), safe_tools, hidden_tools),
             ManifestAction::ConfigureAgentTools {
                 role,
                 tool,
