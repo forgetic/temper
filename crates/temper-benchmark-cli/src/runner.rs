@@ -18,13 +18,14 @@ use temper_worker::{
 
 use crate::{
     AggregateError, AnalyzeOptions, ArtifactLayoutError, BenchmarkAggregateV1,
-    BenchmarkArtifactLayout, BenchmarkModeV1, BenchmarkRunV1, ReportWriteError,
-    ResolvedBenchmarkManifest, TraceIngestError, TraceInputKindV1, WorkspacePreparationError,
-    aggregate_run_summaries, analyze_trace, collect_environment_metadata, load_benchmark_manifest,
-    prepare_benchmark_workspace, render_aggregate_markdown, write_canonical_export,
-    write_run_summary,
+    BenchmarkArtifactLayout, BenchmarkConditionV1, BenchmarkModeV1, BenchmarkRunV1,
+    ReportWriteError, ResolvedBenchmarkManifest, TraceIngestError, TraceInputKindV1,
+    WorkspacePreparationError, aggregate_run_summaries, analyze_trace,
+    collect_environment_metadata, load_benchmark_manifest, prepare_benchmark_workspace,
+    render_aggregate_markdown, write_canonical_export, write_run_summary,
 };
 
+mod condition;
 mod diff;
 mod live;
 mod redaction;
@@ -37,10 +38,12 @@ pub use diff::{
 pub use live::{LIVE_OPT_IN_ENV, LiveRunOptions, run_live};
 use redaction::SecretRedactor;
 pub use validation::{
-    AcceptedSubmitEvidenceV1, VALIDATION_ARTIFACT_VERSION, ValidationArtifactV1,
-    ValidationCommandEvidenceV1,
+    AcceptedSubmitEvidenceV1, ExactPatchEvidenceV1, VALIDATION_ARTIFACT_VERSION,
+    ValidationArtifactV1, ValidationCommandEvidenceV1,
 };
-use validation::{accepted_submit_evidence, run_post_run_commands, validation_summary};
+use validation::{
+    accepted_submit_evidence, run_post_run_commands, validate_expected_patch, validation_summary,
+};
 
 const DUMMY_PROVIDER_CREDENTIAL: &str =
     r#"{"type":"api-key","api_key":"temper-benchmark-harness-dummy"}"#;
@@ -54,6 +57,8 @@ pub struct HarnessRunOptions {
     pub output_dir: PathBuf,
     /// `None` uses the manifest default.
     pub repetitions: Option<u32>,
+    /// Required when the manifest declares a controlled condition profile.
+    pub condition: Option<BenchmarkConditionV1>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -133,6 +138,7 @@ pub enum BenchmarkRunError {
 /// after every independent repetition has been attempted and persisted.
 pub fn run_harness(options: &HarnessRunOptions) -> Result<BenchmarkAggregateV1, BenchmarkRunError> {
     let manifest = load_benchmark_manifest(&options.benchmark)?;
+    let condition = condition::resolve_condition(&manifest, options.condition)?;
     if manifest.manifest().capture == CaptureModeV1::Off {
         return Err(BenchmarkRunError::Invalid(
             "harness mode requires capture other than `off`".to_string(),
@@ -153,7 +159,7 @@ pub fn run_harness(options: &HarnessRunOptions) -> Result<BenchmarkAggregateV1, 
     let mut summaries = Vec::with_capacity(repetitions as usize);
     let mut first_agent_failure = None;
     for repetition in 1..=repetitions {
-        let completed = run_repetition(&manifest, &layout, &agent_bin, repetition)?;
+        let completed = run_repetition(&manifest, &layout, &agent_bin, repetition, condition)?;
         summaries.push(completed.summary);
         if first_agent_failure.is_none() {
             first_agent_failure = completed.agent_failure;
@@ -277,16 +283,23 @@ fn run_repetition(
     layout: &BenchmarkArtifactLayout,
     agent_bin: &Path,
     repetition: u32,
+    condition: Option<BenchmarkConditionV1>,
 ) -> Result<CompletedRepetition, BenchmarkRunError> {
     let workspace = prepare_benchmark_workspace(manifest, repetition)?;
     let paths = layout.snapshot_inputs(repetition, manifest, &workspace)?;
 
-    let script = ScriptFile::load(manifest.jig_script_path()).map_err(|error| {
-        BenchmarkRunError::JigScript {
-            path: manifest.jig_script_path().to_path_buf(),
+    let jig_script_path = if condition == Some(BenchmarkConditionV1::CodebaseMemoryDisabled) {
+        manifest
+            .condition_disabled_jig_script_path()
+            .expect("resolved profiled manifest has disabled Jig script")
+    } else {
+        manifest.jig_script_path()
+    };
+    let script =
+        ScriptFile::load(jig_script_path).map_err(|error| BenchmarkRunError::JigScript {
+            path: jig_script_path.to_path_buf(),
             message: error.to_string(),
-        }
-    })?;
+        })?;
     let jig = FakeLlm::start(script.into_script()).map_err(BenchmarkRunError::JigServer)?;
 
     let policy = AgentActivityCapturePolicyV1 {
@@ -316,6 +329,7 @@ fn run_repetition(
             PROVIDER_CREDENTIALS_ENV.to_string(),
             DUMMY_PROVIDER_CREDENTIAL.to_string(),
         )])
+        .with_tool_config(condition::harness_tool_config(manifest, condition)?)
         .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()))
         .with_trace_policy(Some(policy))
         .with_shared_trace_collector(collector.clone());
@@ -344,6 +358,7 @@ fn run_repetition(
         output,
         BenchmarkModeV1::Harness,
         repetition,
+        condition,
         None,
     )?;
     Ok(CompletedRepetition {
@@ -361,6 +376,7 @@ fn finalize_repetition(
     mut output: Option<AgentRunOutput>,
     mode: BenchmarkModeV1,
     repetition: u32,
+    condition: Option<BenchmarkConditionV1>,
     redactor: Option<&SecretRedactor>,
 ) -> Result<crate::RunSummaryV1, BenchmarkRunError> {
     if let (Some(redactor), Some(output)) = (redactor, output.as_mut()) {
@@ -378,9 +394,12 @@ fn finalize_repetition(
     let post_run_commands = run_post_run_commands(manifest, workspace);
     workspace.verify_context_directories()?;
     let mut diff = collect_diff_artifact(workspace)?;
+    let exact_patch =
+        validate_expected_patch(manifest, workspace, diff.statistics.untracked_files)?;
     let mut validation = ValidationArtifactV1 {
         version: VALIDATION_ARTIFACT_VERSION,
         accepted_submit,
+        exact_patch,
         post_run_commands,
     };
     if let Some(redactor) = redactor {
@@ -431,6 +450,7 @@ fn finalize_repetition(
         name: manifest.manifest().name.clone(),
         mode,
         repetition,
+        condition,
     });
     summary.host = Some(collect_environment_metadata(
         &trace.events,

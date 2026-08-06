@@ -134,6 +134,17 @@ pub struct BenchmarkRunV1 {
     pub name: String,
     pub mode: BenchmarkModeV1,
     pub repetition: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<BenchmarkConditionV1>,
+}
+
+/// Availability condition selected for a controlled benchmark profile.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkConditionV1 {
+    CodebaseMemoryEnabled,
+    CodebaseMemoryDisabled,
+    CodebaseMemoryUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

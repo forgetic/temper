@@ -1,0 +1,24 @@
+{
+  "repos": [
+    {
+      "id": "codebase-memory-routing-fixture",
+      "owner": "temper-benchmark",
+      "name": "codebase-memory-routing-repair",
+      "default_branch": "main",
+      "dir": "repo",
+      "access": "writable",
+      "base_branch": "main",
+      "branch_hint": "benchmark/codebase-memory-routing-repair"
+    }
+  ],
+  "work_item": {
+    "role": "engineer",
+    "queue": "code_ready",
+    "kind": "code",
+    "target": "Issue { number: ItemNumber(211) }",
+    "context": "{\"title\":\"Keep aliased delivery retries on their original worker\",\"body\":\"A production incident showed that the first delivery of an aliased topic and its retries can select different ordered workers. Find the affinity implementation and its production caller, fix the retry behavior without changing the public API or hash algorithm, run the focused and full tests, inspect the diff, and submit through the host gate. Tenant isolation and ordinary non-aliased routing must remain unchanged. Do not weaken or rewrite tests.\"}"
+  },
+  "action": "open_pr",
+  "correlation_key": "benchmark-codebase-memory-routing-repair",
+  "checkout": "writable"
+}

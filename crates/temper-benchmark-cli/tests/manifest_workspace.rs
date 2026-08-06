@@ -173,6 +173,29 @@ fn manifest_rejects_symlink_escapes_unsafe_links_and_cycles() {
 }
 
 #[test]
+fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../benchmarks/agent-sessions/codebase-memory-routing-repair/benchmark.toml");
+    let manifest = load_benchmark_manifest(manifest_path).unwrap();
+
+    assert_eq!(manifest.manifest().name, "codebase-memory-routing-repair");
+    assert!(
+        manifest
+            .condition_fixture_provider_path()
+            .unwrap()
+            .is_file()
+    );
+    assert!(
+        manifest
+            .condition_disabled_jig_script_path()
+            .unwrap()
+            .is_file()
+    );
+    assert!(manifest.expected_patch_path().unwrap().is_file());
+    assert_eq!(manifest.manifest().graph_decision_targets.len(), 3);
+}
+
+#[test]
 fn every_repetition_is_isolated_and_has_reproducible_baselines() {
     let (root, manifest_path) = benchmark(&[("one", "one"), ("two", "two")]);
     let source_before = fs::read(root.path().join("fixture/one/README.md")).unwrap();
@@ -242,6 +265,7 @@ fn artifact_layout_and_snapshots_are_deterministic_and_exclude_secrets() {
     assert_eq!(layout.aggregate_markdown, output.join("aggregate.md"));
     assert_eq!(paths.root, output.join("repetitions/001"));
     assert_eq!(paths.manifest_snapshot, paths.root.join("manifest.toml"));
+    assert_eq!(paths.expected_patch, paths.root.join("expected.patch"));
     assert_eq!(
         paths.workspace_context_snapshot,
         paths.root.join("workspace-context.json")

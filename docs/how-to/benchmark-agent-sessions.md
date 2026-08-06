@@ -118,16 +118,26 @@ Run the repository lane with:
 cargo dev-benchmark-harness
 ```
 
-Live mode uses the normal Temper provider and model configuration. It is an
-explicit operator action and refuses to start unless opted in:
+Live mode uses the normal Temper provider and model configuration. A manifest
+with a `condition_profile` additionally requires one of
+`--condition codebase-memory-enabled`, `--condition codebase-memory-disabled`,
+or `--condition codebase-memory-unavailable`. The runner records that condition
+in every run and aggregate artifact. Enabled live runs retain the selected
+production codebase-memory profile, disabled runs remove only that toolset, and
+unavailable runs retain its mode, role, index, and timeout policy while routing
+graph requests to the benchmark's systemically failing fixture provider.
+
+Live execution is an explicit operator action and refuses to start unless opted
+in:
 
 ```sh
-manifest=benchmarks/agent-sessions/cross-cutting-rust-change/benchmark.toml
+manifest=benchmarks/agent-sessions/codebase-memory-routing-repair/benchmark.toml
 cargo build -p temper-agent-session --bin temper-agent
 TEMPER_BENCHMARK_LIVE=1 \
   cargo run -p temper-benchmark-cli -- run \
   --benchmark "$manifest" \
   --mode live \
+  --condition codebase-memory-enabled \
   --agent-bin target/debug/temper-agent \
   --config /path/to/config.toml \
   --secrets /path/to/credentials.toml \
@@ -147,7 +157,9 @@ model output, tool arguments, and tool results.
 fresh fixture copy and baseline commit. The artifact root contains
 `aggregate.json` and `aggregate.md`; each `repetitions/NNN/` directory retains
 the manifest and context snapshots, canonical trace, workspace result,
-validation and diff evidence, and JSON/Markdown run summary.
+validation and diff evidence, and JSON/Markdown run summary. A manifest with an
+`expected_patch` also snapshots it as `expected.patch` and records the host-owned
+exact comparison in `validation.json`.
 
 Use repeated live runs with enough repetitions to expose variance before drawing
 behavioral or performance conclusions, then interpret min, p25, median, p75,
@@ -166,6 +178,13 @@ contents before sharing; do not publish source or model/tool content without the
 same privacy review applied to the repository and work item.
 
 ## Compare a caller-owned baseline
+
+The condition is part of benchmark identity metadata, so a comparison report
+shows the base and head conditions while allowing pairwise comparison under the
+same benchmark name and mode. For the checked-in routing benchmark, compare the
+enabled aggregate to the disabled aggregate only after all trials pass fixture,
+submit, host-command, and exact-patch validation. The benchmark README
+predeclares its 20% median improvement criterion.
 
 Temper does not ship a live timing baseline, database, or dashboard. Choose and
 retain a suitable artifact directory for the provider, model, host class, and
