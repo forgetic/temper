@@ -22,16 +22,20 @@ use tongs::error::Result;
 use tongs::model::{ContentBlock, TextContent};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
 
-use crate::mcp::{McpError, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig};
+use crate::mcp::{
+    MAX_MCP_RECORD_BYTES, McpError, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig,
+};
 use temper_agent_core::AgentContainmentContext;
 
 mod background;
+mod health;
 mod indexing;
 mod provider;
 mod scope;
 mod tool;
 mod tool_schema;
 
+use health::CodebaseMemoryHealth;
 use indexing::prepare_indexes;
 use provider::validate_provider_contract;
 use scope::{WorkspaceScope, discover_workspace_projects};
@@ -373,6 +377,10 @@ async fn start_toolset(
     let prompt_status = scope.prompt_status(config.index, &setup_notes);
     let scope = Arc::new(scope);
 
+    // This state belongs to exactly this toolset build (one agent run) and is
+    // shared by every wrapper cloned from the serving client.
+    let health = Arc::new(CodebaseMemoryHealth::new(client.cancellation_handle()));
+
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
     let mut registered_tool_metadata = Vec::new();
 
@@ -406,6 +414,7 @@ async fn start_toolset(
         });
         tools.push(Box::new(CodebaseMemoryTool::new(
             client.clone(),
+            Arc::clone(&health),
             descriptor.name,
             *allowed,
             public_name,
@@ -645,6 +654,7 @@ fn codebase_memory_index(index: CodebaseMemoryIndex) -> &'static str {
 
 struct CodebaseMemoryTool {
     client: StdioMcpClient,
+    health: Arc<CodebaseMemoryHealth>,
     mcp_name: String,
     public_name: String,
     description: String,
@@ -658,6 +668,7 @@ impl CodebaseMemoryTool {
     #[allow(clippy::too_many_arguments)]
     fn new(
         client: StdioMcpClient,
+        health: Arc<CodebaseMemoryHealth>,
         mcp_name: String,
         allowed: AllowedCodebaseMemoryTool,
         public_name: String,
@@ -670,6 +681,7 @@ impl CodebaseMemoryTool {
         debug_assert_eq!(public_name, allowed.public_name);
         Self {
             client,
+            health,
             mcp_name,
             public_name,
             description,

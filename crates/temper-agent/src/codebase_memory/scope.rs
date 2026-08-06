@@ -380,6 +380,12 @@ impl ScopedProject {
     }
 
     fn wait_for_background_index(&self, timeout: Duration) -> std::result::Result<(), String> {
+        if self.index_state() == ProjectIndexState::IndexFailed {
+            return Err(format!(
+                "codebase-memory indexing failed for project `{}`",
+                self.canonical_alias
+            ));
+        }
         let Some(background) = &self.background_index else {
             return Ok(());
         };

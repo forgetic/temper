@@ -79,6 +79,17 @@ same content-free timing values for deterministic validation. Deadline,
 not-ready, index-failure, and provider-unavailable paths return stable typed
 failures without retaining provider or repository text.
 
+Every wrapper in one agent run shares a run-local health circuit. Timeout,
+transport/process loss, failed readiness or indexing, and unusable provider or
+protocol state open it and cancel the serving process. Later wrappers, including
+locally implemented inventory, return `circuit_open` immediately without an MCP
+request and direct the agent to continue with conventional read, grep, find, and
+shell discovery. Invalid model input, unknown workspace aliases, outbound input
+overflow, and ordinary empty results do not open the circuit. Provider error
+text is never reflected into the model-visible failure. Building the next
+run's toolset creates fresh health state; the circuit does not disable
+conventional tools or survive across runs.
+
 The side-channel listeners exist only for that run, accept bounded JSON, and
 are stopped when the child exits. Standalone calls the same host callbacks
 in-process rather than opening sockets. Every carrier binds the callbacks to
