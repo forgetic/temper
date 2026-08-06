@@ -17,6 +17,9 @@ pub struct CodebaseMemoryProjectRecord {
     pub ownership: Option<String>,
     #[serde(default)]
     pub estimated_bytes: Option<u64>,
+    /// Explicit provider evidence that this project is currently indexing.
+    #[serde(default)]
+    pub indexing_active: Option<bool>,
 }
 
 /// One bounded provider inventory page.
@@ -115,6 +118,8 @@ pub struct CodebaseMemoryRetentionReport {
     pub deleted_estimated_bytes: Option<u64>,
     pub preserved: Vec<CodebaseMemoryRetentionRecordResult>,
     pub candidates: Vec<CodebaseMemoryRetentionRecordResult>,
+    /// Exact actions a dry-run proposes after applying the per-run cap.
+    pub proposed: Vec<CodebaseMemoryRetentionRecordResult>,
     pub deleted: Vec<CodebaseMemoryRetentionRecordResult>,
     pub failed: Vec<CodebaseMemoryRetentionFailure>,
 }

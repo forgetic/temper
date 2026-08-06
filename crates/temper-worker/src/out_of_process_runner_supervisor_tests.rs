@@ -402,7 +402,7 @@ fn hard_kill_writes_synthetic_cancelled_terminal_activity_and_reports_cleanup() 
         temp.path(),
         "forced-cancel.sh",
         &format!(
-            "trap '' TERM\n: > '{}'\nwhile :; do sleep 1; done",
+            "trap '' TERM\n: > '{}'\nwhile :; do sleep 1 || :; done",
             ready.display()
         ),
     );
@@ -439,7 +439,11 @@ fn hard_kill_writes_synthetic_cancelled_terminal_activity_and_reports_cleanup() 
     cancellation.hard_kill();
     let _ = finish_cancelled_after_delayed_ack(future.as_mut(), &trace_config);
     let cleanup = cancellation.cleanup().expect("supervisor cleanup report");
-    assert_eq!(cleanup.cancellation, Some(CancellationOutcome::HardKill));
+    assert_eq!(
+        cleanup.cancellation,
+        Some(CancellationOutcome::HardKill),
+        "{cleanup:?}"
+    );
     assert!(cleanup.proves_quiescence());
     assert_cancelled_terminal(&trace_config);
 }

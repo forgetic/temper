@@ -56,6 +56,7 @@ fn record(path: PathBuf, updated: u64) -> CodebaseMemoryProjectRecord {
         updated_at_unix_secs: Some(updated),
         ownership: None,
         estimated_bytes: Some(128),
+        indexing_active: None,
     }
 }
 
@@ -75,6 +76,7 @@ fn retention_deletes_only_verified_obsolete_records_and_isolates_failures() {
         updated_at_unix_secs: Some(1),
         ownership: Some("temper".to_string()),
         estimated_bytes: Some(256),
+        indexing_active: None,
     };
     let unrelated = CodebaseMemoryProjectRecord {
         project: Some("other-project".to_string()),
@@ -82,6 +84,16 @@ fn retention_deletes_only_verified_obsolete_records_and_isolates_failures() {
         updated_at_unix_secs: Some(1),
         ownership: None,
         estimated_bytes: None,
+        indexing_active: None,
+    };
+    let conflicting_path = root.join("engineer/conflicting/temper");
+    let conflicting = CodebaseMemoryProjectRecord {
+        project: Some(conflicting_path.display().to_string()),
+        repo_path: Some(conflicting_path),
+        updated_at_unix_secs: Some(1),
+        ownership: Some("another-host".to_string()),
+        estimated_bytes: None,
+        indexing_active: None,
     };
     let records = [
         record(old.clone(), 1),
@@ -90,6 +102,7 @@ fn retention_deletes_only_verified_obsolete_records_and_isolates_failures() {
         record(existing, 1),
         stable,
         unrelated,
+        conflicting,
         record(outside_root.path().join("engineer/old/temper"), 1),
     ]
     .into_iter()
@@ -142,6 +155,15 @@ fn retention_deletes_only_verified_obsolete_records_and_isolates_failures() {
             .preserved
             .iter()
             .any(|item| item.reason == "Temper ownership is not verified")
+    );
+    assert!(
+        report
+            .preserved
+            .iter()
+            .filter(|item| item.reason == "Temper ownership is not verified")
+            .count()
+            >= 2,
+        "missing and explicitly conflicting ownership are both preserved"
     );
     assert!(
         report
@@ -302,5 +324,100 @@ fn uncertainty_or_active_work_produces_no_deletion() {
         &|| true,
     );
     assert!(active.no_op_reason.as_deref().unwrap().contains("active"));
+    assert!(provider.deletes.is_empty());
+}
+
+#[test]
+fn dry_run_proposes_exact_actions_without_deleting_and_apply_uses_only_them() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let candidate = record(root.join("engineer/old/temper"), 1);
+    let project = candidate.project.clone().unwrap();
+    let mut provider = FakeProvider {
+        records: BTreeMap::from([(project.clone(), candidate)]),
+        fail: BTreeSet::new(),
+        cache_instance: Some("cache-a".to_string()),
+        deletes: Vec::new(),
+    };
+    let scope = CodebaseMemoryRetentionScope {
+        workspace_root: root,
+        roles: BTreeSet::from(["engineer".to_string()]),
+        repository_dirs: BTreeSet::from(["temper".to_string()]),
+    };
+
+    let plan = plan_obsolete_codebase_memory_indexes(
+        &mut provider,
+        CodebaseMemoryRetentionPolicy {
+            max_obsolete_projects: 0,
+            ..policy()
+        },
+        &scope,
+        1_000_000,
+        &|| false,
+    );
+    assert_eq!(plan.proposed.len(), 1);
+    assert_eq!(plan.proposed[0].project, project);
+    assert!(plan.dry_run);
+    assert_eq!(plan.outcome, CodebaseMemoryRetentionOutcome::Completed);
+    assert!(plan.deleted.is_empty());
+    assert!(
+        provider.deletes.is_empty(),
+        "dry-run must never call deletion"
+    );
+
+    let applied = apply_verified_codebase_memory_plan(
+        &mut provider,
+        plan,
+        &|| false,
+        Instant::now() + Duration::from_secs(1),
+    );
+    assert_eq!(provider.deletes, vec![project]);
+    assert_eq!(applied.deleted.len(), 1);
+    assert!(!applied.dry_run);
+    assert_eq!(applied.deleted_estimated_bytes, Some(128));
+    assert_eq!(applied.outcome, CodebaseMemoryRetentionOutcome::Completed);
+}
+
+#[test]
+fn any_active_provider_indexing_refuses_the_whole_destructive_class() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let mut old = record(root.join("engineer/old/temper"), 1);
+    old.indexing_active = Some(false);
+    let mut active = record(root.join("engineer/indexing/temper"), 2);
+    active.indexing_active = Some(true);
+    let records = [old, active]
+        .into_iter()
+        .map(|record| (record.project.clone().unwrap(), record))
+        .collect();
+    let mut provider = FakeProvider {
+        records,
+        fail: BTreeSet::new(),
+        cache_instance: Some("cache-a".to_string()),
+        deletes: Vec::new(),
+    };
+    let scope = CodebaseMemoryRetentionScope {
+        workspace_root: root,
+        roles: BTreeSet::from(["engineer".to_string()]),
+        repository_dirs: BTreeSet::from(["temper".to_string()]),
+    };
+    let report = maintain_obsolete_codebase_memory_indexes(
+        &mut provider,
+        CodebaseMemoryRetentionPolicy {
+            max_obsolete_projects: 0,
+            ..policy()
+        },
+        &scope,
+        1_000_000,
+        &|| false,
+    );
+    assert!(
+        report
+            .no_op_reason
+            .as_deref()
+            .unwrap()
+            .contains("active indexing")
+    );
+    assert!(report.deleted.is_empty());
     assert!(provider.deletes.is_empty());
 }

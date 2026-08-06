@@ -10,18 +10,132 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
 use crate::codebase_memory_retention::{
     CodebaseMemoryRetentionOutcome, CodebaseMemoryRetentionReport, CodebaseMemoryRetentionScope,
-    maintain_obsolete_codebase_memory_indexes_until,
+    apply_verified_codebase_memory_plan, maintain_obsolete_codebase_memory_indexes_until,
+    plan_obsolete_codebase_memory_indexes_until,
 };
 use crate::run::WorkerActivityProbe;
 use fs2::FileExt;
 use temper_protocol_agent::CodebaseMemoryRetentionPolicy;
 
+mod observability;
 mod provider;
+use observability::emit_report;
 use provider::{ProviderSession, unix_time_secs};
 
 const MAINTENANCE_LOCK_FILE: &str = ".temper-codebase-memory-maintenance.lock";
+const PROVIDER_ID_PREFIX: &str = "forgejo:";
+
+/// Explicit operator recovery mode. Dry-run is the CLI default.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodebaseMemoryRecoveryMode {
+    DryRun,
+    Apply,
+}
+
+/// Optional stable logical project verification/rebuild request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CodebaseMemoryRecoveryTarget {
+    pub logical_repository: String,
+    pub provider_key: String,
+    pub rebuild_from: Option<PathBuf>,
+}
+
+/// Verified provider identity, independent from the cache instance identity.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CodebaseMemoryProviderIdentity {
+    pub name: String,
+    pub version: String,
+    pub cache_instance_id: Option<String>,
+}
+
+/// Targeted stable-project readiness and safe-probe evidence.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CodebaseMemoryStableProjectReport {
+    pub logical_repository: String,
+    pub provider_key: String,
+    pub status: Option<String>,
+    pub ready: bool,
+    pub rebuild_requested: bool,
+    pub rebuild_completed: bool,
+    pub safe_probe_succeeded: bool,
+    pub lookup_latency_ms: Option<u64>,
+    pub failure: Option<String>,
+}
+
+/// Structured operator report. It contains no provider response bodies or
+/// configuration secrets and can be rendered directly as bounded JSON.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CodebaseMemoryRecoveryReport {
+    pub mode: CodebaseMemoryRecoveryMode,
+    pub provider: Option<CodebaseMemoryProviderIdentity>,
+    pub configured_bounds: CodebaseMemoryRetentionPolicy,
+    /// Fingerprint binding an apply invocation to reviewed dry-run evidence.
+    pub plan_id: Option<String>,
+    pub preflight_verified: bool,
+    pub retention: CodebaseMemoryRetentionReport,
+    pub stable_project: Option<CodebaseMemoryStableProjectReport>,
+    pub failure: Option<String>,
+}
+
+impl CodebaseMemoryRecoveryReport {
+    pub fn succeeded(&self) -> bool {
+        self.failure.is_none()
+            && self
+                .provider
+                .as_ref()
+                .is_some_and(|provider| provider.cache_instance_id.is_some())
+            && self.retention.inventory_complete
+            && self.retention.no_op_reason.is_none()
+            && self.retention.failed.is_empty()
+            && self.stable_project.as_ref().is_none_or(|project| {
+                project.failure.is_none() && project.ready && project.safe_probe_succeeded
+            })
+    }
+}
+
+/// Derives the same stable provider key used by agent indexing from a durable
+/// Forge repository identity and logical owner/name.
+pub fn codebase_memory_provider_key(repository_id: &str, owner: &str, name: &str) -> String {
+    let mut digest = Sha256::new();
+    for (label, value) in [
+        (b"id".as_slice(), repository_id.as_bytes()),
+        (b"owner".as_slice(), owner.as_bytes()),
+        (b"name".as_slice(), name.as_bytes()),
+    ] {
+        digest.update((label.len() as u64).to_be_bytes());
+        digest.update(label);
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value);
+    }
+    format!("temper-v1-{:x}", digest.finalize())
+}
+
+/// Builds a stable target from a configured `owner/name`; no checkout path is
+/// consulted when deriving identity.
+pub fn codebase_memory_recovery_target(
+    logical_repository: &str,
+    rebuild_from: Option<PathBuf>,
+) -> Result<CodebaseMemoryRecoveryTarget, String> {
+    let mut parts = logical_repository.split('/');
+    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Err("repository must be a configured `owner/name`".to_string());
+    };
+    if owner.is_empty() || name.is_empty() {
+        return Err("repository must be a configured `owner/name`".to_string());
+    }
+    let repository_id = format!("{PROVIDER_ID_PREFIX}{owner}/{name}");
+    Ok(CodebaseMemoryRecoveryTarget {
+        logical_repository: logical_repository.to_string(),
+        provider_key: codebase_memory_provider_key(&repository_id, owner, name),
+        rebuild_from,
+    })
+}
 
 struct MaintenanceLockFailure {
     reason: String,
@@ -34,6 +148,7 @@ pub struct CodebaseMemoryMaintenanceConfig {
     command: String,
     args: Vec<String>,
     startup_timeout: Duration,
+    index_timeout: Duration,
     pub policy: CodebaseMemoryRetentionPolicy,
     pub scope: CodebaseMemoryRetentionScope,
 }
@@ -43,6 +158,7 @@ impl CodebaseMemoryMaintenanceConfig {
         command: impl Into<String>,
         args: Vec<String>,
         startup_timeout: Duration,
+        index_timeout: Duration,
         policy: CodebaseMemoryRetentionPolicy,
         scope: CodebaseMemoryRetentionScope,
     ) -> Self {
@@ -50,6 +166,7 @@ impl CodebaseMemoryMaintenanceConfig {
             command: command.into(),
             args,
             startup_timeout,
+            index_timeout,
             policy,
             scope,
         }
@@ -130,6 +247,379 @@ fn run_codebase_memory_maintenance_inner(
         active_work,
         deadline,
     )
+}
+
+/// Dry-run-first host recovery entry point. Apply requires the reviewed dry-run
+/// fingerprint, performs a second complete inventory, and requires it to exactly
+/// match before invoking deletion for only the verified proposed identities.
+pub fn run_codebase_memory_recovery(
+    config: &CodebaseMemoryMaintenanceConfig,
+    mode: CodebaseMemoryRecoveryMode,
+    expected_plan_id: Option<&str>,
+    mut target: Option<CodebaseMemoryRecoveryTarget>,
+    active_work: &dyn Fn() -> bool,
+) -> CodebaseMemoryRecoveryReport {
+    let mut report = CodebaseMemoryRecoveryReport {
+        mode,
+        provider: None,
+        configured_bounds: config.policy,
+        plan_id: None,
+        preflight_verified: false,
+        retention: CodebaseMemoryRetentionReport::default(),
+        stable_project: None,
+        failure: None,
+    };
+    if !config.policy.enabled {
+        report.retention = CodebaseMemoryRetentionReport::no_op("retention policy is disabled");
+        report.failure = Some("configured codebase-memory retention is disabled".to_string());
+        return report;
+    }
+    if active_work() {
+        report.retention = CodebaseMemoryRetentionReport::no_op(
+            "active worker assignments suppress provider maintenance",
+        );
+        report.failure = report.retention.no_op_reason.clone();
+        return report;
+    }
+    let lock = match maintenance_lock(&config.scope.workspace_root) {
+        Ok(lock) => lock,
+        Err(failure) => {
+            report.retention = CodebaseMemoryRetentionReport::no_op_with_outcome(
+                failure.reason.clone(),
+                failure.outcome,
+            );
+            report.failure = Some(failure.reason);
+            return report;
+        }
+    };
+    let _lock = lock;
+    if active_work() {
+        let reason = "active worker assignments appeared before provider discovery".to_string();
+        report.retention = CodebaseMemoryRetentionReport::no_op(reason.clone());
+        report.failure = Some(reason);
+        return report;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(config.policy.maintenance_timeout_secs);
+    let timeout = config
+        .startup_timeout
+        .min(deadline.saturating_duration_since(Instant::now()));
+    if timeout.is_zero() {
+        let reason = "maintenance deadline expired before provider negotiation".to_string();
+        report.retention = CodebaseMemoryRetentionReport::no_op(reason.clone());
+        report.failure = Some(reason);
+        return report;
+    }
+    let mut provider = match ProviderSession::connect(&config.command, &config.args, timeout) {
+        Ok(provider) => provider,
+        Err(error) => {
+            let reason = format!("provider maintenance API was not safely negotiated: {error}");
+            report.retention = CodebaseMemoryRetentionReport::no_op(reason.clone());
+            report.failure = Some(reason);
+            return report;
+        }
+    };
+    let (provider_name, provider_version) = provider.identity();
+    report.provider = Some(CodebaseMemoryProviderIdentity {
+        name: provider_name.to_string(),
+        version: provider_version.to_string(),
+        cache_instance_id: None,
+    });
+
+    let now = unix_time_secs();
+    let review = plan_obsolete_codebase_memory_indexes_until(
+        &mut provider,
+        config.policy,
+        &config.scope,
+        now,
+        active_work,
+        deadline,
+    );
+    report.plan_id = Some(retention_plan_id(
+        config.policy,
+        report
+            .provider
+            .as_ref()
+            .expect("provider identity was recorded after negotiation"),
+        target.as_ref(),
+        &review,
+    ));
+    report.retention = match mode {
+        CodebaseMemoryRecoveryMode::DryRun => review,
+        CodebaseMemoryRecoveryMode::Apply => {
+            if expected_plan_id != report.plan_id.as_deref() {
+                // A rejected apply is not an alternate way to mint review
+                // evidence; only an explicit dry-run emits a reusable plan.
+                report.plan_id = None;
+                let mut unconfirmed = review;
+                unconfirmed.no_op_reason = Some(
+                    "destructive execution refused because --plan does not match the current verified dry-run"
+                        .to_string(),
+                );
+                unconfirmed.proposed.clear();
+                unconfirmed
+            } else if !review.inventory_complete
+                || review.cache_instance_id.is_none()
+                || review.no_op_reason.is_some()
+            {
+                review
+            } else if let Err(reason) = preflight_recovery_target(&provider, target.as_mut()) {
+                let mut refused = review;
+                refused.no_op_reason = Some(format!(
+                    "stable-project preflight failed before destructive execution: {reason}"
+                ));
+                refused.proposed.clear();
+                refused
+            } else {
+                let preflight = plan_obsolete_codebase_memory_indexes_until(
+                    &mut provider,
+                    config.policy,
+                    &config.scope,
+                    now,
+                    active_work,
+                    deadline,
+                );
+                let (unchanged, mut preflight) = verify_unchanged_preflight(&review, preflight);
+                if !unchanged {
+                    preflight
+                } else if let Err(reason) =
+                    verify_candidate_quiescence(&mut provider, &preflight, deadline)
+                {
+                    preflight.no_op_reason = Some(reason);
+                    preflight.proposed.clear();
+                    preflight
+                } else {
+                    report.preflight_verified = true;
+                    apply_verified_codebase_memory_plan(
+                        &mut provider,
+                        preflight,
+                        active_work,
+                        deadline,
+                    )
+                }
+            }
+        }
+    };
+    if let Some(identity) = report.provider.as_mut() {
+        identity.cache_instance_id =
+            if report.retention.inventory_complete && report.retention.no_op_reason.is_none() {
+                report.retention.cache_instance_id.clone()
+            } else {
+                None
+            };
+    }
+    if !report.retention.inventory_complete || report.retention.no_op_reason.is_some() {
+        report.failure = report
+            .retention
+            .no_op_reason
+            .clone()
+            .or_else(|| Some("provider inventory was incomplete".to_string()));
+        return report;
+    }
+    if !report.retention.failed.is_empty() {
+        report.failure = Some("one or more verified provider deletions failed".to_string());
+        return report;
+    }
+
+    if let Some(target) = target {
+        report.stable_project = Some(run_stable_project_recovery(
+            &mut provider,
+            target,
+            Instant::now() + config.index_timeout,
+        ));
+        if let Some(failure) = report
+            .stable_project
+            .as_ref()
+            .and_then(|project| project.failure.clone())
+        {
+            report.failure = Some(failure);
+        }
+    }
+    report
+}
+
+fn retention_plan_id(
+    policy: CodebaseMemoryRetentionPolicy,
+    provider: &CodebaseMemoryProviderIdentity,
+    target: Option<&CodebaseMemoryRecoveryTarget>,
+    report: &CodebaseMemoryRetentionReport,
+) -> String {
+    // Bind apply not only to the exact classification and cache instance, but
+    // also to the negotiated provider and selected stable logical identity.
+    // The explicit rebuild source is intentionally authorized by --apply; its
+    // checkout path never participates in stable provider identity.
+    let target_identity = target.map(|target| (&target.logical_repository, &target.provider_key));
+    let stable_report = stable_retention_evidence(report);
+    let encoded = serde_json::to_vec(&(policy, provider, target_identity, stable_report))
+        .expect("non-secret retention plan always serializes");
+    format!("sha256:{:x}", Sha256::digest(encoded))
+}
+
+fn preflight_recovery_target(
+    provider: &ProviderSession,
+    target: Option<&mut CodebaseMemoryRecoveryTarget>,
+) -> Result<(), String> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    provider.validate_recovery_tools(target.rebuild_from.is_some())?;
+    let Some(source) = target.rebuild_from.as_ref() else {
+        return Ok(());
+    };
+    let canonical = source
+        .canonicalize()
+        .map_err(|error| format!("canonicalize explicit rebuild source failed: {error}"))?;
+    if !canonical.is_dir() {
+        return Err("explicit rebuild source is not a directory".to_string());
+    }
+    target.rebuild_from = Some(canonical);
+    Ok(())
+}
+
+fn verify_unchanged_preflight(
+    review: &CodebaseMemoryRetentionReport,
+    mut preflight: CodebaseMemoryRetentionReport,
+) -> (bool, CodebaseMemoryRetentionReport) {
+    if stable_retention_evidence(&preflight) == stable_retention_evidence(review) {
+        return (true, preflight);
+    }
+    preflight.no_op_reason = Some(
+        "destructive execution refused because provider inventory changed after the dry-run"
+            .to_string(),
+    );
+    preflight.proposed.clear();
+    (false, preflight)
+}
+
+fn stable_retention_evidence(
+    report: &CodebaseMemoryRetentionReport,
+) -> CodebaseMemoryRetentionReport {
+    let mut stable = report.clone();
+    // Latency is operator evidence, not provider inventory identity.
+    stable.inventory_duration_ms = 0;
+    stable.duration_ms = 0;
+    stable
+}
+
+fn verify_candidate_quiescence(
+    provider: &mut ProviderSession,
+    preflight: &CodebaseMemoryRetentionReport,
+    deadline: Instant,
+) -> Result<(), String> {
+    provider
+        .validate_status_tool()
+        .map_err(|error| format!("candidate quiescence API was not safely negotiated: {error}"))?;
+    for candidate in &preflight.proposed {
+        let status = provider
+            .index_status(&candidate.project, deadline)
+            .map_err(|error| {
+                format!(
+                    "candidate `{}` quiescence could not be verified: {error}",
+                    candidate.project
+                )
+            })?;
+        if status.active {
+            return Err(format!(
+                "candidate `{}` is actively indexing; deletion refused",
+                candidate.project
+            ));
+        }
+        if matches!(
+            status.status.as_str(),
+            "missing" | "not_found" | "not-found" | "not_indexed" | "not-indexed"
+        ) {
+            return Err(format!(
+                "candidate `{}` changed after inventory; deletion refused",
+                candidate.project
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn run_stable_project_recovery(
+    provider: &mut ProviderSession,
+    target: CodebaseMemoryRecoveryTarget,
+    deadline: Instant,
+) -> CodebaseMemoryStableProjectReport {
+    let rebuild_requested = target.rebuild_from.is_some();
+    let mut report = CodebaseMemoryStableProjectReport {
+        logical_repository: target.logical_repository,
+        provider_key: target.provider_key,
+        status: None,
+        ready: false,
+        rebuild_requested,
+        rebuild_completed: false,
+        safe_probe_succeeded: false,
+        lookup_latency_ms: None,
+        failure: None,
+    };
+    if let Err(error) = provider.validate_recovery_tools(rebuild_requested) {
+        report.failure = Some(format!(
+            "stable-project recovery API was not safely negotiated: {error}"
+        ));
+        return report;
+    }
+    if let Some(source) = target.rebuild_from {
+        let source = match source.canonicalize() {
+            Ok(source) if source.is_dir() => source,
+            Ok(_) => {
+                report.failure = Some("explicit rebuild source is not a directory".to_string());
+                return report;
+            }
+            Err(error) => {
+                report.failure = Some(format!(
+                    "canonicalize explicit rebuild source failed: {error}"
+                ));
+                return report;
+            }
+        };
+        if let Err(error) = provider.rebuild_project(&report.provider_key, &source, deadline) {
+            report.failure = Some(format!("stable project rebuild failed: {error}"));
+            return report;
+        }
+        report.rebuild_completed = true;
+    }
+
+    loop {
+        let lookup_started = Instant::now();
+        match provider.index_status(&report.provider_key, deadline) {
+            Ok(status) => {
+                report.lookup_latency_ms =
+                    Some(u64::try_from(lookup_started.elapsed().as_millis()).unwrap_or(u64::MAX));
+                report.status = Some(status.status);
+                report.ready = status.ready;
+            }
+            Err(error) => {
+                report.failure = Some(format!("stable project status failed: {error}"));
+                return report;
+            }
+        }
+        if report.ready || !rebuild_requested {
+            break;
+        }
+        let still_indexing = report.status.as_deref().is_some_and(|status| {
+            matches!(
+                status,
+                "indexing" | "building" | "in_progress" | "in-progress" | "queued"
+            )
+        });
+        if !still_indexing || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(
+            Duration::from_millis(250).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+    if !report.ready {
+        report.failure = Some("stable project is not ready after recovery".to_string());
+        return report;
+    }
+    match provider.safe_probe(&report.provider_key, deadline) {
+        Ok(()) => report.safe_probe_succeeded = true,
+        Err(error) => report.failure = Some(format!("stable project safe probe failed: {error}")),
+    }
+    report
 }
 
 fn maintenance_lock(workspace_root: &PathBuf) -> Result<File, MaintenanceLockFailure> {
@@ -239,154 +729,9 @@ fn stopped(stop: &Arc<(Mutex<bool>, Condvar)>) -> bool {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn emit_report(report: &CodebaseMemoryRetentionReport) {
-    let discovery_outcome = if report.inventory_complete {
-        "success"
-    } else if report.outcome == CodebaseMemoryRetentionOutcome::TimedOut {
-        "timeout"
-    } else if report.inventory_attempted {
-        "failure"
-    } else {
-        "skipped"
-    };
-    let timed_out = report.outcome == CodebaseMemoryRetentionOutcome::TimedOut;
-    let record_count = count(report.inventory_record_count);
-    let cache_bytes_available = report.cache_bytes.is_some();
-    let cache_bytes = report.cache_bytes.unwrap_or_default();
-    let failure_category = safe_failure_category(report.outcome);
-    if report.inventory_complete {
-        tracing::debug!(
-            target: "temper::worker",
-            service = "worker",
-            event = "codebase_memory.maintenance.discovery.completed",
-            discovery.method = "list_projects",
-            discovery.inventory = "maintenance",
-            discovery.targeted = false,
-            duration_ms = report.inventory_duration_ms,
-            outcome = discovery_outcome,
-            timed_out,
-            record_count,
-            cache.bytes_available = cache_bytes_available,
-            cache.bytes = cache_bytes,
-            failure.category = failure_category,
-            failure.message = safe_failure_message(report.outcome),
-            "worker:  codebase-memory maintenance discovery completed",
-        );
-    } else {
-        tracing::warn!(
-            target: "temper::worker",
-            service = "worker",
-            event = "codebase_memory.maintenance.discovery.completed",
-            discovery.method = "list_projects",
-            discovery.inventory = "maintenance",
-            discovery.targeted = false,
-            duration_ms = report.inventory_duration_ms,
-            outcome = discovery_outcome,
-            timed_out,
-            record_count,
-            cache.bytes_available = cache_bytes_available,
-            cache.bytes = cache_bytes,
-            failure.category = failure_category,
-            failure.message = safe_failure_message(report.outcome),
-            "worker:  codebase-memory maintenance discovery did not complete",
-        );
-    }
-
-    let policy = report.policy.unwrap_or_default();
-    let deleted_bytes_available = report.deleted_estimated_bytes.is_some();
-    let deleted_bytes = report.deleted_estimated_bytes.unwrap_or_default();
-    let outcome = report.outcome.as_str();
-    let preserved_count = count(report.preserved.len());
-    let candidate_count = count(report.candidates.len());
-    let deletion_count = count(report.deleted.len());
-    let failure_count = count(report.failed.len());
-    let warn = matches!(
-        report.outcome,
-        CodebaseMemoryRetentionOutcome::PartialFailure
-            | CodebaseMemoryRetentionOutcome::TimedOut
-            | CodebaseMemoryRetentionOutcome::DiscoveryFailed
-            | CodebaseMemoryRetentionOutcome::InventoryUncertain
-    );
-    if warn {
-        tracing::warn!(
-            target: "temper::worker",
-            service = "worker",
-            event = "codebase_memory.retention.completed",
-            outcome,
-            duration_ms = report.duration_ms,
-            retention.enabled = policy.enabled,
-            retention.max_obsolete_projects = u64::from(policy.max_obsolete_projects),
-            retention.max_age_days = u64::from(policy.max_age_days),
-            retention.max_deletions_per_run = u64::from(policy.max_deletions_per_run),
-            retention.maintenance_timeout_secs = policy.maintenance_timeout_secs,
-            retention.preserved_count = preserved_count,
-            retention.candidate_count = candidate_count,
-            retention.deletion_count = deletion_count,
-            retention.deleted_bytes_available = deleted_bytes_available,
-            retention.deleted_estimated_bytes = deleted_bytes,
-            retention.dry_run = report.dry_run,
-            failure.count = failure_count,
-            failure.category = failure_category,
-            failure.message = safe_failure_message(report.outcome),
-            "worker:  codebase-memory retention completed with operator evidence",
-        );
-    } else {
-        tracing::info!(
-            target: "temper::worker",
-            service = "worker",
-            event = "codebase_memory.retention.completed",
-            outcome,
-            duration_ms = report.duration_ms,
-            retention.enabled = policy.enabled,
-            retention.max_obsolete_projects = u64::from(policy.max_obsolete_projects),
-            retention.max_age_days = u64::from(policy.max_age_days),
-            retention.max_deletions_per_run = u64::from(policy.max_deletions_per_run),
-            retention.maintenance_timeout_secs = policy.maintenance_timeout_secs,
-            retention.preserved_count = preserved_count,
-            retention.candidate_count = candidate_count,
-            retention.deletion_count = deletion_count,
-            retention.deleted_bytes_available = deleted_bytes_available,
-            retention.deleted_estimated_bytes = deleted_bytes,
-            retention.dry_run = report.dry_run,
-            failure.count = failure_count,
-            failure.category = failure_category,
-            failure.message = safe_failure_message(report.outcome),
-            "worker:  codebase-memory retention completed",
-        );
-    }
-}
-
-fn safe_failure_category(outcome: CodebaseMemoryRetentionOutcome) -> &'static str {
-    match outcome {
-        CodebaseMemoryRetentionOutcome::PartialFailure => "deletion_failure",
-        CodebaseMemoryRetentionOutcome::TimedOut => "timeout",
-        CodebaseMemoryRetentionOutcome::DiscoveryFailed => "provider_error",
-        CodebaseMemoryRetentionOutcome::InventoryUncertain => "inventory_uncertain",
-        CodebaseMemoryRetentionOutcome::SuppressedActiveWork => "active_work",
-        CodebaseMemoryRetentionOutcome::SuppressedOverlap => "overlap",
-        CodebaseMemoryRetentionOutcome::SafetyNoOp => "safety_no_op",
-        CodebaseMemoryRetentionOutcome::Disabled | CodebaseMemoryRetentionOutcome::Completed => "",
-    }
-}
-
-fn safe_failure_message(outcome: CodebaseMemoryRetentionOutcome) -> &'static str {
-    match outcome {
-        CodebaseMemoryRetentionOutcome::PartialFailure => "one or more deletions failed",
-        CodebaseMemoryRetentionOutcome::TimedOut => "maintenance timed out",
-        CodebaseMemoryRetentionOutcome::DiscoveryFailed => "provider discovery failed",
-        CodebaseMemoryRetentionOutcome::InventoryUncertain => "provider inventory was uncertain",
-        CodebaseMemoryRetentionOutcome::SuppressedActiveWork => {
-            "active work suppressed maintenance"
-        }
-        CodebaseMemoryRetentionOutcome::SuppressedOverlap => "another maintenance pass was active",
-        CodebaseMemoryRetentionOutcome::SafetyNoOp => "maintenance failed closed",
-        CodebaseMemoryRetentionOutcome::Disabled | CodebaseMemoryRetentionOutcome::Completed => "",
-    }
-}
-
-fn count(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
-}
+#[cfg(test)]
+#[path = "codebase_memory_maintenance/recovery_tests.rs"]
+mod recovery_tests;
 
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)

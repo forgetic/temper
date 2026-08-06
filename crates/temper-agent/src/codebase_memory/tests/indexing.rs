@@ -20,6 +20,10 @@ fn stable_provider_identity_ignores_checkout_path_and_separates_repositories() {
         provider_key(&second_context, 0)
     );
     assert!(provider_key(&first_context, 0).starts_with("temper-v1-"));
+    assert_eq!(
+        provider_key(&first_context, 0),
+        "temper-v1-ebdd9f0285f44f8d4b3391a5f2066dff06aac8b6ec5ca0b596f09cd33295b9f9"
+    );
     assert!(!provider_key(&first_context, 0).contains(&first.path().display().to_string()));
 
     let multi = workspace_context(
@@ -27,6 +31,15 @@ fn stable_provider_identity_ignores_checkout_path_and_separates_repositories() {
         &[("acme", "app", "app"), ("acme", "lib", "lib")],
     );
     assert_ne!(provider_key(&multi, 0), provider_key(&multi, 1));
+
+    let mut production_identity = first_context;
+    production_identity.repos[0].id = "forgejo:ai/temper".to_string();
+    production_identity.repos[0].owner = "ai".to_string();
+    production_identity.repos[0].name = "temper".to_string();
+    assert_eq!(
+        provider_key(&production_identity, 0),
+        "temper-v1-c64512cdee6aab050daf4ddccd4fb911f1fbca74fdc052c1c79ab68b209240ad"
+    );
 }
 
 #[test]

@@ -25,8 +25,17 @@ use crate::codebase_memory_retention::{
 const PROVIDER_NAME: &str = "codebase-memory-mcp";
 const MINIMUM_PROVIDER_VERSION: (u64, u64, u64) = (0, 9, 0);
 const MAX_PROVIDER_RECORD_BYTES: usize = 1024 * 1024;
+const MAX_PROVIDER_FIELD_BYTES: usize = 4096;
+const PROVIDER_PROJECT_NOT_FOUND: &str = "provider project was not found";
 const MAX_TOOL_LIST_PAGES: usize = 8;
 static PROVIDER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ProviderProjectStatus {
+    pub status: String,
+    pub ready: bool,
+    pub active: bool,
+}
 
 pub(super) struct ProviderSession {
     process: ContainedProcess,
@@ -34,6 +43,9 @@ pub(super) struct ProviderSession {
     responses: mpsc::Receiver<Result<Value, String>>,
     reader: Option<JoinHandle<()>>,
     next_id: u64,
+    provider_name: String,
+    provider_version: String,
+    tools: BTreeMap<String, Value>,
 }
 
 impl ProviderSession {
@@ -80,6 +92,9 @@ impl ProviderSession {
             responses,
             reader: Some(reader),
             next_id: 1,
+            provider_name: String::new(),
+            provider_version: String::new(),
+            tools: BTreeMap::new(),
         };
         let deadline = Instant::now() + timeout;
         let initialize = session.request(
@@ -91,11 +106,58 @@ impl ProviderSession {
             }),
             deadline,
         )?;
-        validate_initialize(&initialize)?;
+        let (provider_name, provider_version) = validate_initialize(&initialize)?;
+        session.provider_name = provider_name;
+        session.provider_version = provider_version;
         session.notify("notifications/initialized", json!({}))?;
         let tools = session.list_tools(deadline)?;
         validate_maintenance_tools(&tools)?;
+        session.tools = tools;
         Ok(session)
+    }
+
+    pub(super) fn identity(&self) -> (&str, &str) {
+        (&self.provider_name, &self.provider_version)
+    }
+
+    pub(super) fn validate_recovery_tools(&self, rebuild: bool) -> Result<(), String> {
+        validate_recovery_tools(&self.tools, rebuild)
+    }
+
+    pub(super) fn validate_status_tool(&self) -> Result<(), String> {
+        validate_status_tool(&self.tools)
+    }
+
+    pub(super) fn index_status(
+        &mut self,
+        project: &str,
+        deadline: Instant,
+    ) -> Result<ProviderProjectStatus, String> {
+        let value = self.call_tool("index_status", json!({"project": project}), deadline)?;
+        parse_project_status(&value, project)
+    }
+
+    pub(super) fn rebuild_project(
+        &mut self,
+        project: &str,
+        source: &std::path::Path,
+        deadline: Instant,
+    ) -> Result<(), String> {
+        self.call_tool(
+            "index_repository",
+            json!({"repo_path": source.display().to_string(), "name": project}),
+            deadline,
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn safe_probe(&mut self, project: &str, deadline: Instant) -> Result<(), String> {
+        self.call_tool(
+            "search_code",
+            json!({"project": project, "query": "Temper"}),
+            deadline,
+        )?;
+        Ok(())
     }
 
     fn list_tools(&mut self, deadline: Instant) -> Result<BTreeMap<String, Value>, String> {
@@ -171,9 +233,11 @@ impl ProviderSession {
                 continue;
             }
             if let Some(error) = response.get("error") {
+                if provider_error_indicates_not_found(error) {
+                    return Err(PROVIDER_PROJECT_NOT_FOUND.to_string());
+                }
                 return Err(format!(
-                    "provider `{method}` RPC failed: {}",
-                    bounded_json(error)
+                    "provider `{method}` RPC returned an error response"
                 ));
             }
             return response
@@ -235,7 +299,7 @@ impl CodebaseMemoryMaintenanceProvider for ProviderSession {
     fn delete_project(&mut self, project: &str, deadline: Instant) -> Result<(), String> {
         match self.call_tool("delete_project", json!({"project": project}), deadline) {
             Ok(_) => Ok(()),
-            Err(error) if error.to_ascii_lowercase().contains("not found") => Ok(()),
+            Err(error) if error == PROVIDER_PROJECT_NOT_FOUND => Ok(()),
             Err(error) => Err(error),
         }
     }
@@ -316,20 +380,21 @@ fn read_bounded_record(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, Str
     }
 }
 
-fn validate_initialize(result: &Value) -> Result<(), String> {
+fn validate_initialize(result: &Value) -> Result<(String, String), String> {
     let server = result
         .get("serverInfo")
         .and_then(Value::as_object)
         .ok_or("provider initialize omitted serverInfo")?;
     let name = server.get("name").and_then(Value::as_str).unwrap_or("");
-    if name != PROVIDER_NAME {
-        return Err(format!(
-            "provider identified `{name}` instead of `{PROVIDER_NAME}`"
-        ));
-    }
     let version = server.get("version").and_then(Value::as_str).unwrap_or("");
+    if name.len() > MAX_PROVIDER_FIELD_BYTES || version.len() > MAX_PROVIDER_FIELD_BYTES {
+        return Err("provider identity metadata exceeded its byte bound".to_string());
+    }
+    if name != PROVIDER_NAME {
+        return Err("provider name is incompatible with host maintenance".to_string());
+    }
     if !version_at_least(version, MINIMUM_PROVIDER_VERSION) {
-        return Err(format!("provider version `{version}` is incompatible"));
+        return Err("provider version is incompatible with host maintenance".to_string());
     }
     if result
         .get("capabilities")
@@ -338,7 +403,7 @@ fn validate_initialize(result: &Value) -> Result<(), String> {
     {
         return Err("provider initialize did not advertise tools capability".to_string());
     }
-    Ok(())
+    Ok((name.to_string(), version.to_string()))
 }
 
 fn validate_maintenance_tools(tools: &BTreeMap<String, Value>) -> Result<(), String> {
@@ -351,6 +416,30 @@ fn validate_maintenance_tools(tools: &BTreeMap<String, Value>) -> Result<(), Str
         .get("delete_project")
         .ok_or("provider did not advertise delete_project maintenance")?;
     require_property(delete, "project", "string", true)
+}
+
+fn validate_recovery_tools(tools: &BTreeMap<String, Value>, rebuild: bool) -> Result<(), String> {
+    validate_status_tool(tools)?;
+    let probe = tools
+        .get("search_code")
+        .ok_or("provider did not advertise a safe search_code verification probe")?;
+    require_property(probe, "project", "string", false)?;
+    require_property(probe, "query", "string", true)?;
+    if rebuild {
+        let index = tools
+            .get("index_repository")
+            .ok_or("provider did not advertise stable index_repository")?;
+        require_property(index, "repo_path", "string", true)?;
+        require_property(index, "name", "string", false)?;
+    }
+    Ok(())
+}
+
+fn validate_status_tool(tools: &BTreeMap<String, Value>) -> Result<(), String> {
+    let status = tools
+        .get("index_status")
+        .ok_or("provider did not advertise targeted index_status")?;
+    require_property(status, "project", "string", true)
 }
 
 fn require_property(
@@ -399,22 +488,115 @@ fn parse_tool_result(result: Value) -> Result<Value, String> {
             .and_then(|content| content.iter().find_map(|block| block.get("text")))
             .and_then(Value::as_str)
             .ok_or("provider tool result omitted JSON content")?;
-        serde_json::from_str(text)
-            .map_err(|error| format!("provider tool result was not JSON: {error}"))?
+        serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
     };
     if is_error {
-        return Err(format!(
-            "provider tool returned an error: {}",
-            bounded_json(&value)
-        ));
+        if provider_error_indicates_not_found(&value) {
+            return Err(PROVIDER_PROJECT_NOT_FOUND.to_string());
+        }
+        return Err("provider tool returned an error response".to_string());
     }
     Ok(value)
+}
+
+fn provider_error_indicates_not_found(value: &Value) -> bool {
+    match value {
+        Value::String(message) => {
+            let normalized = message.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "not_found" | "not-found" | "not found")
+                || normalized.contains("project not found")
+        }
+        Value::Object(object) => {
+            ["status", "state", "code"]
+                .iter()
+                .filter_map(|field| object.get(*field))
+                .any(provider_error_indicates_not_found)
+                || object
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| {
+                        message.to_ascii_lowercase().contains("project not found")
+                    })
+        }
+        _ => false,
+    }
+}
+
+fn parse_project_status(
+    value: &Value,
+    expected_project: &str,
+) -> Result<ProviderProjectStatus, String> {
+    let object = value
+        .as_object()
+        .ok_or("provider index_status response was not an object")?;
+    let status = string_field(object, &["status", "state"])
+        .ok_or("provider index_status omitted status/state")?;
+    let actual = string_field(object, &["project", "id", "name"])
+        .ok_or("provider index_status omitted verified project identity")?;
+    if actual != expected_project {
+        return Err("provider index_status identified a different project".to_string());
+    }
+    if status.len() > MAX_PROVIDER_FIELD_BYTES {
+        return Err("provider index status exceeded its byte bound".to_string());
+    }
+    let normalized = status.to_ascii_lowercase();
+    let ready = matches!(
+        normalized.as_str(),
+        "ready" | "fresh" | "complete" | "completed" | "indexed"
+    );
+    let active = matches!(
+        normalized.as_str(),
+        "indexing" | "building" | "in_progress" | "in-progress" | "queued"
+    );
+    if !ready
+        && !matches!(
+            normalized.as_str(),
+            "missing"
+                | "not_found"
+                | "not-found"
+                | "not_indexed"
+                | "not-indexed"
+                | "stale"
+                | "outdated"
+                | "dirty"
+                | "changed"
+                | "indexing"
+                | "building"
+                | "in_progress"
+                | "in-progress"
+                | "queued"
+        )
+    {
+        return Err("provider returned an unsupported index status".to_string());
+    }
+    Ok(ProviderProjectStatus {
+        status: normalized,
+        ready,
+        active,
+    })
 }
 
 fn parse_inventory_page(value: &Value) -> Result<CodebaseMemoryProjectPage, String> {
     let object = value
         .as_object()
         .ok_or("provider inventory page was not an object")?;
+    for (field, value) in [
+        (
+            "cache instance identity",
+            string_field(object, &["cache_instance_id", "cacheInstanceId"]),
+        ),
+        (
+            "inventory cursor",
+            string_field(object, &["next_cursor", "nextCursor"]),
+        ),
+    ] {
+        if value
+            .as_deref()
+            .is_some_and(|value| value.len() > MAX_PROVIDER_FIELD_BYTES)
+        {
+            return Err(format!("provider {field} exceeded its byte bound"));
+        }
+    }
     let projects = object
         .get("projects")
         .and_then(Value::as_array)
@@ -424,11 +606,11 @@ fn parse_inventory_page(value: &Value) -> Result<CodebaseMemoryProjectPage, Stri
         .collect::<Result<Vec<_>, _>>()?;
     Ok(CodebaseMemoryProjectPage {
         cache_instance_id: string_field(object, &["cache_instance_id", "cacheInstanceId"]),
-        cache_bytes: u64_field(
+        projects,
+        cache_bytes: integer_field(
             object,
             &["cache_bytes", "cacheBytes", "total_bytes", "totalBytes"],
         ),
-        projects,
         next_cursor: string_field(object, &["next_cursor", "nextCursor"]),
     })
 }
@@ -469,34 +651,50 @@ fn parse_project_record(value: &Value) -> Result<CodebaseMemoryProjectRecord, St
     let ownership = string_field(object, &["ownership", "managed_by", "managedBy"]).or_else(|| {
         metadata.and_then(|value| string_field(value, &["ownership", "managed_by", "managedBy"]))
     });
-    let estimated_bytes = u64_field(
+    for (field, value) in [
+        ("project identity", project.as_deref()),
+        (
+            "repository path",
+            repo_path.as_ref().and_then(|path| path.to_str()),
+        ),
+        ("ownership", ownership.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.len() > MAX_PROVIDER_FIELD_BYTES) {
+            return Err(format!("provider {field} exceeded its byte bound"));
+        }
+    }
+    let estimated_bytes = integer_field(
         object,
         &[
             "estimated_bytes",
             "estimatedBytes",
             "size_bytes",
             "sizeBytes",
+            "bytes",
         ],
     )
     .or_else(|| {
         metadata.and_then(|value| {
-            u64_field(
+            integer_field(
                 value,
                 &[
                     "estimated_bytes",
                     "estimatedBytes",
                     "size_bytes",
                     "sizeBytes",
+                    "bytes",
                 ],
             )
         })
     });
+    let indexing_active = indexing_active(object).or_else(|| metadata.and_then(indexing_active));
     Ok(CodebaseMemoryProjectRecord {
         project,
         repo_path,
         updated_at_unix_secs,
         ownership,
         estimated_bytes,
+        indexing_active,
     })
 }
 
@@ -511,12 +709,26 @@ fn string_field(object: &Map<String, Value>, fields: &[&str]) -> Option<String> 
     })
 }
 
-fn u64_field(object: &Map<String, Value>, fields: &[&str]) -> Option<u64> {
+fn integer_field(object: &Map<String, Value>, fields: &[&str]) -> Option<u64> {
     fields
         .iter()
         .find_map(|field| object.get(*field).and_then(Value::as_u64))
 }
 
+fn indexing_active(object: &Map<String, Value>) -> Option<bool> {
+    for field in ["indexing_active", "indexingActive", "active"] {
+        if let Some(value) = object.get(field).and_then(Value::as_bool) {
+            return Some(value);
+        }
+    }
+    string_field(object, &["status", "state"]).and_then(|status| {
+        match status.to_ascii_lowercase().as_str() {
+            "indexing" | "building" | "in_progress" | "in-progress" | "queued" => Some(true),
+            "ready" | "fresh" | "complete" | "completed" | "indexed" | "stale" => Some(false),
+            _ => None,
+        }
+    })
+}
 fn unix_timestamp_field(object: &Map<String, Value>, fields: &[&str]) -> Option<u64> {
     fields.iter().find_map(|field| {
         let value = object.get(*field)?;
@@ -529,11 +741,6 @@ fn unix_timestamp_field(object: &Map<String, Value>, fields: &[&str]) -> Option<
             })
         })
     })
-}
-
-fn bounded_json(value: &Value) -> String {
-    let rendered = serde_json::to_string(value).unwrap_or_else(|_| "<invalid-json>".to_string());
-    rendered.chars().take(512).collect()
 }
 
 fn version_at_least(raw: &str, minimum: (u64, u64, u64)) -> bool {

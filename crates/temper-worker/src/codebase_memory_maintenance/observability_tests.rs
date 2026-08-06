@@ -89,6 +89,7 @@ fn retention_events_are_aggregate_safe_and_show_partial_failures() {
         deleted_estimated_bytes: Some(2048),
         preserved: vec![record.clone(); 2],
         candidates: vec![record.clone(); 3],
+        proposed: Vec::new(),
         deleted: vec![record.clone()],
         failed: vec![CodebaseMemoryRetentionFailure {
             record,

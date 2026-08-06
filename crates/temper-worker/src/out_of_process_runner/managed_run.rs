@@ -512,17 +512,22 @@ impl OutOfProcessRunner {
                     // forced-termination command and escalate to KILL before the
                     // supervisor receives an already-observed hard-kill command.
                     // Preserve the strongest delivered outcome when cleanup
-                    // confirms that the process tree was in fact killed.
+                    // confirms that the process tree was killed. Emergency
+                    // hard-kill delivery can reap the root before the ordinary
+                    // cleanup pass begins, in which case a signal-only exit is
+                    // the remaining proof.
+                    let root_was_signaled = outcome
+                        .outcome
+                        .as_ref()
+                        .is_ok_and(|child| child.status_code.is_none());
                     if matches!(
                         observed_cancellation,
                         Some(JobCancellationRequest::HardKill)
-                    ) && matches!(
-                        outcome.quiesced.cleanup.cancellation,
-                        Some(CancellationOutcome::ForcedTermination)
-                    ) && matches!(
+                    ) && (matches!(
                         outcome.quiesced.cleanup.containment.disposition(),
                         temper_process_containment::CleanupDisposition::Killed
-                    ) {
+                    ) || root_was_signaled)
+                    {
                         outcome.quiesced.cleanup.cancellation = Some(CancellationOutcome::HardKill);
                     }
                     break outcome;

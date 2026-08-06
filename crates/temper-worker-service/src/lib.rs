@@ -19,9 +19,14 @@ pub use adapt::{
     git_base_url, role_identities, selected_agent_runtime_limits, selected_worker_auth,
     session_recovery_policy, worker_agent_trace_config, worker_config, worker_liveness_limits,
 };
-pub use codebase_memory_maintenance::codebase_memory_maintenance_config;
+pub use codebase_memory_maintenance::{
+    codebase_memory_maintenance_config, codebase_memory_recovery_target,
+};
 pub use run::{run, self_subcommand, sibling_program};
 pub use temper_worker::{
-    CodebaseMemoryMaintenanceConfig, CodebaseMemoryMaintenanceTask,
-    run_codebase_memory_maintenance, spawn_codebase_memory_maintenance_task,
+    CodebaseMemoryMaintenanceConfig, CodebaseMemoryMaintenanceTask, CodebaseMemoryRecoveryMode,
+    CodebaseMemoryRecoveryReport, CodebaseMemoryRecoveryTarget, CodebaseMemoryRetentionFailure,
+    CodebaseMemoryRetentionPolicy, CodebaseMemoryRetentionRecordResult,
+    CodebaseMemoryRetentionReport, run_codebase_memory_maintenance, run_codebase_memory_recovery,
+    spawn_codebase_memory_maintenance_task,
 };
