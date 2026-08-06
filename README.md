@@ -45,6 +45,11 @@ from onboarding help. The engine owns the Forgejo webhook endpoint
 (`/forgejo/webhook`); webhook deliveries are wake hints and polling remains the
 correctness backstop, so there is no separate trigger service.
 
+Host recovery uses the separate, dry-run-first `temper maintenance` surface.
+Codebase-memory cleanup and stable-project rebuilds are documented in
+[Recover a codebase-memory cache safely](docs/how-to/recover-codebase-memory.md);
+provider cache-directory deletion is not a supported procedure.
+
 Temper's long-term environment surface is intentionally narrow: standard
 `HOME`/`XDG_*`, systemd `CREDENTIALS_DIRECTORY`, logging controls, and the
 single worker-to-agent provider credential env. Put deployment state in

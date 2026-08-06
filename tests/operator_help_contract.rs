@@ -31,7 +31,15 @@ fn top_level_help_exposes_only_the_public_operator_contract() {
     let help = stdout(temper(&["--help"], dir.path()));
 
     let mut previous = 0;
-    for command in ["init", "plan", "apply", "check", "serve", "config"] {
+    for command in [
+        "init",
+        "plan",
+        "apply",
+        "check",
+        "serve",
+        "maintenance",
+        "config",
+    ] {
         let marker = format!("\n  {command} ");
         let position = help
             .find(&marker)

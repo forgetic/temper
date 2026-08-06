@@ -51,14 +51,18 @@ pub use agent_session::{
     PriorAgentSessionRecord, SessionRecoveryPolicy,
 };
 pub use codebase_memory_maintenance::{
-    CodebaseMemoryMaintenanceConfig, CodebaseMemoryMaintenanceTask,
-    run_codebase_memory_maintenance, spawn_codebase_memory_maintenance_task,
+    CodebaseMemoryMaintenanceConfig, CodebaseMemoryMaintenanceTask, CodebaseMemoryProviderIdentity,
+    CodebaseMemoryRecoveryMode, CodebaseMemoryRecoveryReport, CodebaseMemoryRecoveryTarget,
+    CodebaseMemoryStableProjectReport, codebase_memory_provider_key,
+    codebase_memory_recovery_target, run_codebase_memory_maintenance, run_codebase_memory_recovery,
+    spawn_codebase_memory_maintenance_task,
 };
 pub use codebase_memory_retention::{
     CodebaseMemoryMaintenanceProvider, CodebaseMemoryProjectPage, CodebaseMemoryProjectRecord,
     CodebaseMemoryRetentionFailure, CodebaseMemoryRetentionRecordResult,
     CodebaseMemoryRetentionReport, CodebaseMemoryRetentionScope,
     maintain_obsolete_codebase_memory_indexes, maintain_obsolete_codebase_memory_indexes_until,
+    plan_obsolete_codebase_memory_indexes, plan_obsolete_codebase_memory_indexes_until,
 };
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig, NativeValidatorCommand};
 pub use config::{

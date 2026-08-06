@@ -6,6 +6,18 @@ crates/temper-testing/src/live_manifest/codebase_memory.rs
 # production observability at one registration boundary; split with next MCP bridge refactor.
 crates/temper-agent/src/codebase_memory.rs
 
+# Codebase-memory retention keeps one deterministic inventory/classify/apply
+# engine so periodic and operator paths cannot drift on destructive eligibility.
+crates/temper-worker/src/codebase_memory_retention.rs
+
+# Host maintenance keeps locking, provider negotiation, dry-run binding, and
+# stable-project verification in one auditable destructive-operation boundary.
+crates/temper-worker/src/codebase_memory_maintenance.rs
+
+# The host-only provider adapter keeps bounded MCP transport, schema negotiation,
+# response parsing, and destructive calls behind one non-model-visible session.
+crates/temper-worker/src/codebase_memory_maintenance/provider.rs
+
 # Startup assignment recovery keeps staged prior-boot ownership, exact heartbeat
 # reattachment, and protocol dispatch state together at the daemon core boundary.
 crates/temper-worker-registry/src/daemon_core.rs

@@ -19,6 +19,10 @@ pub struct CodebaseMemoryProjectRecord {
     pub repo_path: Option<PathBuf>,
     pub updated_at_unix_secs: Option<u64>,
     pub ownership: Option<String>,
+    /// Provider-reported storage attributed to this project, when available.
+    pub estimated_bytes: Option<u64>,
+    /// Explicit provider evidence that this project is currently indexing.
+    pub indexing_active: Option<bool>,
 }
 
 /// One bounded provider inventory page.
@@ -26,6 +30,8 @@ pub struct CodebaseMemoryProjectRecord {
 pub struct CodebaseMemoryProjectPage {
     pub cache_instance_id: Option<String>,
     pub projects: Vec<CodebaseMemoryProjectRecord>,
+    /// Provider-reported bytes for the whole cache instance, when available.
+    pub cache_bytes: Option<u64>,
     pub next_cursor: Option<String>,
 }
 
@@ -55,6 +61,7 @@ pub struct CodebaseMemoryRetentionRecordResult {
     pub project: String,
     pub repo_path: Option<PathBuf>,
     pub reason: String,
+    pub estimated_bytes: Option<u64>,
 }
 
 /// An isolated provider deletion failure.
@@ -68,10 +75,14 @@ pub struct CodebaseMemoryRetentionFailure {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CodebaseMemoryRetentionReport {
     pub cache_instance_id: Option<String>,
+    pub cache_bytes: Option<u64>,
     pub inventory_complete: bool,
+    pub inventory_record_count: usize,
     pub no_op_reason: Option<String>,
     pub preserved: Vec<CodebaseMemoryRetentionRecordResult>,
     pub candidates: Vec<CodebaseMemoryRetentionRecordResult>,
+    /// Exact actions a dry-run proposes after applying the per-run cap.
+    pub proposed: Vec<CodebaseMemoryRetentionRecordResult>,
     pub deleted: Vec<CodebaseMemoryRetentionRecordResult>,
     pub failed: Vec<CodebaseMemoryRetentionFailure>,
 }
@@ -89,7 +100,9 @@ impl CodebaseMemoryRetentionReport {
 ///
 /// `active_work` is checked before inventory, between pages, and before every
 /// deletion. Worker composition supplies a registry-backed probe and suppresses
-/// maintenance whenever any local assignment is active.
+/// maintenance whenever any local assignment is active. Periodic maintenance
+/// uses apply mode; operator dry-runs use the paired planner, which shares the
+/// inventory and classifier but never calls provider deletion.
 pub fn maintain_obsolete_codebase_memory_indexes(
     provider: &mut dyn CodebaseMemoryMaintenanceProvider,
     policy: CodebaseMemoryRetentionPolicy,
@@ -108,6 +121,25 @@ pub fn maintain_obsolete_codebase_memory_indexes(
     )
 }
 
+/// Produces the exact bounded retention plan without invoking deletion.
+pub fn plan_obsolete_codebase_memory_indexes(
+    provider: &mut dyn CodebaseMemoryMaintenanceProvider,
+    policy: CodebaseMemoryRetentionPolicy,
+    scope: &CodebaseMemoryRetentionScope,
+    now_unix_secs: u64,
+    active_work: &dyn Fn() -> bool,
+) -> CodebaseMemoryRetentionReport {
+    let deadline = Instant::now() + Duration::from_secs(policy.maintenance_timeout_secs);
+    plan_obsolete_codebase_memory_indexes_until(
+        provider,
+        policy,
+        scope,
+        now_unix_secs,
+        active_work,
+        deadline,
+    )
+}
+
 /// Deadline-injected form used by the provider adapter so process startup,
 /// negotiation, inventory, and deletion share one absolute pass budget.
 pub fn maintain_obsolete_codebase_memory_indexes_until(
@@ -117,6 +149,52 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
     now_unix_secs: u64,
     active_work: &dyn Fn() -> bool,
     deadline: Instant,
+) -> CodebaseMemoryRetentionReport {
+    retention_pass(
+        provider,
+        policy,
+        scope,
+        now_unix_secs,
+        active_work,
+        deadline,
+        RetentionMode::Apply,
+    )
+}
+
+/// Deadline-injected dry-run used by the explicit recovery command.
+pub fn plan_obsolete_codebase_memory_indexes_until(
+    provider: &mut dyn CodebaseMemoryMaintenanceProvider,
+    policy: CodebaseMemoryRetentionPolicy,
+    scope: &CodebaseMemoryRetentionScope,
+    now_unix_secs: u64,
+    active_work: &dyn Fn() -> bool,
+    deadline: Instant,
+) -> CodebaseMemoryRetentionReport {
+    retention_pass(
+        provider,
+        policy,
+        scope,
+        now_unix_secs,
+        active_work,
+        deadline,
+        RetentionMode::Plan,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum RetentionMode {
+    Plan,
+    Apply,
+}
+
+fn retention_pass(
+    provider: &mut dyn CodebaseMemoryMaintenanceProvider,
+    policy: CodebaseMemoryRetentionPolicy,
+    scope: &CodebaseMemoryRetentionScope,
+    now_unix_secs: u64,
+    active_work: &dyn Fn() -> bool,
+    deadline: Instant,
+    mode: RetentionMode,
 ) -> CodebaseMemoryRetentionReport {
     if !policy.enabled {
         return CodebaseMemoryRetentionReport::no_op("retention policy is disabled");
@@ -173,6 +251,18 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                 "provider returned more records than the negotiated page bound",
             );
         }
+        match (report.cache_bytes, page.cache_bytes) {
+            (Some(expected), Some(actual)) if expected != actual => {
+                records.extend(page.projects);
+                return inventory_no_op(
+                    report,
+                    records,
+                    "provider cache byte estimate changed during inventory",
+                );
+            }
+            (None, bytes) => report.cache_bytes = bytes,
+            _ => {}
+        }
         let Some(instance) = page.cache_instance_id.as_deref().and_then(nonempty) else {
             records.extend(page.projects);
             return inventory_no_op(
@@ -220,6 +310,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
             }
         }
         records.extend(page.projects);
+        report.inventory_record_count = records.len();
         cursor = page.next_cursor.and_then(|value| {
             let trimmed = value.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
@@ -240,6 +331,25 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
             "provider inventory exceeded the configured page bound",
         );
     }
+    if records
+        .iter()
+        .any(|record| record.indexing_active == Some(true))
+    {
+        return inventory_no_op(
+            report,
+            records,
+            "provider reports active indexing; destructive maintenance requires quiescence",
+        );
+    }
+    if report.cache_bytes.is_none()
+        && records
+            .iter()
+            .all(|record| record.estimated_bytes.is_some())
+    {
+        report.cache_bytes = records.iter().try_fold(0_u64, |total, record| {
+            total.checked_add(record.estimated_bytes.expect("checked above"))
+        });
+    }
 
     let mut eligible = Vec::new();
     for record in records {
@@ -258,12 +368,14 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                         repo_path: Some(path),
                         reason: "project timestamp is in the future; lifecycle age is uncertain"
                             .to_string(),
+                        estimated_bytes: record.estimated_bytes,
                     });
                 } else {
                     eligible.push(EligibleRecord {
                         project,
                         path,
                         updated,
+                        estimated_bytes: record.estimated_bytes,
                     });
                 }
             }
@@ -303,6 +415,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
                 project: eligible.project,
                 repo_path: Some(eligible.path),
                 reason: "within configured age and count bounds".to_string(),
+                estimated_bytes: eligible.estimated_bytes,
             });
         }
     }
@@ -317,6 +430,7 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
             project: record.project.clone(),
             repo_path: Some(record.path.clone()),
             reason: (*reason).to_string(),
+            estimated_bytes: record.estimated_bytes,
         })
         .collect();
 
@@ -325,12 +439,17 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
             project: candidate.project.clone(),
             repo_path: Some(candidate.path),
             reason: reason.to_string(),
+            estimated_bytes: candidate.estimated_bytes,
         };
         if position >= policy.max_deletions_per_run as usize {
             report.preserved.push(CodebaseMemoryRetentionRecordResult {
                 reason: "deferred by the per-run deletion cap".to_string(),
                 ..result
             });
+            continue;
+        }
+        if matches!(mode, RetentionMode::Plan) {
+            report.proposed.push(result);
             continue;
         }
         if active_work() {
@@ -362,6 +481,55 @@ pub fn maintain_obsolete_codebase_memory_indexes_until(
     report
 }
 
+/// Applies only the exact actions from a verified dry-run/preflight report.
+///
+/// The caller must compare an operator-review dry-run with a fresh preflight
+/// generated by [`plan_obsolete_codebase_memory_indexes_until`] before calling
+/// this function. No inventory is repeated here, so the deletion class cannot
+/// silently expand after the comparison.
+pub(crate) fn apply_verified_codebase_memory_plan(
+    provider: &mut dyn CodebaseMemoryMaintenanceProvider,
+    mut verified: CodebaseMemoryRetentionReport,
+    active_work: &dyn Fn() -> bool,
+    deadline: Instant,
+) -> CodebaseMemoryRetentionReport {
+    if !verified.inventory_complete
+        || verified.cache_instance_id.is_none()
+        || verified.no_op_reason.is_some()
+    {
+        verified.no_op_reason = Some(
+            "destructive execution refused because the retention preflight was not verified"
+                .to_string(),
+        );
+        verified.proposed.clear();
+        return verified;
+    }
+    if active_work() {
+        verified.no_op_reason = Some(
+            "active worker assignments appeared after retention preflight; deletion refused"
+                .to_string(),
+        );
+        return verified;
+    }
+
+    for record in verified.proposed.clone() {
+        if active_work() || Instant::now() >= deadline {
+            verified.no_op_reason = Some(
+                "retention apply lost quiescence or exceeded its deadline; remaining deletions were suppressed"
+                    .to_string(),
+            );
+            break;
+        }
+        match provider.delete_project(&record.project, deadline) {
+            Ok(()) => verified.deleted.push(record),
+            Err(error) => verified
+                .failed
+                .push(CodebaseMemoryRetentionFailure { record, error }),
+        }
+    }
+    verified
+}
+
 fn inventory_no_op(
     mut report: CodebaseMemoryRetentionReport,
     records: Vec<CodebaseMemoryProjectRecord>,
@@ -370,6 +538,7 @@ fn inventory_no_op(
     let reason = reason.into();
     report.no_op_reason = Some(reason.clone());
     report.inventory_complete = false;
+    report.inventory_record_count = records.len();
     report.preserved.extend(records.iter().map(|record| {
         CodebaseMemoryRetentionRecordResult {
             project: record
@@ -378,6 +547,7 @@ fn inventory_no_op(
                 .unwrap_or_else(|| "<missing>".to_string()),
             repo_path: record.repo_path.clone(),
             reason: reason.clone(),
+            estimated_bytes: record.estimated_bytes,
         }
     }));
     report
@@ -401,6 +571,7 @@ struct EligibleRecord {
     project: String,
     path: PathBuf,
     updated: u64,
+    estimated_bytes: Option<u64>,
 }
 
 fn classify(
@@ -422,6 +593,9 @@ fn classify(
 
     if project.starts_with("temper-v1-") {
         return Classification::Preserve("stable logical repository project");
+    }
+    if record.indexing_active == Some(true) {
+        return Classification::Preserve("provider reports active indexing");
     }
     if !safe_absolute_path(path) || !path.starts_with(workspace_root) {
         return Classification::Preserve("record is outside the canonical workspace root");
@@ -449,7 +623,11 @@ fn classify(
     if !safe_existing_ancestors(workspace_root, path) {
         return Classification::Preserve("record path has an ambiguous workspace ancestor");
     }
-    let owned = record.ownership.as_deref() == Some("temper") || project == path.to_string_lossy();
+    let owned = match record.ownership.as_deref() {
+        Some("temper") => true,
+        Some(_) => false,
+        None => project == path.to_string_lossy(),
+    };
     if !owned {
         return Classification::Preserve("Temper ownership is not verified");
     }
@@ -506,6 +684,7 @@ fn record_result(
             .unwrap_or_else(|| "<missing>".to_string()),
         repo_path: record.repo_path.clone(),
         reason: reason.into(),
+        estimated_bytes: record.estimated_bytes,
     }
 }
 

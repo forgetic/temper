@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex, mpsc};
 use std::task::{Context, Poll};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use temper_process_containment::{
     CleanupTrigger, ContainedProcess, PreparedContainment, RecursiveEmptyProof,
@@ -240,6 +240,23 @@ fn setup_cleanup(
     }
 }
 
+fn receive_immediate_hard_kill(commands: &mpsc::Receiver<SupervisorCommand>) -> bool {
+    let deadline = Instant::now() + PROCESS_POLL_INTERVAL;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        match commands.recv_timeout(remaining) {
+            Ok(SupervisorCommand::HardKill) => return true,
+            Ok(SupervisorCommand::Cancel | SupervisorCommand::ForceTerminate) => {}
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
+                return false;
+            }
+        }
+    }
+}
+
 fn supervise(
     process: ContainedProcess,
     stderr_thread: JoinHandle<String>,
@@ -273,10 +290,10 @@ fn supervise(
                 if !matches!(cancellation, Some(CancellationOutcome::HardKill)) {
                     cancellation = Some(CancellationOutcome::ForcedTermination);
                 }
-                if commands
-                    .try_iter()
-                    .any(|command| matches!(command, SupervisorCommand::HardKill))
-                {
+                // A caller can enqueue hard kill immediately after forced
+                // termination. Give that already-started escalation one poll
+                // interval to reach this owner before entering blocking cleanup.
+                if receive_immediate_hard_kill(&commands) {
                     cancellation = Some(CancellationOutcome::HardKill);
                 }
                 break CleanupTrigger::Watchdog;

@@ -1,11 +1,13 @@
 //! Resolved-config adapter for worker-owned codebase-memory maintenance.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use temper_config::Resolved;
 use temper_worker::{
-    CodebaseMemoryMaintenanceConfig, CodebaseMemoryRetentionPolicy, CodebaseMemoryRetentionScope,
+    CodebaseMemoryMaintenanceConfig, CodebaseMemoryRecoveryTarget, CodebaseMemoryRetentionPolicy,
+    CodebaseMemoryRetentionScope,
 };
 
 /// Projects resolved non-secret settings into the worker maintenance shape.
@@ -30,6 +32,7 @@ pub fn codebase_memory_maintenance_config(
         tool.command.clone(),
         tool.args.clone(),
         Duration::from_secs(tool.startup_timeout_secs),
+        Duration::from_secs(tool.index_timeout_secs),
         CodebaseMemoryRetentionPolicy {
             enabled: tool.retention.enabled,
             max_obsolete_projects: tool.retention.max_obsolete_projects,
@@ -46,4 +49,31 @@ pub fn codebase_memory_maintenance_config(
             repository_dirs,
         },
     ))
+}
+
+/// Resolves an operator-selected logical repository against the deployment and
+/// derives its stable provider key without consulting the current checkout.
+pub fn codebase_memory_recovery_target(
+    resolved: &Resolved,
+    logical_repository: &str,
+    rebuild_from: Option<PathBuf>,
+) -> Result<CodebaseMemoryRecoveryTarget, String> {
+    if !resolved
+        .engine
+        .repos
+        .iter()
+        .any(|repo| repo.display() == logical_repository)
+    {
+        return Err(format!(
+            "repository `{logical_repository}` is not configured; select one of: {}",
+            resolved
+                .engine
+                .repos
+                .iter()
+                .map(|repo| repo.display())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    temper_worker::codebase_memory_recovery_target(logical_repository, rebuild_from)
 }

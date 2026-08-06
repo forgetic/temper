@@ -102,7 +102,35 @@ model_idle_timeout_secs = 120
 [agent.providers.anthropic]
 # url = "https://api.anthropic.com"   # optional base-URL override → --provider-url
 models = { main = "claude-opus-4-8", investigate = "claude-haiku-4-5" }
+# A codebase-memory provider is optional. Temper requires provider 0.9.0+ for
+# targeted stable identity and host-only bounded maintenance.
+[agent.tools.codebase_memory]
+mode = "auto"
+command = "codebase-memory-mcp"
+args = []
+roles = ["architect", "engineer", "code-reviewer"]
+index = "background"
+startup_timeout_secs = 5
+index_timeout_secs = 120
+
+[agent.tools.codebase_memory.retention]
+enabled = true
+max_obsolete_projects = 64
+max_age_days = 30
+maintenance_interval_secs = 3600
+maintenance_timeout_secs = 30
+inventory_page_size = 50
+max_inventory_pages = 20
+max_deletions_per_run = 16
 ```
+
+Codebase-memory indexes use a stable key derived from the configured logical
+Forge repository, not the prepared checkout path. Runtime workers use the
+retention settings above for ownership-safe bounded maintenance. Operators use
+the same resolved provider, workspace scope, classifier, and limits through the
+dry-run-first `temper maintenance codebase-memory` command. Follow
+[Recover a codebase-memory cache safely](recover-codebase-memory.md) before any
+apply or stable-project rebuild; do not delete the provider cache directory.
 
 ```toml
 # credentials.toml — secrets (chmod 600, keep out of version control)

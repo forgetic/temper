@@ -1759,6 +1759,7 @@ dependencies = [
  "temper-provision-forgejo-cli",
  "temper-reference-delivery-validator",
  "temper-trigger-forgejo",
+ "temper-worker-service",
  "tracing",
 ]
 
