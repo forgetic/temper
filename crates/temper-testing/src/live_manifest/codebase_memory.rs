@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,6 +12,11 @@ use temper_forge_forgejo::ForgejoForge;
 use temper_forge_model::{
     CiJobConclusion, IssueState, ItemNumber, PullRequest, PullRequestQuery, PullRequestState,
     RepositoryId, UserId,
+};
+use temper_protocol_agent::CodebaseMemoryRetentionPolicy;
+use temper_worker::{
+    CodebaseMemoryMaintenanceConfig, CodebaseMemoryRecoveryMode, CodebaseMemoryRetentionScope,
+    run_codebase_memory_recovery,
 };
 use temper_workflow::{CiStatus, parse_metadata_block};
 use toml::Value as TomlValue;
@@ -40,6 +46,7 @@ pub(super) fn converge(
     )?;
     validate_mcp_contract(mcp)?;
     fake.validate_observations()?;
+    let lifecycle = validate_lifecycle(mcp)?;
     if fake.engineer_requests() < 4 {
         return Err(format!(
             "fake LLM did not complete the codebase-memory engineer tool loop\n{}",
@@ -67,8 +74,114 @@ pub(super) fn converge(
                 .iter()
                 .map(|tool| format!("codebase_memory_{tool}"))
                 .collect(),
+            lifecycle,
         },
     ))
+}
+
+fn validate_lifecycle(mcp: &FakeMcpServer) -> Result<Option<String>, String> {
+    if !mcp.lifecycle_fixture {
+        return Ok(None);
+    }
+    let scope = CodebaseMemoryRetentionScope {
+        workspace_root: mcp.workspace_root.join("workspaces"),
+        roles: BTreeSet::from(["engineer".to_string()]),
+        repository_dirs: BTreeSet::from(["demo".to_string()]),
+    };
+    fs::create_dir_all(&scope.workspace_root)
+        .map_err(|error| format!("create lifecycle workspace root: {error}"))?;
+    let policy = CodebaseMemoryRetentionPolicy {
+        enabled: true,
+        max_obsolete_projects: 64,
+        max_age_days: 30,
+        maintenance_interval_secs: 3600,
+        maintenance_timeout_secs: 20,
+        inventory_page_size: 200,
+        max_inventory_pages: 4,
+        max_deletions_per_run: 100,
+    };
+    let config = CodebaseMemoryMaintenanceConfig::new(
+        "python3",
+        mcp.provider_args(),
+        Duration::from_secs(2),
+        Duration::from_secs(3),
+        policy,
+        scope,
+    );
+    let dry = run_codebase_memory_recovery(
+        &config,
+        CodebaseMemoryRecoveryMode::DryRun,
+        None,
+        None,
+        &|| false,
+    );
+    if dry.retention.proposed.is_empty() || !dry.retention.deleted.is_empty() {
+        return Err(format!("lifecycle dry-run was not deletion-free: {dry:?}"));
+    }
+    let mut failed_seen = false;
+    for _ in 0..4 {
+        let review = run_codebase_memory_recovery(
+            &config,
+            CodebaseMemoryRecoveryMode::DryRun,
+            None,
+            None,
+            &|| false,
+        );
+        let plan = review
+            .plan_id
+            .clone()
+            .ok_or("lifecycle dry-run omitted plan id")?;
+        let applied = run_codebase_memory_recovery(
+            &config,
+            CodebaseMemoryRecoveryMode::Apply,
+            Some(&plan),
+            None,
+            &|| false,
+        );
+        failed_seen |= !applied.retention.failed.is_empty();
+        if applied.retention.proposed.len() <= 1 {
+            break;
+        }
+    }
+    let state: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&mcp.state_path)
+            .map_err(|error| format!("read lifecycle provider state: {error}"))?,
+    )
+    .map_err(|error| format!("parse lifecycle provider state: {error}"))?;
+    let projects = state["projects"]
+        .as_object()
+        .ok_or("lifecycle state omitted projects")?;
+    for protected in [
+        "temper-v1-protected",
+        "unrelated-project",
+        "ambiguous-project",
+        "active-project",
+    ] {
+        if !projects.contains_key(protected) {
+            return Err(format!(
+                "lifecycle cleanup deleted protected record {protected}"
+            ));
+        }
+    }
+    if !failed_seen || !projects.contains_key("legacy-temper-000") {
+        return Err("lifecycle cleanup did not isolate the injected deletion failure".to_string());
+    }
+    let obsolete = projects
+        .keys()
+        .filter(|name| name.starts_with("legacy-temper-"))
+        .count();
+    if obsolete > 64 {
+        return Err(format!(
+            "lifecycle cleanup retained {obsolete} obsolete projects, bound is 64"
+        ));
+    }
+    Ok(Some(format!(
+        "dry_run_candidates={} final_projects={} obsolete={} cache_bytes={} partial_failure=true protected=stable,active,unrelated,ambiguous",
+        dry.retention.proposed.len(),
+        projects.len(),
+        obsolete,
+        state["cache_bytes"].as_u64().unwrap_or_default()
+    )))
 }
 
 fn drive_codebase_memory_convergence(
@@ -338,6 +451,8 @@ pub(super) fn tune_codebase_memory_config(
             TomlValue::String(fake_mcp.log_path.display().to_string()),
             TomlValue::String("--mode".to_string()),
             TomlValue::String("stateful".to_string()),
+            TomlValue::String("--seed-json".to_string()),
+            TomlValue::String(fake_mcp.seed_json.clone()),
             TomlValue::String("--safe-tools-json".to_string()),
             TomlValue::String(
                 serde_json::to_string(&fake_mcp.safe_tools)
@@ -347,6 +462,24 @@ pub(super) fn tune_codebase_memory_config(
             TomlValue::String(
                 serde_json::to_string(&fake_mcp.hidden_tools)
                     .map_err(|error| format!("serialize declared hidden MCP tools: {error}"))?,
+            ),
+            TomlValue::String("--delay-list-ms".to_string()),
+            TomlValue::String(
+                if fake_mcp.lifecycle_fixture {
+                    "4000"
+                } else {
+                    "0"
+                }
+                .to_string(),
+            ),
+            TomlValue::String("--fail-tools-json".to_string()),
+            TomlValue::String(
+                if fake_mcp.lifecycle_fixture {
+                    r#"{"delete_project":["legacy-temper-000"]}"#
+                } else {
+                    "{}"
+                }
+                .to_string(),
             ),
         ]),
     );
@@ -374,11 +507,45 @@ pub(super) struct FakeMcpServer {
     pub(super) log_path: PathBuf,
     pub(super) safe_tools: Vec<String>,
     pub(super) hidden_tools: Vec<String>,
+    lifecycle_fixture: bool,
+    seed_json: String,
+    workspace_root: PathBuf,
+}
+
+impl FakeMcpServer {
+    fn provider_args(&self) -> Vec<String> {
+        vec![
+            "-u".into(),
+            self.script_path.display().to_string(),
+            "--state".into(),
+            self.state_path.display().to_string(),
+            "--log".into(),
+            self.log_path.display().to_string(),
+            "--mode".into(),
+            "stateful".into(),
+            "--seed-json".into(),
+            self.seed_json.clone(),
+            "--safe-tools-json".into(),
+            serde_json::to_string(&self.safe_tools).expect("tool names serialize"),
+            "--hidden-tools-json".into(),
+            serde_json::to_string(&self.hidden_tools).expect("tool names serialize"),
+            "--delay-list-ms".into(),
+            if self.lifecycle_fixture { "250" } else { "0" }.into(),
+            "--fail-tools-json".into(),
+            if self.lifecycle_fixture {
+                r#"{"delete_project":["legacy-temper-000"]}"#
+            } else {
+                "{}"
+            }
+            .into(),
+        ]
+    }
 }
 
 pub(super) fn write_fake_mcp(
     root: &Path,
     _project: &str,
+    fixture: Option<&str>,
     safe_tools: &[String],
     hidden_tools: &[String],
 ) -> Result<FakeMcpServer, String> {
@@ -393,12 +560,47 @@ pub(super) fn write_fake_mcp(
     }
     fs::write(&log_path, "")
         .map_err(|error| format!("create fake MCP log {}: {error}", log_path.display()))?;
+    let lifecycle_fixture = fixture == Some("stable-lifecycle");
+    let seed_json = if lifecycle_fixture {
+        serde_json::to_string(&lifecycle_seed(root))
+            .map_err(|error| format!("serialize lifecycle MCP seed: {error}"))?
+    } else {
+        "{}".to_string()
+    };
     Ok(FakeMcpServer {
         script_path,
         state_path,
         log_path,
         safe_tools: safe_tools.to_vec(),
         hidden_tools: hidden_tools.to_vec(),
+        lifecycle_fixture,
+        seed_json,
+        workspace_root: root.to_path_buf(),
+    })
+}
+
+fn lifecycle_seed(root: &Path) -> JsonValue {
+    let projects = (0..320)
+        .map(|index| serde_json::json!({
+            "project": format!("legacy-temper-{index:03}"),
+            "repo_path": root.join("workspaces/engineer").join(format!("old-{index:03}/demo")).display().to_string(),
+            "status": "stale",
+            "updated_at_unix_secs": 1,
+            "ownership": "temper",
+            "estimated_bytes": 4096
+        }))
+        .chain([
+            serde_json::json!({"project":"temper-v1-protected","repo_path":root.join("workspaces/engineer/stable/demo").display().to_string(),"status":"fresh","ownership":"temper","estimated_bytes":8192}),
+            serde_json::json!({"project":"unrelated-project","repo_path":"/opt/unrelated/repo","status":"stale","estimated_bytes":2048}),
+            serde_json::json!({"project":"ambiguous-project","status":"stale","estimated_bytes":1024}),
+            serde_json::json!({"project":"active-project","repo_path":root.join("workspaces/engineer/active/demo").display().to_string(),"status":"stale","ownership":"temper","indexing_active":true,"estimated_bytes":4096}),
+        ])
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "cache_instance_id": "scenario-lifecycle-cache-v1",
+        "cache_bytes": 1_327_104,
+        "now_unix_secs": 2_000_000_000u64,
+        "projects": projects
     })
 }
 
