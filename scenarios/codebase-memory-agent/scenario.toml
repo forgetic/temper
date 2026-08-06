@@ -10,6 +10,20 @@ timeout = "10m"
 [runner]
 uses = "manifest"
 
+[validation]
+feature = "ai/temper#860"
+plan = "ai/temper#887"
+source_branch = "agent/pr-for-feature-860"
+change = "updated"
+
+[feature_contract]
+claim = "Stable repository identity, targeted discovery, and bounded ownership-safe cleanup keep codebase-memory reusable across ephemeral Temper workspaces."
+stimulus = "Run distinct checkout lineages against a persistent scaled fake provider, exercise discovery timeout and dry-run/apply cleanup, then perform a final model-visible graph probe."
+observable = "Structured provider counts, request counts, cache bytes, protected-record decisions, isolated deletion failure, retention convergence, readiness, and final probe evidence."
+assertion = "Both checkout lineages reuse one stable project, timeout creates no index, cleanup preserves protected records and converges idempotently, and the final safe graph call succeeds."
+runtime_budget_seconds = 600
+jig_script_path = "jig/codebase-memory-agent.json"
+
 [observability]
 log_format = "json"
 rust_log = "temper=debug"
