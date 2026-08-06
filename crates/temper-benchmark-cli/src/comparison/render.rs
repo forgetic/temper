@@ -36,8 +36,13 @@ fn render_subject(report: &mut String, label: &str, subject: &ComparisonSubjectV
         .as_deref()
         .map(markdown_text)
         .unwrap_or_else(|| "unidentified benchmark".to_string());
+    let condition = subject
+        .condition
+        .and_then(|condition| serde_json::to_value(condition).ok())
+        .and_then(|value| value.as_str().map(str::to_string))
+        .map_or_else(String::new, |condition| format!(", condition {condition}"));
     report.push_str(&format!(
-        "- {label}: {benchmark}, {} run(s), {} succeeded\n",
+        "- {label}: {benchmark}{condition}, {} run(s), {} succeeded\n",
         subject.run_count, subject.success_count
     ));
 }

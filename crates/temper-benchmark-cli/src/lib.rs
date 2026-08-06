@@ -37,7 +37,8 @@ pub use comparison::{
 };
 pub use ingest::{NormalizedTrace, TraceIngestError, ingest_trace, write_canonical_export};
 pub use manifest::{
-    BENCHMARK_MANIFEST_SCHEMA, BenchmarkAnnotationsV1, BenchmarkManifestError, BenchmarkManifestV1,
+    BENCHMARK_MANIFEST_SCHEMA, BenchmarkAnnotationsV1, BenchmarkConditionProfileKindV1,
+    BenchmarkConditionProfileV1, BenchmarkManifestError, BenchmarkManifestV1,
     GraphDecisionTargetV1, ResolvedBenchmarkManifest, load_benchmark_manifest,
 };
 pub use metadata::{
@@ -50,7 +51,7 @@ pub use report::{
 };
 pub use runner::{
     AcceptedSubmitEvidenceV1, BenchmarkRunError, DIFF_ARTIFACT_VERSION, DiffArtifactV1,
-    DiffFileEvidenceV1, HarnessRunOptions, LIVE_OPT_IN_ENV, LiveRunOptions,
+    DiffFileEvidenceV1, ExactPatchEvidenceV1, HarnessRunOptions, LIVE_OPT_IN_ENV, LiveRunOptions,
     RepositoryDiffEvidenceV1, VALIDATION_ARTIFACT_VERSION, ValidationArtifactV1,
     ValidationCommandEvidenceV1, run_harness, run_live,
 };

@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::aggregate::metric_values;
 use crate::{
-    ADVISORY_METRICS, AggregateError, BenchmarkAggregateV1, BenchmarkModeV1, DistributionV1,
-    PRIMARY_METRICS, RunSummaryV1, RunTerminalStatusV1,
+    ADVISORY_METRICS, AggregateError, BenchmarkAggregateV1, BenchmarkConditionV1, BenchmarkModeV1,
+    DistributionV1, PRIMARY_METRICS, RunSummaryV1, RunTerminalStatusV1,
 };
 
 mod input;
@@ -38,6 +38,8 @@ pub struct ComparisonSubjectV1 {
     pub benchmark: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<BenchmarkModeV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<BenchmarkConditionV1>,
     pub run_count: u64,
     pub success_count: u64,
 }
@@ -207,10 +209,10 @@ fn validate_subject(label: &str, subject: &ComparisonSubjectV1) -> Result<(), Co
         )));
     }
     match (&subject.benchmark, subject.mode) {
-        (None, None) => Ok(()),
+        (None, None) if subject.condition.is_none() => Ok(()),
         (Some(benchmark), Some(_)) if !benchmark.trim().is_empty() => Ok(()),
         _ => Err(ComparisonError::Malformed(format!(
-            "{label} benchmark name and mode must be supplied together"
+            "{label} benchmark name and mode must be supplied together and are required by a condition"
         ))),
     }
 }
@@ -291,6 +293,10 @@ fn subject(input: &ComparisonInput) -> ComparisonSubjectV1 {
                 .as_ref()
                 .map(|benchmark| benchmark.name.clone()),
             mode: summary.benchmark.as_ref().map(|benchmark| benchmark.mode),
+            condition: summary
+                .benchmark
+                .as_ref()
+                .and_then(|benchmark| benchmark.condition),
             run_count: 1,
             success_count: u64::from(
                 summary.terminal.as_ref().map(|terminal| terminal.status)
@@ -301,6 +307,7 @@ fn subject(input: &ComparisonInput) -> ComparisonSubjectV1 {
             kind: ComparisonInputKindV1::Aggregate,
             benchmark: aggregate.benchmark.clone(),
             mode: aggregate.mode,
+            condition: aggregate.condition,
             run_count: aggregate.outcomes.total,
             success_count: aggregate.outcomes.succeeded,
         },

@@ -86,6 +86,7 @@ cache_warmth = "cold"
         agent_bin: Path::new(env!("CARGO_BIN_EXE_temper-agent")).to_path_buf(),
         output_dir: output_dir.clone(),
         repetitions: Some(2),
+        condition: None,
     })
     .unwrap();
 

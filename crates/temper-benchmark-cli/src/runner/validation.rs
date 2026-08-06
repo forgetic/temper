@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -28,7 +29,21 @@ pub struct ValidationArtifactV1 {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_submit: Option<AcceptedSubmitEvidenceV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_patch: Option<ExactPatchEvidenceV1>,
     pub post_run_commands: Vec<ValidationCommandEvidenceV1>,
+}
+
+/// Host-owned comparison of the final writable-repository diff with the
+/// checked-in expected patch. Patch content is not duplicated into reports.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactPatchEvidenceV1 {
+    pub expected_patch: String,
+    pub status: String,
+    pub untracked_files: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
 }
 
 /// The worker-owned accepted proof plus a fresh post-session comparison.
@@ -95,12 +110,135 @@ pub(super) fn validation_summary(artifact: &ValidationArtifactV1) -> ValidationE
         .iter()
         .filter(|command| command.status == "passed")
         .count() as u64;
-    let command_count = gates.len() as u64 + artifact.post_run_commands.len() as u64;
-    let succeeded = gate_succeeded + command_succeeded;
+    let exact_count = u64::from(artifact.exact_patch.is_some());
+    let exact_succeeded = u64::from(
+        artifact
+            .exact_patch
+            .as_ref()
+            .is_some_and(|evidence| evidence.status == "passed"),
+    );
+    let command_count = gates.len() as u64 + artifact.post_run_commands.len() as u64 + exact_count;
+    let succeeded = gate_succeeded + command_succeeded + exact_succeeded;
     ValidationEvidenceV1 {
         command_count,
         succeeded,
         failed: command_count.saturating_sub(succeeded),
+    }
+}
+
+pub(super) fn validate_expected_patch(
+    manifest: &ResolvedBenchmarkManifest,
+    workspace: &PreparedBenchmarkWorkspace,
+    untracked_files: u64,
+) -> Result<Option<ExactPatchEvidenceV1>, BenchmarkRunError> {
+    let Some(expected_path) = manifest.expected_patch_path() else {
+        return Ok(None);
+    };
+    let declared = manifest
+        .manifest()
+        .expected_patch
+        .as_ref()
+        .expect("resolved expected patch has declaration")
+        .display()
+        .to_string();
+    let writable = workspace
+        .context()
+        .repos
+        .iter()
+        .filter(|repository| repository.access == "writable")
+        .collect::<Vec<_>>();
+    if writable.len() != 1 {
+        return Ok(Some(failed_exact_patch(
+            declared,
+            untracked_files,
+            "exact patch validation requires exactly one writable repository",
+        )));
+    }
+    let repository = writable[0];
+    let Some(baseline) = workspace
+        .baselines()
+        .iter()
+        .find(|baseline| baseline.id == repository.id)
+    else {
+        return Ok(Some(failed_exact_patch(
+            declared,
+            untracked_files,
+            "writable repository baseline is unavailable",
+        )));
+    };
+    let cwd = workspace.root().join(&repository.dir);
+    let output = Command::new("git")
+        .args([
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            "--no-renames",
+            &baseline.sha,
+            "--",
+            ".",
+        ])
+        .current_dir(&cwd)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|source| BenchmarkRunError::Io {
+            operation: "run exact patch validation",
+            path: cwd.clone(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(BenchmarkRunError::Git {
+            command: "git diff --binary --no-ext-diff --no-renames <baseline> -- .".to_string(),
+            cwd,
+            status: output.status.to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    let expected = fs::read(expected_path).map_err(|source| BenchmarkRunError::Io {
+        operation: "read expected patch",
+        path: expected_path.to_path_buf(),
+        source,
+    })?;
+    let matches = untracked_files == 0
+        && canonical_text_patch(&expected).is_some_and(|expected| {
+            canonical_text_patch(&output.stdout).is_some_and(|actual| actual == expected)
+        });
+    Ok(Some(if matches {
+        ExactPatchEvidenceV1 {
+            expected_patch: declared,
+            status: "passed".to_string(),
+            untracked_files,
+            diagnostic: None,
+        }
+    } else {
+        failed_exact_patch(
+            declared,
+            untracked_files,
+            "final diff does not exactly match the checked-in expected patch",
+        )
+    }))
+}
+
+fn canonical_text_patch(bytes: &[u8]) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    Some(
+        text.split_inclusive('\n')
+            .filter(|line| !line.starts_with("index "))
+            .collect::<String>()
+            .into_bytes(),
+    )
+}
+
+fn failed_exact_patch(
+    expected_patch: String,
+    untracked_files: u64,
+    diagnostic: &str,
+) -> ExactPatchEvidenceV1 {
+    ExactPatchEvidenceV1 {
+        expected_patch,
+        status: "failed".to_string(),
+        untracked_files,
+        diagnostic: Some(diagnostic.to_string()),
     }
 }
 
@@ -242,4 +380,89 @@ fn join_tail(thread: TailReader, stream: &str) -> CapturedTail {
 
 fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{load_benchmark_manifest, prepare_benchmark_workspace};
+
+    #[test]
+    fn exact_patch_gate_rejects_extra_or_different_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture = root.path().join("fixture/repo");
+        fs::create_dir_all(&fixture).unwrap();
+        fs::write(fixture.join("value.txt"), "before\n").unwrap();
+        fs::write(root.path().join("expected.patch"), "placeholder\n").unwrap();
+        fs::write(root.path().join("jig.json"), "{}\n").unwrap();
+        fs::write(
+            root.path().join("context.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "repos": [{
+                    "id": "repo-1",
+                    "owner": "acme",
+                    "name": "fixture",
+                    "default_branch": "main",
+                    "dir": "repo",
+                    "access": "writable",
+                    "base_branch": "main",
+                    "branch_hint": "benchmark/exact"
+                }],
+                "work_item": {
+                    "role": "engineer",
+                    "queue": "code_ready",
+                    "kind": "code",
+                    "target": "Issue { number: ItemNumber(1) }",
+                    "context": "{}"
+                },
+                "action": "open_pr",
+                "correlation_key": "exact-patch-test",
+                "checkout": "writable"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("benchmark.toml"),
+            r#"schema = "temper.benchmark.v1"
+name = "exact-patch-test"
+fixture = "fixture"
+workspace_context = "context.json"
+capture = "diagnostic"
+jig_script = "jig.json"
+expected_patch = "expected.patch"
+"#,
+        )
+        .unwrap();
+
+        let manifest = load_benchmark_manifest(root.path().join("benchmark.toml")).unwrap();
+        let workspace = prepare_benchmark_workspace(&manifest, 1).unwrap();
+        let repository = workspace.root().join("repo");
+        fs::write(repository.join("value.txt"), "after\n").unwrap();
+        let actual = Command::new("git")
+            .args(["diff", "HEAD", "--", "."])
+            .current_dir(&repository)
+            .output()
+            .unwrap();
+        fs::write(root.path().join("expected.patch"), actual.stdout).unwrap();
+
+        let passed = validate_expected_patch(&manifest, &workspace, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(passed.status, "passed");
+
+        fs::write(repository.join("extra.txt"), "unexpected\n").unwrap();
+        let extra = validate_expected_patch(&manifest, &workspace, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(extra.status, "failed");
+        assert_eq!(extra.untracked_files, 1);
+
+        fs::remove_file(repository.join("extra.txt")).unwrap();
+        fs::write(repository.join("value.txt"), "different\n").unwrap();
+        let different = validate_expected_patch(&manifest, &workspace, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(different.status, "failed");
+    }
 }

@@ -28,6 +28,7 @@ pub struct BenchmarkArtifactLayout {
 pub struct RepetitionArtifactPaths {
     pub root: PathBuf,
     pub manifest_snapshot: PathBuf,
+    pub expected_patch: PathBuf,
     pub workspace_context_snapshot: PathBuf,
     pub baselines: PathBuf,
     pub canonical_trace: PathBuf,
@@ -127,6 +128,7 @@ impl BenchmarkArtifactLayout {
         let root = self.repetitions_dir.join(format!("{repetition:03}"));
         Ok(RepetitionArtifactPaths {
             manifest_snapshot: root.join("manifest.toml"),
+            expected_patch: root.join("expected.patch"),
             workspace_context_snapshot: root.join("workspace-context.json"),
             baselines: root.join("baselines.json"),
             canonical_trace: root.join("trace.export.jsonl"),
@@ -162,6 +164,30 @@ impl BenchmarkArtifactLayout {
             manifest.source().as_bytes(),
             "write manifest snapshot",
         )?;
+        if let Some(expected_patch) = manifest.expected_patch_path() {
+            let contents = fs::read(expected_patch).map_err(|source| ArtifactLayoutError::Io {
+                operation: "read expected patch snapshot",
+                path: expected_patch.to_path_buf(),
+                source,
+            })?;
+            write_owned_file(
+                &paths.expected_patch,
+                &contents,
+                "write expected patch snapshot",
+            )?;
+        } else {
+            match fs::remove_file(&paths.expected_patch) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(ArtifactLayoutError::Io {
+                        operation: "remove stale expected patch snapshot",
+                        path: paths.expected_patch.clone(),
+                        source,
+                    });
+                }
+            }
+        }
         let context = pretty_json(workspace.context(), "workspace context")?;
         write_owned_file(
             &paths.workspace_context_snapshot,

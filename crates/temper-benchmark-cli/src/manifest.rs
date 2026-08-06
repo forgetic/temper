@@ -51,12 +51,39 @@ pub struct BenchmarkManifestV1 {
     pub post_run_commands: Vec<Vec<String>>,
     /// Deterministic Jig provider script used by harness mode.
     pub jig_script: PathBuf,
+    /// Optional controlled runner profile. Profiled benchmarks require an
+    /// explicit condition at execution time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition_profile: Option<BenchmarkConditionProfileV1>,
+    /// Optional exact final patch used as a host-owned correctness gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_patch: Option<PathBuf>,
     /// Number of repetitions used when the CLI does not supply an override.
     #[serde(default = "default_repetitions")]
     pub repetitions: u32,
     /// Explicit non-secret annotations useful when interpreting a run.
     #[serde(default)]
     pub annotations: BenchmarkAnnotationsV1,
+}
+
+/// Runner-owned settings for a controlled benchmark condition family.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BenchmarkConditionProfileV1 {
+    pub kind: BenchmarkConditionProfileKindV1,
+    /// Hermetic MCP provider used by harness runs and by the forced-unavailable
+    /// live condition. The enabled live condition keeps the production profile.
+    pub fixture_provider: PathBuf,
+    /// Harness script that begins with conventional discovery because disabled
+    /// runs do not expose a graph tool for the model to call.
+    pub disabled_jig_script: PathBuf,
+}
+
+/// Condition families with runner-enforced availability changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkConditionProfileKindV1 {
+    CodebaseMemory,
 }
 
 /// Deliberately narrow metadata: credentials and arbitrary environment values
@@ -90,6 +117,9 @@ pub struct ResolvedBenchmarkManifest {
     fixture_dir: PathBuf,
     workspace_context_path: PathBuf,
     jig_script_path: PathBuf,
+    condition_fixture_provider_path: Option<PathBuf>,
+    condition_disabled_jig_script_path: Option<PathBuf>,
+    expected_patch_path: Option<PathBuf>,
     source: String,
     manifest: BenchmarkManifestV1,
     workspace_context: WorkspaceContext,
@@ -118,6 +148,18 @@ impl ResolvedBenchmarkManifest {
 
     pub fn jig_script_path(&self) -> &Path {
         &self.jig_script_path
+    }
+
+    pub fn condition_fixture_provider_path(&self) -> Option<&Path> {
+        self.condition_fixture_provider_path.as_deref()
+    }
+
+    pub fn condition_disabled_jig_script_path(&self) -> Option<&Path> {
+        self.condition_disabled_jig_script_path.as_deref()
+    }
+
+    pub fn expected_patch_path(&self) -> Option<&Path> {
+        self.expected_patch_path.as_deref()
     }
 
     pub fn workspace_context(&self) -> &WorkspaceContext {
@@ -231,6 +273,35 @@ pub fn load_benchmark_manifest(
         &manifest.jig_script,
         InputKind::File,
     )?;
+    let condition_fixture_provider_path = manifest
+        .condition_profile
+        .as_ref()
+        .map(|profile| {
+            resolve_declared_path(
+                &manifest_root,
+                "condition_profile.fixture_provider",
+                &profile.fixture_provider,
+                InputKind::File,
+            )
+        })
+        .transpose()?;
+    let condition_disabled_jig_script_path = manifest
+        .condition_profile
+        .as_ref()
+        .map(|profile| {
+            resolve_declared_path(
+                &manifest_root,
+                "condition_profile.disabled_jig_script",
+                &profile.disabled_jig_script,
+                InputKind::File,
+            )
+        })
+        .transpose()?;
+    let expected_patch_path = manifest
+        .expected_patch
+        .as_ref()
+        .map(|path| resolve_declared_path(&manifest_root, "expected_patch", path, InputKind::File))
+        .transpose()?;
 
     validate_fixture_tree(&fixture_dir)?;
     let context_source = fs::read_to_string(&workspace_context_path).map_err(|source| {
@@ -255,6 +326,9 @@ pub fn load_benchmark_manifest(
         fixture_dir,
         workspace_context_path,
         jig_script_path,
+        condition_fixture_provider_path,
+        condition_disabled_jig_script_path,
+        expected_patch_path,
         source,
         manifest,
         workspace_context,
@@ -291,7 +365,25 @@ fn validate_manifest_values(manifest: &BenchmarkManifestV1) -> Result<(), Benchm
         "provider_region",
         manifest.annotations.provider_region.as_deref(),
     )?;
-    validate_annotation("cache_warmth", manifest.annotations.cache_warmth.as_deref())
+    validate_annotation("cache_warmth", manifest.annotations.cache_warmth.as_deref())?;
+    if manifest.condition_profile.is_some() {
+        for kind in [
+            GraphDecisionKindV1::Implementation,
+            GraphDecisionKindV1::Caller,
+            GraphDecisionKindV1::FocusedTest,
+        ] {
+            if !manifest
+                .graph_decision_targets
+                .iter()
+                .any(|target| target.kind == kind)
+            {
+                return Err(BenchmarkManifestError::Invalid(format!(
+                    "a condition profile requires a `{kind:?}` graph decision target"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_argv_lists(

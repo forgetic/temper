@@ -99,6 +99,13 @@ pub fn render_run_summary_markdown(summary: &RunSummaryV1) -> String {
         code(&summary.identity.assignment.artifact_ref),
     );
     row(&mut out, "Trace source", enum_label(&summary.source));
+    if let Some(condition) = summary
+        .benchmark
+        .as_ref()
+        .and_then(|benchmark| benchmark.condition.as_ref())
+    {
+        row(&mut out, "Condition", enum_label(condition));
+    }
     row(
         &mut out,
         "Capture",

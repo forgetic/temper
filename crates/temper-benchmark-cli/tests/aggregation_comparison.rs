@@ -418,16 +418,59 @@ fn incompatible_benchmark_identities_fail_clearly() {
         name: "benchmark-a".to_string(),
         mode: BenchmarkModeV1::Harness,
         repetition: 1,
+        condition: None,
     });
     let mut head = summary("head", 1, 1);
     head.benchmark = Some(BenchmarkRunV1 {
         name: "benchmark-b".to_string(),
         mode: BenchmarkModeV1::Harness,
         repetition: 1,
+        condition: None,
     });
     let error =
         compare_benchmarks(&ComparisonInput::Run(base), &ComparisonInput::Run(head)).unwrap_err();
     assert!(error.to_string().contains("benchmark names differ"));
+}
+
+#[test]
+fn controlled_conditions_are_recorded_and_remain_pairwise_comparable() {
+    let mut disabled = summary("disabled", 3, 30);
+    disabled.benchmark = Some(BenchmarkRunV1 {
+        name: "controlled".to_string(),
+        mode: BenchmarkModeV1::Live,
+        repetition: 1,
+        condition: Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryDisabled),
+    });
+    let mut enabled = summary("enabled", 2, 20);
+    enabled.benchmark = Some(BenchmarkRunV1 {
+        name: "controlled".to_string(),
+        mode: BenchmarkModeV1::Live,
+        repetition: 1,
+        condition: Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryEnabled),
+    });
+
+    let base = aggregate_run_summaries([disabled]).unwrap();
+    let head = aggregate_run_summaries([enabled]).unwrap();
+    assert_eq!(
+        base.condition,
+        Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryDisabled)
+    );
+    let comparison = compare_benchmarks(
+        &ComparisonInput::Aggregate(base),
+        &ComparisonInput::Aggregate(head),
+    )
+    .unwrap();
+    assert_eq!(
+        comparison.base.condition,
+        Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryDisabled)
+    );
+    assert_eq!(
+        comparison.head.condition,
+        Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryEnabled)
+    );
+    let markdown = render_comparison_markdown(&comparison);
+    assert!(markdown.contains("condition codebase_memory_disabled"));
+    assert!(markdown.contains("condition codebase_memory_enabled"));
 }
 
 #[test]

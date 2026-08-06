@@ -15,6 +15,15 @@ pub fn render_aggregate_markdown(aggregate: &BenchmarkAggregateV1) -> String {
     if let Some(benchmark) = &aggregate.benchmark {
         report.push_str(&format!("- Benchmark: `{}`\n", markdown_text(benchmark)));
     }
+    if let Some(condition) = aggregate.condition {
+        report.push_str(&format!(
+            "- Condition: `{}`\n",
+            serde_json::to_value(condition)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
     report.push_str(&format!(
         "- Runs: {} ({} succeeded, {} failed, {} cancelled, {} incomplete)\n\n",
         aggregate.outcomes.total,
