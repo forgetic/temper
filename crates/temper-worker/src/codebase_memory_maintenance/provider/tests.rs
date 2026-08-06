@@ -14,19 +14,23 @@ fn provider_record_reader_rejects_overflow_before_retaining_it() {
 fn inventory_parser_preserves_complete_ownership_and_lifecycle_metadata() {
     let page = parse_inventory_page(&json!({
         "cacheInstanceId": "cache-a",
+        "cacheBytes": 8192,
         "projects": [{
             "name": "/workspace/engineer/key/temper",
             "metadata": {
                 "repoPath": "/workspace/engineer/key/temper",
                 "updatedAt": "2026-01-02T03:04:05Z",
-                "managedBy": "temper"
+                "managedBy": "temper",
+                "estimatedBytes": 4096
             }
         }],
         "nextCursor": "page-2"
     }))
     .expect("page parses");
     assert_eq!(page.cache_instance_id.as_deref(), Some("cache-a"));
+    assert_eq!(page.cache_bytes, Some(8192));
     assert_eq!(page.next_cursor.as_deref(), Some("page-2"));
+    assert_eq!(page.projects[0].estimated_bytes, Some(4096));
     assert_eq!(page.projects[0].ownership.as_deref(), Some("temper"));
     assert!(page.projects[0].updated_at_unix_secs.is_some());
 }

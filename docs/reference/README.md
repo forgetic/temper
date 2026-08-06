@@ -22,6 +22,7 @@ Current reference pages:
   - [Workflow recovery](workflow-recovery.md)
 - [Post-merge validator handoff](post-merge-validator-handoff.md)
 - [Production worker runtime](production-worker.md)
+- [Codebase-memory lifecycle observability](codebase-memory-observability.md)
 - [Descendant-containment acceptance matrix](descendant-containment-acceptance.md)
 - [Environment variables](environment-variables.md)
 - [Operator compatibility surfaces](operator-compatibility-surfaces.md)

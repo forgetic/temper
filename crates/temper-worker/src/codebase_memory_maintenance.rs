@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::codebase_memory_retention::{
-    CodebaseMemoryRetentionReport, CodebaseMemoryRetentionScope,
+    CodebaseMemoryRetentionOutcome, CodebaseMemoryRetentionReport, CodebaseMemoryRetentionScope,
     apply_verified_codebase_memory_plan, maintain_obsolete_codebase_memory_indexes_until,
     plan_obsolete_codebase_memory_indexes_until,
 };
@@ -22,7 +22,9 @@ use crate::run::WorkerActivityProbe;
 use fs2::FileExt;
 use temper_protocol_agent::CodebaseMemoryRetentionPolicy;
 
+mod observability;
 mod provider;
+use observability::emit_report;
 use provider::{ProviderSession, unix_time_secs};
 
 const MAINTENANCE_LOCK_FILE: &str = ".temper-codebase-memory-maintenance.lock";
@@ -135,6 +137,11 @@ pub fn codebase_memory_recovery_target(
     })
 }
 
+struct MaintenanceLockFailure {
+    reason: String,
+    outcome: CodebaseMemoryRetentionOutcome,
+}
+
 /// Complete non-secret input needed by explicit or periodic maintenance.
 #[derive(Clone, Debug)]
 pub struct CodebaseMemoryMaintenanceConfig {
@@ -172,22 +179,44 @@ pub fn run_codebase_memory_maintenance(
     config: &CodebaseMemoryMaintenanceConfig,
     active_work: &dyn Fn() -> bool,
 ) -> CodebaseMemoryRetentionReport {
+    let started = Instant::now();
+    let mut report = run_codebase_memory_maintenance_inner(config, active_work);
+    report.policy = Some(config.policy);
+    report.duration_ms = duration_ms(started.elapsed());
+    emit_report(&report);
+    report
+}
+
+fn run_codebase_memory_maintenance_inner(
+    config: &CodebaseMemoryMaintenanceConfig,
+    active_work: &dyn Fn() -> bool,
+) -> CodebaseMemoryRetentionReport {
     if !config.policy.enabled {
-        return CodebaseMemoryRetentionReport::no_op("retention policy is disabled");
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
+            "retention policy is disabled",
+            CodebaseMemoryRetentionOutcome::Disabled,
+        );
     }
     if active_work() {
-        return CodebaseMemoryRetentionReport::no_op(
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
             "active worker assignments suppress provider maintenance",
+            CodebaseMemoryRetentionOutcome::SuppressedActiveWork,
         );
     }
     let lock = match maintenance_lock(&config.scope.workspace_root) {
         Ok(lock) => lock,
-        Err(reason) => return CodebaseMemoryRetentionReport::no_op(reason),
+        Err(failure) => {
+            return CodebaseMemoryRetentionReport::no_op_with_outcome(
+                failure.reason,
+                failure.outcome,
+            );
+        }
     };
     let _lock = lock;
     if active_work() {
-        return CodebaseMemoryRetentionReport::no_op(
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
             "active worker assignments appeared before provider discovery",
+            CodebaseMemoryRetentionOutcome::SuppressedActiveWork,
         );
     }
 
@@ -196,16 +225,18 @@ pub fn run_codebase_memory_maintenance(
         .startup_timeout
         .min(deadline.saturating_duration_since(Instant::now()));
     if timeout.is_zero() {
-        return CodebaseMemoryRetentionReport::no_op(
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
             "maintenance deadline expired before provider negotiation",
+            CodebaseMemoryRetentionOutcome::TimedOut,
         );
     }
     let mut provider = match ProviderSession::connect(&config.command, &config.args, timeout) {
         Ok(provider) => provider,
         Err(error) => {
-            return CodebaseMemoryRetentionReport::no_op(format!(
-                "provider maintenance API was not safely negotiated: {error}"
-            ));
+            return CodebaseMemoryRetentionReport::no_op_with_outcome(
+                format!("provider maintenance API was not safely negotiated: {error}"),
+                CodebaseMemoryRetentionOutcome::DiscoveryFailed,
+            );
         }
     };
     maintain_obsolete_codebase_memory_indexes_until(
@@ -252,9 +283,12 @@ pub fn run_codebase_memory_recovery(
     }
     let lock = match maintenance_lock(&config.scope.workspace_root) {
         Ok(lock) => lock,
-        Err(reason) => {
-            report.retention = CodebaseMemoryRetentionReport::no_op(reason.clone());
-            report.failure = Some(reason);
+        Err(failure) => {
+            report.retention = CodebaseMemoryRetentionReport::no_op_with_outcome(
+                failure.reason.clone(),
+                failure.outcome,
+            );
+            report.failure = Some(failure.reason);
             return report;
         }
     };
@@ -415,7 +449,8 @@ fn retention_plan_id(
     // The explicit rebuild source is intentionally authorized by --apply; its
     // checkout path never participates in stable provider identity.
     let target_identity = target.map(|target| (&target.logical_repository, &target.provider_key));
-    let encoded = serde_json::to_vec(&(policy, provider, target_identity, report))
+    let stable_report = stable_retention_evidence(report);
+    let encoded = serde_json::to_vec(&(policy, provider, target_identity, stable_report))
         .expect("non-secret retention plan always serializes");
     format!("sha256:{:x}", Sha256::digest(encoded))
 }
@@ -445,7 +480,7 @@ fn verify_unchanged_preflight(
     review: &CodebaseMemoryRetentionReport,
     mut preflight: CodebaseMemoryRetentionReport,
 ) -> (bool, CodebaseMemoryRetentionReport) {
-    if &preflight == review {
+    if stable_retention_evidence(&preflight) == stable_retention_evidence(review) {
         return (true, preflight);
     }
     preflight.no_op_reason = Some(
@@ -454,6 +489,16 @@ fn verify_unchanged_preflight(
     );
     preflight.proposed.clear();
     (false, preflight)
+}
+
+fn stable_retention_evidence(
+    report: &CodebaseMemoryRetentionReport,
+) -> CodebaseMemoryRetentionReport {
+    let mut stable = report.clone();
+    // Latency is operator evidence, not provider inventory identity.
+    stable.inventory_duration_ms = 0;
+    stable.duration_ms = 0;
+    stable
 }
 
 fn verify_candidate_quiescence(
@@ -577,9 +622,10 @@ fn run_stable_project_recovery(
     report
 }
 
-fn maintenance_lock(workspace_root: &PathBuf) -> Result<File, String> {
-    std::fs::create_dir_all(workspace_root).map_err(|error| {
-        format!("workspace root is unavailable for maintenance locking: {error}")
+fn maintenance_lock(workspace_root: &PathBuf) -> Result<File, MaintenanceLockFailure> {
+    std::fs::create_dir_all(workspace_root).map_err(|error| MaintenanceLockFailure {
+        reason: format!("workspace root is unavailable for maintenance locking: {error}"),
+        outcome: CodebaseMemoryRetentionOutcome::SafetyNoOp,
     })?;
     let path = workspace_root.join(MAINTENANCE_LOCK_FILE);
     let lock = OpenOptions::new()
@@ -588,10 +634,15 @@ fn maintenance_lock(workspace_root: &PathBuf) -> Result<File, String> {
         .read(true)
         .write(true)
         .open(&path)
-        .map_err(|error| format!("open maintenance overlap lock failed: {error}"))?;
-    lock.try_lock_exclusive().map_err(|_| {
-        "another codebase-memory maintenance pass owns the overlap lock".to_string()
-    })?;
+        .map_err(|error| MaintenanceLockFailure {
+            reason: format!("open maintenance overlap lock failed: {error}"),
+            outcome: CodebaseMemoryRetentionOutcome::SafetyNoOp,
+        })?;
+    lock.try_lock_exclusive()
+        .map_err(|_| MaintenanceLockFailure {
+            reason: "another codebase-memory maintenance pass owns the overlap lock".to_string(),
+            outcome: CodebaseMemoryRetentionOutcome::SuppressedOverlap,
+        })?;
     Ok(lock)
 }
 
@@ -644,9 +695,8 @@ pub fn spawn_codebase_memory_maintenance_task(
                 if stopped(&thread_stop) {
                     break;
                 }
-                let report =
+                let _report =
                     run_codebase_memory_maintenance(&config, &|| activity.has_active_work());
-                emit_report(&report);
                 let (stopped, wake) = &*thread_stop;
                 let stopped = stopped
                     .lock()
@@ -679,26 +729,14 @@ fn stopped(stop: &Arc<(Mutex<bool>, Condvar)>) -> bool {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn emit_report(report: &CodebaseMemoryRetentionReport) {
-    let no_op = report.no_op_reason.as_deref().unwrap_or("");
-    tracing::info!(
-        target: "temper::worker",
-        service = "worker",
-        event = "codebase_memory.retention.completed",
-        inventory_complete = report.inventory_complete,
-        preserved = report.preserved.len(),
-        candidates = report.candidates.len(),
-        deleted = report.deleted.len(),
-        failed = report.failed.len(),
-        no_op_reason = no_op,
-        "worker codebase-memory retention: preserved {}, candidates {}, deleted {}, failed {}",
-        report.preserved.len(),
-        report.candidates.len(),
-        report.deleted.len(),
-        report.failed.len(),
-    );
-}
-
 #[cfg(test)]
 #[path = "codebase_memory_maintenance/recovery_tests.rs"]
 mod recovery_tests;
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+#[path = "codebase_memory_maintenance/observability_tests.rs"]
+mod observability_tests;

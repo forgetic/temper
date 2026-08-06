@@ -49,6 +49,22 @@ fn changed_preflight_or_provider_identity_changes_the_review_binding() {
         None,
         &review,
     );
+    let mut observed = review.clone();
+    observed.inventory_duration_ms = 27;
+    observed.duration_ms = 31;
+    assert_eq!(
+        plan,
+        retention_plan_id(
+            CodebaseMemoryRetentionPolicy::default(),
+            &provider,
+            None,
+            &observed
+        ),
+        "latency evidence must not invalidate a reviewed provider plan"
+    );
+    let (unchanged, observed) = verify_unchanged_preflight(&review, observed);
+    assert!(unchanged);
+    assert_eq!(observed.inventory_duration_ms, 27);
     assert_ne!(
         plan,
         retention_plan_id(

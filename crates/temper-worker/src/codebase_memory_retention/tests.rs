@@ -19,8 +19,8 @@ impl CodebaseMemoryMaintenanceProvider for FakeProvider {
     ) -> Result<CodebaseMemoryProjectPage, String> {
         Ok(CodebaseMemoryProjectPage {
             cache_instance_id: self.cache_instance.clone(),
+            cache_bytes: Some(55_000),
             projects: self.records.values().cloned().collect(),
-            cache_bytes: None,
             next_cursor: None,
         })
     }
@@ -55,7 +55,7 @@ fn record(path: PathBuf, updated: u64) -> CodebaseMemoryProjectRecord {
         repo_path: Some(path),
         updated_at_unix_secs: Some(updated),
         ownership: None,
-        estimated_bytes: None,
+        estimated_bytes: Some(128),
         indexing_active: None,
     }
 }
@@ -75,7 +75,7 @@ fn retention_deletes_only_verified_obsolete_records_and_isolates_failures() {
         repo_path: Some(root.join("engineer/stable/temper")),
         updated_at_unix_secs: Some(1),
         ownership: Some("temper".to_string()),
-        estimated_bytes: Some(10),
+        estimated_bytes: Some(256),
         indexing_active: None,
     };
     let unrelated = CodebaseMemoryProjectRecord {
@@ -130,6 +130,12 @@ fn retention_deletes_only_verified_obsolete_records_and_isolates_failures() {
     assert!(report.inventory_complete);
     assert_eq!(report.candidates.len(), 2);
     assert_eq!(report.deleted.len(), 1);
+    assert_eq!(report.deleted_estimated_bytes, Some(128));
+    assert_eq!(report.cache_bytes, Some(55_000));
+    assert_eq!(
+        report.outcome,
+        CodebaseMemoryRetentionOutcome::PartialFailure
+    );
     assert_eq!(report.deleted[0].project, old.display().to_string());
     assert_eq!(report.failed.len(), 1);
     assert!(
@@ -174,6 +180,10 @@ fn retention_deletes_only_verified_obsolete_records_and_isolates_failures() {
         &|| false,
     );
     assert!(rerun.deleted.is_empty(), "a prior deletion is not repeated");
+    assert_eq!(
+        rerun.outcome,
+        CodebaseMemoryRetentionOutcome::PartialFailure
+    );
     assert_eq!(
         rerun.failed.len(),
         1,
@@ -347,6 +357,8 @@ fn dry_run_proposes_exact_actions_without_deleting_and_apply_uses_only_them() {
     );
     assert_eq!(plan.proposed.len(), 1);
     assert_eq!(plan.proposed[0].project, project);
+    assert!(plan.dry_run);
+    assert_eq!(plan.outcome, CodebaseMemoryRetentionOutcome::Completed);
     assert!(plan.deleted.is_empty());
     assert!(
         provider.deletes.is_empty(),
@@ -361,6 +373,9 @@ fn dry_run_proposes_exact_actions_without_deleting_and_apply_uses_only_them() {
     );
     assert_eq!(provider.deletes, vec![project]);
     assert_eq!(applied.deleted.len(), 1);
+    assert!(!applied.dry_run);
+    assert_eq!(applied.deleted_estimated_bytes, Some(128));
+    assert_eq!(applied.outcome, CodebaseMemoryRetentionOutcome::Completed);
 }
 
 #[test]

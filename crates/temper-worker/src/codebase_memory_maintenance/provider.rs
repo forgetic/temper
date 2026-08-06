@@ -729,7 +729,6 @@ fn indexing_active(object: &Map<String, Value>) -> Option<bool> {
         }
     })
 }
-
 fn unix_timestamp_field(object: &Map<String, Value>, fields: &[&str]) -> Option<u64> {
     fields.iter().find_map(|field| {
         let value = object.get(*field)?;

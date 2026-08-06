@@ -1,4 +1,5 @@
 mod indexing;
+mod observability;
 #[path = "test_support.rs"]
 mod test_support;
 use super::*;

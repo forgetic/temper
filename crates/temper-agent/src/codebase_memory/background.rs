@@ -1,5 +1,7 @@
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use super::lifecycle_observability::{FailureCategory, ReadinessOutcome, emit_readiness};
 
 use super::scope::ProjectIndexState;
 
@@ -10,6 +12,7 @@ pub(super) struct BackgroundIndex {
 
 #[derive(Debug)]
 struct BackgroundIndexInner {
+    provider_key: String,
     state: Mutex<BackgroundIndexState>,
     completed: Condvar,
 }
@@ -23,9 +26,10 @@ struct BackgroundIndexState {
 }
 
 impl BackgroundIndex {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(provider_key: String) -> Self {
         Self {
             inner: Arc::new(BackgroundIndexInner {
+                provider_key,
                 state: Mutex::new(BackgroundIndexState {
                     completed: false,
                     actual_project: None,
@@ -73,25 +77,68 @@ impl BackgroundIndex {
     }
 
     pub(super) fn wait(&self, timeout: Duration) -> std::result::Result<(), String> {
-        let state = self.inner.state.lock().map_err(|_| {
-            "background index state lock poisoned while waiting for completion".to_string()
-        })?;
-        let (state, _timeout) = self
-            .inner
-            .completed
-            .wait_timeout_while(state, timeout, |state| !state.completed)
-            .map_err(|_| {
-                "background index state lock poisoned while waiting for completion".to_string()
-            })?;
+        let started = Instant::now();
+        let state = match self.inner.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                emit_readiness(
+                    &self.inner.provider_key,
+                    started.elapsed(),
+                    ReadinessOutcome::Failure,
+                    FailureCategory::Internal,
+                );
+                return Err(
+                    "background index state lock poisoned while waiting for completion".to_string(),
+                );
+            }
+        };
+        let (state, _timeout) =
+            match self
+                .inner
+                .completed
+                .wait_timeout_while(state, timeout, |state| !state.completed)
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    emit_readiness(
+                        &self.inner.provider_key,
+                        started.elapsed(),
+                        ReadinessOutcome::Failure,
+                        FailureCategory::Internal,
+                    );
+                    return Err(
+                        "background index state lock poisoned while waiting for completion"
+                            .to_string(),
+                    );
+                }
+            };
         if !state.completed {
+            emit_readiness(
+                &self.inner.provider_key,
+                started.elapsed(),
+                ReadinessOutcome::Timeout,
+                FailureCategory::Timeout,
+            );
             return Err(format!(
                 "background indexing is still in progress after {:.3}s",
                 timeout.as_secs_f64()
             ));
         }
         if let Some(error) = &state.error {
+            emit_readiness(
+                &self.inner.provider_key,
+                started.elapsed(),
+                ReadinessOutcome::Failure,
+                FailureCategory::Provider,
+            );
             return Err(format!("background indexing failed: {error}"));
         }
+        emit_readiness(
+            &self.inner.provider_key,
+            started.elapsed(),
+            ReadinessOutcome::Success,
+            FailureCategory::None,
+        );
         Ok(())
     }
 
