@@ -15,6 +15,18 @@ pub(in crate::codebase_memory) enum TargetedProjectState {
     Missing,
     Stale,
     Fresh,
+    Migrated,
+}
+
+pub(in crate::codebase_memory) struct TargetedDiscovery {
+    pub states: Vec<TargetedProjectState>,
+    pub cache_bytes: Option<u64>,
+}
+
+pub(in crate::codebase_memory) struct TargetedDiscoveryFailure {
+    pub error: McpError,
+    pub record_count: usize,
+    pub cache_bytes: Option<u64>,
 }
 
 /// Looks up only the host-derived provider keys for this workspace. Results are
@@ -25,38 +37,60 @@ pub(in crate::codebase_memory) async fn discover_workspace_projects(
     client: &StdioMcpClient,
     timeout: Duration,
     scope: &WorkspaceScope,
-) -> Result<Vec<TargetedProjectState>, McpError> {
+) -> Result<TargetedDiscovery, TargetedDiscoveryFailure> {
     let mut states = Vec::with_capacity(scope.projects.len());
+    let mut cache_bytes = None;
     let started = std::time::Instant::now();
     for project in &scope.projects {
-        let remaining =
-            timeout
-                .checked_sub(started.elapsed())
-                .ok_or_else(|| McpError::Timeout {
+        let remaining = timeout.checked_sub(started.elapsed()).ok_or_else(|| {
+            discovery_failure(
+                McpError::Timeout {
                     method: "tools/call index_status".to_string(),
                     timeout,
-                })?;
+                },
+                states.len(),
+                cache_bytes,
+            )
+        })?;
         let result = client
             .call_tool(
                 "index_status",
                 json!({ "project": project.provider_key }),
                 remaining,
             )
-            .await?;
-        states.push(parse_targeted_status(
-            &result,
-            &project.provider_key,
-            project.git_head.as_deref(),
-        )?);
+            .await
+            .map_err(|error| discovery_failure(error, states.len(), cache_bytes))?;
+        let (state, reported_cache_bytes) =
+            parse_targeted_status(&result, &project.provider_key, project.git_head.as_deref())
+                .map_err(|error| discovery_failure(error, states.len(), cache_bytes))?;
+        states.push(state);
+        if let Some(reported) = reported_cache_bytes {
+            cache_bytes = Some(cache_bytes.map_or(reported, |known: u64| known.max(reported)));
+        }
     }
-    Ok(states)
+    Ok(TargetedDiscovery {
+        states,
+        cache_bytes,
+    })
+}
+
+fn discovery_failure(
+    error: McpError,
+    record_count: usize,
+    cache_bytes: Option<u64>,
+) -> TargetedDiscoveryFailure {
+    TargetedDiscoveryFailure {
+        error,
+        record_count,
+        cache_bytes,
+    }
 }
 
 fn parse_targeted_status(
     result: &McpToolCallResult,
     provider_key: &str,
     checkout_head: Option<&str>,
-) -> Result<TargetedProjectState, McpError> {
+) -> Result<(TargetedProjectState, Option<u64>), McpError> {
     if result.text.len() > MAX_TARGETED_DISCOVERY_BYTES {
         return Err(discovery_protocol_error(
             provider_key,
@@ -69,10 +103,11 @@ fn parse_targeted_status(
     let object = value
         .as_object()
         .ok_or_else(|| discovery_protocol_error(provider_key, "response must be a JSON object"))?;
+    let cache_bytes = u64_field(object, &["cache_bytes", "cacheBytes"]);
 
     if result.is_error {
         if response_is_missing(object) {
-            return Ok(TargetedProjectState::Missing);
+            return Ok((TargetedProjectState::Missing, cache_bytes));
         }
         return Err(discovery_protocol_error(
             provider_key,
@@ -80,7 +115,7 @@ fn parse_targeted_status(
         ));
     }
     if response_is_missing(object) {
-        return Ok(TargetedProjectState::Missing);
+        return Ok((TargetedProjectState::Missing, cache_bytes));
     }
     if let Some(actual) = string_field(object, &["project", "id", "name"]) {
         if actual != provider_key {
@@ -103,7 +138,7 @@ fn parse_targeted_status(
         ],
     ) == Some(true)
     {
-        return Ok(TargetedProjectState::Stale);
+        return Ok((TargetedProjectState::Stale, cache_bytes));
     }
 
     let status = string_field(object, &["status", "state"])
@@ -113,7 +148,10 @@ fn parse_targeted_status(
         status.as_str(),
         "stale" | "outdated" | "dirty" | "changed" | "needs_index" | "needs-index"
     ) {
-        return Ok(TargetedProjectState::Stale);
+        return Ok((TargetedProjectState::Stale, cache_bytes));
+    }
+    if status == "migrated" {
+        return Ok((TargetedProjectState::Migrated, cache_bytes));
     }
     if !matches!(
         status.as_str(),
@@ -133,10 +171,15 @@ fn parse_targeted_status(
             .and_then(|git| string_field(git, &["head_sha", "headSha", "commit"])),
     ) {
         if checkout_head != indexed_head {
-            return Ok(TargetedProjectState::Stale);
+            return Ok((TargetedProjectState::Stale, cache_bytes));
         }
     }
-    Ok(TargetedProjectState::Fresh)
+    Ok((TargetedProjectState::Fresh, cache_bytes))
+}
+
+fn u64_field(object: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| object.get(*key).and_then(Value::as_u64))
 }
 
 fn response_is_missing(object: &Map<String, Value>) -> bool {

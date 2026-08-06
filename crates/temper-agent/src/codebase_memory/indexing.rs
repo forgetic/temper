@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -12,6 +13,7 @@ use temper_agent_core::AgentContainmentContext;
 
 use super::advertised_tool;
 use super::background::BackgroundIndex;
+use super::lifecycle_observability::{FailureCategory, IndexOutcome, emit_index};
 use super::scope::{ProjectIndexState, WorkspaceScope};
 
 pub(super) async fn prepare_indexes(
@@ -22,9 +24,44 @@ pub(super) async fn prepare_indexes(
     containment: &AgentContainmentContext,
 ) -> std::result::Result<Vec<String>, McpError> {
     let mut notes = Vec::new();
+    let mode = index_setting(config.index);
     if config.index == CodebaseMemoryIndex::Off {
+        for project in &scope.projects {
+            let outcome = if project.index_state.is_discovery_unavailable() {
+                IndexOutcome::SkippedDiscoveryUnknown
+            } else {
+                IndexOutcome::Disabled
+            };
+            emit_index(
+                &project.canonical_alias,
+                &project.provider_key,
+                mode,
+                outcome,
+                FailureCategory::None,
+            );
+        }
         notes.push("index=off; no internal indexing was attempted".to_string());
         return Ok(notes);
+    }
+
+    for project in &scope.projects {
+        if project.index_state.is_fresh() {
+            emit_index(
+                &project.canonical_alias,
+                &project.provider_key,
+                mode,
+                IndexOutcome::Reused,
+                FailureCategory::None,
+            );
+        } else if project.index_state.is_discovery_unavailable() {
+            emit_index(
+                &project.canonical_alias,
+                &project.provider_key,
+                mode,
+                IndexOutcome::SkippedDiscoveryUnknown,
+                FailureCategory::None,
+            );
+        }
     }
 
     let repo_indices = scope.projects_needing_index();
@@ -45,14 +82,43 @@ pub(super) async fn prepare_indexes(
     }
 
     let timeout = Duration::from_secs(config.index_timeout_secs);
+    let mut requested_provider_keys = BTreeMap::<String, usize>::new();
     for index in repo_indices {
         let path = scope.projects[index].root.clone();
         let provider_key = scope.projects[index].provider_key.clone();
+        let logical = scope.projects[index].canonical_alias.clone();
+        emit_index(
+            &logical,
+            &provider_key,
+            mode,
+            IndexOutcome::Requested,
+            FailureCategory::None,
+        );
+
+        if let Some(previous) = requested_provider_keys.get(&provider_key).copied() {
+            scope.projects[index].index_state = scope.projects[previous].index_state;
+            scope.projects[index].background_index =
+                scope.projects[previous].background_index.clone();
+            emit_index(
+                &logical,
+                &provider_key,
+                mode,
+                IndexOutcome::SuppressedDuplicate,
+                FailureCategory::None,
+            );
+            notes.push(format!(
+                "duplicate stable index request was suppressed for prepared repo `{logical}`"
+            ));
+            continue;
+        }
+        requested_provider_keys.insert(provider_key.clone(), index);
+
         if config.index == CodebaseMemoryIndex::Background {
             match start_background_index_repository(
                 mcp_config,
                 path,
-                provider_key,
+                logical.clone(),
+                provider_key.clone(),
                 timeout,
                 containment.clone(),
             ) {
@@ -60,29 +126,57 @@ pub(super) async fn prepare_indexes(
                     scope.projects[index].index_state = ProjectIndexState::BackgroundInProgress;
                     scope.projects[index].background_index = Some(background);
                     notes.push(format!(
-                        "stable index upsert started for prepared repo `{}` (background indexing may still be in progress)",
-                        scope.projects[index].canonical_alias
+                        "stable index upsert started for prepared repo `{logical}` (background indexing may still be in progress)"
                     ));
                 }
                 Err(message) if config.mode == CodebaseMemoryMode::Auto => {
                     scope.projects[index].index_state = ProjectIndexState::IndexFailed;
+                    emit_index(
+                        &logical,
+                        &provider_key,
+                        mode,
+                        IndexOutcome::Failed,
+                        FailureCategory::Internal,
+                    );
                     notes.push(format!(
-                        "stable index upsert background start failed for prepared repo `{}`; no path-keyed fallback was attempted: {message}",
-                        scope.projects[index].canonical_alias
+                        "stable index upsert background start failed for prepared repo `{logical}`; no path-keyed fallback was attempted: {message}"
                     ));
                 }
-                Err(message) => return Err(McpError::Protocol(message)),
+                Err(message) => {
+                    emit_index(
+                        &logical,
+                        &provider_key,
+                        mode,
+                        IndexOutcome::Failed,
+                        FailureCategory::Internal,
+                    );
+                    return Err(McpError::Protocol(message));
+                }
             }
             continue;
         }
 
+        emit_index(
+            &logical,
+            &provider_key,
+            mode,
+            IndexOutcome::Started,
+            FailureCategory::None,
+        );
         let result =
             call_index_repository(mcp_config, &path, &provider_key, timeout, containment).await;
         match result {
             Ok(result) if result.is_error => {
                 let message = format!(
-                    "stable index upsert reported an error for prepared repo `{}`: {}",
-                    scope.projects[index].canonical_alias, result.text
+                    "stable index upsert reported an error for prepared repo `{logical}`: {}",
+                    result.text
+                );
+                emit_index(
+                    &logical,
+                    &provider_key,
+                    mode,
+                    IndexOutcome::Failed,
+                    FailureCategory::Provider,
                 );
                 if config.mode == CodebaseMemoryMode::Auto {
                     scope.projects[index].index_state = ProjectIndexState::IndexFailed;
@@ -96,19 +190,40 @@ pub(super) async fn prepare_indexes(
             }
             Ok(_) => {
                 scope.projects[index].index_state = ProjectIndexState::Fresh;
+                emit_index(
+                    &logical,
+                    &provider_key,
+                    mode,
+                    IndexOutcome::Completed,
+                    FailureCategory::None,
+                );
                 notes.push(format!(
-                    "stable index upsert completed for prepared repo `{}` (blocking indexing completed)",
-                    scope.projects[index].canonical_alias
+                    "stable index upsert completed for prepared repo `{logical}` (blocking indexing completed)"
                 ));
             }
             Err(error) if config.mode == CodebaseMemoryMode::Auto => {
                 scope.projects[index].index_state = ProjectIndexState::IndexFailed;
+                emit_index(
+                    &logical,
+                    &provider_key,
+                    mode,
+                    IndexOutcome::Failed,
+                    FailureCategory::from(&error),
+                );
                 notes.push(format!(
-                    "stable index upsert failed for prepared repo `{}`; no path-keyed fallback was attempted: {error}",
-                    scope.projects[index].canonical_alias
+                    "stable index upsert failed for prepared repo `{logical}`; no path-keyed fallback was attempted: {error}"
                 ));
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                emit_index(
+                    &logical,
+                    &provider_key,
+                    mode,
+                    IndexOutcome::Failed,
+                    FailureCategory::from(&error),
+                );
+                return Err(error);
+            }
         }
     }
     Ok(notes)
@@ -117,29 +232,49 @@ pub(super) async fn prepare_indexes(
 fn start_background_index_repository(
     mcp_config: &StdioMcpServerConfig,
     path: PathBuf,
+    logical: String,
     provider_key: String,
     timeout: Duration,
     containment: AgentContainmentContext,
 ) -> std::result::Result<BackgroundIndex, String> {
     let mcp_config = mcp_config.clone();
-    let tracker = BackgroundIndex::new();
+    let tracker = BackgroundIndex::new(provider_key.clone());
     let tracker_for_thread = tracker.clone();
     thread::Builder::new()
         .name("codebase-memory-index".to_string())
         .spawn(move || {
+            emit_index(
+                &logical,
+                &provider_key,
+                "background",
+                IndexOutcome::Started,
+                FailureCategory::None,
+            );
             let completion = run_background_index_repository(
                 mcp_config,
                 path,
-                provider_key,
+                provider_key.clone(),
                 timeout,
                 containment,
             );
             match completion {
-                Ok(actual_project) => tracker_for_thread.complete_success(Some(actual_project)),
+                Ok(actual_project) => {
+                    emit_index(
+                        &logical,
+                        &provider_key,
+                        "background",
+                        IndexOutcome::Completed,
+                        FailureCategory::None,
+                    );
+                    tracker_for_thread.complete_success(Some(actual_project));
+                }
                 Err(message) => {
-                    tracing::warn!(
-                        target: "temper::agent",
-                        "background codebase-memory stable index upsert failed: {message}"
+                    emit_index(
+                        &logical,
+                        &provider_key,
+                        "background",
+                        IndexOutcome::Failed,
+                        FailureCategory::Provider,
                     );
                     tracker_for_thread.complete_error(message);
                 }

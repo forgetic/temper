@@ -190,6 +190,46 @@ fn confirmed_missing_projects_use_stable_blocking_upsert_and_repeated_roots_conv
 }
 
 #[test]
+fn duplicate_provider_identity_is_indexed_once_per_preparation_pass() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("duplicate.log");
+    let mut context = workspace_context(
+        workspace.path(),
+        &[("acme", "demo", "first"), ("acme", "demo", "second")],
+    );
+    context.repos[1].id = context.repos[0].id.clone();
+    assert_eq!(provider_key(&context, 0), provider_key(&context, 1));
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Blocking,
+                "missing",
+                &log_path,
+                json!({}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("duplicate stable identity converges through one upsert");
+
+        assert_eq!(calls_named(&log_path, "index_status").len(), 2);
+        assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
+        assert!(
+            toolset
+                .prompt_status()
+                .expect("prompt status")
+                .contains("duplicate stable index request was suppressed")
+        );
+    });
+}
+
+#[test]
 fn stale_multi_repo_background_upserts_keep_paths_and_provider_keys_isolated() {
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");

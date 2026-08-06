@@ -51,6 +51,18 @@ pub enum Event {
     McpToolCalled,
     /// A model-visible MCP wrapper returned a server tool result (`mcp.tool.result`).
     McpToolResult,
+    /// Targeted discovery completed (`codebase_memory.discovery.completed`).
+    CodebaseMemoryDiscoveryCompleted,
+    /// Maintenance inventory discovery completed (`codebase_memory.maintenance.discovery.completed`).
+    CodebaseMemoryMaintenanceDiscoveryCompleted,
+    /// A stable logical/provider identity was selected (`codebase_memory.identity.selected`).
+    CodebaseMemoryIdentitySelected,
+    /// An index request changed lifecycle state (`codebase_memory.index.lifecycle`).
+    CodebaseMemoryIndexLifecycle,
+    /// A call waited for background readiness (`codebase_memory.readiness.wait`).
+    CodebaseMemoryReadinessWait,
+    /// A bounded retention pass completed (`codebase_memory.retention.completed`).
+    CodebaseMemoryRetentionCompleted,
     /// A workspace contains a product diff after an agent run (`workspace.diff.produced`).
     WorkspaceDiffProduced,
     /// A failed side-effect-free provider request will be retried in the same model turn
@@ -114,6 +126,14 @@ impl Event {
             Self::McpServerStarted => "mcp.server.started",
             Self::McpToolCalled => "mcp.tool.called",
             Self::McpToolResult => "mcp.tool.result",
+            Self::CodebaseMemoryDiscoveryCompleted => "codebase_memory.discovery.completed",
+            Self::CodebaseMemoryMaintenanceDiscoveryCompleted => {
+                "codebase_memory.maintenance.discovery.completed"
+            }
+            Self::CodebaseMemoryIdentitySelected => "codebase_memory.identity.selected",
+            Self::CodebaseMemoryIndexLifecycle => "codebase_memory.index.lifecycle",
+            Self::CodebaseMemoryReadinessWait => "codebase_memory.readiness.wait",
+            Self::CodebaseMemoryRetentionCompleted => "codebase_memory.retention.completed",
             Self::WorkspaceDiffProduced => "workspace.diff.produced",
             Self::ModelTurnRetrying => "model.turn.retrying",
             Self::ModelSessionRotated => "model.session.rotated",
@@ -138,7 +158,7 @@ impl Event {
     ///
     /// Kept in sync with the enum by the `all_variants_have_unique_dotted_form`
     /// test, which fails if a new variant is added without listing it here.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 37] = [
         Self::IssueOpened,
         Self::WakeReceived,
         Self::CiCompleted,
@@ -153,6 +173,12 @@ impl Event {
         Self::McpServerStarted,
         Self::McpToolCalled,
         Self::McpToolResult,
+        Self::CodebaseMemoryDiscoveryCompleted,
+        Self::CodebaseMemoryMaintenanceDiscoveryCompleted,
+        Self::CodebaseMemoryIdentitySelected,
+        Self::CodebaseMemoryIndexLifecycle,
+        Self::CodebaseMemoryReadinessWait,
+        Self::CodebaseMemoryRetentionCompleted,
         Self::WorkspaceDiffProduced,
         Self::ModelTurnRetrying,
         Self::ModelSessionRotated,
@@ -196,6 +222,12 @@ mod tests {
             "mcp.server.started",
             "mcp.tool.called",
             "mcp.tool.result",
+            "codebase_memory.discovery.completed",
+            "codebase_memory.maintenance.discovery.completed",
+            "codebase_memory.identity.selected",
+            "codebase_memory.index.lifecycle",
+            "codebase_memory.readiness.wait",
+            "codebase_memory.retention.completed",
             "workspace.diff.produced",
             "model.turn.retrying",
             "model.session.rotated",
@@ -242,6 +274,6 @@ mod tests {
         // variant is added but not appended to ALL, this and the uniqueness test
         // catch it (the array literal would also fail to compile on a length
         // mismatch).
-        assert_eq!(Event::ALL.len(), 31);
+        assert_eq!(Event::ALL.len(), 37);
     }
 }

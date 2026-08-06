@@ -15,11 +15,8 @@ use super::indexing::index_setting;
 
 #[path = "discovery.rs"]
 mod discovery;
-pub(super) use discovery::discover_workspace_projects;
-use discovery::{
-    TargetedProjectState, alias_looks_like_filesystem_path, resolve_repo_root,
-    validate_safe_model_paths,
-};
+pub(super) use discovery::{TargetedProjectState, discover_workspace_projects};
+use discovery::{alias_looks_like_filesystem_path, resolve_repo_root, validate_safe_model_paths};
 
 #[derive(Clone, Debug)]
 pub(super) struct WorkspaceScope {
@@ -64,7 +61,9 @@ impl WorkspaceScope {
             project.index_state = match state {
                 TargetedProjectState::Missing => ProjectIndexState::Missing,
                 TargetedProjectState::Stale => ProjectIndexState::Stale,
-                TargetedProjectState::Fresh => ProjectIndexState::Fresh,
+                TargetedProjectState::Fresh | TargetedProjectState::Migrated => {
+                    ProjectIndexState::Fresh
+                }
             };
         }
     }
@@ -284,10 +283,6 @@ impl WorkspaceScope {
         })
     }
 
-    pub(super) fn primary_root(&self) -> &Path {
-        &self.primary().root
-    }
-
     pub(super) fn primary_actual_project(&self) -> String {
         self.primary().actual_project()
     }
@@ -422,6 +417,14 @@ pub(super) enum ProjectIndexState {
 impl ProjectIndexState {
     fn needs_index(self) -> bool {
         matches!(self, Self::Missing | Self::Stale)
+    }
+
+    pub(super) fn is_discovery_unavailable(self) -> bool {
+        self == Self::DiscoveryUnavailable
+    }
+
+    pub(super) fn is_fresh(self) -> bool {
+        self == Self::Fresh
     }
 
     fn as_prompt_text(self) -> &'static str {

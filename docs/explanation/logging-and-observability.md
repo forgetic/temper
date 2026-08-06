@@ -223,6 +223,18 @@ state, not an alternate watchdog. The daemon stores one latest report per exact
 assignment and does not infer progress, renew leases, or reclaim claims from the
 reported elapsed values.
 
+### Codebase-memory lifecycle evidence
+
+Codebase-memory discovery, identity, indexing, readiness, and retention use the
+stable event catalog in
+[codebase-memory lifecycle observability](../reference/codebase-memory-observability.md).
+Normal discovery/index/readiness transitions are debug, their failures are warn,
+and completed retention is info (warn when partial, uncertain, or timed out).
+The catalog also defines byte-availability flags, safe aggregate-only fields,
+concrete journald/JSON queries, and alert signals. Absolute workspace roots,
+provider records, command arguments, credentials, source text, and tool
+arguments/results are excluded from these runtime events.
+
 ### Wake, apply, and Forge operation measurements
 
 Wake scheduling is operational debug data, not an extension of the stable

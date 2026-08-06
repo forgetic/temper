@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::codebase_memory_retention::{
-    CodebaseMemoryRetentionReport, CodebaseMemoryRetentionScope,
+    CodebaseMemoryRetentionOutcome, CodebaseMemoryRetentionReport, CodebaseMemoryRetentionScope,
     maintain_obsolete_codebase_memory_indexes_until,
 };
 use crate::run::WorkerActivityProbe;
@@ -22,6 +22,11 @@ mod provider;
 use provider::{ProviderSession, unix_time_secs};
 
 const MAINTENANCE_LOCK_FILE: &str = ".temper-codebase-memory-maintenance.lock";
+
+struct MaintenanceLockFailure {
+    reason: String,
+    outcome: CodebaseMemoryRetentionOutcome,
+}
 
 /// Complete non-secret input needed by explicit or periodic maintenance.
 #[derive(Clone, Debug)]
@@ -57,22 +62,44 @@ pub fn run_codebase_memory_maintenance(
     config: &CodebaseMemoryMaintenanceConfig,
     active_work: &dyn Fn() -> bool,
 ) -> CodebaseMemoryRetentionReport {
+    let started = Instant::now();
+    let mut report = run_codebase_memory_maintenance_inner(config, active_work);
+    report.policy = Some(config.policy);
+    report.duration_ms = duration_ms(started.elapsed());
+    emit_report(&report);
+    report
+}
+
+fn run_codebase_memory_maintenance_inner(
+    config: &CodebaseMemoryMaintenanceConfig,
+    active_work: &dyn Fn() -> bool,
+) -> CodebaseMemoryRetentionReport {
     if !config.policy.enabled {
-        return CodebaseMemoryRetentionReport::no_op("retention policy is disabled");
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
+            "retention policy is disabled",
+            CodebaseMemoryRetentionOutcome::Disabled,
+        );
     }
     if active_work() {
-        return CodebaseMemoryRetentionReport::no_op(
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
             "active worker assignments suppress provider maintenance",
+            CodebaseMemoryRetentionOutcome::SuppressedActiveWork,
         );
     }
     let lock = match maintenance_lock(&config.scope.workspace_root) {
         Ok(lock) => lock,
-        Err(reason) => return CodebaseMemoryRetentionReport::no_op(reason),
+        Err(failure) => {
+            return CodebaseMemoryRetentionReport::no_op_with_outcome(
+                failure.reason,
+                failure.outcome,
+            );
+        }
     };
     let _lock = lock;
     if active_work() {
-        return CodebaseMemoryRetentionReport::no_op(
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
             "active worker assignments appeared before provider discovery",
+            CodebaseMemoryRetentionOutcome::SuppressedActiveWork,
         );
     }
 
@@ -81,16 +108,18 @@ pub fn run_codebase_memory_maintenance(
         .startup_timeout
         .min(deadline.saturating_duration_since(Instant::now()));
     if timeout.is_zero() {
-        return CodebaseMemoryRetentionReport::no_op(
+        return CodebaseMemoryRetentionReport::no_op_with_outcome(
             "maintenance deadline expired before provider negotiation",
+            CodebaseMemoryRetentionOutcome::TimedOut,
         );
     }
     let mut provider = match ProviderSession::connect(&config.command, &config.args, timeout) {
         Ok(provider) => provider,
         Err(error) => {
-            return CodebaseMemoryRetentionReport::no_op(format!(
-                "provider maintenance API was not safely negotiated: {error}"
-            ));
+            return CodebaseMemoryRetentionReport::no_op_with_outcome(
+                format!("provider maintenance API was not safely negotiated: {error}"),
+                CodebaseMemoryRetentionOutcome::DiscoveryFailed,
+            );
         }
     };
     maintain_obsolete_codebase_memory_indexes_until(
@@ -103,9 +132,10 @@ pub fn run_codebase_memory_maintenance(
     )
 }
 
-fn maintenance_lock(workspace_root: &PathBuf) -> Result<File, String> {
-    std::fs::create_dir_all(workspace_root).map_err(|error| {
-        format!("workspace root is unavailable for maintenance locking: {error}")
+fn maintenance_lock(workspace_root: &PathBuf) -> Result<File, MaintenanceLockFailure> {
+    std::fs::create_dir_all(workspace_root).map_err(|error| MaintenanceLockFailure {
+        reason: format!("workspace root is unavailable for maintenance locking: {error}"),
+        outcome: CodebaseMemoryRetentionOutcome::SafetyNoOp,
     })?;
     let path = workspace_root.join(MAINTENANCE_LOCK_FILE);
     let lock = OpenOptions::new()
@@ -114,10 +144,15 @@ fn maintenance_lock(workspace_root: &PathBuf) -> Result<File, String> {
         .read(true)
         .write(true)
         .open(&path)
-        .map_err(|error| format!("open maintenance overlap lock failed: {error}"))?;
-    lock.try_lock_exclusive().map_err(|_| {
-        "another codebase-memory maintenance pass owns the overlap lock".to_string()
-    })?;
+        .map_err(|error| MaintenanceLockFailure {
+            reason: format!("open maintenance overlap lock failed: {error}"),
+            outcome: CodebaseMemoryRetentionOutcome::SafetyNoOp,
+        })?;
+    lock.try_lock_exclusive()
+        .map_err(|_| MaintenanceLockFailure {
+            reason: "another codebase-memory maintenance pass owns the overlap lock".to_string(),
+            outcome: CodebaseMemoryRetentionOutcome::SuppressedOverlap,
+        })?;
     Ok(lock)
 }
 
@@ -170,9 +205,8 @@ pub fn spawn_codebase_memory_maintenance_task(
                 if stopped(&thread_stop) {
                     break;
                 }
-                let report =
+                let _report =
                     run_codebase_memory_maintenance(&config, &|| activity.has_active_work());
-                emit_report(&report);
                 let (stopped, wake) = &*thread_stop;
                 let stopped = stopped
                     .lock()
@@ -206,21 +240,158 @@ fn stopped(stop: &Arc<(Mutex<bool>, Condvar)>) -> bool {
 }
 
 fn emit_report(report: &CodebaseMemoryRetentionReport) {
-    let no_op = report.no_op_reason.as_deref().unwrap_or("");
-    tracing::info!(
-        target: "temper::worker",
-        service = "worker",
-        event = "codebase_memory.retention.completed",
-        inventory_complete = report.inventory_complete,
-        preserved = report.preserved.len(),
-        candidates = report.candidates.len(),
-        deleted = report.deleted.len(),
-        failed = report.failed.len(),
-        no_op_reason = no_op,
-        "worker codebase-memory retention: preserved {}, candidates {}, deleted {}, failed {}",
-        report.preserved.len(),
-        report.candidates.len(),
-        report.deleted.len(),
-        report.failed.len(),
+    let discovery_outcome = if report.inventory_complete {
+        "success"
+    } else if report.outcome == CodebaseMemoryRetentionOutcome::TimedOut {
+        "timeout"
+    } else if report.inventory_attempted {
+        "failure"
+    } else {
+        "skipped"
+    };
+    let timed_out = report.outcome == CodebaseMemoryRetentionOutcome::TimedOut;
+    let record_count = count(report.inventory_record_count);
+    let cache_bytes_available = report.cache_bytes.is_some();
+    let cache_bytes = report.cache_bytes.unwrap_or_default();
+    let failure_category = safe_failure_category(report.outcome);
+    if report.inventory_complete {
+        tracing::debug!(
+            target: "temper::worker",
+            service = "worker",
+            event = "codebase_memory.maintenance.discovery.completed",
+            discovery.method = "list_projects",
+            discovery.inventory = "maintenance",
+            discovery.targeted = false,
+            duration_ms = report.inventory_duration_ms,
+            outcome = discovery_outcome,
+            timed_out,
+            record_count,
+            cache.bytes_available = cache_bytes_available,
+            cache.bytes = cache_bytes,
+            failure.category = failure_category,
+            failure.message = safe_failure_message(report.outcome),
+            "worker:  codebase-memory maintenance discovery completed",
+        );
+    } else {
+        tracing::warn!(
+            target: "temper::worker",
+            service = "worker",
+            event = "codebase_memory.maintenance.discovery.completed",
+            discovery.method = "list_projects",
+            discovery.inventory = "maintenance",
+            discovery.targeted = false,
+            duration_ms = report.inventory_duration_ms,
+            outcome = discovery_outcome,
+            timed_out,
+            record_count,
+            cache.bytes_available = cache_bytes_available,
+            cache.bytes = cache_bytes,
+            failure.category = failure_category,
+            failure.message = safe_failure_message(report.outcome),
+            "worker:  codebase-memory maintenance discovery did not complete",
+        );
+    }
+
+    let policy = report.policy.unwrap_or_default();
+    let deleted_bytes_available = report.deleted_estimated_bytes.is_some();
+    let deleted_bytes = report.deleted_estimated_bytes.unwrap_or_default();
+    let outcome = report.outcome.as_str();
+    let preserved_count = count(report.preserved.len());
+    let candidate_count = count(report.candidates.len());
+    let deletion_count = count(report.deleted.len());
+    let failure_count = count(report.failed.len());
+    let warn = matches!(
+        report.outcome,
+        CodebaseMemoryRetentionOutcome::PartialFailure
+            | CodebaseMemoryRetentionOutcome::TimedOut
+            | CodebaseMemoryRetentionOutcome::DiscoveryFailed
+            | CodebaseMemoryRetentionOutcome::InventoryUncertain
     );
+    if warn {
+        tracing::warn!(
+            target: "temper::worker",
+            service = "worker",
+            event = "codebase_memory.retention.completed",
+            outcome,
+            duration_ms = report.duration_ms,
+            retention.enabled = policy.enabled,
+            retention.max_obsolete_projects = u64::from(policy.max_obsolete_projects),
+            retention.max_age_days = u64::from(policy.max_age_days),
+            retention.max_deletions_per_run = u64::from(policy.max_deletions_per_run),
+            retention.maintenance_timeout_secs = policy.maintenance_timeout_secs,
+            retention.preserved_count = preserved_count,
+            retention.candidate_count = candidate_count,
+            retention.deletion_count = deletion_count,
+            retention.deleted_bytes_available = deleted_bytes_available,
+            retention.deleted_estimated_bytes = deleted_bytes,
+            retention.dry_run = report.dry_run,
+            failure.count = failure_count,
+            failure.category = failure_category,
+            failure.message = safe_failure_message(report.outcome),
+            "worker:  codebase-memory retention completed with operator evidence",
+        );
+    } else {
+        tracing::info!(
+            target: "temper::worker",
+            service = "worker",
+            event = "codebase_memory.retention.completed",
+            outcome,
+            duration_ms = report.duration_ms,
+            retention.enabled = policy.enabled,
+            retention.max_obsolete_projects = u64::from(policy.max_obsolete_projects),
+            retention.max_age_days = u64::from(policy.max_age_days),
+            retention.max_deletions_per_run = u64::from(policy.max_deletions_per_run),
+            retention.maintenance_timeout_secs = policy.maintenance_timeout_secs,
+            retention.preserved_count = preserved_count,
+            retention.candidate_count = candidate_count,
+            retention.deletion_count = deletion_count,
+            retention.deleted_bytes_available = deleted_bytes_available,
+            retention.deleted_estimated_bytes = deleted_bytes,
+            retention.dry_run = report.dry_run,
+            failure.count = failure_count,
+            failure.category = failure_category,
+            failure.message = safe_failure_message(report.outcome),
+            "worker:  codebase-memory retention completed",
+        );
+    }
 }
+
+fn safe_failure_category(outcome: CodebaseMemoryRetentionOutcome) -> &'static str {
+    match outcome {
+        CodebaseMemoryRetentionOutcome::PartialFailure => "deletion_failure",
+        CodebaseMemoryRetentionOutcome::TimedOut => "timeout",
+        CodebaseMemoryRetentionOutcome::DiscoveryFailed => "provider_error",
+        CodebaseMemoryRetentionOutcome::InventoryUncertain => "inventory_uncertain",
+        CodebaseMemoryRetentionOutcome::SuppressedActiveWork => "active_work",
+        CodebaseMemoryRetentionOutcome::SuppressedOverlap => "overlap",
+        CodebaseMemoryRetentionOutcome::SafetyNoOp => "safety_no_op",
+        CodebaseMemoryRetentionOutcome::Disabled | CodebaseMemoryRetentionOutcome::Completed => "",
+    }
+}
+
+fn safe_failure_message(outcome: CodebaseMemoryRetentionOutcome) -> &'static str {
+    match outcome {
+        CodebaseMemoryRetentionOutcome::PartialFailure => "one or more deletions failed",
+        CodebaseMemoryRetentionOutcome::TimedOut => "maintenance timed out",
+        CodebaseMemoryRetentionOutcome::DiscoveryFailed => "provider discovery failed",
+        CodebaseMemoryRetentionOutcome::InventoryUncertain => "provider inventory was uncertain",
+        CodebaseMemoryRetentionOutcome::SuppressedActiveWork => {
+            "active work suppressed maintenance"
+        }
+        CodebaseMemoryRetentionOutcome::SuppressedOverlap => "another maintenance pass was active",
+        CodebaseMemoryRetentionOutcome::SafetyNoOp => "maintenance failed closed",
+        CodebaseMemoryRetentionOutcome::Disabled | CodebaseMemoryRetentionOutcome::Completed => "",
+    }
+}
+
+fn count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+#[path = "codebase_memory_maintenance/observability_tests.rs"]
+mod observability_tests;
