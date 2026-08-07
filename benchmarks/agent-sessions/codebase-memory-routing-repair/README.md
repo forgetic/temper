@@ -31,14 +31,28 @@ cargo run -p temper-benchmark-cli -- run \
   --output-dir target/benchmark-harness/codebase-memory-routing-repair/enabled
 ```
 
-The enabled fixture response names `src/route.rs`, its caller
-`src/delivery.rs`, and `tests/alias_retry.rs`. The unavailable script includes
-provider text that must never survive the wrapper's typed safe diagnostic.
-Enabled and unavailable harness runs share the one graph attempt; the disabled
-Jig starts at the same fallback step because that invocation exposes no graph
-tool. Every subsequent discovery, patch, validation, submit, and final response
-is identical. This static Jig adaptation proves condition plumbing only; live
-comparisons keep one model/task and let the model react to the actual tool list.
+The enabled harness starts with a confirmed missing stable project, performs a
+blocking stable upsert in an isolated fixture-state file outside the repository,
+then verifies a cold ready search followed by a warm ready search using that
+same provider key. Both targeted `search_code` responses name `src/route.rs`,
+its caller `src/delivery.rs`, and/or `tests/alias_retry.rs`, and later exact
+reads consume every declared result marker. The Jig deliberately avoids broad
+architecture and empty graph searches.
+
+Every condition uses the same parseable compound shell fallback before the
+first exact selection: `cd repo && rg ...`. The manifest counts its one `rg`
+segment only when full shell coverage is present; it does not infer a count
+from an unparseable command. The disabled Jig begins at that
+fallback because no graph tools are registered. The unavailable Jig makes one
+systemically failing graph request, then takes the same fallback without an
+immediate graph retry. Its provider response includes secret-shaped text that
+must never survive the wrapper's typed safe diagnostic or retained trace.
+
+These scripted cold/warm, relevance, shell-classification, and unavailable
+checks prove deterministic harness plumbing and bounded wrapper behavior only.
+They do not simulate model choice, production cache behavior, or deployment
+approval; live comparisons keep one model/task and must satisfy the frozen
+criterion independently.
 
 ## Predeclared material-improvement criterion
 

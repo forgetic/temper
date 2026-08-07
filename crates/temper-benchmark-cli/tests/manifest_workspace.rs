@@ -191,6 +191,12 @@ fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
             .unwrap()
             .is_file()
     );
+    assert!(
+        manifest
+            .condition_unavailable_jig_script_path()
+            .unwrap()
+            .is_file()
+    );
     assert!(manifest.expected_patch_path().unwrap().is_file());
     assert_eq!(manifest.manifest().graph_decision_targets.len(), 3);
 }

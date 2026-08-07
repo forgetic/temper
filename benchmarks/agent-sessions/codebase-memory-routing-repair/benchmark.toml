@@ -29,6 +29,7 @@ result_contains = "tests/alias_retry.rs"
 kind = "codebase_memory"
 fixture_provider = "codebase-memory-mcp.py"
 disabled_jig_script = "jig-disabled.json"
+unavailable_jig_script = "jig-unavailable.json"
 
 [annotations]
 provider_region = "loopback"

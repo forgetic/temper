@@ -4,7 +4,22 @@
       "turns": [
         {
           "tool_call": {
-            "id": "compound_shell_discovery",
+            "id": "graph_find_affinity_unavailable",
+            "name": "codebase_memory_search_code",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "pattern": "aliased delivery retry worker affinity"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "compound_shell_fallback_after_unavailable",
             "name": "bash",
             "args": {
               "command": "cd repo && rg worker_for src",
