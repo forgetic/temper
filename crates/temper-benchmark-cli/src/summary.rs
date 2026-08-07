@@ -301,13 +301,23 @@ pub struct GraphDecisionEvidenceV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConventionalDiscoveryMetricsV1 {
+    /// Direct conventional-tool calls are counted independently of shell
+    /// classification so partial shell evidence does not erase them.
     pub grep_calls: u64,
     pub find_calls: u64,
     pub read_calls: u64,
-    pub classified_shell_calls: u64,
+    /// Discovery command-list segments from completely parsed shell calls.
+    #[serde(alias = "classified_shell_calls")]
+    pub classified_shell_segments: u64,
+    /// The all-component conventional-discovery total is available only when
+    /// every preceding shell call was captured and classified. It is the value
+    /// suitable for a cross-condition improvement gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_calls: Option<u64>,
-    pub shell_classification_coverage: MetricCoverageV1,
+    /// Shell calls whose complete command was parsed under the constrained
+    /// command-list grammar, over all preceding shell calls.
+    #[serde(alias = "shell_classification_coverage")]
+    pub shell_command_classification_coverage: MetricCoverageV1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

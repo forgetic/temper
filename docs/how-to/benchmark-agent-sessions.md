@@ -72,12 +72,23 @@ result_contains = "src/lib.rs"
 
 Conventional discovery counts `grep`, `find`, and `read` calls before the first
 successful selection whose complete arguments contain a declared target. Shell
-calls count only when their complete command starts with a manifest
-`discovery_command_prefixes` entry; arbitrary shell calls are never guessed to
-be discovery. A configured rubric therefore emits known zero graph counts in a
-graph-disabled condition instead of dropping that trial. Reports retain the
-component counts and shell classification coverage when old traces omit
-arguments.
+classification uses a deliberately narrow command-list parser: unquoted and
+unescaped words joined with `&&`, `||`, `;`, or newlines. Each parseable segment
+matching a manifest `discovery_command_prefixes` argv prefix and containing an
+argument beyond that prefix counts as discovery. Parseable non-matches count as
+zero. Quoting, escaping, expansions, pipelines, redirects, grouping, globbing,
+comments, missing discovery arguments, omitted command content, and other
+ambiguous syntax remain unknown rather than being guessed.
+
+`shell_command_classification_coverage` measures fully captured and parsed
+shell *calls*, while `classified_shell_segments` counts matching segments in
+those calls. Direct `grep`, `find`, and `read` components remain visible when a
+shell call is unknown, but `total_calls` is omitted unless every shell call
+before selection is classified. Aggregate and comparison artifacts likewise
+omit the all-component total and the shell-segment distribution for incomplete
+shell coverage; do not use component medians as a material-improvement gate. A
+configured rubric still emits known zero graph counts in a graph-disabled
+condition instead of dropping that trial.
 
 Failure categories come from typed safe diagnostics. Every category except
 `invalid_model_input` is systemic for the immediate-repeat metric: a repeat is

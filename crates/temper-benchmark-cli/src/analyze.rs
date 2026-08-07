@@ -3,6 +3,7 @@
 //! Typed metric extraction over a normalized activity stream.
 
 mod graph;
+mod shell;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,8 +26,8 @@ pub struct AnalyzeOptions {
     /// Successful `bash` calls whose captured command starts with one of these
     /// values are validation boundaries.
     pub validation_command_prefixes: Vec<String>,
-    /// `bash` prefixes explicitly classified as conventional discovery.
-    pub discovery_command_prefixes: Vec<String>,
+    /// `bash` argv prefixes explicitly classified as conventional discovery.
+    pub discovery_command_prefixes: Vec<Vec<String>>,
     /// Fixture-owned decision targets used by the graph-consumption rubric.
     pub graph_decision_targets: Vec<GraphDecisionTargetV1>,
 }

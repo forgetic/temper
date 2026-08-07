@@ -197,7 +197,7 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
     let mut complete = analyze_trace(
         &ingest_trace(fixture("graph-metrics-events.jsonl")).unwrap(),
         &AnalyzeOptions {
-            discovery_command_prefixes: vec!["git grep".to_string()],
+            discovery_command_prefixes: vec![vec!["git".to_string(), "grep".to_string()]],
             graph_decision_targets: targets.clone(),
             ..AnalyzeOptions::default()
         },
@@ -219,6 +219,18 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
         .unwrap()
         .discovery_duration_coverage
         .observed = 6;
+    let partial_discovery = partial
+        .metrics
+        .graph
+        .as_mut()
+        .unwrap()
+        .conventional_discovery_before_selection
+        .as_mut()
+        .unwrap();
+    partial_discovery
+        .shell_command_classification_coverage
+        .observed = 0;
+    partial_discovery.total_calls = None;
     let mut missing = analyze_trace(
         &ingest_trace(fixture("graph-missing-evidence-events.jsonl")).unwrap(),
         &AnalyzeOptions {
@@ -235,7 +247,15 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
     assert_eq!(base.metrics["graph_readiness_wait_ms"].count, 1);
     assert_eq!(
         base.metrics["conventional_discovery_calls_before_selection"].count,
+        1
+    );
+    assert_eq!(
+        base.metrics["conventional_grep_calls_before_selection"].count,
         2
+    );
+    assert_eq!(
+        base.metrics["conventional_shell_segments_before_selection"].count,
+        1
     );
     let markdown = render_aggregate_markdown(&base);
     assert!(markdown.contains("| graph relevant results | 2 |"));
@@ -258,6 +278,20 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
     assert_eq!(relevance.base.as_ref().unwrap().count, 2);
     assert_eq!(relevance.head.as_ref().unwrap().count, 1);
     assert_eq!(relevance.median_delta, Some(1));
+    let total = comparison
+        .primary
+        .iter()
+        .find(|metric| metric.metric == "conventional_discovery_calls_before_selection")
+        .unwrap();
+    assert_eq!(total.base.as_ref().unwrap().count, 1);
+    assert_eq!(total.head.as_ref().unwrap().count, 1);
+    let shell_segments = comparison
+        .primary
+        .iter()
+        .find(|metric| metric.metric == "conventional_shell_segments_before_selection")
+        .unwrap();
+    assert_eq!(shell_segments.base.as_ref().unwrap().count, 1);
+    assert_eq!(shell_segments.head.as_ref().unwrap().count, 1);
     assert!(
         render_comparison_markdown(&comparison)
             .contains("| graph relevant results | 1 (n=2) | 2 | +1 |")

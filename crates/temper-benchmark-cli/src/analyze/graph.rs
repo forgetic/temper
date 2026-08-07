@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use temper_protocol_activity::{AgentActivityEventV1, ToolFailureCategoryV1, ToolStatusV1};
 
-use super::{CallKey, captured_command, content_text};
+use super::{CallKey, captured_command, content_text, shell::classify_shell_discovery};
 use crate::{
     AnalyzeOptions, ConventionalDiscoveryMetricsV1, DiagnosticSeverityV1, GraphDecisionEvidenceV1,
     GraphMetricsV1, MetricCoverageV1, NormalizedTrace, TraceDiagnosticCodeV1, TraceDiagnosticV1,
@@ -100,6 +100,10 @@ pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -
     let conventional = decision
         .sequence
         .map(|sequence| conventional_discovery(trace, options, sequence));
+    let conventional = conventional.map(|analysis| {
+        diagnostics.extend(analysis.diagnostics);
+        analysis.metrics
+    });
 
     GraphAnalysis {
         metrics: Some(GraphMetricsV1 {
@@ -436,13 +440,18 @@ fn conventional_discovery(
     trace: &NormalizedTrace,
     options: &AnalyzeOptions,
     before_seq: u64,
-) -> ConventionalDiscoveryMetricsV1 {
+) -> ConventionalDiscoveryAnalysis {
+    // This intentionally recognizes only an unquoted, unescaped shell list
+    // joined by `&&`, `||`, `;`, or newlines. Treating richer shell syntax as
+    // unknown avoids counting a word inside a quote, expansion, pipeline, or
+    // redirection as a separate conventional-discovery command.
     let mut grep_calls = 0_u64;
     let mut find_calls = 0_u64;
     let mut read_calls = 0_u64;
-    let mut shell_calls = 0_u64;
+    let mut shell_segments = 0_u64;
     let mut shell_observed = 0_u64;
     let mut shell_expected = 0_u64;
+    let mut diagnostics = Vec::new();
     for event in trace.events.iter().filter(|event| event.seq < before_seq) {
         let AgentActivityEventV1::ToolStarted(tool) = &event.event else {
             continue;
@@ -458,15 +467,21 @@ fn conventional_discovery(
                     .as_ref()
                     .and_then(|arguments| content_text(trace, arguments))
                     .and_then(|arguments| captured_command(&arguments));
-                if let Some(command) = command {
-                    shell_observed = shell_observed.saturating_add(1);
-                    if options
-                        .discovery_command_prefixes
-                        .iter()
-                        .any(|prefix| command_matches_prefix(&command, prefix))
-                    {
-                        shell_calls = shell_calls.saturating_add(1);
+                match command.as_deref().map(|command| {
+                    classify_shell_discovery(command, &options.discovery_command_prefixes)
+                }) {
+                    Some(Ok(classified_segments)) => {
+                        shell_observed = shell_observed.saturating_add(1);
+                        shell_segments = shell_segments.saturating_add(classified_segments);
                     }
+                    Some(Err(error)) => diagnostics.push(unavailable(
+                        Some(event.seq),
+                        error.availability_message(),
+                    )),
+                    None => diagnostics.push(unavailable(
+                        Some(event.seq),
+                        "shell discovery classification is unavailable because the complete command is omitted or truncated",
+                    )),
                 }
             }
             _ => {}
@@ -475,30 +490,30 @@ fn conventional_discovery(
     let known_total = grep_calls
         .saturating_add(find_calls)
         .saturating_add(read_calls)
-        .saturating_add(shell_calls);
-    ConventionalDiscoveryMetricsV1 {
-        grep_calls,
-        find_calls,
-        read_calls,
-        classified_shell_calls: shell_calls,
-        total_calls: (shell_observed == shell_expected).then_some(known_total),
-        shell_classification_coverage: MetricCoverageV1 {
-            observed: shell_observed,
-            expected: Some(shell_expected),
+        .saturating_add(shell_segments);
+    ConventionalDiscoveryAnalysis {
+        metrics: ConventionalDiscoveryMetricsV1 {
+            grep_calls,
+            find_calls,
+            read_calls,
+            classified_shell_segments: shell_segments,
+            total_calls: (shell_observed == shell_expected).then_some(known_total),
+            shell_command_classification_coverage: MetricCoverageV1 {
+                observed: shell_observed,
+                expected: Some(shell_expected),
+            },
         },
+        diagnostics,
     }
+}
+
+struct ConventionalDiscoveryAnalysis {
+    metrics: ConventionalDiscoveryMetricsV1,
+    diagnostics: Vec<TraceDiagnosticV1>,
 }
 
 fn selection_matches_target(arguments: &str, target: &str) -> bool {
     arguments.trim() == target.trim()
-}
-
-fn command_matches_prefix(command: &str, prefix: &str) -> bool {
-    let command = command.trim_start();
-    let prefix = prefix.trim();
-    command
-        .strip_prefix(prefix)
-        .is_some_and(|remainder| remainder.chars().next().is_none_or(char::is_whitespace))
 }
 
 fn is_graph_tool(name: &str) -> bool {

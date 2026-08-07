@@ -33,7 +33,7 @@ pub const PRIMARY_METRICS: &[&str] = &[
     "conventional_grep_calls_before_selection",
     "conventional_find_calls_before_selection",
     "conventional_read_calls_before_selection",
-    "conventional_shell_calls_before_selection",
+    "conventional_shell_segments_before_selection",
     "graph_failure_configuration_startup",
     "graph_failure_project_not_ready",
     "graph_failure_index_failure",
@@ -208,10 +208,10 @@ pub(crate) fn metric_values(summary: &RunSummaryV1) -> BTreeMap<&'static str, u6
                 "conventional_read_calls_before_selection",
                 discovery.read_calls,
             );
-            if has_full_coverage(&discovery.shell_classification_coverage) {
+            if has_full_coverage(&discovery.shell_command_classification_coverage) {
                 values.insert(
-                    "conventional_shell_calls_before_selection",
-                    discovery.classified_shell_calls,
+                    "conventional_shell_segments_before_selection",
+                    discovery.classified_shell_segments,
                 );
             }
         }

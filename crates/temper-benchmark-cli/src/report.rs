@@ -365,13 +365,13 @@ fn render_graph(graph: Option<&GraphMetricsV1>, out: &mut String) {
         row(out, "Discovery read calls", discovery.read_calls);
         row(
             out,
-            "Rubric-classified shell discovery",
-            discovery.classified_shell_calls,
+            "Rubric-classified shell discovery segments",
+            discovery.classified_shell_segments,
         );
         row(
             out,
-            "Shell classification coverage",
-            coverage(&discovery.shell_classification_coverage),
+            "Shell-command classification coverage",
+            coverage(&discovery.shell_command_classification_coverage),
         );
     } else {
         row(

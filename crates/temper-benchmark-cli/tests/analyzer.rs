@@ -284,7 +284,7 @@ fn graph_metrics_distinguish_consumption_failures_retries_and_fallback_discovery
     let summary = analyze_trace(
         &trace,
         &AnalyzeOptions {
-            discovery_command_prefixes: vec!["git grep".to_string()],
+            discovery_command_prefixes: vec![vec!["git".to_string(), "grep".to_string()]],
             graph_decision_targets: vec![
                 GraphDecisionTargetV1 {
                     target: "src/lib.rs".to_string(),
@@ -377,7 +377,7 @@ fn graph_metrics_distinguish_consumption_failures_retries_and_fallback_discovery
         ),
         (1, 1, 1)
     );
-    assert_eq!(discovery.classified_shell_calls, 1);
+    assert_eq!(discovery.classified_shell_segments, 1);
     assert_eq!(discovery.total_calls, Some(4));
 
     let markdown = render_run_summary_markdown(&summary);
@@ -395,7 +395,7 @@ fn decisive_selection_keeps_disabled_and_irrelevant_graph_fallback_comparable() 
         result_contains: None,
     };
     let options = AnalyzeOptions {
-        discovery_command_prefixes: vec!["git grep".to_string()],
+        discovery_command_prefixes: vec![vec!["git".to_string(), "grep".to_string()]],
         graph_decision_targets: vec![target],
         ..AnalyzeOptions::default()
     };

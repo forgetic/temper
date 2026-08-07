@@ -432,12 +432,7 @@ fn finalize_repetition(
         .iter()
         .map(|argv| argv.join(" "))
         .collect();
-    let discovery_prefixes = manifest
-        .manifest()
-        .discovery_command_prefixes
-        .iter()
-        .map(|argv| argv.join(" "))
-        .collect();
+    let discovery_prefixes = manifest.manifest().discovery_command_prefixes.clone();
     let mut summary = analyze_trace(
         &trace,
         &AnalyzeOptions {

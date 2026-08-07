@@ -45,10 +45,16 @@ comparisons keep one model/task and let the model react to the actual tool list.
 Before any live trials, material improvement is defined as **at least a 20%
 reduction** in the enabled condition's median conventional discovery calls
 before decisive selection, or in median discovery latency/token cost, relative
-to the disabled condition. Correctness and host validation must pass in every
-included trial, provider/model identity and cache policy must match, and the
-unavailable condition must show bounded fallback with no immediate graph retry.
-Report sample counts and unavailable coverage with every median.
+to the disabled condition. A conventional-discovery total is eligible only when
+every shell command before selection has complete, parseable classification;
+compound lists contribute one count per matching command segment. A quoted,
+escaped, incomplete, or unsupported shell command lowers coverage and makes the
+total ineligible rather than being counted as zero. Direct-tool component
+medians remain diagnostic only in that case. Correctness and host validation
+must pass in every included trial, provider/model identity and cache policy must
+match, and the unavailable condition must show bounded fallback with no
+immediate graph retry. Report sample counts and unavailable coverage with every
+median.
 
 Harness output proves condition plumbing, graph evidence classification, safe
 bounded failure, exact diff validation, and deterministic correctness only. Jig

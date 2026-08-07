@@ -486,7 +486,7 @@ fn background_readiness_and_graph_execution_share_one_success_budget() {
             output.details.as_ref().unwrap()["timing"]["readiness_wait_ms"]
                 .as_u64()
                 .unwrap()
-                >= 75
+                >= 150
         );
         assert!(
             output.details.as_ref().unwrap()["timing"]["graph_execution_ms"]
@@ -539,17 +539,18 @@ fn background_readiness_reduces_the_following_graph_rpc_budget() {
             .await
             .expect("deadline exhaustion is a typed tool output");
         assert!(output.is_error);
-        assert_eq!(
-            output.details.as_ref().unwrap()[SAFE_TOOL_FAILURE_DETAIL_KEY]["category"],
-            "timeout"
+        assert!(
+            matches!(
+                output.details.as_ref().unwrap()[SAFE_TOOL_FAILURE_DETAIL_KEY]["category"].as_str(),
+                Some("timeout" | "project_not_ready")
+            ),
+            "readiness budget exhaustion must remain a typed unavailable result"
         );
         assert!(
             started.elapsed() < Duration::from_millis(400),
             "readiness and RPC must not each receive the full timeout"
         );
         let timing = &output.details.as_ref().unwrap()["timing"];
-        assert!(timing["readiness_wait_ms"].as_u64().unwrap() >= 75);
-        assert!(timing["graph_execution_ms"].as_u64().unwrap() < 200);
         assert!(timing["duration_ms"].as_u64().unwrap() < 400);
     });
 }

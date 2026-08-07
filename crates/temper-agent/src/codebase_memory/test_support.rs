@@ -103,8 +103,12 @@ for line in sys.stdin:
             if not isinstance(repo_path, str) or not repo_path or not isinstance(project, str) or not project:
                 tool_result(request["id"], "index_repository requires repo_path and stable name", True)
                 continue
-            if mode in ("background-budget-success", "background-budget-timeout"):
-                time.sleep(0.15)
+            if mode == "background-budget-success":
+                # Keep this above process-startup jitter so the success-budget
+                # test observes readiness rather than a completed background run.
+                time.sleep(0.30)
+            elif mode == "background-budget-timeout":
+                time.sleep(0.30)
             if mode == "index-hang":
                 time.sleep(60)
             if mode == "index-error":
