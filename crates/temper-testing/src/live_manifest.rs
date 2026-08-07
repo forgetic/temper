@@ -34,9 +34,10 @@ use std::time::Duration;
 
 use crate::forgejo_runtime::RunWorkspace;
 pub use bundle::{
-    AgentFixture, ConvergenceStrategy, IntakeFixture, LateStreamFailureBurst,
-    LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan, ManifestStep,
-    ObservabilityFixture, RecoveryFixture, RepoFixture, ScenarioBundle, TerminalHistorySeedFixture,
+    AgentFixture, ConvergenceStrategy, ForcedSystemicFailureFixture, IntakeFixture,
+    LateStreamFailureBurst, LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan,
+    ManifestStep, ObservabilityFixture, RecoveryFixture, RepoFixture, ScenarioBundle,
+    TerminalHistorySeedFixture,
 };
 pub use failure_evidence::{CiFailureEvidenceFixture, LiveCiFailureEvidence};
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
@@ -405,6 +406,12 @@ pub struct LiveCodebaseMemoryEvidence {
     pub expected_result: String,
     pub fake_mcp_log: PathBuf,
     pub mcp_search_calls: usize,
+    /// Exact tool-call inventory retained without provider response content.
+    pub mcp_call_counts: Vec<(String, usize)>,
+    /// Fixture delay that the first model-visible call had to await.
+    pub readiness_delay_ms: u64,
+    /// Provider tool that produced the controlled systemic failure, if any.
+    pub forced_failure_tool: Option<String>,
     pub safe_tools: Vec<String>,
     pub hidden_tools: Vec<String>,
     pub lifecycle: Option<String>,

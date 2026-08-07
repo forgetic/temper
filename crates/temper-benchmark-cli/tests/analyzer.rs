@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use temper_benchmark_cli::{
-    AnalyzeOptions, MetricCoverageV1, RunTerminalStatusV1, TraceDiagnosticCodeV1, analyze_trace,
-    ingest_trace, render_run_summary_json, render_run_summary_markdown,
+    AnalyzeOptions, GraphDecisionKindV1, GraphDecisionTargetV1, MetricCoverageV1,
+    RunTerminalStatusV1, TraceDiagnosticCodeV1, analyze_trace, ingest_trace,
+    render_run_summary_json, render_run_summary_markdown,
 };
 use temper_protocol_activity::{
     AgentActivityEventV1, CaptureModeV1, FailureCodeV1, FailureInfoV1, RunFailedV1, ToolStatusV1,
@@ -25,6 +26,7 @@ fn analyzer_derives_retries_ttft_tokens_tools_and_structure() {
         &trace,
         &AnalyzeOptions {
             validation_command_prefixes: vec!["cargo test".to_string()],
+            ..AnalyzeOptions::default()
         },
     );
 
@@ -201,6 +203,7 @@ fn omitted_validation_content_makes_ordering_metrics_unavailable() {
         &trace,
         &AnalyzeOptions {
             validation_command_prefixes: vec!["cargo test".to_string()],
+            ..AnalyzeOptions::default()
         },
     );
     let structure = summary.metrics.structure.as_ref().unwrap();
@@ -273,6 +276,243 @@ fn failed_terminal_uses_typed_reason_and_elapsed_wall_time() {
         FailureCodeV1::Timeout
     );
     assert_eq!(summary.wall_time_ms, Some(1_000));
+}
+
+#[test]
+fn graph_metrics_distinguish_consumption_failures_retries_and_fallback_discovery() {
+    let trace = ingest_trace(fixture("graph-metrics-events.jsonl")).unwrap();
+    let summary = analyze_trace(
+        &trace,
+        &AnalyzeOptions {
+            discovery_command_prefixes: vec![vec!["git".to_string(), "grep".to_string()]],
+            graph_decision_targets: vec![
+                GraphDecisionTargetV1 {
+                    target: "src/lib.rs".to_string(),
+                    kind: GraphDecisionKindV1::Implementation,
+                    result_contains: None,
+                },
+                GraphDecisionTargetV1 {
+                    target: "src/main.rs".to_string(),
+                    kind: GraphDecisionKindV1::Caller,
+                    result_contains: None,
+                },
+                GraphDecisionTargetV1 {
+                    target: "tests/focused.rs".to_string(),
+                    kind: GraphDecisionKindV1::FocusedTest,
+                    result_contains: None,
+                },
+            ],
+            ..AnalyzeOptions::default()
+        },
+    );
+
+    let graph = summary.metrics.graph.as_ref().unwrap();
+    assert_eq!(
+        (graph.calls, graph.succeeded, graph.failed, graph.cancelled),
+        (7, 4, 3, 0)
+    );
+    assert_eq!(
+        graph.status_coverage,
+        MetricCoverageV1 {
+            observed: 7,
+            expected: Some(7)
+        }
+    );
+    assert_eq!(
+        graph.failures_by_category[&temper_protocol_activity::ToolFailureCategoryV1::Timeout],
+        1
+    );
+    assert_eq!(
+        graph.failures_by_category[&temper_protocol_activity::ToolFailureCategoryV1::IndexFailure],
+        1
+    );
+    assert_eq!(
+        graph.failures_by_category[&temper_protocol_activity::ToolFailureCategoryV1::CircuitOpen],
+        1
+    );
+    assert_eq!(
+        graph.failure_category_coverage,
+        MetricCoverageV1 {
+            observed: 3,
+            expected: Some(3)
+        }
+    );
+    assert_eq!(graph.cumulative_readiness_wait_ms, Some(44));
+    assert_eq!(graph.cumulative_discovery_duration_ms, Some(197));
+    assert_eq!(graph.readiness_wait_coverage.observed, 7);
+    assert_eq!(
+        graph.immediate_repeated_attempts_after_systemic_failure,
+        Some(1)
+    );
+    assert_eq!(graph.relevant_results, Some(3));
+    assert_eq!(graph.irrelevant_successes, Some(1));
+    assert_eq!(
+        graph.relevance_coverage,
+        MetricCoverageV1 {
+            observed: 4,
+            expected: Some(4)
+        }
+    );
+    assert_eq!(
+        graph
+            .decision_evidence
+            .iter()
+            .map(|evidence| evidence.kind)
+            .collect::<Vec<_>>(),
+        vec![
+            GraphDecisionKindV1::Implementation,
+            GraphDecisionKindV1::Caller,
+            GraphDecisionKindV1::FocusedTest,
+        ]
+    );
+    let discovery = graph
+        .conventional_discovery_before_selection
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (
+            discovery.grep_calls,
+            discovery.find_calls,
+            discovery.read_calls
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(discovery.classified_shell_segments, 1);
+    assert_eq!(discovery.total_calls, Some(4));
+
+    let markdown = render_run_summary_markdown(&summary);
+    assert!(markdown.contains("## Graph discovery and decision relevance"));
+    assert!(markdown.contains("| Relevant graph results | 3 |"));
+    assert!(markdown.contains("| Task correctness | unavailable |"));
+    assert!(markdown.contains("| Host validation | unavailable |"));
+}
+
+#[test]
+fn decisive_selection_keeps_disabled_and_irrelevant_graph_fallback_comparable() {
+    let target = GraphDecisionTargetV1 {
+        target: "src/lib.rs".to_string(),
+        kind: GraphDecisionKindV1::Implementation,
+        result_contains: None,
+    };
+    let options = AnalyzeOptions {
+        discovery_command_prefixes: vec![vec!["git".to_string(), "grep".to_string()]],
+        graph_decision_targets: vec![target],
+        ..AnalyzeOptions::default()
+    };
+
+    let mut disabled = ingest_trace(fixture("graph-metrics-events.jsonl")).unwrap();
+    disabled.events.retain(|event| {
+        !matches!(
+            &event.event,
+            AgentActivityEventV1::ToolStarted(tool) if tool.name.starts_with("codebase_memory_")
+        ) && !matches!(
+            &event.event,
+            AgentActivityEventV1::ToolFinished(tool) if tool.name.starts_with("codebase_memory_")
+        )
+    });
+    let disabled = analyze_trace(&disabled, &options);
+    let graph = disabled.metrics.graph.as_ref().unwrap();
+    assert_eq!((graph.calls, graph.succeeded, graph.failed), (0, 0, 0));
+    assert_eq!(graph.relevant_results, Some(0));
+    assert_eq!(graph.irrelevant_successes, Some(0));
+    assert_eq!(
+        graph
+            .conventional_discovery_before_selection
+            .as_ref()
+            .unwrap()
+            .total_calls,
+        Some(4)
+    );
+
+    let mut irrelevant = ingest_trace(fixture("graph-metrics-events.jsonl")).unwrap();
+    for event in &mut irrelevant.events {
+        if let AgentActivityEventV1::ToolFinished(tool) = &mut event.event {
+            if tool.call_id == "graph-implementation" {
+                let Some(temper_protocol_activity::CapturedContentV1::Inline(result)) =
+                    tool.result.as_mut()
+                else {
+                    panic!("fixture graph result must be inline");
+                };
+                result.text = "unrelated docs/design.md".to_string();
+            }
+        }
+    }
+    let irrelevant = analyze_trace(&irrelevant, &options);
+    let graph = irrelevant.metrics.graph.as_ref().unwrap();
+    assert_eq!(graph.relevant_results, Some(0));
+    assert_eq!(graph.irrelevant_successes, Some(4));
+    assert_eq!(
+        graph
+            .conventional_discovery_before_selection
+            .as_ref()
+            .unwrap()
+            .total_calls,
+        Some(4)
+    );
+}
+
+#[test]
+fn partial_graph_timing_keeps_coverage_and_partial_total() {
+    let mut trace = ingest_trace(fixture("graph-metrics-events.jsonl")).unwrap();
+    let event = trace
+        .events
+        .iter_mut()
+        .find(|event| {
+            matches!(
+                &event.event,
+                AgentActivityEventV1::ToolFinished(tool) if tool.call_id == "graph-caller"
+            )
+        })
+        .unwrap();
+    let AgentActivityEventV1::ToolFinished(tool) = &mut event.event else {
+        unreachable!();
+    };
+    tool.codebase_memory_timing = None;
+    let summary = analyze_trace(&trace, &AnalyzeOptions::default());
+    let graph = summary.metrics.graph.as_ref().unwrap();
+    assert_eq!(graph.readiness_wait_coverage.observed, 6);
+    assert_eq!(graph.readiness_wait_coverage.expected, Some(7));
+    assert_eq!(graph.cumulative_readiness_wait_ms, Some(40));
+}
+
+#[test]
+fn old_or_metadata_only_graph_traces_keep_evidence_unavailable() {
+    let trace = ingest_trace(fixture("graph-missing-evidence-events.jsonl")).unwrap();
+    let summary = analyze_trace(
+        &trace,
+        &AnalyzeOptions {
+            graph_decision_targets: vec![GraphDecisionTargetV1 {
+                target: "src/lib.rs".to_string(),
+                kind: GraphDecisionKindV1::Implementation,
+                result_contains: None,
+            }],
+            ..AnalyzeOptions::default()
+        },
+    );
+    let graph = summary.metrics.graph.as_ref().unwrap();
+    assert_eq!(graph.calls, 1);
+    assert_eq!(graph.cumulative_readiness_wait_ms, None);
+    assert_eq!(
+        graph.readiness_wait_coverage,
+        MetricCoverageV1 {
+            observed: 0,
+            expected: Some(1)
+        }
+    );
+    assert_eq!(graph.relevant_results, None);
+    assert_eq!(graph.irrelevant_successes, None);
+    assert_eq!(
+        graph.relevance_coverage,
+        MetricCoverageV1 {
+            observed: 0,
+            expected: Some(1)
+        }
+    );
+    assert!(graph.conventional_discovery_before_selection.is_none());
+    assert!(summary.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == TraceDiagnosticCodeV1::GraphEvidenceUnavailable
+            && diagnostic.message.contains("omitted or truncated")
+    }));
 }
 
 #[test]

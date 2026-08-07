@@ -30,6 +30,23 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - name: Fence checkout to supplied landing PR head
+        run: |
+          set -eu
+          if ! git cat-file -e "${FEATURE_HEAD_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "$FEATURE_HEAD_SHA"
+          fi
+          git checkout --detach --force "$FEATURE_HEAD_SHA"
+          checkout_head="$(git rev-parse --verify 'HEAD^{commit}')"
+          if [ "$checkout_head" != "$FEATURE_HEAD_SHA" ]; then
+            echo "checked-out head $checkout_head does not match supplied landing PR head $FEATURE_HEAD_SHA" >&2
+            exit 1
+          fi
+          mkdir -p "$FOCUSED_ARTIFACT_DIR"
+          {
+            echo "authoritative landing PR head: $FEATURE_HEAD_SHA"
+            echo "checked-out head: $checkout_head"
+          } | tee "$FOCUSED_ARTIFACT_DIR/checkout-audit.log"
       - name: Reclaim shared build cache
         run: kache gc
       - name: Prepare focused validation artifacts

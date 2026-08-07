@@ -158,6 +158,19 @@ fn repository_ci_runs_one_mapped_scenario_from_exact_feature_head() {
             && focused_job.contains("fetch-depth: 0"),
         "focused validation must check out the exact head with its landing base available"
     );
+    let checkout_fence = FOCUSED_WORKFLOW
+        .split_once("      - name: Fence checkout to supplied landing PR head\n")
+        .expect("focused validation fences the supplied landing PR head")
+        .1
+        .split_once("      - name: Reclaim shared build cache\n")
+        .expect("checkout fence precedes shared-cache work")
+        .0;
+    assert!(
+        checkout_fence.contains("git checkout --detach --force \"$FEATURE_HEAD_SHA\"")
+            && checkout_fence.contains("[ \"$checkout_head\" != \"$FEATURE_HEAD_SHA\" ]")
+            && checkout_fence.contains("checkout-audit.log"),
+        "focused validation must retain evidence that the supplied landing PR head controlled the checkout"
+    );
     let run_step = focused_job
         .split_once("      - name: Resolve and run one mapped feature scenario\n")
         .expect("focused job resolves and runs a mapping")

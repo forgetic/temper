@@ -182,6 +182,8 @@ pub(super) fn produce_first_party_run(collector: &TraceCollector) -> (String, Ag
             preview: Some(ARGUMENT_SENTINEL.to_string()),
             bytes: ARGUMENT_SENTINEL.len() as u64,
             truncated: false,
+            failure: None,
+            codebase_memory_timing: None,
         },
     });
 

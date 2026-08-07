@@ -15,6 +15,15 @@ pub fn render_aggregate_markdown(aggregate: &BenchmarkAggregateV1) -> String {
     if let Some(benchmark) = &aggregate.benchmark {
         report.push_str(&format!("- Benchmark: `{}`\n", markdown_text(benchmark)));
     }
+    if let Some(condition) = aggregate.condition {
+        report.push_str(&format!(
+            "- Condition: `{}`\n",
+            serde_json::to_value(condition)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
     report.push_str(&format!(
         "- Runs: {} ({} succeeded, {} failed, {} cancelled, {} incomplete)\n\n",
         aggregate.outcomes.total,
@@ -25,12 +34,12 @@ pub fn render_aggregate_markdown(aggregate: &BenchmarkAggregateV1) -> String {
     ));
     render_metric_table(
         &mut report,
-        "Structural metrics",
+        "Correctness, discovery, and structural metrics",
         PRIMARY_METRICS,
         &aggregate.metrics,
     );
     report.push_str(
-        "## Advisory timings\n\nTiming values are advisory and are not pass/fail gates.\n\n",
+        "## Advisory timings\n\nTiming values are advisory; graph, model, tool, and wall timings are not pass/fail gates.\n\n",
     );
     render_metric_rows(&mut report, ADVISORY_METRICS, &aggregate.metrics);
     report

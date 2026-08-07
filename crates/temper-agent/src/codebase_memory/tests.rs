@@ -1,3 +1,4 @@
+mod health;
 mod indexing;
 mod lifecycle;
 mod observability;
@@ -19,6 +20,120 @@ fn model_visible_mcp_calls_are_clamped_to_the_generic_tool_deadline() {
     assert_eq!(
         effective_mcp_call_timeout(Duration::from_secs(5), Duration::from_secs(30)),
         Duration::from_secs(5)
+    );
+}
+
+#[test]
+fn codebase_memory_failures_are_classified_without_retaining_source_text() {
+    let cases = [
+        (
+            McpError::Spawn {
+                command: "command --token=SECRET".to_string(),
+                message: "stderr SECRET".to_string(),
+            },
+            ToolFailureCategory::ConfigurationStartup,
+        ),
+        (
+            McpError::Io {
+                operation: "read response",
+                message: "transport SECRET".to_string(),
+            },
+            ToolFailureCategory::Transport,
+        ),
+        (
+            McpError::Timeout {
+                method: "tools/call".to_string(),
+                timeout: Duration::from_secs(1),
+            },
+            ToolFailureCategory::Timeout,
+        ),
+        (
+            McpError::ProcessExited {
+                method: "tools/call".to_string(),
+                status: Some("SECRET".to_string()),
+            },
+            ToolFailureCategory::ProcessExit,
+        ),
+        (
+            McpError::Protocol("provider cache SECRET".to_string()),
+            ToolFailureCategory::ProviderProtocol,
+        ),
+        (
+            McpError::Json {
+                operation: "encode request",
+                message: "model input SECRET".to_string(),
+            },
+            ToolFailureCategory::InvalidModelInput,
+        ),
+        (
+            McpError::Json {
+                operation: "decode response",
+                message: "provider SECRET".to_string(),
+            },
+            ToolFailureCategory::ProviderProtocol,
+        ),
+        (
+            McpError::Rpc {
+                method: "tools/call".to_string(),
+                message: r#"{"code":-32602,"message":"Invalid params SECRET"}"#.to_string(),
+            },
+            ToolFailureCategory::InvalidModelInput,
+        ),
+        (
+            McpError::ProtocolOverflow {
+                direction: "outbound",
+                resource: "record bytes",
+                limit: 10,
+                observed: 11,
+            },
+            ToolFailureCategory::InvalidModelInput,
+        ),
+    ];
+    for (error, expected) in cases {
+        let output = codebase_memory_failure_output(classify_mcp_error(&error));
+        assert!(output.is_error);
+        assert_eq!(
+            output
+                .details
+                .as_ref()
+                .and_then(|details| { details[SAFE_TOOL_FAILURE_DETAIL_KEY]["category"].as_str() }),
+            Some(expected.as_str())
+        );
+        let rendered = format!(
+            "{} {}",
+            serde_json::to_string(&output.details).unwrap(),
+            output_text(&output)
+        );
+        assert!(!rendered.contains("SECRET"));
+        assert!(!rendered.contains("command --token"));
+        assert!(!rendered.contains("provider cache"));
+    }
+
+    assert_eq!(
+        classify_input_failure("background indexing failed: repository SECRET"),
+        ToolFailureCategory::IndexFailure
+    );
+    assert_eq!(
+        classify_input_failure(
+            "project is not ready: background indexing is still in progress after 0.250s"
+        ),
+        ToolFailureCategory::Timeout
+    );
+    assert_eq!(
+        classify_input_failure("project is not ready: repository SECRET"),
+        ToolFailureCategory::ProjectNotReady
+    );
+    assert_eq!(
+        classify_provider_failure("invalid argument contains repository SECRET"),
+        ToolFailureCategory::InvalidModelInput
+    );
+    assert_eq!(
+        classify_provider_failure("project not found"),
+        ToolFailureCategory::ProjectNotReady
+    );
+    assert_eq!(
+        classify_provider_failure("no matches"),
+        ToolFailureCategory::ProviderProtocol
     );
 }
 
@@ -171,6 +286,58 @@ fn codebase_memory_workspace_aliases_default_primary_and_filter_project_list() {
 }
 
 #[test]
+fn codebase_memory_normalizes_aliases_for_advertised_repo_schemas() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("repo-schema.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    let provider_key = scope::provider_key_for_repo(&context.repos[0]);
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "repo-schema",
+                &log_path,
+                json!({}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("repo-schema provider starts");
+        let search = toolset
+            .into_tools()
+            .into_iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search wrapper present");
+        let parameters = search.parameters();
+        assert_eq!(
+            parameters["properties"]["project"]["enum"],
+            parameters["properties"]["repo"]["enum"]
+        );
+        assert_eq!(parameters["required"], json!(["query"]));
+
+        let output = search
+            .execute(
+                "project-alias",
+                json!({"query": "needle", "project": "acme/demo"}),
+                None,
+            )
+            .await
+            .expect("project alias is normalized onto provider repo input");
+        assert!(!output.is_error);
+        let calls = calls_named(&log_path, "search_code");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["arguments"]["repo"], provider_key);
+        assert!(calls[0]["arguments"].get("project").is_none());
+    });
+}
+
+#[test]
 fn codebase_memory_rejects_unknown_aliases_and_unsafe_paths() {
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");
@@ -201,85 +368,56 @@ fn codebase_memory_rejects_unknown_aliases_and_unsafe_paths() {
             .find(|tool| tool.name() == "codebase_memory_search_code")
             .expect("search wrapper present");
 
-        let unknown = match search
-            .execute(
+        for (call_id, input) in [
+            (
                 "unknown",
                 json!({ "query": "Widget", "project": "other/repo" }),
-                None,
-            )
-            .await
-        {
-            Ok(_) => panic!("unknown aliases are rejected"),
-            Err(error) => error,
-        };
-        assert!(
-            unknown
-                .to_string()
-                .contains("unknown codebase-memory project/repo alias")
-        );
-
-        let provider_identity = match search
-            .execute(
+            ),
+            (
                 "provider-key",
                 json!({ "query": "Widget", "project": provider_key }),
-                None,
-            )
-            .await
-        {
-            Ok(_) => panic!("provider identities are not model-facing aliases"),
-            Err(error) => error,
-        };
-        assert!(
-            provider_identity
-                .to_string()
-                .contains("unknown codebase-memory project/repo alias")
-        );
-
-        let path_alias = match search
-            .execute(
+            ),
+            (
                 "path-alias",
                 json!({ "query": "Widget", "repo": "/tmp/demo" }),
-                None,
-            )
-            .await
-        {
-            Ok(_) => panic!("filesystem paths are not project aliases"),
-            Err(error) => error,
-        };
-        assert!(
-            path_alias
-                .to_string()
-                .contains("filesystem paths are not accepted")
-        );
-
-        let unsafe_path = match search
-            .execute(
+            ),
+            (
                 "unsafe-path",
                 json!({ "query": "Widget", "path": "/etc/passwd" }),
-                None,
-            )
-            .await
-        {
-            Ok(_) => panic!("absolute paths are rejected"),
-            Err(error) => error,
-        };
-        assert!(unsafe_path.to_string().contains("repository-relative path"));
-        let nested_unsafe_path = match search
-            .execute(
+            ),
+            (
                 "nested-unsafe-path",
                 json!({ "query": "Widget", "filters": {"path": "../secret"} }),
+            ),
+        ] {
+            let output = search
+                .execute(call_id, input, None)
+                .await
+                .expect("invalid input becomes a model-visible tool failure");
+            assert!(output.is_error);
+            assert!(output_text(&output).contains("request input was invalid"));
+            assert_eq!(
+                output.details.as_ref().and_then(|details| {
+                    details[SAFE_TOOL_FAILURE_DETAIL_KEY]["category"].as_str()
+                }),
+                Some("invalid_model_input")
+            );
+            let rendered = serde_json::to_string(&output.details).unwrap();
+            assert!(!rendered.contains("/etc/passwd"));
+            assert!(!rendered.contains("../secret"));
+            assert!(!rendered.contains("other/repo"));
+        }
+
+        let output = search
+            .execute(
+                "valid-after-local-errors",
+                json!({"query": "still healthy"}),
                 None,
             )
             .await
-        {
-            Ok(_) => panic!("nested parent paths are rejected"),
-            Err(error) => error,
-        };
-        assert!(
-            nested_unsafe_path
-                .to_string()
-                .contains("selected workspace repository")
-        );
+            .expect("query-local failures leave the shared client healthy");
+        assert!(!output.is_error);
+        assert_eq!(calls_named(&log_path, "search_code").len(), 1);
     });
 }
 

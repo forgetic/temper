@@ -130,9 +130,12 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
     match capability {
         Capability::CodingWorkspace => prompt.push_str(
             "\nEFFICIENCY:\n\
-             - Scale discovery to the task. For non-local work, batch independent \
-             status, architecture, and search calls into one response; skip ritual \
-             discovery when the task is already localized.\n\
+             - Scale discovery to the task. When repository-index tools are available for a \
+             concrete or already-localized defect, start with targeted symbol/code search, then \
+             use only needed call/path tracing and exact source reads; avoid empty or broad graph \
+             searches and broad architecture calls. Reserve architecture views for genuine topology \
+             questions. For non-local topology work, batch independent status and targeted discovery \
+             calls into one response; skip ritual discovery when the task is already localized.\n\
              - Read the complete likely source, test, configuration, and \
              documentation set together before editing. Form the implementation \
              contract internally, but do not spend a standalone response \

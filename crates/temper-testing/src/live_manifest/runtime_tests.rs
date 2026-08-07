@@ -61,6 +61,8 @@ fn walker_dispatches_every_manifest_action_in_declared_order() {
                 fixture: None,
                 safe_tools: vec!["search_code".to_string()],
                 hidden_tools: vec!["index_repository".to_string()],
+                readiness_delay_ms: 0,
+                forced_systemic_failure: None,
             },
         ),
         step(
@@ -70,6 +72,7 @@ fn walker_dispatches_every_manifest_action_in_declared_order() {
                 tool: "codebase_memory".to_string(),
                 mode: "required".to_string(),
                 index: "blocking".to_string(),
+                tool_timeout_secs: None,
                 server_step: "$step:mcp".to_string(),
             },
         ),

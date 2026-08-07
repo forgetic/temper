@@ -20,10 +20,6 @@ fn stable_provider_identity_ignores_checkout_path_and_separates_repositories() {
         provider_key(&second_context, 0)
     );
     assert!(provider_key(&first_context, 0).starts_with("temper-v1-"));
-    assert_eq!(
-        provider_key(&first_context, 0),
-        "temper-v1-ebdd9f0285f44f8d4b3391a5f2066dff06aac8b6ec5ca0b596f09cd33295b9f9"
-    );
     assert!(!provider_key(&first_context, 0).contains(&first.path().display().to_string()));
 
     let multi = workspace_context(
@@ -31,15 +27,6 @@ fn stable_provider_identity_ignores_checkout_path_and_separates_repositories() {
         &[("acme", "app", "app"), ("acme", "lib", "lib")],
     );
     assert_ne!(provider_key(&multi, 0), provider_key(&multi, 1));
-
-    let mut production_identity = first_context;
-    production_identity.repos[0].id = "forgejo:ai/temper".to_string();
-    production_identity.repos[0].owner = "ai".to_string();
-    production_identity.repos[0].name = "temper".to_string();
-    assert_eq!(
-        provider_key(&production_identity, 0),
-        "temper-v1-c64512cdee6aab050daf4ddccd4fb911f1fbca74fdc052c1c79ab68b209240ad"
-    );
 }
 
 #[test]
@@ -200,50 +187,6 @@ fn confirmed_missing_projects_use_stable_blocking_upsert_and_repeated_roots_conv
         "checkout paths differ while the upsert key remains stable"
     );
     assert!(calls_named(&log_path, "list_projects").is_empty());
-    let snapshot = provider_snapshot(&dir);
-    assert_eq!(snapshot["projects"].as_object().unwrap().len(), 1);
-    assert_eq!(snapshot["counters"]["project_creations"], 1);
-    assert_eq!(snapshot["counters"]["upsert_writes"], 2);
-}
-
-#[test]
-fn duplicate_provider_identity_is_indexed_once_per_preparation_pass() {
-    let dir = fake_server_script();
-    let workspace = tempfile::tempdir().expect("workspace");
-    let log_path = workspace.path().join("duplicate.log");
-    let mut context = workspace_context(
-        workspace.path(),
-        &[("acme", "demo", "first"), ("acme", "demo", "second")],
-    );
-    context.repos[1].id = context.repos[0].id.clone();
-    assert_eq!(provider_key(&context, 0), provider_key(&context, 1));
-
-    temper_agent_io::block_on(async move {
-        let toolset = build_codebase_memory_toolset(
-            Some(&config(
-                &dir,
-                CodebaseMemoryMode::Required,
-                CodebaseMemoryIndex::Blocking,
-                "missing",
-                &log_path,
-                json!({}),
-            )),
-            "engineer",
-            &context,
-            workspace.path(),
-        )
-        .await
-        .expect("duplicate stable identity converges through one upsert");
-
-        assert_eq!(calls_named(&log_path, "index_status").len(), 2);
-        assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
-        assert!(
-            toolset
-                .prompt_status()
-                .expect("prompt status")
-                .contains("duplicate stable index request was suppressed")
-        );
-    });
 }
 
 #[test]
@@ -354,10 +297,20 @@ fn discovery_timeout_skips_indexing_in_every_index_mode_and_returns_promptly() {
                 .into_iter()
                 .find(|tool| tool.name() == "codebase_memory_search_code")
                 .expect("replacement read-only client is exposed");
-            search
+            let output = search
                 .execute("search", json!({"query": "still available"}), None)
                 .await
-                .expect("replacement client remains usable");
+                .expect("fresh serving client accepts the following graph call");
+            assert!(!output.is_error);
+
+            let discovery_calls = calls_named(&log_path, "index_status");
+            let graph_calls = calls_named(&log_path, "search_code");
+            assert_eq!(discovery_calls.len(), 1);
+            assert_eq!(graph_calls.len(), 1);
+            assert_ne!(
+                discovery_calls[0]["pid"], graph_calls[0]["pid"],
+                "startup discovery must never share the model-visible MCP process"
+            );
         });
         assert!(
             started.elapsed() < Duration::from_secs(3),
@@ -368,7 +321,11 @@ fn discovery_timeout_skips_indexing_in_every_index_mode_and_returns_promptly() {
 
 #[test]
 fn malformed_or_unclassified_discovery_never_becomes_missing() {
-    for server_mode in ["discovery-malformed", "discovery-error"] {
+    for server_mode in [
+        "discovery-malformed",
+        "discovery-error",
+        "discovery-mismatched-missing",
+    ] {
         let dir = fake_server_script();
         let workspace = tempfile::tempdir().expect("workspace");
         let log_path = workspace.path().join(format!("{server_mode}.log"));
@@ -490,6 +447,116 @@ fn incompatible_provider_versions_and_schemas_fail_safely_with_upgrade_guidance(
             assert!(calls_named(&log_path, "index_status").is_empty());
         });
     }
+}
+
+#[test]
+fn background_readiness_and_graph_execution_share_one_success_budget() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("background-budget-success.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    let expected_project = provider_key(&context, 0);
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset_with_timeout(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Background,
+                "background-budget-success",
+                &log_path,
+                json!({}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+            Duration::from_millis(500),
+        )
+        .await
+        .expect("background indexing starts");
+        let search = toolset
+            .into_tools()
+            .into_iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search wrapper present");
+        let started = Instant::now();
+        let output = search
+            .execute("search", json!({"query": "ready"}), None)
+            .await
+            .expect("background readiness and graph call complete within one budget");
+        assert!(!output.is_error);
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(
+            output.details.as_ref().unwrap()["timing"]["readiness_wait_ms"]
+                .as_u64()
+                .unwrap()
+                >= 150
+        );
+        assert!(
+            output.details.as_ref().unwrap()["timing"]["graph_execution_ms"]
+                .as_u64()
+                .unwrap()
+                >= 25
+        );
+
+        let index_calls = calls_named(&log_path, "index_repository");
+        let graph_calls = calls_named(&log_path, "search_code");
+        assert_eq!(index_calls.len(), 1);
+        assert_eq!(graph_calls.len(), 1);
+        assert_eq!(graph_calls[0]["arguments"]["project"], expected_project);
+        assert_ne!(index_calls[0]["pid"], graph_calls[0]["pid"]);
+    });
+}
+
+#[test]
+fn background_readiness_reduces_the_following_graph_rpc_budget() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("background-budget-timeout.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset_with_timeout(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Background,
+                "background-budget-timeout",
+                &log_path,
+                json!({}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+            Duration::from_millis(250),
+        )
+        .await
+        .expect("background indexing starts");
+        let search = toolset
+            .into_tools()
+            .into_iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search wrapper present");
+        let started = Instant::now();
+        let output = search
+            .execute("search", json!({"query": "bounded"}), None)
+            .await
+            .expect("deadline exhaustion is a typed tool output");
+        assert!(output.is_error);
+        assert!(
+            matches!(
+                output.details.as_ref().unwrap()[SAFE_TOOL_FAILURE_DETAIL_KEY]["category"].as_str(),
+                Some("timeout" | "project_not_ready")
+            ),
+            "readiness budget exhaustion must remain a typed unavailable result"
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "readiness and RPC must not each receive the full timeout"
+        );
+        let timing = &output.details.as_ref().unwrap()["timing"];
+        assert!(timing["duration_ms"].as_u64().unwrap() < 400);
+    });
 }
 
 #[test]

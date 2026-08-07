@@ -1,0 +1,36 @@
+schema = "temper.benchmark.v1"
+name = "codebase-memory-routing-repair"
+fixture = "fixture"
+workspace_context = "workspace-context.json"
+capture = "diagnostic"
+validation_command_prefixes = [["cd", "repo", "&&", "cargo", "test", "--quiet"]]
+discovery_command_prefixes = [["git", "grep"], ["rg"]]
+post_run_commands = [["cargo", "test", "--quiet", "--manifest-path", "repo/Cargo.toml", "--target-dir", ".benchmark-target"]]
+jig_script = "jig.json"
+expected_patch = "expected.patch"
+repetitions = 1
+
+[[graph_decision_targets]]
+target = "repo/src/route.rs"
+kind = "implementation"
+result_contains = "src/route.rs"
+
+[[graph_decision_targets]]
+target = "repo/src/delivery.rs"
+kind = "caller"
+result_contains = "src/delivery.rs"
+
+[[graph_decision_targets]]
+target = "repo/tests/alias_retry.rs"
+kind = "focused_test"
+result_contains = "tests/alias_retry.rs"
+
+[condition_profile]
+kind = "codebase_memory"
+fixture_provider = "codebase-memory-mcp.py"
+disabled_jig_script = "jig-disabled.json"
+unavailable_jig_script = "jig-unavailable.json"
+
+[annotations]
+provider_region = "loopback"
+cache_warmth = "not-applicable"

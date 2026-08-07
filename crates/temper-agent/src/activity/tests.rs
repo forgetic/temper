@@ -20,6 +20,7 @@ use super::*;
 
 mod model_failure;
 mod terminal;
+mod tool_failure;
 
 struct FakeClock {
     values: Mutex<VecDeque<ActivityTimestamp>>,
@@ -306,6 +307,8 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 preview: Some("stdout password=hunter2".to_string()),
                 bytes: 23,
                 truncated: false,
+                failure: None,
+                codebase_memory_timing: None,
             },
         });
         sink.emit(AgentEvent::ToolEnd {
@@ -319,6 +322,8 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 ),
                 bytes: 66,
                 truncated: true,
+                failure: None,
+                codebase_memory_timing: None,
             },
         });
         sink.emit(AgentEvent::ToolStart {
@@ -335,6 +340,8 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 preview: Some(secret.clone()),
                 bytes: secret.len() as u64,
                 truncated: true,
+                failure: None,
+                codebase_memory_timing: None,
             },
         });
         let json =

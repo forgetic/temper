@@ -40,6 +40,8 @@ impl LiveExecutionContext<'_> {
         fixture: Option<&str>,
         safe_tools: &[String],
         hidden_tools: &[String],
+        readiness_delay_ms: u64,
+        forced_systemic_failure: Option<&super::super::ForcedSystemicFailureFixture>,
     ) -> Result<(), String> {
         required_ref(&self.server, "forgejo.provision")?;
         require(
@@ -61,6 +63,7 @@ impl LiveExecutionContext<'_> {
         )?;
         let supported = [
             "search_code",
+            "search_graph",
             "list_projects",
             "index_status",
             "index_repository",
@@ -80,12 +83,22 @@ impl LiveExecutionContext<'_> {
                 "MCP tool `{tool}` cannot be both model-safe and hidden"
             ));
         }
+        if let Some(failure) = forced_systemic_failure {
+            require(
+                safe_tools.contains(&failure.tool),
+                &format!(
+                    "forced systemic failure tool `{}` must be a model-safe MCP tool",
+                    failure.tool
+                ),
+            )?;
+        }
         self.mcp = Some(super::super::codebase_memory::write_fake_mcp(
             self.workspace.path(),
             project,
-            fixture,
             safe_tools,
             hidden_tools,
+            readiness_delay_ms,
+            forced_systemic_failure,
         )?);
         Ok(())
     }
@@ -96,6 +109,7 @@ impl LiveExecutionContext<'_> {
         tool: &str,
         mode: &str,
         index: &str,
+        tool_timeout_secs: Option<u64>,
         server_step: &str,
     ) -> Result<(), String> {
         required_ref(&self.mcp, "mcp.fake_codebase_memory.start")?;
@@ -121,6 +135,7 @@ impl LiveExecutionContext<'_> {
             tool: tool.to_string(),
             mode: mode.to_string(),
             index: index.to_string(),
+            tool_timeout_secs,
         });
         Ok(())
     }

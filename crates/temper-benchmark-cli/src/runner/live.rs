@@ -20,9 +20,9 @@ use super::{
     validate_agent_binary, write_bytes, write_json,
 };
 use crate::{
-    BenchmarkAggregateV1, BenchmarkArtifactLayout, BenchmarkModeV1, ResolvedBenchmarkManifest,
-    aggregate_run_summaries, load_benchmark_manifest, prepare_benchmark_workspace,
-    render_aggregate_markdown,
+    BenchmarkAggregateV1, BenchmarkArtifactLayout, BenchmarkConditionV1, BenchmarkModeV1,
+    ResolvedBenchmarkManifest, aggregate_run_summaries, load_benchmark_manifest,
+    prepare_benchmark_workspace, render_aggregate_markdown,
 };
 
 /// Deliberate process-level opt-in required before any live input is touched.
@@ -41,6 +41,8 @@ pub struct LiveRunOptions {
     pub credentials: Option<PathBuf>,
     /// Target-era worker pool whose agent profile should shape the invocation.
     pub worker_pool: Option<String>,
+    /// Required when the manifest declares a controlled condition profile.
+    pub condition: Option<BenchmarkConditionV1>,
 }
 
 /// Executes credential-backed live repetitions after an explicit opt-in gate.
@@ -93,6 +95,7 @@ pub fn run_live(
     redactor.ensure_safe_strings(invocation.command.iter(), "agent command")?;
 
     let manifest = load_benchmark_manifest(&options.benchmark)?;
+    let condition = super::condition::resolve_condition(&manifest, options.condition)?;
     if manifest.manifest().capture == CaptureModeV1::Off {
         return Err(BenchmarkRunError::Invalid(
             "live mode requires manifest capture other than `off`".to_string(),
@@ -117,7 +120,11 @@ pub fn run_live(
     let runtime = LiveInvocation {
         command: invocation.command,
         env: invocation.env,
-        tool_config: invocation.tool_config,
+        tool_config: super::condition::live_tool_config(
+            &manifest,
+            condition,
+            invocation.tool_config,
+        )?,
         runtime_limits: invocation.runtime_limits,
         trace_policy,
         liveness_limits: worker_liveness_limits(&resolved),
@@ -137,7 +144,9 @@ pub fn run_live(
     let mut summaries = Vec::with_capacity(repetitions as usize);
     let mut first_agent_failure = None;
     for repetition in 1..=repetitions {
-        let completed = run_live_repetition(&manifest, &layout, &runtime, &redactor, repetition)?;
+        let completed = run_live_repetition(
+            &manifest, &layout, &runtime, &redactor, repetition, condition,
+        )?;
         summaries.push(completed.summary);
         if first_agent_failure.is_none() {
             first_agent_failure = completed.agent_failure;
@@ -195,6 +204,14 @@ fn ensure_safe_input_snapshots(
     manifest: &ResolvedBenchmarkManifest,
 ) -> Result<(), BenchmarkRunError> {
     redactor.ensure_safe_bytes(manifest.source().as_bytes(), "manifest snapshot")?;
+    if let Some(expected_patch) = manifest.expected_patch_path() {
+        let bytes = std::fs::read(expected_patch).map_err(|source| BenchmarkRunError::Io {
+            operation: "read expected patch",
+            path: expected_patch.to_path_buf(),
+            source,
+        })?;
+        redactor.ensure_safe_bytes(&bytes, "expected patch snapshot")?;
+    }
     let context = serde_json::to_vec(manifest.workspace_context()).map_err(|source| {
         BenchmarkRunError::Json {
             artifact: "workspace context",
@@ -219,6 +236,7 @@ fn run_live_repetition(
     runtime: &LiveInvocation,
     redactor: &SecretRedactor,
     repetition: u32,
+    condition: Option<BenchmarkConditionV1>,
 ) -> Result<CompletedRepetition, BenchmarkRunError> {
     let workspace = prepare_benchmark_workspace(manifest, repetition)?;
     let paths = layout.snapshot_inputs(repetition, manifest, &workspace)?;
@@ -257,6 +275,7 @@ fn run_live_repetition(
         output,
         BenchmarkModeV1::Live,
         repetition,
+        condition,
         Some(redactor),
     )?;
     Ok(CompletedRepetition {

@@ -125,9 +125,14 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
         "\nCODEBASE MEMORY:\n\
          You have repository-index tools for architecture, symbol search, code search,\n\
          and call/impact tracing.\n\n\
-         Use them early for non-trivial tasks:\n\
-         - architect: map affected areas before triage/breakdown;\n\
-         - engineer: find relevant symbols/callers before editing;\n\
+         Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
+         - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
+           symptom, file, or area; then use call/path tracing and read exact source snippets as\n\
+           needed. Avoid empty or broad graph searches and broad architecture calls for\n\
+           already-localized work.\n\
+         - architect: map affected areas before triage/breakdown only when a genuine topology\n\
+           question warrants an architecture view;\n\
+         - engineer: start with targeted symbols/code, then trace affected callers before editing;\n\
          - reviewer: inspect impacted code paths and callers before verdicts.\n\n\
          Treat the graph as an index, not truth. Verify exact code with read/grep/git diff\n\
          before editing or making final claims.\n\
@@ -317,8 +322,15 @@ for line in sys.stdin:
             for expected in [
                 "CODEBASE MEMORY",
                 "repository-index tools for architecture, symbol search, code search",
-                "Use them early for non-trivial tasks",
-                "- engineer: find relevant symbols/callers before editing;",
+                "Use them early for non-trivial tasks, but choose the narrowest useful query",
+                "- concrete defects: begin with a targeted symbol or code search tied to the reported",
+                "then use call/path tracing and read exact source snippets as",
+                "needed. Avoid empty or broad graph searches and broad architecture calls for",
+                "already-localized work.",
+                "- architect: map affected areas before triage/breakdown only when a genuine topology",
+                "question warrants an architecture view;",
+                "- engineer: start with targeted symbols/code, then trace affected callers before editing;",
+                "- reviewer: inspect impacted code paths and callers before verdicts.",
                 "Treat the graph as an index, not truth.",
                 "Default project: `acme/demo`",
                 "Project aliases accepted in `project`/`repo`",

@@ -117,6 +117,12 @@ fn target_dir() -> PathBuf {
 }
 
 const BENCHMARK_NAME: &str = "cross-cutting-rust-change";
+const CONTROLLED_BENCHMARK_NAME: &str = "codebase-memory-routing-repair";
+const CONTROLLED_CONDITIONS: [(&str, &str); 3] = [
+    ("enabled", "codebase-memory-enabled"),
+    ("disabled", "codebase-memory-disabled"),
+    ("unavailable", "codebase-memory-unavailable"),
+];
 const HARNESS_DISCLAIMER: &str = "not representative LLM performance";
 
 fn run_dev_benchmark_harness(args: &[OsString]) -> i32 {
@@ -139,12 +145,46 @@ fn run_dev_benchmark_harness(args: &[OsString]) -> i32 {
     }
 
     let output_dir = target_dir().join("benchmark-harness").join(BENCHMARK_NAME);
-    if let Err(error) = remove_old_artifacts(&output_dir) {
+    let run_status = run_checked_in_benchmark(BENCHMARK_NAME, &output_dir, None);
+    if run_status != 0 {
+        return run_status;
+    }
+    if let Err(error) = verify_benchmark_artifacts(&output_dir) {
+        eprintln!("temper-dev: benchmark artifact verification failed: {error}");
+        return 1;
+    }
+
+    let controlled_root = target_dir()
+        .join("benchmark-harness")
+        .join(CONTROLLED_BENCHMARK_NAME);
+    for (directory, condition) in CONTROLLED_CONDITIONS {
+        let output = controlled_root.join(directory);
+        let run_status =
+            run_checked_in_benchmark(CONTROLLED_BENCHMARK_NAME, &output, Some(condition));
+        if run_status != 0 {
+            return run_status;
+        }
+        if let Err(error) = verify_controlled_benchmark(&output, condition) {
+            eprintln!("temper-dev: controlled benchmark verification failed: {error}");
+            return 1;
+        }
+    }
+
+    eprintln!(
+        "temper-dev: verified harness artifacts in {} and {}",
+        output_dir.display(),
+        controlled_root.display()
+    );
+    0
+}
+
+fn run_checked_in_benchmark(name: &str, output_dir: &Path, condition: Option<&str>) -> i32 {
+    if let Err(error) = remove_old_artifacts(output_dir) {
         eprintln!("temper-dev: {error}");
         return 1;
     }
-    let benchmark = format!("benchmarks/agent-sessions/{BENCHMARK_NAME}/benchmark.toml");
-    let run_status = run_cargo_owned(&[
+    let benchmark = format!("benchmarks/agent-sessions/{name}/benchmark.toml");
+    let mut args = vec![
         OsString::from("run"),
         OsString::from("--quiet"),
         OsString::from("-p"),
@@ -163,24 +203,13 @@ fn run_dev_benchmark_harness(args: &[OsString]) -> i32 {
             .join(format!("temper-agent{}", env::consts::EXE_SUFFIX))
             .into_os_string(),
         OsString::from("--output-dir"),
-        output_dir.clone().into_os_string(),
-    ]);
-    if run_status != 0 {
-        return run_status;
+        output_dir.as_os_str().to_os_string(),
+    ];
+    if let Some(condition) = condition {
+        args.push(OsString::from("--condition"));
+        args.push(OsString::from(condition));
     }
-    match verify_benchmark_artifacts(&output_dir) {
-        Ok(()) => {
-            eprintln!(
-                "temper-dev: verified harness artifacts in {}",
-                output_dir.display()
-            );
-            0
-        }
-        Err(error) => {
-            eprintln!("temper-dev: benchmark artifact verification failed: {error}");
-            1
-        }
-    }
+    run_cargo_owned(&args)
 }
 
 fn remove_old_artifacts(path: &Path) -> Result<(), String> {
@@ -225,6 +254,126 @@ fn verify_benchmark_artifacts(root: &Path) -> Result<(), String> {
     verify_disclaimer(&repetition.join("run.md"))
 }
 
+fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), String> {
+    let condition = cli_condition.replace('-', "_");
+    let aggregate = read_json(&root.join("aggregate.json"))?;
+    expect_text(&aggregate, "/benchmark", CONTROLLED_BENCHMARK_NAME)?;
+    expect_text(&aggregate, "/mode", "harness")?;
+    expect_text(&aggregate, "/condition", &condition)?;
+    expect_exact(&aggregate, "/outcomes/succeeded", 1)?;
+    expect_exact(&aggregate, "/metrics/task_correct/median", 1)?;
+    expect_exact(&aggregate, "/metrics/host_validation_failures/median", 0)?;
+    expect_exact(&aggregate, "/metrics/diff_files_changed/median", 1)?;
+    expect_exact(&aggregate, "/metrics/diff_insertions/median", 1)?;
+    expect_exact(&aggregate, "/metrics/diff_deletions/median", 5)?;
+
+    let repetition = root.join("repetitions/001");
+    let run = read_json(&repetition.join("run.json"))?;
+    expect_text(&run, "/benchmark/name", CONTROLLED_BENCHMARK_NAME)?;
+    expect_text(&run, "/benchmark/condition", &condition)?;
+    expect_text(&run, "/terminal/status", "succeeded")?;
+    expect_exact(&run, "/validation/failed", 0)?;
+    expect_exact(&run, "/diff/files_changed", 1)?;
+    verify_complete_compound_discovery(&run)?;
+    let validation = read_json(&repetition.join("validation.json"))?;
+    expect_text(&validation, "/exact_patch/status", "passed")?;
+    expect_exact(&validation, "/exact_patch/untracked_files", 0)?;
+    if !repetition.join("expected.patch").is_file() {
+        return Err("controlled repetition omitted expected.patch snapshot".to_string());
+    }
+
+    match cli_condition {
+        "codebase-memory-enabled" => {
+            expect_exact(&run, "/metrics/graph/calls", 2)?;
+            expect_exact(&run, "/metrics/graph/succeeded", 2)?;
+            expect_exact(&run, "/metrics/graph/relevant_results", 2)?;
+            expect_exact(&run, "/metrics/graph/irrelevant_successes", 0)?;
+            expect_exact(
+                &run,
+                "/metrics/tools/by_name/codebase_memory_search_code/calls",
+                2,
+            )?;
+            expect_absent(
+                &run,
+                "/metrics/tools/by_name/codebase_memory_get_architecture",
+            )?;
+            expect_absent(&run, "/metrics/tools/by_name/codebase_memory_search_graph")?;
+            let evidence = run
+                .pointer("/metrics/graph/decision_evidence")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            if evidence != 4 {
+                return Err(format!(
+                    "enabled decision evidence count was {evidence}; expected 4"
+                ));
+            }
+            let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
+                .map_err(|error| format!("read controlled trace: {error}"))?;
+            for expected in [
+                "cold stable upsert is ready",
+                "warm stable project remains ready",
+            ] {
+                if !trace.contains(expected) {
+                    return Err(format!("enabled trace omitted {expected:?}"));
+                }
+            }
+        }
+        "codebase-memory-disabled" => {
+            expect_exact(&run, "/metrics/graph/calls", 0)?;
+        }
+        "codebase-memory-unavailable" => {
+            expect_exact(&run, "/metrics/graph/calls", 1)?;
+            expect_exact(&run, "/metrics/graph/failed", 1)?;
+            expect_exact(
+                &run,
+                "/metrics/graph/failures_by_category/provider_protocol",
+                1,
+            )?;
+            expect_exact(
+                &run,
+                "/metrics/graph/immediate_repeated_attempts_after_systemic_failure",
+                0,
+            )?;
+            let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
+                .map_err(|error| format!("read controlled trace: {error}"))?;
+            if trace.contains("MCP-FIXTURE-SECRET") || trace.contains("Authorization: Bearer") {
+                return Err("unsafe unavailable-provider text leaked into trace".to_string());
+            }
+            if !trace.contains("codebase-memory provider or protocol request failed") {
+                return Err("unavailable trace omitted the stable safe diagnostic".to_string());
+            }
+        }
+        other => return Err(format!("unknown controlled condition {other}")),
+    }
+    verify_disclaimer(&root.join("aggregate.md"))?;
+    verify_disclaimer(&repetition.join("run.md"))
+}
+
+fn verify_complete_compound_discovery(run: &Value) -> Result<(), String> {
+    expect_exact(
+        run,
+        "/metrics/graph/conventional_discovery_before_selection/classified_shell_segments",
+        1,
+    )?;
+    expect_exact(
+        run,
+        "/metrics/graph/conventional_discovery_before_selection/total_calls",
+        1,
+    )?;
+    expect_exact(
+        run,
+        "/metrics/graph/conventional_discovery_before_selection/shell_command_classification_coverage/observed",
+        1,
+    )?;
+    expect_exact(
+        run,
+        "/metrics/graph/conventional_discovery_before_selection/shell_command_classification_coverage/expected",
+        1,
+    )?;
+    expect_exact(run, "/metrics/tools/by_name/bash/calls", 2)?;
+    expect_absent(run, "/metrics/tools/by_name/grep")
+}
+
 fn read_json(path: &Path) -> Result<Value, String> {
     let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
     serde_json::from_slice(&bytes).map_err(|error| format!("parse {}: {error}", path.display()))
@@ -250,6 +399,14 @@ fn expect_exact(value: &Value, pointer: &str, expected: u64) -> Result<(), Strin
     match value.pointer(pointer).and_then(Value::as_u64) {
         Some(actual) if actual == expected => Ok(()),
         actual => Err(format!("{pointer} was {actual:?}; expected {expected}")),
+    }
+}
+
+fn expect_absent(value: &Value, pointer: &str) -> Result<(), String> {
+    if value.pointer(pointer).is_none() {
+        Ok(())
+    } else {
+        Err(format!("{pointer} was present; expected no call"))
     }
 }
 

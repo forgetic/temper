@@ -10,8 +10,10 @@ pub(super) fn default_project_key(mcp_name: &str, input_schema: &Value) -> Optio
     let properties = input_schema.get("properties").and_then(Value::as_object);
     if properties.is_some_and(|properties| properties.contains_key("repo")) {
         Some("repo")
-    } else {
+    } else if properties.is_some_and(|properties| properties.contains_key("project")) {
         Some("project")
+    } else {
+        None
     }
 }
 
@@ -45,15 +47,27 @@ pub(super) fn scoped_parameters(
         let properties = object
             .entry("properties".to_string())
             .or_insert_with(|| Value::Object(Map::new()));
+        let mut normalizes_project = false;
         if let Some(properties) = properties.as_object_mut() {
-            properties.insert(
-                "project".to_string(),
-                json!({
-                    "type": "string",
-                    "description": description,
-                    "enum": aliases,
-                }),
-            );
+            normalizes_project =
+                properties.contains_key("repo") || properties.contains_key("project");
+            if normalizes_project {
+                for key in ["project", "repo"] {
+                    properties.insert(
+                        key.to_string(),
+                        json!({
+                            "type": "string",
+                            "description": description,
+                            "enum": aliases,
+                        }),
+                    );
+                }
+            }
+        }
+        if normalizes_project {
+            if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+                required.retain(|value| value != "project" && value != "repo");
+            }
         }
     }
     schema

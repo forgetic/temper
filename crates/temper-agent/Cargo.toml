@@ -10,6 +10,7 @@ description = "Temper-specific provider/auth/decision core for the temper agent.
 skein.workspace = true
 async-trait.workspace = true
 tracing = { workspace = true }
+futures.workspace = true
 temper-protocol-agent = { path = "../temper-protocol-agent" }
 temper-verdict = { path = "../temper-verdict" }
 tongs.workspace = true
@@ -18,14 +19,13 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 temper-agent-core = { path = "../temper-agent-core" }
+temper-agent-io = { path = "../temper-agent-io" }
 temper-protocol-activity = { path = "../temper-protocol-activity" }
 temper-protocol-interaction = { path = "../temper-protocol-interaction" }
 uuid.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
-futures.workspace = true
-temper-agent-io = { path = "../temper-agent-io" }
 tracing-subscriber = { workspace = true }
 jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }

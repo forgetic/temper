@@ -30,8 +30,10 @@ mod protocol;
 
 pub use core::{AgentMachine, ArgPreviewFn};
 pub use protocol::{
-    AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, ModelCallStatus,
-    OperationGeneration, StreamDelta, ToolCallStatus, ToolResultMetadata,
+    AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,
+    CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, ModelCallStatus, OperationGeneration,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallStatus, ToolFailureCategory,
+    ToolFailureDiagnostic, ToolResultMetadata,
 };
 
 #[cfg(test)]

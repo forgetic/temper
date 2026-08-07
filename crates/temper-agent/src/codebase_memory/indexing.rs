@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig};
 
 use crate::mcp::{
@@ -13,8 +12,9 @@ use temper_agent_core::AgentContainmentContext;
 
 use super::advertised_tool;
 use super::background::BackgroundIndex;
-use super::lifecycle_observability::{FailureCategory, IndexOutcome, emit_index};
 use super::scope::{ProjectIndexState, WorkspaceScope};
+
+const MAX_INDEX_UPSERT_RESPONSE_BYTES: usize = 64 * 1024;
 
 pub(super) async fn prepare_indexes(
     config: &CodebaseMemoryToolConfig,
@@ -24,44 +24,9 @@ pub(super) async fn prepare_indexes(
     containment: &AgentContainmentContext,
 ) -> std::result::Result<Vec<String>, McpError> {
     let mut notes = Vec::new();
-    let mode = index_setting(config.index);
     if config.index == CodebaseMemoryIndex::Off {
-        for project in &scope.projects {
-            let outcome = if project.index_state.is_discovery_unavailable() {
-                IndexOutcome::SkippedDiscoveryUnknown
-            } else {
-                IndexOutcome::Disabled
-            };
-            emit_index(
-                &project.canonical_alias,
-                &project.provider_key,
-                mode,
-                outcome,
-                FailureCategory::None,
-            );
-        }
         notes.push("index=off; no internal indexing was attempted".to_string());
         return Ok(notes);
-    }
-
-    for project in &scope.projects {
-        if project.index_state.is_fresh() {
-            emit_index(
-                &project.canonical_alias,
-                &project.provider_key,
-                mode,
-                IndexOutcome::Reused,
-                FailureCategory::None,
-            );
-        } else if project.index_state.is_discovery_unavailable() {
-            emit_index(
-                &project.canonical_alias,
-                &project.provider_key,
-                mode,
-                IndexOutcome::SkippedDiscoveryUnknown,
-                FailureCategory::None,
-            );
-        }
     }
 
     let repo_indices = scope.projects_needing_index();
@@ -82,43 +47,14 @@ pub(super) async fn prepare_indexes(
     }
 
     let timeout = Duration::from_secs(config.index_timeout_secs);
-    let mut requested_provider_keys = BTreeMap::<String, usize>::new();
     for index in repo_indices {
         let path = scope.projects[index].root.clone();
         let provider_key = scope.projects[index].provider_key.clone();
-        let logical = scope.projects[index].canonical_alias.clone();
-        emit_index(
-            &logical,
-            &provider_key,
-            mode,
-            IndexOutcome::Requested,
-            FailureCategory::None,
-        );
-
-        if let Some(previous) = requested_provider_keys.get(&provider_key).copied() {
-            scope.projects[index].index_state = scope.projects[previous].index_state;
-            scope.projects[index].background_index =
-                scope.projects[previous].background_index.clone();
-            emit_index(
-                &logical,
-                &provider_key,
-                mode,
-                IndexOutcome::SuppressedDuplicate,
-                FailureCategory::None,
-            );
-            notes.push(format!(
-                "duplicate stable index request was suppressed for prepared repo `{logical}`"
-            ));
-            continue;
-        }
-        requested_provider_keys.insert(provider_key.clone(), index);
-
         if config.index == CodebaseMemoryIndex::Background {
             match start_background_index_repository(
                 mcp_config,
                 path,
-                logical.clone(),
-                provider_key.clone(),
+                provider_key,
                 timeout,
                 containment.clone(),
             ) {
@@ -126,104 +62,41 @@ pub(super) async fn prepare_indexes(
                     scope.projects[index].index_state = ProjectIndexState::BackgroundInProgress;
                     scope.projects[index].background_index = Some(background);
                     notes.push(format!(
-                        "stable index upsert started for prepared repo `{logical}` (background indexing may still be in progress)"
+                        "stable index upsert started for prepared repo `{}` (background indexing may still be in progress)",
+                        scope.projects[index].canonical_alias
                     ));
                 }
                 Err(message) if config.mode == CodebaseMemoryMode::Auto => {
                     scope.projects[index].index_state = ProjectIndexState::IndexFailed;
-                    emit_index(
-                        &logical,
-                        &provider_key,
-                        mode,
-                        IndexOutcome::Failed,
-                        FailureCategory::Internal,
-                    );
                     notes.push(format!(
-                        "stable index upsert background start failed for prepared repo `{logical}`; no path-keyed fallback was attempted: {message}"
+                        "stable index upsert background start failed for prepared repo `{}`; no path-keyed fallback was attempted: {message}",
+                        scope.projects[index].canonical_alias
                     ));
                 }
-                Err(message) => {
-                    emit_index(
-                        &logical,
-                        &provider_key,
-                        mode,
-                        IndexOutcome::Failed,
-                        FailureCategory::Internal,
-                    );
-                    return Err(McpError::Protocol(message));
-                }
+                Err(message) => return Err(McpError::Protocol(message)),
             }
             continue;
         }
 
-        emit_index(
-            &logical,
-            &provider_key,
-            mode,
-            IndexOutcome::Started,
-            FailureCategory::None,
-        );
         let result =
             call_index_repository(mcp_config, &path, &provider_key, timeout, containment).await;
-        match result {
-            Ok(result) if result.is_error => {
-                let message = format!(
-                    "stable index upsert reported an error for prepared repo `{logical}`: {}",
-                    result.text
-                );
-                emit_index(
-                    &logical,
-                    &provider_key,
-                    mode,
-                    IndexOutcome::Failed,
-                    FailureCategory::Provider,
-                );
-                if config.mode == CodebaseMemoryMode::Auto {
-                    scope.projects[index].index_state = ProjectIndexState::IndexFailed;
-                    notes.push(format!("{message}; no path-keyed fallback was attempted"));
-                } else {
-                    return Err(McpError::Rpc {
-                        method: "tools/call index_repository".to_string(),
-                        message,
-                    });
-                }
-            }
-            Ok(_) => {
+        match result.and_then(|result| confirm_stable_upsert(&result, &provider_key)) {
+            Ok(()) => {
                 scope.projects[index].index_state = ProjectIndexState::Fresh;
-                emit_index(
-                    &logical,
-                    &provider_key,
-                    mode,
-                    IndexOutcome::Completed,
-                    FailureCategory::None,
-                );
                 notes.push(format!(
-                    "stable index upsert completed for prepared repo `{logical}` (blocking indexing completed)"
+                    "stable index upsert completed for prepared repo `{}` (blocking indexing completed)",
+                    scope.projects[index].canonical_alias
                 ));
             }
             Err(error) if config.mode == CodebaseMemoryMode::Auto => {
                 scope.projects[index].index_state = ProjectIndexState::IndexFailed;
-                emit_index(
-                    &logical,
-                    &provider_key,
-                    mode,
-                    IndexOutcome::Failed,
-                    FailureCategory::from(&error),
-                );
                 notes.push(format!(
-                    "stable index upsert failed for prepared repo `{logical}`; no path-keyed fallback was attempted: {error}"
+                    "stable index upsert failed for prepared repo `{}`; no path-keyed fallback was attempted ({})",
+                    scope.projects[index].canonical_alias,
+                    safe_index_failure_kind(&error)
                 ));
             }
-            Err(error) => {
-                emit_index(
-                    &logical,
-                    &provider_key,
-                    mode,
-                    IndexOutcome::Failed,
-                    FailureCategory::from(&error),
-                );
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         }
     }
     Ok(notes)
@@ -232,7 +105,6 @@ pub(super) async fn prepare_indexes(
 fn start_background_index_repository(
     mcp_config: &StdioMcpServerConfig,
     path: PathBuf,
-    logical: String,
     provider_key: String,
     timeout: Duration,
     containment: AgentContainmentContext,
@@ -243,38 +115,19 @@ fn start_background_index_repository(
     thread::Builder::new()
         .name("codebase-memory-index".to_string())
         .spawn(move || {
-            emit_index(
-                &logical,
-                &provider_key,
-                "background",
-                IndexOutcome::Started,
-                FailureCategory::None,
-            );
             let completion = run_background_index_repository(
                 mcp_config,
                 path,
-                provider_key.clone(),
+                provider_key,
                 timeout,
                 containment,
             );
             match completion {
-                Ok(actual_project) => {
-                    emit_index(
-                        &logical,
-                        &provider_key,
-                        "background",
-                        IndexOutcome::Completed,
-                        FailureCategory::None,
-                    );
-                    tracker_for_thread.complete_success(Some(actual_project));
-                }
+                Ok(actual_project) => tracker_for_thread.complete_success(Some(actual_project)),
                 Err(message) => {
-                    emit_index(
-                        &logical,
-                        &provider_key,
-                        "background",
-                        IndexOutcome::Failed,
-                        FailureCategory::Provider,
+                    tracing::warn!(
+                        target: "temper::agent",
+                        "background codebase-memory stable index upsert failed: {message}"
                     );
                     tracker_for_thread.complete_error(message);
                 }
@@ -292,20 +145,19 @@ fn run_background_index_repository(
     containment: AgentContainmentContext,
 ) -> std::result::Result<String, String> {
     let client = StdioMcpClient::connect_blocking_with_containment(mcp_config, containment)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("stable index upsert {}", safe_index_failure_kind(&error)))?;
     let result = client
         .call_tool_blocking(
             "index_repository",
             stable_index_arguments(&path, &provider_key),
             timeout,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("stable index upsert {}", safe_index_failure_kind(&error)))?;
     if result.is_error {
-        return Err(format!(
-            "index_repository returned an error: {}",
-            result.text
-        ));
+        return Err("stable index upsert returned a provider error".to_string());
     }
+    confirm_stable_upsert(&result, &provider_key)
+        .map_err(|_| "stable index upsert confirmation failed".to_string())?;
     Ok(provider_key)
 }
 
@@ -335,6 +187,143 @@ fn stable_index_arguments(path: &Path, provider_key: &str) -> serde_json::Value 
         "repo_path": path.display().to_string(),
         "name": provider_key,
     })
+}
+
+/// A successful RPC is not enough to make a cold project model-visible. The
+/// provider must explicitly confirm that it upserted the requested stable key;
+/// otherwise a path-keyed response could appear successful while the following
+/// graph request remains unusable.
+fn confirm_stable_upsert(
+    result: &McpToolCallResult,
+    provider_key: &str,
+) -> std::result::Result<(), McpError> {
+    if result.is_error {
+        return Err(stable_upsert_protocol(
+            provider_key,
+            "provider returned a tool error",
+        ));
+    }
+    if result.text.len() > MAX_INDEX_UPSERT_RESPONSE_BYTES {
+        return Err(stable_upsert_protocol(
+            provider_key,
+            "response exceeded 65536 bytes",
+        ));
+    }
+    let value: Value = serde_json::from_str(result.text.trim())
+        .map_err(|_| stable_upsert_protocol(provider_key, "response was not JSON"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| stable_upsert_protocol(provider_key, "response must be a JSON object"))?;
+    validate_upsert_identity(object, provider_key)?;
+    let status = upsert_status(object, provider_key)?;
+    if !matches!(
+        status.as_str(),
+        "ready"
+            | "fresh"
+            | "complete"
+            | "completed"
+            | "indexed"
+            | "created"
+            | "updated"
+            | "upserted"
+    ) {
+        return Err(stable_upsert_protocol(
+            provider_key,
+            "response did not confirm a usable indexed state",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_upsert_identity(
+    object: &Map<String, Value>,
+    provider_key: &str,
+) -> std::result::Result<(), McpError> {
+    let mut found = false;
+    for field in ["project", "id", "name"] {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        found = true;
+        let actual = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                stable_upsert_protocol(
+                    provider_key,
+                    &format!("response field `{field}` must be a non-empty string"),
+                )
+            })?;
+        if actual != provider_key {
+            return Err(stable_upsert_protocol(
+                provider_key,
+                "response identified a different provider project",
+            ));
+        }
+    }
+    if !found {
+        return Err(stable_upsert_protocol(
+            provider_key,
+            "response omitted the stable provider project identity",
+        ));
+    }
+    Ok(())
+}
+
+fn upsert_status(
+    object: &Map<String, Value>,
+    provider_key: &str,
+) -> std::result::Result<String, McpError> {
+    let mut statuses = Vec::new();
+    for field in ["status", "state"] {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        let status = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                stable_upsert_protocol(
+                    provider_key,
+                    &format!("response field `{field}` must be a non-empty string"),
+                )
+            })?;
+        statuses.push(status.to_ascii_lowercase());
+    }
+    let Some(status) = statuses.first() else {
+        return Err(stable_upsert_protocol(
+            provider_key,
+            "response omitted status",
+        ));
+    };
+    if statuses.iter().any(|candidate| candidate != status) {
+        return Err(stable_upsert_protocol(
+            provider_key,
+            "response reported conflicting status/state values",
+        ));
+    }
+    Ok(status.clone())
+}
+
+fn stable_upsert_protocol(provider_key: &str, message: &str) -> McpError {
+    McpError::Protocol(format!(
+        "stable codebase-memory index upsert for `{provider_key}` was not confirmed: {message}"
+    ))
+}
+
+fn safe_index_failure_kind(error: &McpError) -> &'static str {
+    match error {
+        McpError::Timeout { .. } => "timed out",
+        McpError::Cancelled { .. } => "was cancelled",
+        McpError::Spawn { .. } => "could not start the indexing client",
+        McpError::Io { .. } | McpError::ProcessExited { .. } => "lost the indexing client",
+        McpError::Json { .. } | McpError::ProtocolOverflow { .. } | McpError::Protocol(_) => {
+            "returned an invalid provider response"
+        }
+        McpError::Rpc { .. } => "returned a provider error",
+    }
 }
 
 pub(super) fn index_setting(index: CodebaseMemoryIndex) -> &'static str {

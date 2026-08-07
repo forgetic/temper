@@ -16,7 +16,7 @@ LEGACY FALLBACK OUTCOMES (no workflow outcomes were declared):
 Only the no-verdict success path is routable for this action. Do not emit a `verdict` field: no workflow outcome was declared, so any named verdict would be rejected rather than applied. If the item cannot be implemented safely, explain the blocker in `summary` without claiming a routed outcome.
 
 EFFICIENCY:
-- Scale discovery to the task. For non-local work, batch independent status, architecture, and search calls into one response; skip ritual discovery when the task is already localized.
+- Scale discovery to the task. When repository-index tools are available for a concrete or already-localized defect, start with targeted symbol/code search, then use only needed call/path tracing and exact source reads; avoid empty or broad graph searches and broad architecture calls. Reserve architecture views for genuine topology questions. For non-local topology work, batch independent status and targeted discovery calls into one response; skip ritual discovery when the task is already localized.
 - Read the complete likely source, test, configuration, and documentation set together before editing. Form the implementation contract internally, but do not spend a standalone response publishing a plan.
 - For a planned cross-file change, prefer one cohesive `apply_patch` call spanning source, tests, and documentation. Use `edit` or `write` for genuinely isolated changes or bounded repair. Normally complete the work in one to four mutation responses instead of one response per file.
 - Multiple mutation calls in one model response are model-turn batching, not concurrent execution. Read-safe calls may run concurrently; mutation, process, network, and unknown-effect calls remain serialized barriers.

@@ -2,6 +2,9 @@
 
 //! Typed metric extraction over a normalized activity stream.
 
+mod graph;
+mod shell;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_activity::{
@@ -10,10 +13,12 @@ use temper_protocol_activity::{
 };
 
 use crate::{
-    DiagnosticSeverityV1, MetricCoverageV1, ModelMetricsV1, NormalizedTrace, RunSummaryV1,
-    SlowToolCallV1, StructureMetricsV1, TokenMetricsV1, ToolMetricsV1, ToolNameMetricsV1,
-    TraceDiagnosticCodeV1, TraceDiagnosticV1,
+    DiagnosticSeverityV1, GraphDecisionTargetV1, MetricCoverageV1, ModelMetricsV1, NormalizedTrace,
+    RunSummaryV1, SlowToolCallV1, StructureMetricsV1, TokenMetricsV1, ToolMetricsV1,
+    ToolNameMetricsV1, TraceDiagnosticCodeV1, TraceDiagnosticV1,
 };
+
+use graph::graph_metrics;
 
 /// Analyzer settings supplied by a benchmark manifest or an operator.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -21,6 +26,10 @@ pub struct AnalyzeOptions {
     /// Successful `bash` calls whose captured command starts with one of these
     /// values are validation boundaries.
     pub validation_command_prefixes: Vec<String>,
+    /// `bash` argv prefixes explicitly classified as conventional discovery.
+    pub discovery_command_prefixes: Vec<Vec<String>>,
+    /// Fixture-owned decision targets used by the graph-consumption rubric.
+    pub graph_decision_targets: Vec<GraphDecisionTargetV1>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -47,6 +56,9 @@ pub fn analyze_trace(trace: &NormalizedTrace, options: &AnalyzeOptions) -> RunSu
     summary.metrics.tokens = Some(token_metrics(&trace.events, model.succeeded_attempts));
     summary.metrics.model = Some(model);
     summary.metrics.tools = Some(tool_metrics(&trace.events));
+    let graph = graph_metrics(trace, options);
+    summary.metrics.graph = graph.metrics;
+    summary.diagnostics.extend(graph.diagnostics);
 
     let structure = structure_metrics(trace, options);
     summary.metrics.structure = Some(structure.metrics);
@@ -546,8 +558,8 @@ fn accepted_submit(text: &str) -> Option<bool> {
 }
 
 fn captured_command(text: &str) -> Option<String> {
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-        return match value {
+    let command = if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+        match value {
             serde_json::Value::String(command) => nonempty(command),
             serde_json::Value::Array(argv) => argv_strings(&argv),
             serde_json::Value::Object(object) => object
@@ -561,14 +573,16 @@ fn captured_command(text: &str) -> Option<String> {
                         .and_then(|v| argv_strings(v))
                 }),
             _ => None,
-        };
-    }
-    let trimmed = text.trim();
-    let unquoted = trimmed
-        .strip_prefix('`')
-        .and_then(|value| value.strip_suffix('`'))
-        .unwrap_or(trimmed);
-    nonempty(unquoted.to_string())
+        }
+    } else {
+        let trimmed = text.trim();
+        let unquoted = trimmed
+            .strip_prefix('`')
+            .and_then(|value| value.strip_suffix('`'))
+            .unwrap_or(trimmed);
+        nonempty(unquoted.to_string())
+    };
+    command.filter(|command| !command.ends_with('…'))
 }
 
 fn argv_strings(values: &[serde_json::Value]) -> Option<String> {

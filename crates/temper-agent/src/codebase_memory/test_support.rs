@@ -2,22 +2,191 @@ use super::super::*;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use temper_protocol_agent::{
     CodebaseMemoryIndex, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
     WorkspaceWorkItem,
 };
 
-const FAKE_MCP_SCRIPT: &str =
-    include_str!("../../../temper-testing/src/live_manifest/fake_codebase_memory_mcp.py");
-
-/// Writes the same persistent fake provider used by live-manifest tests.
-/// Every process launched from this fixture shares one lock-protected state
-/// file, while each test still owns an isolated temporary cache.
 pub(super) fn fake_server_script() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("fake_codebase_memory_mcp.py"),
-        FAKE_MCP_SCRIPT,
+        r#"
+import fcntl
+import json
+import os
+import sys
+import time
+
+mode = sys.argv[1] if len(sys.argv) > 1 else "normal"
+log_path = sys.argv[2] if len(sys.argv) > 2 else ""
+if mode == "hang":
+    time.sleep(60)
+    sys.exit(0)
+
+provider_name = "other-provider" if mode == "incompatible-name" else "codebase-memory-mcp"
+provider_version = "0.8.1" if mode == "incompatible-version" else "0.9.0"
+capabilities = {} if mode == "incompatible-capability" else {"tools": {}}
+
+index_properties = {
+    "repo_path": {"type": "string"},
+    "name": {"type": "string"},
+}
+if mode == "incompatible-schema":
+    del index_properties["name"]
+
+search_project_property = "repo" if mode == "repo-schema" else "project"
+
+state_path = f"{log_path}.state.json" if log_path else ""
+
+TOOLS = [
+    {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, search_project_property: {"type": "string"}}, "required": ["query", search_project_property] if mode == "repo-schema" else ["query"]}},
+    {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
+    {"name": "list_projects", "description": "List projects", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
+    {"name": "detect_changes", "description": "Detect changes", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
+    {"name": "delete_project", "description": "Delete project", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "manage_adr", "description": "Write ADRs", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "ingest_traces", "description": "Ingest traces", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "query_graph", "description": "Raw graph query", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": index_properties, "required": ["repo_path"]}},
+]
+
+def send(value):
+    sys.stdout.write(json.dumps(value) + "\n")
+    sys.stdout.flush()
+
+def log_tool(name, args):
+    if not log_path:
+        return
+    with open(log_path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"name": name, "arguments": args, "pid": os.getpid()}, sort_keys=True) + "\n")
+
+def with_provider_state(update):
+    if not state_path:
+        return update({"projects": {}, "counters": {}})
+    lock_path = f"{state_path}.lock"
+    with open(lock_path, "a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            with open(state_path, "r", encoding="utf-8") as handle:
+                state = json.load(handle)
+        except (FileNotFoundError, json.JSONDecodeError):
+            state = {"projects": {}, "counters": {}}
+        state.setdefault("projects", {})
+        state.setdefault("counters", {})
+        result = update(state)
+        temporary = f"{state_path}.tmp.{os.getpid()}"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, sort_keys=True)
+        os.replace(temporary, state_path)
+        return result
+
+def state_status(project):
+    def update(state):
+        counters = state["counters"]
+        counters["index_status"] = counters.get("index_status", 0) + 1
+        return "fresh" if project in state["projects"] else "missing"
+    return with_provider_state(update)
+
+def stable_upsert(project, repo_path):
+    def update(state):
+        counters = state["counters"]
+        counters["index_repository"] = counters.get("index_repository", 0) + 1
+        counters["project_creations"] = counters.get("project_creations", 0) + int(project not in state["projects"])
+        state["projects"][project] = {"repo_path": repo_path}
+    with_provider_state(update)
+
+def tool_result(request_id, payload, is_error=False):
+    send({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": payload}], "isError": is_error}})
+
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request.get("method")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": provider_name, "version": provider_version}, "capabilities": capabilities}})
+    elif method == "tools/list":
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
+    elif method == "tools/call":
+        params = request.get("params", {})
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        log_tool(name, args)
+        if name == "list_projects":
+            if mode == "global-list-hang":
+                time.sleep(60)
+            tool_result(request["id"], json.dumps({"projects": [{"name": "unrelated", "path": "/tmp/unrelated"}]}))
+        elif name == "index_status":
+            project = args.get("project", "")
+            if mode == "discovery-hang":
+                time.sleep(60)
+            elif mode == "discovery-malformed":
+                tool_result(request["id"], "not-json")
+            elif mode == "discovery-error":
+                tool_result(request["id"], json.dumps({"status": "backend_unavailable", "message": "project not found while backend unavailable"}), True)
+            elif mode == "discovery-mismatched-missing":
+                tool_result(request["id"], json.dumps({"project": "different-project", "status": "missing"}), True)
+            elif mode in ("missing", "index-hang", "index-error", "index-error-secret", "index-malformed", "index-wrong-project", "background-budget-success", "background-budget-timeout"):
+                tool_result(request["id"], json.dumps({"project": project, "status": "missing"}), True)
+            elif mode == "cold-warm":
+                status = state_status(project)
+                tool_result(request["id"], json.dumps({"project": project, "status": status}), status == "missing")
+            elif mode == "stale":
+                tool_result(request["id"], json.dumps({"project": project, "status": "stale"}))
+            else:
+                tool_result(request["id"], json.dumps({"project": project, "status": "fresh"}))
+        elif name == "index_repository":
+            repo_path = args.get("repo_path", "")
+            project = args.get("name", "")
+            if not isinstance(repo_path, str) or not repo_path or not isinstance(project, str) or not project:
+                tool_result(request["id"], "index_repository requires repo_path and stable name", True)
+                continue
+            if mode == "background-budget-success":
+                # Keep this above process-startup jitter so the success-budget
+                # test observes readiness rather than a completed background run.
+                time.sleep(0.30)
+            elif mode == "background-budget-timeout":
+                time.sleep(0.30)
+            if mode == "index-hang":
+                time.sleep(60)
+            if mode == "index-error":
+                tool_result(request["id"], "index failed", True)
+            elif mode == "index-error-secret":
+                tool_result(request["id"], "Authorization: Bearer SECRET", True)
+            elif mode == "index-malformed":
+                tool_result(request["id"], "not-json SECRET")
+            elif mode == "index-wrong-project":
+                tool_result(request["id"], json.dumps({"project": "path-keyed-project", "repo_path": repo_path, "status": "fresh"}))
+            else:
+                if mode == "cold-warm":
+                    stable_upsert(project, repo_path)
+                tool_result(request["id"], json.dumps({"project": project, "repo_path": repo_path, "status": "fresh"}))
+        else:
+            if mode == "background-budget-success":
+                time.sleep(0.05)
+            elif mode == "background-budget-timeout":
+                time.sleep(0.20)
+            elif mode == "graph-timeout":
+                time.sleep(60)
+            if mode == "graph-systemic":
+                tool_result(request["id"], "provider protocol is unusable SECRET", True)
+            elif mode == "graph-errors" and args.get("query") == "invalid":
+                tool_result(request["id"], "invalid argument: query-local SECRET", True)
+            elif mode == "graph-errors" and args.get("query") == "systemic":
+                tool_result(request["id"], "unusable provider state Authorization: Bearer SECRET", True)
+            elif mode == "graph-errors" and args.get("query") == "empty":
+                tool_result(request["id"], "")
+            else:
+                payload = f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
+                tool_result(request["id"], payload)
+    else:
+        send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
+"#,
     )
     .expect("write fake server");
     dir
@@ -25,17 +194,6 @@ pub(super) fn fake_server_script() -> tempfile::TempDir {
 
 pub(super) fn script_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("fake_codebase_memory_mcp.py")
-}
-
-pub(super) fn provider_state_path(dir: &tempfile::TempDir) -> PathBuf {
-    dir.path().join("provider-state.json")
-}
-
-pub(super) fn provider_snapshot(dir: &tempfile::TempDir) -> Value {
-    let path = provider_state_path(dir);
-    let raw = fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read provider snapshot {}: {error}", path.display()));
-    serde_json::from_str(&raw).expect("provider snapshot is JSON")
 }
 
 pub(super) fn config(
@@ -46,36 +204,17 @@ pub(super) fn config(
     log_path: &Path,
     projects: Value,
 ) -> AgentToolConfig {
-    config_with_args(dir, mode, index, server_mode, log_path, projects, &[])
-}
-
-pub(super) fn config_with_args(
-    dir: &tempfile::TempDir,
-    mode: CodebaseMemoryMode,
-    index: CodebaseMemoryIndex,
-    server_mode: &str,
-    log_path: &Path,
-    projects: Value,
-    extra_args: &[&str],
-) -> AgentToolConfig {
-    let mut args = vec![
-        "-u".to_string(),
-        script_path(dir).display().to_string(),
-        "--state".to_string(),
-        provider_state_path(dir).display().to_string(),
-        "--log".to_string(),
-        log_path.display().to_string(),
-        "--mode".to_string(),
-        server_mode.to_string(),
-        "--seed-json".to_string(),
-        projects.to_string(),
-    ];
-    args.extend(extra_args.iter().map(|arg| (*arg).to_string()));
     AgentToolConfig {
         codebase_memory: Some(CodebaseMemoryToolConfig {
             mode,
             command: "python3".to_string(),
-            args,
+            args: vec![
+                "-u".to_string(),
+                script_path(dir).display().to_string(),
+                server_mode.to_string(),
+                log_path.display().to_string(),
+                projects.to_string(),
+            ],
             roles: vec!["engineer".to_string()],
             index,
             startup_timeout_secs: 1,
@@ -153,6 +292,13 @@ pub(super) fn output_text(output: &ToolOutput) -> String {
         .join("")
 }
 
+pub(super) fn provider_state(log_path: &Path) -> Value {
+    let state_path = PathBuf::from(format!("{}.state.json", log_path.display()));
+    let raw = fs::read_to_string(&state_path)
+        .unwrap_or_else(|error| panic!("read provider state {}: {error}", state_path.display()));
+    serde_json::from_str(&raw).expect("provider state is JSON")
+}
+
 pub(super) fn tool_calls(log_path: &Path) -> Vec<Value> {
     let Ok(text) = fs::read_to_string(log_path) else {
         return Vec::new();
@@ -178,5 +324,33 @@ pub(super) fn wait_for_calls_named(log_path: &Path, name: &str, count: usize) ->
             return calls;
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    let exists = Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !exists {
+        return false;
+    }
+    fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| stat.rsplit_once(") ").map(|(_, rest)| rest.to_string()))
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|state| state != 'Z')
+}
+
+pub(super) fn wait_for_process_exit(pid: u32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while process_alive(pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "MCP process {pid} survived circuit-open cleanup"
+        );
+        std::thread::yield_now();
     }
 }

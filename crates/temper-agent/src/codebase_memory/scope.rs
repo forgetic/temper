@@ -15,8 +15,11 @@ use super::indexing::index_setting;
 
 #[path = "discovery.rs"]
 mod discovery;
-pub(super) use discovery::{TargetedProjectState, discover_workspace_projects};
-use discovery::{alias_looks_like_filesystem_path, resolve_repo_root, validate_safe_model_paths};
+pub(super) use discovery::discover_workspace_projects;
+use discovery::{
+    TargetedProjectState, alias_looks_like_filesystem_path, resolve_repo_root,
+    validate_safe_model_paths,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct WorkspaceScope {
@@ -55,17 +58,25 @@ impl WorkspaceScope {
         Ok(scope)
     }
 
-    pub(super) fn apply_targeted_discovery(&mut self, states: Vec<TargetedProjectState>) {
-        debug_assert_eq!(states.len(), self.projects.len());
+    pub(super) fn apply_targeted_discovery(
+        &mut self,
+        states: Vec<TargetedProjectState>,
+    ) -> std::result::Result<(), String> {
+        if states.len() != self.projects.len() {
+            return Err(format!(
+                "targeted codebase-memory discovery returned {} project states for {} prepared repositories",
+                states.len(),
+                self.projects.len()
+            ));
+        }
         for (project, state) in self.projects.iter_mut().zip(states) {
             project.index_state = match state {
                 TargetedProjectState::Missing => ProjectIndexState::Missing,
                 TargetedProjectState::Stale => ProjectIndexState::Stale,
-                TargetedProjectState::Fresh | TargetedProjectState::Migrated => {
-                    ProjectIndexState::Fresh
-                }
+                TargetedProjectState::Fresh => ProjectIndexState::Fresh,
             };
         }
+        Ok(())
     }
 
     pub(super) fn mark_discovery_unavailable(&mut self) {
@@ -283,6 +294,10 @@ impl WorkspaceScope {
         })
     }
 
+    pub(super) fn primary_root(&self) -> &Path {
+        &self.primary().root
+    }
+
     pub(super) fn primary_actual_project(&self) -> String {
         self.primary().actual_project()
     }
@@ -375,6 +390,12 @@ impl ScopedProject {
     }
 
     fn wait_for_background_index(&self, timeout: Duration) -> std::result::Result<(), String> {
+        if self.index_state() == ProjectIndexState::IndexFailed {
+            return Err(format!(
+                "codebase-memory indexing failed for project `{}`",
+                self.canonical_alias
+            ));
+        }
         let Some(background) = &self.background_index else {
             return Ok(());
         };
@@ -417,14 +438,6 @@ pub(super) enum ProjectIndexState {
 impl ProjectIndexState {
     fn needs_index(self) -> bool {
         matches!(self, Self::Missing | Self::Stale)
-    }
-
-    pub(super) fn is_discovery_unavailable(self) -> bool {
-        self == Self::DiscoveryUnavailable
-    }
-
-    pub(super) fn is_fresh(self) -> bool {
-        self == Self::Fresh
     }
 
     fn as_prompt_text(self) -> &'static str {

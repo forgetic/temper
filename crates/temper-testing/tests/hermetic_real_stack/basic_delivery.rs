@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use jig_core::{Reply, Script, StopReason, Turn};
+use temper_protocol_agent::SubmitForPrResponse;
 use temper_protocol_worker::ResultStatus;
 use temper_testing::real_stack::{
     HermeticIssueSpec, HermeticRealStackBuilder, HermeticRepoSpec, WorkerRoleSpec,
@@ -15,6 +16,23 @@ fn hermetic_real_stack_basic_delivery_architect_triages_then_engineer_opens_pr()
     temper_engine_io::block_on_with(|cx, handle| async move {
         let observed_architect = Arc::new(AtomicUsize::new(0));
         let observed_engineer_continuation = Arc::new(AtomicUsize::new(0));
+        let host_validations = Arc::new(AtomicUsize::new(0));
+        let validations_for_host = Arc::clone(&host_validations);
+        let submit_host: temper_agent::SubmitForPrHost = Arc::new(move |request, _context, cwd| {
+            assert_eq!(
+                request.summary.as_deref(),
+                Some("Implemented deterministic environment banner.")
+            );
+            assert_eq!(
+                std::fs::read_to_string(cwd.join("service/BANNER.txt"))
+                    .expect("host validates the agent write before accepting submit"),
+                "environment: hermetic\n"
+            );
+            validations_for_host.fetch_add(1, Ordering::SeqCst);
+            Box::pin(std::future::ready(SubmitForPrResponse::accepted(
+                "host validated the banner",
+            )))
+        });
         let mut stack = HermeticRealStackBuilder::new()
             .repo(HermeticRepoSpec::new("acme", "service"))
             .issue(HermeticIssueSpec::untriaged_intake(
@@ -28,6 +46,7 @@ fn hermetic_real_stack_basic_delivery_architect_triages_then_engineer_opens_pr()
                 Arc::clone(&observed_architect),
                 Arc::clone(&observed_engineer_continuation),
             ))
+            .submit_for_pr_host(submit_host)
             .build(&handle)
             .await
             .expect("basic-delivery hermetic stack builds");
@@ -160,6 +179,11 @@ fn hermetic_real_stack_basic_delivery_architect_triages_then_engineer_opens_pr()
             observed_engineer_continuation.load(Ordering::SeqCst),
             1,
             "fake Jig model should have observed the engineer tool-result continuation"
+        );
+        assert_eq!(
+            host_validations.load(Ordering::SeqCst),
+            1,
+            "the write, host validation, submit, and final Jig response form one accepted delivery"
         );
     });
 }

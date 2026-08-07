@@ -11,10 +11,10 @@ analysis, harness and live runs, repetitions, retention, and comparisons. The
 [codebase map](../docs/explanation/codebase-map.md) identifies the
 implementation crates and process boundary.
 
-## Checked-in benchmark
+## Checked-in benchmarks
 
-`agent-sessions/cross-cutting-rust-change/` is the deterministic reference
-benchmark. It contains:
+`agent-sessions/cross-cutting-rust-change/` is the deterministic structural
+reference benchmark. It contains:
 
 - a small Rust crate copied into a fresh temporary workspace per repetition;
 - a valid `WorkspaceContext` for one writable repository;
@@ -30,20 +30,33 @@ mutation turn. This batching does not make tool execution concurrent.
 Independent reads may run concurrently, but `write`, `edit`, process, network,
 and other barrier calls remain serialized.
 
+`agent-sessions/codebase-memory-routing-repair/` adds a controlled three-condition
+benchmark under one `codebase-memory-routing-repair` identity. The same task,
+fixture, Jig model identity, host validation, exact expected patch, and cache
+annotation run with codebase-memory enabled, disabled, or forced systemically
+unavailable. Its README predeclares the live material-improvement criterion and
+explains why deterministic Jig timing is not effectiveness evidence.
+
 Run the complete CI-safe lane from the repository root:
 
 ```sh
 cargo dev-benchmark-harness
 ```
 
-The `temper-dev` driver builds `temper-agent`, runs the checked-in manifest, and
-verifies both run and aggregate summaries, including mutation turns,
-single-mutation turns, and maximum mutations per turn. Malformed or missing
-scope ancestry is an ingestion error, not unavailable historical evidence. If
-an ingested trace contains a successful mutation without usable model-turn
+The `temper-dev` driver builds `temper-agent`, runs the structural manifest and
+all three controlled codebase-memory conditions, and verifies run and aggregate
+summaries. The structural checks include mutation turns, single-mutation turns,
+and maximum mutations per turn. The controlled checks include complete
+compound-shell classification, targeted graph-result consumption, deterministic
+cold-then-warm stable readiness, a bounded privacy-safe unavailable fallback,
+host validation, and exact diff correctness. Those fixture signals verify
+harness behavior, not deployment eligibility or live model effectiveness.
+Malformed or missing scope ancestry is an ingestion error,
+not unavailable historical evidence. If an ingested trace contains a successful mutation without usable model-turn
 identity, all three mutation-turn metrics are unavailable and the summary emits
 `StructureEvidenceUnavailable` rather than reporting zero. Artifacts are
-written below `target/benchmark-harness/cross-cutting-rust-change/`.
+written below `target/benchmark-harness/`, grouped by benchmark identity and
+condition.
 
 Every deterministic harness report is plumbing and structure evidence only, not
 representative LLM performance. Use repeated live runs to draw behavioral or

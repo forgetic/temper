@@ -15,18 +15,6 @@ pub(in crate::codebase_memory) enum TargetedProjectState {
     Missing,
     Stale,
     Fresh,
-    Migrated,
-}
-
-pub(in crate::codebase_memory) struct TargetedDiscovery {
-    pub states: Vec<TargetedProjectState>,
-    pub cache_bytes: Option<u64>,
-}
-
-pub(in crate::codebase_memory) struct TargetedDiscoveryFailure {
-    pub error: McpError,
-    pub record_count: usize,
-    pub cache_bytes: Option<u64>,
 }
 
 /// Looks up only the host-derived provider keys for this workspace. Results are
@@ -37,60 +25,38 @@ pub(in crate::codebase_memory) async fn discover_workspace_projects(
     client: &StdioMcpClient,
     timeout: Duration,
     scope: &WorkspaceScope,
-) -> Result<TargetedDiscovery, TargetedDiscoveryFailure> {
+) -> Result<Vec<TargetedProjectState>, McpError> {
     let mut states = Vec::with_capacity(scope.projects.len());
-    let mut cache_bytes = None;
     let started = std::time::Instant::now();
     for project in &scope.projects {
-        let remaining = timeout.checked_sub(started.elapsed()).ok_or_else(|| {
-            discovery_failure(
-                McpError::Timeout {
+        let remaining =
+            timeout
+                .checked_sub(started.elapsed())
+                .ok_or_else(|| McpError::Timeout {
                     method: "tools/call index_status".to_string(),
                     timeout,
-                },
-                states.len(),
-                cache_bytes,
-            )
-        })?;
+                })?;
         let result = client
             .call_tool(
                 "index_status",
                 json!({ "project": project.provider_key }),
                 remaining,
             )
-            .await
-            .map_err(|error| discovery_failure(error, states.len(), cache_bytes))?;
-        let (state, reported_cache_bytes) =
-            parse_targeted_status(&result, &project.provider_key, project.git_head.as_deref())
-                .map_err(|error| discovery_failure(error, states.len(), cache_bytes))?;
-        states.push(state);
-        if let Some(reported) = reported_cache_bytes {
-            cache_bytes = Some(cache_bytes.map_or(reported, |known: u64| known.max(reported)));
-        }
+            .await?;
+        states.push(parse_targeted_status(
+            &result,
+            &project.provider_key,
+            project.git_head.as_deref(),
+        )?);
     }
-    Ok(TargetedDiscovery {
-        states,
-        cache_bytes,
-    })
-}
-
-fn discovery_failure(
-    error: McpError,
-    record_count: usize,
-    cache_bytes: Option<u64>,
-) -> TargetedDiscoveryFailure {
-    TargetedDiscoveryFailure {
-        error,
-        record_count,
-        cache_bytes,
-    }
+    Ok(states)
 }
 
 fn parse_targeted_status(
     result: &McpToolCallResult,
     provider_key: &str,
     checkout_head: Option<&str>,
-) -> Result<(TargetedProjectState, Option<u64>), McpError> {
+) -> Result<TargetedProjectState, McpError> {
     if result.text.len() > MAX_TARGETED_DISCOVERY_BYTES {
         return Err(discovery_protocol_error(
             provider_key,
@@ -103,27 +69,18 @@ fn parse_targeted_status(
     let object = value
         .as_object()
         .ok_or_else(|| discovery_protocol_error(provider_key, "response must be a JSON object"))?;
-    let cache_bytes = u64_field(object, &["cache_bytes", "cacheBytes"]);
 
+    validate_targeted_identity(object, provider_key)?;
+    let status = targeted_status(object, provider_key)?;
+
+    if is_missing_status(&status) {
+        return Ok(TargetedProjectState::Missing);
+    }
     if result.is_error {
-        if response_is_missing(object) {
-            return Ok((TargetedProjectState::Missing, cache_bytes));
-        }
         return Err(discovery_protocol_error(
             provider_key,
             "provider returned a tool error without an explicit missing status",
         ));
-    }
-    if response_is_missing(object) {
-        return Ok((TargetedProjectState::Missing, cache_bytes));
-    }
-    if let Some(actual) = string_field(object, &["project", "id", "name"]) {
-        if actual != provider_key {
-            return Err(discovery_protocol_error(
-                provider_key,
-                "response identified a different provider project",
-            ));
-        }
     }
 
     if bool_field(
@@ -138,20 +95,14 @@ fn parse_targeted_status(
         ],
     ) == Some(true)
     {
-        return Ok((TargetedProjectState::Stale, cache_bytes));
+        return Ok(TargetedProjectState::Stale);
     }
 
-    let status = string_field(object, &["status", "state"])
-        .map(|status| status.to_ascii_lowercase())
-        .ok_or_else(|| discovery_protocol_error(provider_key, "response omitted status/state"))?;
     if matches!(
         status.as_str(),
         "stale" | "outdated" | "dirty" | "changed" | "needs_index" | "needs-index"
     ) {
-        return Ok((TargetedProjectState::Stale, cache_bytes));
-    }
-    if status == "migrated" {
-        return Ok((TargetedProjectState::Migrated, cache_bytes));
+        return Ok(TargetedProjectState::Stale);
     }
     if !matches!(
         status.as_str(),
@@ -171,24 +122,78 @@ fn parse_targeted_status(
             .and_then(|git| string_field(git, &["head_sha", "headSha", "commit"])),
     ) {
         if checkout_head != indexed_head {
-            return Ok((TargetedProjectState::Stale, cache_bytes));
+            return Ok(TargetedProjectState::Stale);
         }
     }
-    Ok((TargetedProjectState::Fresh, cache_bytes))
+    Ok(TargetedProjectState::Fresh)
 }
 
-fn u64_field(object: &Map<String, Value>, keys: &[&str]) -> Option<u64> {
-    keys.iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_u64))
+fn validate_targeted_identity(
+    object: &Map<String, Value>,
+    provider_key: &str,
+) -> Result<(), McpError> {
+    for field in ["project", "id", "name"] {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        let actual = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                discovery_protocol_error(
+                    provider_key,
+                    &format!("response field `{field}` must be a non-empty string"),
+                )
+            })?;
+        if actual != provider_key {
+            return Err(discovery_protocol_error(
+                provider_key,
+                "response identified a different provider project",
+            ));
+        }
+    }
+    Ok(())
 }
 
-fn response_is_missing(object: &Map<String, Value>) -> bool {
-    string_field(object, &["status", "state"]).is_some_and(|status| {
-        matches!(
-            status.to_ascii_lowercase().as_str(),
-            "missing" | "not_found" | "not-found" | "not_indexed" | "not-indexed"
-        )
-    })
+fn targeted_status(object: &Map<String, Value>, provider_key: &str) -> Result<String, McpError> {
+    let mut statuses = Vec::new();
+    for field in ["status", "state"] {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        let status = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                discovery_protocol_error(
+                    provider_key,
+                    &format!("response field `{field}` must be a non-empty string"),
+                )
+            })?;
+        statuses.push(status.to_ascii_lowercase());
+    }
+    let Some(status) = statuses.first() else {
+        return Err(discovery_protocol_error(
+            provider_key,
+            "response omitted status/state",
+        ));
+    };
+    if statuses.iter().any(|candidate| candidate != status) {
+        return Err(discovery_protocol_error(
+            provider_key,
+            "response reported conflicting status/state values",
+        ));
+    }
+    Ok(status.clone())
+}
+
+fn is_missing_status(status: &str) -> bool {
+    matches!(
+        status,
+        "missing" | "not_found" | "not-found" | "not_indexed" | "not-indexed"
+    )
 }
 
 fn discovery_protocol_error(provider_key: &str, message: &str) -> McpError {

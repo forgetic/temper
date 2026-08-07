@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,11 +13,6 @@ use temper_forge_model::{
     CiJobConclusion, IssueState, ItemNumber, PullRequest, PullRequestQuery, PullRequestState,
     RepositoryId, UserId,
 };
-use temper_protocol_agent::CodebaseMemoryRetentionPolicy;
-use temper_worker::{
-    CodebaseMemoryMaintenanceConfig, CodebaseMemoryRecoveryMode, CodebaseMemoryRetentionScope,
-    run_codebase_memory_recovery,
-};
 use temper_workflow::{CiStatus, parse_metadata_block};
 use toml::Value as TomlValue;
 
@@ -25,17 +20,18 @@ use super::convergence::{
     ci_observation_evidence, completed_ci_observation, issue_evidence, poll_until, pr_evidence,
     reject_labels, require_labels,
 };
-use super::{ENGINEER, FinalStateEvidence, LiveCodebaseMemoryEvidence};
+use super::{
+    ENGINEER, FinalStateEvidence, ForcedSystemicFailureFixture, LiveCodebaseMemoryEvidence,
+};
 
-#[path = "codebase_memory/lifecycle_fixture.rs"]
-mod lifecycle_fixture;
-
-const MEMORY_FILE: &str = "MEMORY_NOTES.md";
-const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_SEARCH_RESULT";
-const ENGINEER_SUMMARY: &str = "Used codebase memory search result before writing MEMORY_NOTES.md.";
-const AGENT_MCP_CLIENT: &str = "temper-agent";
-const MAINTENANCE_MCP_CLIENT: &str = "temper-worker-maintenance";
-const UNINITIALIZED_MCP_CLIENT: &str = "<uninitialized>";
+const MEMORY_FILE: &str = "src/lib.rs";
+const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_GRAPH_RESULT";
+const ENGINEER_SUMMARY: &str =
+    "Used codebase-memory graph evidence, then validated the retry-worker repair.";
+const RAW_PROVIDER_FAILURE_NEEDLE: &str = "MCP-FIXTURE-SECRET";
+const SAFE_PROVIDER_FAILURE: &str = "codebase-memory provider or protocol request failed; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
+const BOUNDED_GRAPH_RESULT_NEEDLE: &str = "[codebase-memory output truncated to 16384 bytes]";
+const MAX_MODEL_MESSAGE_BYTES: usize = 20 * 1024;
 
 pub(super) fn converge(
     forge: &ForgejoForge,
@@ -50,26 +46,36 @@ pub(super) fn converge(
     let final_state = drive_codebase_memory_convergence(
         forge, repository, issue, admin_user, standalone, timeout,
     )?;
-    validate_mcp_contract(mcp)?;
+    let calls = logged_tool_calls(&mcp.log_path)?;
+    validate_mcp_contract(mcp, &calls)?;
     fake.validate_observations()?;
-    let lifecycle = validate_lifecycle(mcp)?;
-    if fake.engineer_requests() < 4 {
+    if fake.engineer_requests() < 9 {
         return Err(format!(
-            "fake LLM did not complete the codebase-memory engineer tool loop\n{}",
+            "fake LLM did not complete the codebase-memory readiness, fallback, and validation loop\n{}",
             fake.log_tail()
         ));
     }
-    let search_calls = logged_tool_calls(&mcp.log_path)?
-        .iter()
-        .filter(|call| call.name == "search_code")
-        .count();
+    let mut mcp_call_counts = BTreeMap::<String, usize>::new();
+    for call in &calls {
+        *mcp_call_counts.entry(call.name.clone()).or_default() += 1;
+    }
+    let mcp_search_calls = mcp_call_counts
+        .get("search_graph")
+        .copied()
+        .unwrap_or_default();
     Ok((
         final_state,
         LiveCodebaseMemoryEvidence {
             produced_file: MEMORY_FILE.to_string(),
             expected_result: MEMORY_RESULT_NEEDLE.to_string(),
             fake_mcp_log: mcp.log_path.clone(),
-            mcp_search_calls: search_calls,
+            mcp_search_calls,
+            mcp_call_counts: mcp_call_counts.into_iter().collect(),
+            readiness_delay_ms: mcp.readiness_delay_ms,
+            forced_failure_tool: mcp
+                .forced_systemic_failure
+                .as_ref()
+                .map(|failure| failure.tool.clone()),
             safe_tools: mcp
                 .safe_tools
                 .iter()
@@ -80,114 +86,9 @@ pub(super) fn converge(
                 .iter()
                 .map(|tool| format!("codebase_memory_{tool}"))
                 .collect(),
-            lifecycle,
+            lifecycle: None,
         },
     ))
-}
-
-fn validate_lifecycle(mcp: &FakeMcpServer) -> Result<Option<String>, String> {
-    if !mcp.lifecycle_fixture {
-        return Ok(None);
-    }
-    let scope = CodebaseMemoryRetentionScope {
-        workspace_root: mcp.workspace_root.join("workspaces"),
-        roles: BTreeSet::from(["engineer".to_string()]),
-        repository_dirs: BTreeSet::from(["demo".to_string()]),
-    };
-    fs::create_dir_all(scope.workspace_root.join("engineer/active/demo"))
-        .map_err(|error| format!("create active lifecycle workspace: {error}"))?;
-    let policy = CodebaseMemoryRetentionPolicy {
-        enabled: true,
-        max_obsolete_projects: 64,
-        max_age_days: 30,
-        maintenance_interval_secs: 3600,
-        maintenance_timeout_secs: 20,
-        inventory_page_size: 200,
-        max_inventory_pages: 4,
-        max_deletions_per_run: 100,
-    };
-    let config = CodebaseMemoryMaintenanceConfig::new(
-        "python3",
-        mcp.provider_args(),
-        Duration::from_secs(2),
-        Duration::from_secs(3),
-        policy,
-        scope,
-    );
-    let dry = run_codebase_memory_recovery(
-        &config,
-        CodebaseMemoryRecoveryMode::DryRun,
-        None,
-        None,
-        &|| false,
-    );
-    if dry.retention.proposed.is_empty() || !dry.retention.deleted.is_empty() {
-        return Err(format!("lifecycle dry-run was not deletion-free: {dry:?}"));
-    }
-    let mut failed_seen = false;
-    for _ in 0..4 {
-        let review = run_codebase_memory_recovery(
-            &config,
-            CodebaseMemoryRecoveryMode::DryRun,
-            None,
-            None,
-            &|| false,
-        );
-        let plan = review
-            .plan_id
-            .clone()
-            .ok_or("lifecycle dry-run omitted plan id")?;
-        let applied = run_codebase_memory_recovery(
-            &config,
-            CodebaseMemoryRecoveryMode::Apply,
-            Some(&plan),
-            None,
-            &|| false,
-        );
-        failed_seen |= !applied.retention.failed.is_empty();
-        if applied.retention.proposed.len() <= 1 {
-            break;
-        }
-    }
-    let state: JsonValue = serde_json::from_str(
-        &fs::read_to_string(&mcp.state_path)
-            .map_err(|error| format!("read lifecycle provider state: {error}"))?,
-    )
-    .map_err(|error| format!("parse lifecycle provider state: {error}"))?;
-    let projects = state["projects"]
-        .as_object()
-        .ok_or("lifecycle state omitted projects")?;
-    for protected in [
-        "temper-v1-protected",
-        "unrelated-project",
-        "ambiguous-project",
-        "active-project",
-    ] {
-        if !projects.contains_key(protected) {
-            return Err(format!(
-                "lifecycle cleanup deleted protected record {protected}"
-            ));
-        }
-    }
-    if !failed_seen || !projects.contains_key("legacy-temper-000") {
-        return Err("lifecycle cleanup did not isolate the injected deletion failure".to_string());
-    }
-    let obsolete = projects
-        .keys()
-        .filter(|name| name.starts_with("legacy-temper-"))
-        .count();
-    if obsolete > 64 {
-        return Err(format!(
-            "lifecycle cleanup retained {obsolete} obsolete projects, bound is 64"
-        ));
-    }
-    Ok(Some(format!(
-        "dry_run_candidates={} final_projects={} obsolete={} cache_bytes={} partial_failure=true protected=stable,active,unrelated,ambiguous",
-        dry.retention.proposed.len(),
-        projects.len(),
-        obsolete,
-        state["cache_bytes"].as_u64().unwrap_or_default()
-    )))
 }
 
 fn drive_codebase_memory_convergence(
@@ -412,6 +313,7 @@ pub(super) struct ToolConfiguration {
     pub(super) tool: String,
     pub(super) mode: String,
     pub(super) index: String,
+    pub(super) tool_timeout_secs: Option<u64>,
 }
 
 pub(super) fn tune_codebase_memory_config(
@@ -432,6 +334,17 @@ pub(super) fn tune_codebase_memory_config(
         .or_insert_with(|| TomlValue::Table(Default::default()))
         .as_table_mut()
         .ok_or_else(|| "config.toml [agent] must be a table".to_string())?;
+    if let Some(timeout) = configuration.tool_timeout_secs {
+        let deadlines = agent
+            .entry("deadlines".to_string())
+            .or_insert_with(|| TomlValue::Table(Default::default()))
+            .as_table_mut()
+            .ok_or_else(|| "config.toml [agent.deadlines] must be a table".to_string())?;
+        deadlines.insert(
+            "tool_timeout_secs".to_string(),
+            TomlValue::Integer(i64::try_from(timeout).expect("bounded timeout fits i64")),
+        );
+    }
     let tools = agent
         .entry("tools".to_string())
         .or_insert_with(|| TomlValue::Table(Default::default()))
@@ -451,41 +364,33 @@ pub(super) fn tune_codebase_memory_config(
         TomlValue::Array(vec![
             TomlValue::String("-u".to_string()),
             TomlValue::String(fake_mcp.script_path.display().to_string()),
-            TomlValue::String("--state".to_string()),
-            TomlValue::String(fake_mcp.state_path.display().to_string()),
-            TomlValue::String("--log".to_string()),
             TomlValue::String(fake_mcp.log_path.display().to_string()),
-            TomlValue::String("--mode".to_string()),
-            TomlValue::String("stateful".to_string()),
-            TomlValue::String("--seed-json".to_string()),
-            TomlValue::String(fake_mcp.seed_json.clone()),
-            TomlValue::String("--safe-tools-json".to_string()),
+            TomlValue::String("demo".to_string()),
+            TomlValue::String(fake_mcp.project.clone()),
             TomlValue::String(
                 serde_json::to_string(&fake_mcp.safe_tools)
                     .map_err(|error| format!("serialize declared safe MCP tools: {error}"))?,
             ),
-            TomlValue::String("--hidden-tools-json".to_string()),
             TomlValue::String(
                 serde_json::to_string(&fake_mcp.hidden_tools)
                     .map_err(|error| format!("serialize declared hidden MCP tools: {error}"))?,
             ),
-            TomlValue::String("--delay-list-ms".to_string()),
+            TomlValue::String(fake_mcp.readiness_delay_ms.to_string()),
             TomlValue::String(
-                if fake_mcp.lifecycle_fixture {
-                    "4000"
-                } else {
-                    "0"
-                }
-                .to_string(),
+                fake_mcp
+                    .forced_systemic_failure
+                    .as_ref()
+                    .map(|failure| failure.tool.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             ),
-            TomlValue::String("--fail-tools-json".to_string()),
             TomlValue::String(
-                if fake_mcp.lifecycle_fixture {
-                    r#"{"delete_project":["legacy-temper-000"]}"#
-                } else {
-                    "{}"
-                }
-                .to_string(),
+                fake_mcp
+                    .forced_systemic_failure
+                    .as_ref()
+                    .map(|failure| failure.after_calls)
+                    .unwrap_or_default()
+                    .to_string(),
             ),
         ]),
     );
@@ -509,54 +414,23 @@ pub(super) fn tune_codebase_memory_config(
 
 pub(super) struct FakeMcpServer {
     pub(super) script_path: PathBuf,
-    pub(super) state_path: PathBuf,
     pub(super) log_path: PathBuf,
+    pub(super) project: String,
     pub(super) safe_tools: Vec<String>,
     pub(super) hidden_tools: Vec<String>,
-    lifecycle_fixture: bool,
-    seed_json: String,
-    workspace_root: PathBuf,
-}
-
-impl FakeMcpServer {
-    fn provider_args(&self) -> Vec<String> {
-        vec![
-            "-u".into(),
-            self.script_path.display().to_string(),
-            "--state".into(),
-            self.state_path.display().to_string(),
-            "--log".into(),
-            self.log_path.display().to_string(),
-            "--mode".into(),
-            "stateful".into(),
-            "--seed-json".into(),
-            self.seed_json.clone(),
-            "--safe-tools-json".into(),
-            serde_json::to_string(&self.safe_tools).expect("tool names serialize"),
-            "--hidden-tools-json".into(),
-            serde_json::to_string(&self.hidden_tools).expect("tool names serialize"),
-            "--delay-list-ms".into(),
-            if self.lifecycle_fixture { "250" } else { "0" }.into(),
-            "--fail-tools-json".into(),
-            if self.lifecycle_fixture {
-                r#"{"delete_project":["legacy-temper-000"]}"#
-            } else {
-                "{}"
-            }
-            .into(),
-        ]
-    }
+    pub(super) readiness_delay_ms: u64,
+    pub(super) forced_systemic_failure: Option<ForcedSystemicFailureFixture>,
 }
 
 pub(super) fn write_fake_mcp(
     root: &Path,
-    _project: &str,
-    fixture: Option<&str>,
+    project: &str,
     safe_tools: &[String],
     hidden_tools: &[String],
+    readiness_delay_ms: u64,
+    forced_systemic_failure: Option<&ForcedSystemicFailureFixture>,
 ) -> Result<FakeMcpServer, String> {
     let script_path = root.join("fake-codebase-memory-mcp.py");
-    let state_path = root.join("fake-codebase-memory-state.json");
     let log_path = root.join("logs/fake-codebase-memory-mcp.jsonl");
     fs::write(&script_path, FAKE_MCP_SCRIPT)
         .map_err(|error| format!("write fake MCP server {}: {error}", script_path.display()))?;
@@ -566,133 +440,151 @@ pub(super) fn write_fake_mcp(
     }
     fs::write(&log_path, "")
         .map_err(|error| format!("create fake MCP log {}: {error}", log_path.display()))?;
-    let lifecycle_fixture = fixture == Some("stable-lifecycle");
-    let seed_json = if lifecycle_fixture {
-        serde_json::to_string(&lifecycle_fixture::seed(root))
-            .map_err(|error| format!("serialize lifecycle MCP seed: {error}"))?
-    } else {
-        "{}".to_string()
-    };
     Ok(FakeMcpServer {
         script_path,
-        state_path,
         log_path,
+        project: project.to_string(),
         safe_tools: safe_tools.to_vec(),
         hidden_tools: hidden_tools.to_vec(),
-        lifecycle_fixture,
-        seed_json,
-        workspace_root: root.to_path_buf(),
+        readiness_delay_ms,
+        forced_systemic_failure: forced_systemic_failure.cloned(),
     })
 }
 
-fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
-    let calls = logged_tool_calls(&mcp.log_path)?;
-    validate_mcp_calls(&calls)
-}
-
-fn validate_mcp_calls(calls: &[McpToolCallEvidence]) -> Result<(), String> {
-    let search = calls
+fn validate_mcp_contract(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Result<(), String> {
+    let failure = mcp.forced_systemic_failure.as_ref();
+    let graph_tool = failure
+        .map(|failure| failure.tool.as_str())
+        .unwrap_or("search_graph");
+    let expected_graph_calls = failure.map(|failure| failure.after_calls + 1).unwrap_or(1);
+    let graph = calls
         .iter()
-        .filter(|call| call.client == AGENT_MCP_CLIENT && call.name == "search_code")
+        .enumerate()
+        .filter(|(_, call)| call.name == graph_tool)
         .collect::<Vec<_>>();
-    if search.len() != 1 {
+    if graph.len() != expected_graph_calls {
         return Err(format!(
-            "expected one agent search_code MCP call, found {}: {calls:?}",
-            search.len()
+            "expected {expected_graph_calls} {graph_tool} MCP call(s), found {} in {}",
+            graph.len(),
+            mcp.log_path.display()
+        ));
+    }
+    if failure.is_some()
+        && (graph[..graph.len().saturating_sub(1)]
+            .iter()
+            .any(|(_, call)| call.is_error)
+            || graph.last().is_some_and(|(_, call)| !call.is_error))
+    {
+        return Err(format!(
+            "{graph_tool} did not preserve one successful graph result before the controlled systemic failure: {graph:?}"
         ));
     }
     let index = calls
         .iter()
-        .filter(|call| call.client == AGENT_MCP_CLIENT && call.name == "index_repository")
+        .filter(|call| call.name == "index_repository")
         .collect::<Vec<_>>();
-    let indexed_project = index
-        .first()
-        .and_then(|call| call.arguments.get("name"))
-        .and_then(JsonValue::as_str);
     if index.len() != 1
         || index[0].arguments.get("repo_path").is_none()
-        || indexed_project.is_none()
+        || index[0].arguments.get("name").is_none()
     {
         return Err(format!(
-            "stable index_repository was not exercised internally with repo_path and name: {calls:?}"
+            "index_repository was not exercised exactly once internally with repo_path and stable name: {calls:?}"
         ));
     }
-    if search[0]
+    let provider_project = index[0]
         .arguments
-        .get("project")
+        .get("name")
         .and_then(JsonValue::as_str)
-        != indexed_project
-    {
+        .filter(|name| name.starts_with("temper-v1-"))
+        .ok_or_else(|| {
+            format!(
+                "index_repository did not receive a stable provider project identity: {index:?}"
+            )
+        })?;
+    if graph.iter().any(|(_, call)| {
+        call.arguments.get("project").and_then(JsonValue::as_str) != Some(provider_project)
+    }) {
         return Err(format!(
-            "search_code did not reuse indexed stable project {:?}: {:?}",
-            indexed_project, search[0].arguments
+            "{graph_tool} did not translate the workspace alias to stable provider project {provider_project}: {graph:?}"
         ));
     }
-    if let Some(call) = calls
+    if index[0].delay_ms != Some(mcp.readiness_delay_ms) {
+        return Err(format!(
+            "background index delay was not retained as {}ms: {index:?}",
+            mcp.readiness_delay_ms
+        ));
+    }
+    let status = calls
         .iter()
-        .find(|call| call.name == "list_projects" && call.client != MAINTENANCE_MCP_CLIENT)
+        .filter(|call| call.name == "index_status")
+        .collect::<Vec<_>>();
+    if status.len() != 1
+        || status[0]
+            .arguments
+            .get("project")
+            .and_then(JsonValue::as_str)
+            != Some(provider_project)
     {
         return Err(format!(
-            "normal startup called the global project inventory as `{}`: {calls:?}",
-            call.client
+            "expected one targeted index_status discovery call for stable provider project {provider_project}, found {status:?}"
         ));
+    }
+    let expected_counts = BTreeMap::from([
+        ("index_repository".to_string(), 1_usize),
+        ("index_status".to_string(), 1_usize),
+        (graph_tool.to_string(), expected_graph_calls),
+    ]);
+    let mut actual_counts = BTreeMap::<String, usize>::new();
+    for call in calls {
+        *actual_counts.entry(call.name.clone()).or_default() += 1;
+    }
+    if actual_counts != expected_counts {
+        return Err(format!(
+            "unexpected MCP request inventory; expected {expected_counts:?}, got {actual_counts:?}"
+        ));
+    }
+    if let Some((failure_position, _)) = graph.last() {
+        if calls.len() != failure_position + 1 {
+            return Err(format!(
+                "a codebase-memory MCP call followed the controlled systemic failure: {calls:?}"
+            ));
+        }
     }
     Ok(())
 }
 
 #[derive(Debug)]
 struct McpToolCallEvidence {
-    client: String,
     name: String,
     arguments: JsonValue,
+    delay_ms: Option<u64>,
+    is_error: bool,
 }
 
 fn logged_tool_calls(path: &Path) -> Result<Vec<McpToolCallEvidence>, String> {
     let raw = fs::read_to_string(path)
         .map_err(|error| format!("read MCP call log {}: {error}", path.display()))?;
-    let mut clients = BTreeMap::new();
-    let mut legacy_client = UNINITIALIZED_MCP_CLIENT.to_string();
-    let mut calls = Vec::new();
-    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        let Some(value) = serde_json::from_str::<JsonValue>(line).ok() else {
-            continue;
-        };
-        let Some(name) = value.get("tool").and_then(JsonValue::as_str) else {
-            continue;
-        };
-        let arguments = value.get("arguments").cloned().unwrap_or(JsonValue::Null);
-        let process_id = value.get("pid").and_then(JsonValue::as_u64);
-        if name == "initialize" {
-            let client = arguments
-                .get("clientInfo")
-                .and_then(|info| info.get("name"))
-                .and_then(JsonValue::as_str)
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or(UNINITIALIZED_MCP_CLIENT)
-                .to_string();
-            if let Some(process_id) = process_id {
-                clients.insert(process_id, client);
-            } else {
-                legacy_client = client;
-            }
-            continue;
-        }
-        let client = process_id
-            .and_then(|process_id| clients.get(&process_id))
-            .unwrap_or(&legacy_client)
-            .clone();
-        calls.push(McpToolCallEvidence {
-            client,
-            name: name.to_string(),
-            arguments,
-        });
-    }
-    Ok(calls)
+    Ok(raw
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let value = serde_json::from_str::<JsonValue>(line).ok()?;
+            let name = value.get("tool")?.as_str()?.to_string();
+            let arguments = value.get("arguments").cloned().unwrap_or(JsonValue::Null);
+            let delay_ms = value.get("delay_ms").and_then(JsonValue::as_u64);
+            let is_error = value
+                .get("is_error")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false);
+            Some(McpToolCallEvidence {
+                name,
+                arguments,
+                delay_ms,
+                is_error,
+            })
+        })
+        .collect())
 }
-
-#[cfg(test)]
-#[path = "codebase_memory/tests.rs"]
-mod tests;
 
 pub(super) struct CodebaseMemoryFake {
     fake: FakeLlm,
@@ -704,6 +596,10 @@ pub(super) struct CodebaseMemoryFake {
 struct ModelObservations {
     prompt_guidance_seen: bool,
     memory_result_seen: bool,
+    safe_failure_seen: bool,
+    raw_provider_text_seen: bool,
+    bounded_graph_result_seen: bool,
+    oversized_message_seen: bool,
 }
 
 impl CodebaseMemoryFake {
@@ -725,18 +621,30 @@ impl CodebaseMemoryFake {
                 return Reply::text("unexpected codebase-memory fake-LLM request");
             }
             request_count.fetch_add(1, Ordering::SeqCst);
+            let mut observations = observations_for_rule.lock().expect("observations lock");
             if messages_contain(view, "CODEBASE MEMORY") {
-                observations_for_rule
-                    .lock()
-                    .expect("observations lock")
-                    .prompt_guidance_seen = true;
+                observations.prompt_guidance_seen = true;
             }
             if messages_contain(view, MEMORY_RESULT_NEEDLE) {
-                observations_for_rule
-                    .lock()
-                    .expect("observations lock")
-                    .memory_result_seen = true;
+                observations.memory_result_seen = true;
             }
+            if messages_contain(view, SAFE_PROVIDER_FAILURE) {
+                observations.safe_failure_seen = true;
+            }
+            if messages_contain(view, RAW_PROVIDER_FAILURE_NEEDLE) {
+                observations.raw_provider_text_seen = true;
+            }
+            if messages_contain(view, BOUNDED_GRAPH_RESULT_NEEDLE) {
+                observations.bounded_graph_result_seen = true;
+            }
+            if view
+                .messages
+                .iter()
+                .any(|message| message.content.len() > MAX_MODEL_MESSAGE_BYTES)
+            {
+                observations.oversized_message_seen = true;
+            }
+            drop(observations);
             script.next_reply(view)
         }))
         .map_err(|error| format!("start scenario Jig fake LLM: {error}"))?;
@@ -756,7 +664,14 @@ impl CodebaseMemoryFake {
     }
 
     fn validate_observations(&self) -> Result<(), String> {
-        let (prompt_guidance_seen, memory_result_seen) = {
+        let (
+            prompt_guidance_seen,
+            memory_result_seen,
+            safe_failure_seen,
+            raw_provider_text_seen,
+            bounded_graph_result_seen,
+            oversized_message_seen,
+        ) = {
             let observations = self
                 .observations
                 .lock()
@@ -764,6 +679,10 @@ impl CodebaseMemoryFake {
             (
                 observations.prompt_guidance_seen,
                 observations.memory_result_seen,
+                observations.safe_failure_seen,
+                observations.raw_provider_text_seen,
+                observations.bounded_graph_result_seen,
+                observations.oversized_message_seen,
             )
         };
         if !prompt_guidance_seen {
@@ -774,7 +693,31 @@ impl CodebaseMemoryFake {
         }
         if !memory_result_seen {
             return Err(format!(
-                "fake LLM did not receive the fake MCP search result\n{}",
+                "fake LLM did not receive the fake MCP graph result\n{}",
+                self.log_tail()
+            ));
+        }
+        if !bounded_graph_result_seen {
+            return Err(format!(
+                "fake LLM did not receive the bounded graph result marker\n{}",
+                self.log_tail()
+            ));
+        }
+        if !safe_failure_seen {
+            return Err(format!(
+                "fake LLM did not receive the bounded typed systemic diagnostic\n{}",
+                self.log_tail()
+            ));
+        }
+        if raw_provider_text_seen {
+            return Err(format!(
+                "raw provider failure text leaked into the fake LLM request\n{}",
+                self.log_tail()
+            ));
+        }
+        if oversized_message_seen {
+            return Err(format!(
+                "a model-visible message exceeded the scenario's bounded result allowance\n{}",
                 self.log_tail()
             ));
         }
@@ -785,8 +728,13 @@ impl CodebaseMemoryFake {
         let requests = self.fake.requests();
         let observations = self.observations.lock().expect("observations lock");
         let mut lines = vec![format!(
-            "observations: prompt_guidance_seen={} memory_result_seen={}",
-            observations.prompt_guidance_seen, observations.memory_result_seen
+            "observations: prompt_guidance_seen={} memory_result_seen={} bounded_graph_result_seen={} safe_failure_seen={} raw_provider_text_seen={} oversized_message_seen={}",
+            observations.prompt_guidance_seen,
+            observations.memory_result_seen,
+            observations.bounded_graph_result_seen,
+            observations.safe_failure_seen,
+            observations.raw_provider_text_seen,
+            observations.oversized_message_seen,
         )];
         if requests.is_empty() {
             lines.push("<fake LLM received no requests>".to_string());

@@ -21,6 +21,8 @@
 | Reason | cancelled |
 | Wall time | 1000 ms |
 | Turns | 2 |
+| Task correctness | failed |
+| Host validation | unavailable |
 
 ## Model and tokens
 
@@ -69,6 +71,10 @@
 | 8 | submit_for_pr | `submit-accepted-1` | 5 ms |
 | 9 | submit_for_pr | `submit-accepted-2` | 5 ms |
 | 10 | submit_for_pr | `submit-rejected` | 5 ms |
+
+## Graph discovery and decision relevance
+
+_No graph calls or decision-relevance rubric observed._
 
 ## Mutation and validation structure
 
