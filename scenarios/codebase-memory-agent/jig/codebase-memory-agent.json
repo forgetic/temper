@@ -30,7 +30,7 @@
                 "name": "write",
                 "args": {
                   "path": "demo/MEMORY_NOTES.md",
-                  "content": "memory-guided notes\nFAKE_MCP_SEARCH_RESULT project=actual-demo-project query=WidgetService\n"
+                  "content": "memory-guided notes\nFAKE_MCP_SEARCH_RESULT project=temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a query=WidgetService\n"
                 }
               }
             }

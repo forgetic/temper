@@ -219,7 +219,7 @@ def append_log(value):
 
 
 def record_request(name, args):
-    evidence = {"name": name, "tool": name, "arguments": args}
+    evidence = {"name": name, "tool": name, "arguments": args, "pid": os.getpid()}
     with locked_state() as state:
         counters = state["counters"]
         counters[name] = int(counters.get(name, 0)) + 1
