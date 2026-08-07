@@ -9,6 +9,7 @@ use super::*;
 mod export;
 mod model_failure;
 mod prompt;
+mod tool_failure;
 
 fn fixture(name: &str) -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

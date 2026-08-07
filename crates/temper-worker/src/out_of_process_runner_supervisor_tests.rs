@@ -402,7 +402,7 @@ fn hard_kill_writes_synthetic_cancelled_terminal_activity_and_reports_cleanup() 
         temp.path(),
         "forced-cancel.sh",
         &format!(
-            "trap '' TERM\n: > '{}'\nwhile :; do sleep 1; done",
+            "trap '' TERM\n: > '{}'\nwhile :; do sleep 1 || :; done",
             ready.display()
         ),
     );

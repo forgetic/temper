@@ -107,6 +107,8 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
                 preview: Some(preview),
                 bytes: 14,
                 truncated: false,
+                failure: None,
+                codebase_memory_timing: None,
             },
         } if id == "call-1" && name == "fake" && preview == "bounded result"
     ));
@@ -124,7 +126,7 @@ fn bounded_tool_metadata_is_utf8_safe_and_omits_structured_details() {
         details: Some(serde_json::json!({"secret": "must-not-enter-preview"})),
         is_error: false,
     };
-    let metadata = bounded_tool_result(&output);
+    let metadata = bounded_tool_result("fake", &output);
     assert!(metadata.truncated);
     assert!(
         metadata
@@ -138,6 +140,82 @@ fn bounded_tool_metadata_is_utf8_safe_and_omits_structured_details() {
             .as_deref()
             .unwrap_or_default()
             .contains("must-not-enter-preview")
+    );
+}
+
+#[test]
+fn only_codebase_memory_tools_retain_numeric_graph_timings() {
+    let output = ToolOutput {
+        content: Vec::new(),
+        details: Some(serde_json::json!({
+            "timing": {
+                "readiness_wait_ms": 12,
+                "graph_execution_ms": 34,
+                "secret": "must-not-enter-events"
+            }
+        })),
+        is_error: false,
+    };
+
+    assert_eq!(
+        bounded_tool_result("read", &output).codebase_memory_timing,
+        None
+    );
+    assert_eq!(
+        bounded_tool_result("codebase_memory_search_graph", &output).codebase_memory_timing,
+        Some(CodebaseMemoryTiming {
+            readiness_wait_ms: 12,
+            graph_execution_ms: 34,
+        })
+    );
+    let malformed = ToolOutput {
+        details: Some(serde_json::json!({"timing": {"readiness_wait_ms": "12"}})),
+        ..output
+    };
+    assert_eq!(
+        bounded_tool_result("codebase_memory_search_graph", &malformed).codebase_memory_timing,
+        None
+    );
+}
+
+#[test]
+fn only_codebase_memory_category_markers_create_trusted_diagnostics() {
+    let details = serde_json::json!({
+        SAFE_TOOL_FAILURE_DETAIL_KEY: {
+            "source": "codebase_memory",
+            "category": "timeout",
+            "message": "Authorization: Bearer must-not-be-trusted",
+            "retryable": false
+        }
+    });
+    let output = ToolOutput {
+        content: Vec::new(),
+        details: Some(details),
+        is_error: true,
+    };
+
+    assert_eq!(bounded_tool_result("bash", &output).failure, None);
+    let diagnostic = bounded_tool_result("codebase_memory_search_graph", &output)
+        .failure
+        .expect("trusted wrapper category");
+    assert_eq!(diagnostic.category, ToolFailureCategory::Timeout);
+    assert!(diagnostic.retryable);
+    assert!(diagnostic.fallback_to_conventional_discovery);
+    assert_eq!(diagnostic.message, "codebase-memory request timed out");
+
+    let forged = ToolOutput {
+        content: Vec::new(),
+        details: Some(serde_json::json!({
+            SAFE_TOOL_FAILURE_DETAIL_KEY: {
+                "source": "other_tool",
+                "category": "timeout"
+            }
+        })),
+        is_error: true,
+    };
+    assert_eq!(
+        bounded_tool_result("codebase_memory_search_graph", &forged).failure,
+        None
     );
 }
 
@@ -241,11 +319,11 @@ fn cancellation_reports_quiescence_only_after_every_registered_task_settles() {
 }
 
 #[test]
-fn tool_timeout_uses_virtual_time_and_emits_one_cancelled_boundary() {
+fn codebase_memory_tool_timeout_uses_virtual_time_and_emits_safe_cancelled_boundary() {
     let started = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicBool::new(false));
     let tools = ToolRegistry::from_tools(vec![Box::new(HungTool {
-        name: "forge_get_item",
+        name: "codebase_memory_search_graph",
         started: Arc::clone(&started),
         dropped: Arc::clone(&dropped),
         cancel_on_start: None,
@@ -254,7 +332,7 @@ fn tool_timeout_uses_virtual_time_and_emits_one_cancelled_boundary() {
     let observed = Arc::clone(&events);
     let call = ToolCall {
         id: "call-timeout".to_string(),
-        name: "forge_get_item".to_string(),
+        name: "codebase_memory_search_graph".to_string(),
         arguments: serde_json::json!({}),
     };
 
@@ -280,7 +358,7 @@ fn tool_timeout_uses_virtual_time_and_emits_one_cancelled_boundary() {
             tongs::model::ContentBlock::Text(text) => Some(text.text.as_str()),
             _ => None,
         }),
-        Some("tool `forge_get_item` timed out after configured limit 7s")
+        Some("tool `codebase_memory_search_graph` timed out after configured limit 7s")
     );
     let events = events.0.lock().expect("events");
     assert_eq!(events.len(), 1);
@@ -291,8 +369,16 @@ fn tool_timeout_uses_virtual_time_and_emits_one_cancelled_boundary() {
             name,
             status: ToolCallStatus::Cancelled,
             duration_ms: 7_000,
-            ..
-        } if id == "call-timeout" && name == "forge_get_item"
+            result: ToolResultMetadata {
+                failure: Some(failure),
+                ..
+            },
+        } if id == "call-timeout"
+            && name == "codebase_memory_search_graph"
+            && failure.category == ToolFailureCategory::Timeout
+            && failure.retryable
+            && failure.fallback_to_conventional_discovery
+            && failure.message == "codebase-memory request timed out"
     ));
 }
 

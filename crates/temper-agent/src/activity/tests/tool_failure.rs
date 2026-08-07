@@ -1,0 +1,109 @@
+use std::sync::Arc;
+
+use temper_agent_core::{
+    AgentEvent, CodebaseMemoryTiming, ModelIdentity, ToolCallStatus, ToolFailureCategory,
+    ToolFailureDiagnostic, ToolResultMetadata,
+};
+use temper_protocol_activity::{
+    AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1, CapturedContentV1,
+    ToolFailureCategoryV1,
+};
+
+use super::{FakeClock, Recorder, ScopeFactory};
+
+#[test]
+fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
+    const SECRET: &str = "Authorization: Bearer CODEBASE-MEMORY-SECRET";
+    for mode in [
+        CaptureModeV1::Metadata,
+        CaptureModeV1::Transcript,
+        CaptureModeV1::Diagnostic,
+    ] {
+        let recorder = Arc::new(Recorder::default());
+        let factory = ScopeFactory::with_parts(
+            AgentActivityCapturePolicyV1 {
+                capture: mode,
+                max_inline_bytes: 64,
+                ..Default::default()
+            },
+            Arc::new(FakeClock::new(0..20)),
+            vec![recorder.clone()],
+        );
+        let run = factory.main("main", ModelIdentity::new("p", "m"));
+        let sink = run.observability.events;
+        sink.emit(AgentEvent::ToolEnd {
+            id: "graph-ok".to_string(),
+            name: "codebase_memory_search_graph".to_string(),
+            status: ToolCallStatus::Succeeded,
+            duration_ms: 4,
+            result: ToolResultMetadata {
+                preview: Some(format!("bounded graph evidence {}", "x".repeat(200))),
+                bytes: 223,
+                truncated: true,
+                failure: None,
+                codebase_memory_timing: Some(CodebaseMemoryTiming {
+                    readiness_wait_ms: 1,
+                    graph_execution_ms: 3,
+                }),
+            },
+        });
+        let mut failure = ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::ProcessExit);
+        failure.message = format!("{SECRET} {}", "y".repeat(10_000));
+        sink.emit(AgentEvent::ToolEnd {
+            id: "graph-failed".to_string(),
+            name: "codebase_memory_search_graph".to_string(),
+            status: ToolCallStatus::Failed,
+            duration_ms: 5,
+            result: ToolResultMetadata {
+                preview: Some(format!("provider output {SECRET}")),
+                bytes: 10_000,
+                truncated: true,
+                failure: Some(failure),
+                codebase_memory_timing: Some(CodebaseMemoryTiming {
+                    readiness_wait_ms: 2,
+                    graph_execution_ms: 3,
+                }),
+            },
+        });
+
+        let frames = recorder.0.lock().expect("frames");
+        let finished = frames
+            .iter()
+            .filter_map(|frame| match &frame.event {
+                AgentActivityEventV1::ToolFinished(value) => Some(value),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(finished.len(), 2);
+        if mode == CaptureModeV1::Metadata {
+            assert_eq!(finished[0].result, None);
+        } else {
+            let CapturedContentV1::Inline(result) =
+                finished[0].result.as_ref().expect("graph result captured")
+            else {
+                panic!("graph result is inline");
+            };
+            assert!(result.text.len() <= 64);
+            assert!(result.truncated);
+        }
+        assert_eq!(
+            finished[0]
+                .codebase_memory_timing
+                .unwrap()
+                .graph_execution_ms,
+            3
+        );
+        assert_eq!(finished[1].result, None);
+        let diagnostic = finished[1].failure.as_ref().expect("typed failure");
+        assert_eq!(diagnostic.category, ToolFailureCategoryV1::ProcessExit);
+        assert_eq!(
+            diagnostic.message,
+            "codebase-memory provider process exited"
+        );
+        assert!(!diagnostic.retryable);
+        assert!(diagnostic.fallback_to_conventional_discovery);
+        let json = serde_json::to_string(&*frames).unwrap();
+        assert!(!json.contains(SECRET));
+        assert!(!json.contains(&"y".repeat(1_000)));
+    }
+}

@@ -58,9 +58,14 @@ fixture = {fixture}
 workspace_context = "context.json"
 capture = "diagnostic"
 validation_command_prefixes = [["cargo", "test"], ["./.temper/pre-pr"]]
+discovery_command_prefixes = [["git", "grep"]]
 post_run_commands = [["cargo", "test", "-p", "fixture"]]
 jig_script = "jig.json"
 repetitions = 2
+
+[[graph_decision_targets]]
+target = "one/src/lib.rs"
+kind = "implementation"
 
 [annotations]
 provider_region = "local"
@@ -94,6 +99,14 @@ fn manifest_resolves_inputs_relative_to_its_own_directory() {
 
     assert_eq!(manifest.manifest().name, "secure-workspace");
     assert_eq!(manifest.manifest().repetitions, 2);
+    assert_eq!(
+        manifest.manifest().discovery_command_prefixes[0],
+        ["git", "grep"]
+    );
+    assert_eq!(
+        manifest.manifest().graph_decision_targets[0].target,
+        "one/src/lib.rs"
+    );
     assert_eq!(
         manifest.manifest().annotations.provider_region.as_deref(),
         Some("local")
@@ -157,6 +170,29 @@ fn manifest_rejects_symlink_escapes_unsafe_links_and_cycles() {
         error,
         BenchmarkManifestError::DirectoryCycle { .. }
     ));
+}
+
+#[test]
+fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../benchmarks/agent-sessions/codebase-memory-routing-repair/benchmark.toml");
+    let manifest = load_benchmark_manifest(manifest_path).unwrap();
+
+    assert_eq!(manifest.manifest().name, "codebase-memory-routing-repair");
+    assert!(
+        manifest
+            .condition_fixture_provider_path()
+            .unwrap()
+            .is_file()
+    );
+    assert!(
+        manifest
+            .condition_disabled_jig_script_path()
+            .unwrap()
+            .is_file()
+    );
+    assert!(manifest.expected_patch_path().unwrap().is_file());
+    assert_eq!(manifest.manifest().graph_decision_targets.len(), 3);
 }
 
 #[test]
@@ -229,6 +265,7 @@ fn artifact_layout_and_snapshots_are_deterministic_and_exclude_secrets() {
     assert_eq!(layout.aggregate_markdown, output.join("aggregate.md"));
     assert_eq!(paths.root, output.join("repetitions/001"));
     assert_eq!(paths.manifest_snapshot, paths.root.join("manifest.toml"));
+    assert_eq!(paths.expected_patch, paths.root.join("expected.patch"));
     assert_eq!(
         paths.workspace_context_snapshot,
         paths.root.join("workspace-context.json")

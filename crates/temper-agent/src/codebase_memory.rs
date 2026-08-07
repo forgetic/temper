@@ -9,28 +9,41 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use temper_agent_core::{SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory, ToolFailureDiagnostic};
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
     WorkspaceContext,
 };
-use tongs::error::{Error, Result};
+use tongs::error::Result;
 use tongs::model::{ContentBlock, TextContent};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
 
-use crate::mcp::{McpError, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig};
+use crate::mcp::{
+    MAX_MCP_RECORD_BYTES, McpError, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig,
+};
 use temper_agent_core::AgentContainmentContext;
 
 mod background;
+mod health;
 mod indexing;
+mod provider;
 mod scope;
+mod tool;
 mod tool_schema;
 
-use indexing::{discover_indexed_projects, prepare_indexes};
-use scope::WorkspaceScope;
+use health::CodebaseMemoryHealth;
+use indexing::prepare_indexes;
+use provider::validate_provider_contract;
+use scope::{WorkspaceScope, discover_workspace_projects};
+#[cfg(test)]
+use tool::{
+    classify_input_failure, classify_mcp_error, classify_provider_failure,
+    codebase_memory_failure_output,
+};
 use tool_schema::{default_project_key, description_for, scoped_parameters};
 
 /// Maximum UTF-8 bytes returned to the model from one MCP tool call.
@@ -319,45 +332,54 @@ async fn start_toolset(
         model_visible: false,
         repo_root: &scope.primary_root().display().to_string(),
     });
-    let client =
+    let discovery_client =
         StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
-    emit_mcp_server_started(McpServerStarted {
-        tool_name: "codebase_memory",
-        command: &config.command,
-        repo_root: &scope.primary_root().display().to_string(),
-    });
-    let advertised = client.list_tools(startup_timeout).await?;
+    let discovery_tools = discovery_client.list_tools(startup_timeout).await?;
+    validate_provider_contract(&discovery_client, &discovery_tools)?;
     let mut setup_notes = Vec::new();
 
-    if advertised_tool(&advertised, "list_projects") {
-        match discover_indexed_projects(&client, startup_timeout).await {
-            Ok(discovered) => scope.apply_discovered_projects(discovered, true),
-            Err(error) if config.mode == CodebaseMemoryMode::Auto => {
-                setup_notes.push(format!(
-                    "could not read codebase-memory project list; aliases use prepared repo names only: {error}"
-                ));
-                scope.apply_discovered_projects(Vec::new(), false);
-            }
-            Err(error) => return Err(error),
+    match discover_workspace_projects(&discovery_client, startup_timeout, &scope).await {
+        Ok(states) => scope.apply_targeted_discovery(states),
+        Err(error) if config.mode == CodebaseMemoryMode::Auto => {
+            scope.mark_discovery_unavailable();
+            setup_notes.push(format!(
+                "safe targeted project discovery was unavailable; indexing was skipped for every prepared repo and no path-keyed fallback was attempted: {error}"
+            ));
         }
-    } else {
-        scope.apply_discovered_projects(Vec::new(), false);
+        Err(error) => return Err(error),
     }
 
     setup_notes.extend(
         prepare_indexes(
             config,
-            &client,
             &mcp_config,
-            &advertised,
+            &discovery_tools,
             &mut scope,
             containment,
         )
         .await?,
     );
+
+    // Discovery requests and their timeouts are process-fatal in the stdio
+    // client. Never clone that process into model-visible wrappers, even after
+    // successful discovery: initialize and validate a fresh serving client.
+    drop(discovery_client);
+    let client =
+        StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
+    let advertised = client.list_tools(startup_timeout).await?;
+    validate_provider_contract(&client, &advertised)?;
+    emit_mcp_server_started(McpServerStarted {
+        tool_name: "codebase_memory",
+        command: &config.command,
+        repo_root: &scope.primary_root().display().to_string(),
+    });
     scope.rebuild_alias_map();
     let prompt_status = scope.prompt_status(config.index, &setup_notes);
     let scope = Arc::new(scope);
+
+    // This state belongs to exactly this toolset build (one agent run) and is
+    // shared by every wrapper cloned from the serving client.
+    let health = Arc::new(CodebaseMemoryHealth::new(client.cancellation_handle()));
 
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
     let mut registered_tool_metadata = Vec::new();
@@ -392,6 +414,7 @@ async fn start_toolset(
         });
         tools.push(Box::new(CodebaseMemoryTool::new(
             client.clone(),
+            Arc::clone(&health),
             descriptor.name,
             *allowed,
             public_name,
@@ -469,6 +492,9 @@ struct McpToolResult<'a> {
     is_error: bool,
     truncated: bool,
     result_preview: &'a str,
+    readiness_wait_ms: u64,
+    graph_execution_ms: u64,
+    duration_ms: u64,
 }
 
 fn emit_agent_tool_configured(ev: AgentToolConfigured<'_>) {
@@ -562,6 +588,9 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         is_error = ev.is_error,
         truncated = ev.truncated,
         result.preview = ev.result_preview,
+        readiness.wait_ms = ev.readiness_wait_ms,
+        graph.execution_ms = ev.graph_execution_ms,
+        duration_ms = ev.duration_ms,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,
@@ -625,6 +654,7 @@ fn codebase_memory_index(index: CodebaseMemoryIndex) -> &'static str {
 
 struct CodebaseMemoryTool {
     client: StdioMcpClient,
+    health: Arc<CodebaseMemoryHealth>,
     mcp_name: String,
     public_name: String,
     description: String,
@@ -638,6 +668,7 @@ impl CodebaseMemoryTool {
     #[allow(clippy::too_many_arguments)]
     fn new(
         client: StdioMcpClient,
+        health: Arc<CodebaseMemoryHealth>,
         mcp_name: String,
         allowed: AllowedCodebaseMemoryTool,
         public_name: String,
@@ -650,6 +681,7 @@ impl CodebaseMemoryTool {
         debug_assert_eq!(public_name, allowed.public_name);
         Self {
             client,
+            health,
             mcp_name,
             public_name,
             description,
@@ -658,120 +690,6 @@ impl CodebaseMemoryTool {
             call_timeout,
             scope,
         }
-    }
-}
-
-#[async_trait]
-impl Tool for CodebaseMemoryTool {
-    fn name(&self) -> &str {
-        &self.public_name
-    }
-
-    fn label(&self) -> &str {
-        &self.public_name
-    }
-
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn parameters(&self) -> Value {
-        self.parameters.clone()
-    }
-
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read()
-    }
-
-    async fn execute(
-        &self,
-        _tool_call_id: &str,
-        input: Value,
-        _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
-    ) -> Result<ToolOutput> {
-        let scope = Arc::clone(&self.scope);
-        let mcp_name = self.mcp_name.clone();
-        let default_project_key = self.default_project_key;
-        let wait_timeout = self.call_timeout;
-        let input = skein::runtime::spawn_blocking(move || {
-            scope.prepare_tool_input(&mcp_name, default_project_key, input, wait_timeout)
-        })
-        .await
-        .map_err(|message| Error::tool(self.public_name.clone(), message))?;
-
-        if self.mcp_name == "list_projects" {
-            return Ok(self.scope.list_projects_output());
-        }
-
-        let mcp_project = input
-            .get("project")
-            .or_else(|| input.get("repo"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let argument_preview = redacted_preview(&input.to_string(), 240);
-        emit_mcp_tool_called(McpToolCalled {
-            tool_name: &self.public_name,
-            mcp_tool: &self.mcp_name,
-            mcp_project: &mcp_project,
-            repo_root: &self.scope.primary_root().display().to_string(),
-            argument_preview: &argument_preview,
-        });
-
-        let result = self
-            .client
-            .call_tool(&self.mcp_name, input, self.call_timeout)
-            .await
-            .map_err(|error| Error::tool(self.public_name.clone(), error))?;
-        let bounded = bound_text(&result.text, MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
-        let result_preview = redacted_preview(&bounded.text, 240);
-        emit_mcp_tool_result(McpToolResult {
-            tool_name: &self.public_name,
-            mcp_tool: &self.mcp_name,
-            mcp_project: &mcp_project,
-            is_error: result.is_error,
-            truncated: bounded.truncated,
-            result_preview: &result_preview,
-        });
-        Ok(ToolOutput {
-            content: vec![ContentBlock::Text(TextContent {
-                text: bounded.text,
-                text_signature: None,
-            })],
-            details: Some(json!({
-                "mcp_tool": self.mcp_name,
-                "truncated": bounded.truncated,
-                "workspace_scope": self.scope.details_json(),
-            })),
-            is_error: result.is_error,
-        })
-    }
-}
-
-struct BoundedText {
-    text: String,
-    truncated: bool,
-}
-
-fn bound_text(input: &str, max_bytes: usize) -> BoundedText {
-    if input.len() <= max_bytes {
-        return BoundedText {
-            text: input.to_string(),
-            truncated: false,
-        };
-    }
-
-    let notice = format!("\n[codebase-memory output truncated to {max_bytes} bytes]");
-    let content_budget = max_bytes.saturating_sub(notice.len());
-    let mut end = content_budget.min(input.len());
-    while end > 0 && !input.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut text = input[..end].to_string();
-    text.push_str(&notice);
-    BoundedText {
-        text,
-        truncated: true,
     }
 }
 

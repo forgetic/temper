@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{BenchmarkModeV1, RunSummaryV1, RunTerminalStatusV1};
+use crate::{BenchmarkConditionV1, BenchmarkModeV1, RunSummaryV1, RunTerminalStatusV1};
 
 mod metrics;
 mod render;
@@ -99,6 +99,8 @@ pub struct BenchmarkAggregateV1 {
     pub benchmark: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<BenchmarkModeV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<BenchmarkConditionV1>,
     pub outcomes: RunOutcomeCountsV1,
     /// Extensible metric names allow a newer producer's measurements to remain
     /// visible to comparison code without weakening the outer serde contract.
@@ -114,6 +116,8 @@ struct BenchmarkAggregateWireV1 {
     benchmark: Option<String>,
     #[serde(default)]
     mode: Option<BenchmarkModeV1>,
+    #[serde(default)]
+    condition: Option<BenchmarkConditionV1>,
     outcomes: RunOutcomeCountsV1,
     metrics: BTreeMap<String, DistributionV1>,
     runs: Vec<AggregateRunV1>,
@@ -130,6 +134,7 @@ impl TryFrom<BenchmarkAggregateWireV1> for BenchmarkAggregateV1 {
             version: value.version,
             benchmark: value.benchmark,
             mode: value.mode,
+            condition: value.condition,
             outcomes: value.outcomes,
             metrics: value.metrics,
             runs: value.runs,
@@ -194,7 +199,12 @@ impl BenchmarkAggregateV1 {
                 )));
             }
         }
-        validate_declared_identity(self.benchmark.as_deref(), self.mode, &self.runs)
+        validate_declared_identity(
+            self.benchmark.as_deref(),
+            self.mode,
+            self.condition,
+            &self.runs,
+        )
     }
 }
 
@@ -208,7 +218,7 @@ pub fn aggregate_run_summaries(
         return Err(AggregateError::Empty);
     }
 
-    let (benchmark, mode) = common_identity(&summaries)?;
+    let (benchmark, mode, condition) = common_identity(&summaries)?;
     let runs = summaries
         .into_iter()
         .enumerate()
@@ -226,6 +236,7 @@ pub fn aggregate_run_summaries(
         version: BENCHMARK_AGGREGATE_VERSION,
         benchmark,
         mode,
+        condition,
         outcomes,
         metrics,
         runs,
@@ -247,15 +258,19 @@ fn aggregated_metrics(runs: &[AggregateRunV1]) -> BTreeMap<String, DistributionV
         .collect()
 }
 
-fn common_identity(
-    summaries: &[RunSummaryV1],
-) -> Result<(Option<String>, Option<BenchmarkModeV1>), AggregateError> {
+type CommonIdentity = (
+    Option<String>,
+    Option<BenchmarkModeV1>,
+    Option<BenchmarkConditionV1>,
+);
+
+fn common_identity(summaries: &[RunSummaryV1]) -> Result<CommonIdentity, AggregateError> {
     let identities = summaries
         .iter()
         .map(|summary| summary.benchmark.as_ref())
         .collect::<Vec<_>>();
     if identities.iter().all(|identity| identity.is_none()) {
-        return Ok((None, None));
+        return Ok((None, None, None));
     }
     if identities.iter().any(|identity| identity.is_none()) {
         return Err(AggregateError::Incompatible(
@@ -269,22 +284,31 @@ fn common_identity(
         ));
     }
     for identity in identities.into_iter().flatten().skip(1) {
-        if identity.name != first.name || identity.mode != first.mode {
+        if identity.name != first.name
+            || identity.mode != first.mode
+            || identity.condition != first.condition
+        {
             return Err(AggregateError::Incompatible(
-                "benchmark name or mode changed between repetitions".to_string(),
+                "benchmark name, mode, or condition changed between repetitions".to_string(),
             ));
         }
     }
-    Ok((Some(first.name.clone()), Some(first.mode)))
+    Ok((Some(first.name.clone()), Some(first.mode), first.condition))
 }
 
 fn validate_declared_identity(
     benchmark: Option<&str>,
     mode: Option<BenchmarkModeV1>,
+    condition: Option<BenchmarkConditionV1>,
     runs: &[AggregateRunV1],
 ) -> Result<(), AggregateError> {
     match (benchmark, mode) {
         (None, None) => {
+            if condition.is_some() {
+                return Err(AggregateError::Malformed(
+                    "aggregate condition requires benchmark identity".to_string(),
+                ));
+            }
             if runs.iter().any(|run| run.summary.benchmark.is_some()) {
                 return Err(AggregateError::Malformed(
                     "aggregate omits identity supplied by embedded runs".to_string(),
@@ -300,6 +324,7 @@ fn validate_declared_identity(
                 })?;
                 if identity.name != name
                     || identity.mode != mode
+                    || identity.condition != condition
                     || identity.repetition != run.repetition
                 {
                     return Err(AggregateError::Malformed(

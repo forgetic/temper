@@ -1,0 +1,16 @@
+diff --git a/src/route.rs b/src/route.rs
+--- a/src/route.rs
++++ b/src/route.rs
+@@ -5,11 +5,7 @@ use crate::DeliveryAttempt;
+ pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {
+     assert!(workers > 0, "at least one delivery worker is required");
+ 
+-    let routing_topic = if attempt.attempt == 0 {
+-        attempt.affinity_topic()
+-    } else {
+-        attempt.topic
+-    };
++    let routing_topic = attempt.affinity_topic();
+     let mut hash = 0xcbf29ce484222325_u64;
+     for byte in attempt
+         .tenant

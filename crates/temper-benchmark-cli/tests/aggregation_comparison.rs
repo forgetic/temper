@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use temper_benchmark_cli::{
-    BenchmarkAnnotationsV1, BenchmarkModeV1, BenchmarkRunV1, ComparisonInput, DiffStatisticsV1,
-    DistributionV1, RunSummaryV1, aggregate_run_summaries, collect_environment_metadata,
+    AnalyzeOptions, BenchmarkAnnotationsV1, BenchmarkModeV1, BenchmarkRunV1, ComparisonInput,
+    DiffStatisticsV1, DistributionV1, GraphDecisionKindV1, GraphDecisionTargetV1, RunSummaryV1,
+    ValidationEvidenceV1, aggregate_run_summaries, analyze_trace, collect_environment_metadata,
     compare_benchmarks, ingest_trace, load_comparison_input, render_aggregate_markdown,
     render_comparison_markdown,
 };
@@ -162,6 +163,142 @@ fn mutation_turn_metrics_flow_through_aggregate_and_comparison_artifacts() {
 }
 
 #[test]
+fn correctness_and_host_validation_distributions_retain_unavailable_trials() {
+    let mut passing = summary("passing", 1, 10);
+    passing.validation = Some(ValidationEvidenceV1 {
+        command_count: 2,
+        succeeded: 2,
+        failed: 0,
+    });
+    let mut failing = summary("failing", 1, 10);
+    failing.validation = Some(ValidationEvidenceV1 {
+        command_count: 2,
+        succeeded: 1,
+        failed: 1,
+    });
+    let unavailable = summary("unavailable", 1, 10);
+
+    let aggregate = aggregate_run_summaries([passing, failing, unavailable]).unwrap();
+    assert_eq!(aggregate.outcomes.total, 3);
+    assert_eq!(aggregate.metrics["task_correct"].count, 2);
+    assert_eq!(aggregate.metrics["task_correct"].min, 0);
+    assert_eq!(aggregate.metrics["task_correct"].max, 1);
+    assert_eq!(aggregate.metrics["host_validation_commands"].count, 2);
+    assert_eq!(aggregate.metrics["host_validation_failures"].count, 2);
+}
+
+#[test]
+fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
+    let targets = vec![GraphDecisionTargetV1 {
+        target: "src/lib.rs".to_string(),
+        kind: GraphDecisionKindV1::Implementation,
+        result_contains: None,
+    }];
+    let mut complete = analyze_trace(
+        &ingest_trace(fixture("graph-metrics-events.jsonl")).unwrap(),
+        &AnalyzeOptions {
+            discovery_command_prefixes: vec![vec!["git".to_string(), "grep".to_string()]],
+            graph_decision_targets: targets.clone(),
+            ..AnalyzeOptions::default()
+        },
+    );
+    complete.identity.run_id = "graph-complete".to_string();
+    let mut partial = complete.clone();
+    partial.identity.run_id = "graph-partial".to_string();
+    partial
+        .metrics
+        .graph
+        .as_mut()
+        .unwrap()
+        .readiness_wait_coverage
+        .observed = 6;
+    partial
+        .metrics
+        .graph
+        .as_mut()
+        .unwrap()
+        .discovery_duration_coverage
+        .observed = 6;
+    let partial_discovery = partial
+        .metrics
+        .graph
+        .as_mut()
+        .unwrap()
+        .conventional_discovery_before_selection
+        .as_mut()
+        .unwrap();
+    partial_discovery
+        .shell_command_classification_coverage
+        .observed = 0;
+    partial_discovery.total_calls = None;
+    let mut missing = analyze_trace(
+        &ingest_trace(fixture("graph-missing-evidence-events.jsonl")).unwrap(),
+        &AnalyzeOptions {
+            graph_decision_targets: targets,
+            ..AnalyzeOptions::default()
+        },
+    );
+    missing.identity.run_id = "graph-missing".to_string();
+    let base = aggregate_run_summaries([complete.clone(), partial, missing]).unwrap();
+
+    assert_eq!(base.outcomes.total, 3);
+    assert_eq!(base.metrics["graph_calls"].count, 3);
+    assert_eq!(base.metrics["graph_relevant_results"].count, 2);
+    assert_eq!(base.metrics["graph_readiness_wait_ms"].count, 1);
+    assert_eq!(
+        base.metrics["conventional_discovery_calls_before_selection"].count,
+        1
+    );
+    assert_eq!(
+        base.metrics["conventional_grep_calls_before_selection"].count,
+        2
+    );
+    assert_eq!(
+        base.metrics["conventional_shell_segments_before_selection"].count,
+        1
+    );
+    let markdown = render_aggregate_markdown(&base);
+    assert!(markdown.contains("| graph relevant results | 2 |"));
+    assert!(markdown.contains("| graph readiness wait ms | 1 |"));
+
+    let graph = complete.metrics.graph.as_mut().unwrap();
+    graph.relevant_results = Some(2);
+    graph.irrelevant_successes = Some(2);
+    let head = aggregate_run_summaries([complete]).unwrap();
+    let comparison = compare_benchmarks(
+        &ComparisonInput::Aggregate(base),
+        &ComparisonInput::Aggregate(head),
+    )
+    .unwrap();
+    let relevance = comparison
+        .primary
+        .iter()
+        .find(|metric| metric.metric == "graph_relevant_results")
+        .unwrap();
+    assert_eq!(relevance.base.as_ref().unwrap().count, 2);
+    assert_eq!(relevance.head.as_ref().unwrap().count, 1);
+    assert_eq!(relevance.median_delta, Some(1));
+    let total = comparison
+        .primary
+        .iter()
+        .find(|metric| metric.metric == "conventional_discovery_calls_before_selection")
+        .unwrap();
+    assert_eq!(total.base.as_ref().unwrap().count, 1);
+    assert_eq!(total.head.as_ref().unwrap().count, 1);
+    let shell_segments = comparison
+        .primary
+        .iter()
+        .find(|metric| metric.metric == "conventional_shell_segments_before_selection")
+        .unwrap();
+    assert_eq!(shell_segments.base.as_ref().unwrap().count, 1);
+    assert_eq!(shell_segments.head.as_ref().unwrap().count, 1);
+    assert!(
+        render_comparison_markdown(&comparison)
+            .contains("| graph relevant results | 1 (n=2) | 2 | +1 |")
+    );
+}
+
+#[test]
 fn quartiles_are_stable_for_single_and_odd_sample_sets() {
     assert_eq!(
         DistributionV1::from_values(vec![99]).unwrap(),
@@ -262,7 +399,7 @@ fn comparison_preserves_unknown_metrics_and_separates_advisory_timings() {
     assert_eq!(comparison.other[0].median_delta, Some(4));
 
     let markdown = render_comparison_markdown(&comparison);
-    assert!(markdown.contains("## Primary structural metrics"));
+    assert!(markdown.contains("## Primary correctness, discovery, and structural metrics"));
     assert!(markdown.contains("## Advisory timings"));
     assert!(markdown.contains("not pass/fail gates"));
     assert!(markdown.contains("## Additional metrics"));
@@ -315,16 +452,59 @@ fn incompatible_benchmark_identities_fail_clearly() {
         name: "benchmark-a".to_string(),
         mode: BenchmarkModeV1::Harness,
         repetition: 1,
+        condition: None,
     });
     let mut head = summary("head", 1, 1);
     head.benchmark = Some(BenchmarkRunV1 {
         name: "benchmark-b".to_string(),
         mode: BenchmarkModeV1::Harness,
         repetition: 1,
+        condition: None,
     });
     let error =
         compare_benchmarks(&ComparisonInput::Run(base), &ComparisonInput::Run(head)).unwrap_err();
     assert!(error.to_string().contains("benchmark names differ"));
+}
+
+#[test]
+fn controlled_conditions_are_recorded_and_remain_pairwise_comparable() {
+    let mut disabled = summary("disabled", 3, 30);
+    disabled.benchmark = Some(BenchmarkRunV1 {
+        name: "controlled".to_string(),
+        mode: BenchmarkModeV1::Live,
+        repetition: 1,
+        condition: Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryDisabled),
+    });
+    let mut enabled = summary("enabled", 2, 20);
+    enabled.benchmark = Some(BenchmarkRunV1 {
+        name: "controlled".to_string(),
+        mode: BenchmarkModeV1::Live,
+        repetition: 1,
+        condition: Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryEnabled),
+    });
+
+    let base = aggregate_run_summaries([disabled]).unwrap();
+    let head = aggregate_run_summaries([enabled]).unwrap();
+    assert_eq!(
+        base.condition,
+        Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryDisabled)
+    );
+    let comparison = compare_benchmarks(
+        &ComparisonInput::Aggregate(base),
+        &ComparisonInput::Aggregate(head),
+    )
+    .unwrap();
+    assert_eq!(
+        comparison.base.condition,
+        Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryDisabled)
+    );
+    assert_eq!(
+        comparison.head.condition,
+        Some(temper_benchmark_cli::BenchmarkConditionV1::CodebaseMemoryEnabled)
+    );
+    let markdown = render_comparison_markdown(&comparison);
+    assert!(markdown.contains("condition codebase_memory_disabled"));
+    assert!(markdown.contains("condition codebase_memory_enabled"));
 }
 
 #[test]
