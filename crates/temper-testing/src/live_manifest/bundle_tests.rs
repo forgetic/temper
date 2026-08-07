@@ -162,6 +162,10 @@ fn codebase_memory_bundle_requires_delayed_graph_readiness_and_bounded_fallback(
     assert!(jig.contains("fallback_grep_retry_worker"));
     assert!(!jig.contains("MCP-FIXTURE-SECRET"));
     assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
+    assert_eq!(
+        fs::read_to_string(bundle.repo.seed_path.join(".gitignore")).expect("fixture ignore"),
+        "/target/\n"
+    );
     assert!(
         bundle
             .repo
