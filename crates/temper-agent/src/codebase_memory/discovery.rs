@@ -70,25 +70,17 @@ fn parse_targeted_status(
         .as_object()
         .ok_or_else(|| discovery_protocol_error(provider_key, "response must be a JSON object"))?;
 
+    validate_targeted_identity(object, provider_key)?;
+    let status = targeted_status(object, provider_key)?;
+
+    if is_missing_status(&status) {
+        return Ok(TargetedProjectState::Missing);
+    }
     if result.is_error {
-        if response_is_missing(object) {
-            return Ok(TargetedProjectState::Missing);
-        }
         return Err(discovery_protocol_error(
             provider_key,
             "provider returned a tool error without an explicit missing status",
         ));
-    }
-    if response_is_missing(object) {
-        return Ok(TargetedProjectState::Missing);
-    }
-    if let Some(actual) = string_field(object, &["project", "id", "name"]) {
-        if actual != provider_key {
-            return Err(discovery_protocol_error(
-                provider_key,
-                "response identified a different provider project",
-            ));
-        }
     }
 
     if bool_field(
@@ -106,9 +98,6 @@ fn parse_targeted_status(
         return Ok(TargetedProjectState::Stale);
     }
 
-    let status = string_field(object, &["status", "state"])
-        .map(|status| status.to_ascii_lowercase())
-        .ok_or_else(|| discovery_protocol_error(provider_key, "response omitted status/state"))?;
     if matches!(
         status.as_str(),
         "stale" | "outdated" | "dirty" | "changed" | "needs_index" | "needs-index"
@@ -139,13 +128,72 @@ fn parse_targeted_status(
     Ok(TargetedProjectState::Fresh)
 }
 
-fn response_is_missing(object: &Map<String, Value>) -> bool {
-    string_field(object, &["status", "state"]).is_some_and(|status| {
-        matches!(
-            status.to_ascii_lowercase().as_str(),
-            "missing" | "not_found" | "not-found" | "not_indexed" | "not-indexed"
-        )
-    })
+fn validate_targeted_identity(
+    object: &Map<String, Value>,
+    provider_key: &str,
+) -> Result<(), McpError> {
+    for field in ["project", "id", "name"] {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        let actual = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                discovery_protocol_error(
+                    provider_key,
+                    &format!("response field `{field}` must be a non-empty string"),
+                )
+            })?;
+        if actual != provider_key {
+            return Err(discovery_protocol_error(
+                provider_key,
+                "response identified a different provider project",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn targeted_status(object: &Map<String, Value>, provider_key: &str) -> Result<String, McpError> {
+    let mut statuses = Vec::new();
+    for field in ["status", "state"] {
+        let Some(value) = object.get(field) else {
+            continue;
+        };
+        let status = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                discovery_protocol_error(
+                    provider_key,
+                    &format!("response field `{field}` must be a non-empty string"),
+                )
+            })?;
+        statuses.push(status.to_ascii_lowercase());
+    }
+    let Some(status) = statuses.first() else {
+        return Err(discovery_protocol_error(
+            provider_key,
+            "response omitted status/state",
+        ));
+    };
+    if statuses.iter().any(|candidate| candidate != status) {
+        return Err(discovery_protocol_error(
+            provider_key,
+            "response reported conflicting status/state values",
+        ));
+    }
+    Ok(status.clone())
+}
+
+fn is_missing_status(status: &str) -> bool {
+    matches!(
+        status,
+        "missing" | "not_found" | "not-found" | "not_indexed" | "not-indexed"
+    )
 }
 
 fn discovery_protocol_error(provider_key: &str, message: &str) -> McpError {

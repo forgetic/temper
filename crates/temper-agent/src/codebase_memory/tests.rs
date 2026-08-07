@@ -1,5 +1,6 @@
 mod health;
 mod indexing;
+mod lifecycle;
 #[path = "test_support.rs"]
 mod test_support;
 use super::*;

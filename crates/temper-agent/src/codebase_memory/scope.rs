@@ -58,8 +58,17 @@ impl WorkspaceScope {
         Ok(scope)
     }
 
-    pub(super) fn apply_targeted_discovery(&mut self, states: Vec<TargetedProjectState>) {
-        debug_assert_eq!(states.len(), self.projects.len());
+    pub(super) fn apply_targeted_discovery(
+        &mut self,
+        states: Vec<TargetedProjectState>,
+    ) -> std::result::Result<(), String> {
+        if states.len() != self.projects.len() {
+            return Err(format!(
+                "targeted codebase-memory discovery returned {} project states for {} prepared repositories",
+                states.len(),
+                self.projects.len()
+            ));
+        }
         for (project, state) in self.projects.iter_mut().zip(states) {
             project.index_state = match state {
                 TargetedProjectState::Missing => ProjectIndexState::Missing,
@@ -67,6 +76,7 @@ impl WorkspaceScope {
                 TargetedProjectState::Fresh => ProjectIndexState::Fresh,
             };
         }
+        Ok(())
     }
 
     pub(super) fn mark_discovery_unavailable(&mut self) {
