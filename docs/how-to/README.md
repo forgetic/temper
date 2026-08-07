@@ -15,6 +15,7 @@ Current guides:
 - [Verify implementation PR handoff end to end](verify-implementation-pr-handoff.md)
 - [Configure Smith LLM responders from Temper](use-chatgpt-oauth-auth.md)
 - [Configure a coding workspace external tool](configure-coding-workspace.md)
+- [Recover a codebase-memory cache safely](recover-codebase-memory.md)
 - [Operate durable agent traces and OpenTelemetry](operate-agent-traces.md)
 - [Benchmark coding-agent sessions](benchmark-agent-sessions.md)
 - [Deploy Temper with systemd](deploy-with-systemd.md)

@@ -460,6 +460,7 @@ fn test_tool_config() -> AgentToolConfig {
             index: CodebaseMemoryIndex::Background,
             startup_timeout_secs: 5,
             index_timeout_secs: 30,
+            retention: Default::default(),
         }),
     }
 }
@@ -482,6 +483,7 @@ fn required_bad_tool_config_with_command(role: &str, command: &str) -> AgentTool
             index: CodebaseMemoryIndex::Off,
             startup_timeout_secs: 1,
             index_timeout_secs: 1,
+            retention: Default::default(),
         }),
     }
 }

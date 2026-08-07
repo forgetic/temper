@@ -181,7 +181,9 @@ import json
 import sys
 
 TOOLS = [
-    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
+    {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
+    {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path"]}},
 ]
 
 def send(value):
@@ -196,14 +198,19 @@ for line in sys.stdin:
         continue
     method = request.get("method")
     if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "fake-codebase-memory", "version": "1"}, "capabilities": {"tools": {}}}})
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.9.0"}, "capabilities": {"tools": {}}}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
         params = request.get("params", {})
+        name = params.get("name")
         args = params.get("arguments") or {}
-        query = args.get("query", "")
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": "FAKE_MCP_SEARCH_RESULT for " + query}], "isError": False}})
+        if name == "index_status":
+            text = json.dumps({"project": args.get("project", ""), "status": "fresh"})
+        else:
+            query = args.get("query", "")
+            text = "FAKE_MCP_SEARCH_RESULT for " + query
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
 "#,
@@ -225,6 +232,7 @@ fn codebase_memory_tool_config(dir: &tempfile::TempDir) -> AgentToolConfig {
             index: CodebaseMemoryIndex::Off,
             startup_timeout_secs: 1,
             index_timeout_secs: 2,
+            retention: Default::default(),
         }),
     }
 }

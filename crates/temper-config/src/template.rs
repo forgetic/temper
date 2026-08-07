@@ -131,6 +131,20 @@ mode = \"auto\"          # off | auto | required
 # startup_timeout_secs = 5
 # index_timeout_secs = 30
 
+# Worker-owned cleanup inventories only bounded provider pages and deletes only
+# verified Temper path-keyed projects whose scoped workspace no longer exists.
+# Stable logical projects, active/existing workspaces, and uncertain records are
+# always preserved.
+[agent.tools.codebase_memory.retention]
+enabled = true
+# max_obsolete_projects = 64
+# max_age_days = 30
+# maintenance_interval_secs = 3600
+# maintenance_timeout_secs = 30
+# inventory_page_size = 50
+# max_inventory_pages = 20
+# max_deletions_per_run = 16
+
 [agent.providers.anthropic]
 # url = \"https://api.anthropic.com\"
 models = { main = \"claude-opus-4-8\", investigate = \"claude-haiku-4-5\" }

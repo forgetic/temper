@@ -157,7 +157,9 @@ import json
 import sys
 
 TOOLS = [
-    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
+    {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
+    {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path"]}},
     {"name": "delete_project", "description": "Delete project", "inputSchema": {"type": "object", "properties": {}}},
 ]
 
@@ -173,11 +175,18 @@ for line in sys.stdin:
         continue
     method = request.get("method")
     if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "fake-codebase-memory", "version": "1"}, "capabilities": {"tools": {}}}})
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.9.0"}, "capabilities": {"tools": {}}}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": "fake result"}], "isError": False}})
+        params = request.get("params", {})
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        if name == "index_status":
+            result = json.dumps({"project": args.get("project", ""), "status": "fresh"})
+        else:
+            result = "fake result"
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": result}], "isError": False}})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
 "#,
@@ -204,6 +213,7 @@ for line in sys.stdin:
                 index: CodebaseMemoryIndex::Off,
                 startup_timeout_secs: 1,
                 index_timeout_secs: 2,
+                retention: Default::default(),
             }),
         }
     }
@@ -218,6 +228,7 @@ for line in sys.stdin:
                 index: CodebaseMemoryIndex::Off,
                 startup_timeout_secs: 1,
                 index_timeout_secs: 1,
+                retention: Default::default(),
             }),
         }
     }

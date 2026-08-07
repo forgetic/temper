@@ -101,6 +101,11 @@ Pass --temper-bin <PATH>, set TEMPER_SCENARIO_TEMPER_BIN, or prebuild a sibling
 target-dir `temper`; `cargo dev-scenario-run <path>` builds it.\nManifests must select `[runner] uses = \"manifest\"`; the legacy manifest `name` fallback has been removed.";
 
 fn main() -> ExitCode {
+    if let Some(status) =
+        temper_testing::dispatch_linux_supervisor_helper(std::env::args_os().skip(1))
+    {
+        return status;
+    }
     run(env::args().skip(1))
 }
 

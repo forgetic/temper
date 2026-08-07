@@ -37,6 +37,7 @@ temper-provision-forgejo-cli = { path = "../temper-provision-forgejo-cli" }
 temper-trigger-forgejo = { path = "../temper-trigger-forgejo" }
 temper-reference-delivery-validator = { path = "../temper-reference-delivery-validator" }
 temper-interaction-service = { path = "../temper-interaction-service" }
+temper-worker-service = { path = "../temper-worker-service" }
 
 [lints]
 workspace = true

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,6 +13,11 @@ use temper_forge_model::{
     CiJobConclusion, IssueState, ItemNumber, PullRequest, PullRequestQuery, PullRequestState,
     RepositoryId, UserId,
 };
+use temper_protocol_agent::CodebaseMemoryRetentionPolicy;
+use temper_worker::{
+    CodebaseMemoryMaintenanceConfig, CodebaseMemoryRecoveryMode, CodebaseMemoryRetentionScope,
+    run_codebase_memory_recovery,
+};
 use temper_workflow::{CiStatus, parse_metadata_block};
 use toml::Value as TomlValue;
 
@@ -21,9 +27,15 @@ use super::convergence::{
 };
 use super::{ENGINEER, FinalStateEvidence, LiveCodebaseMemoryEvidence};
 
+#[path = "codebase_memory/lifecycle_fixture.rs"]
+mod lifecycle_fixture;
+
 const MEMORY_FILE: &str = "MEMORY_NOTES.md";
 const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_SEARCH_RESULT";
 const ENGINEER_SUMMARY: &str = "Used codebase memory search result before writing MEMORY_NOTES.md.";
+const AGENT_MCP_CLIENT: &str = "temper-agent";
+const MAINTENANCE_MCP_CLIENT: &str = "temper-worker-maintenance";
+const UNINITIALIZED_MCP_CLIENT: &str = "<uninitialized>";
 
 pub(super) fn converge(
     forge: &ForgejoForge,
@@ -40,6 +52,7 @@ pub(super) fn converge(
     )?;
     validate_mcp_contract(mcp)?;
     fake.validate_observations()?;
+    let lifecycle = validate_lifecycle(mcp)?;
     if fake.engineer_requests() < 4 {
         return Err(format!(
             "fake LLM did not complete the codebase-memory engineer tool loop\n{}",
@@ -67,8 +80,114 @@ pub(super) fn converge(
                 .iter()
                 .map(|tool| format!("codebase_memory_{tool}"))
                 .collect(),
+            lifecycle,
         },
     ))
+}
+
+fn validate_lifecycle(mcp: &FakeMcpServer) -> Result<Option<String>, String> {
+    if !mcp.lifecycle_fixture {
+        return Ok(None);
+    }
+    let scope = CodebaseMemoryRetentionScope {
+        workspace_root: mcp.workspace_root.join("workspaces"),
+        roles: BTreeSet::from(["engineer".to_string()]),
+        repository_dirs: BTreeSet::from(["demo".to_string()]),
+    };
+    fs::create_dir_all(scope.workspace_root.join("engineer/active/demo"))
+        .map_err(|error| format!("create active lifecycle workspace: {error}"))?;
+    let policy = CodebaseMemoryRetentionPolicy {
+        enabled: true,
+        max_obsolete_projects: 64,
+        max_age_days: 30,
+        maintenance_interval_secs: 3600,
+        maintenance_timeout_secs: 20,
+        inventory_page_size: 200,
+        max_inventory_pages: 4,
+        max_deletions_per_run: 100,
+    };
+    let config = CodebaseMemoryMaintenanceConfig::new(
+        "python3",
+        mcp.provider_args(),
+        Duration::from_secs(2),
+        Duration::from_secs(3),
+        policy,
+        scope,
+    );
+    let dry = run_codebase_memory_recovery(
+        &config,
+        CodebaseMemoryRecoveryMode::DryRun,
+        None,
+        None,
+        &|| false,
+    );
+    if dry.retention.proposed.is_empty() || !dry.retention.deleted.is_empty() {
+        return Err(format!("lifecycle dry-run was not deletion-free: {dry:?}"));
+    }
+    let mut failed_seen = false;
+    for _ in 0..4 {
+        let review = run_codebase_memory_recovery(
+            &config,
+            CodebaseMemoryRecoveryMode::DryRun,
+            None,
+            None,
+            &|| false,
+        );
+        let plan = review
+            .plan_id
+            .clone()
+            .ok_or("lifecycle dry-run omitted plan id")?;
+        let applied = run_codebase_memory_recovery(
+            &config,
+            CodebaseMemoryRecoveryMode::Apply,
+            Some(&plan),
+            None,
+            &|| false,
+        );
+        failed_seen |= !applied.retention.failed.is_empty();
+        if applied.retention.proposed.len() <= 1 {
+            break;
+        }
+    }
+    let state: JsonValue = serde_json::from_str(
+        &fs::read_to_string(&mcp.state_path)
+            .map_err(|error| format!("read lifecycle provider state: {error}"))?,
+    )
+    .map_err(|error| format!("parse lifecycle provider state: {error}"))?;
+    let projects = state["projects"]
+        .as_object()
+        .ok_or("lifecycle state omitted projects")?;
+    for protected in [
+        "temper-v1-protected",
+        "unrelated-project",
+        "ambiguous-project",
+        "active-project",
+    ] {
+        if !projects.contains_key(protected) {
+            return Err(format!(
+                "lifecycle cleanup deleted protected record {protected}"
+            ));
+        }
+    }
+    if !failed_seen || !projects.contains_key("legacy-temper-000") {
+        return Err("lifecycle cleanup did not isolate the injected deletion failure".to_string());
+    }
+    let obsolete = projects
+        .keys()
+        .filter(|name| name.starts_with("legacy-temper-"))
+        .count();
+    if obsolete > 64 {
+        return Err(format!(
+            "lifecycle cleanup retained {obsolete} obsolete projects, bound is 64"
+        ));
+    }
+    Ok(Some(format!(
+        "dry_run_candidates={} final_projects={} obsolete={} cache_bytes={} partial_failure=true protected=stable,active,unrelated,ambiguous",
+        dry.retention.proposed.len(),
+        projects.len(),
+        obsolete,
+        state["cache_bytes"].as_u64().unwrap_or_default()
+    )))
 }
 
 fn drive_codebase_memory_convergence(
@@ -332,16 +451,41 @@ pub(super) fn tune_codebase_memory_config(
         TomlValue::Array(vec![
             TomlValue::String("-u".to_string()),
             TomlValue::String(fake_mcp.script_path.display().to_string()),
+            TomlValue::String("--state".to_string()),
+            TomlValue::String(fake_mcp.state_path.display().to_string()),
+            TomlValue::String("--log".to_string()),
             TomlValue::String(fake_mcp.log_path.display().to_string()),
-            TomlValue::String("demo".to_string()),
-            TomlValue::String(fake_mcp.project.clone()),
+            TomlValue::String("--mode".to_string()),
+            TomlValue::String("stateful".to_string()),
+            TomlValue::String("--seed-json".to_string()),
+            TomlValue::String(fake_mcp.seed_json.clone()),
+            TomlValue::String("--safe-tools-json".to_string()),
             TomlValue::String(
                 serde_json::to_string(&fake_mcp.safe_tools)
                     .map_err(|error| format!("serialize declared safe MCP tools: {error}"))?,
             ),
+            TomlValue::String("--hidden-tools-json".to_string()),
             TomlValue::String(
                 serde_json::to_string(&fake_mcp.hidden_tools)
                     .map_err(|error| format!("serialize declared hidden MCP tools: {error}"))?,
+            ),
+            TomlValue::String("--delay-list-ms".to_string()),
+            TomlValue::String(
+                if fake_mcp.lifecycle_fixture {
+                    "4000"
+                } else {
+                    "0"
+                }
+                .to_string(),
+            ),
+            TomlValue::String("--fail-tools-json".to_string()),
+            TomlValue::String(
+                if fake_mcp.lifecycle_fixture {
+                    r#"{"delete_project":["legacy-temper-000"]}"#
+                } else {
+                    "{}"
+                }
+                .to_string(),
             ),
         ]),
     );
@@ -365,19 +509,54 @@ pub(super) fn tune_codebase_memory_config(
 
 pub(super) struct FakeMcpServer {
     pub(super) script_path: PathBuf,
+    pub(super) state_path: PathBuf,
     pub(super) log_path: PathBuf,
-    pub(super) project: String,
     pub(super) safe_tools: Vec<String>,
     pub(super) hidden_tools: Vec<String>,
+    lifecycle_fixture: bool,
+    seed_json: String,
+    workspace_root: PathBuf,
+}
+
+impl FakeMcpServer {
+    fn provider_args(&self) -> Vec<String> {
+        vec![
+            "-u".into(),
+            self.script_path.display().to_string(),
+            "--state".into(),
+            self.state_path.display().to_string(),
+            "--log".into(),
+            self.log_path.display().to_string(),
+            "--mode".into(),
+            "stateful".into(),
+            "--seed-json".into(),
+            self.seed_json.clone(),
+            "--safe-tools-json".into(),
+            serde_json::to_string(&self.safe_tools).expect("tool names serialize"),
+            "--hidden-tools-json".into(),
+            serde_json::to_string(&self.hidden_tools).expect("tool names serialize"),
+            "--delay-list-ms".into(),
+            if self.lifecycle_fixture { "250" } else { "0" }.into(),
+            "--fail-tools-json".into(),
+            if self.lifecycle_fixture {
+                r#"{"delete_project":["legacy-temper-000"]}"#
+            } else {
+                "{}"
+            }
+            .into(),
+        ]
+    }
 }
 
 pub(super) fn write_fake_mcp(
     root: &Path,
-    project: &str,
+    _project: &str,
+    fixture: Option<&str>,
     safe_tools: &[String],
     hidden_tools: &[String],
 ) -> Result<FakeMcpServer, String> {
     let script_path = root.join("fake-codebase-memory-mcp.py");
+    let state_path = root.join("fake-codebase-memory-state.json");
     let log_path = root.join("logs/fake-codebase-memory-mcp.jsonl");
     fs::write(&script_path, FAKE_MCP_SCRIPT)
         .map_err(|error| format!("write fake MCP server {}: {error}", script_path.display()))?;
@@ -387,46 +566,75 @@ pub(super) fn write_fake_mcp(
     }
     fs::write(&log_path, "")
         .map_err(|error| format!("create fake MCP log {}: {error}", log_path.display()))?;
+    let lifecycle_fixture = fixture == Some("stable-lifecycle");
+    let seed_json = if lifecycle_fixture {
+        serde_json::to_string(&lifecycle_fixture::seed(root))
+            .map_err(|error| format!("serialize lifecycle MCP seed: {error}"))?
+    } else {
+        "{}".to_string()
+    };
     Ok(FakeMcpServer {
         script_path,
+        state_path,
         log_path,
-        project: project.to_string(),
         safe_tools: safe_tools.to_vec(),
         hidden_tools: hidden_tools.to_vec(),
+        lifecycle_fixture,
+        seed_json,
+        workspace_root: root.to_path_buf(),
     })
 }
 
 fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
     let calls = logged_tool_calls(&mcp.log_path)?;
+    validate_mcp_calls(&calls)
+}
+
+fn validate_mcp_calls(calls: &[McpToolCallEvidence]) -> Result<(), String> {
     let search = calls
         .iter()
-        .filter(|call| call.name == "search_code")
+        .filter(|call| call.client == AGENT_MCP_CLIENT && call.name == "search_code")
         .collect::<Vec<_>>();
     if search.len() != 1 {
         return Err(format!(
-            "expected one search_code MCP call, found {} in {}",
-            search.len(),
-            mcp.log_path.display()
+            "expected one agent search_code MCP call, found {}: {calls:?}",
+            search.len()
+        ));
+    }
+    let index = calls
+        .iter()
+        .filter(|call| call.client == AGENT_MCP_CLIENT && call.name == "index_repository")
+        .collect::<Vec<_>>();
+    let indexed_project = index
+        .first()
+        .and_then(|call| call.arguments.get("name"))
+        .and_then(JsonValue::as_str);
+    if index.len() != 1
+        || index[0].arguments.get("repo_path").is_none()
+        || indexed_project.is_none()
+    {
+        return Err(format!(
+            "stable index_repository was not exercised internally with repo_path and name: {calls:?}"
         ));
     }
     if search[0]
         .arguments
         .get("project")
         .and_then(JsonValue::as_str)
-        != Some(mcp.project.as_str())
+        != indexed_project
     {
         return Err(format!(
-            "search_code did not receive declared project {}: {:?}",
-            mcp.project, search[0].arguments
+            "search_code did not reuse indexed stable project {:?}: {:?}",
+            indexed_project, search[0].arguments
         ));
     }
-    let index = calls
+    if let Some(call) = calls
         .iter()
-        .filter(|call| call.name == "index_repository")
-        .collect::<Vec<_>>();
-    if index.len() != 1 || index[0].arguments.get("repo_path").is_none() {
+        .find(|call| call.name == "list_projects" && call.client != MAINTENANCE_MCP_CLIENT)
+    {
         return Err(format!(
-            "index_repository was not exercised internally with repo_path: {calls:?}"
+            "normal startup called the global project inventory as `{}`: {calls:?}",
+            call.client
         ));
     }
     Ok(())
@@ -434,6 +642,7 @@ fn validate_mcp_contract(mcp: &FakeMcpServer) -> Result<(), String> {
 
 #[derive(Debug)]
 struct McpToolCallEvidence {
+    client: String,
     name: String,
     arguments: JsonValue,
 }
@@ -441,17 +650,49 @@ struct McpToolCallEvidence {
 fn logged_tool_calls(path: &Path) -> Result<Vec<McpToolCallEvidence>, String> {
     let raw = fs::read_to_string(path)
         .map_err(|error| format!("read MCP call log {}: {error}", path.display()))?;
-    Ok(raw
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| {
-            let value = serde_json::from_str::<JsonValue>(line).ok()?;
-            let name = value.get("tool")?.as_str()?.to_string();
-            let arguments = value.get("arguments").cloned().unwrap_or(JsonValue::Null);
-            Some(McpToolCallEvidence { name, arguments })
-        })
-        .collect())
+    let mut clients = BTreeMap::new();
+    let mut legacy_client = UNINITIALIZED_MCP_CLIENT.to_string();
+    let mut calls = Vec::new();
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        let Some(value) = serde_json::from_str::<JsonValue>(line).ok() else {
+            continue;
+        };
+        let Some(name) = value.get("tool").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        let arguments = value.get("arguments").cloned().unwrap_or(JsonValue::Null);
+        let process_id = value.get("pid").and_then(JsonValue::as_u64);
+        if name == "initialize" {
+            let client = arguments
+                .get("clientInfo")
+                .and_then(|info| info.get("name"))
+                .and_then(JsonValue::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or(UNINITIALIZED_MCP_CLIENT)
+                .to_string();
+            if let Some(process_id) = process_id {
+                clients.insert(process_id, client);
+            } else {
+                legacy_client = client;
+            }
+            continue;
+        }
+        let client = process_id
+            .and_then(|process_id| clients.get(&process_id))
+            .unwrap_or(&legacy_client)
+            .clone();
+        calls.push(McpToolCallEvidence {
+            client,
+            name: name.to_string(),
+            arguments,
+        });
+    }
+    Ok(calls)
 }
+
+#[cfg(test)]
+#[path = "codebase_memory/tests.rs"]
+mod tests;
 
 pub(super) struct CodebaseMemoryFake {
     fake: FakeLlm,

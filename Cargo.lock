@@ -1656,6 +1656,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "sha2",
  "skein",
  "temper-agent-core",
  "temper-agent-io",
@@ -1758,6 +1759,7 @@ dependencies = [
  "temper-provision-forgejo-cli",
  "temper-reference-delivery-validator",
  "temper-trigger-forgejo",
+ "temper-worker-service",
  "tracing",
 ]
 

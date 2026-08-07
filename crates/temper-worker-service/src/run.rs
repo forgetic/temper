@@ -94,6 +94,10 @@ async fn run_async(
         transport,
         trace_collector,
     );
+    let maintenance = crate::spawn_codebase_memory_maintenance_task(
+        crate::codebase_memory_maintenance_config(resolved),
+        worker.activity_probe(),
+    );
     let signal = async move {
         std::future::poll_fn(|task_cx| {
             if sigint.poll_recv(task_cx).is_ready() || sigterm.poll_recv(task_cx).is_ready() {
@@ -107,11 +111,16 @@ async fn run_async(
 
     // Intentionally has no timeout: if kernel cleanup is blocked, systemd's
     // service timeout and control-group kill remain the abrupt-death backstop.
+    let stop_maintenance = async move {
+        if let Some(task) = maintenance {
+            task.stop();
+        }
+    };
     temper_worker::shutdown_worker_after_signal(
         signal,
         std::future::ready(()),
         worker,
-        std::future::ready(()),
+        stop_maintenance,
     )
     .await;
     Ok(())

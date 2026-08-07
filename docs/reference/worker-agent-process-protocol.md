@@ -32,6 +32,73 @@ Temper-specific limits flag and remain under bounded worker fallback
 supervision. Profile deadline overrides inherit field-by-field from
 `[agent.deadlines]` before the file is written.
 
+### Codebase-memory provider contract
+
+When `--tool-config` enables `codebase_memory`, Temper supports
+`codebase-memory-mcp` version 0.9.0 or newer. Initialization must identify that
+provider in `serverInfo`, advertise the MCP `tools` capability, and expose:
+
+- `index_status` with a required string `project` input and a bounded JSON
+  result that explicitly classifies the requested identity as missing, stale,
+  or fresh; and
+- `index_repository` with required string `repo_path` and a string `name`
+  input. Version 0.9.0 defines `name` as the stable, idempotent upsert identity,
+  so concurrent calls with the same name converge rather than create
+  path-keyed projects.
+
+Temper retains only bounded initialize metadata (provider/protocol strings and
+top-level capability names) and validates the advertised tool schemas before
+project discovery. It derives the provider project key from a SHA-256 digest of
+the host-controlled repository `id`, `owner`, and `name`; checkout path, branch,
+role, correlation key, and work item are not inputs. Model-facing aliases stay
+limited to prepared-workspace repository identities and are translated to that
+provider project key internally.
+
+Startup calls `index_status` only for those derived identities; it never reads
+an unfiltered provider inventory. Only an explicit missing or stale result may
+start indexing. A timeout, malformed response, unknown status, or incompatible
+provider marks discovery unavailable and causes zero `index_repository` calls.
+Auto mode either disables an incompatible provider with upgrade guidance or,
+for an unknown discovery result, exposes a fresh read-only MCP client with the
+skip reason in prompt status. Required mode fails setup. Neither mode falls
+back to path-keyed creation.
+
+### Host-only bounded retention
+
+The same non-secret tool-config object carries a `retention` policy with an
+`enabled` switch, count and age bounds, maintenance interval/deadline, inventory
+page/page-count bounds, and a per-run deletion cap. The policy crosses the
+worker/runtime boundary for both split workers and standalone, but it does not
+add provider tools to the model schema.
+
+The worker negotiates two additional **host-only** provider tools before a
+maintenance pass: paginated `list_projects(limit, cursor)` and
+`delete_project(project)`. Every inventory page must carry one stable,
+non-empty `cache_instance_id`; a missing/changing identity, repeated cursor,
+duplicate/incomplete record, timeout, provider mismatch, or page-bound overrun
+makes the complete pass deletion-free. Startup discovery remains targeted and
+does not use this inventory path.
+
+A deletion candidate must be a path-keyed record whose project identity equals
+its repository path (or whose provider metadata explicitly says it is managed
+by `temper`), whose absolute path is beneath canonical `paths.workspace_dir`,
+and whose three path components match a configured role, one scoped
+correlation-key component, and a configured repository directory. The path
+must no longer exist. Stable `temper-v1-*` projects, existing/active workspaces,
+unrelated projects, outside-root paths, and ambiguous records are preserved.
+Candidates are ordered oldest then project identity; age and count bounds are
+applied deterministically, individual failures do not stop later deletions, and
+the per-pass cap leaves the remainder for an idempotent retry.
+
+Workers run one immediate pass and then use the configured interval. Any active
+assignment suppresses a pass, activity is rechecked between inventory pages and
+before each deletion, and a workspace-root advisory lock suppresses overlap
+between periodic and explicit maintenance. Provider process startup plus each
+inventory/deletion operation is deadline-bounded. Structured reports retain the
+preserved, candidate, deleted, and failed record sets for later operator
+presentation. Destructive tools remain inside the host-only `temper-worker`
+maintenance adapter and never enter `temper-agent`'s allowlist.
+
 The side-channel listeners exist only for that run, accept bounded JSON, and
 are stopped when the child exits. Standalone calls the same host callbacks
 in-process rather than opening sockets. Every carrier binds the callbacks to

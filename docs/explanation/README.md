@@ -10,6 +10,7 @@ Current explanation pages:
 - [Interactive agent interfaces](interactive-agent-interfaces.md)
 - [Cross-repository workflow model](cross-repo-workflows.md)
 - [End-to-end big picture](end-to-end-big-picture.md)
+- [Logging and observability](logging-and-observability.md)
 - [Runner process split bridge](runner-process-split.md)
 - [Forgejo multi-process e2e topology and real CI](forgejo-e2e-topology.md)
 - [Reference delivery workflow](reference-workflow.md)

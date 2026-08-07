@@ -360,6 +360,20 @@ pub struct CodebaseMemoryToolSettings {
     pub index: CodebaseMemoryIndex,
     pub startup_timeout_secs: u64,
     pub index_timeout_secs: u64,
+    pub retention: CodebaseMemoryRetentionSettings,
+}
+
+/// Complete host-controlled retention settings after defaults are applied.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct CodebaseMemoryRetentionSettings {
+    pub enabled: bool,
+    pub max_obsolete_projects: u32,
+    pub max_age_days: u32,
+    pub maintenance_interval_secs: u64,
+    pub maintenance_timeout_secs: u64,
+    pub inventory_page_size: u32,
+    pub max_inventory_pages: u32,
+    pub max_deletions_per_run: u32,
 }
 
 impl CodebaseMemoryToolSettings {

@@ -161,6 +161,24 @@ destroys the evidence and can reset the finite safety boundary. If exceptional
 state repair is unavoidable, retain a complete copy and require explicit
 operator review rather than using deletion as a requeue shortcut.
 
+## Codebase-memory lifecycle recovery evidence
+
+Before changing provider cache state, inspect the structured events described in
+[codebase-memory lifecycle observability](codebase-memory-observability.md).
+A discovery timeout must be paired with
+`index.outcome=skipped_discovery_unknown`; do not treat it as proof that a
+project is missing or manually start a path-keyed index. Cache bytes are known
+only when `cache.bytes_available=true`.
+
+For retention incidents, preserve the explicit maintenance report before
+retrying. Normal logs intentionally contain aggregate counts only; per-candidate
+paths, provider records, and isolated deletion errors remain in that operator
+response. Resolve active-work or overlap suppression first. For
+`discovery_failed`, `inventory_uncertain`, or `timed_out`, repair provider
+availability and rerun without deleting ambiguous records. A `partial_failure`
+is retryable and does not imply that successful deletions should be repeated
+manually.
+
 ## Workspace quarantine recovery
 
 A reusable writable checkout is inspected before reset or fetch. Local commits,

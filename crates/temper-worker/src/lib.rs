@@ -17,6 +17,8 @@
 pub mod agent_runner;
 pub mod agent_session;
 pub mod client;
+pub mod codebase_memory_maintenance;
+pub mod codebase_memory_retention;
 pub mod coding_executor;
 pub mod config;
 pub mod context_client;
@@ -47,6 +49,21 @@ pub use agent_runner::{
 pub use agent_session::{
     AGENT_SESSION_STORE_VERSION, AgentSessionLedger, AgentSessionStore, AgentSessionStoreError,
     PriorAgentSessionRecord, SessionRecoveryPolicy,
+};
+pub use codebase_memory_maintenance::{
+    CodebaseMemoryMaintenanceConfig, CodebaseMemoryMaintenanceTask, CodebaseMemoryProviderIdentity,
+    CodebaseMemoryRecoveryMode, CodebaseMemoryRecoveryReport, CodebaseMemoryRecoveryTarget,
+    CodebaseMemoryStableProjectReport, codebase_memory_provider_key,
+    codebase_memory_recovery_target, run_codebase_memory_maintenance, run_codebase_memory_recovery,
+    spawn_codebase_memory_maintenance_task,
+};
+pub use codebase_memory_retention::{
+    CodebaseMemoryMaintenanceProvider, CodebaseMemoryProjectPage, CodebaseMemoryProjectRecord,
+    CodebaseMemoryRetentionFailure, CodebaseMemoryRetentionOutcome,
+    CodebaseMemoryRetentionRecordResult, CodebaseMemoryRetentionReport,
+    CodebaseMemoryRetentionScope, maintain_obsolete_codebase_memory_indexes,
+    maintain_obsolete_codebase_memory_indexes_until, plan_obsolete_codebase_memory_indexes,
+    plan_obsolete_codebase_memory_indexes_until,
 };
 pub use coding_executor::{CodingExecutor, CodingExecutorConfig, NativeValidatorCommand};
 pub use config::{
@@ -84,11 +101,11 @@ pub use result_outbox::{
     ResultOutbox, ResultOutboxEntry, ResultOutboxError,
 };
 pub use run::{
-    STARTUP_TRACE_RECLAMATION_RUN_BUDGET, WorkerComponentHandle, WorkerEmergencyShutdownHandle,
-    run_worker, run_worker_with_trace_collector, run_worker_with_transport,
-    run_worker_with_transport_and_trace_collector, shutdown_worker_after_signal,
-    start_worker_with_transport, start_worker_with_transport_and_hook,
-    start_worker_with_transport_and_hook_and_trace_collector,
+    STARTUP_TRACE_RECLAMATION_RUN_BUDGET, WorkerActivityProbe, WorkerComponentHandle,
+    WorkerEmergencyShutdownHandle, run_worker, run_worker_with_trace_collector,
+    run_worker_with_transport, run_worker_with_transport_and_trace_collector,
+    shutdown_worker_after_signal, start_worker_with_transport,
+    start_worker_with_transport_and_hook, start_worker_with_transport_and_hook_and_trace_collector,
     start_worker_with_transport_and_trace_collector,
 };
 pub use task_registry::{
@@ -105,7 +122,7 @@ pub use temper_protocol_agent::{
     AgentLifecycleCommandV1, AgentLifecycleEventV1, AgentLifecycleFrameV1, AgentLifecycleHelloV1,
     AgentLifecycleModelStatusV1, AgentLifecycleScopeV1, AgentLifecycleToolStatusV1,
     AgentRuntimeLimitsV1, AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode,
-    CodebaseMemoryToolConfig, RUNTIME_LIMITS_FLAG,
+    CodebaseMemoryRetentionPolicy, CodebaseMemoryToolConfig, RUNTIME_LIMITS_FLAG,
 };
 pub use temper_protocol_worker::WorkerAuth;
 pub use temper_protocol_worker::{ShutdownBlocker, ShutdownBlockerKind, ShutdownEscalationStage};
