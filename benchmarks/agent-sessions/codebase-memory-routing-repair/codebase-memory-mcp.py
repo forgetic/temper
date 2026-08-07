@@ -200,13 +200,21 @@ for line in sys.stdin:
             )
         elif name == "index_repository":
             project = arguments.get("name", "")
+            repo_path = os.path.realpath(arguments.get("repo_path", ""))
             if MODE == "enabled":
                 state = load_state()
                 state["projects"][project] = "stable"
                 save_state(state)
             tool_result(
                 request_id,
-                json.dumps({"project": project, "status": "fresh"}, sort_keys=True),
+                json.dumps(
+                    {
+                        "project": project,
+                        "repo_path": repo_path,
+                        "status": "fresh",
+                    },
+                    sort_keys=True,
+                ),
             )
         elif MODE == "unavailable":
             # The wrapper must classify and replace this provider text. It must
