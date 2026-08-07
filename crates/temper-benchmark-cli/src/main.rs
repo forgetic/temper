@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_benchmark_cli::{
-    AnalyzeOptions, HarnessRunOptions, LiveRunOptions, analyze_trace, compare_benchmarks,
-    ingest_trace, load_comparison_input, render_aggregate_markdown, render_comparison_markdown,
-    render_run_summary_markdown, run_harness, run_live, write_canonical_export,
-    write_comparison_artifacts, write_run_summary,
+    AnalyzeOptions, BenchmarkConditionV1, HarnessRunOptions, LiveRunOptions, analyze_trace,
+    compare_benchmarks, ingest_trace, load_comparison_input, render_aggregate_markdown,
+    render_comparison_markdown, render_run_summary_markdown, run_harness, run_live,
+    write_canonical_export, write_comparison_artifacts, write_run_summary,
 };
 use temper_config::EnvMap;
 
@@ -20,8 +20,8 @@ temper-benchmark: agent-session benchmark trace tooling
 
 Usage:
   temper-benchmark analyze --trace <PATH> --output-dir <DIR>
-  temper-benchmark run --benchmark <MANIFEST> --mode harness --agent-bin <PATH> --output-dir <DIR> [--repetitions <N>]
-  TEMPER_BENCHMARK_LIVE=1 temper-benchmark run --benchmark <MANIFEST> --mode live --agent-bin <PATH> --output-dir <DIR> [--config <PATH>] [--secrets <PATH>] [--pool <NAME>] [--repetitions <N>]
+  temper-benchmark run --benchmark <MANIFEST> --mode harness --agent-bin <PATH> --output-dir <DIR> [--condition <NAME>] [--repetitions <N>]
+  TEMPER_BENCHMARK_LIVE=1 temper-benchmark run --benchmark <MANIFEST> --mode live --agent-bin <PATH> --output-dir <DIR> [--condition <NAME>] [--config <PATH>] [--secrets <PATH>] [--pool <NAME>] [--repetitions <N>]
   temper-benchmark normalize --trace <PATH> --output <FILE>
   temper-benchmark compare --base <ARTIFACT-OR-SUMMARY> --head <ARTIFACT-OR-SUMMARY> [--output-dir <DIR>]
   temper-benchmark --help
@@ -110,6 +110,7 @@ struct RunArgs {
     config: Option<PathBuf>,
     credentials: Option<PathBuf>,
     worker_pool: Option<String>,
+    condition: Option<BenchmarkConditionV1>,
 }
 
 fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
@@ -126,6 +127,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
             "--config",
             "--secrets",
             "--pool",
+            "--condition",
         ]
         .contains(&flag)
         {
@@ -168,6 +170,17 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     let config = values.remove("--config").map(PathBuf::from);
     let credentials = values.remove("--secrets").map(PathBuf::from);
     let worker_pool = values.remove("--pool");
+    let condition = values
+        .remove("--condition")
+        .map(|value| match value.as_str() {
+            "codebase-memory-enabled" => Ok(BenchmarkConditionV1::CodebaseMemoryEnabled),
+            "codebase-memory-disabled" => Ok(BenchmarkConditionV1::CodebaseMemoryDisabled),
+            "codebase-memory-unavailable" => Ok(BenchmarkConditionV1::CodebaseMemoryUnavailable),
+            _ => Err(format!(
+                "unsupported benchmark condition `{value}`; expected `codebase-memory-enabled`, `codebase-memory-disabled`, or `codebase-memory-unavailable`"
+            )),
+        })
+        .transpose()?;
     if mode == RunMode::Harness
         && (config.is_some() || credentials.is_some() || worker_pool.is_some())
     {
@@ -197,6 +210,7 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
         config,
         credentials,
         worker_pool,
+        condition,
     })
 }
 
@@ -262,6 +276,7 @@ fn run(args: RunArgs, env: &EnvMap) -> ExitCode {
                 agent_bin: args.agent_bin,
                 output_dir: args.output_dir,
                 repetitions: args.repetitions,
+                condition: args.condition,
             })?,
             RunMode::Live => run_live(
                 &LiveRunOptions {
@@ -272,6 +287,7 @@ fn run(args: RunArgs, env: &EnvMap) -> ExitCode {
                     config: args.config,
                     credentials: args.credentials,
                     worker_pool: args.worker_pool,
+                    condition: args.condition,
                 },
                 env,
             )?,

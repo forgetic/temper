@@ -1,0 +1,113 @@
+{
+  "sequence": [
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "graph_find_affinity",
+            "name": "codebase_memory_search_code",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "pattern": "aliased delivery retry worker affinity"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "fallback_grep_affinity",
+            "name": "grep",
+            "args": {
+              "path": "repo",
+              "pattern": "worker_for|affinity_topic",
+              "context": 2
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "read_route_implementation",
+            "name": "read",
+            "args": {
+              "path": "repo/src/route.rs"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "read_delivery_caller",
+            "name": "read",
+            "args": {
+              "path": "repo/src/delivery.rs"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "read_alias_retry_test",
+            "name": "read",
+            "args": {
+              "path": "repo/tests/alias_retry.rs"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "patch_retry_affinity",
+            "name": "apply_patch",
+            "args": {
+              "patch": "diff --git a/repo/src/route.rs b/repo/src/route.rs\n--- a/repo/src/route.rs\n+++ b/repo/src/route.rs\n@@ -5,11 +5,7 @@ use crate::DeliveryAttempt;\n pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {\n     assert!(workers > 0, \"at least one delivery worker is required\");\n \n-    let routing_topic = if attempt.attempt == 0 {\n-        attempt.affinity_topic()\n-    } else {\n-        attempt.topic\n-    };\n+    let routing_topic = attempt.affinity_topic();\n     let mut hash = 0xcbf29ce484222325_u64;\n     for byte in attempt\n         .tenant\n"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "validate_routing_repair",
+            "name": "bash",
+            "args": {
+              "command": "cd repo && cargo fmt --check && cargo test --quiet",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "submit_routing_repair",
+            "name": "submit_for_pr",
+            "args": {
+              "summary": "Repaired alias retry affinity and passed the focused and full validation gates"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "text": "{\"title\":\"Keep alias retries on the canonical delivery worker\",\"body\":\"# Implementation report\\n\\nReused canonical topic affinity for every delivery attempt. Focused fixture tests, full tests, and the submit gate pass.\",\"summary\":\"Fixed and validated ordered worker affinity for alias retries\"}"
+    }
+  ]
+}

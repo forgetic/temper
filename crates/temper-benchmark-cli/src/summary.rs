@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use temper_protocol_activity::{
-    AgentAssignmentIdentityV1, CaptureModeV1, FailureInfoV1, StopReasonV1,
+    AgentAssignmentIdentityV1, CaptureModeV1, FailureInfoV1, StopReasonV1, ToolFailureCategoryV1,
 };
 use temper_protocol_agent::WorkspaceResult;
 
@@ -134,6 +134,17 @@ pub struct BenchmarkRunV1 {
     pub name: String,
     pub mode: BenchmarkModeV1,
     pub repetition: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<BenchmarkConditionV1>,
+}
+
+/// Availability condition selected for a controlled benchmark profile.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkConditionV1 {
+    CodebaseMemoryEnabled,
+    CodebaseMemoryDisabled,
+    CodebaseMemoryUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -199,6 +210,8 @@ pub struct RunMetricsV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolMetricsV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<GraphMetricsV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure: Option<StructureMetricsV1>,
 }
 
@@ -263,6 +276,68 @@ pub struct SlowToolCallV1 {
     pub call_id: String,
     pub name: String,
     pub duration_ms: u64,
+}
+
+/// Decision target classes are fixture-declared; the analyzer never guesses a
+/// caller or focused test from an RPC success or a filename alone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphDecisionKindV1 {
+    Implementation,
+    Caller,
+    FocusedTest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphDecisionEvidenceV1 {
+    pub graph_call_id: String,
+    pub selection_call_id: String,
+    pub selection_tool: String,
+    pub target: String,
+    pub kind: GraphDecisionKindV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConventionalDiscoveryMetricsV1 {
+    pub grep_calls: u64,
+    pub find_calls: u64,
+    pub read_calls: u64,
+    pub classified_shell_calls: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_calls: Option<u64>,
+    pub shell_classification_coverage: MetricCoverageV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphMetricsV1 {
+    pub calls: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub cancelled: u64,
+    pub failures_by_category: BTreeMap<ToolFailureCategoryV1, u64>,
+    pub status_coverage: MetricCoverageV1,
+    pub failure_category_coverage: MetricCoverageV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cumulative_readiness_wait_ms: Option<u64>,
+    pub readiness_wait_coverage: MetricCoverageV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cumulative_discovery_duration_ms: Option<u64>,
+    pub discovery_duration_coverage: MetricCoverageV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub immediate_repeated_attempts_after_systemic_failure: Option<u64>,
+    pub immediate_repeat_coverage: MetricCoverageV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relevant_results: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub irrelevant_successes: Option<u64>,
+    pub relevance_coverage: MetricCoverageV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decision_evidence: Vec<GraphDecisionEvidenceV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conventional_discovery_before_selection: Option<ConventionalDiscoveryMetricsV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -356,6 +431,7 @@ pub enum TraceDiagnosticCodeV1 {
     DiffEvidenceUnavailable,
     ValidationEvidenceUnavailable,
     StructureEvidenceUnavailable,
+    GraphEvidenceUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -14,11 +14,11 @@ pub fn render_comparison_markdown(comparison: &BenchmarkComparisonV1) -> String 
     report.push('\n');
     render_comparison_table(
         &mut report,
-        "Primary structural metrics",
+        "Primary correctness, discovery, and structural metrics",
         &comparison.primary,
     );
     report.push_str(
-        "## Advisory timings\n\nModel, tool, and wall timings are advisory and are not pass/fail gates.\n\n",
+        "## Advisory timings\n\nGraph, model, tool, and wall timings are advisory and are not pass/fail gates.\n\n",
     );
     render_comparison_rows(&mut report, &comparison.advisory);
     if !comparison.other.is_empty() {
@@ -36,8 +36,13 @@ fn render_subject(report: &mut String, label: &str, subject: &ComparisonSubjectV
         .as_deref()
         .map(markdown_text)
         .unwrap_or_else(|| "unidentified benchmark".to_string());
+    let condition = subject
+        .condition
+        .and_then(|condition| serde_json::to_value(condition).ok())
+        .and_then(|value| value.as_str().map(str::to_string))
+        .map_or_else(String::new, |condition| format!(", condition {condition}"));
     report.push_str(&format!(
-        "- {label}: {benchmark}, {} run(s), {} succeeded\n",
+        "- {label}: {benchmark}{condition}, {} run(s), {} succeeded\n",
         subject.run_count, subject.success_count
     ));
 }

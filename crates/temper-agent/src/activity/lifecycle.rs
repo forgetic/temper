@@ -520,6 +520,8 @@ mod tests {
                 preview: Some("not-forwarded".to_string()),
                 bytes: 99,
                 truncated: false,
+                failure: None,
+                codebase_memory_timing: None,
             },
         });
         sink.emit(AgentEvent::Steered { count: 1 });

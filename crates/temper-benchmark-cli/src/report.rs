@@ -11,8 +11,8 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
-    BenchmarkModeV1, MetricCoverageV1, RunSummaryV1, RunTerminalStatusV1, StructureMetricsV1,
-    ToolMetricsV1,
+    BenchmarkModeV1, GraphMetricsV1, MetricCoverageV1, RunSummaryV1, RunTerminalStatusV1,
+    StructureMetricsV1, ToolMetricsV1,
 };
 
 pub const RUN_SUMMARY_JSON_FILE: &str = "run.json";
@@ -99,6 +99,13 @@ pub fn render_run_summary_markdown(summary: &RunSummaryV1) -> String {
         code(&summary.identity.assignment.artifact_ref),
     );
     row(&mut out, "Trace source", enum_label(&summary.source));
+    if let Some(condition) = summary
+        .benchmark
+        .as_ref()
+        .and_then(|benchmark| benchmark.condition.as_ref())
+    {
+        row(&mut out, "Condition", enum_label(condition));
+    }
     row(
         &mut out,
         "Capture",
@@ -153,10 +160,19 @@ pub fn render_run_summary_markdown(summary: &RunSummaryV1) -> String {
     }
     row(&mut out, "Wall time", optional_ms(summary.wall_time_ms));
     row(&mut out, "Turns", optional_count(summary.metrics.turns));
+    row(
+        &mut out,
+        "Task correctness",
+        task_correctness(summary)
+            .map(|passed| if passed { "passed" } else { "failed" })
+            .unwrap_or("unavailable"),
+    );
+    row(&mut out, "Host validation", host_validation(summary));
     out.push('\n');
 
     render_model_and_tokens(summary, &mut out);
     render_tools(summary.metrics.tools.as_ref(), &mut out);
+    render_graph(summary.metrics.graph.as_ref(), &mut out);
     render_structure(summary.metrics.structure.as_ref(), &mut out);
     render_diagnostics(summary, &mut out);
     out
@@ -268,6 +284,126 @@ fn render_tools(tools: Option<&ToolMetricsV1>, out: &mut String) {
     }
 }
 
+fn render_graph(graph: Option<&GraphMetricsV1>, out: &mut String) {
+    writeln!(out, "## Graph discovery and decision relevance\n").unwrap();
+    let Some(graph) = graph else {
+        writeln!(
+            out,
+            "_No graph calls or decision-relevance rubric observed._\n"
+        )
+        .unwrap();
+        return;
+    };
+    writeln!(out, "| Metric | Value |").unwrap();
+    writeln!(out, "| --- | ---: |").unwrap();
+    row(out, "Calls", graph.calls);
+    row(out, "Succeeded", graph.succeeded);
+    row(out, "Failed", graph.failed);
+    row(out, "Cancelled", graph.cancelled);
+    row(out, "Status coverage", coverage(&graph.status_coverage));
+    row(
+        out,
+        "Failure-category coverage",
+        coverage(&graph.failure_category_coverage),
+    );
+    for (category, count) in &graph.failures_by_category {
+        row(out, &format!("Failure: {}", enum_label(category)), count);
+    }
+    row(
+        out,
+        "Readiness wait",
+        optional_ms(graph.cumulative_readiness_wait_ms),
+    );
+    row(
+        out,
+        "Readiness timing coverage",
+        coverage(&graph.readiness_wait_coverage),
+    );
+    row(
+        out,
+        "Graph discovery duration",
+        optional_ms(graph.cumulative_discovery_duration_ms),
+    );
+    row(
+        out,
+        "Graph duration coverage",
+        coverage(&graph.discovery_duration_coverage),
+    );
+    row(
+        out,
+        "Immediate repeats after systemic failure",
+        optional_count(graph.immediate_repeated_attempts_after_systemic_failure),
+    );
+    row(
+        out,
+        "Immediate-repeat coverage",
+        coverage(&graph.immediate_repeat_coverage),
+    );
+    row(
+        out,
+        "Relevant graph results",
+        optional_count(graph.relevant_results),
+    );
+    row(
+        out,
+        "Irrelevant successful results",
+        optional_count(graph.irrelevant_successes),
+    );
+    row(
+        out,
+        "Relevance coverage",
+        coverage(&graph.relevance_coverage),
+    );
+    if let Some(discovery) = &graph.conventional_discovery_before_selection {
+        row(
+            out,
+            "Conventional discovery before selection",
+            optional_count(discovery.total_calls),
+        );
+        row(out, "Discovery grep calls", discovery.grep_calls);
+        row(out, "Discovery find calls", discovery.find_calls);
+        row(out, "Discovery read calls", discovery.read_calls);
+        row(
+            out,
+            "Rubric-classified shell discovery",
+            discovery.classified_shell_calls,
+        );
+        row(
+            out,
+            "Shell classification coverage",
+            coverage(&discovery.shell_classification_coverage),
+        );
+    } else {
+        row(
+            out,
+            "Conventional discovery before selection",
+            unavailable(),
+        );
+    }
+    out.push('\n');
+
+    writeln!(out, "### Decision evidence\n").unwrap();
+    if graph.decision_evidence.is_empty() {
+        writeln!(out, "_Unavailable or no declared target was consumed._\n").unwrap();
+    } else {
+        writeln!(out, "| Graph call | Selection | Tool | Target | Kind |").unwrap();
+        writeln!(out, "| --- | --- | --- | --- | --- |").unwrap();
+        for evidence in &graph.decision_evidence {
+            writeln!(
+                out,
+                "| {} | {} | {} | {} | {} |",
+                code(&evidence.graph_call_id),
+                code(&evidence.selection_call_id),
+                escape_cell(&evidence.selection_tool),
+                code(&evidence.target),
+                enum_label(&evidence.kind),
+            )
+            .unwrap();
+        }
+        out.push('\n');
+    }
+}
+
 fn render_structure(structure: Option<&StructureMetricsV1>, out: &mut String) {
     writeln!(out, "## Mutation and validation structure\n").unwrap();
     writeln!(out, "| Metric | Value |").unwrap();
@@ -346,6 +482,40 @@ fn render_diagnostics(summary: &RunSummaryV1, out: &mut String) {
         )
         .unwrap();
     }
+}
+
+fn task_correctness(summary: &RunSummaryV1) -> Option<bool> {
+    match summary.terminal.as_ref().map(|terminal| terminal.status) {
+        Some(RunTerminalStatusV1::Failed | RunTerminalStatusV1::Cancelled) => Some(false),
+        Some(RunTerminalStatusV1::Succeeded) => {
+            summary.validation.as_ref().and_then(|validation| {
+                (validation.command_count > 0).then_some(validation.failed == 0)
+            })
+        }
+        None => None,
+    }
+}
+
+fn host_validation(summary: &RunSummaryV1) -> String {
+    summary
+        .validation
+        .as_ref()
+        .map_or_else(unavailable, |validation| {
+            if validation.command_count == 0 {
+                "not exercised (0 commands)".to_string()
+            } else {
+                format!(
+                    "{} ({}/{} commands passed)",
+                    if validation.failed == 0 {
+                        "passed"
+                    } else {
+                        "failed"
+                    },
+                    validation.succeeded,
+                    validation.command_count,
+                )
+            }
+        })
 }
 
 fn row(out: &mut String, label: &str, value: impl std::fmt::Display) {

@@ -16,7 +16,9 @@ use tongs::tools::ToolRegistry;
 
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
-    OperationGeneration, ToolCallStatus, ToolResultMetadata,
+    CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, OperationGeneration,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
+    ToolResultMetadata,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
@@ -386,16 +388,16 @@ async fn execute_tool(
 
     let settled = cancel_or(cancellation, operation).await;
     let duration_ms = clock.now_millis().saturating_sub(started_ms);
-    let (output, status) = match settled {
+    let (output, status, timed_out) = match settled {
         Some(ToolExecution::Finished(output)) => {
             let status = if output.is_error {
                 ToolCallStatus::Failed
             } else {
                 ToolCallStatus::Succeeded
             };
-            (output, status)
+            (output, status, false)
         }
-        Some(ToolExecution::TimedOut(output)) => (output, ToolCallStatus::Cancelled),
+        Some(ToolExecution::TimedOut(output)) => (output, ToolCallStatus::Cancelled, true),
         None => {
             let output = tool_error_output(&format!("tool `{}` cancelled", call.name));
             events.emit(AgentEvent::ToolEnd {
@@ -403,7 +405,7 @@ async fn execute_tool(
                 name: call.name.clone(),
                 status: ToolCallStatus::Cancelled,
                 duration_ms,
-                result: bounded_tool_result(&output),
+                result: bounded_tool_result(&call.name, &output),
             });
             return None;
         }
@@ -413,7 +415,15 @@ async fn execute_tool(
         name: call.name.clone(),
         status,
         duration_ms,
-        result: bounded_tool_result(&output),
+        result: {
+            let mut result = bounded_tool_result(&call.name, &output);
+            if timed_out && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+                result.failure = Some(ToolFailureDiagnostic::codebase_memory(
+                    ToolFailureCategory::Timeout,
+                ));
+            }
+            result
+        },
     });
     Some(output)
 }
@@ -430,9 +440,13 @@ fn format_duration(duration: Duration) -> String {
 
 const TOOL_RESULT_PREVIEW_BYTES: usize = 4 * 1024;
 
-/// Extract a bounded text-only candidate from a tool result. Structured details,
-/// signatures, images, and arbitrary JSON never enter the event protocol.
-fn bounded_tool_result(output: &tongs::tools::ToolOutput) -> ToolResultMetadata {
+/// Extract a bounded text-only candidate from a tool result. Generic structured
+/// details, signatures, images, and arbitrary JSON never enter the event
+/// protocol. A codebase-memory wrapper may contribute only a stable category
+/// and bounded numeric timing fields.
+fn bounded_tool_result(name: &str, output: &tongs::tools::ToolOutput) -> ToolResultMetadata {
+    let failure = safe_tool_failure(name, output);
+    let codebase_memory_timing = codebase_memory_timing(name, output);
     let text = output
         .content
         .iter()
@@ -448,6 +462,8 @@ fn bounded_tool_result(output: &tongs::tools::ToolOutput) -> ToolResultMetadata 
             preview: None,
             bytes,
             truncated: false,
+            failure,
+            codebase_memory_timing,
         };
     }
     let (preview, truncated) = truncate_utf8(&text, TOOL_RESULT_PREVIEW_BYTES);
@@ -455,7 +471,41 @@ fn bounded_tool_result(output: &tongs::tools::ToolOutput) -> ToolResultMetadata 
         preview: Some(preview.to_string()),
         bytes,
         truncated,
+        failure,
+        codebase_memory_timing,
     }
+}
+
+fn codebase_memory_timing(
+    name: &str,
+    output: &tongs::tools::ToolOutput,
+) -> Option<CodebaseMemoryTiming> {
+    if !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+        return None;
+    }
+    let timing = output.details.as_ref()?.get("timing")?;
+    Some(CodebaseMemoryTiming {
+        readiness_wait_ms: timing.get("readiness_wait_ms")?.as_u64()?,
+        graph_execution_ms: timing.get("graph_execution_ms")?.as_u64()?,
+    })
+}
+
+fn safe_tool_failure(
+    name: &str,
+    output: &tongs::tools::ToolOutput,
+) -> Option<ToolFailureDiagnostic> {
+    if !output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+        return None;
+    }
+    let marker = output.details.as_ref()?.get(SAFE_TOOL_FAILURE_DETAIL_KEY)?;
+    if marker.get("source").and_then(serde_json::Value::as_str) != Some("codebase_memory") {
+        return None;
+    }
+    let category = marker
+        .get("category")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ToolFailureCategory::from_stable_str)?;
+    Some(ToolFailureDiagnostic::codebase_memory(category))
 }
 
 fn truncate_utf8(value: &str, maximum_bytes: usize) -> (&str, bool) {

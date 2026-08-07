@@ -10,10 +10,12 @@ mod failure;
 mod model_call;
 mod prompt;
 mod terminal;
+mod tool_failure;
 pub use failure::*;
 pub use model_call::*;
 pub use prompt::*;
 pub use terminal::*;
+pub use tool_failure::*;
 
 /// Identity assigned by the worker and held constant for an entire run.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -572,34 +574,6 @@ pub struct AssistantMessageV1 {
 #[serde(deny_unknown_fields)]
 pub struct OutputDeltaV1 {
     pub delta: InlineContentV1,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolStartedV1 {
-    pub call_id: String,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub arguments: Option<CapturedContentV1>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ToolFinishedV1 {
-    pub call_id: String,
-    pub name: String,
-    pub status: ToolStatusV1,
-    pub duration_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<CapturedContentV1>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolStatusV1 {
-    Succeeded,
-    Failed,
-    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

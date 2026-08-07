@@ -125,9 +125,14 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
         "\nCODEBASE MEMORY:\n\
          You have repository-index tools for architecture, symbol search, code search,\n\
          and call/impact tracing.\n\n\
-         Use them early for non-trivial tasks:\n\
-         - architect: map affected areas before triage/breakdown;\n\
-         - engineer: find relevant symbols/callers before editing;\n\
+         Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
+         - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
+           symptom, file, or area; then use call/path tracing and read exact source snippets as\n\
+           needed. Avoid empty or broad graph searches and broad architecture calls for\n\
+           already-localized work.\n\
+         - architect: map affected areas before triage/breakdown only when a genuine topology\n\
+           question warrants an architecture view;\n\
+         - engineer: start with targeted symbols/code, then trace affected callers before editing;\n\
          - reviewer: inspect impacted code paths and callers before verdicts.\n\n\
          Treat the graph as an index, not truth. Verify exact code with read/grep/git diff\n\
          before editing or making final claims.\n\
@@ -157,7 +162,9 @@ import json
 import sys
 
 TOOLS = [
-    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
+    {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
+    {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path"]}},
     {"name": "delete_project", "description": "Delete project", "inputSchema": {"type": "object", "properties": {}}},
 ]
 
@@ -173,11 +180,18 @@ for line in sys.stdin:
         continue
     method = request.get("method")
     if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "fake-codebase-memory", "version": "1"}, "capabilities": {"tools": {}}}})
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.9.0"}, "capabilities": {"tools": {}}}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": "fake result"}], "isError": False}})
+        params = request.get("params", {})
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        if name == "index_status":
+            result = json.dumps({"project": args.get("project", ""), "status": "fresh"})
+        else:
+            result = "fake result"
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": result}], "isError": False}})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
 "#,
@@ -306,8 +320,15 @@ for line in sys.stdin:
             for expected in [
                 "CODEBASE MEMORY",
                 "repository-index tools for architecture, symbol search, code search",
-                "Use them early for non-trivial tasks",
-                "- engineer: find relevant symbols/callers before editing;",
+                "Use them early for non-trivial tasks, but choose the narrowest useful query",
+                "- concrete defects: begin with a targeted symbol or code search tied to the reported",
+                "then use call/path tracing and read exact source snippets as",
+                "needed. Avoid empty or broad graph searches and broad architecture calls for",
+                "already-localized work.",
+                "- architect: map affected areas before triage/breakdown only when a genuine topology",
+                "question warrants an architecture view;",
+                "- engineer: start with targeted symbols/code, then trace affected callers before editing;",
+                "- reviewer: inspect impacted code paths and callers before verdicts.",
                 "Treat the graph as an index, not truth.",
                 "Default project: `acme/demo`",
                 "Project aliases accepted in `project`/`repo`",

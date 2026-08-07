@@ -83,7 +83,19 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         prompt.contains("CODEBASE MEMORY"),
         "first request should include prompt guidance only because tools registered"
     );
-    assert!(prompt.contains("Use them early for non-trivial tasks"));
+    for expected in [
+        "Use them early for non-trivial tasks, but choose the narrowest useful query",
+        "- concrete defects: begin with a targeted symbol or code search tied to the reported",
+        "then use call/path tracing and read exact source snippets as",
+        "Avoid empty or broad graph searches and broad architecture calls",
+        "- engineer: start with targeted symbols/code, then trace affected callers before editing;",
+        "Treat the graph as an index, not truth. Verify exact code",
+    ] {
+        assert!(
+            prompt.contains(expected),
+            "tool-enabled prompt omitted targeted guidance {expected:?}"
+        );
+    }
     for duplicated_api_text in [
         FAKE_MCP_DESCRIPTION_SENTINEL,
         "codebase_memory_search_code",
@@ -181,7 +193,9 @@ import json
 import sys
 
 TOOLS = [
-    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
+    {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
+    {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path"]}},
 ]
 
 def send(value):
@@ -196,14 +210,19 @@ for line in sys.stdin:
         continue
     method = request.get("method")
     if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "fake-codebase-memory", "version": "1"}, "capabilities": {"tools": {}}}})
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.9.0"}, "capabilities": {"tools": {}}}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
         params = request.get("params", {})
+        name = params.get("name")
         args = params.get("arguments") or {}
-        query = args.get("query", "")
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": "FAKE_MCP_SEARCH_RESULT for " + query}], "isError": False}})
+        if name == "index_status":
+            text = json.dumps({"project": args.get("project", ""), "status": "fresh"})
+        else:
+            query = args.get("query", "")
+            text = "FAKE_MCP_SEARCH_RESULT for " + query
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})
 "#,
