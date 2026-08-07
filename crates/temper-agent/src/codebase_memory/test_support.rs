@@ -147,7 +147,7 @@ for line in sys.stdin:
                 tool_result(request["id"], json.dumps({"status": "backend_unavailable", "message": "project not found while backend unavailable"}), True)
             elif mode == "discovery-mismatched-missing":
                 tool_result(request["id"], json.dumps({"project": "different-project", "status": "missing"}), True)
-            elif mode in ("missing", "index-hang", "index-error", "index-error-secret", "index-malformed", "index-wrong-project", "background-budget-success", "background-budget-timeout"):
+            elif mode in ("missing", "index-hang", "index-error", "index-error-secret", "index-malformed", "index-wrong-project", "index-missing-root", "index-malformed-root", "index-wrong-root", "index-unconfirmed-root", "background-budget-success", "background-budget-timeout"):
                 tool_result(request["id"], json.dumps({"project": project, "status": "missing"}), True)
             elif mode == "cold-warm":
                 status = state_status(project)
@@ -178,6 +178,14 @@ for line in sys.stdin:
                 tool_result(request["id"], "not-json SECRET")
             elif mode == "index-wrong-project":
                 tool_result(request["id"], json.dumps({"project": "path-keyed-project", "repo_path": repo_path, "status": "fresh"}))
+            elif mode == "index-missing-root":
+                tool_result(request["id"], json.dumps({"project": project, "status": "fresh"}))
+            elif mode == "index-malformed-root":
+                tool_result(request["id"], json.dumps({"project": project, "repo_path": [repo_path], "status": "fresh"}))
+            elif mode == "index-wrong-root":
+                tool_result(request["id"], json.dumps({"project": project, "repo_path": os.path.join(repo_path, "stale-checkout"), "status": "fresh"}))
+            elif mode == "index-unconfirmed-root":
+                tool_result(request["id"], json.dumps({"project": project, "repo_path": repo_path, "status": "pending"}))
             else:
                 if mode == "cold-warm":
                     stable_upsert(project, repo_path)

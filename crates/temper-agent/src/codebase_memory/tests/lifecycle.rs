@@ -19,6 +19,16 @@ fn fresh_stable_project_rebinds_to_relocated_checkout_before_serving_source() {
         let log_path = first.path().join(format!("cold-warm-{index:?}.log"));
         let first_context = workspace_context(first.path(), &[("acme", "demo", "demo")]);
         let second_context = workspace_context(second.path(), &[("acme", "demo", "checkout")]);
+        let first_root = first
+            .path()
+            .join("demo")
+            .canonicalize()
+            .expect("canonical first checkout root");
+        let second_root = second
+            .path()
+            .join("checkout")
+            .canonicalize()
+            .expect("canonical second checkout root");
         let first_source = "pub const CHECKOUT: &str = \"first\";\n";
         let second_source = "pub const CHECKOUT: &str = \"second\";\n";
         std::fs::create_dir_all(first.path().join("demo/src")).expect("create first source dir");
@@ -124,10 +134,24 @@ fn fresh_stable_project_rebinds_to_relocated_checkout_before_serving_source() {
         );
         let roots = upserts
             .iter()
-            .map(|upsert| upsert["arguments"]["repo_path"].as_str().unwrap())
+            .map(|upsert| {
+                upsert["arguments"]["repo_path"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
             .collect::<BTreeSet<_>>();
         assert_eq!(roots.len(), 2, "each checkout root must be rebound");
+        assert_eq!(
+            roots,
+            BTreeSet::from([
+                first_root.display().to_string(),
+                second_root.display().to_string(),
+            ]),
+            "each upsert must request its canonical prepared checkout root"
+        );
         assert_eq!(calls_named(&log_path, "index_status").len(), 2);
+        assert!(calls_named(&log_path, "list_projects").is_empty());
         let searches = calls_named(&log_path, "search_code");
         assert_eq!(searches.len(), 2);
         assert!(
@@ -142,6 +166,11 @@ fn fresh_stable_project_rebinds_to_relocated_checkout_before_serving_source() {
         assert_eq!(state["projects"].as_object().unwrap().len(), 1);
         assert_eq!(state["counters"]["project_creations"], 1);
         assert_eq!(state["counters"]["index_repository"], 2);
+        assert_eq!(
+            state["projects"][&stable_key]["repo_path"],
+            second_root.display().to_string(),
+            "the one retained provider project must be bound to the live second checkout"
+        );
     }
 }
 
@@ -151,6 +180,10 @@ fn unconfirmed_or_failed_stable_upserts_are_redacted_and_not_retried() {
         (CodebaseMemoryIndex::Blocking, "index-error-secret"),
         (CodebaseMemoryIndex::Background, "index-malformed"),
         (CodebaseMemoryIndex::Background, "index-wrong-project"),
+        (CodebaseMemoryIndex::Blocking, "index-missing-root"),
+        (CodebaseMemoryIndex::Blocking, "index-malformed-root"),
+        (CodebaseMemoryIndex::Background, "index-wrong-root"),
+        (CodebaseMemoryIndex::Background, "index-unconfirmed-root"),
     ] {
         let dir = fake_server_script();
         let workspace = tempfile::tempdir().expect("workspace");
@@ -212,5 +245,50 @@ fn unconfirmed_or_failed_stable_upserts_are_redacted_and_not_retried() {
         assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
         assert!(calls_named(&log_path, "search_code").is_empty());
         assert!(calls_named(&log_path, "get_architecture").is_empty());
+    }
+}
+
+#[test]
+fn required_blocking_indexing_rejects_unacknowledged_canonical_root_bindings() {
+    for server_mode in [
+        "index-missing-root",
+        "index-malformed-root",
+        "index-wrong-root",
+        "index-unconfirmed-root",
+    ] {
+        let dir = fake_server_script();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let log_path = workspace.path().join(format!("{server_mode}-required.log"));
+        let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+
+        temper_agent_io::block_on(async move {
+            let error = match build_codebase_memory_toolset(
+                Some(&config(
+                    &dir,
+                    CodebaseMemoryMode::Required,
+                    CodebaseMemoryIndex::Blocking,
+                    server_mode,
+                    &log_path,
+                    json!({}),
+                )),
+                "engineer",
+                &context,
+                workspace.path(),
+            )
+            .await
+            {
+                Ok(_) => panic!("required mode must reject an unacknowledged root binding"),
+                Err(error) => error,
+            };
+            let rendered = error.to_string();
+            assert!(rendered.contains("stable codebase-memory index upsert"));
+            assert!(rendered.contains("was not confirmed"));
+            assert!(
+                !rendered.contains(&workspace.path().display().to_string()),
+                "provider paths must not be exposed in required-mode diagnostics"
+            );
+            assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
+            assert!(calls_named(&log_path, "list_projects").is_empty());
+        });
     }
 }
