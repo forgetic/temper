@@ -1,5 +1,6 @@
 use super::*;
-use serde_json::json;
+use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode, WorkspaceContext};
 
 fn provider_key(context: &WorkspaceContext, index: usize) -> String {
@@ -7,7 +8,7 @@ fn provider_key(context: &WorkspaceContext, index: usize) -> String {
 }
 
 #[test]
-fn cold_stable_projects_become_usable_and_warm_across_relocated_checkouts() {
+fn fresh_stable_project_rebinds_to_relocated_checkout_before_serving_source() {
     for index in [
         CodebaseMemoryIndex::Blocking,
         CodebaseMemoryIndex::Background,
@@ -18,9 +19,33 @@ fn cold_stable_projects_become_usable_and_warm_across_relocated_checkouts() {
         let log_path = first.path().join(format!("cold-warm-{index:?}.log"));
         let first_context = workspace_context(first.path(), &[("acme", "demo", "demo")]);
         let second_context = workspace_context(second.path(), &[("acme", "demo", "checkout")]);
+        let first_root = first
+            .path()
+            .join("demo")
+            .canonicalize()
+            .expect("canonical first checkout root");
+        let second_root = second
+            .path()
+            .join("checkout")
+            .canonicalize()
+            .expect("canonical second checkout root");
+        let first_source = "pub const CHECKOUT: &str = \"first\";\n";
+        let second_source = "pub const CHECKOUT: &str = \"second\";\n";
+        std::fs::create_dir_all(first.path().join("demo/src")).expect("create first source dir");
+        std::fs::write(first.path().join("demo/src/lib.rs"), first_source)
+            .expect("write first source");
+        std::fs::create_dir_all(second.path().join("checkout/src"))
+            .expect("create second source dir");
+        std::fs::write(second.path().join("checkout/src/lib.rs"), second_source)
+            .expect("write second source");
         let stable_key = provider_key(&first_context, 0);
         let first_cwd = first.path().to_path_buf();
         let second_cwd = second.path().to_path_buf();
+        let second_source_path = second
+            .path()
+            .join("checkout/src/lib.rs")
+            .canonicalize()
+            .expect("canonical second source path");
         let setup_log_path = log_path.clone();
         assert_eq!(stable_key, provider_key(&second_context, 0));
 
@@ -65,27 +90,68 @@ fn cold_stable_projects_become_usable_and_warm_across_relocated_checkouts() {
                 &second_cwd,
             )
             .await
-            .expect("relocated checkout reuses the stable project");
-            let warm_search = warm_toolset
-                .into_tools()
-                .into_iter()
+            .expect("fresh logical project is rebound to the relocated checkout");
+            let warm_tools = warm_toolset.into_tools();
+            let warm_search = warm_tools
+                .iter()
                 .find(|tool| tool.name() == "codebase_memory_search_code")
                 .expect("warm search wrapper");
             let warm = warm_search
                 .execute("warm", json!({"query": "stable"}), None)
                 .await
-                .expect("warm project remains usable");
+                .expect("warm project remains usable after rebind");
             assert!(!warm.is_error);
+
+            let snippet = warm_tools
+                .iter()
+                .find(|tool| tool.name() == "codebase_memory_get_code_snippet")
+                .expect("snippet wrapper");
+            let snippet = snippet
+                .execute("snippet", json!({"path": "src/lib.rs"}), None)
+                .await
+                .expect("rebound project serves source");
+            assert!(!snippet.is_error);
+            let payload: Value = serde_json::from_str(&output_text(&snippet))
+                .expect("fixture snippet response is JSON");
+            assert_eq!(payload["source"], second_source);
+            assert_eq!(
+                payload["file_path"],
+                second_source_path.display().to_string(),
+                "snippet source must come from the second live checkout"
+            );
         });
 
         let upserts = calls_named(&log_path, "index_repository");
         assert_eq!(
             upserts.len(),
-            1,
-            "{index:?} must not recreate a warm project"
+            2,
+            "{index:?} must rebind the fresh stable project for each checkout"
         );
-        assert_eq!(upserts[0]["arguments"]["name"], stable_key);
+        assert!(
+            upserts
+                .iter()
+                .all(|upsert| upsert["arguments"]["name"] == stable_key)
+        );
+        let roots = upserts
+            .iter()
+            .map(|upsert| {
+                upsert["arguments"]["repo_path"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(roots.len(), 2, "each checkout root must be rebound");
+        assert_eq!(
+            roots,
+            BTreeSet::from([
+                first_root.display().to_string(),
+                second_root.display().to_string(),
+            ]),
+            "each upsert must request its canonical prepared checkout root"
+        );
         assert_eq!(calls_named(&log_path, "index_status").len(), 2);
+        assert!(calls_named(&log_path, "list_projects").is_empty());
         let searches = calls_named(&log_path, "search_code");
         assert_eq!(searches.len(), 2);
         assert!(
@@ -93,10 +159,18 @@ fn cold_stable_projects_become_usable_and_warm_across_relocated_checkouts() {
                 .iter()
                 .all(|call| call["arguments"]["project"] == stable_key)
         );
+        let snippets = calls_named(&log_path, "get_code_snippet");
+        assert_eq!(snippets.len(), 1);
+        assert_eq!(snippets[0]["arguments"]["project"], stable_key);
         let state = provider_state(&log_path);
         assert_eq!(state["projects"].as_object().unwrap().len(), 1);
         assert_eq!(state["counters"]["project_creations"], 1);
-        assert_eq!(state["counters"]["index_repository"], 1);
+        assert_eq!(state["counters"]["index_repository"], 2);
+        assert_eq!(
+            state["projects"][&stable_key]["repo_path"],
+            second_root.display().to_string(),
+            "the one retained provider project must be bound to the live second checkout"
+        );
     }
 }
 
@@ -106,6 +180,10 @@ fn unconfirmed_or_failed_stable_upserts_are_redacted_and_not_retried() {
         (CodebaseMemoryIndex::Blocking, "index-error-secret"),
         (CodebaseMemoryIndex::Background, "index-malformed"),
         (CodebaseMemoryIndex::Background, "index-wrong-project"),
+        (CodebaseMemoryIndex::Blocking, "index-missing-root"),
+        (CodebaseMemoryIndex::Blocking, "index-malformed-root"),
+        (CodebaseMemoryIndex::Background, "index-wrong-root"),
+        (CodebaseMemoryIndex::Background, "index-unconfirmed-root"),
     ] {
         let dir = fake_server_script();
         let workspace = tempfile::tempdir().expect("workspace");
@@ -167,5 +245,50 @@ fn unconfirmed_or_failed_stable_upserts_are_redacted_and_not_retried() {
         assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
         assert!(calls_named(&log_path, "search_code").is_empty());
         assert!(calls_named(&log_path, "get_architecture").is_empty());
+    }
+}
+
+#[test]
+fn required_blocking_indexing_rejects_unacknowledged_canonical_root_bindings() {
+    for server_mode in [
+        "index-missing-root",
+        "index-malformed-root",
+        "index-wrong-root",
+        "index-unconfirmed-root",
+    ] {
+        let dir = fake_server_script();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let log_path = workspace.path().join(format!("{server_mode}-required.log"));
+        let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+
+        temper_agent_io::block_on(async move {
+            let error = match build_codebase_memory_toolset(
+                Some(&config(
+                    &dir,
+                    CodebaseMemoryMode::Required,
+                    CodebaseMemoryIndex::Blocking,
+                    server_mode,
+                    &log_path,
+                    json!({}),
+                )),
+                "engineer",
+                &context,
+                workspace.path(),
+            )
+            .await
+            {
+                Ok(_) => panic!("required mode must reject an unacknowledged root binding"),
+                Err(error) => error,
+            };
+            let rendered = error.to_string();
+            assert!(rendered.contains("stable codebase-memory index upsert"));
+            assert!(rendered.contains("was not confirmed"));
+            assert!(
+                !rendered.contains(&workspace.path().display().to_string()),
+                "provider paths must not be exposed in required-mode diagnostics"
+            );
+            assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
+            assert!(calls_named(&log_path, "list_projects").is_empty());
+        });
     }
 }

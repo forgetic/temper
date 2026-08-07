@@ -339,7 +339,8 @@ for line in sys.stdin:
                 "`repo-1`",
                 "Filesystem paths are never accepted as project/repo values",
                 "Index setting: `off`",
-                "`acme/demo` status:",
+                "`acme/demo` logical index state: fresh/non-stale",
+                "active-checkout binding: pending current-checkout rebind",
                 "Note: index=off; no internal indexing was attempted",
             ] {
                 assert!(prompt.contains(expected), "prompt omitted {expected:?}");

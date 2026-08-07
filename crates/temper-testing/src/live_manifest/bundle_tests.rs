@@ -137,12 +137,14 @@ fn codebase_memory_bundle_requires_delayed_graph_readiness_and_bounded_fallback(
     assert!(matches!(
         &mcp.action,
         ManifestAction::StartCodebaseMemoryMcp {
+            fixture: Some(fixture),
             safe_tools,
             readiness_delay_ms: 750,
             forced_systemic_failure: Some(ForcedSystemicFailureFixture { tool, after_calls: 1 }),
             ..
-        } if safe_tools == &vec![
+        } if fixture == "stable-rebind" && safe_tools == &vec![
             "search_graph".to_string(),
+            "get_code_snippet".to_string(),
             "list_projects".to_string(),
             "index_status".to_string(),
         ] && tool == "search_graph"
@@ -159,6 +161,7 @@ fn codebase_memory_bundle_requires_delayed_graph_readiness_and_bounded_fallback(
     }));
     let jig = std::fs::read_to_string(bundle.jig_script_path()).expect("scenario-owned Jig");
     assert!(jig.contains("graph_select_retry_worker"));
+    assert!(jig.contains("read_rebound_graph_selected_source"));
     assert!(jig.contains("fallback_grep_retry_worker"));
     assert!(!jig.contains("MCP-FIXTURE-SECRET"));
     assert!(bundle.repo.ci_source.contains("cargo test --quiet"));

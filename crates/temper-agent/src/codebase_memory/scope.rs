@@ -106,11 +106,16 @@ impl WorkspaceScope {
         }
     }
 
-    pub(super) fn projects_needing_index(&self) -> Vec<usize> {
+    pub(super) fn projects_requiring_current_root_binding(&self) -> Vec<usize> {
         self.projects
             .iter()
             .enumerate()
-            .filter_map(|(index, project)| project.index_state.needs_index().then_some(index))
+            .filter_map(|(index, project)| {
+                project
+                    .index_state
+                    .requires_current_root_binding()
+                    .then_some(index)
+            })
             .collect()
     }
 
@@ -269,15 +274,16 @@ impl WorkspaceScope {
             index_setting(index),
             match index {
                 CodebaseMemoryIndex::Off => "No internal indexing was attempted; results may be missing or stale.",
-                CodebaseMemoryIndex::Background => "Indexing was started for missing/stale prepared repos and may still be in progress.",
-                CodebaseMemoryIndex::Blocking => "Missing/stale prepared repos were indexed before exposing tools unless auto mode recorded a warning.",
+                CodebaseMemoryIndex::Background => "Current-checkout rebinding was started for every discovered prepared repo and may still be in progress.",
+                CodebaseMemoryIndex::Blocking => "Every discovered prepared repo was rebound to its current checkout before exposing tools unless auto mode recorded a warning.",
             }
         ));
         for project in &self.projects {
             lines.push(format!(
-                "- `{}` status: {} (actual `{}`)",
+                "- `{}` logical index state: {}; active-checkout binding: {} (actual `{}`)",
                 project.canonical_alias,
-                project.index_state().as_prompt_text(),
+                project.logical_index_state().as_logical_prompt_text(),
+                project.index_state().as_root_binding_prompt_text(),
                 project.actual_project()
             ));
         }
@@ -389,6 +395,14 @@ impl ScopedProject {
             .unwrap_or(self.index_state)
     }
 
+    fn logical_index_state(&self) -> ProjectIndexState {
+        if self.index_state() == ProjectIndexState::CurrentRootBound {
+            ProjectIndexState::CurrentRootBound
+        } else {
+            self.index_state
+        }
+    }
+
     fn wait_for_background_index(&self, timeout: Duration) -> std::result::Result<(), String> {
         if self.index_state() == ProjectIndexState::IndexFailed {
             return Err(format!(
@@ -419,7 +433,9 @@ impl ScopedProject {
             "project": self.canonical_alias,
             "aliases": self.documented_aliases().into_iter().collect::<Vec<_>>(),
             "actual_project": self.actual_project(),
-            "index_status": self.index_state().as_prompt_text(),
+            "index_status": self.logical_index_state().as_logical_prompt_text(),
+            "logical_index_status": self.logical_index_state().as_logical_prompt_text(),
+            "current_root_binding": self.index_state().as_root_binding_prompt_text(),
             "primary": self.primary,
         })
     }
@@ -431,23 +447,33 @@ pub(super) enum ProjectIndexState {
     Missing,
     Stale,
     Fresh,
+    CurrentRootBound,
     BackgroundInProgress,
     IndexFailed,
 }
 
 impl ProjectIndexState {
-    fn needs_index(self) -> bool {
-        matches!(self, Self::Missing | Self::Stale)
+    fn requires_current_root_binding(self) -> bool {
+        matches!(self, Self::Missing | Self::Stale | Self::Fresh)
     }
 
-    fn as_prompt_text(self) -> &'static str {
+    fn as_logical_prompt_text(self) -> &'static str {
         match self {
-            Self::DiscoveryUnavailable => "discovery unavailable; indexing was not attempted",
-            Self::Missing => "missing from codebase-memory index",
-            Self::Stale => "stale according to codebase-memory project metadata",
-            Self::Fresh => "fresh/non-stale",
-            Self::BackgroundInProgress => "background indexing may still be in progress",
-            Self::IndexFailed => "indexing failed; results may be stale or missing",
+            Self::DiscoveryUnavailable => "discovery unavailable",
+            Self::Missing => "missing",
+            Self::Stale => "stale",
+            Self::Fresh | Self::CurrentRootBound => "fresh/non-stale",
+            Self::BackgroundInProgress | Self::IndexFailed => "unavailable",
+        }
+    }
+
+    fn as_root_binding_prompt_text(self) -> &'static str {
+        match self {
+            Self::DiscoveryUnavailable => "not attempted because discovery was unavailable",
+            Self::Missing | Self::Stale | Self::Fresh => "pending current-checkout rebind",
+            Self::CurrentRootBound => "confirmed for the current prepared checkout",
+            Self::BackgroundInProgress => "background rebind in progress",
+            Self::IndexFailed => "rebind failed; results may be stale or missing",
         }
     }
 }
