@@ -38,13 +38,21 @@ That upsert returns only the fixture's normalized provider identity
 not acknowledge a root. A second targeted `index_status` request for that
 normalized identity returns `ready` plus the canonical `root_path`. The
 requested opaque stable key remains in fixture state for comparison, but cannot
-serve status or graph reads. Each successful `search_code` result records its
-requested stable key, confirmed project, and graph-read project, proving that
-reads route through the confirmed normalized identity rather than the requested
-stable key. The cold and warm responses name `src/route.rs`, its caller
-`src/delivery.rs`, and/or `tests/alias_retry.rs`, and later exact reads consume
-every declared result marker. The Jig deliberately avoids broad architecture
-and empty graph searches.
+serve status or graph reads.
+
+The enabled Jig exercises five ordered, targeted calls through that confirmed
+identity: `search_graph` identifies implementation, caller, and focused-test
+evidence; `search_code` refines `worker_slot`; `trace_path` follows it to the
+delivery caller; and two `get_code_snippet` calls read `DeliveryAttempt` and
+`DeliveryRouter::worker_for` from the confirmed current root before the exact
+patch. The manifest permits only those declared graph-to-graph, graph-to-source,
+and final exact source-selection consumption links. The run summary retains
+ordered call IDs, safe tool names, declared target/kind, and consumption mode
+(`graph`, `source`, or `selection`); it never retains tool arguments, source
+text, or provider results as decision evidence. Diagnostic traces do contain the
+controlled source snippets, so they remain local review artifacts and must not
+be published without the same source/privacy review required for live traces.
+The Jig deliberately avoids broad architecture and empty graph searches.
 
 Every condition uses the same parseable compound shell fallback before the
 first exact selection: `cd repo && rg ...`. The manifest counts its one `rg`
@@ -52,8 +60,10 @@ segment only when full shell coverage is present; it does not infer a count
 from an unparseable command. The disabled Jig begins at that
 fallback because no graph tools are registered. The unavailable Jig makes one
 systemically failing graph request, then takes the same fallback without an
-immediate graph retry. Its provider response includes secret-shaped text that
-must never survive the wrapper's typed safe diagnostic or retained trace.
+immediate graph retry. Disabled and unavailable runs do not synthesize graph
+consumption evidence. The unavailable provider response includes secret-shaped
+text that must never survive the wrapper's typed safe diagnostic or retained
+trace.
 
 These scripted cold/warm, relevance, shell-classification, and unavailable
 checks prove deterministic harness plumbing and bounded wrapper behavior only.

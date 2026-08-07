@@ -48,10 +48,14 @@ all three controlled codebase-memory conditions, and verifies run and aggregate
 summaries. The structural checks include mutation turns, single-mutation turns,
 and maximum mutations per turn. The controlled checks include complete
 compound-shell classification, targeted graph-result consumption, a normalized
-provider identity confirmed by a separate targeted ready/root response,
-deterministic cold-then-warm readiness, a bounded privacy-safe unavailable fallback,
-host validation, and exact diff correctness. Those fixture signals verify
-harness behavior, not deployment eligibility or live model effectiveness.
+provider identity confirmed by a separate targeted ready/root response, a
+five-call graph-to-graph/source/selection chain, deterministic cold-then-warm
+readiness, and a bounded privacy-safe unavailable fallback, host validation,
+and exact diff correctness. Its decision summaries retain only declared target
+metadata, call ordering, safe tool names, and consumption modes; diagnostic
+traces can contain controlled source and require restricted review. Those
+fixture signals verify harness behavior, not deployment eligibility or live
+model effectiveness.
 Malformed or missing scope ancestry is an ingestion error,
 not unavailable historical evidence. If an ingested trace contains a successful mutation without usable model-turn
 identity, all three mutation-turn metrics are unavailable and the summary emits

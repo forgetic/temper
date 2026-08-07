@@ -6,9 +6,13 @@ use temper_protocol_activity::{AgentActivityEventV1, ToolFailureCategoryV1, Tool
 
 use super::{CallKey, captured_command, content_text, shell::classify_shell_discovery};
 use crate::{
-    AnalyzeOptions, ConventionalDiscoveryMetricsV1, DiagnosticSeverityV1, GraphDecisionEvidenceV1,
-    GraphMetricsV1, MetricCoverageV1, NormalizedTrace, TraceDiagnosticCodeV1, TraceDiagnosticV1,
+    AnalyzeOptions, ConventionalDiscoveryMetricsV1, DiagnosticSeverityV1, GraphMetricsV1,
+    MetricCoverageV1, NormalizedTrace, TraceDiagnosticCodeV1, TraceDiagnosticV1,
 };
+
+mod relevance;
+
+use relevance::classify_relevance;
 
 pub(super) struct GraphAnalysis {
     pub metrics: Option<GraphMetricsV1>,
@@ -19,7 +23,10 @@ pub(super) struct GraphAnalysis {
 struct GraphCall {
     call_id: String,
     scope_id: String,
+    name: String,
+    start_seq: Option<u64>,
     finish_seq: Option<u64>,
+    arguments: Option<String>,
     status: Option<ToolStatusV1>,
     result: Option<String>,
     failure: Option<ToolFailureCategoryV1>,
@@ -27,12 +34,15 @@ struct GraphCall {
     discovery_duration_ms: Option<u64>,
 }
 
-struct Selection {
+#[derive(Default)]
+struct Action {
     call_id: String,
+    scope_id: String,
     name: String,
     start_seq: u64,
-    finish_seq: u64,
+    finish_seq: Option<u64>,
     arguments: Option<String>,
+    status: Option<ToolStatusV1>,
 }
 
 pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> GraphAnalysis {
@@ -92,10 +102,10 @@ pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -
     let immediate_repeats = immediate_repeats(trace, &calls);
     let immediate_repeat = (failure_observed == non_success).then_some(immediate_repeats);
 
-    let selections = collect_selections(trace);
-    let relevance = classify_relevance(options, &calls, &selections);
+    let actions = collect_actions(trace);
+    let relevance = classify_relevance(options, &calls, &actions);
     diagnostics.extend(relevance.diagnostics);
-    let decision = decisive_selection(options, &selections);
+    let decision = decisive_selection(options, &actions);
     diagnostics.extend(decision.diagnostics);
     let conventional = decision
         .sequence
@@ -158,6 +168,12 @@ fn collect_graph_calls(trace: &NormalizedTrace) -> BTreeMap<CallKey, GraphCall> 
                     .or_insert_with(|| GraphCall {
                         call_id: tool.call_id.clone(),
                         scope_id: event.scope.id.clone(),
+                        name: tool.name.clone(),
+                        start_seq: Some(event.seq),
+                        arguments: tool
+                            .arguments
+                            .as_ref()
+                            .and_then(|arguments| content_text(trace, arguments)),
                         ..GraphCall::default()
                     });
             }
@@ -167,6 +183,7 @@ fn collect_graph_calls(trace: &NormalizedTrace) -> BTreeMap<CallKey, GraphCall> 
                     .or_insert_with(|| GraphCall {
                         call_id: tool.call_id.clone(),
                         scope_id: event.scope.id.clone(),
+                        name: tool.name.clone(),
                         ..GraphCall::default()
                     });
                 call.finish_seq = Some(event.seq);
@@ -187,6 +204,47 @@ fn collect_graph_calls(trace: &NormalizedTrace) -> BTreeMap<CallKey, GraphCall> 
         }
     }
     calls
+}
+
+fn collect_actions(trace: &NormalizedTrace) -> Vec<Action> {
+    let mut actions = trace
+        .events
+        .iter()
+        .filter_map(|event| match &event.event {
+            AgentActivityEventV1::ToolStarted(tool) if is_action_tool(&tool.name) => Some((
+                CallKey::new(event, &tool.call_id),
+                Action {
+                    call_id: tool.call_id.clone(),
+                    scope_id: event.scope.id.clone(),
+                    name: tool.name.clone(),
+                    start_seq: event.seq,
+                    finish_seq: None,
+                    arguments: tool
+                        .arguments
+                        .as_ref()
+                        .and_then(|arguments| content_text(trace, arguments)),
+                    status: None,
+                },
+            )),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    for event in &trace.events {
+        let AgentActivityEventV1::ToolFinished(tool) = &event.event else {
+            continue;
+        };
+        if !is_action_tool(&tool.name) {
+            continue;
+        }
+        if let Some(action) = actions.get_mut(&CallKey::new(event, &tool.call_id)) {
+            action.finish_seq = Some(event.seq);
+            action.status = Some(tool.status);
+        }
+    }
+    actions
+        .into_values()
+        .filter(|action| action.status == Some(ToolStatusV1::Succeeded))
+        .collect()
 }
 
 fn timing_total(values: impl Iterator<Item = Option<u64>>, expected: u64) -> (Option<u64>, u64) {
@@ -229,156 +287,6 @@ fn systemic_failure(category: ToolFailureCategoryV1) -> bool {
     category != ToolFailureCategoryV1::InvalidModelInput
 }
 
-fn collect_selections(trace: &NormalizedTrace) -> Vec<Selection> {
-    let starts = trace
-        .events
-        .iter()
-        .filter_map(|event| match &event.event {
-            AgentActivityEventV1::ToolStarted(tool) if is_selection_tool(&tool.name) => Some((
-                CallKey::new(event, &tool.call_id),
-                event.seq,
-                tool.call_id.clone(),
-                tool.name.clone(),
-                tool.arguments
-                    .as_ref()
-                    .and_then(|arguments| content_text(trace, arguments)),
-            )),
-            _ => None,
-        })
-        .map(|(key, seq, call_id, name, arguments)| (key, (seq, call_id, name, arguments)))
-        .collect::<BTreeMap<_, _>>();
-    trace
-        .events
-        .iter()
-        .filter_map(|event| match &event.event {
-            AgentActivityEventV1::ToolFinished(tool)
-                if tool.status == ToolStatusV1::Succeeded && is_selection_tool(&tool.name) =>
-            {
-                starts.get(&CallKey::new(event, &tool.call_id)).map(
-                    |(start_seq, call_id, name, arguments)| Selection {
-                        call_id: call_id.clone(),
-                        name: name.clone(),
-                        start_seq: *start_seq,
-                        finish_seq: event.seq,
-                        arguments: arguments.clone(),
-                    },
-                )
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-struct RelevanceAnalysis {
-    relevant: Option<u64>,
-    irrelevant: Option<u64>,
-    observed: u64,
-    evidence: Vec<GraphDecisionEvidenceV1>,
-    diagnostics: Vec<TraceDiagnosticV1>,
-}
-
-fn classify_relevance(
-    options: &AnalyzeOptions,
-    calls: &BTreeMap<CallKey, GraphCall>,
-    selections: &[Selection],
-) -> RelevanceAnalysis {
-    let successful = calls
-        .values()
-        .filter(|call| call.status == Some(ToolStatusV1::Succeeded))
-        .count() as u64;
-    if options.graph_decision_targets.is_empty() {
-        return RelevanceAnalysis {
-            relevant: None,
-            irrelevant: None,
-            observed: 0,
-            evidence: Vec::new(),
-            diagnostics: vec![unavailable(
-                None,
-                "graph decision relevance is unavailable because no decision targets were declared",
-            )],
-        };
-    }
-
-    let mut observed = 0_u64;
-    let mut relevant = 0_u64;
-    let mut irrelevant = 0_u64;
-    let mut evidence = Vec::new();
-    let mut diagnostics = Vec::new();
-    let mut successful_calls = calls
-        .values()
-        .filter(|call| call.status == Some(ToolStatusV1::Succeeded))
-        .collect::<Vec<_>>();
-    successful_calls.sort_by_key(|call| call.finish_seq);
-    for call in successful_calls {
-        let Some(result) = call.result.as_deref() else {
-            diagnostics.push(unavailable(
-                call.finish_seq,
-                "successful graph result content is omitted or truncated; relevance is unavailable",
-            ));
-            continue;
-        };
-        let matching_targets = options
-            .graph_decision_targets
-            .iter()
-            .filter(|target| {
-                result.contains(
-                    target
-                        .result_contains
-                        .as_deref()
-                        .unwrap_or(target.target.as_str()),
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut call_evidence = Vec::new();
-        for target in &matching_targets {
-            if let Some(selection) = selections
-                .iter()
-                .filter(|selection| {
-                    call.finish_seq.is_some_and(|seq| selection.start_seq > seq)
-                        && selection.arguments.as_deref().is_some_and(|arguments| {
-                            selection_matches_target(arguments, &target.target)
-                        })
-                })
-                .min_by_key(|selection| selection.finish_seq)
-            {
-                call_evidence.push(GraphDecisionEvidenceV1 {
-                    graph_call_id: call.call_id.clone(),
-                    selection_call_id: selection.call_id.clone(),
-                    selection_tool: selection.name.clone(),
-                    target: target.target.clone(),
-                    kind: target.kind,
-                });
-            }
-        }
-        if !call_evidence.is_empty() {
-            observed = observed.saturating_add(1);
-            relevant = relevant.saturating_add(1);
-            evidence.extend(call_evidence);
-        } else if !matching_targets.is_empty()
-            && selections.iter().any(|selection| {
-                call.finish_seq.is_some_and(|seq| selection.start_seq > seq)
-                    && selection.arguments.is_none()
-            })
-        {
-            diagnostics.push(unavailable(
-                call.finish_seq,
-                "a later selection omits arguments needed to classify graph-result consumption",
-            ));
-        } else {
-            observed = observed.saturating_add(1);
-            irrelevant = irrelevant.saturating_add(1);
-        }
-    }
-    let complete = observed == successful;
-    RelevanceAnalysis {
-        relevant: complete.then_some(relevant),
-        irrelevant: complete.then_some(irrelevant),
-        observed,
-        evidence,
-        diagnostics,
-    }
-}
-
 struct DecisiveSelection {
     sequence: Option<u64>,
     diagnostics: Vec<TraceDiagnosticV1>,
@@ -388,7 +296,7 @@ struct DecisiveSelection {
 /// mutation. This boundary is intentionally independent of graph relevance:
 /// graph-disabled and graph-unavailable runs still need comparable fallback
 /// discovery measurements.
-fn decisive_selection(options: &AnalyzeOptions, selections: &[Selection]) -> DecisiveSelection {
+fn decisive_selection(options: &AnalyzeOptions, actions: &[Action]) -> DecisiveSelection {
     if options.graph_decision_targets.is_empty() {
         return DecisiveSelection {
             sequence: None,
@@ -396,21 +304,23 @@ fn decisive_selection(options: &AnalyzeOptions, selections: &[Selection]) -> Dec
         };
     }
 
-    let sequence = selections
+    let sequence = actions
         .iter()
-        .filter(|selection| {
-            selection.arguments.as_deref().is_some_and(|arguments| {
+        .filter(|action| is_selection_tool(&action.name))
+        .filter(|action| {
+            action.arguments.as_deref().is_some_and(|arguments| {
                 options
                     .graph_decision_targets
                     .iter()
                     .any(|target| selection_matches_target(arguments, &target.target))
             })
         })
-        .map(|selection| selection.start_seq)
+        .map(|action| action.start_seq)
         .min();
-    let unknown_before_boundary = selections.iter().any(|selection| {
-        selection.arguments.is_none()
-            && sequence.is_none_or(|sequence| selection.start_seq < sequence)
+    let unknown_before_boundary = actions.iter().any(|action| {
+        is_selection_tool(&action.name)
+            && action.arguments.is_none()
+            && sequence.is_none_or(|sequence| action.start_seq < sequence)
     });
     if unknown_before_boundary {
         return DecisiveSelection {
@@ -522,6 +432,10 @@ fn is_graph_tool(name: &str) -> bool {
 
 fn is_selection_tool(name: &str) -> bool {
     matches!(name, "read" | "edit" | "write")
+}
+
+fn is_action_tool(name: &str) -> bool {
+    is_selection_tool(name) || name == "apply_patch"
 }
 
 fn unavailable(seq: Option<u64>, message: &str) -> TraceDiagnosticV1 {

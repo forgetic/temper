@@ -386,15 +386,23 @@ fn render_graph(graph: Option<&GraphMetricsV1>, out: &mut String) {
     if graph.decision_evidence.is_empty() {
         writeln!(out, "_Unavailable or no declared target was consumed._\n").unwrap();
     } else {
-        writeln!(out, "| Graph call | Selection | Tool | Target | Kind |").unwrap();
-        writeln!(out, "| --- | --- | --- | --- | --- |").unwrap();
+        writeln!(
+            out,
+            "| Graph call | Order | Graph tool | Consumer | Tool | Mode | Target | Kind |"
+        )
+        .unwrap();
+        writeln!(out, "| --- | --- | --- | --- | --- | --- | --- | --- |").unwrap();
         for evidence in &graph.decision_evidence {
             writeln!(
                 out,
-                "| {} | {} | {} | {} | {} |",
+                "| {} | {} → {} | {} | {} | {} | {} | {} | {} |",
                 code(&evidence.graph_call_id),
-                code(&evidence.selection_call_id),
-                escape_cell(&evidence.selection_tool),
+                evidence.graph_finish_seq,
+                evidence.consumer_start_seq,
+                enum_label(&evidence.graph_tool),
+                code(&evidence.consumer_call_id),
+                enum_label(&evidence.consumer_tool),
+                enum_label(&evidence.consumption_mode),
                 code(&evidence.target),
                 enum_label(&evidence.kind),
             )

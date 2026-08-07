@@ -25,6 +25,7 @@ fn shell_discovery_summary(name: &str) -> temper_benchmark_cli::RunSummaryV1 {
                 target: "src/lib.rs".to_string(),
                 kind: GraphDecisionKindV1::Implementation,
                 result_contains: None,
+                consumption: Vec::new(),
             }],
             ..AnalyzeOptions::default()
         },

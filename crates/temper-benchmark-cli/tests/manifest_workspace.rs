@@ -67,6 +67,10 @@ repetitions = 2
 target = "one/src/lib.rs"
 kind = "implementation"
 
+[[graph_decision_targets.consumption]]
+tool = "search_code"
+target = "worker_slot"
+
 [annotations]
 provider_region = "local"
 cache_warmth = "cold"
@@ -108,6 +112,10 @@ fn manifest_resolves_inputs_relative_to_its_own_directory() {
         "one/src/lib.rs"
     );
     assert_eq!(
+        manifest.manifest().graph_decision_targets[0].consumption[0].target,
+        "worker_slot"
+    );
+    assert_eq!(
         manifest.manifest().annotations.provider_region.as_deref(),
         Some("local")
     );
@@ -117,6 +125,21 @@ fn manifest_resolves_inputs_relative_to_its_own_directory() {
         "context.json"
     );
     assert_eq!(manifest.jig_script_path().file_name().unwrap(), "jig.json");
+}
+
+#[test]
+fn manifest_rejects_non_targeted_graph_consumers() {
+    let (root, manifest_path) = benchmark(&[("one", "one")]);
+    let source = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(
+        &manifest_path,
+        source.replace("tool = \"search_code\"", "tool = \"read\""),
+    )
+    .unwrap();
+
+    let error = load_benchmark_manifest(manifest_path).unwrap_err();
+    assert!(error.to_string().contains("must be a targeted graph tool"));
+    drop(root);
 }
 
 #[test]
@@ -198,7 +221,17 @@ fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
             .is_file()
     );
     assert!(manifest.expected_patch_path().unwrap().is_file());
-    assert_eq!(manifest.manifest().graph_decision_targets.len(), 3);
+    let targets = &manifest.manifest().graph_decision_targets;
+    assert_eq!(targets.len(), 6);
+    assert_eq!(targets[0].target, "worker_slot");
+    assert_eq!(targets[0].consumption[0].target, "worker_slot");
+    assert_eq!(targets[1].consumption[0].target, "worker_slot");
+    assert_eq!(targets[2].consumption[0].target, "DeliveryAttempt");
+    assert_eq!(
+        targets[3].consumption[0].target,
+        "DeliveryRouter::worker_for"
+    );
+    assert_eq!(targets[5].target, "repo/src/route.rs");
 }
 
 #[test]

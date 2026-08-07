@@ -4,11 +4,71 @@
       "turns": [
         {
           "tool_call": {
-            "id": "graph_find_affinity_after_cold_upsert",
+            "id": "graph_identify_routing_evidence",
+            "name": "codebase_memory_search_graph",
+            "args": {
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "query": "aliased delivery retry worker affinity"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "graph_refine_worker_slot",
             "name": "codebase_memory_search_code",
             "args": {
               "project": "temper-benchmark/codebase-memory-routing-repair",
-              "pattern": "aliased delivery retry worker affinity"
+              "pattern": "worker_slot"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "graph_trace_worker_caller",
+            "name": "codebase_memory_trace_path",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "function_name": "worker_slot"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "graph_source_delivery_attempt",
+            "name": "codebase_memory_get_code_snippet",
+            "args": {
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "qualified_name": "DeliveryAttempt"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "graph_source_delivery_caller",
+            "name": "codebase_memory_get_code_snippet",
+            "args": {
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "qualified_name": "DeliveryRouter::worker_for"
             }
           }
         }
@@ -22,7 +82,7 @@
             "id": "compound_shell_discovery",
             "name": "bash",
             "args": {
-              "command": "cd repo && rg worker_for src",
+              "command": "cd repo && rg worker_slot src",
               "timeout": 60
             }
           }
@@ -34,54 +94,7 @@
       "turns": [
         {
           "tool_call": {
-            "id": "read_route_implementation",
-            "name": "read",
-            "args": {
-              "path": "repo/src/route.rs"
-            }
-          }
-        },
-        {
-          "tool_call": {
-            "id": "read_delivery_caller",
-            "name": "read",
-            "args": {
-              "path": "repo/src/delivery.rs"
-            }
-          }
-        },
-        {
-          "tool_call": {
-            "id": "read_alias_retry_test",
-            "name": "read",
-            "args": {
-              "path": "repo/tests/alias_retry.rs"
-            }
-          }
-        }
-      ],
-      "stop": "tool_calls"
-    },
-    {
-      "turns": [
-        {
-          "tool_call": {
-            "id": "graph_confirm_warm_affinity",
-            "name": "codebase_memory_search_code",
-            "args": {
-              "project": "temper-benchmark/codebase-memory-routing-repair",
-              "pattern": "worker_slot stable warm readiness"
-            }
-          }
-        }
-      ],
-      "stop": "tool_calls"
-    },
-    {
-      "turns": [
-        {
-          "tool_call": {
-            "id": "read_route_after_warm_search",
+            "id": "read_route_after_source_chain",
             "name": "read",
             "args": {
               "path": "repo/src/route.rs"
