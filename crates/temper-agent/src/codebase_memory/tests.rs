@@ -112,6 +112,12 @@ fn codebase_memory_failures_are_classified_without_retaining_source_text() {
         ToolFailureCategory::IndexFailure
     );
     assert_eq!(
+        classify_input_failure(
+            "project is not ready: background indexing is still in progress after 0.250s"
+        ),
+        ToolFailureCategory::Timeout
+    );
+    assert_eq!(
         classify_input_failure("project is not ready: repository SECRET"),
         ToolFailureCategory::ProjectNotReady
     );

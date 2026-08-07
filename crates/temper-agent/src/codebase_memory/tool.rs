@@ -358,7 +358,12 @@ fn codebase_memory_failure_output_with_timings(
 
 pub(super) fn classify_input_failure(message: &str) -> ToolFailureCategory {
     let lowered = message.to_ascii_lowercase();
-    if lowered.contains("index") && lowered.contains("fail") {
+    if lowered.contains("timed out")
+        || lowered.contains("timeout")
+        || lowered.contains("still in progress after")
+    {
+        ToolFailureCategory::Timeout
+    } else if lowered.contains("index") && lowered.contains("fail") {
         ToolFailureCategory::IndexFailure
     } else if lowered.contains("not ready") {
         ToolFailureCategory::ProjectNotReady

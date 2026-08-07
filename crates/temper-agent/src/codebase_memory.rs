@@ -349,17 +349,6 @@ async fn start_toolset(
         Err(error) => return Err(error),
     }
 
-    setup_notes.extend(
-        prepare_indexes(
-            config,
-            &mcp_config,
-            &discovery_tools,
-            &mut scope,
-            containment,
-        )
-        .await?,
-    );
-
     // Discovery requests and their timeouts are process-fatal in the stdio
     // client. Never clone that process into model-visible wrappers, even after
     // successful discovery: initialize and validate a fresh serving client.
@@ -368,6 +357,12 @@ async fn start_toolset(
         StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
     let advertised = client.list_tools(startup_timeout).await?;
     validate_provider_contract(&client, &advertised)?;
+
+    // Establish the serving client before spawning a background upsert. That
+    // makes the background index's readiness visible from the first model tool
+    // call instead of consuming its work while the serving client starts.
+    setup_notes
+        .extend(prepare_indexes(config, &mcp_config, &advertised, &mut scope, containment).await?);
     emit_mcp_server_started(McpServerStarted {
         tool_name: "codebase_memory",
         command: &config.command,

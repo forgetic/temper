@@ -83,7 +83,19 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         prompt.contains("CODEBASE MEMORY"),
         "first request should include prompt guidance only because tools registered"
     );
-    assert!(prompt.contains("Use them early for non-trivial tasks"));
+    for expected in [
+        "Use them early for non-trivial tasks, but choose the narrowest useful query",
+        "- concrete defects: begin with a targeted symbol or code search tied to the reported",
+        "then use call/path tracing and read exact source snippets as",
+        "Avoid empty or broad graph searches and broad architecture calls",
+        "- engineer: start with targeted symbols/code, then trace affected callers before editing;",
+        "Treat the graph as an index, not truth. Verify exact code",
+    ] {
+        assert!(
+            prompt.contains(expected),
+            "tool-enabled prompt omitted targeted guidance {expected:?}"
+        );
+    }
     for duplicated_api_text in [
         FAKE_MCP_DESCRIPTION_SENTINEL,
         "codebase_memory_search_code",

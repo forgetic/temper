@@ -56,7 +56,12 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
     let engineer = system_prompt(Capability::CodingWorkspace, &[]);
     for expected in [
         "Scale discovery to the task",
-        "For non-local work, batch independent status, architecture, and search calls",
+        "When repository-index tools are available for a concrete or already-localized defect",
+        "start with targeted symbol/code search",
+        "use only needed call/path tracing and exact source reads",
+        "avoid empty or broad graph searches and broad architecture calls",
+        "Reserve architecture views for genuine topology questions",
+        "For non-local topology work, batch independent status and targeted discovery calls",
         "skip ritual discovery when the task is already localized",
         "complete likely source, test, configuration, and documentation set together",
         "Form the implementation contract internally",
