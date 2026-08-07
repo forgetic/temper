@@ -274,6 +274,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
     expect_text(&run, "/terminal/status", "succeeded")?;
     expect_exact(&run, "/validation/failed", 0)?;
     expect_exact(&run, "/diff/files_changed", 1)?;
+    verify_complete_compound_discovery(&run)?;
     let validation = read_json(&repetition.join("validation.json"))?;
     expect_text(&validation, "/exact_patch/status", "passed")?;
     expect_exact(&validation, "/exact_patch/untracked_files", 0)?;
@@ -283,17 +284,38 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
 
     match cli_condition {
         "codebase-memory-enabled" => {
-            expect_exact(&run, "/metrics/graph/calls", 1)?;
-            expect_exact(&run, "/metrics/graph/succeeded", 1)?;
-            expect_exact(&run, "/metrics/graph/relevant_results", 1)?;
+            expect_exact(&run, "/metrics/graph/calls", 2)?;
+            expect_exact(&run, "/metrics/graph/succeeded", 2)?;
+            expect_exact(&run, "/metrics/graph/relevant_results", 2)?;
+            expect_exact(&run, "/metrics/graph/irrelevant_successes", 0)?;
+            expect_exact(
+                &run,
+                "/metrics/tools/by_name/codebase_memory_search_code/calls",
+                2,
+            )?;
+            expect_absent(
+                &run,
+                "/metrics/tools/by_name/codebase_memory_get_architecture",
+            )?;
+            expect_absent(&run, "/metrics/tools/by_name/codebase_memory_search_graph")?;
             let evidence = run
                 .pointer("/metrics/graph/decision_evidence")
                 .and_then(Value::as_array)
                 .map_or(0, Vec::len);
-            if evidence != 3 {
+            if evidence != 4 {
                 return Err(format!(
-                    "enabled decision evidence count was {evidence}; expected 3"
+                    "enabled decision evidence count was {evidence}; expected 4"
                 ));
+            }
+            let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
+                .map_err(|error| format!("read controlled trace: {error}"))?;
+            for expected in [
+                "cold stable upsert is ready",
+                "warm stable project remains ready",
+            ] {
+                if !trace.contains(expected) {
+                    return Err(format!("enabled trace omitted {expected:?}"));
+                }
             }
         }
         "codebase-memory-disabled" => {
@@ -327,6 +349,31 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
     verify_disclaimer(&repetition.join("run.md"))
 }
 
+fn verify_complete_compound_discovery(run: &Value) -> Result<(), String> {
+    expect_exact(
+        run,
+        "/metrics/graph/conventional_discovery_before_selection/classified_shell_segments",
+        1,
+    )?;
+    expect_exact(
+        run,
+        "/metrics/graph/conventional_discovery_before_selection/total_calls",
+        1,
+    )?;
+    expect_exact(
+        run,
+        "/metrics/graph/conventional_discovery_before_selection/shell_command_classification_coverage/observed",
+        1,
+    )?;
+    expect_exact(
+        run,
+        "/metrics/graph/conventional_discovery_before_selection/shell_command_classification_coverage/expected",
+        1,
+    )?;
+    expect_exact(run, "/metrics/tools/by_name/bash/calls", 2)?;
+    expect_absent(run, "/metrics/tools/by_name/grep")
+}
+
 fn read_json(path: &Path) -> Result<Value, String> {
     let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
     serde_json::from_slice(&bytes).map_err(|error| format!("parse {}: {error}", path.display()))
@@ -352,6 +399,14 @@ fn expect_exact(value: &Value, pointer: &str, expected: u64) -> Result<(), Strin
     match value.pointer(pointer).and_then(Value::as_u64) {
         Some(actual) if actual == expected => Ok(()),
         actual => Err(format!("{pointer} was {actual:?}; expected {expected}")),
+    }
+}
+
+fn expect_absent(value: &Value, pointer: &str) -> Result<(), String> {
+    if value.pointer(pointer).is_none() {
+        Ok(())
+    } else {
+        Err(format!("{pointer} was present; expected no call"))
     }
 }
 

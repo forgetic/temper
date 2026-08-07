@@ -288,12 +288,14 @@ fn run_repetition(
     let workspace = prepare_benchmark_workspace(manifest, repetition)?;
     let paths = layout.snapshot_inputs(repetition, manifest, &workspace)?;
 
-    let jig_script_path = if condition == Some(BenchmarkConditionV1::CodebaseMemoryDisabled) {
-        manifest
+    let jig_script_path = match condition {
+        Some(BenchmarkConditionV1::CodebaseMemoryDisabled) => manifest
             .condition_disabled_jig_script_path()
-            .expect("resolved profiled manifest has disabled Jig script")
-    } else {
-        manifest.jig_script_path()
+            .expect("resolved profiled manifest has disabled Jig script"),
+        Some(BenchmarkConditionV1::CodebaseMemoryUnavailable) => manifest
+            .condition_unavailable_jig_script_path()
+            .expect("resolved profiled manifest has unavailable Jig script"),
+        None | Some(BenchmarkConditionV1::CodebaseMemoryEnabled) => manifest.jig_script_path(),
     };
     let script =
         ScriptFile::load(jig_script_path).map_err(|error| BenchmarkRunError::JigScript {
@@ -324,12 +326,19 @@ fn run_repetition(
         "--subagents".to_string(),
         "off".to_string(),
     ];
+    let fixture_provider_state = workspace
+        .temporary_root()
+        .join("codebase-memory-fixture-state.json");
     let runner = OutOfProcessRunner::new(command)
         .with_env(vec![(
             PROVIDER_CREDENTIALS_ENV.to_string(),
             DUMMY_PROVIDER_CREDENTIAL.to_string(),
         )])
-        .with_tool_config(condition::harness_tool_config(manifest, condition)?)
+        .with_tool_config(condition::harness_tool_config(
+            manifest,
+            condition,
+            &fixture_provider_state,
+        )?)
         .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()))
         .with_trace_policy(Some(policy))
         .with_shared_trace_collector(collector.clone());

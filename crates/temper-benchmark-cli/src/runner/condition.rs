@@ -4,6 +4,8 @@
 //! codebase-memory availability surface after the normal agent profile has
 //! already resolved.
 
+use std::path::Path;
+
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
 };
@@ -31,6 +33,7 @@ pub(super) fn resolve_condition(
 pub(super) fn harness_tool_config(
     manifest: &ResolvedBenchmarkManifest,
     condition: Option<BenchmarkConditionV1>,
+    provider_state_path: &Path,
 ) -> Result<Option<AgentToolConfig>, BenchmarkRunError> {
     let Some(condition) = condition else {
         return Ok(None);
@@ -51,9 +54,13 @@ pub(super) fn harness_tool_config(
                 "-u".to_string(),
                 provider.display().to_string(),
                 provider_mode(condition).to_string(),
+                "--state".to_string(),
+                provider_state_path.display().to_string(),
             ],
             roles: vec![manifest.workspace_context().work_item.role.clone()],
-            index: CodebaseMemoryIndex::Off,
+            // The enabled harness provider starts cold, confirms its stable
+            // upsert, then makes the same key available to warm graph calls.
+            index: CodebaseMemoryIndex::Blocking,
             startup_timeout_secs: 5,
             index_timeout_secs: 5,
         }),
@@ -141,6 +148,24 @@ mod tests {
                 index_timeout_secs: 23,
             }),
         }
+    }
+
+    #[test]
+    fn harness_enabled_condition_uses_isolated_blocking_stable_state() {
+        let configured = harness_tool_config(
+            &manifest(),
+            Some(BenchmarkConditionV1::CodebaseMemoryEnabled),
+            Path::new("fixture-provider-state.json"),
+        )
+        .unwrap()
+        .unwrap()
+        .codebase_memory
+        .unwrap();
+
+        assert_eq!(configured.index, CodebaseMemoryIndex::Blocking);
+        assert_eq!(configured.args[2], "enabled");
+        assert_eq!(configured.args[3], "--state");
+        assert_eq!(configured.args[4], "fixture-provider-state.json");
     }
 
     #[test]

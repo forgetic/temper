@@ -77,6 +77,9 @@ pub struct BenchmarkConditionProfileV1 {
     /// Harness script that begins with conventional discovery because disabled
     /// runs do not expose a graph tool for the model to call.
     pub disabled_jig_script: PathBuf,
+    /// Harness script that performs exactly one failing graph call before
+    /// conventional fallback, so unavailable runs never model an immediate retry.
+    pub unavailable_jig_script: PathBuf,
 }
 
 /// Condition families with runner-enforced availability changes.
@@ -119,6 +122,7 @@ pub struct ResolvedBenchmarkManifest {
     jig_script_path: PathBuf,
     condition_fixture_provider_path: Option<PathBuf>,
     condition_disabled_jig_script_path: Option<PathBuf>,
+    condition_unavailable_jig_script_path: Option<PathBuf>,
     expected_patch_path: Option<PathBuf>,
     source: String,
     manifest: BenchmarkManifestV1,
@@ -156,6 +160,10 @@ impl ResolvedBenchmarkManifest {
 
     pub fn condition_disabled_jig_script_path(&self) -> Option<&Path> {
         self.condition_disabled_jig_script_path.as_deref()
+    }
+
+    pub fn condition_unavailable_jig_script_path(&self) -> Option<&Path> {
+        self.condition_unavailable_jig_script_path.as_deref()
     }
 
     pub fn expected_patch_path(&self) -> Option<&Path> {
@@ -297,6 +305,18 @@ pub fn load_benchmark_manifest(
             )
         })
         .transpose()?;
+    let condition_unavailable_jig_script_path = manifest
+        .condition_profile
+        .as_ref()
+        .map(|profile| {
+            resolve_declared_path(
+                &manifest_root,
+                "condition_profile.unavailable_jig_script",
+                &profile.unavailable_jig_script,
+                InputKind::File,
+            )
+        })
+        .transpose()?;
     let expected_patch_path = manifest
         .expected_patch
         .as_ref()
@@ -328,6 +348,7 @@ pub fn load_benchmark_manifest(
         jig_script_path,
         condition_fixture_provider_path,
         condition_disabled_jig_script_path,
+        condition_unavailable_jig_script_path,
         expected_patch_path,
         source,
         manifest,

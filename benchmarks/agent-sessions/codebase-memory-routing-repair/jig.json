@@ -4,7 +4,7 @@
       "turns": [
         {
           "tool_call": {
-            "id": "graph_find_affinity",
+            "id": "graph_find_affinity_after_cold_upsert",
             "name": "codebase_memory_search_code",
             "args": {
               "project": "temper-benchmark/codebase-memory-routing-repair",
@@ -19,12 +19,11 @@
       "turns": [
         {
           "tool_call": {
-            "id": "fallback_grep_affinity",
-            "name": "grep",
+            "id": "compound_shell_discovery",
+            "name": "bash",
             "args": {
-              "path": "repo",
-              "pattern": "worker_for|affinity_topic",
-              "context": 2
+              "command": "cd repo && rg worker_for src",
+              "timeout": 60
             }
           }
         }
@@ -57,6 +56,35 @@
             "name": "read",
             "args": {
               "path": "repo/tests/alias_retry.rs"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "graph_confirm_warm_affinity",
+            "name": "codebase_memory_search_code",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "pattern": "worker_slot stable warm readiness"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "read_route_after_warm_search",
+            "name": "read",
+            "args": {
+              "path": "repo/src/route.rs"
             }
           }
         }
