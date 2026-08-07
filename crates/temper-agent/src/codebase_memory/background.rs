@@ -45,7 +45,7 @@ impl BackgroundIndex {
         self.complete(BackgroundIndexState {
             completed: true,
             actual_project,
-            index_state: ProjectIndexState::Fresh,
+            index_state: ProjectIndexState::CurrentRootBound,
             error: None,
         });
     }
