@@ -30,6 +30,7 @@ use temper_agent_core::AgentContainmentContext;
 mod background;
 mod health;
 mod indexing;
+mod lifecycle_observability;
 mod provider;
 mod scope;
 mod tool;

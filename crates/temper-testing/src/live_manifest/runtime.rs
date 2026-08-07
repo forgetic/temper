@@ -178,12 +178,14 @@ impl<'a> LiveExecutionContext<'a> {
             ),
             ManifestAction::StartCodebaseMemoryMcp {
                 project,
+                fixture,
                 safe_tools,
                 hidden_tools,
                 readiness_delay_ms,
                 forced_systemic_failure,
             } => self.start_mcp(
                 project,
+                fixture.as_deref(),
                 safe_tools,
                 hidden_tools,
                 *readiness_delay_ms,

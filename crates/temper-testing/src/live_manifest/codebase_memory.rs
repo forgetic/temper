@@ -86,6 +86,7 @@ pub(super) fn converge(
                 .iter()
                 .map(|tool| format!("codebase_memory_{tool}"))
                 .collect(),
+            lifecycle: None,
         },
     ))
 }
