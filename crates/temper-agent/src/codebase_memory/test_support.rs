@@ -13,6 +13,7 @@ pub(super) fn fake_server_script() -> tempfile::TempDir {
     fs::write(
         dir.path().join("fake_codebase_memory_mcp.py"),
         r#"
+import fcntl
 import json
 import os
 import sys
@@ -37,6 +38,8 @@ if mode == "incompatible-schema":
 
 search_project_property = "repo" if mode == "repo-schema" else "project"
 
+state_path = f"{log_path}.state.json" if log_path else ""
+
 TOOLS = [
     {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, search_project_property: {"type": "string"}}, "required": ["query", search_project_property] if mode == "repo-schema" else ["query"]}},
     {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
@@ -59,6 +62,41 @@ def log_tool(name, args):
         return
     with open(log_path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps({"name": name, "arguments": args, "pid": os.getpid()}, sort_keys=True) + "\n")
+
+def with_provider_state(update):
+    if not state_path:
+        return update({"projects": {}, "counters": {}})
+    lock_path = f"{state_path}.lock"
+    with open(lock_path, "a+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            with open(state_path, "r", encoding="utf-8") as handle:
+                state = json.load(handle)
+        except (FileNotFoundError, json.JSONDecodeError):
+            state = {"projects": {}, "counters": {}}
+        state.setdefault("projects", {})
+        state.setdefault("counters", {})
+        result = update(state)
+        temporary = f"{state_path}.tmp.{os.getpid()}"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, sort_keys=True)
+        os.replace(temporary, state_path)
+        return result
+
+def state_status(project):
+    def update(state):
+        counters = state["counters"]
+        counters["index_status"] = counters.get("index_status", 0) + 1
+        return "fresh" if project in state["projects"] else "missing"
+    return with_provider_state(update)
+
+def stable_upsert(project, repo_path):
+    def update(state):
+        counters = state["counters"]
+        counters["index_repository"] = counters.get("index_repository", 0) + 1
+        counters["project_creations"] = counters.get("project_creations", 0) + int(project not in state["projects"])
+        state["projects"][project] = {"repo_path": repo_path}
+    with_provider_state(update)
 
 def tool_result(request_id, payload, is_error=False):
     send({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": payload}], "isError": is_error}})
@@ -91,8 +129,13 @@ for line in sys.stdin:
                 tool_result(request["id"], "not-json")
             elif mode == "discovery-error":
                 tool_result(request["id"], json.dumps({"status": "backend_unavailable", "message": "project not found while backend unavailable"}), True)
-            elif mode in ("missing", "index-hang", "index-error", "background-budget-success", "background-budget-timeout"):
+            elif mode == "discovery-mismatched-missing":
+                tool_result(request["id"], json.dumps({"project": "different-project", "status": "missing"}), True)
+            elif mode in ("missing", "index-hang", "index-error", "index-error-secret", "index-malformed", "index-wrong-project", "background-budget-success", "background-budget-timeout"):
                 tool_result(request["id"], json.dumps({"project": project, "status": "missing"}), True)
+            elif mode == "cold-warm":
+                status = state_status(project)
+                tool_result(request["id"], json.dumps({"project": project, "status": status}), status == "missing")
             elif mode == "stale":
                 tool_result(request["id"], json.dumps({"project": project, "status": "stale"}))
             else:
@@ -113,7 +156,15 @@ for line in sys.stdin:
                 time.sleep(60)
             if mode == "index-error":
                 tool_result(request["id"], "index failed", True)
+            elif mode == "index-error-secret":
+                tool_result(request["id"], "Authorization: Bearer SECRET", True)
+            elif mode == "index-malformed":
+                tool_result(request["id"], "not-json SECRET")
+            elif mode == "index-wrong-project":
+                tool_result(request["id"], json.dumps({"project": "path-keyed-project", "repo_path": repo_path, "status": "fresh"}))
             else:
+                if mode == "cold-warm":
+                    stable_upsert(project, repo_path)
                 tool_result(request["id"], json.dumps({"project": project, "repo_path": repo_path, "status": "fresh"}))
         else:
             if mode == "background-budget-success":
@@ -237,6 +288,13 @@ pub(super) fn output_text(output: &ToolOutput) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+pub(super) fn provider_state(log_path: &Path) -> Value {
+    let state_path = PathBuf::from(format!("{}.state.json", log_path.display()));
+    let raw = fs::read_to_string(&state_path)
+        .unwrap_or_else(|error| panic!("read provider state {}: {error}", state_path.display()));
+    serde_json::from_str(&raw).expect("provider state is JSON")
 }
 
 pub(super) fn tool_calls(log_path: &Path) -> Vec<Value> {

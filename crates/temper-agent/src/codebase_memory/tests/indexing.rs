@@ -321,7 +321,11 @@ fn discovery_timeout_skips_indexing_in_every_index_mode_and_returns_promptly() {
 
 #[test]
 fn malformed_or_unclassified_discovery_never_becomes_missing() {
-    for server_mode in ["discovery-malformed", "discovery-error"] {
+    for server_mode in [
+        "discovery-malformed",
+        "discovery-error",
+        "discovery-mismatched-missing",
+    ] {
         let dir = fake_server_script();
         let workspace = tempfile::tempdir().expect("workspace");
         let log_path = workspace.path().join(format!("{server_mode}.log"));

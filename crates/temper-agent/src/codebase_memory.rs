@@ -339,12 +339,15 @@ async fn start_toolset(
     let mut setup_notes = Vec::new();
 
     match discover_workspace_projects(&discovery_client, startup_timeout, &scope).await {
-        Ok(states) => scope.apply_targeted_discovery(states),
-        Err(error) if config.mode == CodebaseMemoryMode::Auto => {
+        Ok(states) => scope
+            .apply_targeted_discovery(states)
+            .map_err(McpError::Protocol)?,
+        Err(_error) if config.mode == CodebaseMemoryMode::Auto => {
             scope.mark_discovery_unavailable();
-            setup_notes.push(format!(
-                "safe targeted project discovery was unavailable; indexing was skipped for every prepared repo and no path-keyed fallback was attempted: {error}"
-            ));
+            setup_notes.push(
+                "safe targeted project discovery was unavailable; indexing was skipped for every prepared repo and no path-keyed fallback was attempted"
+                    .to_string(),
+            );
         }
         Err(error) => return Err(error),
     }
