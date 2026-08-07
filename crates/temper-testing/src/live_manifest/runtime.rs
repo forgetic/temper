@@ -180,14 +180,25 @@ impl<'a> LiveExecutionContext<'a> {
                 project,
                 safe_tools,
                 hidden_tools,
-            } => self.start_mcp(project, safe_tools, hidden_tools),
+                readiness_delay_ms,
+                forced_systemic_failure,
+            } => self.start_mcp(
+                project,
+                safe_tools,
+                hidden_tools,
+                *readiness_delay_ms,
+                forced_systemic_failure.as_ref(),
+            ),
             ManifestAction::ConfigureAgentTools {
                 role,
                 tool,
                 mode,
                 index,
+                tool_timeout_secs,
                 server_step,
-            } => self.configure_agent_tools(role, tool, mode, index, server_step),
+            } => {
+                self.configure_agent_tools(role, tool, mode, index, *tool_timeout_secs, server_step)
+            }
             ManifestAction::Stimulus(stimulus) => self.execute_stimulus(stimulus),
             ManifestAction::WaitForConvergence { strategy } => self.converge(*strategy),
         }

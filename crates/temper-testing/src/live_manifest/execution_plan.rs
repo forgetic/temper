@@ -166,12 +166,15 @@ pub enum ManifestAction {
         project: String,
         safe_tools: Vec<String>,
         hidden_tools: Vec<String>,
+        readiness_delay_ms: u64,
+        forced_systemic_failure: Option<ForcedSystemicFailureFixture>,
     },
     ConfigureAgentTools {
         role: String,
         tool: String,
         mode: String,
         index: String,
+        tool_timeout_secs: Option<u64>,
         server_step: String,
     },
     WaitForConvergence {
@@ -241,6 +244,15 @@ pub struct LateStreamFailureBurst {
     pub after_requests: u32,
     /// Number of consecutive unclassified late failures in this burst.
     pub failures: u32,
+}
+
+/// A bounded provider-side failure used to exercise model-visible fallback.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForcedSystemicFailureFixture {
+    /// Model-callable MCP tool that returns one systemic provider error.
+    pub tool: String,
+    /// Successful calls to allow before injecting the failure.
+    pub after_calls: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -372,12 +384,18 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             project: required_table_string(table, "project", &field)?,
             safe_tools: string_array(table, "advertises_safe_tools", &field)?,
             hidden_tools: string_array(table, "advertises_hidden_tools", &field)?,
+            readiness_delay_ms: bounded_integer(table, "readiness_delay_ms", &field, 0, 0, 5_000)?,
+            forced_systemic_failure: parse_forced_systemic_failure(table, &field)?,
         }),
         "agent.tools.configure" => Ok(ManifestAction::ConfigureAgentTools {
             role: required_table_string(table, "role", &field)?,
             tool: required_table_string(table, "tool", &field)?,
             mode: required_table_string(table, "mode", &field)?,
             index: required_table_string(table, "index", &field)?,
+            tool_timeout_secs: table
+                .contains_key("tool_timeout_secs")
+                .then(|| bounded_integer(table, "tool_timeout_secs", &field, 1, 1, 600))
+                .transpose()?,
             server_step: required_table_string(table, "server", &field)?,
         }),
         "workflow.wait_convergence" => {
@@ -403,6 +421,25 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             "{field}.action `{other}` is not supported by the live manifest executor"
         )),
     }
+}
+
+fn parse_forced_systemic_failure(
+    table: &toml::Table,
+    field: &str,
+) -> Result<Option<ForcedSystemicFailureFixture>, String> {
+    let Some(value) = table.get("forced_systemic_failure") else {
+        return Ok(None);
+    };
+    let failure = value
+        .as_table()
+        .ok_or_else(|| format!("{field}.forced_systemic_failure must be an inline table"))?;
+    let failure_field = format!("{field}.forced_systemic_failure");
+    let tool = required_table_string(failure, "tool", &failure_field)?;
+    let after_calls = bounded_integer(failure, "after_calls", &failure_field, 1, 1, 16)?;
+    Ok(Some(ForcedSystemicFailureFixture {
+        tool,
+        after_calls: usize::try_from(after_calls).expect("bounded forced failure count fits usize"),
+    }))
 }
 
 fn parse_late_stream_failure(

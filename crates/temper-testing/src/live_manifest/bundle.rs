@@ -5,8 +5,9 @@ use std::time::Duration;
 use toml::Value as TomlValue;
 
 pub use super::execution_plan::{
-    AgentFixture, ConvergenceStrategy, LateStreamFailureBurst, LateStreamFailureFixture,
-    ManifestAction, ManifestExecutionPlan, ManifestStep, TerminalHistorySeedFixture,
+    AgentFixture, ConvergenceStrategy, ForcedSystemicFailureFixture, LateStreamFailureBurst,
+    LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan, ManifestStep,
+    TerminalHistorySeedFixture,
 };
 pub use super::failure_evidence::CiFailureEvidenceFixture;
 

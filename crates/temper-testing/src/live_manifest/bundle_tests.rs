@@ -125,6 +125,53 @@ fn forgejo_v16_api_ci_bundle_owns_two_job_terminal_workflow() {
 }
 
 #[test]
+fn codebase_memory_bundle_requires_delayed_graph_readiness_and_bounded_fallback() {
+    let bundle = ScenarioBundle::load(scenarios_root().join("codebase-memory-remediation"))
+        .expect("codebase-memory bundle");
+    let mcp = bundle
+        .execution
+        .steps
+        .iter()
+        .find(|step| step.id == "start-fake-codebase-memory-mcp")
+        .expect("MCP fixture action");
+    assert!(matches!(
+        &mcp.action,
+        ManifestAction::StartCodebaseMemoryMcp {
+            safe_tools,
+            readiness_delay_ms: 750,
+            forced_systemic_failure: Some(ForcedSystemicFailureFixture { tool, after_calls: 1 }),
+            ..
+        } if safe_tools == &vec![
+            "search_graph".to_string(),
+            "list_projects".to_string(),
+            "index_status".to_string(),
+        ] && tool == "search_graph"
+    ));
+    assert!(bundle.execution.steps.iter().any(|step| {
+        matches!(
+            &step.action,
+            ManifestAction::ConfigureAgentTools {
+                index,
+                tool_timeout_secs: Some(2),
+                ..
+            } if index == "background"
+        )
+    }));
+    let jig = std::fs::read_to_string(bundle.jig_script_path()).expect("scenario-owned Jig");
+    assert!(jig.contains("graph_select_retry_worker"));
+    assert!(jig.contains("fallback_grep_retry_worker"));
+    assert!(!jig.contains("MCP-FIXTURE-SECRET"));
+    assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
+    assert!(
+        bundle
+            .repo
+            .seed_path
+            .join("tests/retry_affinity.rs")
+            .is_file()
+    );
+}
+
+#[test]
 fn exact_head_repair_bundle_owns_protected_failure_proof_and_three_cadences() {
     let bundle = ScenarioBundle::load(scenarios_root().join("forgejo-exact-head-ci-repair"))
         .expect("exact-head CI repair bundle");
