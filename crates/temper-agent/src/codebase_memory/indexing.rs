@@ -110,7 +110,7 @@ fn start_background_index_repository(
     containment: AgentContainmentContext,
 ) -> std::result::Result<BackgroundIndex, String> {
     let mcp_config = mcp_config.clone();
-    let tracker = BackgroundIndex::new();
+    let tracker = BackgroundIndex::new(provider_key.clone());
     let tracker_for_thread = tracker.clone();
     thread::Builder::new()
         .name("codebase-memory-index".to_string())

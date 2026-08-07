@@ -219,6 +219,7 @@ pub(super) fn config(
             index,
             startup_timeout_secs: 1,
             index_timeout_secs: 1,
+            retention: Default::default(),
         }),
     }
 }
@@ -233,6 +234,7 @@ pub(super) fn bad_command_config(mode: CodebaseMemoryMode) -> AgentToolConfig {
             index: CodebaseMemoryIndex::Off,
             startup_timeout_secs: 1,
             index_timeout_secs: 1,
+            retention: Default::default(),
         }),
     }
 }

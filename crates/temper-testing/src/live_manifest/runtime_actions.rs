@@ -95,7 +95,6 @@ impl LiveExecutionContext<'_> {
         self.mcp = Some(super::super::codebase_memory::write_fake_mcp(
             self.workspace.path(),
             project,
-            fixture,
             safe_tools,
             hidden_tools,
             readiness_delay_ms,

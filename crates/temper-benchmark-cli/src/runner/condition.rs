@@ -63,6 +63,7 @@ pub(super) fn harness_tool_config(
             index: CodebaseMemoryIndex::Blocking,
             startup_timeout_secs: 5,
             index_timeout_secs: 5,
+            retention: Default::default(),
         }),
     }))
 }
@@ -146,6 +147,7 @@ mod tests {
                 index: CodebaseMemoryIndex::Blocking,
                 startup_timeout_secs: 7,
                 index_timeout_secs: 23,
+                retention: Default::default(),
             }),
         }
     }
