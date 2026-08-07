@@ -7,7 +7,7 @@
             "id": "compound_shell_discovery",
             "name": "bash",
             "args": {
-              "command": "cd repo && rg worker_for src",
+              "command": "cd repo && rg worker_slot src",
               "timeout": 60
             }
           }

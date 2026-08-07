@@ -5,10 +5,10 @@
         {
           "tool_call": {
             "id": "graph_find_affinity_unavailable",
-            "name": "codebase_memory_search_code",
+            "name": "codebase_memory_search_graph",
             "args": {
-              "project": "temper-benchmark/codebase-memory-routing-repair",
-              "pattern": "aliased delivery retry worker affinity"
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "query": "aliased delivery retry worker affinity"
             }
           }
         }
@@ -22,7 +22,7 @@
             "id": "compound_shell_fallback_after_unavailable",
             "name": "bash",
             "args": {
-              "command": "cd repo && rg worker_for src",
+              "command": "cd repo && rg worker_slot src",
               "timeout": 60
             }
           }

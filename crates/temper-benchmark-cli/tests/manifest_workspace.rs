@@ -221,7 +221,17 @@ fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
             .is_file()
     );
     assert!(manifest.expected_patch_path().unwrap().is_file());
-    assert_eq!(manifest.manifest().graph_decision_targets.len(), 3);
+    let targets = &manifest.manifest().graph_decision_targets;
+    assert_eq!(targets.len(), 6);
+    assert_eq!(targets[0].target, "worker_slot");
+    assert_eq!(targets[0].consumption[0].target, "worker_slot");
+    assert_eq!(targets[1].consumption[0].target, "worker_slot");
+    assert_eq!(targets[2].consumption[0].target, "DeliveryAttempt");
+    assert_eq!(
+        targets[3].consumption[0].target,
+        "DeliveryRouter::worker_for"
+    );
+    assert_eq!(targets[5].target, "repo/src/route.rs");
 }
 
 #[test]

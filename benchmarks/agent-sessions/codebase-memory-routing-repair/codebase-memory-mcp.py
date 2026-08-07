@@ -13,6 +13,10 @@ MODE = sys.argv[1] if len(sys.argv) > 1 else "enabled"
 NORMALIZED_PROJECT = "temper-benchmark-codebase-memory-routing-repair"
 
 
+def graph_project(arguments):
+    return arguments.get("repo", arguments.get("project", ""))
+
+
 def state_path_from_args():
     try:
         index = sys.argv.index("--state")
@@ -47,8 +51,32 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
+                "repo": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "trace_path",
+        "description": "Trace a targeted symbol to its callers",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string"},
                 "project": {"type": "string"},
             },
+            "required": ["function_name"],
+        },
+    },
+    {
+        "name": "get_code_snippet",
+        "description": "Read a targeted symbol from the confirmed current root",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "qualified_name": {"type": "string"},
+                "repo": {"type": "string"},
+            },
+            "required": ["qualified_name"],
         },
     },
     {
@@ -126,20 +154,22 @@ def tool_result(request_id, payload, is_error=False):
     )
 
 
-def ready_search_result(project):
+def confirmed_graph_read(project, tool):
     state = load_state()
     binding = state["projects"].get(project)
     # A requested stable key is retained for assertion only. It cannot be
     # used as a graph target: only the normalized identity returned by the
-    # upsert and confirmed by the second targeted status request is accepted.
+    # upsert and confirmed by the second targeted status request can serve a
+    # graph read or current-root source snippet.
     if project != NORMALIZED_PROJECT or binding is None:
         return None
     state["searches"] += 1
-    search_number = state["searches"]
+    graph_read_number = state["searches"]
     state["graph_reads"].append(
         {
             "confirmed_project": project,
             "requested_stable_project": binding["requested_stable_project"],
+            "tool": tool,
         }
     )
     save_state(state)
@@ -149,16 +179,40 @@ def ready_search_result(project):
         "project_route": "confirmed_identity",
         "requested_stable_project": binding["requested_stable_project"],
     }
-    if search_number == 1:
-        return identity | {
-            "readiness": "cold stable upsert is ready",
-            "implementation": "src/route.rs::worker_slot",
-            "caller": "src/delivery.rs::DeliveryRouter::worker_for",
-            "focused_test": "tests/alias_retry.rs::alias_retries_stay_on_the_original_ordered_worker",
-        }
+    return identity, binding, graph_read_number
+
+
+def current_root_source(project, qualified_name):
+    snippet = {
+        "DeliveryAttempt": (
+            "src/model.rs",
+            "delivery_source_evidence",
+            "DeliveryRouter::worker_for",
+        ),
+        "DeliveryRouter::worker_for": (
+            "src/delivery.rs",
+            "worker_source_evidence",
+            "repo/src/route.rs",
+        ),
+    }.get(qualified_name)
+    graph_read = confirmed_graph_read(project, "get_code_snippet")
+    if graph_read is None or snippet is None:
+        return None
+    identity, binding, _graph_read_number = graph_read
+    relative_path, evidence_marker, next_target = snippet
+    try:
+        with open(
+            os.path.join(binding["root_path"], relative_path), encoding="utf-8"
+        ) as handle:
+            source = handle.read()
+    except OSError:
+        return None
     return identity | {
-        "readiness": "warm stable project remains ready",
-        "implementation": "src/route.rs::worker_slot",
+        "source_root": "confirmed_current_root",
+        "source_path": relative_path,
+        "symbol": qualified_name,
+        evidence_marker: next_target,
+        "source": source,
     }
 
 
@@ -262,23 +316,81 @@ for line in sys.stdin:
                 "fixture backend unavailable Authorization: Bearer MCP-FIXTURE-SECRET",
                 True,
             )
-        elif name == "search_code":
-            result = ready_search_result(arguments.get("project", ""))
-            if result is None:
+        elif name == "search_graph":
+            graph_read = confirmed_graph_read(graph_project(arguments), "search_graph")
+            if graph_read is None:
                 tool_result(request_id, "fixture stable project is not ready", True)
+            else:
+                identity, _binding, graph_read_number = graph_read
+                tool_result(
+                    request_id,
+                    json.dumps(
+                        identity
+                        | {
+                            "readiness": (
+                                "cold stable upsert is ready"
+                                if graph_read_number == 1
+                                else "warm stable project remains ready"
+                            ),
+                            "graph_implementation_evidence": "src/route.rs::worker_slot",
+                            "caller": "src/delivery.rs::DeliveryRouter::worker_for",
+                            "focused_test_evidence": "tests/alias_retry.rs::alias_retries_stay_on_the_original_ordered_worker",
+                        },
+                        sort_keys=True,
+                    ),
+                )
+        elif name == "search_code":
+            graph_read = confirmed_graph_read(arguments.get("project", ""), "search_code")
+            if graph_read is None:
+                tool_result(request_id, "fixture stable project is not ready", True)
+            else:
+                identity, _binding, graph_read_number = graph_read
+                tool_result(
+                    request_id,
+                    json.dumps(
+                        identity
+                        | {
+                            "readiness": (
+                                "warm stable project remains ready"
+                                if graph_read_number >= 2
+                                else "cold stable upsert is ready"
+                            ),
+                            "code_refinement_evidence": "worker_slot",
+                            "implementation": "src/route.rs::worker_slot",
+                        },
+                        sort_keys=True,
+                    ),
+                )
+        elif name == "trace_path":
+            graph_read = confirmed_graph_read(arguments.get("project", ""), "trace_path")
+            if graph_read is None or arguments.get("function_name") != "worker_slot":
+                tool_result(request_id, "fixture stable symbol is not ready", True)
+            else:
+                identity, _binding, _graph_read_number = graph_read
+                tool_result(
+                    request_id,
+                    json.dumps(
+                        identity
+                        | {
+                            "trace_caller_evidence": "DeliveryAttempt -> DeliveryRouter::worker_for",
+                            "caller": "src/delivery.rs::DeliveryRouter::worker_for",
+                        },
+                        sort_keys=True,
+                    ),
+                )
+        elif name == "get_code_snippet":
+            result = current_root_source(
+                graph_project(arguments), arguments.get("qualified_name", "")
+            )
+            if result is None:
+                tool_result(request_id, "fixture current-root source is not ready", True)
             else:
                 tool_result(request_id, json.dumps(result, sort_keys=True))
         else:
             tool_result(
                 request_id,
-                json.dumps(
-                    {
-                        "implementation": "src/route.rs::worker_slot",
-                        "caller": "src/delivery.rs::DeliveryRouter::worker_for",
-                        "focused_test": "tests/alias_retry.rs::alias_retries_stay_on_the_original_ordered_worker",
-                    },
-                    sort_keys=True,
-                ),
+                "fixture does not expose this codebase-memory tool",
+                True,
             )
     else:
         send(

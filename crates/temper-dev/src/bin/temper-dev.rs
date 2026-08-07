@@ -7,6 +7,9 @@ use std::process::{self, Command, ExitStatus};
 
 use serde_json::Value;
 
+#[path = "temper-dev/benchmark.rs"]
+mod benchmark;
+
 fn main() {
     let mut args = env::args_os();
     let program = args.next().unwrap_or_else(|| OsString::from("temper-dev"));
@@ -284,29 +287,37 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
 
     match cli_condition {
         "codebase-memory-enabled" => {
-            expect_exact(&run, "/metrics/graph/calls", 2)?;
-            expect_exact(&run, "/metrics/graph/succeeded", 2)?;
-            expect_exact(&run, "/metrics/graph/relevant_results", 2)?;
+            expect_exact(&run, "/metrics/graph/calls", 5)?;
+            expect_exact(&run, "/metrics/graph/succeeded", 5)?;
+            expect_exact(&run, "/metrics/graph/relevant_results", 5)?;
             expect_exact(&run, "/metrics/graph/irrelevant_successes", 0)?;
+            expect_exact(&run, "/metrics/graph/relevance_coverage/observed", 5)?;
+            expect_exact(&run, "/metrics/graph/relevance_coverage/expected", 5)?;
+            expect_exact(
+                &run,
+                "/metrics/tools/by_name/codebase_memory_search_graph/calls",
+                1,
+            )?;
             expect_exact(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_search_code/calls",
+                1,
+            )?;
+            expect_exact(
+                &run,
+                "/metrics/tools/by_name/codebase_memory_trace_path/calls",
+                1,
+            )?;
+            expect_exact(
+                &run,
+                "/metrics/tools/by_name/codebase_memory_get_code_snippet/calls",
                 2,
             )?;
             expect_absent(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_get_architecture",
             )?;
-            expect_absent(&run, "/metrics/tools/by_name/codebase_memory_search_graph")?;
-            let evidence = run
-                .pointer("/metrics/graph/decision_evidence")
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len);
-            if evidence != 4 {
-                return Err(format!(
-                    "enabled decision evidence count was {evidence}; expected 4"
-                ));
-            }
+            benchmark::verify_safe_five_call_decision_evidence(&run)?;
             let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
                 .map_err(|error| format!("read controlled trace: {error}"))?;
             for expected in [
@@ -317,11 +328,18 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
                     return Err(format!("enabled trace omitted {expected:?}"));
                 }
             }
-            if !trace_has_confirmed_graph_read(&trace) {
+            if !benchmark::trace_has_confirmed_graph_read(&trace) {
                 return Err(
                     "enabled trace did not prove graph reads used the confirmed normalized provider identity"
                         .to_string(),
                 );
+            }
+            for symbol in ["DeliveryAttempt", "DeliveryRouter::worker_for"] {
+                if !benchmark::trace_has_confirmed_current_root_source(&trace, symbol) {
+                    return Err(format!(
+                        "enabled trace omitted confirmed-current-root source for {symbol:?}"
+                    ));
+                }
             }
         }
         "codebase-memory-disabled" => {
@@ -378,37 +396,6 @@ fn verify_complete_compound_discovery(run: &Value) -> Result<(), String> {
     )?;
     expect_exact(run, "/metrics/tools/by_name/bash/calls", 2)?;
     expect_absent(run, "/metrics/tools/by_name/grep")
-}
-
-fn trace_has_confirmed_graph_read(trace: &str) -> bool {
-    trace
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .any(|event| value_has_confirmed_graph_read(&event))
-}
-
-fn value_has_confirmed_graph_read(value: &Value) -> bool {
-    match value {
-        Value::String(text) => serde_json::from_str::<Value>(text)
-            .ok()
-            .is_some_and(|payload| confirmed_graph_read_payload(&payload)),
-        Value::Array(values) => values.iter().any(value_has_confirmed_graph_read),
-        Value::Object(values) => values.values().any(value_has_confirmed_graph_read),
-        _ => false,
-    }
-}
-
-fn confirmed_graph_read_payload(payload: &Value) -> bool {
-    let requested = payload
-        .get("requested_stable_project")
-        .and_then(Value::as_str);
-    requested.is_some_and(|requested| {
-        requested.starts_with("temper-v1-")
-            && requested != "temper-benchmark-codebase-memory-routing-repair"
-    }) && payload.get("project_route").and_then(Value::as_str) == Some("confirmed_identity")
-        && payload.get("confirmed_project").and_then(Value::as_str)
-            == Some("temper-benchmark-codebase-memory-routing-repair")
-        && payload.get("graph_read_project") == payload.get("confirmed_project")
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {

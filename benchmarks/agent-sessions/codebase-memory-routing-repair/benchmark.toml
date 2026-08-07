@@ -11,19 +11,50 @@ expected_patch = "expected.patch"
 repetitions = 1
 
 [[graph_decision_targets]]
-target = "repo/src/route.rs"
+target = "worker_slot"
 kind = "implementation"
-result_contains = "src/route.rs"
+result_contains = "graph_implementation_evidence"
+
+[[graph_decision_targets.consumption]]
+tool = "search_code"
+target = "worker_slot"
 
 [[graph_decision_targets]]
-target = "repo/src/delivery.rs"
+target = "worker_slot"
+kind = "implementation"
+result_contains = "code_refinement_evidence"
+
+[[graph_decision_targets.consumption]]
+tool = "trace_path"
+target = "worker_slot"
+
+[[graph_decision_targets]]
+target = "DeliveryAttempt"
 kind = "caller"
-result_contains = "src/delivery.rs"
+result_contains = "trace_caller_evidence"
+
+[[graph_decision_targets.consumption]]
+tool = "get_code_snippet"
+target = "DeliveryAttempt"
+
+[[graph_decision_targets]]
+target = "DeliveryRouter::worker_for"
+kind = "caller"
+result_contains = "delivery_source_evidence"
+
+[[graph_decision_targets.consumption]]
+tool = "get_code_snippet"
+target = "DeliveryRouter::worker_for"
 
 [[graph_decision_targets]]
 target = "repo/tests/alias_retry.rs"
 kind = "focused_test"
-result_contains = "tests/alias_retry.rs"
+result_contains = "focused_test_evidence"
+
+[[graph_decision_targets]]
+target = "repo/src/route.rs"
+kind = "implementation"
+result_contains = "worker_source_evidence"
 
 [condition_profile]
 kind = "codebase_memory"
