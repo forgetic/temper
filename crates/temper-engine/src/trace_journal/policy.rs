@@ -227,8 +227,7 @@ fn sanitize_for_policy(
 ) -> AgentRunEventV1 {
     // Re-establish the privacy invariant at the engine boundary. This runs for
     // every capture mode and for direct/forged batches that bypass the worker.
-    event.event.sanitize_retry_failure_message();
-    event.event.normalize_model_failure();
+    event.event.sanitize_untrusted_activity();
     match policy.capture {
         CaptureModeV1::Off => {}
         CaptureModeV1::Metadata => match &mut event.event {

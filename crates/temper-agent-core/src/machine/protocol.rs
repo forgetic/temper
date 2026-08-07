@@ -7,6 +7,7 @@
 //! ([`AgentRequest`]). Keeping them here — separate from the loop's logic —
 //! lets the protocol be read and depended on without the driving code.
 
+use temper_protocol_activity::GraphCorrelationV1;
 use tongs::model::{AssistantMessage, ContentBlock, Message, ToolCall};
 use tongs::provider::ToolDef;
 use tongs::tools::ToolOutput;
@@ -123,6 +124,9 @@ pub const CODEBASE_MEMORY_TOOL_PREFIX: &str = "codebase_memory_";
 /// other diagnostic field from that category rather than trusting arbitrary
 /// tool-owned JSON.
 pub const SAFE_TOOL_FAILURE_DETAIL_KEY: &str = "temper_safe_tool_failure_v1";
+/// Reserved [`ToolOutput::details`] key for the closed, wrapper-extracted graph
+/// correlation record. Generic tool details never enter activity metadata.
+pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1";
 
 /// Stable failure categories for model-visible codebase-memory tools.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -233,6 +237,7 @@ pub struct ToolResultMetadata {
     pub truncated: bool,
     pub failure: Option<ToolFailureDiagnostic>,
     pub codebase_memory_timing: Option<CodebaseMemoryTiming>,
+    pub graph_correlation: Option<GraphCorrelationV1>,
 }
 
 /// A live streaming fragment of a model response, forwarded by the shell.

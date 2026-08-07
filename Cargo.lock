@@ -1686,6 +1686,7 @@ dependencies = [
  "temper-agent",
  "temper-agent-io",
  "temper-process-containment",
+ "temper-protocol-activity",
  "tempfile",
  "tongs",
 ]

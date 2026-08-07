@@ -6,6 +6,7 @@ use temper_agent_core::{
 };
 use temper_protocol_activity::{
     AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1, CapturedContentV1,
+    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
     ToolFailureCategoryV1,
 };
 
@@ -14,6 +15,13 @@ use super::{FakeClock, Recorder, ScopeFactory};
 #[test]
 fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
     const SECRET: &str = "Authorization: Bearer CODEBASE-MEMORY-SECRET";
+    const CORRELATION_TARGET: &str = "activity-normalizer-CORRELATION-SECRET";
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        CORRELATION_TARGET,
+    )
+    .expect("complete correlation");
     for mode in [
         CaptureModeV1::Metadata,
         CaptureModeV1::Transcript,
@@ -45,6 +53,7 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                     readiness_wait_ms: 1,
                     graph_execution_ms: 3,
                 }),
+                graph_correlation: Some(correlation.clone()),
             },
         });
         let mut failure = ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::ProcessExit);
@@ -63,6 +72,7 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                     readiness_wait_ms: 2,
                     graph_execution_ms: 3,
                 }),
+                graph_correlation: Some(correlation.clone()),
             },
         });
 
@@ -93,6 +103,12 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                 .graph_execution_ms,
             3
         );
+        assert_eq!(
+            finished[0].graph_correlation.as_ref(),
+            Some(&correlation),
+            "valid fingerprints remain available even in metadata capture"
+        );
+        assert_eq!(finished[1].graph_correlation, None);
         assert_eq!(finished[1].result, None);
         let diagnostic = finished[1].failure.as_ref().expect("typed failure");
         assert_eq!(diagnostic.category, ToolFailureCategoryV1::ProcessExit);
@@ -104,6 +120,7 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
         assert!(diagnostic.fallback_to_conventional_discovery);
         let json = serde_json::to_string(&*frames).unwrap();
         assert!(!json.contains(SECRET));
+        assert!(!json.contains(CORRELATION_TARGET));
         assert!(!json.contains(&"y".repeat(1_000)));
     }
 }

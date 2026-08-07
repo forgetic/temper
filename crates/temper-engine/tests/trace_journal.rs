@@ -20,6 +20,9 @@ use tempfile::TempDir;
 
 const RUN_ID: &str = "run/with-traversal-safe-storage";
 
+#[path = "trace_journal/correlation.rs"]
+mod correlation;
+
 fn ts(value: &str) -> DateTime<Utc> {
     value.parse().expect("valid test timestamp")
 }
