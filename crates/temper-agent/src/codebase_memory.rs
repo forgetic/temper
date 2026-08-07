@@ -38,6 +38,9 @@ mod tool_schema;
 
 use health::CodebaseMemoryHealth;
 use indexing::prepare_indexes;
+use lifecycle_observability::{
+    DiscoveryEvidence, DiscoveryOutcome, FailureCategory, emit_discovery, emit_identity_selected,
+};
 use provider::validate_provider_contract;
 use scope::{WorkspaceScope, discover_workspace_projects};
 #[cfg(test)]
@@ -339,18 +342,70 @@ async fn start_toolset(
     validate_provider_contract(&discovery_client, &discovery_tools)?;
     let mut setup_notes = Vec::new();
 
+    let discovery_started = Instant::now();
     match discover_workspace_projects(&discovery_client, startup_timeout, &scope).await {
-        Ok(states) => scope
-            .apply_targeted_discovery(states)
-            .map_err(McpError::Protocol)?,
-        Err(_error) if config.mode == CodebaseMemoryMode::Auto => {
+        Ok(states) => {
+            let record_count = states.len();
+            scope
+                .apply_targeted_discovery(states)
+                .map_err(McpError::Protocol)?;
+            emit_discovery(DiscoveryEvidence {
+                method: "index_status",
+                inventory: "targeted",
+                duration: discovery_started.elapsed(),
+                outcome: DiscoveryOutcome::Success,
+                record_count,
+                cache_bytes: None,
+                failure: FailureCategory::None,
+            });
+            for project in &scope.projects {
+                let outcome = match project.index_state {
+                    scope::ProjectIndexState::Missing => "missing",
+                    scope::ProjectIndexState::Stale => "stale",
+                    scope::ProjectIndexState::Fresh => "fresh",
+                    _ => "unavailable",
+                };
+                emit_identity_selected(&project.canonical_alias, &project.provider_key, outcome);
+            }
+        }
+        Err(error) if config.mode == CodebaseMemoryMode::Auto => {
+            let outcome = if matches!(error, McpError::Timeout { .. }) {
+                DiscoveryOutcome::Timeout
+            } else {
+                DiscoveryOutcome::Failure
+            };
+            emit_discovery(DiscoveryEvidence {
+                method: "index_status",
+                inventory: "targeted",
+                duration: discovery_started.elapsed(),
+                outcome,
+                record_count: 0,
+                cache_bytes: None,
+                failure: FailureCategory::from(&error),
+            });
             scope.mark_discovery_unavailable();
             setup_notes.push(
                 "safe targeted project discovery was unavailable; indexing was skipped for every prepared repo and no path-keyed fallback was attempted"
                     .to_string(),
             );
         }
-        Err(error) => return Err(error),
+        Err(error) => {
+            let outcome = if matches!(error, McpError::Timeout { .. }) {
+                DiscoveryOutcome::Timeout
+            } else {
+                DiscoveryOutcome::Failure
+            };
+            emit_discovery(DiscoveryEvidence {
+                method: "index_status",
+                inventory: "targeted",
+                duration: discovery_started.elapsed(),
+                outcome,
+                record_count: 0,
+                cache_bytes: None,
+                failure: FailureCategory::from(&error),
+            });
+            return Err(error);
+        }
     }
 
     // Discovery requests and their timeouts are process-fatal in the stdio

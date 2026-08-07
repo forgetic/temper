@@ -30,7 +30,7 @@ fn stable_provider_identity_ignores_checkout_path_and_separates_repositories() {
 }
 
 #[test]
-fn targeted_discovery_reuses_fresh_projects_without_global_inventory() {
+fn targeted_discovery_rebinds_fresh_projects_without_global_inventory() {
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");
     let log_path = workspace.path().join("mcp.log");
@@ -56,11 +56,23 @@ fn targeted_discovery_reuses_fresh_projects_without_global_inventory() {
             workspace.path(),
         )
         .await
-        .expect("fresh projects are reused through targeted lookup");
+        .expect("fresh projects are rebound through targeted lookup");
 
+        let prompt = toolset.prompt_status().expect("prompt status");
+        assert!(prompt.contains("logical index state: fresh/non-stale"));
+        assert!(
+            prompt.contains("active-checkout binding: confirmed for the current prepared checkout")
+        );
         assert_eq!(calls_named(&log_path, "index_status").len(), 2);
         assert!(calls_named(&log_path, "list_projects").is_empty());
-        assert!(calls_named(&log_path, "index_repository").is_empty());
+        let upserts = calls_named(&log_path, "index_repository");
+        assert_eq!(upserts.len(), 2);
+        assert!(
+            upserts
+                .iter()
+                .all(|upsert| upsert["arguments"]["name"] == app_key
+                    || upsert["arguments"]["name"] == lib_key)
+        );
 
         let tools = toolset.into_tools();
         let search = tools
@@ -106,7 +118,8 @@ fn index_off_preserves_confirmed_missing_state_without_indexing() {
         .expect("index off still performs safe targeted discovery");
         let prompt = toolset.prompt_status().expect("prompt status");
         assert!(prompt.contains("Index setting: `off`"));
-        assert!(prompt.contains("missing from codebase-memory index"));
+        assert!(prompt.contains("logical index state: missing"));
+        assert!(prompt.contains("active-checkout binding: pending current-checkout rebind"));
         assert!(calls_named(&log_path, "index_repository").is_empty());
     });
 }
@@ -145,7 +158,7 @@ fn confirmed_missing_projects_use_stable_blocking_upsert_and_repeated_roots_conv
             toolset
                 .prompt_status()
                 .expect("prompt status")
-                .contains("blocking indexing completed")
+                .contains("stable current-checkout rebind completed")
         );
     });
 
@@ -288,7 +301,10 @@ fn discovery_timeout_skips_indexing_in_every_index_mode_and_returns_promptly() {
             .expect("auto mode retains read-only tools after unknown discovery");
             assert_eq!(toolset.status(), &CodebaseMemoryToolsetStatus::Started);
             let prompt = toolset.prompt_status().expect("prompt status");
-            assert!(prompt.contains("discovery unavailable; indexing was not attempted"));
+            assert!(prompt.contains("logical index state: discovery unavailable"));
+            assert!(prompt.contains(
+                "active-checkout binding: not attempted because discovery was unavailable"
+            ));
             assert!(prompt.contains("safe targeted project discovery was unavailable"));
             assert!(calls_named(&log_path, "index_repository").is_empty());
 
@@ -351,7 +367,7 @@ fn malformed_or_unclassified_discovery_never_becomes_missing() {
                 toolset
                     .prompt_status()
                     .expect("prompt status")
-                    .contains("discovery unavailable; indexing was not attempted")
+                    .contains("logical index state: discovery unavailable")
             );
             assert!(calls_named(&log_path, "index_repository").is_empty());
 
