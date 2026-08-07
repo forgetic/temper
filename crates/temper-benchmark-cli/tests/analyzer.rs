@@ -290,16 +290,19 @@ fn graph_metrics_distinguish_consumption_failures_retries_and_fallback_discovery
                     target: "src/lib.rs".to_string(),
                     kind: GraphDecisionKindV1::Implementation,
                     result_contains: None,
+                    consumption: Vec::new(),
                 },
                 GraphDecisionTargetV1 {
                     target: "src/main.rs".to_string(),
                     kind: GraphDecisionKindV1::Caller,
                     result_contains: None,
+                    consumption: Vec::new(),
                 },
                 GraphDecisionTargetV1 {
                     target: "tests/focused.rs".to_string(),
                     kind: GraphDecisionKindV1::FocusedTest,
                     result_contains: None,
+                    consumption: Vec::new(),
                 },
             ],
             ..AnalyzeOptions::default()
@@ -393,6 +396,7 @@ fn decisive_selection_keeps_disabled_and_irrelevant_graph_fallback_comparable() 
         target: "src/lib.rs".to_string(),
         kind: GraphDecisionKindV1::Implementation,
         result_contains: None,
+        consumption: Vec::new(),
     };
     let options = AnalyzeOptions {
         discovery_command_prefixes: vec![vec!["git".to_string(), "grep".to_string()]],
@@ -485,6 +489,7 @@ fn old_or_metadata_only_graph_traces_keep_evidence_unavailable() {
                 target: "src/lib.rs".to_string(),
                 kind: GraphDecisionKindV1::Implementation,
                 result_contains: None,
+                consumption: Vec::new(),
             }],
             ..AnalyzeOptions::default()
         },

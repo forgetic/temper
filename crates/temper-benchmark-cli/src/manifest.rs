@@ -14,7 +14,7 @@ mod security;
 use security::{InputKind, resolve_declared_path, validate_context_repositories};
 pub(crate) use security::{validate_fixture_tree, validate_relative_path};
 
-use crate::GraphDecisionKindV1;
+use crate::{GraphDecisionKindV1, GraphEvidenceToolV1};
 
 /// Schema identifier for an agent-session benchmark manifest.
 pub const BENCHMARK_MANIFEST_SCHEMA: &str = "temper.benchmark.v1";
@@ -110,6 +110,21 @@ pub struct GraphDecisionTargetV1 {
     pub kind: GraphDecisionKindV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_contains: Option<String>,
+    /// Exact, fixture-owned graph/source consumers which may use a matching
+    /// result. Direct reads and mutations retain their existing exact target
+    /// matching and therefore do not need an entry here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consumption: Vec<GraphDecisionConsumptionV1>,
+}
+
+/// One allowed graph-to-graph or graph-to-source refinement. `target` is an
+/// exact value for the consuming tool's targeting parameter; it is never
+/// copied from trace arguments into a summary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphDecisionConsumptionV1 {
+    pub tool: GraphEvidenceToolV1,
+    pub target: String,
 }
 
 /// A manifest after all declared inputs have been securely resolved.
@@ -437,6 +452,18 @@ fn validate_graph_targets(targets: &[GraphDecisionTargetV1]) -> Result<(), Bench
             return Err(BenchmarkManifestError::Invalid(format!(
                 "`graph_decision_targets[{index}]` target and result marker must not be empty"
             )));
+        }
+        for (consumption_index, consumption) in target.consumption.iter().enumerate() {
+            if !consumption.tool.is_targeted_graph() {
+                return Err(BenchmarkManifestError::Invalid(format!(
+                    "`graph_decision_targets[{index}].consumption[{consumption_index}].tool` must be a targeted graph tool"
+                )));
+            }
+            if consumption.target.trim().is_empty() || consumption.target.contains('\0') {
+                return Err(BenchmarkManifestError::Invalid(format!(
+                    "`graph_decision_targets[{index}].consumption[{consumption_index}].target` must not be empty or contain a NUL byte"
+                )));
+            }
         }
     }
     Ok(())
