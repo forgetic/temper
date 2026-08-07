@@ -1,0 +1,305 @@
+schema = "temper.scenario.v1"
+name = "codebase-memory-remediation"
+status = "active"
+intent = "Validate targeted graph guidance, cold stable readiness, exact repair convergence, and typed bounded fallback through real Temper agent/tool configuration."
+introduced_by = "#915"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[runner]
+uses = "manifest"
+
+[validation]
+feature = "ai/temper#908"
+plan = "ai/temper#909"
+source_branch = "agent/pr-for-feature-908"
+change = "new"
+
+[feature_contract]
+claim = "Concrete codebase-memory guidance remains targeted, cold stable projects become usable, and unavailable providers fail through a typed bounded conventional fallback."
+stimulus = "Run a delayed cold-project retry-affinity repair through real Forgejo, CI, standalone Temper, and a deterministic provider that gives one targeted graph result followed by one systemic failure."
+observable = "Structured graph-call inventory, stable project identity, readiness delay, safe result/failure previews, conventional fallback sequence, exact fixture repair, host validation, and CI facts."
+assertion = "Targeted graph evidence is consumed before the exact repair, the delayed cold project is ready within the configured deadline, and one typed systemic failure causes conventional fallback with no later graph call or raw provider diagnostic."
+runtime_budget_seconds = 600
+jig_script_path = "jig/codebase-memory-remediation.json"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "codebase-memory-agent"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/demo"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Validate codebase-memory agent tool path"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready"]
+expected_output = "memory_guided_file"
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["landing"]
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the demo repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "start-fake-codebase-memory-mcp"
+action = "mcp.fake_codebase_memory.start"
+project = "actual-demo-project"
+advertises_safe_tools = ["search_graph", "list_projects", "index_status"]
+advertises_hidden_tools = ["index_repository", "delete_project"]
+readiness_delay_ms = 750
+forced_systemic_failure = { tool = "search_graph", after_calls = 1 }
+
+[[steps]]
+id = "configure-codebase-memory-tools"
+action = "agent.tools.configure"
+role = "engineer"
+tool = "codebase_memory"
+mode = "required"
+index = "background"
+tool_timeout_secs = 2
+server = "$step:start-fake-codebase-memory-mcp"
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+role = "engineer"
+script_path = "jig/codebase-memory-remediation.json"
+first_tool = "codebase_memory_search_graph"
+expected_result = "FAKE_MCP_GRAPH_RESULT"
+expected_output_name = "src/lib.rs"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-demo-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-source-issue"
+action = "issue.seed"
+issue_id = "source"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-convergence"
+action = "workflow.wait_convergence"
+strategy = "codebase-memory"
+until = "engineer uses graph-selected retry-worker evidence, survives one safe systemic failure through conventional discovery, fixes src/lib.rs, CI passes, and the source issue closes"
+
+[expect]
+outcome = "The engineer receives AgentToolConfig through real Temper, awaits delayed background indexing within one tool deadline, translates the workspace alias to the stable provider project for a successful search_graph result, uses that result to select the retry-worker repair and test, then receives one redacted systemic failure, avoids another MCP call, uses grep/find/read fallback, validates the repair, and converges through real CI."
+merged_pull_requests = 1
+closed_parent_issues = 1
+
+[[expect.checks]]
+required = true
+id = "source-finalized"
+artifact = "issue:source"
+state = "closed"
+labels = ["code"]
+
+[[expect.checks]]
+required = true
+id = "implementation-pr-landed"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+required = true
+id = "default-branch-has-engineer-diff"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.events]]
+required = true
+id = "tool-configured"
+event = "agent.tool.configured"
+fields."tool.name" = "codebase_memory"
+fields.role = "engineer"
+fields.mode = "required"
+fields.index = "background"
+fields."tool.model_visible" = false
+
+[[expect.events]]
+required = true
+id = "safe-graph-tool-exposed"
+event = "agent.tool.exposed"
+fields."tool.name" = "codebase_memory_search_graph"
+fields."mcp.tool" = "search_graph"
+fields."tool.model_visible" = true
+
+[[expect.events]]
+required = true
+id = "internal-index-tool-hidden"
+event = "agent.tool.hidden"
+fields."tool.name" = "codebase_memory_index_repository"
+fields."mcp.tool" = "index_repository"
+fields."tool.model_visible" = false
+
+[[expect.events]]
+required = true
+id = "unsafe-delete-tool-hidden"
+event = "agent.tool.hidden"
+fields."tool.name" = "codebase_memory_delete_project"
+fields."mcp.tool" = "delete_project"
+fields."tool.model_visible" = false
+
+[[expect.events]]
+required = true
+id = "mcp-server-started"
+event = "mcp.server.started"
+fields."tool.name" = "codebase_memory"
+
+[[expect.events]]
+required = true
+id = "graph-called-with-stable-provider-project"
+event = "mcp.tool.called"
+fields."tool.name" = "codebase_memory_search_graph"
+fields."mcp.tool" = "search_graph"
+
+[[expect.events]]
+required = true
+id = "fake-mcp-result-observed"
+event = "mcp.tool.result"
+fields."tool.name" = "codebase_memory_search_graph"
+fields."mcp.tool" = "search_graph"
+fields.is_error = false
+fields.truncated = true
+
+[[expect.events]]
+required = true
+id = "safe-systemic-failure-observed"
+event = "mcp.tool.result"
+fields."tool.name" = "codebase_memory_search_graph"
+fields."mcp.tool" = "search_graph"
+fields.is_error = true
+fields."result.preview" = "codebase-memory provider or protocol request failed"
+
+[[expect.sequence]]
+required = true
+id = "systemic-failure-falls-back-to-conventional-discovery"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = true } },
+  { event = "tool.start", fields = { tool = "grep", id = "fallback_grep_retry_worker" } },
+  { event = "tool.start", fields = { tool = "find", id = "fallback_find_retry_test" } },
+  { event = "tool.start", fields = { tool = "read", id = "read_graph_selected_implementation" } },
+]
+
+[[expect.events]]
+required = true
+id = "workspace-diff-produced"
+event = "workspace.diff.produced"
+fields.repo = "acme/demo"
+fields."file.path" = "src/lib.rs"
+
+[[expect.events]]
+required = true
+id = "agent-finished"
+event = "agent.finished"
+role = "engineer"
+
+[[expect.sequence]]
+required = true
+id = "codebase-memory-agent-tool-flow"
+scope = "source_artifact"
+events = [
+  { event = "agent.tool.configured", fields = { "tool.name" = "codebase_memory" } },
+  { event = "mcp.server.started", fields = { "tool.name" = "codebase_memory" } },
+  { event = "agent.tool.exposed", fields = { "tool.name" = "codebase_memory_search_graph" } },
+  { event = "mcp.tool.called", fields = { "mcp.tool" = "search_graph" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph" } },
+  { event = "agent.finished", role = "engineer" },
+  { event = "workspace.diff.produced", fields = { "file.path" = "src/lib.rs" } },
+]
+
+[[expect.count]]
+required = true
+id = "graph-called-twice-with-no-post-failure-retry"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_graph"
+exactly = 2
+
+[codebase_memory]
+mode = "required"
+index = "background"
+readiness_delay_ms = 750
+tool_timeout_secs = 2
+fake_mcp_tools = ["search_graph", "list_projects", "index_status", "index_repository", "delete_project"]
+model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_list_projects", "codebase_memory_index_status"]
+model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
+default_project = "acme/demo"
+actual_project = "temper-v1-<stable-provider-key>"
+graph_call_uses_workspace_alias = "demo"
+forced_systemic_failure = "search_graph after one success"
+expected_output_name = "src/lib.rs"
+expected_result = "FAKE_MCP_GRAPH_RESULT"
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify scenario documentation without changing the fake MCP contract.",
+  "Add evidence lines or structured event assertions that further narrow the same codebase-memory agent contract.",
+]
+requires_new_scenario_or_major_update = [
+  "Removing workspace defaulting or safe-tool filtering from the validation contract.",
+  "Replacing the mandatory live Forgejo/Actions/Temper/Jig stack or the delayed-readiness and bounded-fallback contract with a lower-level test topology.",
+]

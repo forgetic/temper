@@ -504,14 +504,17 @@ fn live_evidence_lines(
                 codebase_memory.safe_tools, codebase_memory.hidden_tools
             ),
             format!(
-                "codebase-memory MCP: search_code calls={} log={}",
+                "codebase-memory MCP: search_graph calls={} inventory={:?} readiness_delay_ms={} forced_failure_tool={:?} log={}",
                 codebase_memory.mcp_search_calls,
+                codebase_memory.mcp_call_counts,
+                codebase_memory.readiness_delay_ms,
+                codebase_memory.forced_failure_tool,
                 codebase_mcp_log
                     .unwrap_or(&codebase_memory.fake_mcp_log)
                     .display()
             ),
             format!(
-                "codebase-memory diff: engineer produced {} containing {}",
+                "codebase-memory diff: engineer produced {} after bounded graph evidence containing {}",
                 codebase_memory.produced_file, codebase_memory.expected_result
             ),
         ]);
