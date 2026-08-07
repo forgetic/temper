@@ -9,7 +9,7 @@ FIXTURE_PROJECT = sys.argv[3]
 SAFE_TOOLS = set(json.loads(sys.argv[4]))
 HIDDEN_TOOLS = set(json.loads(sys.argv[5]))
 READINESS_DELAY_MS = int(sys.argv[6])
-FORCED_FAILURE_TOOL = sys.argv[7]
+FORCED_FAILURE_TOOL = "" if sys.argv[7] == "-" else sys.argv[7]
 FORCED_FAILURE_AFTER_CALLS = int(sys.argv[8])
 LIFECYCLE_PROFILE = sys.argv[9]
 STATE_PATH = LOG_PATH + ".state.json"
@@ -26,6 +26,30 @@ TOOLS = [
                 "project": {"type": "string"},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "search_code",
+        "description": "Refine a graph-selected implementation symbol",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string"},
+                "project": {"type": "string"},
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
+        "name": "trace_path",
+        "description": "Trace a refined symbol to its caller",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "function_name": {"type": "string"},
+                "project": {"type": "string"},
+            },
+            "required": ["function_name"],
         },
     },
     {
@@ -166,6 +190,10 @@ def text_result(text, is_error=False):
     return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
+def has_current_root_profile():
+    return LIFECYCLE_PROFILE in ("stable-rebind", "graph-consumption")
+
+
 for line in sys.stdin:
     if not line.strip():
         continue
@@ -190,7 +218,7 @@ for line in sys.stdin:
         name = params.get("name")
         arguments = params.get("arguments") or {}
         if name == "index_status":
-            if LIFECYCLE_PROFILE == "stable-rebind":
+            if has_current_root_profile():
                 project = arguments.get("project", "")
                 binding = load_state()["projects"].get(project)
                 if binding and binding.get("binding") == "current_prepared_checkout":
@@ -213,7 +241,7 @@ for line in sys.stdin:
         elif name == "index_repository":
             time.sleep(READINESS_DELAY_MS / 1000)
             provider_project = arguments.get("name", "")
-            if LIFECYCLE_PROFILE == "stable-rebind":
+            if has_current_root_profile():
                 provider_project = rebind_current_root(
                     provider_project, arguments.get("repo_path", "")
                 )
@@ -230,7 +258,7 @@ for line in sys.stdin:
             path = arguments.get("path", "")
             source = (
                 current_root_source(project, path)
-                if LIFECYCLE_PROFILE == "stable-rebind"
+                if has_current_root_profile()
                 else None
             )
             if source is None:
@@ -244,6 +272,37 @@ for line in sys.stdin:
                     "source": source,
                     "binding": "current_prepared_checkout",
                 }))
+        elif name == "search_code":
+            project = arguments.get("project", "")
+            current_root = current_root_source(project, "src/lib.rs") is not None
+            log_tool(
+                name,
+                arguments,
+                is_error=not current_root,
+                fixture_event="served_current_root_code_refinement" if current_root else None,
+            )
+            result = (
+                text_result("FAKE_MCP_CODE_RESULT symbol=retry_worker_topic")
+                if current_root
+                else text_result("bound source unavailable", True)
+            )
+        elif name == "trace_path":
+            project = arguments.get("project", "")
+            current_root = current_root_source(project, "src/lib.rs") is not None
+            log_tool(
+                name,
+                arguments,
+                is_error=not current_root,
+                fixture_event="served_current_root_graph_trace" if current_root else None,
+            )
+            result = (
+                text_result(
+                    "FAKE_MCP_TRACE_RESULT caller=retry_worker_topic "
+                    "focused_test=tests/retry_affinity.rs"
+                )
+                if current_root
+                else text_result("bound source unavailable", True)
+            )
         elif name == "search_graph":
             GRAPH_CALLS += 1
             project = arguments.get("project", "")

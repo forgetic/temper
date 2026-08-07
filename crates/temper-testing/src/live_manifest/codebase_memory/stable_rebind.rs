@@ -10,6 +10,10 @@ pub(super) fn validate_mcp_contract(
     mcp: &FakeMcpServer,
     calls: &[McpToolCallEvidence],
 ) -> Result<(), String> {
+    if mcp.lifecycle_profile.as_deref() == Some("graph-consumption") {
+        return super::graph_consumption::validate(mcp, calls);
+    }
+
     let failure = mcp.forced_systemic_failure.as_ref();
     let graph_tool = failure
         .map(|failure| failure.tool.as_str())
@@ -181,7 +185,7 @@ pub(super) fn stable_rebind_evidence(
     mcp: &FakeMcpServer,
     calls: &[McpToolCallEvidence],
 ) -> Result<Option<LiveStableRebindEvidence>, String> {
-    if mcp.lifecycle_profile.as_deref() != Some("stable-rebind") {
+    if !uses_stable_rebind(mcp) {
         return Ok(None);
     }
     let requested_stable_project = calls
@@ -334,6 +338,13 @@ fn read_stable_rebind_state(mcp: &FakeMcpServer) -> Result<JsonValue, String> {
     })
 }
 
+fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
+    matches!(
+        mcp.lifecycle_profile.as_deref(),
+        Some("stable-rebind" | "graph-consumption")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -448,5 +459,104 @@ mod tests {
         assert!(evidence.source_reads_use_confirmed_project);
         validate_stable_rebind_contract(&mcp, &calls, requested)
             .expect("exact confirmation inventory is accepted");
+    }
+
+    #[test]
+    fn graph_consumption_contract_requires_the_declared_current_root_chain() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let requested = "temper-v1-demo";
+        let confirmed = "normalized-temper-v1-demo";
+        let state_path = workspace.path().join("mcp.jsonl.state.json");
+        fs::write(
+            &state_path,
+            serde_json::json!({
+                "projects": {
+                    confirmed: {
+                        "requested_stable_project": requested,
+                        "repo_path": "/workspace/demo",
+                        "binding": "current_prepared_checkout"
+                    }
+                },
+                "counters": {"project_creations": 1, "rebinds": 1}
+            })
+            .to_string(),
+        )
+        .expect("write provider state");
+        let mcp = FakeMcpServer {
+            script_path: workspace.path().join("fake.py"),
+            log_path: workspace.path().join("mcp.jsonl"),
+            state_path,
+            project: "demo".to_string(),
+            lifecycle_profile: Some("graph-consumption".to_string()),
+            safe_tools: vec![
+                "search_graph".to_string(),
+                "search_code".to_string(),
+                "trace_path".to_string(),
+                "get_code_snippet".to_string(),
+            ],
+            hidden_tools: vec!["index_repository".to_string()],
+            readiness_delay_ms: 750,
+            forced_systemic_failure: None,
+        };
+        let calls = vec![
+            call(
+                "index_status",
+                serde_json::json!({"project": requested}),
+                None,
+                false,
+                Some("fresh_prior_binding"),
+            ),
+            call(
+                "index_repository",
+                serde_json::json!({"name": requested, "repo_path": "/workspace/demo"}),
+                Some(750),
+                false,
+                Some("normalized_current_root_upsert"),
+            ),
+            call(
+                "index_status",
+                serde_json::json!({"project": confirmed}),
+                None,
+                false,
+                Some("current_root_confirmed"),
+            ),
+            call(
+                "search_graph",
+                serde_json::json!({"project": confirmed, "query": "alias retry worker affinity"}),
+                None,
+                false,
+                Some("served_current_root_graph"),
+            ),
+            call(
+                "search_code",
+                serde_json::json!({"project": confirmed, "pattern": "retry_worker_topic"}),
+                None,
+                false,
+                Some("served_current_root_code_refinement"),
+            ),
+            call(
+                "trace_path",
+                serde_json::json!({"project": confirmed, "function_name": "retry_worker_topic"}),
+                None,
+                false,
+                Some("served_current_root_graph_trace"),
+            ),
+            call(
+                "get_code_snippet",
+                serde_json::json!({"project": confirmed, "path": "src/lib.rs"}),
+                None,
+                false,
+                Some("served_current_root_source"),
+            ),
+            call(
+                "get_code_snippet",
+                serde_json::json!({"project": confirmed, "path": "tests/retry_affinity.rs"}),
+                None,
+                false,
+                Some("served_current_root_source"),
+            ),
+        ];
+
+        validate_mcp_contract(&mcp, &calls).expect("declared graph-consumption chain is accepted");
     }
 }

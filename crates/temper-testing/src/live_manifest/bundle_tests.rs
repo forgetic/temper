@@ -179,6 +179,47 @@ fn codebase_memory_bundle_requires_delayed_graph_readiness_and_bounded_fallback(
 }
 
 #[test]
+fn codebase_memory_graph_consumption_bundle_declares_only_the_five_call_chain() {
+    let bundle = ScenarioBundle::load(scenarios_root().join("codebase-memory-graph-consumption"))
+        .expect("graph-consumption bundle");
+    let mcp = bundle
+        .execution
+        .steps
+        .iter()
+        .find(|step| step.id == "start-fake-codebase-memory-mcp")
+        .expect("MCP fixture action");
+    assert!(matches!(
+        &mcp.action,
+        ManifestAction::StartCodebaseMemoryMcp {
+            fixture: Some(fixture),
+            safe_tools,
+            readiness_delay_ms: 750,
+            forced_systemic_failure: None,
+            ..
+        } if fixture == "graph-consumption" && safe_tools == &vec![
+            "search_graph".to_string(),
+            "search_code".to_string(),
+            "trace_path".to_string(),
+            "get_code_snippet".to_string(),
+            "list_projects".to_string(),
+            "index_status".to_string(),
+        ]
+    ));
+    let jig = std::fs::read_to_string(bundle.jig_script_path()).expect("scenario-owned Jig");
+    for call in [
+        "graph_identify_retry_worker",
+        "graph_refine_retry_worker",
+        "graph_trace_retry_worker_caller",
+        "read_confirmed_current_root_implementation",
+        "read_confirmed_current_root_test",
+    ] {
+        assert!(jig.contains(call), "graph-consumption Jig omitted {call}");
+    }
+    assert!(!jig.contains("get_architecture"));
+    assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
+}
+
+#[test]
 fn codebase_memory_rebind_manifest_declares_normalized_ready_confirmation() {
     let scenario_path = scenarios_root().join("codebase-memory-remediation");
     let bundle = ScenarioBundle::load(&scenario_path).expect("codebase-memory bundle");
