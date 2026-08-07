@@ -223,7 +223,7 @@ fn resolve_feature_emits_identical_stdout_and_ci_json() {
 }
 
 #[test]
-fn validate_feature_rejects_stale_head_and_retains_mapping_audit() {
+fn validate_feature_rejects_stale_checkout_after_branch_advances() {
     let repo = tempfile::tempdir().expect("repo");
     git(repo.path(), &["init", "-q"]);
     git(
@@ -240,6 +240,19 @@ fn validate_feature_rejects_stale_head_and_retains_mapping_audit() {
     write_mapped_scenario(repo.path());
     git(repo.path(), &["add", "."]);
     git(repo.path(), &["commit", "-q", "-m", "scenario"]);
+    let stale_head = git_output(repo.path(), &["rev-parse", "HEAD"]);
+    git(
+        repo.path(),
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "advance feature branch",
+        ],
+    );
+    let landing_pr_head = git_output(repo.path(), &["rev-parse", "HEAD"]);
+    git(repo.path(), &["checkout", "-q", "--detach", &stale_head]);
 
     let output_dir = repo.path().join("artifacts/focused");
     let output = command(
@@ -255,7 +268,7 @@ fn validate_feature_rejects_stale_head_and_retains_mapping_audit() {
             "--pr",
             "42",
             "--sha",
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            &landing_pr_head,
             "--output-dir",
             &output_dir.to_string_lossy(),
         ],
@@ -263,16 +276,18 @@ fn validate_feature_rejects_stale_head_and_retains_mapping_audit() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("evidence would be stale"), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "checked-out HEAD `{stale_head}` does not match supplied landing PR head `{landing_pr_head}`"
+        )),
+        "{stderr}"
+    );
     let mapping: Value = serde_json::from_slice(
         &fs::read(output_dir.join("feature-scenario-mapping.json")).expect("mapping artifact"),
     )
     .expect("mapping JSON");
     assert_eq!(mapping["scenario_path"], "scenarios/proof");
-    assert_eq!(
-        mapping["head_sha"],
-        git_output(repo.path(), &["rev-parse", "HEAD"])
-    );
+    assert_eq!(mapping["head_sha"], stale_head);
     assert!(output_dir.join("focused-validation-failure.txt").is_file());
     assert!(!output_dir.join("run-evidence.json").exists());
 }
@@ -325,6 +340,7 @@ fn validate_feature_runs_resolved_scenario_and_retains_failed_evidence() {
     )
     .expect("audit JSON");
     assert_eq!(audit["status"], "failed");
+    assert_eq!(audit["landing_pr_head_sha"], head);
     assert_eq!(audit["mapping"]["scenario_path"], "scenarios/proof");
     assert_eq!(
         audit["validator_result"]["mapping_id"],
