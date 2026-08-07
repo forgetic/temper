@@ -171,11 +171,25 @@ for line in sys.stdin:
         arguments = params.get("arguments") or {}
         if name == "index_status":
             project = arguments.get("project", "")
-            if MODE == "enabled":
-                status = "fresh" if project in load_state()["projects"] else "missing"
+            binding = load_state()["projects"].get(project)
+            if binding is not None:
                 tool_result(
                     request_id,
-                    json.dumps({"project": project, "status": status}, sort_keys=True),
+                    json.dumps(
+                        {
+                            "project": project,
+                            "root_path": binding["root_path"],
+                            "status": "ready",
+                        },
+                        sort_keys=True,
+                    ),
+                )
+            elif MODE == "enabled":
+                status = "ready" if binding is not None else "missing"
+                payload = {"project": project, "status": status}
+                tool_result(
+                    request_id,
+                    json.dumps(payload, sort_keys=True),
                     status == "missing",
                 )
             else:
@@ -199,19 +213,17 @@ for line in sys.stdin:
                 ),
             )
         elif name == "index_repository":
-            project = arguments.get("name", "")
+            project = arguments.get("name", "").replace("/", "-")
             repo_path = os.path.realpath(arguments.get("repo_path", ""))
-            if MODE == "enabled":
-                state = load_state()
-                state["projects"][project] = "stable"
-                save_state(state)
+            state = load_state()
+            state["projects"][project] = {"root_path": repo_path}
+            save_state(state)
             tool_result(
                 request_id,
                 json.dumps(
                     {
                         "project": project,
-                        "repo_path": repo_path,
-                        "status": "fresh",
+                        "status": "indexed",
                     },
                     sort_keys=True,
                 ),
