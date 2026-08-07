@@ -31,7 +31,7 @@ explicit operator response.
   counts, estimated deleted bytes, `retention.dry_run`, `failure.count`, and
   `outcome`.
 
-Index outcomes are `requested`, `started`, `reused`,
+Index outcomes are `requested`, `started`, `reused`, `rebind_fresh`,
 `suppressed_duplicate`, `completed`, `failed`,
 `skipped_discovery_unknown`, and `disabled`. A discovery timeout therefore has
 both `outcome=timeout` and a matching

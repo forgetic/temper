@@ -415,6 +415,20 @@ pub struct LiveCodebaseMemoryEvidence {
     pub safe_tools: Vec<String>,
     pub hidden_tools: Vec<String>,
     pub lifecycle: Option<String>,
+    /// Secret-free confirmation that a fresh stable provider identity was
+    /// rebound before the model read source from the active prepared checkout.
+    pub stable_rebind: Option<LiveStableRebindEvidence>,
+}
+
+/// Contract facts retained by the stable-rebind fake provider profile.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveStableRebindEvidence {
+    pub stable_project: String,
+    pub retained_project_count: usize,
+    pub fresh_prior_binding: bool,
+    pub current_root_rebound: bool,
+    pub source_served_from_current_root: bool,
+    pub global_inventory_avoided: bool,
 }
 
 /// Terminal Forge state proving the scenario converged.

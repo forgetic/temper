@@ -17,6 +17,16 @@
         {
           "turns": [{
             "tool_call": {
+              "id": "read_rebound_graph_selected_source",
+              "name": "codebase_memory_get_code_snippet",
+              "args": { "project": "demo", "path": "src/lib.rs" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
               "id": "graph_force_systemic_failure",
               "name": "codebase_memory_search_graph",
               "args": { "project": "demo", "query": "confirm alias retry callers" }
