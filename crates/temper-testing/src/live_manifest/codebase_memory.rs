@@ -24,8 +24,12 @@ use super::{
     ENGINEER, FinalStateEvidence, ForcedSystemicFailureFixture, LiveCodebaseMemoryEvidence,
 };
 
+mod stable_rebind;
+use stable_rebind::{stable_rebind_evidence, validate_stable_rebind_contract};
+
 const MEMORY_FILE: &str = "src/lib.rs";
 const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_GRAPH_RESULT";
+const SNIPPET_RESULT_NEEDLE: &str = "FAKE_MCP_SNIPPET_RESULT";
 const ENGINEER_SUMMARY: &str =
     "Used codebase-memory graph evidence, then validated the retry-worker repair.";
 const RAW_PROVIDER_FAILURE_NEEDLE: &str = "MCP-FIXTURE-SECRET";
@@ -86,7 +90,8 @@ pub(super) fn converge(
                 .iter()
                 .map(|tool| format!("codebase_memory_{tool}"))
                 .collect(),
-            lifecycle: None,
+            lifecycle: mcp.lifecycle_profile.clone(),
+            stable_rebind: stable_rebind_evidence(mcp, &calls)?,
         },
     ))
 }
@@ -392,6 +397,13 @@ pub(super) fn tune_codebase_memory_config(
                     .unwrap_or_default()
                     .to_string(),
             ),
+            TomlValue::String(
+                fake_mcp
+                    .lifecycle_profile
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_string(),
+            ),
         ]),
     );
     codebase.insert(
@@ -415,7 +427,9 @@ pub(super) fn tune_codebase_memory_config(
 pub(super) struct FakeMcpServer {
     pub(super) script_path: PathBuf,
     pub(super) log_path: PathBuf,
+    state_path: PathBuf,
     pub(super) project: String,
+    pub(super) lifecycle_profile: Option<String>,
     pub(super) safe_tools: Vec<String>,
     pub(super) hidden_tools: Vec<String>,
     pub(super) readiness_delay_ms: u64,
@@ -425,6 +439,7 @@ pub(super) struct FakeMcpServer {
 pub(super) fn write_fake_mcp(
     root: &Path,
     project: &str,
+    lifecycle_profile: Option<&str>,
     safe_tools: &[String],
     hidden_tools: &[String],
     readiness_delay_ms: u64,
@@ -440,10 +455,13 @@ pub(super) fn write_fake_mcp(
     }
     fs::write(&log_path, "")
         .map_err(|error| format!("create fake MCP log {}: {error}", log_path.display()))?;
+    let state_path = PathBuf::from(format!("{}.state.json", log_path.display()));
     Ok(FakeMcpServer {
         script_path,
         log_path,
+        state_path,
         project: project.to_string(),
+        lifecycle_profile: lifecycle_profile.map(str::to_string),
         safe_tools: safe_tools.to_vec(),
         hidden_tools: hidden_tools.to_vec(),
         readiness_delay_ms,
@@ -529,11 +547,14 @@ fn validate_mcp_contract(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> 
             "expected one targeted index_status discovery call for stable provider project {provider_project}, found {status:?}"
         ));
     }
-    let expected_counts = BTreeMap::from([
+    let mut expected_counts = BTreeMap::from([
         ("index_repository".to_string(), 1_usize),
         ("index_status".to_string(), 1_usize),
         (graph_tool.to_string(), expected_graph_calls),
     ]);
+    if mcp.lifecycle_profile.as_deref() == Some("stable-rebind") {
+        expected_counts.insert("get_code_snippet".to_string(), 1);
+    }
     let mut actual_counts = BTreeMap::<String, usize>::new();
     for call in calls {
         *actual_counts.entry(call.name.clone()).or_default() += 1;
@@ -550,6 +571,9 @@ fn validate_mcp_contract(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> 
             ));
         }
     }
+    if mcp.lifecycle_profile.as_deref() == Some("stable-rebind") {
+        validate_stable_rebind_contract(mcp, calls, provider_project)?;
+    }
     Ok(())
 }
 
@@ -559,6 +583,7 @@ struct McpToolCallEvidence {
     arguments: JsonValue,
     delay_ms: Option<u64>,
     is_error: bool,
+    fixture_event: Option<String>,
 }
 
 fn logged_tool_calls(path: &Path) -> Result<Vec<McpToolCallEvidence>, String> {
@@ -576,11 +601,16 @@ fn logged_tool_calls(path: &Path) -> Result<Vec<McpToolCallEvidence>, String> {
                 .get("is_error")
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false);
+            let fixture_event = value
+                .get("fixture_event")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string);
             Some(McpToolCallEvidence {
                 name,
                 arguments,
                 delay_ms,
                 is_error,
+                fixture_event,
             })
         })
         .collect())
@@ -590,12 +620,14 @@ pub(super) struct CodebaseMemoryFake {
     fake: FakeLlm,
     engineer_requests: Arc<AtomicUsize>,
     observations: Arc<Mutex<ModelObservations>>,
+    require_current_root_source: bool,
 }
 
 #[derive(Default)]
 struct ModelObservations {
     prompt_guidance_seen: bool,
     memory_result_seen: bool,
+    current_root_source_seen: bool,
     safe_failure_seen: bool,
     raw_provider_text_seen: bool,
     bounded_graph_result_seen: bool,
@@ -603,7 +635,10 @@ struct ModelObservations {
 }
 
 impl CodebaseMemoryFake {
-    pub(super) fn start(script_path: &Path) -> Result<Self, String> {
+    pub(super) fn start(
+        script_path: &Path,
+        require_current_root_source: bool,
+    ) -> Result<Self, String> {
         let script = ScriptFile::load(script_path)
             .map_err(|error| {
                 format!(
@@ -627,6 +662,9 @@ impl CodebaseMemoryFake {
             }
             if messages_contain(view, MEMORY_RESULT_NEEDLE) {
                 observations.memory_result_seen = true;
+            }
+            if messages_contain(view, SNIPPET_RESULT_NEEDLE) {
+                observations.current_root_source_seen = true;
             }
             if messages_contain(view, SAFE_PROVIDER_FAILURE) {
                 observations.safe_failure_seen = true;
@@ -652,6 +690,7 @@ impl CodebaseMemoryFake {
             fake,
             engineer_requests,
             observations,
+            require_current_root_source,
         })
     }
 
@@ -667,6 +706,7 @@ impl CodebaseMemoryFake {
         let (
             prompt_guidance_seen,
             memory_result_seen,
+            current_root_source_seen,
             safe_failure_seen,
             raw_provider_text_seen,
             bounded_graph_result_seen,
@@ -679,6 +719,7 @@ impl CodebaseMemoryFake {
             (
                 observations.prompt_guidance_seen,
                 observations.memory_result_seen,
+                observations.current_root_source_seen,
                 observations.safe_failure_seen,
                 observations.raw_provider_text_seen,
                 observations.bounded_graph_result_seen,
@@ -694,6 +735,12 @@ impl CodebaseMemoryFake {
         if !memory_result_seen {
             return Err(format!(
                 "fake LLM did not receive the fake MCP graph result\n{}",
+                self.log_tail()
+            ));
+        }
+        if self.require_current_root_source && !current_root_source_seen {
+            return Err(format!(
+                "fake LLM did not receive source served after current-checkout rebinding\n{}",
                 self.log_tail()
             ));
         }
@@ -728,9 +775,10 @@ impl CodebaseMemoryFake {
         let requests = self.fake.requests();
         let observations = self.observations.lock().expect("observations lock");
         let mut lines = vec![format!(
-            "observations: prompt_guidance_seen={} memory_result_seen={} bounded_graph_result_seen={} safe_failure_seen={} raw_provider_text_seen={} oversized_message_seen={}",
+            "observations: prompt_guidance_seen={} memory_result_seen={} current_root_source_seen={} bounded_graph_result_seen={} safe_failure_seen={} raw_provider_text_seen={} oversized_message_seen={}",
             observations.prompt_guidance_seen,
             observations.memory_result_seen,
+            observations.current_root_source_seen,
             observations.bounded_graph_result_seen,
             observations.safe_failure_seen,
             observations.raw_provider_text_seen,

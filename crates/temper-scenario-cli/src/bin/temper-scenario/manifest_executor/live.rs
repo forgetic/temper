@@ -518,6 +518,17 @@ fn live_evidence_lines(
                 codebase_memory.produced_file, codebase_memory.expected_result
             ),
         ]);
+        if let Some(rebind) = &codebase_memory.stable_rebind {
+            lines.push(format!(
+                "codebase-memory stable rebind: project={} retained_projects={} fresh_prior_binding={} current_root_rebound={} source_served_from_current_root={} global_inventory_avoided={}",
+                rebind.stable_project,
+                rebind.retained_project_count,
+                rebind.fresh_prior_binding,
+                rebind.current_root_rebound,
+                rebind.source_served_from_current_root,
+                rebind.global_inventory_avoided,
+            ));
+        }
     }
     if let Some(plan) = evidence.plan_feature.as_ref() {
         lines.extend(super::plan_artifact::evidence_lines(plan));

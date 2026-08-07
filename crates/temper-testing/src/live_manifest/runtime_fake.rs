@@ -31,6 +31,7 @@ impl ManifestFake {
         strategy: ConvergenceStrategy,
         script_path: &Path,
         late_stream_failure: Option<&LateStreamFailureFixture>,
+        require_current_root_source: bool,
     ) -> Result<Self, String> {
         if late_stream_failure.is_some() && strategy != ConvergenceStrategy::SinglePullRequest {
             return Err(
@@ -48,7 +49,7 @@ impl ManifestFake {
                 script_path,
             }),
             ConvergenceStrategy::CodebaseMemory => Ok(Self::CodebaseMemory {
-                fake: CodebaseMemoryFake::start(&script_path)?,
+                fake: CodebaseMemoryFake::start(&script_path, require_current_root_source)?,
                 script_path,
             }),
             ConvergenceStrategy::ImplementationPrHandoff => Ok(Self::Handoff {
