@@ -414,6 +414,7 @@ pub struct LiveCodebaseMemoryEvidence {
     pub forced_failure_tool: Option<String>,
     pub safe_tools: Vec<String>,
     pub hidden_tools: Vec<String>,
+    pub lifecycle: Option<String>,
 }
 
 /// Terminal Forge state proving the scenario converged.

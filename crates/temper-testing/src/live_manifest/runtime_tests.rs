@@ -58,6 +58,7 @@ fn walker_dispatches_every_manifest_action_in_declared_order() {
             "mcp",
             ManifestAction::StartCodebaseMemoryMcp {
                 project: "demo".to_string(),
+                fixture: None,
                 safe_tools: vec!["search_code".to_string()],
                 hidden_tools: vec!["index_repository".to_string()],
                 readiness_delay_ms: 0,

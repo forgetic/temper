@@ -189,7 +189,7 @@ temper-cli-init = ["temper-cli-common", "temper-config", "temper-provision", "te
 # The thin dispatcher: routes argv to the per-subcommand crates and the hidden
 # operator/responder tools. Re-exports the in-process transport from
 # temper-cli-daemon. Much slimmer than the old monolith.
-temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-protocol-interaction", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log"]
+temper-cli = ["temper-config", "temper-cli-common", "temper-cli-init", "temper-cli-config", "temper-cli-daemon", "temper-agent-session", "temper-agent", "temper-agent-io", "temper-protocol-interaction", "temper-provision-forgejo-cli", "temper-interaction-service", "temper-reference-delivery-validator", "temper-trigger-forgejo", "temper-log", "temper-worker-service"]
 
 # Standalone scenario facade. Listing/checking stays in the manifest core; the
 # deterministic `run` paths compose runner/test-harness primitives over the

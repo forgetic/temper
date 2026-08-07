@@ -63,32 +63,41 @@ for an unknown discovery result, exposes a fresh read-only MCP client with the
 skip reason in prompt status. Required mode fails setup. Neither mode falls
 back to path-keyed creation.
 
-Startup discovery always owns a dedicated MCP process. Temper discards that
-process after targeted lookup (whether lookup succeeds, fails, or times out),
-then initializes and revalidates a fresh serving process before cloning it into
-model-visible wrappers. Background index workers remain separately contained.
-This prevents a process-fatal discovery timeout from leaving advertised graph
-tools attached to a cancelled process.
+### Host-only bounded retention
 
-Each model-visible graph call uses one monotonic budget capped by both the
-codebase-memory call limit and the generic agent tool timeout. Readiness waiting
-consumes that budget first and only the remainder is passed to the provider RPC.
-The `mcp.tool.result` event records numeric `readiness.wait_ms`,
-`graph.execution_ms`, and total `duration_ms` fields; tool details retain the
-same content-free timing values for deterministic validation. Deadline,
-not-ready, index-failure, and provider-unavailable paths return stable typed
-failures without retaining provider or repository text.
+The same non-secret tool-config object carries a `retention` policy with an
+`enabled` switch, count and age bounds, maintenance interval/deadline, inventory
+page/page-count bounds, and a per-run deletion cap. The policy crosses the
+worker/runtime boundary for both split workers and standalone, but it does not
+add provider tools to the model schema.
 
-Every wrapper in one agent run shares a run-local health circuit. Timeout,
-transport/process loss, failed readiness or indexing, and unusable provider or
-protocol state open it and cancel the serving process. Later wrappers, including
-locally implemented inventory, return `circuit_open` immediately without an MCP
-request and direct the agent to continue with conventional read, grep, find, and
-shell discovery. Invalid model input, unknown workspace aliases, outbound input
-overflow, and ordinary empty results do not open the circuit. Provider error
-text is never reflected into the model-visible failure. Building the next
-run's toolset creates fresh health state; the circuit does not disable
-conventional tools or survive across runs.
+The worker negotiates two additional **host-only** provider tools before a
+maintenance pass: paginated `list_projects(limit, cursor)` and
+`delete_project(project)`. Every inventory page must carry one stable,
+non-empty `cache_instance_id`; a missing/changing identity, repeated cursor,
+duplicate/incomplete record, timeout, provider mismatch, or page-bound overrun
+makes the complete pass deletion-free. Startup discovery remains targeted and
+does not use this inventory path.
+
+A deletion candidate must be a path-keyed record whose project identity equals
+its repository path (or whose provider metadata explicitly says it is managed
+by `temper`), whose absolute path is beneath canonical `paths.workspace_dir`,
+and whose three path components match a configured role, one scoped
+correlation-key component, and a configured repository directory. The path
+must no longer exist. Stable `temper-v1-*` projects, existing/active workspaces,
+unrelated projects, outside-root paths, and ambiguous records are preserved.
+Candidates are ordered oldest then project identity; age and count bounds are
+applied deterministically, individual failures do not stop later deletions, and
+the per-pass cap leaves the remainder for an idempotent retry.
+
+Workers run one immediate pass and then use the configured interval. Any active
+assignment suppresses a pass, activity is rechecked between inventory pages and
+before each deletion, and a workspace-root advisory lock suppresses overlap
+between periodic and explicit maintenance. Provider process startup plus each
+inventory/deletion operation is deadline-bounded. Structured reports retain the
+preserved, candidate, deleted, and failed record sets for later operator
+presentation. Destructive tools remain inside the host-only `temper-worker`
+maintenance adapter and never enter `temper-agent`'s allowlist.
 
 The side-channel listeners exist only for that run, accept bounded JSON, and
 are stopped when the child exits. Standalone calls the same host callbacks

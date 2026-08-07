@@ -37,6 +37,7 @@ impl LiveExecutionContext<'_> {
     pub(super) fn start_mcp(
         &mut self,
         project: &str,
+        fixture: Option<&str>,
         safe_tools: &[String],
         hidden_tools: &[String],
         readiness_delay_ms: u64,
@@ -48,6 +49,10 @@ impl LiveExecutionContext<'_> {
             "fake codebase-memory MCP is already started",
         )?;
         require(!project.trim().is_empty(), "MCP project must not be empty")?;
+        require(
+            fixture.is_none() || fixture == Some("stable-lifecycle"),
+            "unknown fake codebase-memory fixture",
+        )?;
         require(
             !safe_tools.is_empty(),
             "MCP safe tool list must not be empty",
@@ -90,6 +95,7 @@ impl LiveExecutionContext<'_> {
         self.mcp = Some(super::super::codebase_memory::write_fake_mcp(
             self.workspace.path(),
             project,
+            fixture,
             safe_tools,
             hidden_tools,
             readiness_delay_ms,

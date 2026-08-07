@@ -164,6 +164,7 @@ pub enum ManifestAction {
     },
     StartCodebaseMemoryMcp {
         project: String,
+        fixture: Option<String>,
         safe_tools: Vec<String>,
         hidden_tools: Vec<String>,
         readiness_delay_ms: u64,
@@ -382,6 +383,7 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
         }),
         "mcp.fake_codebase_memory.start" => Ok(ManifestAction::StartCodebaseMemoryMcp {
             project: required_table_string(table, "project", &field)?,
+            fixture: optional_table_string(table, "lifecycle_profile", &field)?,
             safe_tools: string_array(table, "advertises_safe_tools", &field)?,
             hidden_tools: string_array(table, "advertises_hidden_tools", &field)?,
             readiness_delay_ms: bounded_integer(table, "readiness_delay_ms", &field, 0, 0, 5_000)?,

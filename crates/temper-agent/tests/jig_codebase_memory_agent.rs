@@ -244,6 +244,7 @@ fn codebase_memory_tool_config(dir: &tempfile::TempDir) -> AgentToolConfig {
             index: CodebaseMemoryIndex::Off,
             startup_timeout_secs: 1,
             index_timeout_secs: 2,
+            retention: Default::default(),
         }),
     }
 }
