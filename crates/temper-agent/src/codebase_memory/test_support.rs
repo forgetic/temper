@@ -76,6 +76,7 @@ def with_provider_state(update):
         except (FileNotFoundError, json.JSONDecodeError):
             state = {"projects": {}, "counters": {}}
         state.setdefault("projects", {})
+        state.setdefault("aliases", {})
         state.setdefault("counters", {})
         result = update(state)
         temporary = f"{state_path}.tmp.{os.getpid()}"
@@ -84,26 +85,32 @@ def with_provider_state(update):
         os.replace(temporary, state_path)
         return result
 
-def state_status(project):
+def provider_identity(project):
+    return f"normalized-{project}" if mode == "normalized" else project
+
+def indexed_binding(project, count_status=True):
     def update(state):
-        counters = state["counters"]
-        counters["index_status"] = counters.get("index_status", 0) + 1
-        return "fresh" if project in state["projects"] else "missing"
+        if count_status:
+            counters = state["counters"]
+            counters["index_status"] = counters.get("index_status", 0) + 1
+        actual = state["aliases"].get(project, project)
+        return actual, state["projects"].get(actual)
     return with_provider_state(update)
 
 def stable_upsert(project, repo_path):
+    actual = provider_identity(project)
     def update(state):
         counters = state["counters"]
         counters["index_repository"] = counters.get("index_repository", 0) + 1
-        counters["project_creations"] = counters.get("project_creations", 0) + int(project not in state["projects"])
-        state["projects"][project] = {"repo_path": repo_path}
+        counters["project_creations"] = counters.get("project_creations", 0) + int(actual not in state["projects"])
+        state["aliases"][project] = actual
+        state["projects"][actual] = {"repo_path": repo_path}
     with_provider_state(update)
+    return actual
 
 def bound_snippet(project):
-    def project_root(state):
-        binding = state["projects"].get(project)
-        return binding.get("repo_path") if binding else None
-    repo_path = with_provider_state(project_root)
+    _actual, binding = indexed_binding(project, count_status=False)
+    repo_path = binding.get("repo_path") if binding else None
     if not repo_path:
         return None
     file_path = os.path.join(repo_path, "src", "lib.rs")
@@ -147,15 +154,33 @@ for line in sys.stdin:
                 tool_result(request["id"], json.dumps({"status": "backend_unavailable", "message": "project not found while backend unavailable"}), True)
             elif mode == "discovery-mismatched-missing":
                 tool_result(request["id"], json.dumps({"project": "different-project", "status": "missing"}), True)
-            elif mode in ("missing", "index-hang", "index-error", "index-error-secret", "index-malformed", "index-wrong-project", "index-missing-root", "index-malformed-root", "index-wrong-root", "index-unconfirmed-root", "background-budget-success", "background-budget-timeout"):
-                tool_result(request["id"], json.dumps({"project": project, "status": "missing"}), True)
-            elif mode == "cold-warm":
-                status = state_status(project)
-                tool_result(request["id"], json.dumps({"project": project, "status": status}), status == "missing")
-            elif mode == "stale":
-                tool_result(request["id"], json.dumps({"project": project, "status": "stale"}))
             else:
-                tool_result(request["id"], json.dumps({"project": project, "status": "fresh"}))
+                actual, binding = indexed_binding(project)
+                if binding:
+                    confirmation = {"project": actual, "status": "ready", "root_path": binding["repo_path"]}
+                    if mode == "confirmation-missing-identity":
+                        del confirmation["project"]
+                    elif mode == "confirmation-malformed-identity":
+                        confirmation["project"] = []
+                    elif mode in ("confirmation-mismatched-identity", "index-wrong-project"):
+                        confirmation["project"] = "different-provider-project"
+                    elif mode == "confirmation-path-keyed-identity":
+                        confirmation["project"] = binding["repo_path"]
+                    elif mode == "index-missing-root":
+                        del confirmation["root_path"]
+                    elif mode == "index-malformed-root":
+                        confirmation["root_path"] = []
+                    elif mode == "index-wrong-root":
+                        confirmation["root_path"] = os.path.join(binding["repo_path"], "stale-checkout")
+                    elif mode == "index-unconfirmed-root":
+                        confirmation["status"] = "indexed"
+                    tool_result(request["id"], json.dumps(confirmation))
+                elif mode in ("missing", "index-hang", "index-error", "index-error-secret", "index-malformed", "index-wrong-project", "index-missing-root", "index-malformed-root", "index-wrong-root", "index-unconfirmed-root", "confirmation-missing-identity", "confirmation-malformed-identity", "confirmation-mismatched-identity", "confirmation-path-keyed-identity", "background-budget-success", "background-budget-timeout"):
+                    tool_result(request["id"], json.dumps({"project": project, "status": "missing"}), True)
+                elif mode == "stale":
+                    tool_result(request["id"], json.dumps({"project": project, "status": "stale"}))
+                else:
+                    tool_result(request["id"], json.dumps({"project": project, "status": "fresh"}))
         elif name == "index_repository":
             repo_path = args.get("repo_path", "")
             project = args.get("name", "")
@@ -176,20 +201,9 @@ for line in sys.stdin:
                 tool_result(request["id"], "Authorization: Bearer SECRET", True)
             elif mode == "index-malformed":
                 tool_result(request["id"], "not-json SECRET")
-            elif mode == "index-wrong-project":
-                tool_result(request["id"], json.dumps({"project": "path-keyed-project", "repo_path": repo_path, "status": "fresh"}))
-            elif mode == "index-missing-root":
-                tool_result(request["id"], json.dumps({"project": project, "status": "fresh"}))
-            elif mode == "index-malformed-root":
-                tool_result(request["id"], json.dumps({"project": project, "repo_path": [repo_path], "status": "fresh"}))
-            elif mode == "index-wrong-root":
-                tool_result(request["id"], json.dumps({"project": project, "repo_path": os.path.join(repo_path, "stale-checkout"), "status": "fresh"}))
-            elif mode == "index-unconfirmed-root":
-                tool_result(request["id"], json.dumps({"project": project, "repo_path": repo_path, "status": "pending"}))
             else:
-                if mode == "cold-warm":
-                    stable_upsert(project, repo_path)
-                tool_result(request["id"], json.dumps({"project": project, "repo_path": repo_path, "status": "fresh"}))
+                actual = stable_upsert(project, repo_path)
+                tool_result(request["id"], json.dumps({"project": actual, "status": "indexed"}))
         elif name == "get_code_snippet" and mode == "cold-warm":
             snippet = bound_snippet(args.get("project", ""))
             if snippet is None:

@@ -150,7 +150,7 @@ fn fresh_stable_project_rebinds_to_relocated_checkout_before_serving_source() {
             ]),
             "each upsert must request its canonical prepared checkout root"
         );
-        assert_eq!(calls_named(&log_path, "index_status").len(), 2);
+        assert_eq!(calls_named(&log_path, "index_status").len(), 4);
         assert!(calls_named(&log_path, "list_projects").is_empty());
         let searches = calls_named(&log_path, "search_code");
         assert_eq!(searches.len(), 2);
@@ -249,46 +249,84 @@ fn unconfirmed_or_failed_stable_upserts_are_redacted_and_not_retried() {
 }
 
 #[test]
-fn required_blocking_indexing_rejects_unacknowledged_canonical_root_bindings() {
+fn confirmation_identity_and_root_failures_are_bounded_in_all_index_modes() {
     for server_mode in [
+        "confirmation-missing-identity",
+        "confirmation-malformed-identity",
+        "confirmation-mismatched-identity",
+        "confirmation-path-keyed-identity",
         "index-missing-root",
         "index-malformed-root",
         "index-wrong-root",
-        "index-unconfirmed-root",
     ] {
-        let dir = fake_server_script();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let log_path = workspace.path().join(format!("{server_mode}-required.log"));
-        let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+        for mode in [CodebaseMemoryMode::Auto, CodebaseMemoryMode::Required] {
+            for index in [
+                CodebaseMemoryIndex::Blocking,
+                CodebaseMemoryIndex::Background,
+            ] {
+                let dir = fake_server_script();
+                let workspace = tempfile::tempdir().expect("workspace");
+                let log_path = workspace
+                    .path()
+                    .join(format!("{server_mode}-{mode:?}-{index:?}.log"));
+                let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+                let workspace_cwd = workspace.path().to_path_buf();
+                let workspace_path = workspace_cwd.display().to_string();
+                let setup_log_path = log_path.clone();
 
-        temper_agent_io::block_on(async move {
-            let error = match build_codebase_memory_toolset(
-                Some(&config(
-                    &dir,
-                    CodebaseMemoryMode::Required,
-                    CodebaseMemoryIndex::Blocking,
-                    server_mode,
-                    &log_path,
-                    json!({}),
-                )),
-                "engineer",
-                &context,
-                workspace.path(),
-            )
-            .await
-            {
-                Ok(_) => panic!("required mode must reject an unacknowledged root binding"),
-                Err(error) => error,
-            };
-            let rendered = error.to_string();
-            assert!(rendered.contains("stable codebase-memory index upsert"));
-            assert!(rendered.contains("was not confirmed"));
-            assert!(
-                !rendered.contains(&workspace.path().display().to_string()),
-                "provider paths must not be exposed in required-mode diagnostics"
-            );
-            assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
-            assert!(calls_named(&log_path, "list_projects").is_empty());
-        });
+                temper_agent_io::block_on(async move {
+                    let result = build_codebase_memory_toolset(
+                        Some(&config(
+                            &dir,
+                            mode,
+                            index,
+                            server_mode,
+                            &setup_log_path,
+                            json!({}),
+                        )),
+                        "engineer",
+                        &context,
+                        &workspace_cwd,
+                    )
+                    .await;
+                    if mode == CodebaseMemoryMode::Required
+                        && index == CodebaseMemoryIndex::Blocking
+                    {
+                        let error = match result {
+                            Ok(_) => panic!("required blocking mode rejects confirmation"),
+                            Err(error) => error,
+                        };
+                        let rendered = error.to_string();
+                        assert!(rendered.contains("stable codebase-memory index upsert"));
+                        assert!(rendered.contains("was not confirmed"));
+                        assert!(
+                            !rendered.contains(&workspace_path),
+                            "provider paths must not be exposed in required-mode diagnostics"
+                        );
+                    } else {
+                        let toolset = result.expect("nonblocking confirmation failures are typed");
+                        let search = toolset
+                            .into_tools()
+                            .into_iter()
+                            .find(|tool| tool.name() == "codebase_memory_search_code")
+                            .expect("search wrapper");
+                        let failed = search
+                            .execute("failed-confirmation", json!({"query": "stable"}), None)
+                            .await
+                            .expect("failed confirmation is a typed tool result");
+                        assert!(failed.is_error);
+                        assert_eq!(
+                            failed.details.as_ref().unwrap()[SAFE_TOOL_FAILURE_DETAIL_KEY]["category"],
+                            "index_failure"
+                        );
+                    }
+                });
+
+                assert_eq!(calls_named(&log_path, "index_repository").len(), 1);
+                assert_eq!(calls_named(&log_path, "index_status").len(), 2);
+                assert!(calls_named(&log_path, "search_code").is_empty());
+                assert!(calls_named(&log_path, "list_projects").is_empty());
+            }
+        }
     }
 }

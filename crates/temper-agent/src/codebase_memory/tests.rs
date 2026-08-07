@@ -1,3 +1,4 @@
+mod confirmation;
 mod health;
 mod indexing;
 mod lifecycle;

@@ -2,20 +2,17 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig};
 
-use crate::mcp::{
-    McpError, McpToolCallResult, McpToolDescriptor, StdioMcpClient, StdioMcpServerConfig,
-};
+use crate::mcp::{McpError, McpToolDescriptor, StdioMcpServerConfig};
 use temper_agent_core::AgentContainmentContext;
 
 use super::advertised_tool;
 use super::background::BackgroundIndex;
+use super::confirmation::{confirm_current_root_binding, confirm_current_root_binding_blocking};
 use super::lifecycle_observability::{FailureCategory, IndexOutcome, emit_index};
 use super::scope::{ProjectIndexState, WorkspaceScope};
-
-const MAX_INDEX_UPSERT_RESPONSE_BYTES: usize = 64 * 1024;
 
 pub(super) async fn prepare_indexes(
     config: &CodebaseMemoryToolConfig,
@@ -124,10 +121,11 @@ pub(super) async fn prepare_indexes(
             continue;
         }
 
-        let result =
-            call_index_repository(mcp_config, &path, &provider_key, timeout, containment).await;
-        match result.and_then(|result| confirm_stable_upsert(&result, &provider_key, &path)) {
-            Ok(()) => {
+        match confirm_current_root_binding(mcp_config, &path, &provider_key, timeout, containment)
+            .await
+        {
+            Ok(actual_project) => {
+                scope.projects[index].confirmed_project = Some(actual_project);
                 scope.projects[index].index_state = ProjectIndexState::CurrentRootBound;
                 emit_index(
                     &logical,
@@ -221,209 +219,15 @@ fn run_background_index_repository(
     timeout: Duration,
     containment: AgentContainmentContext,
 ) -> std::result::Result<String, String> {
-    let client = StdioMcpClient::connect_blocking_with_containment(mcp_config, containment)
-        .map_err(|error| format!("stable index upsert {}", safe_index_failure_kind(&error)))?;
-    let result = client
-        .call_tool_blocking(
-            "index_repository",
-            stable_index_arguments(&path, &provider_key),
-            timeout,
-        )
-        .map_err(|error| format!("stable index upsert {}", safe_index_failure_kind(&error)))?;
-    if result.is_error {
-        return Err("stable index upsert returned a provider error".to_string());
-    }
-    confirm_stable_upsert(&result, &provider_key, &path)
-        .map_err(|_| "stable index upsert confirmation failed".to_string())?;
-    Ok(provider_key)
+    confirm_current_root_binding_blocking(mcp_config, &path, &provider_key, timeout, containment)
+        .map_err(|error| format!("stable index upsert {}", safe_index_failure_kind(&error)))
 }
 
-async fn call_index_repository(
-    mcp_config: &StdioMcpServerConfig,
-    path: &Path,
-    provider_key: &str,
-    timeout: Duration,
-    containment: &AgentContainmentContext,
-) -> std::result::Result<McpToolCallResult, McpError> {
-    // Isolate a blocking/timeout indexing call from the read-only client exposed
-    // to the model. The stable name makes retries and concurrent requests an
-    // upsert of one logical provider project.
-    let index_client =
-        StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
-    index_client
-        .call_tool(
-            "index_repository",
-            stable_index_arguments(path, provider_key),
-            timeout,
-        )
-        .await
-}
-
-fn stable_index_arguments(path: &Path, provider_key: &str) -> serde_json::Value {
+pub(super) fn stable_index_arguments(path: &Path, provider_key: &str) -> serde_json::Value {
     json!({
         "repo_path": path.display().to_string(),
         "name": provider_key,
     })
-}
-
-/// A successful RPC is not enough to make a prepared checkout model-visible.
-/// The provider must explicitly confirm both the requested stable key and the
-/// canonical root it bound to that key. A stale binding can otherwise report a
-/// fresh logical project while graph reads still resolve source from a deleted
-/// checkout.
-fn confirm_stable_upsert(
-    result: &McpToolCallResult,
-    provider_key: &str,
-    expected_root: &Path,
-) -> std::result::Result<(), McpError> {
-    if result.is_error {
-        return Err(stable_upsert_protocol(
-            provider_key,
-            "provider returned a tool error",
-        ));
-    }
-    if result.text.len() > MAX_INDEX_UPSERT_RESPONSE_BYTES {
-        return Err(stable_upsert_protocol(
-            provider_key,
-            "response exceeded 65536 bytes",
-        ));
-    }
-    let value: Value = serde_json::from_str(result.text.trim())
-        .map_err(|_| stable_upsert_protocol(provider_key, "response was not JSON"))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| stable_upsert_protocol(provider_key, "response must be a JSON object"))?;
-    validate_upsert_identity(object, provider_key)?;
-    validate_upsert_root_binding(object, provider_key, expected_root)?;
-    let status = upsert_status(object, provider_key)?;
-    if !matches!(
-        status.as_str(),
-        "ready"
-            | "fresh"
-            | "complete"
-            | "completed"
-            | "indexed"
-            | "created"
-            | "updated"
-            | "upserted"
-    ) {
-        return Err(stable_upsert_protocol(
-            provider_key,
-            "response did not confirm a usable indexed state",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_upsert_identity(
-    object: &Map<String, Value>,
-    provider_key: &str,
-) -> std::result::Result<(), McpError> {
-    let mut found = false;
-    for field in ["project", "id", "name"] {
-        let Some(value) = object.get(field) else {
-            continue;
-        };
-        found = true;
-        let actual = value
-            .as_str()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                stable_upsert_protocol(
-                    provider_key,
-                    &format!("response field `{field}` must be a non-empty string"),
-                )
-            })?;
-        if actual != provider_key {
-            return Err(stable_upsert_protocol(
-                provider_key,
-                "response identified a different provider project",
-            ));
-        }
-    }
-    if !found {
-        return Err(stable_upsert_protocol(
-            provider_key,
-            "response omitted the stable provider project identity",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_upsert_root_binding(
-    object: &Map<String, Value>,
-    provider_key: &str,
-    expected_root: &Path,
-) -> std::result::Result<(), McpError> {
-    // `repo_path` is the stable upsert contract's input and acknowledgement
-    // field. `ScopedProject::root` is canonicalized before it reaches this
-    // call, so exact equality proves the provider bound the active prepared
-    // checkout rather than merely accepting the stable name.
-    let actual_root = object
-        .get("repo_path")
-        .ok_or_else(|| {
-            stable_upsert_protocol(
-                provider_key,
-                "response omitted the canonical checkout-root acknowledgement",
-            )
-        })?
-        .as_str()
-        .filter(|root| !root.trim().is_empty())
-        .ok_or_else(|| {
-            stable_upsert_protocol(
-                provider_key,
-                "response field `repo_path` must be a non-empty string",
-            )
-        })?;
-    if actual_root != expected_root.display().to_string() {
-        return Err(stable_upsert_protocol(
-            provider_key,
-            "response did not confirm the active canonical checkout root",
-        ));
-    }
-    Ok(())
-}
-
-fn upsert_status(
-    object: &Map<String, Value>,
-    provider_key: &str,
-) -> std::result::Result<String, McpError> {
-    let mut statuses = Vec::new();
-    for field in ["status", "state"] {
-        let Some(value) = object.get(field) else {
-            continue;
-        };
-        let status = value
-            .as_str()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                stable_upsert_protocol(
-                    provider_key,
-                    &format!("response field `{field}` must be a non-empty string"),
-                )
-            })?;
-        statuses.push(status.to_ascii_lowercase());
-    }
-    let Some(status) = statuses.first() else {
-        return Err(stable_upsert_protocol(
-            provider_key,
-            "response omitted status",
-        ));
-    };
-    if statuses.iter().any(|candidate| candidate != status) {
-        return Err(stable_upsert_protocol(
-            provider_key,
-            "response reported conflicting status/state values",
-        ));
-    }
-    Ok(status.clone())
-}
-
-fn stable_upsert_protocol(provider_key: &str, message: &str) -> McpError {
-    McpError::Protocol(format!(
-        "stable codebase-memory index upsert for `{provider_key}` was not confirmed: {message}"
-    ))
 }
 
 fn safe_index_failure_kind(error: &McpError) -> &'static str {

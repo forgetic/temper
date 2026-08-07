@@ -338,6 +338,7 @@ pub(super) struct ScopedProject {
     pub(super) git_head: Option<String>,
     pub(super) index_state: ProjectIndexState,
     pub(super) background_index: Option<BackgroundIndex>,
+    pub(super) confirmed_project: Option<String>,
 }
 
 impl ScopedProject {
@@ -362,6 +363,7 @@ impl ScopedProject {
             git_head,
             index_state: ProjectIndexState::DiscoveryUnavailable,
             background_index: None,
+            confirmed_project: None,
         };
         Ok(project)
     }
@@ -385,6 +387,7 @@ impl ScopedProject {
         self.background_index
             .as_ref()
             .and_then(BackgroundIndex::actual_project)
+            .or_else(|| self.confirmed_project.clone())
             .unwrap_or_else(|| self.provider_key.clone())
     }
 
