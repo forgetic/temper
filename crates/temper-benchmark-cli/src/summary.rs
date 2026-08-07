@@ -288,12 +288,68 @@ pub enum GraphDecisionKindV1 {
     FocusedTest,
 }
 
+/// Tool names which may appear in privacy-safe graph decision evidence. The
+/// analyzer maps trace-local names to this closed vocabulary rather than
+/// copying arbitrary tool names into a run summary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphEvidenceToolV1 {
+    Read,
+    Edit,
+    Write,
+    ApplyPatch,
+    SearchGraph,
+    SearchCode,
+    TracePath,
+    GetCodeSnippet,
+}
+
+impl GraphEvidenceToolV1 {
+    pub(crate) fn from_tool_name(name: &str) -> Option<Self> {
+        match name {
+            "read" => Some(Self::Read),
+            "edit" => Some(Self::Edit),
+            "write" => Some(Self::Write),
+            "apply_patch" => Some(Self::ApplyPatch),
+            "codebase_memory_search_graph" => Some(Self::SearchGraph),
+            "codebase_memory_search_code" => Some(Self::SearchCode),
+            "codebase_memory_trace_path" => Some(Self::TracePath),
+            "codebase_memory_get_code_snippet" => Some(Self::GetCodeSnippet),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_targeted_graph(self) -> bool {
+        matches!(
+            self,
+            Self::SearchGraph | Self::SearchCode | Self::TracePath | Self::GetCodeSnippet
+        )
+    }
+}
+
+/// The bounded, ordered action by which a graph result was consumed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphConsumptionModeV1 {
+    Selection,
+    Graph,
+    Source,
+    Mutation,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphDecisionEvidenceV1 {
     pub graph_call_id: String,
-    pub selection_call_id: String,
-    pub selection_tool: String,
+    /// The producer must finish before this sequence, in the same scope, for
+    /// the evidence to be considered relevant.
+    pub graph_finish_seq: u64,
+    pub graph_tool: GraphEvidenceToolV1,
+    pub consumer_call_id: String,
+    /// The consumer must start at this sequence after `graph_finish_seq`.
+    pub consumer_start_seq: u64,
+    pub consumer_tool: GraphEvidenceToolV1,
+    pub consumption_mode: GraphConsumptionModeV1,
     pub target: String,
     pub kind: GraphDecisionKindV1,
 }

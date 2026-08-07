@@ -193,6 +193,7 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
         target: "src/lib.rs".to_string(),
         kind: GraphDecisionKindV1::Implementation,
         result_contains: None,
+        consumption: Vec::new(),
     }];
     let mut complete = analyze_trace(
         &ingest_trace(fixture("graph-metrics-events.jsonl")).unwrap(),
