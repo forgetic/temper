@@ -110,6 +110,10 @@ def save_state(state):
     os.replace(temporary, STATE_PATH)
 
 
+def normalized_provider_project(project):
+    return "normalized-" + project
+
+
 def seed_fresh_prior_binding(project):
     state = load_state()
     if project not in state["projects"]:
@@ -123,15 +127,21 @@ def seed_fresh_prior_binding(project):
 
 def rebind_current_root(project, repo_path):
     state = load_state()
+    confirmed_project = normalized_provider_project(project)
     if project not in state["projects"]:
-        state["projects"][project] = {}
         state["counters"]["project_creations"] += 1
-    state["projects"][project] = {
+    else:
+        # The production provider canonicalizes the requested stable key. It
+        # remains one retained provider project, not a second path-keyed one.
+        del state["projects"][project]
+    state["projects"][confirmed_project] = {
+        "requested_stable_project": project,
         "repo_path": repo_path,
         "binding": "current_prepared_checkout",
     }
     state["counters"]["rebinds"] += 1
     save_state(state)
+    return confirmed_project
 
 
 def current_root_source(project, relative_path):
@@ -182,9 +192,18 @@ for line in sys.stdin:
         if name == "index_status":
             if LIFECYCLE_PROFILE == "stable-rebind":
                 project = arguments.get("project", "")
-                seed_fresh_prior_binding(project)
-                log_tool(name, arguments, fixture_event="fresh_prior_binding")
-                result = text_result(json.dumps({"project": project, "status": "fresh"}))
+                binding = load_state()["projects"].get(project)
+                if binding and binding.get("binding") == "current_prepared_checkout":
+                    log_tool(name, arguments, fixture_event="current_root_confirmed")
+                    result = text_result(json.dumps({
+                        "project": project,
+                        "root_path": binding["repo_path"],
+                        "status": "ready",
+                    }))
+                else:
+                    seed_fresh_prior_binding(project)
+                    log_tool(name, arguments, fixture_event="fresh_prior_binding")
+                    result = text_result(json.dumps({"project": project, "status": "fresh"}))
             else:
                 log_tool(name, arguments, is_error=True)
                 result = text_result(
@@ -193,16 +212,18 @@ for line in sys.stdin:
                 )
         elif name == "index_repository":
             time.sleep(READINESS_DELAY_MS / 1000)
+            provider_project = arguments.get("name", "")
             if LIFECYCLE_PROFILE == "stable-rebind":
-                rebind_current_root(arguments.get("name", ""), arguments.get("repo_path", ""))
-                fixture_event = "current_root_rebound"
+                provider_project = rebind_current_root(
+                    provider_project, arguments.get("repo_path", "")
+                )
+                fixture_event = "normalized_current_root_upsert"
             else:
                 fixture_event = None
             log_tool(name, arguments, delay_ms=READINESS_DELAY_MS, fixture_event=fixture_event)
             result = text_result(json.dumps({
-                "project": arguments.get("name", ""),
-                "repo_path": arguments.get("repo_path", REPO_ROOT),
-                "status": "fresh",
+                "project": provider_project,
+                "status": "indexed",
             }))
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
@@ -225,11 +246,21 @@ for line in sys.stdin:
                 }))
         elif name == "search_graph":
             GRAPH_CALLS += 1
+            project = arguments.get("project", "")
+            current_root = current_root_source(project, "src/lib.rs") is not None
             is_error = (
-                name == FORCED_FAILURE_TOOL
-                and GRAPH_CALLS > FORCED_FAILURE_AFTER_CALLS
+                not current_root
+                or (
+                    name == FORCED_FAILURE_TOOL
+                    and GRAPH_CALLS > FORCED_FAILURE_AFTER_CALLS
+                )
             )
-            log_tool(name, arguments, is_error=is_error)
+            log_tool(
+                name,
+                arguments,
+                is_error=is_error,
+                fixture_event="served_current_root_graph" if current_root and not is_error else None,
+            )
             if is_error:
                 result = text_result(
                     "fixture backend unavailable Authorization: Bearer MCP-FIXTURE-SECRET",

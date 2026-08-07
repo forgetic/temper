@@ -520,11 +520,18 @@ fn live_evidence_lines(
         ]);
         if let Some(rebind) = &codebase_memory.stable_rebind {
             lines.push(format!(
-                "codebase-memory stable rebind: project={} retained_projects={} fresh_prior_binding={} current_root_rebound={} source_served_from_current_root={} global_inventory_avoided={}",
-                rebind.stable_project,
+                "codebase-memory stable rebind: requested_project={} confirmed_project={} confirmation_calls={} targeted_discovery={} normalized_identity={} targeted_ready_confirmation={} retained_projects={} fresh_prior_binding={} current_root_rebound={} graph_reads_use_confirmed_project={} source_reads_use_confirmed_project={} source_served_from_current_root={} global_inventory_avoided={}",
+                rebind.requested_stable_project,
+                rebind.confirmed_provider_project,
+                rebind.confirmation_call_count,
+                rebind.initial_discovery_targeted,
+                rebind.normalized_provider_identity,
+                rebind.targeted_ready_confirmation,
                 rebind.retained_project_count,
                 rebind.fresh_prior_binding,
                 rebind.current_root_rebound,
+                rebind.graph_reads_use_confirmed_project,
+                rebind.source_reads_use_confirmed_project,
                 rebind.source_served_from_current_root,
                 rebind.global_inventory_avoided,
             ));

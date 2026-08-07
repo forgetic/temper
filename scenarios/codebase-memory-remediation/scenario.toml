@@ -1,8 +1,8 @@
 schema = "temper.scenario.v1"
 name = "codebase-memory-remediation"
 status = "active"
-intent = "Validate fresh stable-project rebinding to the active checkout, safe source retrieval, exact repair convergence, and typed bounded fallback through real Temper agent/tool configuration."
-introduced_by = "#935"
+intent = "Validate requested stable-key discovery, normalized provider-identity confirmation at the active checkout root, safe source retrieval, exact repair convergence, and typed bounded fallback through real Temper agent/tool configuration."
+introduced_by = "#944"
 owner_area = "agent-tools"
 stability = "provisional"
 timeout = "10m"
@@ -11,16 +11,16 @@ timeout = "10m"
 uses = "manifest"
 
 [validation]
-feature = "ai/temper#935"
-plan = "ai/temper#936"
-source_branch = "agent/pr-for-feature-935"
+feature = "ai/temper#944"
+plan = "ai/temper#945"
+source_branch = "agent/pr-for-feature-944"
 change = "updated"
 
 [feature_contract]
-claim = "A fresh stable codebase-memory project is rebound to each active prepared checkout before model-visible reads, without inventory discovery or path-keyed project creation, while unavailable providers retain typed bounded fallback."
-stimulus = "Run a delayed retry-affinity repair through real Forgejo, CI, standalone Temper, and a deterministic provider that begins with one fresh stable project bound to a retired prepared checkout, acknowledges an explicit rebind to the active checkout, serves safe source, then gives one systemic failure."
-observable = "Structured fresh-rebind lifecycle events, stable project identity, targeted request inventory, bounded readiness delay, current-root source result, safe failure preview, conventional fallback sequence, exact fixture repair, host validation, and CI facts."
-assertion = "The fresh stable key is rebound once to the active checkout before the model receives `src/lib.rs` source, no global inventory or path-keyed project is used, and one typed systemic failure causes conventional fallback with no later graph call or raw provider diagnostic."
+claim = "A fresh stable codebase-memory key is discovered under the requested key, then rebound only after the provider returns a normalized provider identity and a targeted ready `index_status` confirms the exact canonical `root_path`; model-visible graph and source reads use that confirmed identity without global inventory or path-keyed creation, while unavailable providers retain typed bounded fallback."
+stimulus = "Run a delayed retry-affinity repair through real Forgejo, CI, standalone Temper, and a deterministic provider that begins with one fresh requested stable key bound to a retired prepared checkout, returns a normalized identity from the active-checkout upsert, confirms that identity with targeted ready `index_status` and exact canonical `root_path`, serves safe source, then gives one systemic failure."
+observable = "Structured requested-versus-confirmed identity evidence, the two targeted confirmation calls, normalized graph and source request identities, one retained current-root binding, no global inventory, bounded readiness delay, safe failure preview, conventional fallback sequence, exact fixture repair, host validation, and CI facts."
+assertion = "Initial discovery uses the requested stable key; exactly one normalized upsert identity is retained only after targeted ready confirmation of the exact canonical `root_path`; both graph and source reads use that confirmed identity; no global inventory or path-keyed project is used; and one typed systemic failure causes conventional fallback with no later graph call or raw provider diagnostic."
 runtime_budget_seconds = 600
 jig_script_path = "jig/codebase-memory-remediation.json"
 
@@ -140,7 +140,7 @@ strategy = "codebase-memory"
 until = "engineer uses rebound current-root source and graph-selected retry-worker evidence, survives one safe systemic failure through conventional discovery, fixes src/lib.rs, CI passes, and the source issue closes"
 
 [expect]
-outcome = "The engineer receives AgentToolConfig through real Temper, awaits delayed background rebinding within one tool deadline, translates the workspace alias to the one fresh stable provider project, receives a safe source snippet from its current prepared checkout, uses graph evidence to select the retry-worker repair and test, then receives one redacted systemic failure, avoids another MCP call, uses grep/find/read fallback, validates the repair, and converges through real CI."
+outcome = "The engineer receives AgentToolConfig through real Temper, awaits delayed background rebinding within one tool deadline, discovers the requested stable key, then translates the workspace alias to the confirmed normalized provider project after targeted ready current-root confirmation; it receives a safe source snippet from that binding, uses graph evidence to select the retry-worker repair and test, then receives one redacted systemic failure, avoids another MCP call, uses grep/find/read fallback, validates the repair, and converges through real CI."
 merged_pull_requests = 1
 closed_parent_issues = 1
 
@@ -216,7 +216,7 @@ fields."tool.name" = "codebase_memory"
 
 [[expect.events]]
 required = true
-id = "graph-called-with-stable-provider-project"
+id = "graph-called-with-confirmed-provider-project"
 event = "mcp.tool.called"
 fields."tool.name" = "codebase_memory_search_graph"
 fields."mcp.tool" = "search_graph"
@@ -315,7 +315,7 @@ fake_mcp_tools = ["search_graph", "get_code_snippet", "list_projects", "index_st
 model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_get_code_snippet", "codebase_memory_list_projects", "codebase_memory_index_status"]
 model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
 default_project = "acme/demo"
-actual_project = "temper-v1-<stable-provider-key>"
+actual_project = "normalized-temper-v1-<stable-provider-key>"
 graph_call_uses_workspace_alias = "demo"
 forced_systemic_failure = "search_graph after one success"
 expected_output_name = "src/lib.rs"
