@@ -3,9 +3,10 @@
 //! Focused feature-landing validation over one resolved scenario.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
 use temper_scenario_core::{
     ForgeIssueKey, ResolveFeatureScenarioRequest, ResolvedFeatureScenario, ValidatorResult,
@@ -76,21 +77,34 @@ pub(super) fn command(args: &[String]) -> ExitCode {
     }
 
     print_mapping_audit(&resolved);
+    let checkout_head = match checked_out_head() {
+        Ok(head) => head,
+        Err(error) => return retained_failure(&args.output_dir, error),
+    };
+    if checkout_head != args.sha {
+        return retained_failure(
+            &args.output_dir,
+            format!(
+                "checked-out HEAD `{checkout_head}` does not match supplied landing PR head `{}`; evidence would be stale",
+                args.sha
+            ),
+        );
+    }
+    if resolved.head_sha != checkout_head {
+        return retained_failure(
+            &args.output_dir,
+            format!(
+                "resolved mapping head `{}` does not match checked-out landing PR head `{checkout_head}`",
+                resolved.head_sha
+            ),
+        );
+    }
     if resolved.source_branch != args.source_branch {
         return retained_failure(
             &args.output_dir,
             format!(
                 "mapped source branch `{}` does not match landing PR source branch `{}`",
                 resolved.source_branch, args.source_branch
-            ),
-        );
-    }
-    if resolved.head_sha != args.sha {
-        return retained_failure(
-            &args.output_dir,
-            format!(
-                "checked-out HEAD `{}` does not match landing PR head `{}`; evidence would be stale",
-                resolved.head_sha, args.sha
             ),
         );
     }
@@ -103,7 +117,13 @@ pub(super) fn command(args: &[String]) -> ExitCode {
     let result = match load_result(&result_path) {
         Ok(result) => Some(result),
         Err(error) if validation_status == ExitCode::SUCCESS => {
-            let _ = write_audit(&args.output_dir, &resolved, None, "evidence_missing");
+            let _ = write_audit(
+                &args.output_dir,
+                &resolved,
+                None,
+                "evidence_missing",
+                &args.sha,
+            );
             return retained_failure(&args.output_dir, error);
         }
         Err(error) => {
@@ -112,12 +132,29 @@ pub(super) fn command(args: &[String]) -> ExitCode {
         }
     };
 
+    if let Err(error) = verify_checkout_head(&args.sha) {
+        let _ = write_audit(
+            &args.output_dir,
+            &resolved,
+            result.as_ref(),
+            "checkout_changed",
+            &args.sha,
+        );
+        return retained_failure(&args.output_dir, error);
+    }
+
     let status = if validation_status == ExitCode::SUCCESS {
         "passed"
     } else {
         "failed"
     };
-    if let Err(error) = write_audit(&args.output_dir, &resolved, result.as_ref(), status) {
+    if let Err(error) = write_audit(
+        &args.output_dir,
+        &resolved,
+        result.as_ref(),
+        status,
+        &args.sha,
+    ) {
         return retained_failure(&args.output_dir, error);
     }
     if let Some(result) = result.as_ref() {
@@ -128,7 +165,7 @@ pub(super) fn command(args: &[String]) -> ExitCode {
     }
 
     let result = result.expect("successful validation loaded a result");
-    let diagnostics = exact_mapping_diagnostics(&resolved, &result);
+    let diagnostics = exact_mapping_diagnostics(&resolved, &result, &args.sha);
     if diagnostics.is_empty() {
         ExitCode::SUCCESS
     } else {
@@ -137,6 +174,7 @@ pub(super) fn command(args: &[String]) -> ExitCode {
             &resolved,
             Some(&result),
             "contract_failed",
+            &args.sha,
         );
         retained_failure(
             &args.output_dir,
@@ -175,8 +213,15 @@ fn validation_args(args: &Args, resolved: &ResolvedFeatureScenario) -> Vec<Strin
 fn exact_mapping_diagnostics(
     mapping: &ResolvedFeatureScenario,
     result: &ValidatorResult,
+    landing_pr_head_sha: &str,
 ) -> Vec<String> {
     let mut diagnostics = result.validate_contract();
+    if result.exact_head_sha.as_deref() != Some(landing_pr_head_sha) {
+        diagnostics.push(format!(
+            "validator `exact_head_sha` {:?} does not match supplied landing PR head `{landing_pr_head_sha}`",
+            result.exact_head_sha
+        ));
+    }
     for (field, actual, expected) in [
         (
             "feature",
@@ -243,6 +288,36 @@ fn print_mapping_audit(mapping: &ResolvedFeatureScenario) {
     println!("focused content digest: {}", mapping.digest);
 }
 
+fn checked_out_head() -> Result<String, String> {
+    let output = Command::new("git")
+        .args([
+            OsStr::new("rev-parse"),
+            OsStr::new("--verify"),
+            OsStr::new("HEAD^{commit}"),
+        ])
+        .output()
+        .map_err(|error| format!("read checked-out landing PR head: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "read checked-out landing PR head: git rev-parse exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn verify_checkout_head(expected: &str) -> Result<(), String> {
+    let actual = checked_out_head()?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "checked-out HEAD `{actual}` does not match supplied landing PR head `{expected}`; evidence would be stale"
+        ))
+    }
+}
+
 fn print_result_audit(result: &ValidatorResult) {
     println!("focused verdict: {}", result.verdict);
     println!(
@@ -274,10 +349,12 @@ fn write_audit(
     mapping: &ResolvedFeatureScenario,
     result: Option<&ValidatorResult>,
     status: &str,
+    landing_pr_head_sha: &str,
 ) -> Result<(), String> {
     let audit = serde_json::json!({
         "schema": "temper.scenario.focused-validation-audit.v1",
         "status": status,
+        "landing_pr_head_sha": landing_pr_head_sha,
         "mapping": mapping,
         "validator_result": result,
     });

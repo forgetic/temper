@@ -55,6 +55,8 @@ The retained artifact is named
   `temper.validator.result.v2` payload;
 - `focused-validation-audit.json`, joining the mapping and validator result for
   CI audit consumers;
+- `checkout-audit.log`, recording the supplied landing PR head and the forced
+  checkout head; and
 - live logs, script assertion output, and a Markdown report; and
 - `focused-validation-failure.txt` and `ci-audit.log` on early failures.
 
@@ -76,10 +78,14 @@ reconstructing this trust decision from rendered logs.
 
 ## Stale evidence and authority
 
-The command requires the supplied PR head to equal checked-out `HEAD`. The
-result repeats the mapping id, source branch, head SHA, content digest,
-standalone binary SHA-256, required assertion results, and verdict. A mismatch
-between the resolver and a passing result fails the lane.
+The supplied landing PR SHA is authoritative: the workflow force-checks out
+that commit, the command checks it before and after the live run, and the audit
+records it as `landing_pr_head_sha`. Mapping resolution still independently
+proves the feature, source branch, scenario identity, and content digest; it
+does not replace the supplied SHA. The result repeats the mapping id, source
+branch, head SHA, content digest, standalone binary SHA-256, required assertion
+results, and verdict. Any mismatch among the supplied SHA, checkout, resolver,
+or passing result fails the lane.
 
 Any new commit changes the feature head. Prior evidence then describes an old
 attempt and must be rerun; it cannot authorize landing. Focused CI is a
