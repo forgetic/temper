@@ -126,9 +126,16 @@ representative LLM performance**. Deterministic Jig timing is not a CI gate.
 For the controlled routing fixture, the lane also proves that a fixture-only
 stable upsert's normalized identity is separately confirmed with a targeted
 ready status and canonical root before serving a cold targeted result and a
-later warm result, that a parseable compound shell command has complete
-classification coverage, and that one forced-unavailable request is safely
-bounded before conventional fallback.
+later warm result. Its enabled path is a five-call chain: targeted graph search,
+symbol refinement, caller tracing, then two current-root source snippets before
+the exact mutation. Relevance credits only the manifest-declared ordered
+graph-to-graph, graph-to-source, and exact-source-selection consumption modes. A run
+summary exposes only call ordering, safe tool names, declared targets/kinds, and
+consumption modes; it excludes tool arguments, source, and provider results.
+The diagnostic trace retains controlled source snippets and therefore remains a
+restricted review artifact. The lane also proves that a parseable compound shell
+command has complete classification coverage, and that one forced-unavailable
+request is safely bounded before conventional fallback.
 It proves neither live cache behavior nor an effectiveness or deployment gate;
 the fixture Jigs prescribe tool calls and must not be interpreted as model
 decisions. Run the repository lane with:
