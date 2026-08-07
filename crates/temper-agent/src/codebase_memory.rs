@@ -28,6 +28,7 @@ use crate::mcp::{
 use temper_agent_core::AgentContainmentContext;
 
 mod background;
+mod confirmation;
 mod health;
 mod indexing;
 mod lifecycle_observability;

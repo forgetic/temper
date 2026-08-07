@@ -179,6 +179,28 @@ fn codebase_memory_bundle_requires_delayed_graph_readiness_and_bounded_fallback(
 }
 
 #[test]
+fn codebase_memory_rebind_manifest_declares_normalized_ready_confirmation() {
+    let scenario_path = scenarios_root().join("codebase-memory-remediation");
+    let bundle = ScenarioBundle::load(&scenario_path).expect("codebase-memory bundle");
+    let manifest = fs::read_to_string(scenario_path.join("scenario.toml"))
+        .expect("checked-in codebase-memory manifest");
+    let readme = fs::read_to_string(scenario_path.join("README.md"))
+        .expect("checked-in codebase-memory README");
+
+    assert_eq!(
+        bundle.execution.convergence,
+        ConvergenceStrategy::CodebaseMemory
+    );
+    assert!(manifest.contains("normalized provider identity"));
+    assert!(manifest.contains("targeted ready `index_status`"));
+    assert!(manifest.contains("exact canonical `root_path`"));
+    assert!(manifest.contains("no global inventory"));
+    assert!(readme.contains("normalized provider identity"));
+    assert!(readme.contains("targeted ready `index_status`"));
+    assert!(readme.contains("exact canonical `root_path`"));
+}
+
+#[test]
 fn exact_head_repair_bundle_owns_protected_failure_proof_and_three_cadences() {
     let bundle = ScenarioBundle::load(scenarios_root().join("forgejo-exact-head-ci-repair"))
         .expect("exact-head CI repair bundle");

@@ -25,7 +25,7 @@ use super::{
 };
 
 mod stable_rebind;
-use stable_rebind::{stable_rebind_evidence, validate_stable_rebind_contract};
+use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
 const MEMORY_FILE: &str = "src/lib.rs";
 const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_GRAPH_RESULT";
@@ -467,114 +467,6 @@ pub(super) fn write_fake_mcp(
         readiness_delay_ms,
         forced_systemic_failure: forced_systemic_failure.cloned(),
     })
-}
-
-fn validate_mcp_contract(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Result<(), String> {
-    let failure = mcp.forced_systemic_failure.as_ref();
-    let graph_tool = failure
-        .map(|failure| failure.tool.as_str())
-        .unwrap_or("search_graph");
-    let expected_graph_calls = failure.map(|failure| failure.after_calls + 1).unwrap_or(1);
-    let graph = calls
-        .iter()
-        .enumerate()
-        .filter(|(_, call)| call.name == graph_tool)
-        .collect::<Vec<_>>();
-    if graph.len() != expected_graph_calls {
-        return Err(format!(
-            "expected {expected_graph_calls} {graph_tool} MCP call(s), found {} in {}",
-            graph.len(),
-            mcp.log_path.display()
-        ));
-    }
-    if failure.is_some()
-        && (graph[..graph.len().saturating_sub(1)]
-            .iter()
-            .any(|(_, call)| call.is_error)
-            || graph.last().is_some_and(|(_, call)| !call.is_error))
-    {
-        return Err(format!(
-            "{graph_tool} did not preserve one successful graph result before the controlled systemic failure: {graph:?}"
-        ));
-    }
-    let index = calls
-        .iter()
-        .filter(|call| call.name == "index_repository")
-        .collect::<Vec<_>>();
-    if index.len() != 1
-        || index[0].arguments.get("repo_path").is_none()
-        || index[0].arguments.get("name").is_none()
-    {
-        return Err(format!(
-            "index_repository was not exercised exactly once internally with repo_path and stable name: {calls:?}"
-        ));
-    }
-    let provider_project = index[0]
-        .arguments
-        .get("name")
-        .and_then(JsonValue::as_str)
-        .filter(|name| name.starts_with("temper-v1-"))
-        .ok_or_else(|| {
-            format!(
-                "index_repository did not receive a stable provider project identity: {index:?}"
-            )
-        })?;
-    if graph.iter().any(|(_, call)| {
-        call.arguments.get("project").and_then(JsonValue::as_str) != Some(provider_project)
-    }) {
-        return Err(format!(
-            "{graph_tool} did not translate the workspace alias to stable provider project {provider_project}: {graph:?}"
-        ));
-    }
-    if index[0].delay_ms != Some(mcp.readiness_delay_ms) {
-        return Err(format!(
-            "background index delay was not retained as {}ms: {index:?}",
-            mcp.readiness_delay_ms
-        ));
-    }
-    let status = calls
-        .iter()
-        .filter(|call| call.name == "index_status")
-        .collect::<Vec<_>>();
-    if status.len() != 1
-        || status[0]
-            .arguments
-            .get("project")
-            .and_then(JsonValue::as_str)
-            != Some(provider_project)
-    {
-        return Err(format!(
-            "expected one targeted index_status discovery call for stable provider project {provider_project}, found {status:?}"
-        ));
-    }
-    let mut expected_counts = BTreeMap::from([
-        ("index_repository".to_string(), 1_usize),
-        ("index_status".to_string(), 1_usize),
-        (graph_tool.to_string(), expected_graph_calls),
-    ]);
-    if mcp.lifecycle_profile.as_deref() == Some("stable-rebind") {
-        expected_counts.insert("get_code_snippet".to_string(), 1);
-    }
-    let mut actual_counts = BTreeMap::<String, usize>::new();
-    for call in calls {
-        *actual_counts.entry(call.name.clone()).or_default() += 1;
-    }
-    if actual_counts != expected_counts {
-        return Err(format!(
-            "unexpected MCP request inventory; expected {expected_counts:?}, got {actual_counts:?}"
-        ));
-    }
-    if let Some((failure_position, _)) = graph.last() {
-        if calls.len() != failure_position + 1 {
-            return Err(format!(
-                "a codebase-memory MCP call followed the controlled systemic failure: {calls:?}"
-            ));
-        }
-    }
-    if mcp.lifecycle_profile.as_deref() == Some("stable-rebind") {
-        validate_stable_rebind_contract(mcp, calls, provider_project)?;
-    }
-    Ok(())
 }
 
 #[derive(Debug)]

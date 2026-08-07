@@ -317,6 +317,12 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
                     return Err(format!("enabled trace omitted {expected:?}"));
                 }
             }
+            if !trace_has_confirmed_graph_read(&trace) {
+                return Err(
+                    "enabled trace did not prove graph reads used the confirmed normalized provider identity"
+                        .to_string(),
+                );
+            }
         }
         "codebase-memory-disabled" => {
             expect_exact(&run, "/metrics/graph/calls", 0)?;
@@ -372,6 +378,37 @@ fn verify_complete_compound_discovery(run: &Value) -> Result<(), String> {
     )?;
     expect_exact(run, "/metrics/tools/by_name/bash/calls", 2)?;
     expect_absent(run, "/metrics/tools/by_name/grep")
+}
+
+fn trace_has_confirmed_graph_read(trace: &str) -> bool {
+    trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .any(|event| value_has_confirmed_graph_read(&event))
+}
+
+fn value_has_confirmed_graph_read(value: &Value) -> bool {
+    match value {
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .ok()
+            .is_some_and(|payload| confirmed_graph_read_payload(&payload)),
+        Value::Array(values) => values.iter().any(value_has_confirmed_graph_read),
+        Value::Object(values) => values.values().any(value_has_confirmed_graph_read),
+        _ => false,
+    }
+}
+
+fn confirmed_graph_read_payload(payload: &Value) -> bool {
+    let requested = payload
+        .get("requested_stable_project")
+        .and_then(Value::as_str);
+    requested.is_some_and(|requested| {
+        requested.starts_with("temper-v1-")
+            && requested != "temper-benchmark-codebase-memory-routing-repair"
+    }) && payload.get("project_route").and_then(Value::as_str) == Some("confirmed_identity")
+        && payload.get("confirmed_project").and_then(Value::as_str)
+            == Some("temper-benchmark-codebase-memory-routing-repair")
+        && payload.get("graph_read_project") == payload.get("confirmed_project")
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {

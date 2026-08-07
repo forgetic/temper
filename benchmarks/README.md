@@ -47,8 +47,9 @@ The `temper-dev` driver builds `temper-agent`, runs the structural manifest and
 all three controlled codebase-memory conditions, and verifies run and aggregate
 summaries. The structural checks include mutation turns, single-mutation turns,
 and maximum mutations per turn. The controlled checks include complete
-compound-shell classification, targeted graph-result consumption, deterministic
-cold-then-warm stable readiness, a bounded privacy-safe unavailable fallback,
+compound-shell classification, targeted graph-result consumption, a normalized
+provider identity confirmed by a separate targeted ready/root response,
+deterministic cold-then-warm readiness, a bounded privacy-safe unavailable fallback,
 host validation, and exact diff correctness. Those fixture signals verify
 harness behavior, not deployment eligibility or live model effectiveness.
 Malformed or missing scope ancestry is an ingestion error,

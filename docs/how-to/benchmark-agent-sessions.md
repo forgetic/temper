@@ -124,9 +124,11 @@ submit gates, serialized barrier handling, and structural metrics. It is safe
 for ordinary CI, but its model latency, TTFT, tokens, and wall time are **not
 representative LLM performance**. Deterministic Jig timing is not a CI gate.
 For the controlled routing fixture, the lane also proves that a fixture-only
-stable upsert can serve a cold targeted result and a later warm result, that a
-parseable compound shell command has complete classification coverage, and that
-one forced-unavailable request is safely bounded before conventional fallback.
+stable upsert's normalized identity is separately confirmed with a targeted
+ready status and canonical root before serving a cold targeted result and a
+later warm result, that a parseable compound shell command has complete
+classification coverage, and that one forced-unavailable request is safely
+bounded before conventional fallback.
 It proves neither live cache behavior nor an effectiveness or deployment gate;
 the fixture Jigs prescribe tool calls and must not be interpreted as model
 decisions. Run the repository lane with:

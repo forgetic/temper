@@ -63,7 +63,7 @@ fn targeted_discovery_rebinds_fresh_projects_without_global_inventory() {
         assert!(
             prompt.contains("active-checkout binding: confirmed for the current prepared checkout")
         );
-        assert_eq!(calls_named(&log_path, "index_status").len(), 2);
+        assert_eq!(calls_named(&log_path, "index_status").len(), 4);
         assert!(calls_named(&log_path, "list_projects").is_empty());
         let upserts = calls_named(&log_path, "index_repository");
         assert_eq!(upserts.len(), 2);
