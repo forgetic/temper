@@ -423,10 +423,17 @@ pub struct LiveCodebaseMemoryEvidence {
 /// Contract facts retained by the stable-rebind fake provider profile.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LiveStableRebindEvidence {
-    pub stable_project: String,
+    pub requested_stable_project: String,
+    pub confirmed_provider_project: String,
     pub retained_project_count: usize,
+    pub confirmation_call_count: usize,
+    pub initial_discovery_targeted: bool,
+    pub normalized_provider_identity: bool,
+    pub targeted_ready_confirmation: bool,
     pub fresh_prior_binding: bool,
     pub current_root_rebound: bool,
+    pub graph_reads_use_confirmed_project: bool,
+    pub source_reads_use_confirmed_project: bool,
     pub source_served_from_current_root: bool,
     pub global_inventory_avoided: bool,
 }
