@@ -32,12 +32,19 @@ cargo run -p temper-benchmark-cli -- run \
 ```
 
 The enabled harness starts with a confirmed missing stable project, performs a
-blocking stable upsert in an isolated fixture-state file outside the repository,
-then verifies a cold ready search followed by a warm ready search using that
-same provider key. Both targeted `search_code` responses name `src/route.rs`,
-its caller `src/delivery.rs`, and/or `tests/alias_retry.rs`, and later exact
-reads consume every declared result marker. The Jig deliberately avoids broad
-architecture and empty graph searches.
+blocking stable upsert in an isolated fixture-state file outside the repository.
+That upsert returns only the fixture's normalized provider identity
+`temper-benchmark-codebase-memory-routing-repair` and `indexed` status; it does
+not acknowledge a root. A second targeted `index_status` request for that
+normalized identity returns `ready` plus the canonical `root_path`. The
+requested opaque stable key remains in fixture state for comparison, but cannot
+serve status or graph reads. Each successful `search_code` result records its
+requested stable key, confirmed project, and graph-read project, proving that
+reads route through the confirmed normalized identity rather than the requested
+stable key. The cold and warm responses name `src/route.rs`, its caller
+`src/delivery.rs`, and/or `tests/alias_retry.rs`, and later exact reads consume
+every declared result marker. The Jig deliberately avoids broad architecture
+and empty graph searches.
 
 Every condition uses the same parseable compound shell fallback before the
 first exact selection: `cd repo && rg ...`. The manifest counts its one `rg`

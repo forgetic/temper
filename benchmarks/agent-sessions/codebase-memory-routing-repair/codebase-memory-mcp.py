@@ -7,6 +7,11 @@ import sys
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "enabled"
 
+# This is deliberately distinct from Temper's opaque, stable upsert key. The
+# fixture has one repository, so its production-shaped normalized identity is
+# fixed and can be asserted by the controlled harness.
+NORMALIZED_PROJECT = "temper-benchmark-codebase-memory-routing-repair"
+
 
 def state_path_from_args():
     try:
@@ -82,12 +87,13 @@ TOOLS = [
 
 def load_state():
     if not STATE_PATH:
-        return {"projects": {}, "searches": 0}
+        return {"graph_reads": [], "projects": {}, "searches": 0}
     try:
         with open(STATE_PATH, encoding="utf-8") as handle:
             state = json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError):
-        state = {"projects": {}, "searches": 0}
+        state = {"graph_reads": [], "projects": {}, "searches": 0}
+    state.setdefault("graph_reads", [])
     state.setdefault("projects", {})
     state.setdefault("searches", 0)
     return state
@@ -122,19 +128,35 @@ def tool_result(request_id, payload, is_error=False):
 
 def ready_search_result(project):
     state = load_state()
-    if project not in state["projects"]:
+    binding = state["projects"].get(project)
+    # A requested stable key is retained for assertion only. It cannot be
+    # used as a graph target: only the normalized identity returned by the
+    # upsert and confirmed by the second targeted status request is accepted.
+    if project != NORMALIZED_PROJECT or binding is None:
         return None
     state["searches"] += 1
     search_number = state["searches"]
+    state["graph_reads"].append(
+        {
+            "confirmed_project": project,
+            "requested_stable_project": binding["requested_stable_project"],
+        }
+    )
     save_state(state)
+    identity = {
+        "confirmed_project": project,
+        "graph_read_project": project,
+        "project_route": "confirmed_identity",
+        "requested_stable_project": binding["requested_stable_project"],
+    }
     if search_number == 1:
-        return {
+        return identity | {
             "readiness": "cold stable upsert is ready",
             "implementation": "src/route.rs::worker_slot",
             "caller": "src/delivery.rs::DeliveryRouter::worker_for",
             "focused_test": "tests/alias_retry.rs::alias_retries_stay_on_the_original_ordered_worker",
         }
-    return {
+    return identity | {
         "readiness": "warm stable project remains ready",
         "implementation": "src/route.rs::worker_slot",
     }
@@ -172,7 +194,9 @@ for line in sys.stdin:
         if name == "index_status":
             project = arguments.get("project", "")
             binding = load_state()["projects"].get(project)
-            if binding is not None:
+            # The canonical root is intentionally withheld from the upsert and
+            # exposed only by this targeted confirmation of the normalized ID.
+            if project == NORMALIZED_PROJECT and binding is not None:
                 tool_result(
                     request_id,
                     json.dumps(
@@ -185,12 +209,11 @@ for line in sys.stdin:
                     ),
                 )
             elif MODE == "enabled":
-                status = "ready" if binding is not None else "missing"
-                payload = {"project": project, "status": status}
+                payload = {"project": project, "status": "missing"}
                 tool_result(
                     request_id,
                     json.dumps(payload, sort_keys=True),
-                    status == "missing",
+                    True,
                 )
             else:
                 tool_result(
@@ -213,16 +236,19 @@ for line in sys.stdin:
                 ),
             )
         elif name == "index_repository":
-            project = arguments.get("name", "").replace("/", "-")
+            requested_stable_project = arguments.get("name", "")
             repo_path = os.path.realpath(arguments.get("repo_path", ""))
             state = load_state()
-            state["projects"][project] = {"root_path": repo_path}
+            state["projects"][NORMALIZED_PROJECT] = {
+                "requested_stable_project": requested_stable_project,
+                "root_path": repo_path,
+            }
             save_state(state)
             tool_result(
                 request_id,
                 json.dumps(
                     {
-                        "project": project,
+                        "project": NORMALIZED_PROJECT,
                         "status": "indexed",
                     },
                     sort_keys=True,
