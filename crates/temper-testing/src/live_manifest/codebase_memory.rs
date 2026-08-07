@@ -24,6 +24,7 @@ use super::{
     ENGINEER, FinalStateEvidence, ForcedSystemicFailureFixture, LiveCodebaseMemoryEvidence,
 };
 
+mod graph_consumption;
 mod stable_rebind;
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
@@ -52,13 +53,7 @@ pub(super) fn converge(
     )?;
     let calls = logged_tool_calls(&mcp.log_path)?;
     validate_mcp_contract(mcp, &calls)?;
-    fake.validate_observations()?;
-    if fake.engineer_requests() < 9 {
-        return Err(format!(
-            "fake LLM did not complete the codebase-memory readiness, fallback, and validation loop\n{}",
-            fake.log_tail()
-        ));
-    }
+    fake.validate_observations(mcp)?;
     let mut mcp_call_counts = BTreeMap::<String, usize>::new();
     for call in &calls {
         *mcp_call_counts.entry(call.name.clone()).or_default() += 1;
@@ -386,7 +381,7 @@ pub(super) fn tune_codebase_memory_config(
                     .forced_systemic_failure
                     .as_ref()
                     .map(|failure| failure.tool.as_str())
-                    .unwrap_or("")
+                    .unwrap_or("-")
                     .to_string(),
             ),
             TomlValue::String(
@@ -520,6 +515,9 @@ struct ModelObservations {
     prompt_guidance_seen: bool,
     memory_result_seen: bool,
     current_root_source_seen: bool,
+    code_refinement_seen: bool,
+    graph_trace_seen: bool,
+    current_root_source_results: usize,
     safe_failure_seen: bool,
     raw_provider_text_seen: bool,
     bounded_graph_result_seen: bool,
@@ -558,6 +556,17 @@ impl CodebaseMemoryFake {
             if messages_contain(view, SNIPPET_RESULT_NEEDLE) {
                 observations.current_root_source_seen = true;
             }
+            if messages_contain(view, "FAKE_MCP_CODE_RESULT") {
+                observations.code_refinement_seen = true;
+            }
+            if messages_contain(view, "FAKE_MCP_TRACE_RESULT") {
+                observations.graph_trace_seen = true;
+            }
+            observations.current_root_source_results += view
+                .messages
+                .iter()
+                .filter(|message| message.content.contains(SNIPPET_RESULT_NEEDLE))
+                .count();
             if messages_contain(view, SAFE_PROVIDER_FAILURE) {
                 observations.safe_failure_seen = true;
             }
@@ -594,7 +603,7 @@ impl CodebaseMemoryFake {
         self.engineer_requests.load(Ordering::SeqCst)
     }
 
-    fn validate_observations(&self) -> Result<(), String> {
+    fn validate_observations(&self, mcp: &FakeMcpServer) -> Result<(), String> {
         let (
             prompt_guidance_seen,
             memory_result_seen,
@@ -602,6 +611,9 @@ impl CodebaseMemoryFake {
             safe_failure_seen,
             raw_provider_text_seen,
             bounded_graph_result_seen,
+            code_refinement_seen,
+            graph_trace_seen,
+            current_root_source_results,
             oversized_message_seen,
         ) = {
             let observations = self
@@ -615,6 +627,9 @@ impl CodebaseMemoryFake {
                 observations.safe_failure_seen,
                 observations.raw_provider_text_seen,
                 observations.bounded_graph_result_seen,
+                observations.code_refinement_seen,
+                observations.graph_trace_seen,
+                observations.current_root_source_results,
                 observations.oversized_message_seen,
             )
         };
@@ -636,15 +651,31 @@ impl CodebaseMemoryFake {
                 self.log_tail()
             ));
         }
-        if !bounded_graph_result_seen {
+        if !bounded_graph_result_seen
+            && mcp.lifecycle_profile.as_deref() != Some("graph-consumption")
+        {
             return Err(format!(
                 "fake LLM did not receive the bounded graph result marker\n{}",
                 self.log_tail()
             ));
         }
-        if !safe_failure_seen {
+        if mcp.forced_systemic_failure.is_some() && !safe_failure_seen {
             return Err(format!(
                 "fake LLM did not receive the bounded typed systemic diagnostic\n{}",
+                self.log_tail()
+            ));
+        }
+        if mcp.lifecycle_profile.as_deref() == Some("graph-consumption")
+            && (!code_refinement_seen || !graph_trace_seen || current_root_source_results < 2)
+        {
+            return Err(format!(
+                "fake LLM did not consume the complete graph-to-graph/current-root source chain\n{}",
+                self.log_tail()
+            ));
+        }
+        if self.engineer_requests() < 9 {
+            return Err(format!(
+                "fake LLM did not complete the codebase-memory validation loop\n{}",
                 self.log_tail()
             ));
         }
@@ -667,10 +698,13 @@ impl CodebaseMemoryFake {
         let requests = self.fake.requests();
         let observations = self.observations.lock().expect("observations lock");
         let mut lines = vec![format!(
-            "observations: prompt_guidance_seen={} memory_result_seen={} current_root_source_seen={} bounded_graph_result_seen={} safe_failure_seen={} raw_provider_text_seen={} oversized_message_seen={}",
+            "observations: prompt_guidance_seen={} memory_result_seen={} current_root_source_seen={} code_refinement_seen={} graph_trace_seen={} current_root_source_results={} bounded_graph_result_seen={} safe_failure_seen={} raw_provider_text_seen={} oversized_message_seen={}",
             observations.prompt_guidance_seen,
             observations.memory_result_seen,
             observations.current_root_source_seen,
+            observations.code_refinement_seen,
+            observations.graph_trace_seen,
+            observations.current_root_source_results,
             observations.bounded_graph_result_seen,
             observations.safe_failure_seen,
             observations.raw_provider_text_seen,

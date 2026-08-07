@@ -160,13 +160,12 @@ impl Tool for CodebaseMemoryTool {
             };
             return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
         };
-        let argument_preview = redacted_preview(&serialized_input, 240);
         emit_mcp_tool_called(McpToolCalled {
             tool_name: &self.public_name,
             mcp_tool: &self.mcp_name,
             mcp_project: &mcp_project,
             repo_root: &self.scope.primary_root().display().to_string(),
-            argument_preview: &argument_preview,
+            argument_preview: "<arguments omitted>",
         });
 
         let graph_started = Instant::now();
@@ -207,14 +206,13 @@ impl Tool for CodebaseMemoryTool {
             return Ok(self.failed_output(&mcp_project, category, timings));
         }
 
-        let result_preview = redacted_preview(&bounded.text, 240);
         emit_mcp_tool_result(McpToolResult {
             tool_name: &self.public_name,
             mcp_tool: &self.mcp_name,
             mcp_project: &mcp_project,
             is_error: false,
             truncated: bounded.truncated,
-            result_preview: &result_preview,
+            result_preview: "<result omitted>",
             readiness_wait_ms: timings.readiness_wait_ms,
             graph_execution_ms: timings.graph_execution_ms,
             duration_ms: timings.duration_ms,

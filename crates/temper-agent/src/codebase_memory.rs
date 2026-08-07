@@ -652,46 +652,6 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
     );
 }
 
-fn redacted_preview(text: &str, max_chars: usize) -> String {
-    if contains_secret_like(text) {
-        return "<redacted>".to_string();
-    }
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() <= max_chars {
-        return normalized;
-    }
-    if max_chars == 0 {
-        return String::new();
-    }
-    if max_chars == 1 {
-        return "…".to_string();
-    }
-    let mut preview = normalized.chars().take(max_chars - 1).collect::<String>();
-    preview.push('…');
-    preview
-}
-
-fn contains_secret_like(text: &str) -> bool {
-    let lowered = text.to_ascii_lowercase();
-    [
-        "token=",
-        "token:",
-        "password=",
-        "password:",
-        "secret=",
-        "secret:",
-        "authorization=",
-        "authorization:",
-        "bearer ",
-        "api_key=",
-        "api-key=",
-        "auth=",
-        "-----begin ",
-    ]
-    .iter()
-    .any(|needle| lowered.contains(needle))
-}
-
 fn codebase_memory_mode(mode: CodebaseMemoryMode) -> &'static str {
     match mode {
         CodebaseMemoryMode::Auto => "auto",

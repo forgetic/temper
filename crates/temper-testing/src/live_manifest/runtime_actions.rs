@@ -50,7 +50,11 @@ impl LiveExecutionContext<'_> {
         )?;
         require(!project.trim().is_empty(), "MCP project must not be empty")?;
         require(
-            fixture.is_none() || matches!(fixture, Some("stable-lifecycle" | "stable-rebind")),
+            fixture.is_none()
+                || matches!(
+                    fixture,
+                    Some("stable-lifecycle" | "stable-rebind" | "graph-consumption")
+                ),
             "unknown fake codebase-memory fixture",
         )?;
         require(
@@ -64,6 +68,7 @@ impl LiveExecutionContext<'_> {
         let supported = [
             "search_code",
             "search_graph",
+            "trace_path",
             "get_code_snippet",
             "list_projects",
             "index_status",
@@ -163,9 +168,12 @@ impl LiveExecutionContext<'_> {
                 self.harness.scenario.execution.convergence,
                 script_path,
                 late_stream_failure,
-                self.mcp
-                    .as_ref()
-                    .is_some_and(|mcp| mcp.lifecycle_profile.as_deref() == Some("stable-rebind")),
+                self.mcp.as_ref().is_some_and(|mcp| {
+                    matches!(
+                        mcp.lifecycle_profile.as_deref(),
+                        Some("stable-rebind" | "graph-consumption")
+                    )
+                }),
             )?);
         }
         for role in roles {

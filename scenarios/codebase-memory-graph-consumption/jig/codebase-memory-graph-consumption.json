@@ -1,0 +1,96 @@
+{
+  "phases": [
+    {
+      "name": "engineer-codebase-memory-graph-consumption",
+      "when": { "messages_contain": ["ROLE: engineer"] },
+      "sequence": [
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "graph_identify_retry_worker",
+              "name": "codebase_memory_search_graph",
+              "args": { "project": "demo", "query": "alias retry worker affinity" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "graph_refine_retry_worker",
+              "name": "codebase_memory_search_code",
+              "args": { "project": "demo", "pattern": "retry_worker_topic" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "graph_trace_retry_worker_caller",
+              "name": "codebase_memory_trace_path",
+              "args": { "project": "demo", "function_name": "retry_worker_topic" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "read_confirmed_current_root_implementation",
+              "name": "codebase_memory_get_code_snippet",
+              "args": { "project": "demo", "path": "src/lib.rs" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "read_confirmed_current_root_test",
+              "name": "codebase_memory_get_code_snippet",
+              "args": { "project": "demo", "path": "tests/retry_affinity.rs" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "repair_retry_worker_after_graph_consumption",
+              "name": "write",
+              "args": {
+                "path": "demo/src/lib.rs",
+                "content": "/// Chooses the ordered worker key for an event attempt.\npub fn retry_worker_topic<'a>(\n    topic: &'a str,\n    canonical_topic: Option<&'a str>,\n    _attempt: u32,\n) -> &'a str {\n    canonical_topic.unwrap_or(topic)\n}\n"
+              }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "validate_retry_worker_repair",
+              "name": "bash",
+              "args": { "command": "cd demo && cargo fmt --check && cargo test --quiet", "timeout": 60 }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "submit_retry_worker_repair",
+              "name": "submit_for_pr",
+              "args": { "summary": "Used codebase-memory graph evidence, then validated the retry-worker repair." }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Keep alias retries on their ordered worker\",\"body\":\"# Implementation report\\nUsed the declared graph-to-graph and current-root source chain before repairing the retry worker. `cargo fmt --check` and `cargo test --quiet` pass.\",\"summary\":\"Used codebase-memory graph evidence, then validated the retry-worker repair.\"}"
+        }
+      ]
+    }
+  ]
+}
