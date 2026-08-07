@@ -34,6 +34,17 @@ fn emit_workspace_diff_produced(ev: WorkspaceDiffProduced<'_>) {
     );
 }
 
+/// Final, read-only product collection made before the submit proof is checked.
+///
+/// Holding this snapshot prevents a later status/diff walk from opening a gap
+/// between the accepted workspace fingerprint and the files the worker commits.
+struct CollectedWritableRepo<'a> {
+    prepared: &'a PreparedRepo,
+    index: usize,
+    has_tree_changes: bool,
+    changed_paths: Vec<String>,
+}
+
 pub(super) struct WritableOutcomeRequest<'a> {
     pub(super) prepared: &'a [PreparedRepo],
     pub(super) result: WorkspaceResult,
@@ -100,6 +111,15 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
         }
         return discard_unpublished_work(prepared, outcome, fence).await;
     }
+    // Collect the final product before checking the accepted submit proof. In
+    // particular, the collection walks untracked files after tool validation;
+    // checking first left a gap where final collection could observe a
+    // different workspace than the one the host accepted. Nothing is committed
+    // or pushed until the proof has survived this complete collection.
+    let collected = match collect_writable_repos(prepared, pull_request_fix).await {
+        Ok(collected) => collected,
+        Err(outcome) => return outcome,
+    };
     if let Err(outcome) = ensure_accepted_submit_before_pr_push(
         accepted_submit,
         workspace_context,
@@ -113,7 +133,7 @@ pub(super) async fn writable_outcome(request: WritableOutcomeRequest<'_>) -> Job
     }
 
     let outcomes = match push_writable_repos(
-        prepared,
+        &collected,
         coordination_key,
         action,
         artifact_item,
@@ -346,8 +366,32 @@ async fn ensure_accepted_submit_before_pr_push(
     ))
 }
 
-async fn push_writable_repos(
+async fn collect_writable_repos(
     prepared: &[PreparedRepo],
+    pull_request_fix: bool,
+) -> Result<Vec<CollectedWritableRepo<'_>>, JobOutcome> {
+    let mut collected = Vec::new();
+    for (index, prepared) in prepared.iter().enumerate() {
+        if !prepared.writable {
+            continue;
+        }
+        let has_tree_changes = repo_has_tree_changes(prepared).await?;
+        if !repo_produced_diff(prepared, has_tree_changes, pull_request_fix).await? {
+            continue;
+        }
+        let changed_paths = collected_paths(prepared, has_tree_changes, pull_request_fix).await?;
+        collected.push(CollectedWritableRepo {
+            prepared,
+            index,
+            has_tree_changes,
+            changed_paths,
+        });
+    }
+    Ok(collected)
+}
+
+async fn push_writable_repos(
+    collected: &[CollectedWritableRepo<'_>],
     coordination_key: &str,
     action: &str,
     artifact_item: &serde_json::Value,
@@ -355,62 +399,49 @@ async fn push_writable_repos(
     fence: &AttemptFence,
 ) -> Result<Vec<RepoOutcome>, JobOutcome> {
     let mut outcomes = Vec::new();
-    for (index, prepared) in prepared.iter().enumerate() {
+    for collected in collected {
         if !fence.is_open() {
             return Err(cancelled_attempt());
         }
-        if let Some(outcome) = push_writable_repo(
-            prepared,
-            index,
+        let outcome = push_writable_repo(
+            collected,
             coordination_key,
             action,
             artifact_item,
             pull_request_fix,
             fence,
         )
-        .await?
-        {
-            outcomes.push(outcome);
-        }
+        .await?;
+        outcomes.push(outcome);
     }
     Ok(outcomes)
 }
 
 async fn push_writable_repo(
-    prepared: &PreparedRepo,
-    index: usize,
+    collected: &CollectedWritableRepo<'_>,
     coordination_key: &str,
     action: &str,
     artifact_item: &serde_json::Value,
     pull_request_fix: bool,
     fence: &AttemptFence,
-) -> Result<Option<RepoOutcome>, JobOutcome> {
+) -> Result<RepoOutcome, JobOutcome> {
     if !fence.is_open() {
         return Err(cancelled_attempt());
     }
-    if !prepared.writable {
-        return Ok(None);
-    }
+    let prepared = collected.prepared;
     let branch = prepared
         .branch_hint
         .clone()
         .expect("writable repo carries a branch hint (checked at prepare)");
-    let has_tree_changes = repo_has_tree_changes(prepared).await?;
+    emit_produced_diff(prepared, &collected.changed_paths);
     if !fence.is_open() {
         return Err(cancelled_attempt());
     }
-    if !repo_produced_diff(prepared, has_tree_changes, pull_request_fix).await? {
-        return Ok(None);
-    }
-    emit_produced_diff(prepared, has_tree_changes, pull_request_fix).await?;
-    if !fence.is_open() {
-        return Err(cancelled_attempt());
-    }
-    if has_tree_changes {
+    if collected.has_tree_changes {
         let message = if pull_request_fix {
             pr_fix_commit_message(coordination_key, action)
         } else {
-            commit_message(coordination_key, artifact_item, index == 0)
+            commit_message(coordination_key, artifact_item, collected.index == 0)
         };
         prepared
             .workspace
@@ -432,39 +463,16 @@ async fn push_writable_repo(
     if !fence.is_open() {
         return Err(cancelled_attempt());
     }
-    Ok(Some(RepoOutcome {
+    Ok(RepoOutcome {
         repo: prepared.repo.clone(),
         branch: Branch {
             name: branch,
             head_sha,
         },
-    }))
+    })
 }
 
-async fn emit_produced_diff(
-    prepared: &PreparedRepo,
-    has_tree_changes: bool,
-    pull_request_fix: bool,
-) -> Result<(), JobOutcome> {
-    let paths = if has_tree_changes {
-        prepared
-            .workspace
-            .status_paths()
-            .await
-            .map_err(|error| workspace_failure("inspect workspace changed paths", error))?
-    } else if pull_request_fix {
-        prepared
-            .workspace
-            .diff_paths_from_ref(&prepared.start_head_sha)
-            .await
-            .map_err(|error| workspace_failure("inspect workspace diff paths", error))?
-    } else {
-        prepared
-            .workspace
-            .diff_paths_from_base()
-            .await
-            .map_err(|error| workspace_failure("inspect workspace diff paths", error))?
-    };
+fn emit_produced_diff(prepared: &PreparedRepo, paths: &[String]) {
     let first = paths.first().cloned().unwrap_or_default();
     let joined = paths.join(",");
     emit_workspace_diff_produced(WorkspaceDiffProduced {
@@ -474,7 +482,32 @@ async fn emit_produced_diff(
         changed_files: &joined,
         changed_count: paths.len(),
     });
-    Ok(())
+}
+
+async fn collected_paths(
+    prepared: &PreparedRepo,
+    has_tree_changes: bool,
+    pull_request_fix: bool,
+) -> Result<Vec<String>, JobOutcome> {
+    if has_tree_changes {
+        return prepared
+            .workspace
+            .status_paths()
+            .await
+            .map_err(|error| workspace_failure("inspect workspace changed paths", error));
+    }
+    if pull_request_fix {
+        return prepared
+            .workspace
+            .diff_paths_from_ref(&prepared.start_head_sha)
+            .await
+            .map_err(|error| workspace_failure("inspect workspace diff paths", error));
+    }
+    prepared
+        .workspace
+        .diff_paths_from_base()
+        .await
+        .map_err(|error| workspace_failure("inspect workspace diff paths", error))
 }
 
 async fn repo_has_tree_changes(prepared: &PreparedRepo) -> Result<bool, JobOutcome> {
