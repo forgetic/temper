@@ -25,6 +25,7 @@ use super::{
 };
 
 mod graph_consumption;
+mod sequential_graph_evidence;
 mod stable_rebind;
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
@@ -62,11 +63,16 @@ pub(super) fn converge(
         .get("search_graph")
         .copied()
         .unwrap_or_default();
+    let expected_result = if mcp.lifecycle_profile.as_deref() == Some("sequential-graph-evidence") {
+        "one successful provider-shaped graph result".to_string()
+    } else {
+        MEMORY_RESULT_NEEDLE.to_string()
+    };
     Ok((
         final_state,
         LiveCodebaseMemoryEvidence {
             produced_file: MEMORY_FILE.to_string(),
-            expected_result: MEMORY_RESULT_NEEDLE.to_string(),
+            expected_result,
             fake_mcp_log: mcp.log_path.clone(),
             mcp_search_calls,
             mcp_call_counts: mcp_call_counts.into_iter().collect(),
@@ -550,13 +556,19 @@ impl CodebaseMemoryFake {
             if messages_contain(view, "CODEBASE MEMORY") {
                 observations.prompt_guidance_seen = true;
             }
-            if messages_contain(view, MEMORY_RESULT_NEEDLE) {
+            if messages_contain(view, MEMORY_RESULT_NEEDLE)
+                || messages_contain(view, "SEQUENTIAL_GRAPH_RESULT")
+            {
                 observations.memory_result_seen = true;
             }
-            if messages_contain(view, "FAKE_MCP_CODE_RESULT") {
+            if messages_contain(view, "FAKE_MCP_CODE_RESULT")
+                || messages_contain(view, "SEQUENTIAL_CODE_RESULT")
+            {
                 observations.code_refinement_seen = true;
             }
-            if messages_contain(view, "FAKE_MCP_TRACE_RESULT") {
+            if messages_contain(view, "FAKE_MCP_TRACE_RESULT")
+                || messages_contain(view, "SEQUENTIAL_TRACE_RESULT")
+            {
                 observations.graph_trace_seen = true;
             }
             let current_root_source_results = view
@@ -651,7 +663,10 @@ impl CodebaseMemoryFake {
             ));
         }
         if !bounded_graph_result_seen
-            && mcp.lifecycle_profile.as_deref() != Some("graph-consumption")
+            && !matches!(
+                mcp.lifecycle_profile.as_deref(),
+                Some("graph-consumption" | "sequential-graph-evidence")
+            )
         {
             return Err(format!(
                 "fake LLM did not receive the bounded graph result marker\n{}",
@@ -664,8 +679,10 @@ impl CodebaseMemoryFake {
                 self.log_tail()
             ));
         }
-        if mcp.lifecycle_profile.as_deref() == Some("graph-consumption")
-            && (!code_refinement_seen || !graph_trace_seen || current_root_source_results < 2)
+        if matches!(
+            mcp.lifecycle_profile.as_deref(),
+            Some("graph-consumption" | "sequential-graph-evidence")
+        ) && (!code_refinement_seen || !graph_trace_seen || current_root_source_results < 2)
         {
             return Err(format!(
                 "fake LLM did not consume the complete graph-to-graph/current-root source chain\n{}",

@@ -53,7 +53,12 @@ impl LiveExecutionContext<'_> {
             fixture.is_none()
                 || matches!(
                     fixture,
-                    Some("stable-lifecycle" | "stable-rebind" | "graph-consumption")
+                    Some(
+                        "stable-lifecycle"
+                            | "stable-rebind"
+                            | "graph-consumption"
+                            | "sequential-graph-evidence"
+                    )
                 ),
             "unknown fake codebase-memory fixture",
         )?;
@@ -171,7 +176,7 @@ impl LiveExecutionContext<'_> {
                 self.mcp.as_ref().is_some_and(|mcp| {
                     matches!(
                         mcp.lifecycle_profile.as_deref(),
-                        Some("stable-rebind" | "graph-consumption")
+                        Some("stable-rebind" | "graph-consumption" | "sequential-graph-evidence")
                     )
                 }),
             )?);
