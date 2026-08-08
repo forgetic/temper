@@ -125,6 +125,13 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
         "\nCODEBASE MEMORY:\n\
          You have repository-index tools for architecture, symbol search, code search,\n\
          and call/impact tracing.\n\n\
+         When work requires implementation selection, caller/data-flow understanding, or\n\
+         behavioral preservation, turn each successful targeted graph result into a decision\n\
+         chain: use the result and work-item requirements to select the next dependent target\n\
+         in a later model turn. Do not issue producer and consumer calls in the same turn or\n\
+         batch; keep genuinely independent discovery parallel. Before mutation, inspect the\n\
+         selected current-root implementation/model or caller source and\n\
+         focused behavioral tests, with source evidence sufficient to justify the edit.\n\n\
          Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
          - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
            symptom, file, or area; then use call/path tracing and read exact source snippets as\n\
@@ -270,6 +277,42 @@ for line in sys.stdin:
             guidance: WorkspaceGuidance::default(),
             pull_request_freshness: None,
             agent_session: None,
+        }
+    }
+
+    #[test]
+    fn codebase_memory_prompt_requires_result_driven_evidence_without_fixture_details() {
+        let prompt = codebase_memory_prompt_section(&[CodebaseMemoryToolMetadata {
+            name: "codebase_memory_search_graph".to_string(),
+            description: "test metadata".to_string(),
+        }])
+        .expect("registered tool renders prompt section");
+
+        for expected in [
+            "implementation selection, caller/data-flow understanding, or",
+            "turn each successful targeted graph result into a decision",
+            "select the next dependent target",
+            "in a later model turn",
+            "Do not issue producer and consumer calls in the same turn or",
+            "keep genuinely independent discovery parallel",
+            "selected current-root implementation/model or caller source",
+            "focused behavioral tests",
+            "source evidence sufficient to justify the edit",
+        ] {
+            assert!(prompt.contains(expected), "prompt omitted {expected:?}");
+        }
+        for benchmark_detail in [
+            "retry_worker_topic",
+            "retry_worker_topic_retry_affinity",
+            "alias retry worker affinity",
+            "codebase-memory-graph-consumption",
+            "benchmarks/agent-sessions",
+            "five-call",
+        ] {
+            assert!(
+                !prompt.contains(benchmark_detail),
+                "prompt leaked benchmark detail {benchmark_detail:?}"
+            );
         }
     }
 

@@ -136,6 +136,13 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              searches and broad architecture calls. Reserve architecture views for genuine topology \
              questions. For non-local topology work, batch independent status and targeted discovery \
              calls into one response; skip ritual discovery when the task is already localized.\n\
+             - For work requiring implementation selection, caller/data-flow understanding, or \
+             behavioral preservation, inspect the selected current-root implementation/model or \
+             caller and focused behavioral tests before mutation. Gather source evidence sufficient \
+             to justify the edit. When targeted graph tools are available, use each successful \
+             targeted graph result and the work-item requirements to select the next dependent target \
+             in a later model turn. Do not issue producer and consumer calls in the same turn or \
+             batch; keep genuinely independent discovery parallel.\n\
              - Read the complete likely source, test, configuration, and \
              documentation set together before editing. Form the implementation \
              contract internally, but do not spend a standalone response \
@@ -157,6 +164,8 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              repeating architecture searches unless an unresolved correctness \
              question requires it; prefer specialized tools over general shell \
              commands.\n\
+             - Before submission, retain the smallest semantic submission diff and remove \
+             explanatory comments unless the task or established local style requires them.\n\
              - Inspect repository status, the tracked diff, and all untracked \
              deliverables together. When a submission gate is available, submit \
              the unchanged validated workspace once and emit the terminal JSON \

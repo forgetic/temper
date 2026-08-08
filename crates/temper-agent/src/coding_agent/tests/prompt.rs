@@ -63,6 +63,15 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "Reserve architecture views for genuine topology questions",
         "For non-local topology work, batch independent status and targeted discovery calls",
         "skip ritual discovery when the task is already localized",
+        "work requiring implementation selection, caller/data-flow understanding, or behavioral preservation",
+        "selected current-root implementation/model or caller and focused behavioral tests before mutation",
+        "source evidence sufficient to justify the edit",
+        "When targeted graph tools are available, use each successful targeted graph result and the work-item requirements",
+        "select the next dependent target in a later model turn",
+        "Do not issue producer and consumer calls in the same turn or batch",
+        "genuinely independent discovery parallel",
+        "smallest semantic submission diff",
+        "explanatory comments unless the task or established local style requires them",
         "complete likely source, test, configuration, and documentation set together",
         "Form the implementation contract internally",
         "do not spend a standalone response publishing a plan",
@@ -103,6 +112,13 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "bounded repair",
         "tracked diff",
         "8–12 total responses",
+        "implementation selection, caller/data-flow understanding",
+        "current-root implementation/model",
+        "source evidence sufficient to justify the edit",
+        "targeted graph tools are available",
+        "producer and consumer calls",
+        "smallest semantic submission diff",
+        "explanatory comments unless the task",
     ];
     for prompt in [
         system_prompt(Capability::TriageWorkspace, &[]),
@@ -120,6 +136,24 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
                 "engineer-only guidance leaked into another role: {forbidden:?}"
             );
         }
+    }
+}
+
+#[test]
+fn system_prompt_engineer_uses_generic_evidence_guidance_without_benchmark_details() {
+    let engineer = system_prompt(Capability::CodingWorkspace, &[]);
+    for benchmark_detail in [
+        "retry_worker_topic",
+        "retry_worker_topic_retry_affinity",
+        "alias retry worker affinity",
+        "codebase-memory-graph-consumption",
+        "benchmarks/agent-sessions",
+        "five-call",
+    ] {
+        assert!(
+            !engineer.contains(benchmark_detail),
+            "prompt leaked benchmark detail {benchmark_detail:?}"
+        );
     }
 }
 
