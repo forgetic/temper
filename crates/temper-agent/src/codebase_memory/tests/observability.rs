@@ -2,9 +2,13 @@ use super::super::lifecycle_observability::{
     DiscoveryEvidence, DiscoveryOutcome, FailureCategory, IndexOutcome, ReadinessOutcome,
     emit_discovery, emit_identity_selected, emit_index, emit_readiness,
 };
+use super::super::{McpToolResult, emit_mcp_tool_result};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use temper_protocol_activity::{
+    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
 use tracing::{Event, Level, Subscriber};
@@ -250,4 +254,45 @@ fn lifecycle_events_have_exact_safe_fields_levels_and_unavailable_bytes() {
             .get("failure.message")
             .is_none_or(|message| message.chars().count() <= 64)
     }));
+}
+
+#[test]
+fn mcp_results_project_only_complete_typed_correlation_facts() {
+    const DECLARED_TARGET: &str = "alias retry worker affinity";
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        DECLARED_TARGET,
+    )
+    .expect("complete declared graph target");
+
+    let events = capture(|| {
+        emit_mcp_tool_result(McpToolResult {
+            tool_name: "codebase_memory_search_graph",
+            mcp_tool: "search_graph",
+            mcp_project: "normalized-safe-project",
+            is_error: false,
+            truncated: false,
+            result_preview: "<result omitted>",
+            readiness_wait_ms: 4,
+            graph_execution_ms: 7,
+            duration_ms: 11,
+            graph_correlation: Some(&correlation),
+        });
+    });
+
+    let result = event(&events, "mcp.tool.result", "mcp.tool", "search_graph");
+    assert_eq!(result.fields["graph.correlation.complete"], "true");
+    assert_eq!(result.fields["graph.correlation.version"], "1");
+    assert_eq!(
+        result.fields["graph.correlation.tool"],
+        "codebase_memory_search_graph"
+    );
+    assert_eq!(
+        result.fields["graph.correlation.target_kind"],
+        "graph_query"
+    );
+    let rendered = format!("{result:#?}");
+    assert!(!rendered.contains(DECLARED_TARGET));
+    assert!(!rendered.contains(&correlation.target_digest));
 }

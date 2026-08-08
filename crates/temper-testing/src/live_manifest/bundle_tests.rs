@@ -206,6 +206,15 @@ fn codebase_memory_graph_consumption_bundle_declares_only_the_five_call_chain() 
         ]
     ));
     let jig = std::fs::read_to_string(bundle.jig_script_path()).expect("scenario-owned Jig");
+    let manifest = std::fs::read_to_string(
+        scenarios_root().join("codebase-memory-graph-consumption/scenario.toml"),
+    )
+    .expect("graph-consumption manifest");
+    assert!(manifest.contains("feature = \"ai/temper#962\""));
+    assert!(manifest.contains("plan = \"ai/temper#963\""));
+    assert!(manifest.contains("five-complete-v1-typed-correlations"));
+    assert!(manifest.contains("graph.correlation.complete"));
+    assert!(manifest.contains("graph.correlation.target_kind"));
     for call in [
         "graph_identify_retry_worker",
         "graph_refine_retry_worker",

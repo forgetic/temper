@@ -1,8 +1,8 @@
 schema = "temper.scenario.v1"
 name = "codebase-memory-graph-consumption"
 status = "active"
-intent = "Validate bounded, ordered graph-to-graph refinement and current-root source consumption through the live codebase-memory topology."
-introduced_by = "#953"
+intent = "Validate privacy-safe typed graph correlation across bounded, ordered graph-to-graph refinement and current-root source consumption through the live codebase-memory topology."
+introduced_by = "#962"
 owner_area = "agent-tools"
 stability = "provisional"
 timeout = "10m"
@@ -11,16 +11,16 @@ timeout = "10m"
 uses = "manifest"
 
 [validation]
-feature = "ai/temper#953"
-plan = "ai/temper#954"
-source_branch = "agent/pr-for-feature-953"
-change = "new"
+feature = "ai/temper#962"
+plan = "ai/temper#963"
+source_branch = "agent/pr-for-feature-962"
+change = "updated"
 
 [feature_contract]
-claim = "Only declared targeted graph refinement and confirmed current-root source reads count as graph-consumption evidence; broad or unconsumed calls do not gain relevance."
-stimulus = "Run one engineer repair through real Forgejo, Actions, standalone Temper, and a deterministic provider that rebinds a fresh stable key to the active checkout, then performs one exact five-call graph chain before the repair."
-observable = "Privacy-safe tool names, aggregate call inventory, normalized current-root confirmation facts, ordered same-artifact MCP events, repaired Rust file, host validation, and CI convergence."
-assertion = "Exactly search_graph, search_code, trace_path, and two get_code_snippet calls occur in declared order under the confirmed current-root provider identity; no broad, extra, failed, or unconsumed MCP call is retained, both sources are consumed before mutation, and the repair converges."
+claim = "Only successful declared targeted graph refinement and confirmed current-root source reads with complete typed correlation count as graph-consumption evidence; generic, broad, extra, or unconsumed calls do not gain relevance."
+stimulus = "Run one engineer repair through real Forgejo, Actions, standalone Temper, and a deterministic provider that rebinds a fresh stable key to the active checkout, then performs one provider-shaped exact five-call graph chain before the repair."
+observable = "Privacy-safe tool names, aggregate call inventory, normalized current-root confirmation facts, ordered same-artifact MCP events, typed-correlation completion/version/tool/kind facts, repaired Rust file, host validation, and CI convergence."
+assertion = "Exactly search_graph, search_code, trace_path, and two get_code_snippet calls occur in declared order under the confirmed current-root provider identity; each successful call has one complete V1 typed correlation of the declared kind; no broad, extra, failed, or unconsumed MCP call is retained; both sources are consumed before mutation; and the repair converges."
 runtime_budget_seconds = 600
 jig_script_path = "jig/codebase-memory-graph-consumption.json"
 
@@ -206,21 +206,29 @@ fields."index.outcome" = "completed"
 
 [[expect.sequence]]
 required = true
-id = "ordered-same-artifact-graph-consumption"
+id = "ordered-provider-shaped-typed-graph-consumption"
 scope = "source_artifact"
 events = [
   { event = "mcp.tool.called", fields = { "mcp.tool" = "search_graph" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_search_graph", "graph.correlation.target_kind" = "graph_query" } },
   { event = "mcp.tool.called", fields = { "mcp.tool" = "search_code" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_search_code", "graph.correlation.target_kind" = "pattern" } },
   { event = "mcp.tool.called", fields = { "mcp.tool" = "trace_path" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_trace_path", "graph.correlation.target_kind" = "function_name" } },
   { event = "mcp.tool.called", fields = { "mcp.tool" = "get_code_snippet" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_get_code_snippet", "graph.correlation.target_kind" = "qualified_name" } },
   { event = "mcp.tool.called", fields = { "mcp.tool" = "get_code_snippet" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_get_code_snippet", "graph.correlation.target_kind" = "qualified_name" } },
   { event = "workspace.diff.produced", fields = { "file.path" = "src/lib.rs" } },
 ]
+
+[[expect.count]]
+required = true
+id = "five-complete-v1-typed-correlations"
+event = "mcp.tool.result"
+fields."graph.correlation.complete" = true
+fields."graph.correlation.version" = 1
+exactly = 5
 
 [[expect.count]]
 required = true
@@ -266,7 +274,7 @@ model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_se
 model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
 default_project = "acme/demo"
 actual_project = "normalized-temper-v1-<stable-provider-key>"
-graph_consumption_profile = "declared five-call chain; exact current-root graph/code/trace/source consumption; no broad or unconsumed calls"
+graph_consumption_profile = "provider-shaped five-call chain; complete V1 typed graph/code/trace/source correlation; exact current-root consumption; no broad, generic, or unconsumed calls"
 global_inventory_forbidden = true
 
 [change_policy]
@@ -275,10 +283,10 @@ promotion_artifact = "checked-in"
 examples_changed = false
 fixture_paths_must_exist = true
 compatible_changes = [
-  "Clarify the five-call graph-consumption assertion without expanding its declared tool set.",
-  "Add privacy-safe aggregate observability that preserves current-root and ordering evidence.",
+  "Clarify the provider-shaped five-call graph-consumption assertion without expanding its declared tool set.",
+  "Add privacy-safe aggregate observability that preserves current-root ordering and complete typed-correlation evidence without raw targets or provider results.",
 ]
 requires_new_scenario_or_major_update = [
-  "Treating broad, extra, cross-scope, out-of-order, or unconsumed graph calls as relevant.",
+  "Treating broad, generic, extra, cross-scope, out-of-order, incomplete, or unconsumed graph calls as relevant.",
   "Replacing the mandatory live Forgejo/Actions/Temper/Jig stack with a lower-level topology.",
 ]

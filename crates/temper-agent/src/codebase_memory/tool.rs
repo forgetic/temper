@@ -223,6 +223,7 @@ impl Tool for CodebaseMemoryTool {
             readiness_wait_ms: timings.readiness_wait_ms,
             graph_execution_ms: timings.graph_execution_ms,
             duration_ms: timings.duration_ms,
+            graph_correlation: graph_correlation.as_ref(),
         });
         let mut details = json!({
             "mcp_tool": self.mcp_name,
@@ -319,6 +320,7 @@ fn emit_failed_mcp_tool_result(
         readiness_wait_ms: timings.readiness_wait_ms,
         graph_execution_ms: timings.graph_execution_ms,
         duration_ms: timings.duration_ms,
+        graph_correlation: None,
     });
 }
 
