@@ -30,7 +30,7 @@ use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
 const MEMORY_FILE: &str = "src/lib.rs";
 const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_GRAPH_RESULT";
-const SNIPPET_RESULT_NEEDLE: &str = "FAKE_MCP_SNIPPET_RESULT";
+const CURRENT_ROOT_SOURCE_BINDING: &str = "current_prepared_checkout";
 const ENGINEER_SUMMARY: &str =
     "Used codebase-memory graph evidence, then validated the retry-worker repair.";
 const RAW_PROVIDER_FAILURE_NEEDLE: &str = "MCP-FIXTURE-SECRET";
@@ -553,20 +553,19 @@ impl CodebaseMemoryFake {
             if messages_contain(view, MEMORY_RESULT_NEEDLE) {
                 observations.memory_result_seen = true;
             }
-            if messages_contain(view, SNIPPET_RESULT_NEEDLE) {
-                observations.current_root_source_seen = true;
-            }
             if messages_contain(view, "FAKE_MCP_CODE_RESULT") {
                 observations.code_refinement_seen = true;
             }
             if messages_contain(view, "FAKE_MCP_TRACE_RESULT") {
                 observations.graph_trace_seen = true;
             }
-            observations.current_root_source_results += view
+            let current_root_source_results = view
                 .messages
                 .iter()
-                .filter(|message| message.content.contains(SNIPPET_RESULT_NEEDLE))
+                .filter(|message| is_current_root_source_result(&message.content))
                 .count();
+            observations.current_root_source_seen |= current_root_source_results > 0;
+            observations.current_root_source_results += current_root_source_results;
             if messages_contain(view, SAFE_PROVIDER_FAILURE) {
                 observations.safe_failure_seen = true;
             }
@@ -743,6 +742,22 @@ fn messages_contain(view: &RequestView, needle: &str) -> bool {
         .any(|message| message.content.contains(needle))
 }
 
+fn is_current_root_source_result(content: &str) -> bool {
+    let Ok(result) = serde_json::from_str::<JsonValue>(content) else {
+        return false;
+    };
+    result.get("binding").and_then(JsonValue::as_str) == Some(CURRENT_ROOT_SOURCE_BINDING)
+        && result
+            .get("qualified_name")
+            .and_then(JsonValue::as_str)
+            .is_some()
+        && result
+            .get("file_path")
+            .and_then(JsonValue::as_str)
+            .is_some()
+        && result.get("source").and_then(JsonValue::as_str).is_some()
+}
+
 fn snippet(text: &str, max: usize) -> String {
     let mut out = String::new();
     for (index, ch) in text.chars().enumerate() {
@@ -756,3 +771,26 @@ fn snippet(text: &str, max: usize) -> String {
 }
 
 const FAKE_MCP_SCRIPT: &str = include_str!("fake_codebase_memory_mcp.py");
+
+#[cfg(test)]
+mod tests {
+    use super::is_current_root_source_result;
+
+    #[test]
+    fn recognizes_structured_current_root_source_results() {
+        assert!(is_current_root_source_result(
+            r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","source":"<fixture source>","binding":"current_prepared_checkout"}"#
+        ));
+    }
+
+    #[test]
+    fn rejects_legacy_or_incomplete_source_markers() {
+        assert!(!is_current_root_source_result("FAKE_MCP_SNIPPET_RESULT"));
+        assert!(!is_current_root_source_result(
+            r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","binding":"current_prepared_checkout"}"#
+        ));
+        assert!(!is_current_root_source_result(
+            r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","source":"<fixture source>","binding":"unconfirmed"}"#
+        ));
+    }
+}
