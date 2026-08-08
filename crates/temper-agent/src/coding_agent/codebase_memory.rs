@@ -126,12 +126,13 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          You have repository-index tools for architecture, symbol search, code search,\n\
          and call/impact tracing.\n\n\
          When work requires implementation selection, caller/data-flow understanding, or\n\
-         behavioral preservation, turn each successful targeted graph result into a decision\n\
-         chain: use the result and work-item requirements to select the next dependent target\n\
-         in a later model turn. Do not issue producer and consumer calls in the same turn or\n\
-         batch; keep genuinely independent discovery parallel. Before mutation, inspect the\n\
-         selected current-root implementation/model or caller source and\n\
-         focused behavioral tests, with source evidence sufficient to justify the edit.\n\n\
+         behavioral preservation, use every successful targeted graph result as a decision\n\
+         checkpoint: consume it with the work-item requirements before selecting a dependent\n\
+         refinement, trace, or source read. Select and invoke that dependent operation only in\n\
+         a later model turn. Keep genuinely independent discovery parallel; do not issue\n\
+         producer and consumer calls in the same turn or batch. Do not mutate until consumed\n\
+         source evidence covers the selected current-root implementation, its caller/model,\n\
+         and focused behavioral tests, sufficient to justify the smallest semantic diff.\n\n\
          Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
          - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
            symptom, file, or area; then use call/path tracing and read exact source snippets as\n\
@@ -281,26 +282,32 @@ for line in sys.stdin:
     }
 
     #[test]
-    fn codebase_memory_prompt_requires_result_driven_evidence_without_fixture_details() {
+    fn codebase_memory_prompt_requires_result_driven_evidence_without_provider_details() {
         let prompt = codebase_memory_prompt_section(&[CodebaseMemoryToolMetadata {
             name: "codebase_memory_search_graph".to_string(),
-            description: "test metadata".to_string(),
+            description: "PRIVATE-PROVIDER-DESCRIPTION-SENTINEL-984".to_string(),
         }])
         .expect("registered tool renders prompt section");
 
         for expected in [
             "implementation selection, caller/data-flow understanding, or",
-            "turn each successful targeted graph result into a decision",
-            "select the next dependent target",
-            "in a later model turn",
-            "Do not issue producer and consumer calls in the same turn or",
-            "keep genuinely independent discovery parallel",
-            "selected current-root implementation/model or caller source",
+            "use every successful targeted graph result as a decision",
+            "checkpoint: consume it with the work-item requirements",
+            "refinement, trace, or source read",
+            "Select and invoke that dependent operation only in",
+            "a later model turn",
+            "Keep genuinely independent discovery parallel",
+            "Do not mutate until consumed",
+            "selected current-root implementation, its caller/model",
             "focused behavioral tests",
-            "source evidence sufficient to justify the edit",
+            "smallest semantic diff",
         ] {
             assert!(prompt.contains(expected), "prompt omitted {expected:?}");
         }
+        assert!(
+            !prompt.contains("PRIVATE-PROVIDER-DESCRIPTION-SENTINEL-984"),
+            "prompt must not retain provider tool metadata"
+        );
         for benchmark_detail in [
             "retry_worker_topic",
             "retry_worker_topic_retry_affinity",
@@ -418,6 +425,14 @@ for line in sys.stdin:
                 .get("codebase_memory_search_code")
                 .expect("safe tool registered");
             assert_eq!(tool.effects(), ToolEffects::read());
+            assert!(
+                tool.description().contains("Decision checkpoint:"),
+                "only a registered safe tool presents the decision checkpoint"
+            );
+            assert!(
+                !prompt.contains(FAKE_MCP_DESCRIPTION_SENTINEL),
+                "registered guidance must not retain provider metadata"
+            );
         });
     }
 

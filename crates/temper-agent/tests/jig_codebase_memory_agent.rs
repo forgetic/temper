@@ -90,6 +90,10 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "Avoid empty or broad graph searches and broad architecture calls",
         "- engineer: start with targeted symbols/code, then trace affected callers before editing;",
         "Treat the graph as an index, not truth. Verify exact code",
+        "use every successful targeted graph result as a decision",
+        "checkpoint: consume it with the work-item requirements",
+        "Do not mutate until consumed",
+        "smallest semantic diff",
     ] {
         assert!(
             prompt.contains(expected),
@@ -99,6 +103,7 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     for duplicated_api_text in [
         FAKE_MCP_DESCRIPTION_SENTINEL,
         "codebase_memory_search_code",
+        "FAKE_MCP_SEARCH_RESULT",
         "Registered codebase-memory tools:",
     ] {
         assert!(
@@ -123,6 +128,7 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     assert_eq!(memory_tools.len(), 1, "memory tool registered exactly once");
     let expected_description = format!(
         "{FAKE_MCP_DESCRIPTION_SENTINEL}\n\n\
+         Decision checkpoint: after a successful targeted result, consume it with the work-item requirements before choosing a dependent refinement, trace, or source read. Choose and invoke that dependent operation only in a later model turn; genuinely independent discovery remains parallel-safe.\n\n\
          Workspace scoped: default project `acme/demo`; accepted `project`/`repo` aliases: acme/demo, demo, repo-1. Unknown aliases and filesystem paths are rejected.\n\n\
          Read-only wrapper around codebase-memory MCP tool `search_code`."
     );

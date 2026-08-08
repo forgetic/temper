@@ -137,12 +137,13 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              questions. For non-local topology work, batch independent status and targeted discovery \
              calls into one response; skip ritual discovery when the task is already localized.\n\
              - For work requiring implementation selection, caller/data-flow understanding, or \
-             behavioral preservation, inspect the selected current-root implementation/model or \
-             caller and focused behavioral tests before mutation. Gather source evidence sufficient \
-             to justify the edit. When targeted graph tools are available, use each successful \
-             targeted graph result and the work-item requirements to select the next dependent target \
-             in a later model turn. Do not issue producer and consumer calls in the same turn or \
-             batch; keep genuinely independent discovery parallel.\n\
+             behavioral preservation, use every successful targeted graph result as a decision \
+             checkpoint: consume it with the work-item requirements before selecting a dependent \
+             refinement, trace, or source read. Select and invoke that dependent operation only in a \
+             later model turn. Keep genuinely independent discovery parallel; do not issue producer \
+             and consumer calls in the same turn or batch. Do not mutate until consumed source \
+             evidence covers the selected current-root implementation, its caller/model, and focused \
+             behavioral tests, sufficient to justify the smallest semantic diff.\n\
              - Read the complete likely source, test, configuration, and \
              documentation set together before editing. Form the implementation \
              contract internally, but do not spend a standalone response \
