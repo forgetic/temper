@@ -1,0 +1,96 @@
+{
+  "phases": [
+    {
+      "name": "engineer-sequential-graph-evidence",
+      "when": { "messages_contain": ["ROLE: engineer"] },
+      "sequence": [
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "discover_delivery_worker_decision",
+              "name": "codebase_memory_search_graph",
+              "args": { "project": "demo", "query": "canonical delivery worker selection" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "refine_provider_selected_delivery_worker",
+              "name": "codebase_memory_search_code",
+              "args": { "project": "demo", "pattern": "delivery_worker_topic" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "trace_provider_refined_delivery_worker",
+              "name": "codebase_memory_trace_path",
+              "args": { "project": "demo", "function_name": "delivery_worker_topic" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "read_provider_selected_current_root_implementation",
+              "name": "codebase_memory_get_code_snippet",
+              "args": { "project": "demo", "qualified_name": "delivery_worker_topic" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "read_implementation_derived_focused_test",
+              "name": "codebase_memory_get_code_snippet",
+              "args": { "project": "demo", "qualified_name": "delivery_worker_topic_preserves_canonical_topic" }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "write_minimal_delivery_worker_repair_after_sources",
+              "name": "write",
+              "args": {
+                "path": "demo/src/lib.rs",
+                "content": "pub fn delivery_worker_topic<'a>(\n    topic: &'a str,\n    canonical_topic: Option<&'a str>,\n    _attempt: u32,\n) -> &'a str {\n    canonical_topic.unwrap_or(topic)\n}\n"
+              }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "validate_minimal_delivery_worker_repair",
+              "name": "bash",
+              "args": { "command": "cd demo && cargo fmt --check && cargo test --quiet", "timeout": 60 }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [{
+            "tool_call": {
+              "id": "submit_sequential_delivery_worker_repair",
+              "name": "submit_for_pr",
+              "args": { "summary": "Consumed sequential graph and current-root source evidence before the minimal delivery-worker repair." }
+            }
+          }],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Keep delivery retries on their canonical worker\",\"body\":\"# Implementation report\\nConsumed the declared sequential graph and current-root source chain before the minimal delivery-worker repair. `cargo fmt --check` and `cargo test --quiet` pass.\",\"summary\":\"Consumed sequential graph and current-root source evidence before the minimal delivery-worker repair.\"}"
+        }
+      ]
+    }
+  ]
+}

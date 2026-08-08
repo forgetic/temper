@@ -10,8 +10,12 @@ pub(super) fn validate_mcp_contract(
     mcp: &FakeMcpServer,
     calls: &[McpToolCallEvidence],
 ) -> Result<(), String> {
-    if mcp.lifecycle_profile.as_deref() == Some("graph-consumption") {
-        return super::graph_consumption::validate(mcp, calls);
+    match mcp.lifecycle_profile.as_deref() {
+        Some("graph-consumption") => return super::graph_consumption::validate(mcp, calls),
+        Some("sequential-graph-evidence") => {
+            return super::sequential_graph_evidence::validate(mcp, calls);
+        }
+        _ => {}
     }
 
     let failure = mcp.forced_systemic_failure.as_ref();
@@ -341,7 +345,7 @@ fn read_stable_rebind_state(mcp: &FakeMcpServer) -> Result<JsonValue, String> {
 fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
     matches!(
         mcp.lifecycle_profile.as_deref(),
-        Some("stable-rebind" | "graph-consumption")
+        Some("stable-rebind" | "graph-consumption" | "sequential-graph-evidence")
     )
 }
 

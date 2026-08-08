@@ -27,7 +27,7 @@ runner:
   `basic-delivery`, `forgejo-exact-head-ci-repair`, `forgejo-v16-api-ci`,
   `implementation-pr-handoff`, `codebase-memory-agent`,
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
-  `model-failure-recovery`, `plan-centric-feature-branch`,
+  `sequential-graph-evidence`, `model-failure-recovery`, `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
   `runner.uses = "manifest"`. Every run boots real Forgejo, a host
@@ -144,6 +144,17 @@ The harness writes the three values to `engine.ci_poll_cadence_secs`,
 back before starting standalone Temper. Run evidence retains that secret-free
 record as `effective_configuration`; these are the values actually used, not
 just the manifest request.
+
+### Sequential graph-evidence mapping
+
+`sequential-graph-evidence` is the active mapping for `ai/temper#973` and
+`ai/temper#974` on `agent/pr-for-feature-973`. It remains separate from the
+historical `codebase-memory-graph-consumption` mapping for `#962`: its provider
+fixture exposes each dependent target only after a successful predecessor and
+reveals the focused test target only after the current-root implementation
+source result. Its checked-in and aggregate evidence is limited to safe tool
+names, counts, binding facts, and typed-correlation facts; provider arguments,
+targets, source, and results stay out of the corpus and aggregate reports.
 
 ### Structured run evidence
 

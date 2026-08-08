@@ -13,6 +13,7 @@ FORCED_FAILURE_TOOL = "" if sys.argv[7] == "-" else sys.argv[7]
 FORCED_FAILURE_AFTER_CALLS = int(sys.argv[8])
 LIFECYCLE_PROFILE = sys.argv[9]
 STATE_PATH = LOG_PATH + ".state.json"
+SEQUENTIAL_STAGE = 0
 GRAPH_CALLS = 0
 
 TOOLS = [
@@ -191,7 +192,25 @@ def text_result(text, is_error=False):
 
 
 def has_current_root_profile():
-    return LIFECYCLE_PROFILE in ("stable-rebind", "graph-consumption")
+    return LIFECYCLE_PROFILE in (
+        "stable-rebind",
+        "graph-consumption",
+        "sequential-graph-evidence",
+    )
+
+
+def is_sequential_graph_evidence_profile():
+    return LIFECYCLE_PROFILE == "sequential-graph-evidence"
+
+
+def sequential_step(expected_stage, expected_argument, actual_argument):
+    global SEQUENTIAL_STAGE
+    if not is_sequential_graph_evidence_profile():
+        return True
+    if SEQUENTIAL_STAGE != expected_stage or actual_argument != expected_argument:
+        return False
+    SEQUENTIAL_STAGE += 1
+    return True
 
 
 for line in sys.stdin:
@@ -256,13 +275,27 @@ for line in sys.stdin:
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
-            source_path = {
+            source_paths = {
                 "retry_worker_topic": "src/lib.rs",
                 "retry_worker_topic_retry_affinity": "tests/retry_affinity.rs",
+            }
+            if is_sequential_graph_evidence_profile():
+                source_paths = {
+                    "delivery_worker_topic": "src/lib.rs",
+                    "delivery_worker_topic_preserves_canonical_topic": "tests/retry_affinity.rs",
+                }
+            source_path = source_paths.get(qualified_name)
+            expected_stage = {
+                "delivery_worker_topic": 3,
+                "delivery_worker_topic_preserves_canonical_topic": 4,
             }.get(qualified_name)
+            sequence_valid = (
+                expected_stage is None
+                or sequential_step(expected_stage, qualified_name, qualified_name)
+            )
             source = (
                 current_root_source(project, source_path)
-                if has_current_root_profile() and source_path is not None
+                if has_current_root_profile() and source_path is not None and sequence_valid
                 else None
             )
             if source is None:
@@ -270,49 +303,80 @@ for line in sys.stdin:
                 result = text_result("bound source unavailable", True)
             else:
                 log_tool(name, arguments, fixture_event="served_current_root_source")
-                result = text_result(json.dumps({
+                payload = {
                     "qualified_name": qualified_name,
                     "file_path": source_path,
                     "source": source,
                     "binding": "current_prepared_checkout",
-                }))
+                }
+                if is_sequential_graph_evidence_profile() and qualified_name == "delivery_worker_topic":
+                    payload["next_target"] = {
+                        "tool": "get_code_snippet",
+                        "qualified_name": "delivery_worker_topic_preserves_canonical_topic",
+                    }
+                result = text_result(json.dumps(payload))
         elif name == "search_code":
             project = arguments.get("project", "")
             current_root = current_root_source(project, "src/lib.rs") is not None
+            sequence_valid = sequential_step(
+                1,
+                "delivery_worker_topic",
+                arguments.get("pattern", ""),
+            )
+            successful = current_root and sequence_valid
             log_tool(
                 name,
                 arguments,
-                is_error=not current_root,
-                fixture_event="served_current_root_code_refinement" if current_root else None,
+                is_error=not successful,
+                fixture_event="served_current_root_code_refinement" if successful else None,
             )
             result = (
-                text_result("FAKE_MCP_CODE_RESULT symbol=retry_worker_topic")
-                if current_root
+                text_result(
+                    "SEQUENTIAL_CODE_RESULT next=trace_path:function_name=delivery_worker_topic"
+                    if is_sequential_graph_evidence_profile()
+                    else "FAKE_MCP_CODE_RESULT symbol=retry_worker_topic"
+                )
+                if successful
                 else text_result("bound source unavailable", True)
             )
         elif name == "trace_path":
             project = arguments.get("project", "")
             current_root = current_root_source(project, "src/lib.rs") is not None
+            sequence_valid = sequential_step(
+                2,
+                "delivery_worker_topic",
+                arguments.get("function_name", ""),
+            )
+            successful = current_root and sequence_valid
             log_tool(
                 name,
                 arguments,
-                is_error=not current_root,
-                fixture_event="served_current_root_graph_trace" if current_root else None,
+                is_error=not successful,
+                fixture_event="served_current_root_graph_trace" if successful else None,
             )
             result = (
                 text_result(
-                    "FAKE_MCP_TRACE_RESULT caller=retry_worker_topic "
+                    "SEQUENTIAL_TRACE_RESULT caller=delivery_worker_route "
+                    "next=get_code_snippet:qualified_name=delivery_worker_topic"
+                    if is_sequential_graph_evidence_profile()
+                    else "FAKE_MCP_TRACE_RESULT caller=retry_worker_topic "
                     "focused_test=tests/retry_affinity.rs"
                 )
-                if current_root
+                if successful
                 else text_result("bound source unavailable", True)
             )
         elif name == "search_graph":
             GRAPH_CALLS += 1
             project = arguments.get("project", "")
             current_root = current_root_source(project, "src/lib.rs") is not None
+            sequence_valid = sequential_step(
+                0,
+                "canonical delivery worker selection",
+                arguments.get("query", ""),
+            )
             is_error = (
                 not current_root
+                or not sequence_valid
                 or (
                     name == FORCED_FAILURE_TOOL
                     and GRAPH_CALLS > FORCED_FAILURE_AFTER_CALLS
@@ -331,7 +395,9 @@ for line in sys.stdin:
                 )
             else:
                 result = text_result(
-                    "FAKE_MCP_GRAPH_RESULT implementation=src/lib.rs::retry_worker_topic "
+                    "SEQUENTIAL_GRAPH_RESULT next=search_code:pattern=delivery_worker_topic"
+                    if is_sequential_graph_evidence_profile()
+                    else "FAKE_MCP_GRAPH_RESULT implementation=src/lib.rs::retry_worker_topic "
                     "focused_test=tests/retry_affinity.rs::alias_retries_keep_the_original_ordered_worker\n"
                     + ("x" * 20_000)
                 )
