@@ -61,8 +61,8 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         (3, "query", "alias retry worker affinity"),
         (4, "pattern", "retry_worker_topic"),
         (5, "function_name", "retry_worker_topic"),
-        (6, "path", "src/lib.rs"),
-        (7, "path", "tests/retry_affinity.rs"),
+        (6, "qualified_name", "retry_worker_topic"),
+        (7, "qualified_name", "retry_worker_topic_retry_affinity"),
     ];
     for (index, field, expected) in expected_targets {
         if calls[index]

@@ -184,22 +184,14 @@ def confirmed_graph_read(project, tool):
 
 def current_root_source(project, qualified_name):
     snippet = {
-        "DeliveryAttempt": (
-            "src/model.rs",
-            "delivery_source_evidence",
-            "DeliveryRouter::worker_for",
-        ),
-        "DeliveryRouter::worker_for": (
-            "src/delivery.rs",
-            "worker_source_evidence",
-            "repo/src/route.rs",
-        ),
+        "DeliveryAttempt": ("src/model.rs", "DeliveryRouter::worker_for"),
+        "DeliveryRouter::worker_for": ("src/delivery.rs", "repo/src/route.rs"),
     }.get(qualified_name)
     graph_read = confirmed_graph_read(project, "get_code_snippet")
     if graph_read is None or snippet is None:
         return None
     identity, binding, _graph_read_number = graph_read
-    relative_path, evidence_marker, next_target = snippet
+    relative_path, related_qualified_name = snippet
     try:
         with open(
             os.path.join(binding["root_path"], relative_path), encoding="utf-8"
@@ -210,8 +202,8 @@ def current_root_source(project, qualified_name):
     return identity | {
         "source_root": "confirmed_current_root",
         "source_path": relative_path,
-        "symbol": qualified_name,
-        evidence_marker: next_target,
+        "qualified_name": qualified_name,
+        "related_qualified_name": related_qualified_name,
         "source": source,
     }
 
@@ -332,9 +324,11 @@ for line in sys.stdin:
                                 if graph_read_number == 1
                                 else "warm stable project remains ready"
                             ),
-                            "graph_implementation_evidence": "src/route.rs::worker_slot",
-                            "caller": "src/delivery.rs::DeliveryRouter::worker_for",
-                            "focused_test_evidence": "tests/alias_retry.rs::alias_retries_stay_on_the_original_ordered_worker",
+                            "results": [
+                                {"qualified_name": "worker_slot", "file_path": "src/route.rs"},
+                                {"qualified_name": "DeliveryRouter::worker_for", "file_path": "src/delivery.rs"},
+                                {"file_path": "tests/alias_retry.rs"},
+                            ],
                         },
                         sort_keys=True,
                     ),
@@ -355,8 +349,9 @@ for line in sys.stdin:
                                 if graph_read_number >= 2
                                 else "cold stable upsert is ready"
                             ),
-                            "code_refinement_evidence": "worker_slot",
-                            "implementation": "src/route.rs::worker_slot",
+                            "results": [
+                                {"qualified_name": "worker_slot", "file_path": "src/route.rs"},
+                            ],
                         },
                         sort_keys=True,
                     ),
@@ -372,8 +367,7 @@ for line in sys.stdin:
                     json.dumps(
                         identity
                         | {
-                            "trace_caller_evidence": "DeliveryAttempt -> DeliveryRouter::worker_for",
-                            "caller": "src/delivery.rs::DeliveryRouter::worker_for",
+                            "callers": ["DeliveryRouter::worker_for"],
                         },
                         sort_keys=True,
                     ),

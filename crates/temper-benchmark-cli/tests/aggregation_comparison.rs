@@ -6,12 +6,14 @@ use std::process::Command;
 
 use temper_benchmark_cli::{
     AnalyzeOptions, BenchmarkAnnotationsV1, BenchmarkModeV1, BenchmarkRunV1, ComparisonInput,
-    DiffStatisticsV1, DistributionV1, GraphDecisionKindV1, GraphDecisionTargetV1, RunSummaryV1,
-    ValidationEvidenceV1, aggregate_run_summaries, analyze_trace, collect_environment_metadata,
-    compare_benchmarks, ingest_trace, load_comparison_input, render_aggregate_markdown,
-    render_comparison_markdown,
+    DiffStatisticsV1, DistributionV1, GraphDecisionCorrelationV1, GraphDecisionKindV1,
+    GraphDecisionTargetV1, RunSummaryV1, ValidationEvidenceV1, aggregate_run_summaries,
+    analyze_trace, collect_environment_metadata, compare_benchmarks, ingest_trace,
+    load_comparison_input, render_aggregate_markdown, render_comparison_markdown,
 };
-use temper_protocol_activity::{AgentActivityEventV1, ModelCallStartedV1};
+use temper_protocol_activity::{
+    AgentActivityEventV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1, ModelCallStartedV1,
+};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -192,7 +194,11 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
     let targets = vec![GraphDecisionTargetV1 {
         target: "src/lib.rs".to_string(),
         kind: GraphDecisionKindV1::Implementation,
-        result_contains: None,
+        producer: GraphDecisionCorrelationV1 {
+            tool: GraphCorrelationToolV1::SearchGraph,
+            target_kind: GraphCorrelationTargetKindV1::GraphQuery,
+            target: "src/lib.rs".to_string(),
+        },
         consumption: Vec::new(),
     }];
     let mut complete = analyze_trace(

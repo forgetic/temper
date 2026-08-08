@@ -5,18 +5,31 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use temper_benchmark_cli::{
-    AnalyzeOptions, GraphDecisionKindV1, GraphDecisionTargetV1, MetricCoverageV1,
-    RunTerminalStatusV1, TraceDiagnosticCodeV1, analyze_trace, ingest_trace,
+    AnalyzeOptions, GraphDecisionCorrelationV1, GraphDecisionKindV1, GraphDecisionTargetV1,
+    MetricCoverageV1, RunTerminalStatusV1, TraceDiagnosticCodeV1, analyze_trace, ingest_trace,
     render_run_summary_json, render_run_summary_markdown,
 };
 use temper_protocol_activity::{
-    AgentActivityEventV1, CaptureModeV1, FailureCodeV1, FailureInfoV1, RunFailedV1, ToolStatusV1,
+    AgentActivityEventV1, CaptureModeV1, FailureCodeV1, FailureInfoV1,
+    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, RunFailedV1, ToolStatusV1,
 };
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures")
         .join(name)
+}
+
+fn producer(
+    tool: GraphCorrelationToolV1,
+    target_kind: GraphCorrelationTargetKindV1,
+    target: &str,
+) -> GraphDecisionCorrelationV1 {
+    GraphDecisionCorrelationV1 {
+        tool,
+        target_kind,
+        target: target.to_string(),
+    }
 }
 
 #[test]
@@ -289,19 +302,31 @@ fn graph_metrics_distinguish_consumption_failures_retries_and_fallback_discovery
                 GraphDecisionTargetV1 {
                     target: "src/lib.rs".to_string(),
                     kind: GraphDecisionKindV1::Implementation,
-                    result_contains: None,
+                    producer: producer(
+                        GraphCorrelationToolV1::SearchGraph,
+                        GraphCorrelationTargetKindV1::GraphQuery,
+                        "src/lib.rs",
+                    ),
                     consumption: Vec::new(),
                 },
                 GraphDecisionTargetV1 {
                     target: "src/main.rs".to_string(),
                     kind: GraphDecisionKindV1::Caller,
-                    result_contains: None,
+                    producer: producer(
+                        GraphCorrelationToolV1::TracePath,
+                        GraphCorrelationTargetKindV1::FunctionName,
+                        "src/main.rs",
+                    ),
                     consumption: Vec::new(),
                 },
                 GraphDecisionTargetV1 {
                     target: "tests/focused.rs".to_string(),
                     kind: GraphDecisionKindV1::FocusedTest,
-                    result_contains: None,
+                    producer: producer(
+                        GraphCorrelationToolV1::SearchCode,
+                        GraphCorrelationTargetKindV1::Pattern,
+                        "tests/focused.rs",
+                    ),
                     consumption: Vec::new(),
                 },
             ],
@@ -395,7 +420,11 @@ fn decisive_selection_keeps_disabled_and_irrelevant_graph_fallback_comparable() 
     let target = GraphDecisionTargetV1 {
         target: "src/lib.rs".to_string(),
         kind: GraphDecisionKindV1::Implementation,
-        result_contains: None,
+        producer: producer(
+            GraphCorrelationToolV1::SearchGraph,
+            GraphCorrelationTargetKindV1::GraphQuery,
+            "src/lib.rs",
+        ),
         consumption: Vec::new(),
     };
     let options = AnalyzeOptions {
@@ -437,6 +466,11 @@ fn decisive_selection_keeps_disabled_and_irrelevant_graph_fallback_comparable() 
                 else {
                     panic!("fixture graph result must be inline");
                 };
+                tool.graph_correlation = temper_protocol_activity::GraphCorrelationV1::new(
+                    GraphCorrelationToolV1::SearchGraph,
+                    GraphCorrelationTargetKindV1::GraphQuery,
+                    "unmatched provider target",
+                );
                 result.text = "unrelated docs/design.md".to_string();
             }
         }
@@ -477,47 +511,6 @@ fn partial_graph_timing_keeps_coverage_and_partial_total() {
     assert_eq!(graph.readiness_wait_coverage.observed, 6);
     assert_eq!(graph.readiness_wait_coverage.expected, Some(7));
     assert_eq!(graph.cumulative_readiness_wait_ms, Some(40));
-}
-
-#[test]
-fn old_or_metadata_only_graph_traces_keep_evidence_unavailable() {
-    let trace = ingest_trace(fixture("graph-missing-evidence-events.jsonl")).unwrap();
-    let summary = analyze_trace(
-        &trace,
-        &AnalyzeOptions {
-            graph_decision_targets: vec![GraphDecisionTargetV1 {
-                target: "src/lib.rs".to_string(),
-                kind: GraphDecisionKindV1::Implementation,
-                result_contains: None,
-                consumption: Vec::new(),
-            }],
-            ..AnalyzeOptions::default()
-        },
-    );
-    let graph = summary.metrics.graph.as_ref().unwrap();
-    assert_eq!(graph.calls, 1);
-    assert_eq!(graph.cumulative_readiness_wait_ms, None);
-    assert_eq!(
-        graph.readiness_wait_coverage,
-        MetricCoverageV1 {
-            observed: 0,
-            expected: Some(1)
-        }
-    );
-    assert_eq!(graph.relevant_results, None);
-    assert_eq!(graph.irrelevant_successes, None);
-    assert_eq!(
-        graph.relevance_coverage,
-        MetricCoverageV1 {
-            observed: 0,
-            expected: Some(1)
-        }
-    );
-    assert!(graph.conventional_discovery_before_selection.is_none());
-    assert!(summary.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == TraceDiagnosticCodeV1::GraphEvidenceUnavailable
-            && diagnostic.message.contains("omitted or truncated")
-    }));
 }
 
 #[test]

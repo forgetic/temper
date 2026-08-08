@@ -59,9 +59,9 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "project": {"type": "string"},
-                "path": {"type": "string"},
+                "qualified_name": {"type": "string"},
             },
-            "required": ["path"],
+            "required": ["qualified_name"],
         },
     },
     {
@@ -255,10 +255,14 @@ for line in sys.stdin:
             }))
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
-            path = arguments.get("path", "")
+            qualified_name = arguments.get("qualified_name", "")
+            source_path = {
+                "retry_worker_topic": "src/lib.rs",
+                "retry_worker_topic_retry_affinity": "tests/retry_affinity.rs",
+            }.get(qualified_name)
             source = (
-                current_root_source(project, path)
-                if has_current_root_profile()
+                current_root_source(project, source_path)
+                if has_current_root_profile() and source_path is not None
                 else None
             )
             if source is None:
@@ -267,8 +271,8 @@ for line in sys.stdin:
             else:
                 log_tool(name, arguments, fixture_event="served_current_root_source")
                 result = text_result(json.dumps({
-                    "result": "FAKE_MCP_SNIPPET_RESULT",
-                    "path": path,
+                    "qualified_name": qualified_name,
+                    "file_path": source_path,
                     "source": source,
                     "binding": "current_prepared_checkout",
                 }))

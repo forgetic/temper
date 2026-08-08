@@ -434,7 +434,7 @@ mod tests {
             ),
             call(
                 "get_code_snippet",
-                serde_json::json!({"project": confirmed, "path": "src/lib.rs"}),
+                serde_json::json!({"project": confirmed, "qualified_name": "retry_worker_topic"}),
                 None,
                 false,
                 Some("served_current_root_source"),
@@ -543,14 +543,14 @@ mod tests {
             ),
             call(
                 "get_code_snippet",
-                serde_json::json!({"project": confirmed, "path": "src/lib.rs"}),
+                serde_json::json!({"project": confirmed, "qualified_name": "retry_worker_topic"}),
                 None,
                 false,
                 Some("served_current_root_source"),
             ),
             call(
                 "get_code_snippet",
-                serde_json::json!({"project": confirmed, "path": "tests/retry_affinity.rs"}),
+                serde_json::json!({"project": confirmed, "qualified_name": "retry_worker_topic_retry_affinity"}),
                 None,
                 false,
                 Some("served_current_root_source"),

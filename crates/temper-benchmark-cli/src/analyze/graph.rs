@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use temper_protocol_activity::{AgentActivityEventV1, ToolFailureCategoryV1, ToolStatusV1};
+use temper_protocol_activity::{
+    AgentActivityEventV1, GraphCorrelationV1, ToolFailureCategoryV1, ToolStatusV1,
+};
 
 use super::{CallKey, captured_command, content_text, shell::classify_shell_discovery};
 use crate::{
@@ -26,9 +28,8 @@ struct GraphCall {
     name: String,
     start_seq: Option<u64>,
     finish_seq: Option<u64>,
-    arguments: Option<String>,
     status: Option<ToolStatusV1>,
-    result: Option<String>,
+    graph_correlation: Option<GraphCorrelationV1>,
     failure: Option<ToolFailureCategoryV1>,
     readiness_wait_ms: Option<u64>,
     discovery_duration_ms: Option<u64>,
@@ -170,10 +171,6 @@ fn collect_graph_calls(trace: &NormalizedTrace) -> BTreeMap<CallKey, GraphCall> 
                         scope_id: event.scope.id.clone(),
                         name: tool.name.clone(),
                         start_seq: Some(event.seq),
-                        arguments: tool
-                            .arguments
-                            .as_ref()
-                            .and_then(|arguments| content_text(trace, arguments)),
                         ..GraphCall::default()
                     });
             }
@@ -190,10 +187,7 @@ fn collect_graph_calls(trace: &NormalizedTrace) -> BTreeMap<CallKey, GraphCall> 
                 call.status = Some(tool.status);
                 call.failure = tool.failure.as_ref().map(|failure| failure.category);
                 if tool.status == ToolStatusV1::Succeeded {
-                    call.result = tool
-                        .result
-                        .as_ref()
-                        .and_then(|result| content_text(trace, result));
+                    call.graph_correlation = tool.graph_correlation.clone();
                 }
                 if let Some(timing) = tool.codebase_memory_timing {
                     call.readiness_wait_ms = Some(timing.readiness_wait_ms);

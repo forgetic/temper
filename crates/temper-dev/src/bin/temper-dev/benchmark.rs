@@ -52,6 +52,54 @@ pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(),
     Ok(())
 }
 
+pub(super) fn verify_typed_graph_correlation_records(trace: &str) -> Result<(), String> {
+    let expected = [
+        ("search_graph", "graph_query"),
+        ("search_code", "pattern"),
+        ("trace_path", "function_name"),
+        ("get_code_snippet", "qualified_name"),
+        ("get_code_snippet", "qualified_name"),
+    ];
+    let observed = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|event| {
+            event
+                .pointer("/event/event/data/graph_correlation")
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+    if observed.len() != expected.len() {
+        return Err(format!(
+            "enabled trace retained {} typed graph correlations; expected {}",
+            observed.len(),
+            expected.len()
+        ));
+    }
+    for (record, (tool, target_kind)) in observed.iter().zip(expected) {
+        let Some(object) = record.as_object() else {
+            return Err("enabled trace retained a non-object graph correlation".to_string());
+        };
+        let fields = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+        if fields != BTreeSet::from(["target_digest", "target_kind", "tool", "version"])
+            || object.get("version").and_then(Value::as_u64) != Some(1)
+            || object.get("tool").and_then(Value::as_str) != Some(tool)
+            || object.get("target_kind").and_then(Value::as_str) != Some(target_kind)
+            || !object
+                .get("target_digest")
+                .and_then(Value::as_str)
+                .is_some_and(|digest| {
+                    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+        {
+            return Err(
+                "enabled trace did not retain only complete typed graph correlations".to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn trace_has_confirmed_graph_read(trace: &str) -> bool {
     trace
         .lines()
@@ -107,7 +155,7 @@ fn value_has_confirmed_current_root_source(value: &Value, symbol: &str) -> bool 
 
 fn confirmed_current_root_source_payload(payload: &Value, symbol: &str) -> bool {
     payload.get("source_root").and_then(Value::as_str) == Some("confirmed_current_root")
-        && payload.get("symbol").and_then(Value::as_str) == Some(symbol)
+        && payload.get("qualified_name").and_then(Value::as_str) == Some(symbol)
         && payload
             .get("source_path")
             .and_then(Value::as_str)

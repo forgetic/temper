@@ -3,9 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use temper_benchmark_cli::{
-    AnalyzeOptions, GraphDecisionKindV1, GraphDecisionTargetV1, MetricCoverageV1,
-    TraceDiagnosticCodeV1, analyze_trace, ingest_trace, render_run_summary_markdown,
+    AnalyzeOptions, GraphDecisionCorrelationV1, GraphDecisionKindV1, GraphDecisionTargetV1,
+    MetricCoverageV1, TraceDiagnosticCodeV1, analyze_trace, ingest_trace,
+    render_run_summary_markdown,
 };
+use temper_protocol_activity::{GraphCorrelationTargetKindV1, GraphCorrelationToolV1};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -24,7 +26,11 @@ fn shell_discovery_summary(name: &str) -> temper_benchmark_cli::RunSummaryV1 {
             graph_decision_targets: vec![GraphDecisionTargetV1 {
                 target: "src/lib.rs".to_string(),
                 kind: GraphDecisionKindV1::Implementation,
-                result_contains: None,
+                producer: GraphDecisionCorrelationV1 {
+                    tool: GraphCorrelationToolV1::SearchGraph,
+                    target_kind: GraphCorrelationTargetKindV1::GraphQuery,
+                    target: "src/lib.rs".to_string(),
+                },
                 consumption: Vec::new(),
             }],
             ..AnalyzeOptions::default()

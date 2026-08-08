@@ -45,8 +45,9 @@ identity: `search_graph` identifies implementation, caller, and focused-test
 evidence; `search_code` refines `worker_slot`; `trace_path` follows it to the
 delivery caller; and two `get_code_snippet` calls read `DeliveryAttempt` and
 `DeliveryRouter::worker_for` from the confirmed current root before the exact
-patch. The manifest permits only those declared graph-to-graph, graph-to-source,
-and final exact source-selection consumption links. The run summary retains
+patch. The manifest permits only declared provider-shaped typed producer and
+consumer targets, followed by graph-to-graph, graph-to-source, and final exact
+source-selection consumption links. Provider summaries are not relevance markers. The run summary retains
 ordered call IDs, safe tool names, declared target/kind, and consumption mode
 (`graph`, `source`, or `selection`); it never retains tool arguments, source
 text, or provider results as decision evidence. Diagnostic traces do contain the
