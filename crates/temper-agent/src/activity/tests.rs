@@ -309,6 +309,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 truncated: false,
                 failure: None,
                 codebase_memory_timing: None,
+                graph_correlation: None,
             },
         });
         sink.emit(AgentEvent::ToolEnd {
@@ -324,6 +325,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 truncated: true,
                 failure: None,
                 codebase_memory_timing: None,
+                graph_correlation: None,
             },
         });
         sink.emit(AgentEvent::ToolStart {
@@ -342,6 +344,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 truncated: true,
                 failure: None,
                 codebase_memory_timing: None,
+                graph_correlation: None,
             },
         });
         let json =

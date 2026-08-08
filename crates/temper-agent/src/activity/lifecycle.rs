@@ -522,6 +522,7 @@ mod tests {
                 truncated: false,
                 failure: None,
                 codebase_memory_timing: None,
+                graph_correlation: None,
             },
         });
         sink.emit(AgentEvent::Steered { count: 1 });

@@ -8,6 +8,9 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use temper_protocol_activity::{
+    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
 struct FakeClock(Mutex<VecDeque<u64>>);
@@ -109,6 +112,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
                 truncated: false,
                 failure: None,
                 codebase_memory_timing: None,
+                graph_correlation: None,
             },
         } if id == "call-1" && name == "fake" && preview == "bounded result"
     ));
@@ -174,6 +178,54 @@ fn only_codebase_memory_tools_retain_numeric_graph_timings() {
     };
     assert_eq!(
         bounded_tool_result("codebase_memory_search_graph", &malformed).codebase_memory_timing,
+        None
+    );
+}
+
+#[test]
+fn only_closed_graph_correlation_details_enter_trusted_metadata() {
+    const SECRET: &str = "Authorization: Bearer CORE-GRAPH-CORRELATION-SECRET";
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        SECRET,
+    )
+    .expect("complete target");
+    let output = ToolOutput {
+        content: Vec::new(),
+        details: Some(serde_json::json!({
+            SAFE_GRAPH_CORRELATION_DETAIL_KEY: correlation,
+            "raw_argument": SECRET,
+        })),
+        is_error: false,
+    };
+    let metadata = bounded_tool_result("codebase_memory_search_graph", &output);
+    assert_eq!(metadata.graph_correlation, Some(correlation.clone()));
+    assert!(
+        !serde_json::to_string(&metadata.graph_correlation)
+            .expect("fingerprint serializes")
+            .contains(SECRET)
+    );
+    assert_eq!(bounded_tool_result("read", &output).graph_correlation, None);
+
+    let mut malformed = correlation;
+    malformed.target_digest = SECRET.to_string();
+    let malformed_output = ToolOutput {
+        details: Some(serde_json::json!({
+            SAFE_GRAPH_CORRELATION_DETAIL_KEY: malformed,
+        })),
+        ..output
+    };
+    assert_eq!(
+        bounded_tool_result("codebase_memory_search_graph", &malformed_output).graph_correlation,
+        None
+    );
+    let failed_output = ToolOutput {
+        is_error: true,
+        ..malformed_output
+    };
+    assert_eq!(
+        bounded_tool_result("codebase_memory_search_graph", &failed_output).graph_correlation,
         None
     );
 }

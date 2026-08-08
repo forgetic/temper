@@ -79,7 +79,74 @@ fn old_tool_finished_events_omit_the_optional_failure() {
     assert_eq!(parsed.failure, None);
     assert_eq!(parsed.result, None);
     assert_eq!(parsed.codebase_memory_timing, None);
+    assert_eq!(parsed.graph_correlation, None);
     assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
+}
+
+#[test]
+fn graph_correlation_fingerprints_closed_targets_without_retaining_raw_arguments() {
+    const SECRET: &str = "Authorization: Bearer GRAPH-CORRELATION-SECRET";
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        &format!("  activity   correlation {SECRET}  "),
+    )
+    .expect("complete graph query is fingerprinted");
+    assert!(correlation.is_valid());
+    assert_eq!(
+        correlation.target_digest,
+        GraphCorrelationV1::target_digest(&format!("activity correlation {SECRET}"))
+            .expect("normalized digest")
+    );
+    assert!(
+        GraphCorrelationV1::new(
+            GraphCorrelationToolV1::SearchGraph,
+            GraphCorrelationTargetKindV1::Pattern,
+            "unsupported pair",
+        )
+        .is_none()
+    );
+    assert!(GraphCorrelationV1::target_digest("bad\ncontrol").is_none());
+    assert!(
+        GraphCorrelationV1::target_digest(&"x".repeat(MAX_GRAPH_CORRELATION_TARGET_BYTES + 1))
+            .is_none()
+    );
+
+    let rendered = serde_json::to_string(&correlation).expect("correlation serializes");
+    assert!(!rendered.contains(SECRET));
+    assert!(!rendered.contains("activity correlation"));
+    assert!(rendered.contains(&correlation.target_digest));
+
+    let mut event = usage_event(1);
+    event.event = AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
+        call_id: "graph-1".into(),
+        name: "codebase_memory_search_graph".into(),
+        status: ToolStatusV1::Succeeded,
+        duration_ms: 5,
+        result: None,
+        failure: None,
+        codebase_memory_timing: None,
+        graph_correlation: Some(correlation),
+    });
+    event.validate().expect("closed correlation validates");
+    let export = TraceExportRecordV1::event(event.clone());
+    let export_json = serde_json::to_string(&export).expect("export serializes");
+    assert!(!export_json.contains(SECRET));
+    assert_eq!(
+        serde_json::from_str::<TraceExportRecordV1>(&export_json).expect("export parses"),
+        export
+    );
+
+    let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+        unreachable!();
+    };
+    finished.graph_correlation.as_mut().unwrap().target_digest = SECRET.to_string();
+    assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
+    event.event.sanitize_graph_correlation();
+    let AgentActivityEventV1::ToolFinished(finished) = &event.event else {
+        unreachable!();
+    };
+    assert_eq!(finished.graph_correlation, None);
 }
 
 #[test]
@@ -96,6 +163,7 @@ fn tool_failures_validate_only_on_non_success_boundaries() {
             readiness_wait_ms: 10,
             graph_execution_ms: 40,
         }),
+        graph_correlation: None,
     });
     event.validate().expect("failed tool diagnostic validates");
 

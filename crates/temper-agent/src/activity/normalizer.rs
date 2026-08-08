@@ -27,7 +27,7 @@ pub(super) use model_failure::map_diagnostic;
 use model_failure::{normalize_finish, retry_code, status as map_model_status};
 use terminal::scope_terminal;
 use tool_failure::{map_tool_failure, map_tool_status};
-use tool_result::{captured_tool_result, graph_timing};
+use tool_result::{captured_tool_result, graph_correlation, graph_timing};
 
 struct NormalizerState {
     current_turn: Option<u32>,
@@ -496,16 +496,16 @@ impl NormalizingEventSink {
         } else {
             None
         };
-        let failure = metadata.failure.map(map_tool_failure);
         self.project(
             state.current_turn,
             AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
+                graph_correlation: graph_correlation(metadata.graph_correlation, &name, status),
                 call_id: id,
                 name,
                 status: map_tool_status(status),
                 duration_ms,
                 result,
-                failure,
+                failure: metadata.failure.map(map_tool_failure),
                 codebase_memory_timing: graph_timing(metadata.codebase_memory_timing),
             }),
         );

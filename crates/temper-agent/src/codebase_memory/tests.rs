@@ -1,4 +1,5 @@
 mod confirmation;
+mod correlation;
 mod health;
 mod indexing;
 mod lifecycle;
@@ -8,6 +9,9 @@ mod test_support;
 use super::*;
 use serde_json::json;
 use std::fs;
+use temper_protocol_activity::{
+    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+};
 use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode};
 use test_support::*;
 use tongs::tools::ToolEffects;
@@ -189,9 +193,36 @@ fn codebase_memory_bridge_wraps_allowed_tool_and_filters_destructive_tools() {
             .expect("search wrapper present");
         assert_eq!(search.effects(), ToolEffects::read());
         let output = search
-            .execute("call-1", json!({ "query": "needle" }), None)
+            .execute(
+                "call-1",
+                json!({ "query": "needle", "pattern": "ToolFinishedV1" }),
+                None,
+            )
             .await
             .expect("execute wrapped MCP tool");
+        let correlation: GraphCorrelationV1 = serde_json::from_value(
+            output
+                .details
+                .as_ref()
+                .and_then(|details| details.get(SAFE_GRAPH_CORRELATION_DETAIL_KEY))
+                .cloned()
+                .expect("wrapper emits a closed correlation detail"),
+        )
+        .expect("correlation detail is typed");
+        assert_eq!(
+            correlation,
+            GraphCorrelationV1::new(
+                GraphCorrelationToolV1::SearchCode,
+                GraphCorrelationTargetKindV1::Pattern,
+                "ToolFinishedV1",
+            )
+            .expect("complete declared pattern")
+        );
+        assert!(
+            !serde_json::to_string(&output.details)
+                .expect("details serialize")
+                .contains("ToolFinishedV1")
+        );
         let text = output_text(&output);
         assert!(!output.is_error);
         assert!(text.contains("search_code result"));

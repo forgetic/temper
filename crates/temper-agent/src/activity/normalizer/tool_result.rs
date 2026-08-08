@@ -1,5 +1,7 @@
-use temper_agent_core::CodebaseMemoryTiming;
-use temper_protocol_activity::{CapturedContentV1, CodebaseMemoryTimingV1, InlineContentV1};
+use temper_agent_core::{CodebaseMemoryTiming, ToolCallStatus};
+use temper_protocol_activity::{
+    CapturedContentV1, CodebaseMemoryTimingV1, GraphCorrelationV1, InlineContentV1,
+};
 
 use super::{nonempty, sanitized_text};
 
@@ -7,6 +9,18 @@ pub(super) fn graph_timing(timing: Option<CodebaseMemoryTiming>) -> Option<Codeb
     timing.map(|timing| CodebaseMemoryTimingV1 {
         readiness_wait_ms: timing.readiness_wait_ms,
         graph_execution_ms: timing.graph_execution_ms,
+    })
+}
+
+pub(super) fn graph_correlation(
+    correlation: Option<GraphCorrelationV1>,
+    name: &str,
+    status: ToolCallStatus,
+) -> Option<GraphCorrelationV1> {
+    correlation.filter(|correlation| {
+        status == ToolCallStatus::Succeeded
+            && correlation.is_valid()
+            && correlation.tool.public_name() == name
     })
 }
 
