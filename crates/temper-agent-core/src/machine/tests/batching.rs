@@ -46,7 +46,7 @@ fn parallel_batch_runs_concurrently_and_waits_for_all_before_next_call() {
 #[test]
 fn independent_codebase_memory_discovery_remains_parallel_safe() {
     // The static effect policy remains intentionally unaware of semantic
-    // dependencies. Independent graph discovery issued in one model turn stays
+    // dependencies. Independent provider-shaped discovery issued in one model turn stays
     // in a concurrent read-only batch; the Jig decision-chain coverage issues
     // dependent producer/consumer calls in separate model turns instead.
     let mut m = machine_read_tools(&[
@@ -70,14 +70,61 @@ fn independent_codebase_memory_discovery_remains_parallel_safe() {
 
     let after_first = complete(
         &mut m,
-        tool_finished("implementation", tool_output("opaque", false)),
+        tool_finished(
+            "implementation",
+            tool_output(r#"{"results":[{"next":"opaque"}]}"#, false),
+        ),
     );
     assert_eq!(calls_llm(&after_first), 0);
     let after_second = complete(
         &mut m,
-        tool_finished("behavior", tool_output("opaque", false)),
+        tool_finished(
+            "behavior",
+            tool_output(r#"{"results":[{"evidence":"opaque"}]}"#, false),
+        ),
     );
     assert_eq!(calls_llm(&after_second), 1);
+}
+
+#[test]
+fn producer_turn_dependent_reads_remain_one_static_batch() {
+    // Static effects do not inspect opaque provider values. This documents the
+    // deliberately unchanged scheduler boundary: model-visible decision-chain
+    // guidance, not batching inference, keeps these dependent calls out of one
+    // producer turn.
+    let mut m = machine_read_tools(&[
+        "codebase_memory_search_graph",
+        "codebase_memory_search_code",
+        "codebase_memory_trace_path",
+        "codebase_memory_get_code_snippet",
+    ]);
+    let mut requests = m.on_start(EngineTime::ZERO);
+    requests.extend(complete(
+        &mut m,
+        llm_responded(assistant_tool_calls(&[
+            ("producer", "codebase_memory_search_graph"),
+            ("refinement", "codebase_memory_search_code"),
+            ("trace", "codebase_memory_trace_path"),
+            ("source", "codebase_memory_get_code_snippet"),
+        ])),
+    ));
+    assert_eq!(
+        run_tools(&requests),
+        vec!["producer", "refinement", "trace", "source"],
+        "read-only calls remain a single static batch even when a model wrongly groups them"
+    );
+
+    for id in ["producer", "refinement", "trace", "source"] {
+        let after_result = complete(
+            &mut m,
+            tool_finished(id, tool_output(r#"{"results":[{"next":"opaque"}]}"#, false)),
+        );
+        if id == "source" {
+            assert_eq!(calls_llm(&after_result), 1);
+        } else {
+            assert_eq!(calls_llm(&after_result), 0);
+        }
+    }
 }
 
 #[test]
