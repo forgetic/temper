@@ -13,7 +13,11 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use temper_agent_core::{SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory, ToolFailureDiagnostic};
+use temper_agent_core::{
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory,
+    ToolFailureDiagnostic,
+};
+use temper_protocol_activity::{GraphCorrelationTargetKindV1, GraphCorrelationV1};
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
     WorkspaceContext,
@@ -550,6 +554,7 @@ struct McpToolResult<'a> {
     readiness_wait_ms: u64,
     graph_execution_ms: u64,
     duration_ms: u64,
+    graph_correlation: Option<&'a GraphCorrelationV1>,
 }
 
 fn emit_agent_tool_configured(ev: AgentToolConfigured<'_>) {
@@ -633,6 +638,21 @@ fn emit_mcp_tool_called(ev: McpToolCalled<'_>) {
 }
 
 fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
+    // Scenario and operator logs need to distinguish a successful targeted
+    // call with a complete typed correlation from a generic graph success. Do
+    // not project the digest here: activity traces retain that opaque value for
+    // the relevance analyzer, while live run evidence needs only aggregate
+    // completion and closed type facts.
+    let (correlation_version, correlation_tool, correlation_target_kind) = ev
+        .graph_correlation
+        .map(|correlation| {
+            (
+                correlation.version,
+                correlation.tool.public_name(),
+                graph_correlation_target_kind(correlation.target_kind),
+            )
+        })
+        .unwrap_or((0, "", ""));
     tracing::debug!(
         target: "temper::agent",
         service = "agent",
@@ -646,10 +666,25 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         readiness.wait_ms = ev.readiness_wait_ms,
         graph.execution_ms = ev.graph_execution_ms,
         duration_ms = ev.duration_ms,
+        graph.correlation.complete = ev.graph_correlation.is_some(),
+        graph.correlation.version = correlation_version,
+        graph.correlation.tool = correlation_tool,
+        graph.correlation.target_kind = correlation_target_kind,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,
     );
+}
+
+fn graph_correlation_target_kind(kind: GraphCorrelationTargetKindV1) -> &'static str {
+    match kind {
+        GraphCorrelationTargetKindV1::GraphQuery => "graph_query",
+        GraphCorrelationTargetKindV1::Pattern => "pattern",
+        GraphCorrelationTargetKindV1::NamePattern => "name_pattern",
+        GraphCorrelationTargetKindV1::QualifiedNamePattern => "qualified_name_pattern",
+        GraphCorrelationTargetKindV1::FunctionName => "function_name",
+        GraphCorrelationTargetKindV1::QualifiedName => "qualified_name",
+    }
 }
 
 fn codebase_memory_mode(mode: CodebaseMemoryMode) -> &'static str {

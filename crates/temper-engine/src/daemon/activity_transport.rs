@@ -19,8 +19,7 @@ impl DaemonMachine {
         // Normalize diagnostics before protocol validation so unsafe detail can
         // never reach dispatch, logging, or the journal representation.
         for event in &mut request.batch.events {
-            event.event.sanitize_retry_failure_message();
-            event.event.normalize_model_failure();
+            event.event.sanitize_untrusted_activity();
         }
         if request.protocol_version != WORKER_PROTOCOL_VERSION
             || request.worker_id.trim().is_empty()

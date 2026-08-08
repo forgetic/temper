@@ -19,7 +19,7 @@
             "tool_call": {
               "id": "read_rebound_graph_selected_source",
               "name": "codebase_memory_get_code_snippet",
-              "args": { "project": "demo", "path": "src/lib.rs" }
+              "args": { "project": "demo", "qualified_name": "retry_worker_topic" }
             }
           }],
           "stop": "tool_calls"

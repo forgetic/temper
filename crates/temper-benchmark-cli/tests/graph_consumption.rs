@@ -3,12 +3,14 @@
 use std::path::{Path, PathBuf};
 
 use temper_benchmark_cli::{
-    AnalyzeOptions, GraphConsumptionModeV1, GraphDecisionConsumptionV1, GraphDecisionKindV1,
-    GraphDecisionTargetV1, GraphEvidenceToolV1, MetricCoverageV1, NormalizedTrace,
-    TraceDiagnosticCodeV1, analyze_trace, ingest_trace, render_run_summary_json,
-    render_run_summary_markdown,
+    AnalyzeOptions, GraphConsumptionModeV1, GraphDecisionCorrelationV1, GraphDecisionKindV1,
+    GraphDecisionTargetV1, MetricCoverageV1, NormalizedTrace, TraceDiagnosticCodeV1, analyze_trace,
+    ingest_trace, render_run_summary_json, render_run_summary_markdown,
 };
-use temper_protocol_activity::{AgentActivityEventV1, AgentScopeKindV1, CapturedContentV1};
+use temper_protocol_activity::{
+    AgentActivityEventV1, AgentScopeKindV1, CapturedContentV1, GraphCorrelationTargetKindV1,
+    GraphCorrelationToolV1, GraphCorrelationV1,
+};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -16,51 +18,95 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn correlation(
+    tool: GraphCorrelationToolV1,
+    target_kind: GraphCorrelationTargetKindV1,
+    target: &str,
+) -> GraphDecisionCorrelationV1 {
+    GraphDecisionCorrelationV1 {
+        tool,
+        target_kind,
+        target: target.to_string(),
+    }
+}
+
+fn target(
+    target: &str,
+    producer: GraphDecisionCorrelationV1,
+    consumption: Vec<GraphDecisionCorrelationV1>,
+) -> GraphDecisionTargetV1 {
+    GraphDecisionTargetV1 {
+        target: target.to_string(),
+        kind: GraphDecisionKindV1::Implementation,
+        producer,
+        consumption,
+    }
+}
+
 fn graph_consumption_options() -> AnalyzeOptions {
-    let target =
-        |target: &str, result_contains: &str, consumption: Vec<GraphDecisionConsumptionV1>| {
-            GraphDecisionTargetV1 {
-                target: target.to_string(),
-                kind: GraphDecisionKindV1::Implementation,
-                result_contains: Some(result_contains.to_string()),
-                consumption,
-            }
-        };
     AnalyzeOptions {
         graph_decision_targets: vec![
             target(
                 "worker_slot",
-                "search-graph-marker",
-                vec![GraphDecisionConsumptionV1 {
-                    tool: GraphEvidenceToolV1::SearchCode,
-                    target: "worker_slot".to_string(),
-                }],
+                correlation(
+                    GraphCorrelationToolV1::SearchGraph,
+                    GraphCorrelationTargetKindV1::QualifiedNamePattern,
+                    "worker_slot",
+                ),
+                vec![correlation(
+                    GraphCorrelationToolV1::SearchCode,
+                    GraphCorrelationTargetKindV1::Pattern,
+                    "worker_slot",
+                )],
             ),
             target(
                 "worker_slot",
-                "search-code-marker",
-                vec![GraphDecisionConsumptionV1 {
-                    tool: GraphEvidenceToolV1::TracePath,
-                    target: "worker_slot".to_string(),
-                }],
+                correlation(
+                    GraphCorrelationToolV1::SearchCode,
+                    GraphCorrelationTargetKindV1::Pattern,
+                    "worker_slot",
+                ),
+                vec![correlation(
+                    GraphCorrelationToolV1::TracePath,
+                    GraphCorrelationTargetKindV1::FunctionName,
+                    "worker_slot",
+                )],
             ),
             target(
                 "DeliveryAttempt",
-                "trace-marker",
-                vec![GraphDecisionConsumptionV1 {
-                    tool: GraphEvidenceToolV1::GetCodeSnippet,
-                    target: "DeliveryAttempt".to_string(),
-                }],
+                correlation(
+                    GraphCorrelationToolV1::TracePath,
+                    GraphCorrelationTargetKindV1::FunctionName,
+                    "worker_slot",
+                ),
+                vec![correlation(
+                    GraphCorrelationToolV1::GetCodeSnippet,
+                    GraphCorrelationTargetKindV1::QualifiedName,
+                    "DeliveryAttempt",
+                )],
             ),
             target(
-                "worker_for",
-                "delivery-source-marker",
-                vec![GraphDecisionConsumptionV1 {
-                    tool: GraphEvidenceToolV1::GetCodeSnippet,
-                    target: "worker_for".to_string(),
-                }],
+                "DeliveryRouter::worker_for",
+                correlation(
+                    GraphCorrelationToolV1::GetCodeSnippet,
+                    GraphCorrelationTargetKindV1::QualifiedName,
+                    "DeliveryAttempt",
+                ),
+                vec![correlation(
+                    GraphCorrelationToolV1::GetCodeSnippet,
+                    GraphCorrelationTargetKindV1::QualifiedName,
+                    "DeliveryRouter::worker_for",
+                )],
             ),
-            target("repo/src/route.rs", "worker-source-marker", Vec::new()),
+            target(
+                "repo/src/route.rs",
+                correlation(
+                    GraphCorrelationToolV1::GetCodeSnippet,
+                    GraphCorrelationTargetKindV1::QualifiedName,
+                    "DeliveryRouter::worker_for",
+                ),
+                Vec::new(),
+            ),
         ],
         ..AnalyzeOptions::default()
     }
@@ -128,7 +174,7 @@ fn set_started_arguments(
     }
 }
 
-fn set_finished_result_truncated(trace: &mut NormalizedTrace, call_id: &str) {
+fn set_finished_result(trace: &mut NormalizedTrace, call_id: &str, result: &str, truncated: bool) {
     for event in &mut trace.events {
         let AgentActivityEventV1::ToolFinished(tool) = &mut event.event else {
             continue;
@@ -139,7 +185,47 @@ fn set_finished_result_truncated(trace: &mut NormalizedTrace, call_id: &str) {
         let Some(CapturedContentV1::Inline(content)) = tool.result.as_mut() else {
             panic!("fixture graph result must be inline");
         };
-        content.truncated = true;
+        content.text = result.to_string();
+        content.truncated = truncated;
+    }
+}
+
+fn set_finished_correlation(
+    trace: &mut NormalizedTrace,
+    call_id: &str,
+    tool: GraphCorrelationToolV1,
+    target_kind: GraphCorrelationTargetKindV1,
+    target: &str,
+) {
+    for event in &mut trace.events {
+        let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+            continue;
+        };
+        if finished.call_id == call_id {
+            finished.graph_correlation = GraphCorrelationV1::new(tool, target_kind, target);
+        }
+    }
+}
+
+fn clear_finished_correlation(trace: &mut NormalizedTrace, call_id: &str) {
+    for event in &mut trace.events {
+        let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+            continue;
+        };
+        if finished.call_id == call_id {
+            finished.graph_correlation = None;
+        }
+    }
+}
+
+fn corrupt_finished_correlation(trace: &mut NormalizedTrace, call_id: &str) {
+    for event in &mut trace.events {
+        let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+            continue;
+        };
+        if finished.call_id == call_id {
+            finished.graph_correlation.as_mut().unwrap().target_digest = "truncated".to_string();
+        }
     }
 }
 
@@ -155,7 +241,7 @@ fn graph_counts(
 }
 
 #[test]
-fn graph_consumption_requires_declared_ordered_same_scope_chain_and_redacts_raw_evidence() {
+fn graph_consumption_uses_typed_correlation_for_a_generic_five_call_chain() {
     let summary = analyze_trace(&graph_consumption_trace(), &graph_consumption_options());
     let graph = summary.metrics.graph.as_ref().unwrap();
     assert_eq!((graph.calls, graph.succeeded), (5, 5));
@@ -192,30 +278,10 @@ fn graph_consumption_requires_declared_ordered_same_scope_chain_and_redacts_raw_
             GraphConsumptionModeV1::Mutation,
         ]
     );
-    assert_eq!(
-        graph
-            .decision_evidence
-            .iter()
-            .map(|evidence| evidence.target.as_str())
-            .collect::<Vec<_>>(),
-        vec![
-            "worker_slot",
-            "worker_slot",
-            "DeliveryAttempt",
-            "worker_for",
-            "repo/src/route.rs",
-        ]
-    );
-    assert!(
-        graph
-            .decision_evidence
-            .iter()
-            .all(|evidence| evidence.kind == GraphDecisionKindV1::Implementation)
-    );
 
     let json = render_run_summary_json(&summary).unwrap();
     let markdown = render_run_summary_markdown(&summary);
-    for raw_value in ["search-graph-marker", "private source one", "diff --git"] {
+    for raw_value in ["private source one", "diff --git", "qualified_name_pattern"] {
         assert!(!json.contains(raw_value), "summary retained {raw_value:?}");
         assert!(
             !markdown.contains(raw_value),
@@ -227,29 +293,66 @@ fn graph_consumption_requires_declared_ordered_same_scope_chain_and_redacts_raw_
             "| Graph call | Order | Graph tool | Consumer | Tool | Mode | Target | Kind |"
         )
     );
-    assert!(markdown.contains(
-        "| `graph-search` | 3 → 4 | search_graph | `graph-code` | search_code | graph |"
-    ));
 }
 
 #[test]
-fn graph_consumption_rejects_broad_unmatched_cross_scope_and_out_of_order_consumers() {
-    let cases: Vec<(&str, Box<dyn Fn(&mut NormalizedTrace)>)> = vec![
+fn sentinel_results_cannot_substitute_for_exact_typed_correlation() {
+    let mut trace = graph_consumption_trace();
+    set_finished_result(&mut trace, "graph-search", "search-graph-marker", false);
+    set_finished_correlation(
+        &mut trace,
+        "graph-search",
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        "unmatched provider query",
+    );
+
+    let summary = analyze_trace(&trace, &graph_consumption_options());
+    assert_eq!(
+        graph_counts(&summary),
+        (
+            Some(4),
+            Some(1),
+            MetricCoverageV1 {
+                observed: 5,
+                expected: Some(5),
+            },
+        )
+    );
+    assert!(
+        !render_run_summary_json(&summary)
+            .unwrap()
+            .contains("search-graph-marker")
+    );
+}
+
+#[test]
+fn graph_consumption_rejects_broad_mismatched_cross_scope_and_out_of_order_consumers() {
+    let cases: Vec<(&str, Box<dyn Fn(&mut NormalizedTrace)>, (u64, u64))> = vec![
         (
             "broad producer",
             Box::new(|trace| {
                 set_tool_name(trace, "graph-search", "codebase_memory_get_architecture")
             }),
+            (4, 1),
         ),
         (
-            "unmatched consumer",
+            "mismatched consumer",
             Box::new(|trace| {
-                set_started_arguments(trace, "graph-code", r#"{"pattern":"unmatched"}"#, false)
+                set_finished_correlation(
+                    trace,
+                    "graph-code",
+                    GraphCorrelationToolV1::SearchCode,
+                    GraphCorrelationTargetKindV1::Pattern,
+                    "unmatched",
+                )
             }),
+            (3, 2),
         ),
         (
             "cross-scope consumer",
             Box::new(|trace| set_tool_scope(trace, "graph-code", "child")),
+            (3, 2),
         ),
         (
             "out-of-order consumer",
@@ -257,17 +360,15 @@ fn graph_consumption_rejects_broad_unmatched_cross_scope_and_out_of_order_consum
                 set_tool_sequence(trace, "graph-code", 3);
                 set_tool_sequence(trace, "graph-search", 5);
             }),
+            (4, 1),
         ),
     ];
-    for (name, mutate) in cases {
+    for (name, mutate, (expected_relevant, expected_irrelevant)) in cases {
         let mut trace = graph_consumption_trace();
         mutate(&mut trace);
         let summary = analyze_trace(&trace, &graph_consumption_options());
-        let (relevant, irrelevant, coverage) = graph_counts(&summary);
-        let expected_relevant = if name == "cross-scope consumer" { 3 } else { 4 };
-        let expected_irrelevant = 5 - expected_relevant;
         assert_eq!(
-            (relevant, irrelevant, coverage),
+            graph_counts(&summary),
             (
                 Some(expected_relevant),
                 Some(expected_irrelevant),
@@ -282,18 +383,29 @@ fn graph_consumption_rejects_broad_unmatched_cross_scope_and_out_of_order_consum
 }
 
 #[test]
-fn graph_consumption_marks_missing_or_truncated_correlation_unavailable() {
-    let cases: Vec<(&str, Box<dyn Fn(&mut NormalizedTrace)>)> = vec![
+fn graph_consumption_marks_missing_malformed_or_lossy_correlation_unavailable() {
+    let cases: Vec<(&str, Box<dyn Fn(&mut NormalizedTrace)>, u64)> = vec![
         (
-            "missing consumer arguments",
-            Box::new(|trace| set_started_arguments(trace, "graph-code", "", true)),
+            "missing producer correlation",
+            Box::new(|trace| clear_finished_correlation(trace, "graph-search")),
+            4,
         ),
         (
-            "truncated producer result",
-            Box::new(|trace| set_finished_result_truncated(trace, "graph-trace")),
+            "truncated raw metadata without correlation",
+            Box::new(|trace| {
+                clear_finished_correlation(trace, "graph-search");
+                set_finished_result(trace, "graph-search", "generic provider summary", true);
+                set_started_arguments(trace, "graph-search", "", true);
+            }),
+            4,
+        ),
+        (
+            "malformed consumer correlation",
+            Box::new(|trace| corrupt_finished_correlation(trace, "graph-code")),
+            3,
         ),
     ];
-    for (name, mutate) in cases {
+    for (name, mutate, observed) in cases {
         let mut trace = graph_consumption_trace();
         mutate(&mut trace);
         let summary = analyze_trace(&trace, &graph_consumption_options());
@@ -302,17 +414,14 @@ fn graph_consumption_marks_missing_or_truncated_correlation_unavailable() {
         assert_eq!(
             coverage,
             MetricCoverageV1 {
-                observed: 4,
+                observed,
                 expected: Some(5),
             },
             "{name}"
         );
         assert!(summary.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == TraceDiagnosticCodeV1::GraphEvidenceUnavailable
-                && (diagnostic.message.contains("relevance is unavailable")
-                    || diagnostic
-                        .message
-                        .contains("declared consumer omits arguments"))
+                && diagnostic.message.contains("correlation")
         }));
     }
 }
@@ -356,5 +465,31 @@ fn graph_consumption_rejects_mismatched_or_absent_later_mutations() {
             ),
             "{name} must not count a non-exact or missing mutation"
         );
+    }
+}
+
+#[test]
+fn graph_consumption_redacts_raw_provider_and_argument_values() {
+    const SECRET: &str = "Authorization: Bearer BENCHMARK-GRAPH-SECRET";
+    let mut trace = graph_consumption_trace();
+    set_started_arguments(
+        &mut trace,
+        "graph-search",
+        &format!(r#"{{"qn_pattern":"{SECRET}"}}"#),
+        false,
+    );
+    set_finished_result(
+        &mut trace,
+        "graph-search",
+        &format!(r#"{{"summary":"{SECRET}"}}"#),
+        false,
+    );
+    let summary = analyze_trace(&trace, &graph_consumption_options());
+    assert_eq!(graph_counts(&summary).0, Some(5));
+    for rendered in [
+        render_run_summary_json(&summary).unwrap(),
+        render_run_summary_markdown(&summary),
+    ] {
+        assert!(!rendered.contains(SECRET));
     }
 }

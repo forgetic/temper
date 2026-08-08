@@ -166,6 +166,26 @@ pub(super) fn event(
                     ));
                 }
             }
+            if let Some(correlation) = &value.graph_correlation {
+                if value.status != ToolStatusV1::Succeeded {
+                    return Err(invalid_event(
+                        &format!("{path}.data.graph_correlation"),
+                        "is permitted only when tool status is succeeded",
+                    ));
+                }
+                if !correlation.is_valid() {
+                    return Err(invalid_event(
+                        &format!("{path}.data.graph_correlation"),
+                        "must contain a complete supported normalized V1 correlation",
+                    ));
+                }
+                if value.name != correlation.tool.public_name() {
+                    return Err(invalid_event(
+                        &format!("{path}.data.graph_correlation.tool"),
+                        "does not match the closed public codebase-memory tool identity",
+                    ));
+                }
+            }
             Ok(())
         }
         Event::SteeringApplied(value) => optional_content(

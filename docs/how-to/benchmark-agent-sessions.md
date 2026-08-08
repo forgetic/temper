@@ -44,17 +44,21 @@ observed or a benchmark configures a decision-relevance rubric. A successful
 RPC is **graph success**, not evidence that the result was useful. Decision
 relevance uses this explicit rubric:
 
-1. A benchmark declares an implementation, caller, or focused-test target.
-2. A complete successful graph result must contain the target (or its declared
-   `result_contains` marker).
-3. A later successful `read`, `edit`, or `write` must have complete captured
-   path evidence equal to that target. Generic patch previews do not expose a
-   target path and therefore cannot prove consumption.
+1. A benchmark declares an implementation, caller, or focused-test target and
+   its exact provider-shaped producer target (`tool`, `target_kind`, and
+   `target`).
+2. The trusted wrapper must retain the corresponding complete typed correlation
+   fingerprint for the successful producer. Generic provider summaries and
+   result text are never matched.
+3. A later declared graph/source consumer must carry its own exact typed
+   correlation fingerprint in the same scope and after the producer. Direct
+   successful `read`, `edit`, `write`, and patch mutations retain their exact
+   target matching behavior.
 
-Only that bounded trace correlation is a relevant result. A complete success
-which does not satisfy a declared target is an irrelevant success. Omitted or
-truncated result/argument evidence makes relevance unavailable; it is never
-converted to zero. The declared target also identifies the decisive selection
+Only that bounded typed correlation is a relevant result. A complete success
+which does not satisfy a declared target is an irrelevant success. Missing,
+malformed, or lossy producer/consumer correlation makes relevance unavailable;
+it is never converted to zero. The declared target also identifies the decisive selection
 independently of graph consumption. This keeps conventional discovery
 comparable when graph results are irrelevant, graph calls fail, or a benchmark
 condition disables graph calls entirely. Declare the rubric in the benchmark
@@ -66,8 +70,16 @@ discovery_command_prefixes = [["git", "grep"]]
 [[graph_decision_targets]]
 target = "repo/src/lib.rs"
 kind = "implementation" # implementation, caller, or focused_test
-# Optional when the graph result uses a different stable marker:
-result_contains = "src/lib.rs"
+
+[graph_decision_targets.producer]
+tool = "search_graph"
+target_kind = "graph_query"
+target = "repair retry affinity"
+
+[[graph_decision_targets.consumption]]
+tool = "search_code"
+target_kind = "pattern"
+target = "retry_worker_topic"
 ```
 
 Conventional discovery counts `grep`, `find`, and `read` calls before the first

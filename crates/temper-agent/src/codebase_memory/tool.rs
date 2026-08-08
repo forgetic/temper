@@ -1,4 +1,7 @@
 use super::*;
+use temper_protocol_activity::{
+    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+};
 
 // Reserve space for the JSON-RPC envelope, tool name, request id, and newline.
 // This keeps oversized model input on the local side of the process-fatal MCP
@@ -95,6 +98,10 @@ impl Tool for CodebaseMemoryTool {
             }
         };
         let readiness_wait_ms = duration_ms(readiness_started.elapsed());
+        // Extract only one closed, structured correlation target before the
+        // provider consumes the input. The returned DTO is a digest, never a
+        // raw model argument.
+        let graph_correlation = graph_correlation(&self.public_name, &input);
 
         if self.mcp_name == "list_projects" {
             return Ok(self.scope.list_projects_output());
@@ -216,22 +223,28 @@ impl Tool for CodebaseMemoryTool {
             readiness_wait_ms: timings.readiness_wait_ms,
             graph_execution_ms: timings.graph_execution_ms,
             duration_ms: timings.duration_ms,
+            graph_correlation: graph_correlation.as_ref(),
         });
+        let mut details = json!({
+            "mcp_tool": self.mcp_name,
+            "truncated": bounded.truncated,
+            "workspace_scope": self.scope.details_json(),
+            "timing": {
+                "readiness_wait_ms": timings.readiness_wait_ms,
+                "graph_execution_ms": timings.graph_execution_ms,
+                "duration_ms": timings.duration_ms,
+            },
+        });
+        if let Some(correlation) = graph_correlation {
+            details[SAFE_GRAPH_CORRELATION_DETAIL_KEY] =
+                serde_json::to_value(correlation).expect("graph correlation serializes");
+        }
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {
                 text: bounded.text,
                 text_signature: None,
             })],
-            details: Some(json!({
-                "mcp_tool": self.mcp_name,
-                "truncated": bounded.truncated,
-                "workspace_scope": self.scope.details_json(),
-                "timing": {
-                    "readiness_wait_ms": timings.readiness_wait_ms,
-                    "graph_execution_ms": timings.graph_execution_ms,
-                    "duration_ms": timings.duration_ms,
-                },
-            })),
+            details: Some(details),
             is_error: false,
         })
     }
@@ -307,6 +320,7 @@ fn emit_failed_mcp_tool_result(
         readiness_wait_ms: timings.readiness_wait_ms,
         graph_execution_ms: timings.graph_execution_ms,
         duration_ms: timings.duration_ms,
+        graph_correlation: None,
     });
 }
 
@@ -441,4 +455,41 @@ fn bound_text(input: &str, max_bytes: usize) -> BoundedText {
         text,
         truncated: true,
     }
+}
+
+/// Extracts a single unambiguous, allowlisted target from a targeted wrapper
+/// call. Unknown fields, non-string values, duplicates, and incomplete values
+/// deliberately produce no correlation rather than a lossy approximation.
+pub(super) fn graph_correlation(public_name: &str, input: &Value) -> Option<GraphCorrelationV1> {
+    let tool = GraphCorrelationToolV1::from_public_name(public_name)?;
+    let candidates: &[(&str, GraphCorrelationTargetKindV1)] = match tool {
+        GraphCorrelationToolV1::SearchGraph => &[
+            ("query", GraphCorrelationTargetKindV1::GraphQuery),
+            ("name_pattern", GraphCorrelationTargetKindV1::NamePattern),
+            (
+                "qn_pattern",
+                GraphCorrelationTargetKindV1::QualifiedNamePattern,
+            ),
+        ],
+        GraphCorrelationToolV1::SearchCode => &[("pattern", GraphCorrelationTargetKindV1::Pattern)],
+        GraphCorrelationToolV1::TracePath => {
+            &[("function_name", GraphCorrelationTargetKindV1::FunctionName)]
+        }
+        GraphCorrelationToolV1::GetCodeSnippet => &[(
+            "qualified_name",
+            GraphCorrelationTargetKindV1::QualifiedName,
+        )],
+    };
+    let mut selected = None;
+    for (field, target_kind) in candidates {
+        let Some(value) = input.get(*field) else {
+            continue;
+        };
+        let target = value.as_str()?;
+        if selected.replace((*target_kind, target)).is_some() {
+            return None;
+        }
+    }
+    let (target_kind, target) = selected?;
+    GraphCorrelationV1::new(tool, target_kind, target)
 }

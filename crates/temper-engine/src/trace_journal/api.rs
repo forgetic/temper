@@ -238,8 +238,7 @@ impl AgentTraceJournal {
         // Canonicalize the direct-ingestion clone before validation and all durable use.
         let mut batch = batch.clone();
         for event in &mut batch.events {
-            event.event.sanitize_retry_failure_message();
-            event.event.normalize_model_failure();
+            event.event.sanitize_untrusted_activity();
         }
         batch.validate()?;
         for event in &batch.events {

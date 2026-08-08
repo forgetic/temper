@@ -9,6 +9,7 @@ use crate::{ACTIVITY_PROTOCOL_VERSION, ActivityValidationError};
 mod failure;
 mod model_call;
 mod prompt;
+mod sanitize;
 mod terminal;
 mod tool_failure;
 pub use failure::*;

@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 temper-agent-io = { path = "../temper-agent-io" }
 temper-process-containment = { path = "../temper-process-containment" }
+temper-protocol-activity = { path = "../temper-protocol-activity" }
 
 [dev-dependencies]
 temper-agent-io = { path = "../temper-agent-io" }

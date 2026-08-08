@@ -66,9 +66,14 @@ repetitions = 2
 [[graph_decision_targets]]
 target = "one/src/lib.rs"
 kind = "implementation"
+[graph_decision_targets.producer]
+tool = "search_graph"
+target_kind = "graph_query"
+target = "worker_slot"
 
 [[graph_decision_targets.consumption]]
 tool = "search_code"
+target_kind = "pattern"
 target = "worker_slot"
 
 [annotations]
@@ -128,17 +133,24 @@ fn manifest_resolves_inputs_relative_to_its_own_directory() {
 }
 
 #[test]
-fn manifest_rejects_non_targeted_graph_consumers() {
+fn manifest_rejects_unsupported_graph_correlation_targets() {
     let (root, manifest_path) = benchmark(&[("one", "one")]);
     let source = fs::read_to_string(&manifest_path).unwrap();
     fs::write(
         &manifest_path,
-        source.replace("tool = \"search_code\"", "tool = \"read\""),
+        source.replace(
+            "target_kind = \"pattern\"",
+            "target_kind = \"function_name\"",
+        ),
     )
     .unwrap();
 
     let error = load_benchmark_manifest(manifest_path).unwrap_err();
-    assert!(error.to_string().contains("must be a targeted graph tool"));
+    assert!(
+        error
+            .to_string()
+            .contains("complete supported normalized graph correlation target")
+    );
     drop(root);
 }
 

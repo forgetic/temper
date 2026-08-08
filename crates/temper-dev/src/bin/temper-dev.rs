@@ -320,6 +320,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             benchmark::verify_safe_five_call_decision_evidence(&run)?;
             let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
                 .map_err(|error| format!("read controlled trace: {error}"))?;
+            benchmark::verify_typed_graph_correlation_records(&trace)?;
             for expected in [
                 "cold stable upsert is ready",
                 "warm stable project remains ready",
