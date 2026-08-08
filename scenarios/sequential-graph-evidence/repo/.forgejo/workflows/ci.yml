@@ -1,0 +1,14 @@
+# Bundled CI workflow for the codebase-memory-agent scenario.
+# It runs directly on the host and validates the sequentially selected Rust repair.
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: validate delivery-worker repair
+        run: |
+          cargo fmt --check
+          cargo test --quiet

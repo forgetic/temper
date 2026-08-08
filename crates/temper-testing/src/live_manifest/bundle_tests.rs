@@ -70,6 +70,10 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
         ),
         ("codebase-memory-agent", ConvergenceStrategy::CodebaseMemory),
         (
+            "sequential-graph-evidence",
+            ConvergenceStrategy::CodebaseMemory,
+        ),
+        (
             "implementation-pr-handoff",
             ConvergenceStrategy::ImplementationPrHandoff,
         ),
@@ -225,6 +229,74 @@ fn codebase_memory_graph_consumption_bundle_declares_only_the_five_call_chain() 
         assert!(jig.contains(call), "graph-consumption Jig omitted {call}");
     }
     assert!(!jig.contains("get_architecture"));
+    assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
+}
+
+#[test]
+fn sequential_graph_evidence_bundle_maps_feature_973_without_rewriting_history() {
+    let scenario_path = scenarios_root().join("sequential-graph-evidence");
+    let bundle = ScenarioBundle::load(&scenario_path).expect("sequential graph-evidence bundle");
+    let mcp = bundle
+        .execution
+        .steps
+        .iter()
+        .find(|step| step.id == "start-fake-codebase-memory-mcp")
+        .expect("MCP fixture action");
+    assert!(matches!(
+        &mcp.action,
+        ManifestAction::StartCodebaseMemoryMcp {
+            fixture: Some(fixture),
+            safe_tools,
+            readiness_delay_ms: 750,
+            forced_systemic_failure: None,
+            ..
+        } if fixture == "sequential-graph-evidence" && safe_tools == &vec![
+            "search_graph".to_string(),
+            "search_code".to_string(),
+            "trace_path".to_string(),
+            "get_code_snippet".to_string(),
+            "list_projects".to_string(),
+            "index_status".to_string(),
+        ]
+    ));
+    let manifest = fs::read_to_string(scenario_path.join("scenario.toml"))
+        .expect("sequential graph-evidence manifest");
+    let jig = fs::read_to_string(bundle.jig_script_path()).expect("scenario-owned Jig");
+    let readme = fs::read_to_string(scenario_path.join("README.md"))
+        .expect("sequential graph-evidence README");
+
+    assert!(manifest.contains("feature = \"ai/temper#973\""));
+    assert!(manifest.contains("plan = \"ai/temper#974\""));
+    assert!(manifest.contains("change = \"new\""));
+    assert!(
+        manifest.contains("sequential-provider-derived-current-root-evidence-before-minimal-patch")
+    );
+    assert!(manifest.contains("five-successful-complete-v1-typed-correlations"));
+    for call in [
+        "discover_delivery_worker_decision",
+        "refine_provider_selected_delivery_worker",
+        "trace_provider_refined_delivery_worker",
+        "read_provider_selected_current_root_implementation",
+        "read_implementation_derived_focused_test",
+        "write_minimal_delivery_worker_repair_after_sources",
+    ] {
+        assert!(jig.contains(call), "sequential Jig omitted {call}");
+    }
+    assert!(jig.contains("canonical_topic.unwrap_or(topic)"));
+    let jig_document: serde_json::Value =
+        serde_json::from_str(&jig).expect("sequential graph-evidence Jig parses");
+    assert_eq!(
+        jig_document["phases"][0]["sequence"][5]["turns"][0]["tool_call"]["args"]["content"]
+            .as_str(),
+        Some(
+            "pub fn delivery_worker_topic<'a>(\n    topic: &'a str,\n    canonical_topic: Option<&'a str>,\n    _attempt: u32,\n) -> &'a str {\n    canonical_topic.unwrap_or(topic)\n}\n"
+        ),
+        "the source reads must precede the declared minimal exact repair"
+    );
+    assert!(!jig.contains("get_architecture"));
+    assert!(readme.contains("`ai/temper#973`"));
+    assert!(readme.contains("historical `codebase-memory-graph-consumption`"));
+    assert!(readme.contains("Privacy-safe evidence"));
     assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
 }
 
