@@ -44,6 +44,43 @@ fn parallel_batch_runs_concurrently_and_waits_for_all_before_next_call() {
 }
 
 #[test]
+fn independent_codebase_memory_discovery_remains_parallel_safe() {
+    // The static effect policy remains intentionally unaware of semantic
+    // dependencies. Independent graph discovery issued in one model turn stays
+    // in a concurrent read-only batch; the Jig decision-chain coverage issues
+    // dependent producer/consumer calls in separate model turns instead.
+    let mut m = machine_read_tools(&[
+        "codebase_memory_search_graph",
+        "codebase_memory_search_code",
+    ]);
+    let mut requests = m.on_start(EngineTime::ZERO);
+    requests.extend(complete(
+        &mut m,
+        llm_responded(assistant_tool_calls(&[
+            ("implementation", "codebase_memory_search_graph"),
+            ("behavior", "codebase_memory_search_code"),
+        ])),
+    ));
+
+    assert_eq!(
+        run_tools(&requests),
+        vec!["implementation".to_string(), "behavior".to_string()],
+        "independent read-only discovery must remain one parallel-safe batch"
+    );
+
+    let after_first = complete(
+        &mut m,
+        tool_finished("implementation", tool_output("opaque", false)),
+    );
+    assert_eq!(calls_llm(&after_first), 0);
+    let after_second = complete(
+        &mut m,
+        tool_finished("behavior", tool_output("opaque", false)),
+    );
+    assert_eq!(calls_llm(&after_second), 1);
+}
+
+#[test]
 fn final_conversation_has_tool_results_in_order() {
     // Two read-only tools run in one parallel batch; results arrive out of order
     // (y before x) but the tool-result messages must still be appended in
