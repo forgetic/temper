@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use temper_protocol_activity::CaptureModeV1;
+use temper_protocol_activity::{
+    CaptureModeV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+};
 use temper_protocol_agent::WorkspaceContext;
 
 mod security;
@@ -14,7 +16,7 @@ mod security;
 use security::{InputKind, resolve_declared_path, validate_context_repositories};
 pub(crate) use security::{validate_fixture_tree, validate_relative_path};
 
-use crate::{GraphDecisionKindV1, GraphEvidenceToolV1};
+use crate::GraphDecisionKindV1;
 
 /// Schema identifier for an agent-session benchmark manifest.
 pub const BENCHMARK_MANIFEST_SCHEMA: &str = "temper.benchmark.v1";
@@ -100,31 +102,38 @@ pub struct BenchmarkAnnotationsV1 {
     pub cache_warmth: Option<String>,
 }
 
-/// One fixture-owned target which a graph result may inform. `result_contains`
-/// defaults to `target`, allowing a fixture to distinguish a result marker from
-/// the path later selected by a read or mutation.
+/// One fixture-owned target which a typed graph call may inform.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphDecisionTargetV1 {
     pub target: String,
     pub kind: GraphDecisionKindV1,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_contains: Option<String>,
-    /// Exact, fixture-owned graph/source consumers which may use a matching
-    /// result. Direct reads and mutations retain their existing exact target
-    /// matching and therefore do not need an entry here.
+    /// The exact, wrapper-fingerprinted producer that may inform this target.
+    pub producer: GraphDecisionCorrelationV1,
+    /// Exact, fixture-owned graph/source consumers which may use this producer.
+    /// Direct reads and mutations retain their existing exact target matching
+    /// and therefore do not need an entry here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub consumption: Vec<GraphDecisionConsumptionV1>,
+    pub consumption: Vec<GraphDecisionCorrelationV1>,
 }
 
-/// One allowed graph-to-graph or graph-to-source refinement. `target` is an
-/// exact value for the consuming tool's targeting parameter; it is never
-/// copied from trace arguments into a summary.
+/// One exact provider-shaped target declared in a benchmark manifest.
+///
+/// The analyzer derives the same closed [`GraphCorrelationV1`] record as the
+/// trusted wrapper and compares only that record. The raw manifest target is
+/// never copied from a trace or rendered in decision evidence.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct GraphDecisionConsumptionV1 {
-    pub tool: GraphEvidenceToolV1,
+pub struct GraphDecisionCorrelationV1 {
+    pub tool: GraphCorrelationToolV1,
+    pub target_kind: GraphCorrelationTargetKindV1,
     pub target: String,
+}
+
+impl GraphDecisionCorrelationV1 {
+    pub(crate) fn correlation(&self) -> Option<GraphCorrelationV1> {
+        GraphCorrelationV1::new(self.tool, self.target_kind, &self.target)
+    }
 }
 
 /// A manifest after all declared inputs have been securely resolved.
@@ -443,28 +452,33 @@ fn validate_argv_lists(
 
 fn validate_graph_targets(targets: &[GraphDecisionTargetV1]) -> Result<(), BenchmarkManifestError> {
     for (index, target) in targets.iter().enumerate() {
-        if target.target.trim().is_empty()
-            || target
-                .result_contains
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
-        {
+        if target.target.trim().is_empty() || target.target.contains('\0') {
             return Err(BenchmarkManifestError::Invalid(format!(
-                "`graph_decision_targets[{index}]` target and result marker must not be empty"
+                "`graph_decision_targets[{index}].target` must not be empty or contain a NUL byte"
             )));
         }
+        validate_graph_correlation(
+            &format!("graph_decision_targets[{index}].producer"),
+            &target.producer,
+        )?;
         for (consumption_index, consumption) in target.consumption.iter().enumerate() {
-            if !consumption.tool.is_targeted_graph() {
-                return Err(BenchmarkManifestError::Invalid(format!(
-                    "`graph_decision_targets[{index}].consumption[{consumption_index}].tool` must be a targeted graph tool"
-                )));
-            }
-            if consumption.target.trim().is_empty() || consumption.target.contains('\0') {
-                return Err(BenchmarkManifestError::Invalid(format!(
-                    "`graph_decision_targets[{index}].consumption[{consumption_index}].target` must not be empty or contain a NUL byte"
-                )));
-            }
+            validate_graph_correlation(
+                &format!("graph_decision_targets[{index}].consumption[{consumption_index}]"),
+                consumption,
+            )?;
         }
+    }
+    Ok(())
+}
+
+fn validate_graph_correlation(
+    field: &str,
+    correlation: &GraphDecisionCorrelationV1,
+) -> Result<(), BenchmarkManifestError> {
+    if correlation.correlation().is_none() {
+        return Err(BenchmarkManifestError::Invalid(format!(
+            "`{field}` must declare one complete supported normalized graph correlation target"
+        )));
     }
     Ok(())
 }

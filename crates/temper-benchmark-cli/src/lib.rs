@@ -39,7 +39,7 @@ pub use ingest::{NormalizedTrace, TraceIngestError, ingest_trace, write_canonica
 pub use manifest::{
     BENCHMARK_MANIFEST_SCHEMA, BenchmarkAnnotationsV1, BenchmarkConditionProfileKindV1,
     BenchmarkConditionProfileV1, BenchmarkManifestError, BenchmarkManifestV1,
-    GraphDecisionConsumptionV1, GraphDecisionTargetV1, ResolvedBenchmarkManifest,
+    GraphDecisionCorrelationV1, GraphDecisionTargetV1, ResolvedBenchmarkManifest,
     load_benchmark_manifest,
 };
 pub use metadata::{

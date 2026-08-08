@@ -62,10 +62,14 @@ pub(super) fn classify_relevance(
             irrelevant = irrelevant.saturating_add(1);
             continue;
         };
-        let Some(result) = call.result.as_deref() else {
+        let Some(producer_correlation) = call
+            .graph_correlation
+            .as_ref()
+            .filter(|value| value.is_valid() && value.tool.public_name() == call.name)
+        else {
             diagnostics.push(unavailable(
                 call.finish_seq,
-                "successful graph result content is omitted or truncated; relevance is unavailable",
+                "successful targeted graph call lacks a complete trusted correlation record; relevance is unavailable",
             ));
             continue;
         };
@@ -79,14 +83,7 @@ pub(super) fn classify_relevance(
         let matching_targets = options
             .graph_decision_targets
             .iter()
-            .filter(|target| {
-                result.contains(
-                    target
-                        .result_contains
-                        .as_deref()
-                        .unwrap_or(target.target.as_str()),
-                )
-            })
+            .filter(|target| target.producer.correlation().as_ref() == Some(producer_correlation))
             .collect::<Vec<_>>();
         let mut call_evidence = Vec::new();
         let mut correlation_unknown = false;
@@ -103,10 +100,10 @@ pub(super) fn classify_relevance(
         } else if correlation_unknown {
             diagnostics.push(unavailable(
                 Some(finish_seq),
-                "a later declared consumer omits arguments needed to classify graph-result consumption",
+                "a later declared consumer lacks a complete trusted correlation record needed to classify graph-result consumption",
             ));
         } else {
-            // A complete result which has no matching, ordered, same-scope
+            // A complete typed producer which has no matching, ordered, same-scope
             // consumer is explicitly irrelevant rather than assumed useful.
             observed = observed.saturating_add(1);
             irrelevant = irrelevant.saturating_add(1);
@@ -180,11 +177,15 @@ fn target_consumption(
     }
 
     for consumption in &target.consumption {
+        let Some(expected_correlation) = consumption.correlation() else {
+            unknown = true;
+            continue;
+        };
         let mut matching_consumers = Vec::new();
         for consumer in calls.values().filter(|consumer| {
             consumer.scope_id == call.scope_id
                 && consumer.status == Some(ToolStatusV1::Succeeded)
-                && GraphEvidenceToolV1::from_tool_name(&consumer.name) == Some(consumption.tool)
+                && consumer.name == consumption.tool.public_name()
         }) {
             let Some(start_seq) = consumer.start_seq else {
                 unknown = true;
@@ -193,22 +194,28 @@ fn target_consumption(
             if start_seq <= finish_seq {
                 continue;
             }
-            let Some(arguments) = consumer.arguments.as_deref() else {
+            let Some(correlation) = consumer
+                .graph_correlation
+                .as_ref()
+                .filter(|value| value.is_valid() && value.tool.public_name() == consumer.name)
+            else {
                 unknown = true;
                 continue;
             };
-            if graph_arguments_match(consumption.tool, arguments, &consumption.target) {
+            if correlation == &expected_correlation {
                 matching_consumers.push(consumer);
             }
         }
         matching_consumers.sort_by_key(|consumer| (consumer.start_seq, consumer.finish_seq));
         if let Some(consumer) = matching_consumers.into_iter().next() {
-            let mode = match consumption.tool {
+            let consumer_tool = GraphEvidenceToolV1::from_tool_name(&consumer.name)
+                .expect("closed correlation tool has an evidence-tool name");
+            let mode = match consumer_tool {
                 GraphEvidenceToolV1::GetCodeSnippet => GraphConsumptionModeV1::Source,
                 GraphEvidenceToolV1::SearchGraph
                 | GraphEvidenceToolV1::SearchCode
                 | GraphEvidenceToolV1::TracePath => GraphConsumptionModeV1::Graph,
-                _ => unreachable!("manifest validation permits only targeted graph consumers"),
+                _ => unreachable!("closed correlation tools are targeted graph tools"),
             };
             evidence.push(decision_evidence(
                 call,
@@ -218,7 +225,7 @@ fn target_consumption(
                 consumer
                     .start_seq
                     .expect("filtered graph consumer has a start sequence"),
-                consumption.tool,
+                consumer_tool,
                 mode,
                 target,
             ));
@@ -248,31 +255,6 @@ fn decision_evidence(
         target: target.target.clone(),
         kind: target.kind,
     }
-}
-
-fn graph_arguments_match(tool: GraphEvidenceToolV1, arguments: &str, target: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<Value>(arguments) else {
-        return arguments.trim() == target.trim();
-    };
-    if value.as_str().is_some_and(|value| value == target) {
-        return true;
-    }
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    let fields: &[&str] = match tool {
-        GraphEvidenceToolV1::SearchGraph => &["query", "name_pattern", "qn_pattern"],
-        GraphEvidenceToolV1::SearchCode => &["pattern"],
-        GraphEvidenceToolV1::TracePath => &["function_name"],
-        GraphEvidenceToolV1::GetCodeSnippet => &["qualified_name"],
-        _ => return false,
-    };
-    fields.iter().any(|field| {
-        object
-            .get(*field)
-            .and_then(Value::as_str)
-            .is_some_and(|value| value == target)
-    })
 }
 
 fn mutation_matches_target(arguments: &str, target: &str) -> bool {

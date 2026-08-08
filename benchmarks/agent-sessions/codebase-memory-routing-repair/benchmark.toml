@@ -13,48 +13,66 @@ repetitions = 1
 [[graph_decision_targets]]
 target = "worker_slot"
 kind = "implementation"
-result_contains = "graph_implementation_evidence"
-
+[graph_decision_targets.producer]
+tool = "search_graph"
+target_kind = "graph_query"
+target = "aliased delivery retry worker affinity"
 [[graph_decision_targets.consumption]]
 tool = "search_code"
+target_kind = "pattern"
 target = "worker_slot"
 
 [[graph_decision_targets]]
 target = "worker_slot"
 kind = "implementation"
-result_contains = "code_refinement_evidence"
-
+[graph_decision_targets.producer]
+tool = "search_code"
+target_kind = "pattern"
+target = "worker_slot"
 [[graph_decision_targets.consumption]]
 tool = "trace_path"
+target_kind = "function_name"
 target = "worker_slot"
 
 [[graph_decision_targets]]
 target = "DeliveryAttempt"
 kind = "caller"
-result_contains = "trace_caller_evidence"
-
+[graph_decision_targets.producer]
+tool = "trace_path"
+target_kind = "function_name"
+target = "worker_slot"
 [[graph_decision_targets.consumption]]
 tool = "get_code_snippet"
+target_kind = "qualified_name"
 target = "DeliveryAttempt"
 
 [[graph_decision_targets]]
 target = "DeliveryRouter::worker_for"
 kind = "caller"
-result_contains = "delivery_source_evidence"
-
+[graph_decision_targets.producer]
+tool = "get_code_snippet"
+target_kind = "qualified_name"
+target = "DeliveryAttempt"
 [[graph_decision_targets.consumption]]
 tool = "get_code_snippet"
+target_kind = "qualified_name"
 target = "DeliveryRouter::worker_for"
 
 [[graph_decision_targets]]
 target = "repo/tests/alias_retry.rs"
 kind = "focused_test"
-result_contains = "focused_test_evidence"
+[graph_decision_targets.producer]
+tool = "search_graph"
+target_kind = "graph_query"
+target = "aliased delivery retry worker affinity"
 
 [[graph_decision_targets]]
 target = "repo/src/route.rs"
 kind = "implementation"
-result_contains = "worker_source_evidence"
+[graph_decision_targets.producer]
+tool = "get_code_snippet"
+target_kind = "qualified_name"
+target = "DeliveryRouter::worker_for"
 
 [condition_profile]
 kind = "codebase_memory"
