@@ -12,7 +12,7 @@ TOOLS = [
 ]
 
 def opaque():
-    return "opaque-" + uuid.uuid4().hex
+    return "crate::opaque_" + uuid.uuid4().hex
 
 targets = {name: opaque() for name in ["root", "refinement", "trace", "implementation", "behavior"]}
 
@@ -33,19 +33,30 @@ def response(name, args):
     if name == "index_status":
         return {"status": "fresh"}
     if name == "search_graph":
-        return result(current_root=targets["root"], next=targets["refinement"])
-    if name == "search_code":
-        return result(next=targets["trace"] if args.get("pattern") == targets["refinement"] else opaque())
-    if name == "trace_path":
         return result(
-            next=targets["implementation"] if args.get("function_name") == targets["trace"] else opaque(),
+            current_root=targets["root"],
+            next=targets["refinement"],
+            qualified_name=targets["refinement"],
+        )
+    if name == "search_code":
+        next = targets["trace"] if args.get("pattern") == targets["refinement"] else opaque()
+        return result(next=next, qualified_name=next)
+    if name == "trace_path":
+        next = targets["implementation"] if args.get("function_name") == targets["trace"] else opaque()
+        return result(
+            next=next,
+            qualified_name=next,
             caller_model=opaque() if args.get("function_name") == targets["trace"] else None,
         )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["implementation"]:
-        return result(next=targets["behavior"], implementation_source=opaque())
+        return result(
+            next=targets["behavior"],
+            qualified_name=targets["behavior"],
+            implementation_source=opaque(),
+        )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["behavior"]:
-        return result(behavioral_test=opaque())
-    return result(evidence=opaque())
+        return result(qualified_name=targets["behavior"], behavioral_test=opaque())
+    return result(qualified_name=opaque(), evidence=opaque())
 
 for line in sys.stdin:
     if not line.strip():

@@ -45,6 +45,7 @@ TOOLS = [
     {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
     {"name": "get_code_snippet", "description": "Read indexed source", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "path": {"type": "string"}}}},
     {"name": "search_graph", "description": "Search graph", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "name_pattern": {"type": "string"}, "project": {"type": "string"}}}},
+    {"name": "trace_path", "description": "Trace graph calls", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}}},
     {"name": "list_projects", "description": "List projects", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "detect_changes", "description": "Detect changes", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
@@ -226,6 +227,18 @@ for line in sys.stdin:
                 tool_result(request["id"], "unusable provider state Authorization: Bearer SECRET", True)
             elif mode == "graph-errors" and args.get("query") == "empty":
                 tool_result(request["id"], "")
+            elif mode == "lineage-cases":
+                if args.get("query") == "start":
+                    payload = json.dumps({"results": [{"qualifiedName": "crate::engine::run", "path": "/private/src/lib.rs"}]})
+                elif args.get("function_name") == "run":
+                    payload = json.dumps({"qualified_name": "crate::engine::run"})
+                elif args.get("qualified_name") == "crate::engine::run":
+                    payload = json.dumps({"functionName": "run", "source": "PRIVATE-SOURCE"})
+                elif args.get("query") == "duplicate":
+                    payload = json.dumps({"results": [{"qualified_name": "crate::engine::run"}, {"qualified_name": "crate::engine::run"}]})
+                else:
+                    payload = json.dumps({"unknown": "not-a-lineage-target"})
+                tool_result(request["id"], payload)
             else:
                 payload = "PROVIDER-RESULT-SENTINEL" if mode == "anchor-cases" else f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
                 if mode == "anchor-cases" and args.get("query") == "large":

@@ -479,8 +479,9 @@ impl NormalizingEventSink {
         metadata: temper_agent_core::ToolResultMetadata,
     ) {
         // Never transport generic process output. Read-only bounded text tools
-        // and successful codebase-memory graph tools are eligible in transcript
-        // modes. Failed output is represented only by its typed safe diagnostic.
+        // are eligible in transcript modes; codebase-memory completions retain
+        // only closed correlation, timing, and failure facts. Failed output is
+        // represented only by its typed safe diagnostic.
         // `submit_for_pr` exposes only a fixed marker, never host gate output.
         let result = if status == ToolCallStatus::Succeeded
             && matches!(

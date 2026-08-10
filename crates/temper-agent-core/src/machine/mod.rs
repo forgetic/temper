@@ -31,8 +31,8 @@ mod protocol;
 
 pub use core::{AgentMachine, ArgPreviewFn};
 pub use decision_anchor::{
-    DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, DecisionAnchorEvidenceV1,
-    SAFE_DECISION_ANCHOR_DETAIL_KEY,
+    DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, DecisionAnchorLineageStageV1,
+    DecisionAnchorLineageV1, DecisionAnchorTargetKindV1, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 pub use protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,

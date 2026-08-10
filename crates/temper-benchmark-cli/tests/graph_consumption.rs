@@ -296,6 +296,33 @@ fn graph_consumption_uses_typed_correlation_for_a_generic_five_call_chain() {
 }
 
 #[test]
+fn v1_correlation_remains_observable_when_no_complete_lineage_can_be_derived() {
+    // Lineage is intentionally wrapper-local and absent from durable activity.
+    // A truncated provider result therefore has no lineage, but its existing
+    // closed V1 input correlation must still give relevance complete coverage.
+    let mut trace = graph_consumption_trace();
+    set_finished_result(
+        &mut trace,
+        "graph-search",
+        "truncated provider result",
+        true,
+    );
+
+    let summary = analyze_trace(&trace, &graph_consumption_options());
+    assert_eq!(
+        graph_counts(&summary),
+        (
+            Some(5),
+            Some(0),
+            MetricCoverageV1 {
+                observed: 5,
+                expected: Some(5),
+            },
+        )
+    );
+}
+
+#[test]
 fn sentinel_results_cannot_substitute_for_exact_typed_correlation() {
     let mut trace = graph_consumption_trace();
     set_finished_result(&mut trace, "graph-search", "search-graph-marker", false);

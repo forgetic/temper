@@ -6,6 +6,9 @@ use super::super::{McpToolResult, emit_mcp_tool_result};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use temper_agent_core::{
+    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
+};
 use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
 };
@@ -266,6 +269,13 @@ fn mcp_results_project_only_complete_typed_correlation_facts() {
     )
     .expect("complete declared graph target");
 
+    let lineage = DecisionAnchorLineageV1::new(
+        "00000000-0000-4000-8000-000000000001".to_string(),
+        DecisionAnchorLineageStageV1::Root,
+        DecisionAnchorTargetKindV1::GraphQuery,
+        [DecisionAnchorTargetKindV1::QualifiedName],
+    )
+    .expect("canonical lineage");
     let events = capture(|| {
         emit_mcp_tool_result(McpToolResult {
             tool_name: "codebase_memory_search_graph",
@@ -278,6 +288,7 @@ fn mcp_results_project_only_complete_typed_correlation_facts() {
             graph_execution_ms: 7,
             duration_ms: 11,
             graph_correlation: Some(&correlation),
+            decision_anchor_lineage: Some(&lineage),
         });
     });
 
@@ -292,7 +303,12 @@ fn mcp_results_project_only_complete_typed_correlation_facts() {
         result.fields["graph.correlation.target_kind"],
         "graph_query"
     );
+    assert_eq!(result.fields["graph.lineage.complete"], "true");
+    assert_eq!(result.fields["graph.lineage.version"], "1");
+    assert_eq!(result.fields["graph.lineage.stage"], "root");
+    assert_eq!(result.fields["graph.lineage.result_target_kind_count"], "1");
     let rendered = format!("{result:#?}");
     assert!(!rendered.contains(DECLARED_TARGET));
     assert!(!rendered.contains(&correlation.target_digest));
+    assert!(!rendered.contains(&lineage.root_binding));
 }
