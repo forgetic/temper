@@ -609,5 +609,8 @@ fn parse_duration_literal(raw: &str) -> Result<Duration, String> {
 }
 
 #[cfg(test)]
+#[path = "bundle_provider_result_anchor_tests.rs"]
+mod provider_result_anchor_tests;
+#[cfg(test)]
 #[path = "bundle_tests.rs"]
 mod tests;

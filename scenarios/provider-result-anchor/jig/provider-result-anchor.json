@@ -1,0 +1,13 @@
+{
+  "phases": [
+    {
+      "name": "provider-result-anchor-runtime",
+      "when": { "messages_contain": ["__provider_result_anchor_fixture_runtime__"] },
+      "sequence": [
+        {
+          "text": "The live fixture owns opaque provider-result anchor responses."
+        }
+      ]
+    }
+  ]
+}
