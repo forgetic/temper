@@ -39,7 +39,13 @@ pub(super) fn captured_tool_result(
             })
         });
     }
-    if !matches!(name, "read" | "ls" | "grep" | "find") && !name.starts_with("codebase_memory_") {
+    // Provider-shaped graph results and their model-visible anchors may contain
+    // source, paths, and selected identities. Durable activity keeps only the
+    // closed correlation, typed failure, and timing facts below.
+    if name.starts_with("codebase_memory_") {
+        return None;
+    }
+    if !matches!(name, "read" | "ls" | "grep" | "find") {
         return None;
     }
     let mut inline = sanitized_text(&value, maximum_bytes);

@@ -1,6 +1,10 @@
 //! Tests for `shell::executor`.
 
 use super::*;
+use crate::machine::{
+    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
+    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+};
 use async_trait::async_trait;
 use skein::lab::{LabConfig, LabRuntime};
 use skein::types::Budget;
@@ -192,16 +196,28 @@ fn only_closed_graph_correlation_details_enter_trusted_metadata() {
         SECRET,
     )
     .expect("complete target");
+    let lineage = DecisionAnchorLineageV1::new(
+        "00000000-0000-4000-8000-000000000001".to_string(),
+        DecisionAnchorLineageStageV1::Root,
+        DecisionAnchorTargetKindV1::GraphQuery,
+        [DecisionAnchorTargetKindV1::QualifiedName],
+    )
+    .expect("canonical lineage");
     let output = ToolOutput {
         content: Vec::new(),
         details: Some(serde_json::json!({
             SAFE_GRAPH_CORRELATION_DETAIL_KEY: correlation,
+            SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: lineage,
             "raw_argument": SECRET,
         })),
         is_error: false,
     };
     let metadata = bounded_tool_result("codebase_memory_search_graph", &output);
     assert_eq!(metadata.graph_correlation, Some(correlation.clone()));
+    assert!(
+        !format!("{metadata:?}").contains("00000000-0000-4000-8000-000000000001"),
+        "lineage is never promoted into activity metadata"
+    );
     assert!(
         !serde_json::to_string(&metadata.graph_correlation)
             .expect("fingerprint serializes")

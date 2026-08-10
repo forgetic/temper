@@ -5,7 +5,7 @@ use temper_agent_core::{
     ToolFailureDiagnostic, ToolResultMetadata,
 };
 use temper_protocol_activity::{
-    AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1, CapturedContentV1,
+    AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1,
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
     ToolFailureCategoryV1,
 };
@@ -45,7 +45,10 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
             status: ToolCallStatus::Succeeded,
             duration_ms: 4,
             result: ToolResultMetadata {
-                preview: Some(format!("bounded graph evidence {}", "x".repeat(200))),
+                preview: Some(format!(
+                    "PRIVATE-SOURCE-PATH bounded graph evidence {}",
+                    "x".repeat(200)
+                )),
                 bytes: 223,
                 truncated: true,
                 failure: None,
@@ -85,17 +88,10 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
             })
             .collect::<Vec<_>>();
         assert_eq!(finished.len(), 2);
-        if mode == CaptureModeV1::Metadata {
-            assert_eq!(finished[0].result, None);
-        } else {
-            let CapturedContentV1::Inline(result) =
-                finished[0].result.as_ref().expect("graph result captured")
-            else {
-                panic!("graph result is inline");
-            };
-            assert!(result.text.len() <= 64);
-            assert!(result.truncated);
-        }
+        assert_eq!(
+            finished[0].result, None,
+            "durable activity must not retain provider-shaped graph output"
+        );
         assert_eq!(
             finished[0]
                 .codebase_memory_timing
@@ -120,6 +116,7 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
         assert!(diagnostic.fallback_to_conventional_discovery);
         let json = serde_json::to_string(&*frames).unwrap();
         assert!(!json.contains(SECRET));
+        assert!(!json.contains("PRIVATE-SOURCE-PATH"));
         assert!(!json.contains(CORRELATION_TARGET));
         assert!(!json.contains(&"y".repeat(1_000)));
     }
