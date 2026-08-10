@@ -93,6 +93,9 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "use every successful targeted graph result as a decision",
         "checkpoint: consume it with the work-item requirements",
         "Do not mutate until consumed",
+        "A `Decision anchor` explicitly marks a bounded successful targeted",
+        "select from that provider result, not unrelated discovery",
+        "truncated or ambiguous output",
         "smallest semantic diff",
     ] {
         assert!(
@@ -128,7 +131,7 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     assert_eq!(memory_tools.len(), 1, "memory tool registered exactly once");
     let expected_description = format!(
         "{FAKE_MCP_DESCRIPTION_SENTINEL}\n\n\
-         Decision checkpoint: after a successful targeted result, consume it with the work-item requirements before choosing a dependent refinement, trace, or source read. Choose and invoke that dependent operation only in a later model turn; genuinely independent discovery remains parallel-safe.\n\n\
+         Decision checkpoint: a bounded successful targeted current-root result is followed by a `Decision anchor`. Use that provider result with the work-item requirements before choosing a dependent refinement, trace, or source read in a later model turn. The anchor is absent for unrelated discovery, failures, truncated or ambiguous output, and unavailable tools; genuinely independent discovery remains parallel-safe.\n\n\
          Workspace scoped: default project `acme/demo`; accepted `project`/`repo` aliases: acme/demo, demo, repo-1. Unknown aliases and filesystem paths are rejected.\n\n\
          Read-only wrapper around codebase-memory MCP tool `search_code`."
     );
@@ -156,7 +159,7 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
             turns: vec![Turn::ToolCall {
                 id: "call_memory_search".to_string(),
                 name: "codebase_memory_search_code".to_string(),
-                args: serde_json::json!({ "query": "WidgetService" }),
+                args: serde_json::json!({ "query": "WidgetService", "pattern": "WidgetService" }),
             }],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
@@ -166,8 +169,11 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
                 message.role == "tool" && message.content.contains("FAKE_MCP_SEARCH_RESULT")
             });
             assert!(
-                saw_memory_result,
-                "fake LLM did not receive the codebase-memory MCP result"
+                saw_memory_result && view.messages.iter().any(|message| {
+                    message.role == "tool"
+                        && message.content.contains("[Decision anchor: This is a bounded successful targeted current-root result.")
+                }),
+                "fake LLM did not receive the anchored codebase-memory MCP result"
             );
             observed_memory_result.fetch_add(1, Ordering::SeqCst);
             Reply {

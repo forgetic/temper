@@ -129,9 +129,10 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          behavioral preservation, use every successful targeted graph result as a decision\n\
          checkpoint: consume it with the work-item requirements before selecting a dependent\n\
          refinement, trace, or source read. Select and invoke that dependent operation only in\n\
-         a later model turn. Keep genuinely independent discovery parallel; do not issue\n\
-         producer and consumer calls in the same turn or batch. Do not mutate until consumed\n\
-         source evidence covers the selected current-root implementation, its caller/model,\n\
+         a later model turn. A `Decision anchor` explicitly marks a bounded successful targeted\n\
+         current-root result; select from that provider result, not unrelated discovery. It is\n\
+         absent for failures, unavailable tools, and truncated or ambiguous output. Keep genuinely independent discovery parallel; do not issue producer and consumer calls in the same turn\n\
+         or batch. Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model,\n\
          and focused behavioral tests, sufficient to justify the smallest semantic diff.\n\n\
          Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
          - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
@@ -296,6 +297,9 @@ for line in sys.stdin:
             "refinement, trace, or source read",
             "Select and invoke that dependent operation only in",
             "a later model turn",
+            "A `Decision anchor` explicitly marks a bounded successful targeted",
+            "current-root result; select from that provider result, not unrelated discovery.",
+            "absent for failures, unavailable tools, and truncated or ambiguous output.",
             "Keep genuinely independent discovery parallel",
             "Do not mutate until consumed",
             "selected current-root implementation, its caller/model",
@@ -426,7 +430,7 @@ for line in sys.stdin:
                 .expect("safe tool registered");
             assert_eq!(tool.effects(), ToolEffects::read());
             assert!(
-                tool.description().contains("Decision checkpoint:"),
+                tool.description().contains("`Decision anchor`"),
                 "only a registered safe tool presents the decision checkpoint"
             );
             assert!(

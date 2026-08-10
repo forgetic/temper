@@ -44,6 +44,7 @@ TOOLS = [
     {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, search_project_property: {"type": "string"}}, "required": ["query", search_project_property] if mode == "repo-schema" else ["query"]}},
     {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
     {"name": "get_code_snippet", "description": "Read indexed source", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "path": {"type": "string"}}}},
+    {"name": "search_graph", "description": "Search graph", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "name_pattern": {"type": "string"}, "project": {"type": "string"}}}},
     {"name": "list_projects", "description": "List projects", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "detect_changes", "description": "Detect changes", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
@@ -226,7 +227,9 @@ for line in sys.stdin:
             elif mode == "graph-errors" and args.get("query") == "empty":
                 tool_result(request["id"], "")
             else:
-                payload = f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
+                payload = "PROVIDER-RESULT-SENTINEL" if mode == "anchor-cases" else f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
+                if mode == "anchor-cases" and args.get("query") == "large":
+                    payload = "x" * 20000
                 tool_result(request["id"], payload)
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})

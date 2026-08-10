@@ -83,7 +83,7 @@ pub(super) fn description_for(
         description => description.to_string(),
     };
     format!(
-        "{base}\n\nDecision checkpoint: after a successful targeted result, consume it with the work-item requirements before choosing a dependent refinement, trace, or source read. Choose and invoke that dependent operation only in a later model turn; genuinely independent discovery remains parallel-safe.\n\nWorkspace scoped: default project `{}`; accepted `project`/`repo` aliases: {}. Unknown aliases and filesystem paths are rejected.\n\nRead-only wrapper around codebase-memory MCP tool `{}`.",
+        "{base}\n\nDecision checkpoint: a bounded successful targeted current-root result is followed by a `Decision anchor`. Use that provider result with the work-item requirements before choosing a dependent refinement, trace, or source read in a later model turn. The anchor is absent for unrelated discovery, failures, truncated or ambiguous output, and unavailable tools; genuinely independent discovery remains parallel-safe.\n\nWorkspace scoped: default project `{}`; accepted `project`/`repo` aliases: {}. Unknown aliases and filesystem paths are rejected.\n\nRead-only wrapper around codebase-memory MCP tool `{}`.",
         scope.primary().canonical_alias,
         scope.documented_aliases().join(", "),
         allowed.mcp_name
