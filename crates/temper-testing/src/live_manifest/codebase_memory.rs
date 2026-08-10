@@ -25,6 +25,8 @@ use super::{
 };
 
 mod graph_consumption;
+mod result_driven_fake;
+mod result_driven_guidance;
 mod sequential_graph_evidence;
 mod stable_rebind;
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
@@ -63,7 +65,10 @@ pub(super) fn converge(
         .get("search_graph")
         .copied()
         .unwrap_or_default();
-    let expected_result = if mcp.lifecycle_profile.as_deref() == Some("sequential-graph-evidence") {
+    let expected_result = if matches!(
+        mcp.lifecycle_profile.as_deref(),
+        Some("sequential-graph-evidence" | "result-driven-decision-guidance")
+    ) {
         "one successful provider-shaped graph result".to_string()
     } else {
         MEMORY_RESULT_NEEDLE.to_string()
@@ -534,6 +539,7 @@ impl CodebaseMemoryFake {
     pub(super) fn start(
         script_path: &Path,
         require_current_root_source: bool,
+        lifecycle_profile: Option<&str>,
     ) -> Result<Self, String> {
         let script = ScriptFile::load(script_path)
             .map_err(|error| {
@@ -547,57 +553,61 @@ impl CodebaseMemoryFake {
         let request_count = Arc::clone(&engineer_requests);
         let observations = Arc::new(Mutex::new(ModelObservations::default()));
         let observations_for_rule = Arc::clone(&observations);
-        let fake = FakeLlm::start(Script::rule(move |view| {
-            if !messages_contain(view, "ROLE: engineer") {
-                return Reply::text("unexpected codebase-memory fake-LLM request");
-            }
-            request_count.fetch_add(1, Ordering::SeqCst);
-            let mut observations = observations_for_rule.lock().expect("observations lock");
-            if messages_contain(view, "CODEBASE MEMORY") {
-                observations.prompt_guidance_seen = true;
-            }
-            if messages_contain(view, MEMORY_RESULT_NEEDLE)
-                || messages_contain(view, "SEQUENTIAL_GRAPH_RESULT")
-            {
-                observations.memory_result_seen = true;
-            }
-            if messages_contain(view, "FAKE_MCP_CODE_RESULT")
-                || messages_contain(view, "SEQUENTIAL_CODE_RESULT")
-            {
-                observations.code_refinement_seen = true;
-            }
-            if messages_contain(view, "FAKE_MCP_TRACE_RESULT")
-                || messages_contain(view, "SEQUENTIAL_TRACE_RESULT")
-            {
-                observations.graph_trace_seen = true;
-            }
-            let current_root_source_results = view
-                .messages
-                .iter()
-                .filter(|message| is_current_root_source_result(&message.content))
-                .count();
-            observations.current_root_source_seen |= current_root_source_results > 0;
-            observations.current_root_source_results += current_root_source_results;
-            if messages_contain(view, SAFE_PROVIDER_FAILURE) {
-                observations.safe_failure_seen = true;
-            }
-            if messages_contain(view, RAW_PROVIDER_FAILURE_NEEDLE) {
-                observations.raw_provider_text_seen = true;
-            }
-            if messages_contain(view, BOUNDED_GRAPH_RESULT_NEEDLE) {
-                observations.bounded_graph_result_seen = true;
-            }
-            if view
-                .messages
-                .iter()
-                .any(|message| message.content.len() > MAX_MODEL_MESSAGE_BYTES)
-            {
-                observations.oversized_message_seen = true;
-            }
-            drop(observations);
-            script.next_reply(view)
-        }))
-        .map_err(|error| format!("start scenario Jig fake LLM: {error}"))?;
+        let fake = if lifecycle_profile == Some("result-driven-decision-guidance") {
+            result_driven_fake::start(request_count, observations_for_rule)?
+        } else {
+            FakeLlm::start(Script::rule(move |view| {
+                if !messages_contain(view, "ROLE: engineer") {
+                    return Reply::text("unexpected codebase-memory fake-LLM request");
+                }
+                request_count.fetch_add(1, Ordering::SeqCst);
+                let mut observations = observations_for_rule.lock().expect("observations lock");
+                if messages_contain(view, "CODEBASE MEMORY") {
+                    observations.prompt_guidance_seen = true;
+                }
+                if messages_contain(view, MEMORY_RESULT_NEEDLE)
+                    || messages_contain(view, "SEQUENTIAL_GRAPH_RESULT")
+                {
+                    observations.memory_result_seen = true;
+                }
+                if messages_contain(view, "FAKE_MCP_CODE_RESULT")
+                    || messages_contain(view, "SEQUENTIAL_CODE_RESULT")
+                {
+                    observations.code_refinement_seen = true;
+                }
+                if messages_contain(view, "FAKE_MCP_TRACE_RESULT")
+                    || messages_contain(view, "SEQUENTIAL_TRACE_RESULT")
+                {
+                    observations.graph_trace_seen = true;
+                }
+                let current_root_source_results = view
+                    .messages
+                    .iter()
+                    .filter(|message| is_current_root_source_result(&message.content))
+                    .count();
+                observations.current_root_source_seen |= current_root_source_results > 0;
+                observations.current_root_source_results += current_root_source_results;
+                if messages_contain(view, SAFE_PROVIDER_FAILURE) {
+                    observations.safe_failure_seen = true;
+                }
+                if messages_contain(view, RAW_PROVIDER_FAILURE_NEEDLE) {
+                    observations.raw_provider_text_seen = true;
+                }
+                if messages_contain(view, BOUNDED_GRAPH_RESULT_NEEDLE) {
+                    observations.bounded_graph_result_seen = true;
+                }
+                if view
+                    .messages
+                    .iter()
+                    .any(|message| message.content.len() > MAX_MODEL_MESSAGE_BYTES)
+                {
+                    observations.oversized_message_seen = true;
+                }
+                drop(observations);
+                script.next_reply(view)
+            }))
+            .map_err(|error| format!("start scenario Jig fake LLM: {error}"))?
+        };
         Ok(Self {
             fake,
             engineer_requests,
@@ -665,7 +675,11 @@ impl CodebaseMemoryFake {
         if !bounded_graph_result_seen
             && !matches!(
                 mcp.lifecycle_profile.as_deref(),
-                Some("graph-consumption" | "sequential-graph-evidence")
+                Some(
+                    "graph-consumption"
+                        | "sequential-graph-evidence"
+                        | "result-driven-decision-guidance"
+                )
             )
         {
             return Err(format!(
@@ -681,7 +695,11 @@ impl CodebaseMemoryFake {
         }
         if matches!(
             mcp.lifecycle_profile.as_deref(),
-            Some("graph-consumption" | "sequential-graph-evidence")
+            Some(
+                "graph-consumption"
+                    | "sequential-graph-evidence"
+                    | "result-driven-decision-guidance"
+            )
         ) && (!code_refinement_seen || !graph_trace_seen || current_root_source_results < 2)
         {
             return Err(format!(

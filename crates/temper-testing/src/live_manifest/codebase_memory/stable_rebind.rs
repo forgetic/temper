@@ -15,6 +15,9 @@ pub(super) fn validate_mcp_contract(
         Some("sequential-graph-evidence") => {
             return super::sequential_graph_evidence::validate(mcp, calls);
         }
+        Some("result-driven-decision-guidance") => {
+            return super::result_driven_guidance::validate(mcp, calls);
+        }
         _ => {}
     }
 
@@ -259,7 +262,10 @@ pub(super) fn stable_rebind_evidence(
             }),
         source_served_from_current_root: calls.iter().any(|call| {
             call.name == "get_code_snippet"
-                && call.fixture_event.as_deref() == Some("served_current_root_source")
+                && matches!(
+                    call.fixture_event.as_deref(),
+                    Some("served_current_root_source" | "served_result_derived_consumer")
+                )
         }),
         global_inventory_avoided: calls.iter().all(|call| call.name != "list_projects"),
     }))
@@ -345,7 +351,12 @@ fn read_stable_rebind_state(mcp: &FakeMcpServer) -> Result<JsonValue, String> {
 fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
     matches!(
         mcp.lifecycle_profile.as_deref(),
-        Some("stable-rebind" | "graph-consumption" | "sequential-graph-evidence")
+        Some(
+            "stable-rebind"
+                | "graph-consumption"
+                | "sequential-graph-evidence"
+                | "result-driven-decision-guidance"
+        )
     )
 }
 
