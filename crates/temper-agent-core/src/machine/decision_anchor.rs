@@ -25,6 +25,14 @@ pub const MAX_DECISION_ANCHOR_RESULT_TARGET_KINDS: usize = 6;
 /// Fixed, model-visible explanation for a locally denied mutation.
 pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked until the successful decision anchor is consumed through later result-derived codebase-memory evidence for the implementation, caller/model, and focused behavioral tests";
 
+/// Generic, privacy-safe correction injected after a successful result cannot
+/// be consumed as the active anchor's typed descendant.
+pub const DECISION_ANCHOR_RECOVERY_MESSAGE: &str = "decision-anchor recovery required: the successful graph result did not form a compatible current-root descendant. Do not mutate; make a later targeted recovery selection or stop without a product.";
+
+/// Recovery is deliberately short: repeated unrelated or unconsumable results
+/// must not spin the native agent into a mutation-free but landable-looking run.
+const MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS: u8 = 2;
+
 /// Closed selector kinds which may participate in a decision-anchor lineage.
 /// Their wire names intentionally mirror the closed V1 graph-correlation
 /// target types, but lineage is an in-process policy contract rather than an
@@ -171,16 +179,25 @@ pub(super) struct DecisionAnchorState {
 enum AnchorPhase {
     Root(Anchor),
     Trail(Trail),
+    Recovery(Recovery),
+    Exhausted,
 }
 
 struct Anchor {
     produced_turn: usize,
     root_binding: String,
+    result_target_kinds: BTreeSet<DecisionAnchorTargetKindV1>,
 }
 
 struct Trail {
     anchor: Anchor,
     evidence: SourceEvidence,
+}
+
+struct Recovery {
+    anchor: Anchor,
+    evidence: SourceEvidence,
+    attempts: u8,
 }
 
 #[derive(Default)]
@@ -196,6 +213,34 @@ struct PendingCodebaseCall {
 struct AnchorOutput {
     lineage: DecisionAnchorLineageV1,
     tool: GraphCorrelationToolV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DecisionAnchorTransition {
+    Unchanged,
+    RecoveryNeeded,
+    RecoveryExhausted,
+}
+
+impl Anchor {
+    fn from_output(turn: usize, lineage: &DecisionAnchorLineageV1) -> Self {
+        Self {
+            produced_turn: turn,
+            root_binding: lineage.root_binding.clone(),
+            result_target_kinds: lineage.result_target_kinds.iter().copied().collect(),
+        }
+    }
+
+    fn is_consumable(&self) -> bool {
+        !self.result_target_kinds.is_empty()
+    }
+
+    fn accepts(&self, call: &PendingCodebaseCall, lineage: &DecisionAnchorLineageV1) -> bool {
+        call.turn > self.produced_turn
+            && lineage.stage == DecisionAnchorLineageStageV1::CarryForward
+            && lineage.root_binding == self.root_binding
+            && self.result_target_kinds.contains(&lineage.target_kind)
+    }
 }
 
 impl DecisionAnchorState {
@@ -224,46 +269,136 @@ impl DecisionAnchorState {
         }
     }
 
-    pub(super) fn on_tool_finished(&mut self, id: &str, name: &str, output: &ToolOutput) {
+    pub(super) fn on_tool_finished(
+        &mut self,
+        id: &str,
+        name: &str,
+        output: &ToolOutput,
+    ) -> DecisionAnchorTransition {
         let Some(call_key) = GraphCorrelationV1::target_digest(id) else {
-            return;
+            return DecisionAnchorTransition::Unchanged;
         };
         let Some(call) = self.calls.remove(&call_key) else {
-            return;
+            return DecisionAnchorTransition::Unchanged;
         };
         let Some(output) = anchor_output(name, output) else {
-            return;
+            return DecisionAnchorTransition::Unchanged;
         };
+        let next_anchor = Anchor::from_output(call.turn, &output.lineage);
 
         match self.phase.take() {
             None if output.lineage.stage == DecisionAnchorLineageStageV1::Root => {
-                self.phase = Some(AnchorPhase::Root(Anchor {
-                    produced_turn: call.turn,
-                    root_binding: output.lineage.root_binding,
-                }));
+                self.install_root(next_anchor, 0)
             }
-            Some(AnchorPhase::Root(root))
-                if output.lineage.stage == DecisionAnchorLineageStageV1::CarryForward
-                    && output.lineage.root_binding == root.root_binding
-                    && call.turn > root.produced_turn =>
-            {
-                let mut evidence = SourceEvidence::default();
-                evidence.record(output.tool, call.turn);
+            Some(AnchorPhase::Root(root)) if call.turn <= root.produced_turn => {
+                self.phase = Some(AnchorPhase::Root(root));
+                DecisionAnchorTransition::Unchanged
+            }
+            Some(AnchorPhase::Root(root)) => self.advance_or_recover(
+                root,
+                SourceEvidence::default(),
+                &call,
+                &output,
+                next_anchor,
+                1,
+            ),
+            Some(AnchorPhase::Trail(trail)) if call.turn <= trail.anchor.produced_turn => {
+                self.phase = Some(AnchorPhase::Trail(trail));
+                DecisionAnchorTransition::Unchanged
+            }
+            Some(AnchorPhase::Trail(trail)) => self.advance_or_recover(
+                trail.anchor,
+                trail.evidence,
+                &call,
+                &output,
+                next_anchor,
+                1,
+            ),
+            Some(AnchorPhase::Recovery(recovery)) if call.turn <= recovery.anchor.produced_turn => {
+                self.phase = Some(AnchorPhase::Recovery(recovery));
+                DecisionAnchorTransition::Unchanged
+            }
+            Some(AnchorPhase::Recovery(recovery)) => {
+                // Only an anchor that itself had no usable typed selections may
+                // be replaced by a fresh later root. A cross-root result cannot
+                // substitute for an otherwise consumable current root.
+                if !recovery.anchor.is_consumable()
+                    && call.turn > recovery.anchor.produced_turn
+                    && output.lineage.stage == DecisionAnchorLineageStageV1::Root
+                {
+                    self.install_root(next_anchor, recovery.attempts.saturating_add(1))
+                } else {
+                    self.advance_or_recover(
+                        recovery.anchor,
+                        recovery.evidence,
+                        &call,
+                        &output,
+                        next_anchor,
+                        recovery.attempts.saturating_add(1),
+                    )
+                }
+            }
+            Some(AnchorPhase::Exhausted) => {
+                self.phase = Some(AnchorPhase::Exhausted);
+                DecisionAnchorTransition::Unchanged
+            }
+            None => {
+                self.phase = None;
+                DecisionAnchorTransition::Unchanged
+            }
+        }
+    }
+
+    fn install_root(&mut self, anchor: Anchor, attempts: u8) -> DecisionAnchorTransition {
+        if anchor.is_consumable() {
+            self.phase = Some(AnchorPhase::Root(anchor));
+            DecisionAnchorTransition::Unchanged
+        } else {
+            self.enter_recovery(anchor, SourceEvidence::default(), attempts)
+        }
+    }
+
+    fn advance_or_recover(
+        &mut self,
+        active: Anchor,
+        mut evidence: SourceEvidence,
+        call: &PendingCodebaseCall,
+        output: &AnchorOutput,
+        next_anchor: Anchor,
+        recovery_attempts: u8,
+    ) -> DecisionAnchorTransition {
+        if active.accepts(call, &output.lineage) {
+            evidence.record(output.tool, call.turn);
+            if next_anchor.is_consumable() {
                 self.phase = Some(AnchorPhase::Trail(Trail {
-                    anchor: root,
+                    anchor: next_anchor,
                     evidence,
                 }));
+                DecisionAnchorTransition::Unchanged
+            } else {
+                self.enter_recovery(next_anchor, evidence, recovery_attempts)
             }
-            Some(AnchorPhase::Trail(mut trail))
-                if output.lineage.stage == DecisionAnchorLineageStageV1::CarryForward
-                    && output.lineage.root_binding == trail.anchor.root_binding
-                    && call.turn > trail.anchor.produced_turn =>
-            {
-                trail.evidence.record(output.tool, call.turn);
-                self.phase = Some(AnchorPhase::Trail(trail));
-            }
-            Some(phase) => self.phase = Some(phase),
-            None => self.phase = None,
+        } else {
+            self.enter_recovery(active, evidence, recovery_attempts)
+        }
+    }
+
+    fn enter_recovery(
+        &mut self,
+        anchor: Anchor,
+        evidence: SourceEvidence,
+        attempts: u8,
+    ) -> DecisionAnchorTransition {
+        if attempts >= MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS {
+            self.phase = Some(AnchorPhase::Exhausted);
+            DecisionAnchorTransition::RecoveryExhausted
+        } else {
+            self.phase = Some(AnchorPhase::Recovery(Recovery {
+                anchor,
+                evidence,
+                attempts,
+            }));
+            DecisionAnchorTransition::RecoveryNeeded
         }
     }
 
@@ -272,6 +407,7 @@ impl DecisionAnchorState {
             && self.phase.as_ref().is_some_and(|phase| match phase {
                 AnchorPhase::Root(_) => true,
                 AnchorPhase::Trail(trail) => !trail.evidence.is_complete(),
+                AnchorPhase::Recovery(_) | AnchorPhase::Exhausted => true,
             })
     }
 }

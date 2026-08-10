@@ -33,6 +33,8 @@ def response(name, args):
     if name == "index_status":
         return {"status": "fresh"}
     if name == "search_graph":
+        if args.get("query") == "unconsumable":
+            return result(opaque="PRIVATE-UNCONSUMABLE-SENTINEL")
         return result(
             current_root=targets["root"],
             next=targets["refinement"],

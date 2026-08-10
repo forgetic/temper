@@ -27,6 +27,11 @@ fn every_agent_stop_projects_a_consistent_scope_status_and_terminal_reason() {
             ScopeStatusV1::Failed,
             AgentTerminalReasonV1::BudgetExhausted,
         ),
+        (
+            AgentStop::DecisionAnchorRecoveryExhausted,
+            ScopeStatusV1::Failed,
+            AgentTerminalReasonV1::DecisionAnchorRecoveryExhausted,
+        ),
     ];
 
     for (stop, expected_status, expected_reason) in cases {

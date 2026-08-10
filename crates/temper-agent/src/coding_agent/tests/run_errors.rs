@@ -148,6 +148,15 @@ fn budget_exhaustion_rejects_parseable_result_text_with_typed_limit() {
 }
 
 #[test]
+fn exhausted_decision_anchor_recovery_cannot_reach_result_parsing() {
+    let outcome = outcome_with_result_text(AgentStop::DecisionAnchorRecoveryExhausted);
+    let error = ensure_completed_outcome(&outcome, "test-model", 7, false)
+        .expect_err("recovery exhaustion must not produce a landable result");
+
+    assert!(matches!(error, CodingAgentError::NoProduct));
+}
+
+#[test]
 fn aborted_result_text_preserves_requested_and_unrequested_authority() {
     let outcome = outcome_with_result_text(AgentStop::Aborted);
 

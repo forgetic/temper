@@ -10,5 +10,9 @@ pub(super) fn scope_terminal(reason: AgentStop) -> (ScopeStatusV1, AgentTerminal
             ScopeStatusV1::Failed,
             AgentTerminalReasonV1::BudgetExhausted,
         ),
+        AgentStop::DecisionAnchorRecoveryExhausted => (
+            ScopeStatusV1::Failed,
+            AgentTerminalReasonV1::DecisionAnchorRecoveryExhausted,
+        ),
     }
 }

@@ -12,6 +12,7 @@ pub enum AgentTerminalReasonV1 {
     ModelError,
     Aborted,
     BudgetExhausted,
+    DecisionAnchorRecoveryExhausted,
 }
 
 impl AgentTerminalReasonV1 {
@@ -21,6 +22,7 @@ impl AgentTerminalReasonV1 {
             Self::ModelError => "model_error",
             Self::Aborted => "aborted",
             Self::BudgetExhausted => "budget_exhausted",
+            Self::DecisionAnchorRecoveryExhausted => "decision_anchor_recovery_exhausted",
         }
     }
 }

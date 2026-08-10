@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use tongs::model::{
-    AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage,
+    AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage, UserContent,
+    UserMessage,
 };
 use tongs::tools::{ToolEffects, ToolOutput};
 
@@ -24,7 +25,9 @@ pub type ArgPreviewFn = Arc<dyn Fn(&str, &serde_json::Value) -> Option<String> +
 use crate::model_failure::ModelFailureDiagnostic;
 
 use super::batching::{PendingTool, plan_batches};
-use super::decision_anchor::DecisionAnchorState;
+use super::decision_anchor::{
+    DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState, DecisionAnchorTransition,
+};
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
 };
@@ -71,6 +74,11 @@ pub struct AgentMachine {
     /// Optional per-run guard activated only after a trusted codebase-memory
     /// wrapper returns a successful targeted decision anchor.
     decision_anchors: Option<DecisionAnchorState>,
+    /// Generic, privacy-safe recovery instruction queued by an unconsumable
+    /// anchor. It is distinct from operator steering.
+    decision_anchor_recovery: bool,
+    /// Stops the run after the active batch drains once bounded recovery fails.
+    decision_anchor_exhausted: bool,
     /// The most recent assistant message (the run's product on completion).
     last_assistant: Option<AssistantMessage>,
     /// Structured terminal provider/model failure, kept independently from
@@ -124,6 +132,8 @@ impl AgentMachine {
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             decision_anchors,
+            decision_anchor_recovery: false,
+            decision_anchor_exhausted: false,
             last_assistant: None,
             model_failure: None,
             queued_steering: Vec::new(),
@@ -154,6 +164,8 @@ impl AgentMachine {
         self.active_tool_batch = None;
         self.pending_batches.clear();
         self.cancellation_generation = None;
+        self.decision_anchor_recovery = false;
+        self.decision_anchor_exhausted = false;
         let final_message = self
             .last_assistant
             .clone()
@@ -229,6 +241,13 @@ impl AgentMachine {
                 count: steering.len(),
             }));
             self.messages.extend(steering);
+        }
+        if self.decision_anchor_recovery {
+            self.decision_anchor_recovery = false;
+            self.messages.push(Message::User(UserMessage {
+                content: UserContent::Text(DECISION_ANCHOR_RECOVERY_MESSAGE.to_string()),
+                timestamp: 0,
+            }));
         }
         self.phase = Phase::AwaitingLlm;
         let operation_generation = self.next_operation_generation();
@@ -368,7 +387,15 @@ impl AgentMachine {
             if let Some(pending) = batch.iter_mut().find(|p| p.call.id == id) {
                 let tool_name = pending.call.name.clone();
                 if let Some(state) = self.decision_anchors.as_mut() {
-                    state.on_tool_finished(&id, &tool_name, &output);
+                    match state.on_tool_finished(&id, &tool_name, &output) {
+                        DecisionAnchorTransition::Unchanged => {}
+                        DecisionAnchorTransition::RecoveryNeeded => {
+                            self.decision_anchor_recovery = true;
+                        }
+                        DecisionAnchorTransition::RecoveryExhausted => {
+                            self.decision_anchor_exhausted = true;
+                        }
+                    }
                 }
                 pending.result = Some(tool_result_message(&id, &tool_name, output));
             }
@@ -385,6 +412,11 @@ impl AgentMachine {
         // it). Then run the next batch, or finish the turn.
         if let Some(batch) = self.pending_batches.pop_front() {
             self.turn_results.extend(batch);
+        }
+
+        if self.decision_anchor_exhausted {
+            requests.extend(self.finish(AgentStop::DecisionAnchorRecoveryExhausted));
+            return requests;
         }
 
         if !self.pending_batches.is_empty() {

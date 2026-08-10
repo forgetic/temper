@@ -193,7 +193,8 @@ fn sub_agent_stop_is_error(stop: crate::machine::AgentStop) -> bool {
         crate::machine::AgentStop::Completed => false,
         crate::machine::AgentStop::ModelError
         | crate::machine::AgentStop::Aborted
-        | crate::machine::AgentStop::BudgetExhausted => true,
+        | crate::machine::AgentStop::BudgetExhausted
+        | crate::machine::AgentStop::DecisionAnchorRecoveryExhausted => true,
     }
 }
 
