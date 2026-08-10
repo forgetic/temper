@@ -2,6 +2,7 @@ use super::super::result_presentation::DECISION_ANCHOR;
 use super::test_support::*;
 use super::*;
 use serde_json::json;
+use temper_agent_core::{DecisionAnchorEvidenceV1, SAFE_DECISION_ANCHOR_DETAIL_KEY};
 
 #[test]
 fn successful_targeted_results_present_only_a_bounded_provider_neutral_decision_anchor() {
@@ -61,11 +62,20 @@ fn successful_targeted_results_present_only_a_bounded_provider_neutral_decision_
             !DECISION_ANCHOR.contains("PROVIDER-RESULT-SENTINEL"),
             "the anchor must not retain provider output"
         );
+        let evidence: DecisionAnchorEvidenceV1 = serde_json::from_value(
+            targeted
+                .details
+                .as_ref()
+                .and_then(|details| details.get(SAFE_DECISION_ANCHOR_DETAIL_KEY))
+                .cloned()
+                .expect("targeted result carries bounded anchor evidence"),
+        )
+        .expect("anchor evidence is typed");
+        assert!(evidence.is_valid());
+        let details = serde_json::to_string(&targeted.details).expect("details serialize");
         assert!(
-            !serde_json::to_string(&targeted.details)
-                .expect("details serialize")
-                .contains(FIXTURE_TARGET),
-            "details must retain only the existing opaque correlation"
+            !details.contains(FIXTURE_TARGET) && !details.contains("PROVIDER-RESULT-SENTINEL"),
+            "details retain only privacy-safe provider-result fingerprints"
         );
         assert!(targeted_text.len() <= MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
 

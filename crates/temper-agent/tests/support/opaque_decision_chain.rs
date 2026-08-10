@@ -26,6 +26,8 @@ pub enum DecisionCase {
     Consumed,
     UnrelatedLaterTarget,
     ProducerTurnDependents,
+    ConventionalReadSubstitution,
+    IncompleteSourceEvidence,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +38,8 @@ pub enum DecisionStep {
     ImplementationSource,
     BehavioralTestSource,
     Mutation,
+    MutationAttempt,
+    MutationBlocked,
     UnrelatedLaterTarget,
     ProducerTurnDependents,
     BypassStopped,
@@ -145,6 +149,14 @@ fn decision_chain_fake(
                 .expect("the prior provider-shaped result selected a next target")
         };
         let record = |step| observed_steps.lock().expect("decision steps lock").push(step);
+        let mutation_was_blocked = || {
+            view.messages.iter().any(|message| {
+                message.role == "tool"
+                    && message
+                        .content
+                        .contains("workspace mutation blocked until the successful decision anchor")
+            })
+        };
 
         match (case, view.prior_tool_results) {
             (DecisionCase::Consumed, 0) => {
@@ -238,9 +250,21 @@ fn decision_chain_fake(
                     result_count(), 2,
                     "the unrelated target still receives a provider-shaped successful result"
                 );
-                record(DecisionStep::BypassStopped);
+                record(DecisionStep::MutationAttempt);
+                tool_reply(
+                    "blocked-unrelated-mutation",
+                    "write",
+                    serde_json::json!({
+                        "path": "demo/EVIDENCE.md",
+                        "content": "must not be written\n"
+                    }),
+                )
+            }
+            (DecisionCase::UnrelatedLaterTarget, 3) => {
+                assert!(mutation_was_blocked(), "the core must deny the unrelated mutation");
+                record(DecisionStep::MutationBlocked);
                 record(DecisionStep::Complete);
-                Reply::text(r#"{"summary":"Stopped before an unconsumed decision-chain mutation."}"#)
+                Reply::text(r#"{"summary":"Stopped after a blocked unconsumed decision-chain mutation."}"#)
             }
             (DecisionCase::ProducerTurnDependents, 0) => {
                 record(DecisionStep::ProducerTurnDependents);
@@ -272,9 +296,99 @@ fn decision_chain_fake(
                     result_count(), 4,
                     "producer-turn refinement, trace, and source reads all returned successfully"
                 );
-                record(DecisionStep::BypassStopped);
+                record(DecisionStep::MutationAttempt);
+                tool_reply(
+                    "blocked-producer-mutation",
+                    "write",
+                    serde_json::json!({
+                        "path": "demo/EVIDENCE.md",
+                        "content": "must not be written\n"
+                    }),
+                )
+            }
+            (DecisionCase::ProducerTurnDependents, 5) => {
+                assert!(mutation_was_blocked(), "the core must deny the producer-turn mutation");
+                record(DecisionStep::MutationBlocked);
                 record(DecisionStep::Complete);
-                Reply::text(r#"{"summary":"Stopped before a producer-turn decision-chain mutation."}"#)
+                Reply::text(r#"{"summary":"Stopped after a blocked producer-turn mutation."}"#)
+            }
+            (DecisionCase::ConventionalReadSubstitution, 0) => {
+                record(DecisionStep::Discovery);
+                tool_reply(
+                    "discover-implementation",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query": "implementation"}),
+                )
+            }
+            (DecisionCase::ConventionalReadSubstitution, 1) => {
+                record(DecisionStep::ImplementationSource);
+                tool_reply("conventional-read", "read", serde_json::json!({"path": "demo/README.md"}))
+            }
+            (DecisionCase::ConventionalReadSubstitution, 2) => {
+                record(DecisionStep::MutationAttempt);
+                tool_reply(
+                    "blocked-conventional-mutation",
+                    "write",
+                    serde_json::json!({
+                        "path": "demo/EVIDENCE.md",
+                        "content": "must not be written\n"
+                    }),
+                )
+            }
+            (DecisionCase::ConventionalReadSubstitution, 3) => {
+                assert!(mutation_was_blocked(), "conventional reads must not consume the anchor");
+                record(DecisionStep::MutationBlocked);
+                record(DecisionStep::Complete);
+                Reply::text(r#"{"summary":"Stopped after a blocked conventional-read substitution."}"#)
+            }
+            (DecisionCase::IncompleteSourceEvidence, 0) => {
+                record(DecisionStep::Discovery);
+                tool_reply(
+                    "discover-implementation",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query": "implementation"}),
+                )
+            }
+            (DecisionCase::IncompleteSourceEvidence, 1) => {
+                record(DecisionStep::Refinement);
+                tool_reply(
+                    "refine-implementation",
+                    "codebase_memory_search_code",
+                    serde_json::json!({"pattern": next_target()}),
+                )
+            }
+            (DecisionCase::IncompleteSourceEvidence, 2) => {
+                record(DecisionStep::Trace);
+                tool_reply(
+                    "trace-caller-or-model",
+                    "codebase_memory_trace_path",
+                    serde_json::json!({"function_name": next_target()}),
+                )
+            }
+            (DecisionCase::IncompleteSourceEvidence, 3) => {
+                record(DecisionStep::ImplementationSource);
+                tool_reply(
+                    "read-implementation",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({"qualified_name": next_target()}),
+                )
+            }
+            (DecisionCase::IncompleteSourceEvidence, 4) => {
+                record(DecisionStep::MutationAttempt);
+                tool_reply(
+                    "blocked-incomplete-mutation",
+                    "write",
+                    serde_json::json!({
+                        "path": "demo/EVIDENCE.md",
+                        "content": "must not be written\n"
+                    }),
+                )
+            }
+            (DecisionCase::IncompleteSourceEvidence, 5) => {
+                assert!(mutation_was_blocked(), "one source read must not satisfy the evidence gate");
+                record(DecisionStep::MutationBlocked);
+                record(DecisionStep::Complete);
+                Reply::text(r#"{"summary":"Stopped after a blocked incomplete-evidence mutation."}"#)
             }
             (_, turn) => panic!("unexpected model turn {turn} for {case:?}"),
         }

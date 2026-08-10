@@ -1,3 +1,6 @@
+use std::collections::BTreeSet;
+
+use temper_agent_core::DecisionAnchorEvidenceV1;
 use temper_protocol_activity::GraphCorrelationV1;
 
 use super::MAX_CODEBASE_MEMORY_OUTPUT_BYTES;
@@ -8,7 +11,11 @@ pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: This is a bounde
 
 pub(super) struct PresentedResult {
     pub(super) text: String,
+    /// The exact bounded provider text shown before any generic anchor suffix.
+    /// It stays in-process only while the wrapper derives fingerprints.
+    pub(super) provider_text: String,
     pub(super) truncated: bool,
+    pub(super) decision_anchor: bool,
 }
 
 /// Keeps the complete model-visible result, including its optional anchor,
@@ -28,11 +35,61 @@ pub(super) fn present_result(
     let text = if anchored {
         format!("{}{DECISION_ANCHOR}", bounded.text)
     } else {
-        bounded.text
+        bounded.text.clone()
     };
     PresentedResult {
         text,
+        provider_text: bounded.text,
         truncated: bounded.truncated,
+        decision_anchor: anchored,
+    }
+}
+
+/// Returns only bounded fingerprints of strings the model can select from a
+/// provider result. Parsing and tokenization are transient; raw provider data
+/// never enters tool details, diagnostics, or the per-run policy state.
+pub(super) fn decision_anchor_evidence(result: &str) -> DecisionAnchorEvidenceV1 {
+    let mut values = Vec::new();
+    if let Ok(value) = serde_json::from_str(result) {
+        collect_json_strings(&value, &mut values);
+        let scalar_values = values.clone();
+        for value in scalar_values {
+            collect_text_tokens(&value, &mut values);
+        }
+    } else {
+        collect_text_tokens(result, &mut values);
+    }
+    let mut seen = BTreeSet::new();
+    let digests = values.into_iter().filter_map(|value| {
+        GraphCorrelationV1::target_digest(&value).filter(|digest| seen.insert(digest.clone()))
+    });
+    DecisionAnchorEvidenceV1::new(digests)
+}
+
+fn collect_json_strings(value: &serde_json::Value, values: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(value) => values.push(value.clone()),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_json_strings(item, values);
+            }
+        }
+        serde_json::Value::Object(items) => {
+            for item in items.values() {
+                collect_json_strings(item, values);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
+}
+
+fn collect_text_tokens(result: &str, values: &mut Vec<String>) {
+    for token in result.split(|character: char| {
+        !character.is_ascii_alphanumeric() && !matches!(character, '_' | ':' | '/' | '.' | '-')
+    }) {
+        if token.len() >= 3 {
+            values.push(token.to_string());
+        }
     }
 }
 

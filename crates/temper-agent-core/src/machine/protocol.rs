@@ -325,6 +325,10 @@ pub enum AgentRequest {
         operation_generation: OperationGeneration,
         batch_generation: BatchGeneration,
         call: ToolCall,
+        /// A successful decision anchor has not yet been consumed into the
+        /// required source evidence, so the shell must return a local error
+        /// without invoking this workspace-mutating tool.
+        mutation_blocked: bool,
     },
     /// Cancel every model/tool task owned by the shell. The machine finishes
     /// only after the matching [`AgentCompletion::TasksQuiesced`] arrives.

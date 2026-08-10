@@ -17,7 +17,8 @@ fn jig_agent_does_not_mutate_after_an_unrelated_later_turn_target() {
         vec![
             DecisionStep::Discovery,
             DecisionStep::UnrelatedLaterTarget,
-            DecisionStep::BypassStopped,
+            DecisionStep::MutationAttempt,
+            DecisionStep::MutationBlocked,
             DecisionStep::Complete,
         ],
         "a merely successful tool sequence is not consumed, result-derived evidence"
@@ -36,9 +37,26 @@ fn jig_agent_does_not_mutate_after_dependent_reads_in_the_producer_turn() {
         run.steps,
         vec![
             DecisionStep::ProducerTurnDependents,
-            DecisionStep::BypassStopped,
+            DecisionStep::MutationAttempt,
+            DecisionStep::MutationBlocked,
             DecisionStep::Complete,
         ],
         "same-turn dependent reads cannot consume a producer result"
     );
+}
+
+#[test]
+fn jig_agent_blocks_conventional_read_substitution_and_incomplete_source_evidence() {
+    for case in [
+        DecisionCase::ConventionalReadSubstitution,
+        DecisionCase::IncompleteSourceEvidence,
+    ] {
+        let run = run(case);
+        assert_eq!(run.mutation, None, "{case:?} must leave no mutation");
+        assert!(
+            run.steps.contains(&DecisionStep::MutationAttempt)
+                && run.steps.contains(&DecisionStep::MutationBlocked),
+            "{case:?} must reach the actual core mutation gate"
+        );
+    }
 }

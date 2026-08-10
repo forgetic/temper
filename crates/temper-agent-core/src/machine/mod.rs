@@ -26,9 +26,14 @@
 
 mod batching;
 mod core;
+mod decision_anchor;
 mod protocol;
 
 pub use core::{AgentMachine, ArgPreviewFn};
+pub use decision_anchor::{
+    DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, DecisionAnchorEvidenceV1,
+    SAFE_DECISION_ANCHOR_DETAIL_KEY,
+};
 pub use protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,
     CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, ModelCallStatus, OperationGeneration,
