@@ -60,3 +60,19 @@ fn jig_agent_blocks_conventional_read_substitution_and_incomplete_source_evidenc
         );
     }
 }
+
+#[test]
+fn jig_agent_bounds_unconsumable_anchor_recovery_without_a_product() {
+    let run = run(DecisionCase::UnconsumableRecoveryExhausted);
+
+    assert_eq!(run.mutation, None, "recovery exhaustion must never mutate");
+    assert_eq!(
+        run.steps,
+        vec![
+            DecisionStep::Discovery,
+            DecisionStep::Recovery,
+            DecisionStep::Recovery,
+        ],
+        "the native agent gets two generic corrective attempts before safe termination"
+    );
+}

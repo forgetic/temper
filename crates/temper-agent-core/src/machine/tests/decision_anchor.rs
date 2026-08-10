@@ -60,16 +60,18 @@ mod tests {
         }
     }
 
-    fn output(name: &str, root: &str, stage: DecisionAnchorLineageStageV1) -> ToolOutput {
+    fn output_with_kinds(
+        name: &str,
+        root: &str,
+        stage: DecisionAnchorLineageStageV1,
+        result_target_kinds: &[DecisionAnchorTargetKindV1],
+    ) -> ToolOutput {
         let (tool, kind) = correlation(name);
         let lineage = DecisionAnchorLineageV1::new(
             root.to_string(),
             stage,
             DecisionAnchorTargetKindV1::from_graph_correlation(kind),
-            [
-                DecisionAnchorTargetKindV1::FunctionName,
-                DecisionAnchorTargetKindV1::QualifiedName,
-            ],
+            result_target_kinds.iter().copied(),
         )
         .unwrap();
         ToolOutput {
@@ -82,6 +84,19 @@ mod tests {
         }
     }
 
+    fn output(name: &str, root: &str, stage: DecisionAnchorLineageStageV1) -> ToolOutput {
+        output_with_kinds(
+            name,
+            root,
+            stage,
+            &[
+                DecisionAnchorTargetKindV1::Pattern,
+                DecisionAnchorTargetKindV1::FunctionName,
+                DecisionAnchorTargetKindV1::QualifiedName,
+            ],
+        )
+    }
+
     fn finish(
         state: &mut DecisionAnchorState,
         id: &str,
@@ -90,6 +105,21 @@ mod tests {
         stage: DecisionAnchorLineageStageV1,
     ) {
         state.on_tool_finished(id, name, &output(name, root, stage));
+    }
+
+    fn finish_with_kinds(
+        state: &mut DecisionAnchorState,
+        id: &str,
+        name: &str,
+        root: &str,
+        stage: DecisionAnchorLineageStageV1,
+        result_target_kinds: &[DecisionAnchorTargetKindV1],
+    ) -> DecisionAnchorTransition {
+        state.on_tool_finished(
+            id,
+            name,
+            &output_with_kinds(name, root, stage, result_target_kinds),
+        )
     }
 
     #[test]
@@ -243,5 +273,134 @@ mod tests {
         let serialized = serde_json::to_string(&lineage).unwrap();
         assert!(!serialized.contains(raw));
         assert!(!serialized.contains("sha256"));
+    }
+    #[test]
+    fn rejects_producer_turn_type_incompatible_and_cross_root_substitutions() {
+        let mut producer_turn = DecisionAnchorState::from_effects(&effects()).unwrap();
+        producer_turn.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut producer_turn,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        producer_turn.on_tool_dispatched(&call("same-turn", "codebase_memory_trace_path"), 0);
+        assert_eq!(
+            finish_with_kinds(
+                &mut producer_turn,
+                "same-turn",
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                &[DecisionAnchorTargetKindV1::QualifiedName],
+            ),
+            DecisionAnchorTransition::Unchanged
+        );
+        assert!(producer_turn.blocks_mutation("write"));
+
+        let mut incompatible = DecisionAnchorState::from_effects(&effects()).unwrap();
+        incompatible.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        assert_eq!(
+            finish_with_kinds(
+                &mut incompatible,
+                "root",
+                "codebase_memory_search_graph",
+                ROOT,
+                DecisionAnchorLineageStageV1::Root,
+                &[DecisionAnchorTargetKindV1::FunctionName],
+            ),
+            DecisionAnchorTransition::Unchanged
+        );
+        incompatible.on_tool_dispatched(&call("pattern", "codebase_memory_search_code"), 1);
+        assert_eq!(
+            finish_with_kinds(
+                &mut incompatible,
+                "pattern",
+                "codebase_memory_search_code",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                &[DecisionAnchorTargetKindV1::FunctionName],
+            ),
+            DecisionAnchorTransition::RecoveryNeeded
+        );
+        assert!(incompatible.blocks_mutation("write"));
+
+        let mut cross_root = DecisionAnchorState::from_effects(&effects()).unwrap();
+        cross_root.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut cross_root,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        cross_root.on_tool_dispatched(&call("other", "codebase_memory_trace_path"), 1);
+        finish(
+            &mut cross_root,
+            "other",
+            "codebase_memory_trace_path",
+            OTHER_ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        assert!(cross_root.blocks_mutation("write"));
+    }
+
+    #[test]
+    fn unconsumable_roots_have_two_recovery_attempts_then_stay_blocked() {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        for (turn, id, expected) in [
+            (0, "root", DecisionAnchorTransition::RecoveryNeeded),
+            (1, "recovery-one", DecisionAnchorTransition::RecoveryNeeded),
+            (
+                2,
+                "recovery-two",
+                DecisionAnchorTransition::RecoveryExhausted,
+            ),
+        ] {
+            state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), turn);
+            assert_eq!(
+                finish_with_kinds(
+                    &mut state,
+                    id,
+                    "codebase_memory_search_graph",
+                    ROOT,
+                    DecisionAnchorLineageStageV1::Root,
+                    &[],
+                ),
+                expected
+            );
+            assert!(state.blocks_mutation("write"));
+        }
+    }
+
+    #[test]
+    fn failed_or_malformed_graph_results_create_no_anchor_or_mutation_block() {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        state.on_tool_dispatched(&call("failed", "codebase_memory_search_graph"), 0);
+        let failed = ToolOutput {
+            content: Vec::new(),
+            details: None,
+            is_error: true,
+        };
+        assert_eq!(
+            state.on_tool_finished("failed", "codebase_memory_search_graph", &failed),
+            DecisionAnchorTransition::Unchanged
+        );
+        assert!(!state.blocks_mutation("write"));
+
+        state.on_tool_dispatched(&call("malformed", "codebase_memory_search_graph"), 1);
+        let malformed = ToolOutput {
+            content: Vec::new(),
+            details: Some(serde_json::json!({
+                SAFE_GRAPH_CORRELATION_DETAIL_KEY: {"version": 99},
+            })),
+            is_error: false,
+        };
+        assert_eq!(
+            state.on_tool_finished("malformed", "codebase_memory_search_graph", &malformed),
+            DecisionAnchorTransition::Unchanged
+        );
+        assert!(!state.blocks_mutation("write"));
     }
 }

@@ -28,6 +28,7 @@ pub enum DecisionCase {
     ProducerTurnDependents,
     ConventionalReadSubstitution,
     IncompleteSourceEvidence,
+    UnconsumableRecoveryExhausted,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,6 +43,7 @@ pub enum DecisionStep {
     MutationBlocked,
     UnrelatedLaterTarget,
     ProducerTurnDependents,
+    Recovery,
     BypassStopped,
     Complete,
 }
@@ -389,6 +391,40 @@ fn decision_chain_fake(
                 record(DecisionStep::MutationBlocked);
                 record(DecisionStep::Complete);
                 Reply::text(r#"{"summary":"Stopped after a blocked incomplete-evidence mutation."}"#)
+            }
+            (DecisionCase::UnconsumableRecoveryExhausted, 0) => {
+                record(DecisionStep::Discovery);
+                tool_reply(
+                    "discover-unconsumable",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query": "unconsumable"}),
+                )
+            }
+            (DecisionCase::UnconsumableRecoveryExhausted, turn @ 1..=2) => {
+                let corrections = view
+                    .messages
+                    .iter()
+                    .filter(|message| {
+                        message.role == "user"
+                            && message.content.contains("decision-anchor recovery required")
+                    })
+                    .collect::<Vec<_>>();
+                assert!(
+                    !corrections.is_empty(),
+                    "the native agent must inject a generic recovery state"
+                );
+                assert!(
+                    corrections
+                        .iter()
+                        .all(|message| !message.content.contains("PRIVATE-UNCONSUMABLE-SENTINEL")),
+                    "recovery guidance must not retain provider values"
+                );
+                record(DecisionStep::Recovery);
+                tool_reply(
+                    &format!("recover-unconsumable-{turn}"),
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query": "unconsumable"}),
+                )
             }
             (_, turn) => panic!("unexpected model turn {turn} for {case:?}"),
         }

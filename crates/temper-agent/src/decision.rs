@@ -142,6 +142,10 @@ fn non_completed_stop_error(
         temper_agent_core::AgentStop::Aborted => Some(DecisionError::Run(
             "aborted: decision agent stopped before completion".to_string(),
         )),
+        temper_agent_core::AgentStop::DecisionAnchorRecoveryExhausted => Some(DecisionError::Run(
+            "decision_anchor_recovery_exhausted: decision agent stopped before completion"
+                .to_string(),
+        )),
     }
 }
 
@@ -269,6 +273,10 @@ mod tests {
                 "budget_exhausted",
             ),
             (temper_agent_core::AgentStop::Aborted, "aborted"),
+            (
+                temper_agent_core::AgentStop::DecisionAnchorRecoveryExhausted,
+                "decision_anchor_recovery_exhausted",
+            ),
         ] {
             let error = non_completed_stop_error(stop, Some("provider failed"))
                 .expect("non-completed stop must fail");
