@@ -91,6 +91,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
             &call,
             Duration::from_secs(1),
             &CancellationToken::default(),
+            false,
             &clock,
             observed.as_ref(),
         )
@@ -394,6 +395,7 @@ fn codebase_memory_tool_timeout_uses_virtual_time_and_emits_safe_cancelled_bound
             &call,
             Duration::from_secs(7),
             &CancellationToken::default(),
+            false,
             &SystemEventClock,
             observed.as_ref(),
         )
@@ -459,6 +461,7 @@ fn external_cancellation_drops_a_hung_tool_without_advancing_time() {
             &call,
             Duration::from_secs(600),
             &cancellation,
+            false,
             &SystemEventClock,
             observed.as_ref(),
         )

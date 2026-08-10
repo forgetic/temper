@@ -1,5 +1,6 @@
-use super::result_presentation::present_result;
+use super::result_presentation::{decision_anchor_evidence, present_result};
 use super::*;
+use temper_agent_core::SAFE_DECISION_ANCHOR_DETAIL_KEY;
 use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
 };
@@ -240,6 +241,11 @@ impl Tool for CodebaseMemoryTool {
         if let Some(correlation) = graph_correlation {
             details[SAFE_GRAPH_CORRELATION_DETAIL_KEY] =
                 serde_json::to_value(correlation).expect("graph correlation serializes");
+        }
+        if presented.decision_anchor {
+            details[SAFE_DECISION_ANCHOR_DETAIL_KEY] =
+                serde_json::to_value(decision_anchor_evidence(&presented.provider_text))
+                    .expect("decision anchor evidence serializes");
         }
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {

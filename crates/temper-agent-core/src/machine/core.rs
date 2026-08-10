@@ -24,6 +24,7 @@ pub type ArgPreviewFn = Arc<dyn Fn(&str, &serde_json::Value) -> Option<String> +
 use crate::model_failure::ModelFailureDiagnostic;
 
 use super::batching::{PendingTool, plan_batches};
+use super::decision_anchor::DecisionAnchorState;
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
 };
@@ -67,6 +68,9 @@ pub struct AgentMachine {
     /// Results collected this turn across all batches, in original tool-call
     /// order, so the tool-result messages are appended deterministically.
     turn_results: Vec<PendingTool>,
+    /// Optional per-run guard activated only after a trusted codebase-memory
+    /// wrapper returns a successful targeted decision anchor.
+    decision_anchors: Option<DecisionAnchorState>,
     /// The most recent assistant message (the run's product on completion).
     last_assistant: Option<AssistantMessage>,
     /// Structured terminal provider/model failure, kept independently from
@@ -109,6 +113,7 @@ impl AgentMachine {
         max_iterations: usize,
         effects: BTreeMap<String, ToolEffects>,
     ) -> Self {
+        let decision_anchors = DecisionAnchorState::from_effects(&effects);
         Self {
             messages: initial_messages,
             max_iterations,
@@ -118,6 +123,7 @@ impl AgentMachine {
             effects,
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
+            decision_anchors,
             last_assistant: None,
             model_failure: None,
             queued_steering: Vec::new(),
@@ -295,7 +301,12 @@ impl AgentMachine {
         let batch_generation = self.next_batch_generation();
         let mut operations = BTreeMap::new();
         let mut requests = Vec::new();
+        let model_turn = self.turn.saturating_sub(1);
         for call in calls {
+            let mutation_blocked = self.decision_anchors.as_mut().is_some_and(|state| {
+                state.on_tool_dispatched(&call, model_turn);
+                state.blocks_mutation(&call.name)
+            });
             // The pure core does not know the per-tool rendering rules; the
             // shell supplies an optional preview fn (agent-log-cleanup plan,
             // pieces B/D). Absent it, the field stays `None`.
@@ -314,6 +325,7 @@ impl AgentMachine {
                 operation_generation,
                 batch_generation,
                 call,
+                mutation_blocked,
             });
         }
         self.active_llm = None;
@@ -355,6 +367,9 @@ impl AgentMachine {
         if let Some(batch) = self.pending_batches.front_mut() {
             if let Some(pending) = batch.iter_mut().find(|p| p.call.id == id) {
                 let tool_name = pending.call.name.clone();
+                if let Some(state) = self.decision_anchors.as_mut() {
+                    state.on_tool_finished(&id, &tool_name, &output);
+                }
                 pending.result = Some(tool_result_message(&id, &tool_name, output));
             }
         }
