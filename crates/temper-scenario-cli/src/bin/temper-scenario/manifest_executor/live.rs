@@ -17,6 +17,8 @@ use crate::run_evidence;
 mod artifacts;
 #[path = "live/ci.rs"]
 mod ci;
+#[path = "live/codebase_memory.rs"]
+mod codebase_memory;
 
 use super::observability::capture_observability;
 use artifacts::{RetainedLogPaths, copy_report_artifacts, stimulus_log_paths};
@@ -498,44 +500,10 @@ fn live_evidence_lines(
         ),
     ];
     if let Some(codebase_memory) = evidence.codebase_memory.as_ref() {
-        lines.extend([
-            format!(
-                "codebase-memory tools: exposed {:?}; hidden {:?}",
-                codebase_memory.safe_tools, codebase_memory.hidden_tools
-            ),
-            format!(
-                "codebase-memory MCP: search_graph calls={} inventory={:?} readiness_delay_ms={} forced_failure_tool={:?} log={}",
-                codebase_memory.mcp_search_calls,
-                codebase_memory.mcp_call_counts,
-                codebase_memory.readiness_delay_ms,
-                codebase_memory.forced_failure_tool,
-                codebase_mcp_log
-                    .unwrap_or(&codebase_memory.fake_mcp_log)
-                    .display()
-            ),
-            format!(
-                "codebase-memory diff: engineer produced {} after bounded graph evidence containing {}",
-                codebase_memory.produced_file, codebase_memory.expected_result
-            ),
-        ]);
-        if let Some(rebind) = &codebase_memory.stable_rebind {
-            lines.push(format!(
-                "codebase-memory stable rebind: requested_project={} confirmed_project={} confirmation_calls={} targeted_discovery={} normalized_identity={} targeted_ready_confirmation={} retained_projects={} fresh_prior_binding={} current_root_rebound={} graph_reads_use_confirmed_project={} source_reads_use_confirmed_project={} source_served_from_current_root={} global_inventory_avoided={}",
-                rebind.requested_stable_project,
-                rebind.confirmed_provider_project,
-                rebind.confirmation_call_count,
-                rebind.initial_discovery_targeted,
-                rebind.normalized_provider_identity,
-                rebind.targeted_ready_confirmation,
-                rebind.retained_project_count,
-                rebind.fresh_prior_binding,
-                rebind.current_root_rebound,
-                rebind.graph_reads_use_confirmed_project,
-                rebind.source_reads_use_confirmed_project,
-                rebind.source_served_from_current_root,
-                rebind.global_inventory_avoided,
-            ));
-        }
+        lines.extend(codebase_memory::evidence_lines(
+            codebase_memory,
+            codebase_mcp_log.map(std::path::PathBuf::as_path),
+        ));
     }
     if let Some(plan) = evidence.plan_feature.as_ref() {
         lines.extend(super::plan_artifact::evidence_lines(plan));

@@ -27,7 +27,7 @@ runner:
   `basic-delivery`, `forgejo-exact-head-ci-repair`, `forgejo-v16-api-ci`,
   `implementation-pr-handoff`, `codebase-memory-agent`,
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
-  `sequential-graph-evidence`, `result-driven-decision-guidance`,
+  `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
   `model-failure-recovery`, `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
@@ -168,6 +168,19 @@ implementation, caller/model, and focused behavioral-test evidence is consumed.
 Only privacy-safe aggregate tool, binding, and complete typed V1-correlation
 facts cross into checked-in declarations and aggregate run evidence. This new
 mapping leaves the historical `#962` and active `#973` mappings unchanged.
+
+### Provider-result anchor mapping
+
+`provider-result-anchor` is the active mapping for `ai/temper#991` and
+`ai/temper#992` on `agent/pr-for-feature-991`. Its Jig-driven current-root
+fixture mints dependent values only from successful provider results and
+requires the live agent to consume a result-derived trace plus complete source
+evidence before the minimal repair. Unrelated or conventional substitution and
+incomplete source evidence cannot satisfy the contract. Checked-in declarations
+and aggregate evidence retain only safe aggregate tool, ordering, binding, and
+typed-correlation facts; provider payloads, targets, source paths, digests,
+prompts, and credentials remain ephemeral. This mapping leaves the historical
+`#962` and active `#973`/`#982` relevance rules unchanged.
 
 ### Structured run evidence
 

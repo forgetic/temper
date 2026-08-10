@@ -59,6 +59,7 @@ impl LiveExecutionContext<'_> {
                             | "graph-consumption"
                             | "sequential-graph-evidence"
                             | "result-driven-decision-guidance"
+                            | "provider-result-anchor"
                     )
                 ),
             "unknown fake codebase-memory fixture",
@@ -182,6 +183,7 @@ impl LiveExecutionContext<'_> {
                                 | "graph-consumption"
                                 | "sequential-graph-evidence"
                                 | "result-driven-decision-guidance"
+                                | "provider-result-anchor"
                         )
                     )
                 }),

@@ -18,6 +18,9 @@ pub(super) fn validate_mcp_contract(
         Some("result-driven-decision-guidance") => {
             return super::result_driven_guidance::validate(mcp, calls);
         }
+        Some("provider-result-anchor") => {
+            return super::provider_result_anchor::validate(mcp, calls);
+        }
         _ => {}
     }
 
@@ -356,6 +359,7 @@ fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
                 | "graph-consumption"
                 | "sequential-graph-evidence"
                 | "result-driven-decision-guidance"
+                | "provider-result-anchor"
         )
     )
 }

@@ -189,12 +189,35 @@ fn result_values(view: &RequestView, field: &str) -> Vec<String> {
             if message.role != "tool" {
                 return None;
             }
-            let value = serde_json::from_str::<JsonValue>(&message.content).ok()?;
-            value
+            let result = provider_result(&message.content)?;
+            result
                 .get(field)
-                .or_else(|| value.pointer(format!("/results/0/{field}").as_str()))
+                .or_else(|| result.pointer(format!("/results/0/{field}").as_str()))
                 .and_then(JsonValue::as_str)
                 .map(str::to_string)
         })
         .collect()
+}
+
+fn provider_result(content: &str) -> Option<JsonValue> {
+    let result = content
+        .split_once("\n\n[Decision anchor:")
+        .map_or(content, |(result, _)| result);
+    serde_json::from_str(result).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_result;
+
+    #[test]
+    fn parses_provider_json_before_a_generic_decision_anchor() {
+        let result = provider_result(
+            r#"{"next":"provider-selected"}
+
+[Decision anchor: generic guidance]"#,
+        )
+        .expect("provider result before anchor parses");
+        assert_eq!(result["next"], "provider-selected");
+    }
 }

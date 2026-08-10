@@ -402,22 +402,30 @@ pub struct FakeLlmEvidence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LiveCodebaseMemoryEvidence {
-    pub produced_file: String,
-    pub expected_result: String,
+    /// Historical fixture-path detail. Privacy-constrained profiles omit it
+    /// from aggregate evidence.
+    pub produced_file: Option<String>,
+    /// Historical provider-result summary. Privacy-constrained profiles omit it
+    /// from aggregate evidence.
+    pub expected_result: Option<String>,
     pub fake_mcp_log: PathBuf,
     pub mcp_search_calls: usize,
     /// Exact tool-call inventory retained without provider response content.
     pub mcp_call_counts: Vec<(String, usize)>,
-    /// Fixture delay that the first model-visible call had to await.
-    pub readiness_delay_ms: u64,
+    /// Fixture delay retained for historical profile diagnostics only. Privacy-
+    /// constrained profiles omit this value from durable aggregate evidence.
+    pub readiness_delay_ms: Option<u64>,
     /// Provider tool that produced the controlled systemic failure, if any.
     pub forced_failure_tool: Option<String>,
     pub safe_tools: Vec<String>,
     pub hidden_tools: Vec<String>,
     pub lifecycle: Option<String>,
-    /// Secret-free confirmation that a fresh stable provider identity was
-    /// rebound before the model read source from the active prepared checkout.
+    /// Historical stable-key evidence. Privacy-constrained profiles use only
+    /// `privacy_safe_binding` so provider identities and digests never leave
+    /// ephemeral fixture state.
     pub stable_rebind: Option<LiveStableRebindEvidence>,
+    /// Secret-free aggregate binding facts for privacy-constrained profiles.
+    pub privacy_safe_binding: Option<LivePrivacySafeCodebaseMemoryBindingEvidence>,
 }
 
 /// Contract facts retained by the stable-rebind fake provider profile.
@@ -431,6 +439,19 @@ pub struct LiveStableRebindEvidence {
     pub normalized_provider_identity: bool,
     pub targeted_ready_confirmation: bool,
     pub fresh_prior_binding: bool,
+    pub current_root_rebound: bool,
+    pub graph_reads_use_confirmed_project: bool,
+    pub source_reads_use_confirmed_project: bool,
+    pub source_served_from_current_root: bool,
+    pub global_inventory_avoided: bool,
+}
+
+/// Terminal aggregate binding facts for privacy-constrained codebase-memory
+/// profiles. All provider identities and target values remain ephemeral.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LivePrivacySafeCodebaseMemoryBindingEvidence {
+    pub confirmation_call_count: usize,
+    pub targeted_ready_confirmation: bool,
     pub current_root_rebound: bool,
     pub graph_reads_use_confirmed_project: bool,
     pub source_reads_use_confirmed_project: bool,
