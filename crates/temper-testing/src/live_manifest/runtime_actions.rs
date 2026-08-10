@@ -58,6 +58,7 @@ impl LiveExecutionContext<'_> {
                             | "stable-rebind"
                             | "graph-consumption"
                             | "sequential-graph-evidence"
+                            | "result-driven-decision-guidance"
                     )
                 ),
             "unknown fake codebase-memory fixture",
@@ -176,9 +177,17 @@ impl LiveExecutionContext<'_> {
                 self.mcp.as_ref().is_some_and(|mcp| {
                     matches!(
                         mcp.lifecycle_profile.as_deref(),
-                        Some("stable-rebind" | "graph-consumption" | "sequential-graph-evidence")
+                        Some(
+                            "stable-rebind"
+                                | "graph-consumption"
+                                | "sequential-graph-evidence"
+                                | "result-driven-decision-guidance"
+                        )
                     )
                 }),
+                self.mcp
+                    .as_ref()
+                    .and_then(|mcp| mcp.lifecycle_profile.as_deref()),
             )?);
         }
         for role in roles {

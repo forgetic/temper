@@ -32,6 +32,15 @@ agents. This is the only scenario execution topology.
 `cargo dev-scenario-run scenarios/<name>` is the sole manual live-run alias. It
 requires the path and never defaults to `basic-delivery`.
 
+## Result-driven guidance example
+
+Feature `ai/temper#982` resolves to the active
+`scenarios/result-driven-decision-guidance` mapping on
+`agent/pr-for-feature-982`. Its live fixture mints opaque dependent values, so
+later operations must consume successful provider results rather than merely
+replay a successful scripted sequence. Run evidence retains aggregate tool,
+binding, and typed-correlation facts only.
+
 ## CI evidence
 
 `.forgejo/workflows/focused-feature-validation.yml` runs the focused job for
