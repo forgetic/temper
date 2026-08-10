@@ -1,0 +1,13 @@
+{
+  "phases": [
+    {
+      "name": "result-driven-decision-guidance-runtime",
+      "when": { "messages_contain": ["__result_driven_fixture_runtime__"] },
+      "sequence": [
+        {
+          "text": "The live fixture owns opaque result-derived responses."
+        }
+      ]
+    }
+  ]
+}

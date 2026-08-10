@@ -27,7 +27,8 @@ runner:
   `basic-delivery`, `forgejo-exact-head-ci-repair`, `forgejo-v16-api-ci`,
   `implementation-pr-handoff`, `codebase-memory-agent`,
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
-  `sequential-graph-evidence`, `model-failure-recovery`, `plan-centric-feature-branch`,
+  `sequential-graph-evidence`, `result-driven-decision-guidance`,
+  `model-failure-recovery`, `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
   `runner.uses = "manifest"`. Every run boots real Forgejo, a host
@@ -155,6 +156,18 @@ reveals the focused test target only after the current-root implementation
 source result. Its checked-in and aggregate evidence is limited to safe tool
 names, counts, binding facts, and typed-correlation facts; provider arguments,
 targets, source, and results stay out of the corpus and aggregate reports.
+
+### Result-driven decision-guidance mapping
+
+`result-driven-decision-guidance` is the active mapping for `ai/temper#982` and
+`ai/temper#983` on `agent/pr-for-feature-982`. Its current-root provider mints
+opaque dependent values at runtime, so only a result consumed in a later model
+turn can select the next refinement, trace, or source read. The fixture blocks
+unrelated or producer-turn consumers and blocks mutation until current-root
+implementation, caller/model, and focused behavioral-test evidence is consumed.
+Only privacy-safe aggregate tool, binding, and complete typed V1-correlation
+facts cross into checked-in declarations and aggregate run evidence. This new
+mapping leaves the historical `#962` and active `#973` mappings unchanged.
 
 ### Structured run evidence
 

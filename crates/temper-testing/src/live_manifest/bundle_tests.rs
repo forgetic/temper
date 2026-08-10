@@ -74,6 +74,10 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
             ConvergenceStrategy::CodebaseMemory,
         ),
         (
+            "result-driven-decision-guidance",
+            ConvergenceStrategy::CodebaseMemory,
+        ),
+        (
             "implementation-pr-handoff",
             ConvergenceStrategy::ImplementationPrHandoff,
         ),
@@ -296,6 +300,53 @@ fn sequential_graph_evidence_bundle_maps_feature_973_without_rewriting_history()
     assert!(!jig.contains("get_architecture"));
     assert!(readme.contains("`ai/temper#973`"));
     assert!(readme.contains("historical `codebase-memory-graph-consumption`"));
+    assert!(readme.contains("Privacy-safe evidence"));
+    assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
+}
+
+#[test]
+fn result_driven_guidance_bundle_maps_feature_982_with_opaque_later_turn_fixture() {
+    let scenario_path = scenarios_root().join("result-driven-decision-guidance");
+    let bundle = ScenarioBundle::load(&scenario_path).expect("result-driven guidance bundle");
+    let mcp = bundle
+        .execution
+        .steps
+        .iter()
+        .find(|step| step.id == "start-fake-codebase-memory-mcp")
+        .expect("MCP fixture action");
+    assert!(matches!(
+        &mcp.action,
+        ManifestAction::StartCodebaseMemoryMcp {
+            fixture: Some(fixture),
+            safe_tools,
+            readiness_delay_ms: 750,
+            forced_systemic_failure: None,
+            ..
+        } if fixture == "result-driven-decision-guidance" && safe_tools == &vec![
+            "search_graph".to_string(),
+            "search_code".to_string(),
+            "trace_path".to_string(),
+            "get_code_snippet".to_string(),
+            "list_projects".to_string(),
+            "index_status".to_string(),
+        ]
+    ));
+    let manifest = fs::read_to_string(scenario_path.join("scenario.toml"))
+        .expect("result-driven guidance manifest");
+    let readme =
+        fs::read_to_string(scenario_path.join("README.md")).expect("result-driven guidance README");
+
+    assert!(manifest.contains("feature = \"ai/temper#982\""));
+    assert!(manifest.contains("plan = \"ai/temper#983\""));
+    assert!(
+        manifest.contains("result-derived-later-turn-current-root-evidence-before-minimal-patch")
+    );
+    assert!(manifest.contains("complete-typed-v1-correlations"));
+    assert!(manifest.contains("workspace.diff.produced"));
+    assert!(!manifest.contains("file.path"));
+    assert!(readme.contains("mints opaque values at runtime"));
+    assert!(readme.contains("does not\nchange the historical `#962` mapping"));
+    assert!(readme.contains("active `#973` mapping"));
     assert!(readme.contains("Privacy-safe evidence"));
     assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
 }

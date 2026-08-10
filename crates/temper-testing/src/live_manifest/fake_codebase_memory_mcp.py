@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+import uuid
 
 LOG_PATH = sys.argv[1]
 REPO_ROOT = sys.argv[2]
@@ -14,6 +15,11 @@ FORCED_FAILURE_AFTER_CALLS = int(sys.argv[8])
 LIFECYCLE_PROFILE = sys.argv[9]
 STATE_PATH = LOG_PATH + ".state.json"
 SEQUENTIAL_STAGE = 0
+RESULT_DRIVEN_STAGE = 0
+RESULT_DRIVEN_TOKENS = {
+    name: "opaque-" + uuid.uuid4().hex
+    for name in ["root", "refinement", "trace", "implementation", "behavioral_test"]
+}
 GRAPH_CALLS = 0
 
 TOOLS = [
@@ -135,6 +141,24 @@ def save_state(state):
     os.replace(temporary, STATE_PATH)
 
 
+def ensure_result_driven_tokens():
+    if not is_result_driven_guidance_profile():
+        return
+    state = load_state()
+    state["decision_tokens"] = RESULT_DRIVEN_TOKENS
+    save_state(state)
+
+
+def result_driven_step(expected_stage, expected_token, actual_token):
+    global RESULT_DRIVEN_STAGE
+    if not is_result_driven_guidance_profile():
+        return True
+    if RESULT_DRIVEN_STAGE != expected_stage or actual_token != RESULT_DRIVEN_TOKENS[expected_token]:
+        return False
+    RESULT_DRIVEN_STAGE += 1
+    return True
+
+
 def normalized_provider_project(project):
     return "normalized-" + project
 
@@ -196,7 +220,12 @@ def has_current_root_profile():
         "stable-rebind",
         "graph-consumption",
         "sequential-graph-evidence",
+        "result-driven-decision-guidance",
     )
+
+
+def is_result_driven_guidance_profile():
+    return LIFECYCLE_PROFILE == "result-driven-decision-guidance"
 
 
 def is_sequential_graph_evidence_profile():
@@ -233,6 +262,7 @@ for line in sys.stdin:
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
+        ensure_result_driven_tokens()
         params = request.get("params") or {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -275,6 +305,36 @@ for line in sys.stdin:
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
+            if is_result_driven_guidance_profile():
+                source_stage = {
+                    RESULT_DRIVEN_TOKENS["implementation"]: (3, "implementation", "src/lib.rs"),
+                    RESULT_DRIVEN_TOKENS["behavioral_test"]: (4, "behavioral_test", "tests/dispatch_behavior.rs"),
+                }.get(qualified_name)
+                source = (
+                    current_root_source(project, source_stage[2])
+                    if source_stage is not None
+                    and result_driven_step(source_stage[0], source_stage[1], qualified_name)
+                    else None
+                )
+                if source is None:
+                    log_tool(name, arguments, is_error=True)
+                    result = text_result("bound source unavailable", True)
+                else:
+                    payload = {
+                        "qualified_name": qualified_name,
+                        "file_path": source_stage[2],
+                        "source": source,
+                        "binding": "current_prepared_checkout",
+                    }
+                    if source_stage[1] == "implementation":
+                        payload["next"] = RESULT_DRIVEN_TOKENS["behavioral_test"]
+                        payload["implementation_source"] = RESULT_DRIVEN_TOKENS["implementation"]
+                    else:
+                        payload["behavioral_test"] = RESULT_DRIVEN_TOKENS["behavioral_test"]
+                    log_tool(name, arguments, fixture_event="served_result_derived_consumer")
+                    result = text_result(json.dumps(payload))
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             source_paths = {
                 "retry_worker_topic": "src/lib.rs",
                 "retry_worker_topic_retry_affinity": "tests/retry_affinity.rs",
@@ -316,6 +376,28 @@ for line in sys.stdin:
                     }
                 result = text_result(json.dumps(payload))
         elif name == "search_code":
+            if is_result_driven_guidance_profile():
+                project = arguments.get("project", "")
+                successful = (
+                    current_root_source(project, "src/lib.rs") is not None
+                    and result_driven_step(1, "refinement", arguments.get("pattern", ""))
+                )
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_result_derived_consumer" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps({
+                        "marker": "RESULT_DRIVEN_CODE_RESULT",
+                        "next": RESULT_DRIVEN_TOKENS["trace"],
+                    }))
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             project = arguments.get("project", "")
             current_root = current_root_source(project, "src/lib.rs") is not None
             sequence_valid = sequential_step(
@@ -340,6 +422,29 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "trace_path":
+            if is_result_driven_guidance_profile():
+                project = arguments.get("project", "")
+                successful = (
+                    current_root_source(project, "src/lib.rs") is not None
+                    and result_driven_step(2, "trace", arguments.get("function_name", ""))
+                )
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_result_derived_consumer" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps({
+                        "marker": "RESULT_DRIVEN_TRACE_RESULT",
+                        "next": RESULT_DRIVEN_TOKENS["implementation"],
+                        "caller_model": RESULT_DRIVEN_TOKENS["trace"],
+                    }))
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             project = arguments.get("project", "")
             current_root = current_root_source(project, "src/lib.rs") is not None
             sequence_valid = sequential_step(
@@ -366,6 +471,29 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "search_graph":
+            if is_result_driven_guidance_profile():
+                project = arguments.get("project", "")
+                successful = (
+                    current_root_source(project, "src/lib.rs") is not None
+                    and result_driven_step(0, "root", RESULT_DRIVEN_TOKENS["root"])
+                )
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_result_driven_producer" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps({
+                        "marker": "RESULT_DRIVEN_GRAPH_RESULT",
+                        "current_root": RESULT_DRIVEN_TOKENS["root"],
+                        "next": RESULT_DRIVEN_TOKENS["refinement"],
+                    }))
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             GRAPH_CALLS += 1
             project = arguments.get("project", "")
             current_root = current_root_source(project, "src/lib.rs") is not None
