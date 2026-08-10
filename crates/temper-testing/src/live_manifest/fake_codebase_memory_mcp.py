@@ -221,11 +221,12 @@ def has_current_root_profile():
         "graph-consumption",
         "sequential-graph-evidence",
         "result-driven-decision-guidance",
+        "provider-result-anchor",
     )
 
 
 def is_result_driven_guidance_profile():
-    return LIFECYCLE_PROFILE == "result-driven-decision-guidance"
+    return LIFECYCLE_PROFILE in ("result-driven-decision-guidance", "provider-result-anchor")
 
 
 def is_sequential_graph_evidence_profile():

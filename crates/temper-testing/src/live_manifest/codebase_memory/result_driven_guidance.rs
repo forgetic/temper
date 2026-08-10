@@ -218,11 +218,26 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_otherwise_successful_unrelated_consumer() {
+    fn rejects_unrelated_or_conventional_consumers_and_incomplete_source_evidence() {
         let (_workspace, mcp, mut calls) = fixture();
         calls[4].arguments["pattern"] = JsonValue::String("opaque-unrelated".to_string());
 
-        let error = validate(&mcp, &calls).expect_err("unrelated consumer must be rejected");
+        let error = validate(&mcp, &calls)
+            .expect_err("an unrelated successful consumer cannot satisfy the anchor contract");
         assert!(error.contains("preceding result"));
+
+        let (_workspace, mcp, mut calls) = fixture();
+        calls[4].name = "read".to_string();
+
+        let error = validate(&mcp, &calls)
+            .expect_err("a conventional read cannot replace an anchored provider consumer");
+        assert!(error.contains("declared ordered MCP chain"));
+
+        let (_workspace, mcp, mut calls) = fixture();
+        calls.pop();
+
+        let error = validate(&mcp, &calls)
+            .expect_err("incomplete source evidence cannot satisfy the anchor contract");
+        assert!(error.contains("declared ordered MCP chain"));
     }
 }

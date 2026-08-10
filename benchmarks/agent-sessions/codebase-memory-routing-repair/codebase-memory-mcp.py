@@ -367,7 +367,7 @@ for line in sys.stdin:
                     json.dumps(
                         identity
                         | {
-                            "callers": ["DeliveryRouter::worker_for"],
+                            "callers": ["DeliveryAttempt"],
                         },
                         sort_keys=True,
                     ),

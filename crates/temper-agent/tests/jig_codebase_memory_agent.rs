@@ -93,6 +93,9 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "use every successful targeted graph result as a decision",
         "checkpoint: consume it with the work-item requirements",
         "Do not mutate until consumed",
+        "A `Decision anchor` explicitly marks a bounded successful targeted",
+        "select from that provider result, not unrelated discovery",
+        "truncated or ambiguous output",
         "smallest semantic diff",
     ] {
         assert!(
@@ -128,7 +131,7 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     assert_eq!(memory_tools.len(), 1, "memory tool registered exactly once");
     let expected_description = format!(
         "{FAKE_MCP_DESCRIPTION_SENTINEL}\n\n\
-         Decision checkpoint: after a successful targeted result, consume it with the work-item requirements before choosing a dependent refinement, trace, or source read. Choose and invoke that dependent operation only in a later model turn; genuinely independent discovery remains parallel-safe.\n\n\
+         Decision checkpoint: a bounded successful targeted current-root result is followed by a `Decision anchor`. Use that provider result with the work-item requirements before choosing a dependent refinement, trace, or source read in a later model turn. The anchor is absent for unrelated discovery, failures, truncated or ambiguous output, and unavailable tools; genuinely independent discovery remains parallel-safe.\n\n\
          Workspace scoped: default project `acme/demo`; accepted `project`/`repo` aliases: acme/demo, demo, repo-1. Unknown aliases and filesystem paths are rejected.\n\n\
          Read-only wrapper around codebase-memory MCP tool `search_code`."
     );
@@ -150,13 +153,86 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     );
 }
 
+#[test]
+fn jig_agent_uses_conventional_discovery_when_codebase_memory_is_unavailable() {
+    let checkout = TempCheckout::new("jig-codebase-memory-unavailable-fallback");
+    checkout.init_git();
+    let fake = FakeLlm::start(Script::rule(move |view| match view.prior_tool_results {
+        0 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "read-fallback-source".to_string(),
+                name: "read".to_string(),
+                args: serde_json::json!({"path": "demo/README.md"}),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        1 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "write-fallback-result".to_string(),
+                name: "write".to_string(),
+                args: serde_json::json!({
+                    "path": "demo/FALLBACK.md",
+                    "content": "conventional discovery remained available\n"
+                }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        _ => Reply::text(
+            r#"{"summary":"Used conventional discovery after codebase memory was unavailable."}"#,
+        ),
+    }))
+    .expect("start fallback fake LLM");
+    let provider = ProviderConfig::new(
+        "jig-openai-compatible",
+        "jig-codebase-memory-unavailable-fallback",
+        "https://example.invalid/unused-production-url",
+        "sk-jig-test",
+    )
+    .with_base_url_override(fake.base_url());
+    let unavailable = AgentToolConfig {
+        codebase_memory: Some(CodebaseMemoryToolConfig {
+            mode: CodebaseMemoryMode::Auto,
+            command: "definitely-not-a-codebase-memory-provider".to_string(),
+            args: Vec::new(),
+            roles: vec!["engineer".to_string()],
+            index: CodebaseMemoryIndex::Off,
+            startup_timeout_secs: 1,
+            index_timeout_secs: 1,
+            retention: Default::default(),
+        }),
+    };
+    let context = workspace_context();
+    let cwd = checkout.path().to_path_buf();
+    let result = temper_agent_io::block_on_with(move |_cx, handle| async move {
+        run_coding_agent_native_with_tool_config(
+            handle,
+            &provider,
+            &context,
+            &cwd,
+            6,
+            None,
+            Some(&unavailable),
+        )
+        .await
+    })
+    .expect("auto-unavailable memory keeps conventional discovery available");
+
+    assert_eq!(result.verdict, None);
+    assert_eq!(
+        fs::read_to_string(checkout.repo_path().join("FALLBACK.md")).expect("fallback product"),
+        "conventional discovery remained available\n"
+    );
+}
+
 fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeLlm {
     FakeLlm::start(Script::rule(move |view| match view.prior_tool_results {
         0 => Reply {
             turns: vec![Turn::ToolCall {
                 id: "call_memory_search".to_string(),
                 name: "codebase_memory_search_code".to_string(),
-                args: serde_json::json!({ "query": "WidgetService" }),
+                args: serde_json::json!({ "query": "WidgetService", "pattern": "WidgetService" }),
             }],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
@@ -166,25 +242,55 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
                 message.role == "tool" && message.content.contains("FAKE_MCP_SEARCH_RESULT")
             });
             assert!(
-                saw_memory_result,
-                "fake LLM did not receive the codebase-memory MCP result"
+                saw_memory_result && view.messages.iter().any(|message| {
+                    message.role == "tool"
+                        && message.content.contains("[Decision anchor: This is a bounded successful targeted current-root result.")
+                }),
+                "fake LLM did not receive the anchored codebase-memory MCP result"
             );
             observed_memory_result.fetch_add(1, Ordering::SeqCst);
             Reply {
                 turns: vec![Turn::ToolCall {
-                    id: "call_write_memory_notes".to_string(),
-                    name: "write".to_string(),
-                    args: serde_json::json!({
-                        "path": "demo/MEMORY_NOTES.md",
-                        "content": "memory-guided notes\n"
-                    }),
+                    id: "call_trace_memory_caller".to_string(),
+                    name: "codebase_memory_trace_path".to_string(),
+                    args: serde_json::json!({ "function_name": "WidgetService" }),
                 }],
                 usage: Default::default(),
                 stop: StopReason::ToolCalls,
             }
         }
+        2 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_read_memory_implementation".to_string(),
+                name: "codebase_memory_get_code_snippet".to_string(),
+                args: serde_json::json!({ "qualified_name": "WidgetService" }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        3 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_read_memory_behavior".to_string(),
+                name: "codebase_memory_get_code_snippet".to_string(),
+                args: serde_json::json!({ "qualified_name": "WidgetService" }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        4 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_write_memory_notes".to_string(),
+                name: "write".to_string(),
+                args: serde_json::json!({
+                    "path": "demo/MEMORY_NOTES.md",
+                    "content": "memory-guided notes\n"
+                }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
         _ => Reply::text(
-            r#"{"summary":"Used codebase memory search result before writing MEMORY_NOTES.md."}"#,
+            r#"{"summary":"Consumed codebase memory source evidence before writing MEMORY_NOTES.md."}"#,
         ),
     }))
     .expect("start codebase-memory fake LLM")
@@ -199,7 +305,9 @@ import json
 import sys
 
 TOOLS = [
-    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "pattern": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
+    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["function_name"]}},
+    {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path"]}},
 ]
@@ -226,7 +334,7 @@ for line in sys.stdin:
         if name == "index_status":
             text = json.dumps({"project": args.get("project", ""), "status": "fresh"})
         else:
-            query = args.get("query", "")
+            query = args.get("query") or args.get("pattern") or args.get("function_name") or args.get("qualified_name") or ""
             text = "FAKE_MCP_SEARCH_RESULT for " + query
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}})
     else:

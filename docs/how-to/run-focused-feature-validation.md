@@ -32,6 +32,18 @@ agents. This is the only scenario execution topology.
 `cargo dev-scenario-run scenarios/<name>` is the sole manual live-run alias. It
 requires the path and never defaults to `basic-delivery`.
 
+## Provider-result anchor example
+
+Feature `ai/temper#991` resolves to the active
+`scenarios/provider-result-anchor` mapping on `agent/pr-for-feature-991`.
+Resolve and run it from the exact aggregate feature head with the supplied PR
+number and `git rev-parse HEAD`; do not substitute a default-branch scenario or
+reuse evidence from an earlier feature head. Its live Jig fixture mints opaque
+dependent values only after successful provider results, so the agent must
+consume a result-derived trace and complete current-root source evidence before
+the minimal repair. Durable evidence retains aggregate tool, ordering, binding,
+and typed-correlation facts only.
+
 ## Result-driven guidance example
 
 Feature `ai/temper#982` resolves to the active

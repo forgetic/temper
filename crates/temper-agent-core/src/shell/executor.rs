@@ -16,9 +16,9 @@ use tongs::tools::ToolRegistry;
 
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
-    CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, OperationGeneration,
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallStatus,
-    ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
+    CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
+    OperationGeneration, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
@@ -268,6 +268,7 @@ impl AgentShell {
         operation_generation: OperationGeneration,
         batch_generation: BatchGeneration,
         call: ToolCall,
+        mutation_blocked: bool,
     ) {
         let tools = Arc::clone(&self.tools);
         let events = Arc::clone(&self.events);
@@ -282,6 +283,7 @@ impl AgentShell {
                 &call,
                 timeout,
                 &cancellation,
+                mutation_blocked,
                 clock.as_ref(),
                 events.as_ref(),
             )
@@ -329,7 +331,13 @@ impl Executor<AgentMachine> for AgentShell {
                 operation_generation,
                 batch_generation,
                 call,
-            } => self.execute_run_tool(operation_generation, batch_generation, call),
+                mutation_blocked,
+            } => self.execute_run_tool(
+                operation_generation,
+                batch_generation,
+                call,
+                mutation_blocked,
+            ),
             AgentRequest::CancelActive {
                 operation_generation,
                 batch_generation,
@@ -357,11 +365,17 @@ async fn execute_tool(
     call: &ToolCall,
     timeout: Duration,
     cancellation: &CancellationToken,
+    mutation_blocked: bool,
     clock: &dyn EventClock,
     events: &dyn EventSink,
 ) -> Option<tongs::tools::ToolOutput> {
     let started_ms = clock.now_millis();
     let operation = async {
+        if mutation_blocked {
+            return ToolExecution::Finished(tool_error_output(
+                DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
+            ));
+        }
         match tools.get(&call.name) {
             Some(tool) => match temper_agent_io::timeout(
                 timeout,

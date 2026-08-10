@@ -1,4 +1,6 @@
+use super::result_presentation::{decision_anchor_evidence, present_result};
 use super::*;
+use temper_agent_core::SAFE_DECISION_ANCHOR_DETAIL_KEY;
 use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
 };
@@ -207,18 +209,19 @@ impl Tool for CodebaseMemoryTool {
             graph_execution_ms: duration_ms(graph_started.elapsed()),
             duration_ms: budget.elapsed_ms(),
         };
-        let bounded = bound_text(&result.text, MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
         if result.is_error {
+            let bounded = present_result(&result.text, None);
             let category = classify_provider_failure(&bounded.text);
             return Ok(self.failed_output(&mcp_project, category, timings));
         }
+        let presented = present_result(&result.text, graph_correlation.as_ref());
 
         emit_mcp_tool_result(McpToolResult {
             tool_name: &self.public_name,
             mcp_tool: &self.mcp_name,
             mcp_project: &mcp_project,
             is_error: false,
-            truncated: bounded.truncated,
+            truncated: presented.truncated,
             result_preview: "<result omitted>",
             readiness_wait_ms: timings.readiness_wait_ms,
             graph_execution_ms: timings.graph_execution_ms,
@@ -227,7 +230,7 @@ impl Tool for CodebaseMemoryTool {
         });
         let mut details = json!({
             "mcp_tool": self.mcp_name,
-            "truncated": bounded.truncated,
+            "truncated": presented.truncated,
             "workspace_scope": self.scope.details_json(),
             "timing": {
                 "readiness_wait_ms": timings.readiness_wait_ms,
@@ -239,9 +242,14 @@ impl Tool for CodebaseMemoryTool {
             details[SAFE_GRAPH_CORRELATION_DETAIL_KEY] =
                 serde_json::to_value(correlation).expect("graph correlation serializes");
         }
+        if presented.decision_anchor {
+            details[SAFE_DECISION_ANCHOR_DETAIL_KEY] =
+                serde_json::to_value(decision_anchor_evidence(&presented.provider_text))
+                    .expect("decision anchor evidence serializes");
+        }
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {
-                text: bounded.text,
+                text: presented.text,
                 text_signature: None,
             })],
             details: Some(details),
@@ -290,11 +298,6 @@ fn readiness_budget(remaining: Duration) -> Option<Duration> {
     let margin = (remaining / 100).min(Duration::from_millis(2));
     let budget = remaining.saturating_sub(margin);
     (!budget.is_zero()).then_some(budget)
-}
-
-struct BoundedText {
-    text: String,
-    truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -432,28 +435,6 @@ pub(super) fn classify_provider_failure(message: &str) -> ToolFailureCategory {
         ToolFailureCategory::InvalidModelInput
     } else {
         ToolFailureCategory::ProviderProtocol
-    }
-}
-
-fn bound_text(input: &str, max_bytes: usize) -> BoundedText {
-    if input.len() <= max_bytes {
-        return BoundedText {
-            text: input.to_string(),
-            truncated: false,
-        };
-    }
-
-    let notice = format!("\n[codebase-memory output truncated to {max_bytes} bytes]");
-    let content_budget = max_bytes.saturating_sub(notice.len());
-    let mut end = content_budget.min(input.len());
-    while end > 0 && !input.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut text = input[..end].to_string();
-    text.push_str(&notice);
-    BoundedText {
-        text,
-        truncated: true,
     }
 }
 

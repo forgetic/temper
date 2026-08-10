@@ -14,7 +14,6 @@ use temper_forge_model::{
     RepositoryId, UserId,
 };
 use temper_workflow::{CiStatus, parse_metadata_block};
-use toml::Value as TomlValue;
 
 use super::convergence::{
     ci_observation_evidence, completed_ci_observation, issue_evidence, poll_until, pr_evidence,
@@ -22,13 +21,17 @@ use super::convergence::{
 };
 use super::{
     ENGINEER, FinalStateEvidence, ForcedSystemicFailureFixture, LiveCodebaseMemoryEvidence,
+    LivePrivacySafeCodebaseMemoryBindingEvidence,
 };
 
+mod configuration;
 mod graph_consumption;
+mod provider_result_anchor;
 mod result_driven_fake;
 mod result_driven_guidance;
 mod sequential_graph_evidence;
 mod stable_rebind;
+pub(super) use configuration::{ToolConfiguration, tune_codebase_memory_config};
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
 const MEMORY_FILE: &str = "src/lib.rs";
@@ -65,9 +68,30 @@ pub(super) fn converge(
         .get("search_graph")
         .copied()
         .unwrap_or_default();
+    let privacy_safe_aggregate = mcp.lifecycle_profile.as_deref() == Some("provider-result-anchor");
+    let stable_rebind = stable_rebind_evidence(mcp, &calls)?;
+    let privacy_safe_binding = privacy_safe_aggregate
+        .then(|| {
+            stable_rebind
+                .as_ref()
+                .map(|binding| LivePrivacySafeCodebaseMemoryBindingEvidence {
+                    confirmation_call_count: binding.confirmation_call_count,
+                    targeted_ready_confirmation: binding.targeted_ready_confirmation,
+                    current_root_rebound: binding.current_root_rebound,
+                    graph_reads_use_confirmed_project: binding.graph_reads_use_confirmed_project,
+                    source_reads_use_confirmed_project: binding.source_reads_use_confirmed_project,
+                    source_served_from_current_root: binding.source_served_from_current_root,
+                    global_inventory_avoided: binding.global_inventory_avoided,
+                })
+        })
+        .flatten();
     let expected_result = if matches!(
         mcp.lifecycle_profile.as_deref(),
-        Some("sequential-graph-evidence" | "result-driven-decision-guidance")
+        Some(
+            "sequential-graph-evidence"
+                | "result-driven-decision-guidance"
+                | "provider-result-anchor"
+        )
     ) {
         "one successful provider-shaped graph result".to_string()
     } else {
@@ -76,12 +100,12 @@ pub(super) fn converge(
     Ok((
         final_state,
         LiveCodebaseMemoryEvidence {
-            produced_file: MEMORY_FILE.to_string(),
-            expected_result,
+            produced_file: (!privacy_safe_aggregate).then(|| MEMORY_FILE.to_string()),
+            expected_result: (!privacy_safe_aggregate).then_some(expected_result),
             fake_mcp_log: mcp.log_path.clone(),
             mcp_search_calls,
             mcp_call_counts: mcp_call_counts.into_iter().collect(),
-            readiness_delay_ms: mcp.readiness_delay_ms,
+            readiness_delay_ms: (!privacy_safe_aggregate).then_some(mcp.readiness_delay_ms),
             forced_failure_tool: mcp
                 .forced_systemic_failure
                 .as_ref()
@@ -97,7 +121,8 @@ pub(super) fn converge(
                 .map(|tool| format!("codebase_memory_{tool}"))
                 .collect(),
             lifecycle: mcp.lifecycle_profile.clone(),
-            stable_rebind: stable_rebind_evidence(mcp, &calls)?,
+            stable_rebind: (!privacy_safe_aggregate).then_some(stable_rebind).flatten(),
+            privacy_safe_binding,
         },
     ))
 }
@@ -319,117 +344,6 @@ fn verify_metadata(pr: &PullRequest, issue: ItemNumber) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) struct ToolConfiguration {
-    pub(super) role: String,
-    pub(super) tool: String,
-    pub(super) mode: String,
-    pub(super) index: String,
-    pub(super) tool_timeout_secs: Option<u64>,
-}
-
-pub(super) fn tune_codebase_memory_config(
-    config_path: &Path,
-    fake_mcp: &FakeMcpServer,
-    configuration: &ToolConfiguration,
-) -> Result<(), String> {
-    let text = fs::read_to_string(config_path)
-        .map_err(|error| format!("read {}: {error}", config_path.display()))?;
-    let mut doc: TomlValue = text
-        .parse()
-        .map_err(|error| format!("parse {} as TOML: {error}", config_path.display()))?;
-    let root = doc
-        .as_table_mut()
-        .ok_or_else(|| "config.toml root must be a table".to_string())?;
-    let agent = root
-        .entry("agent".to_string())
-        .or_insert_with(|| TomlValue::Table(Default::default()))
-        .as_table_mut()
-        .ok_or_else(|| "config.toml [agent] must be a table".to_string())?;
-    if let Some(timeout) = configuration.tool_timeout_secs {
-        let deadlines = agent
-            .entry("deadlines".to_string())
-            .or_insert_with(|| TomlValue::Table(Default::default()))
-            .as_table_mut()
-            .ok_or_else(|| "config.toml [agent.deadlines] must be a table".to_string())?;
-        deadlines.insert(
-            "tool_timeout_secs".to_string(),
-            TomlValue::Integer(i64::try_from(timeout).expect("bounded timeout fits i64")),
-        );
-    }
-    let tools = agent
-        .entry("tools".to_string())
-        .or_insert_with(|| TomlValue::Table(Default::default()))
-        .as_table_mut()
-        .ok_or_else(|| "config.toml [agent.tools] must be a table".to_string())?;
-    let mut codebase = toml::map::Map::new();
-    codebase.insert(
-        "mode".to_string(),
-        TomlValue::String(configuration.mode.clone()),
-    );
-    codebase.insert(
-        "command".to_string(),
-        TomlValue::String("python3".to_string()),
-    );
-    codebase.insert(
-        "args".to_string(),
-        TomlValue::Array(vec![
-            TomlValue::String("-u".to_string()),
-            TomlValue::String(fake_mcp.script_path.display().to_string()),
-            TomlValue::String(fake_mcp.log_path.display().to_string()),
-            TomlValue::String("demo".to_string()),
-            TomlValue::String(fake_mcp.project.clone()),
-            TomlValue::String(
-                serde_json::to_string(&fake_mcp.safe_tools)
-                    .map_err(|error| format!("serialize declared safe MCP tools: {error}"))?,
-            ),
-            TomlValue::String(
-                serde_json::to_string(&fake_mcp.hidden_tools)
-                    .map_err(|error| format!("serialize declared hidden MCP tools: {error}"))?,
-            ),
-            TomlValue::String(fake_mcp.readiness_delay_ms.to_string()),
-            TomlValue::String(
-                fake_mcp
-                    .forced_systemic_failure
-                    .as_ref()
-                    .map(|failure| failure.tool.as_str())
-                    .unwrap_or("-")
-                    .to_string(),
-            ),
-            TomlValue::String(
-                fake_mcp
-                    .forced_systemic_failure
-                    .as_ref()
-                    .map(|failure| failure.after_calls)
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
-            TomlValue::String(
-                fake_mcp
-                    .lifecycle_profile
-                    .as_deref()
-                    .unwrap_or("")
-                    .to_string(),
-            ),
-        ]),
-    );
-    codebase.insert(
-        "roles".to_string(),
-        TomlValue::Array(vec![TomlValue::String(configuration.role.clone())]),
-    );
-    codebase.insert(
-        "index".to_string(),
-        TomlValue::String(configuration.index.clone()),
-    );
-    codebase.insert("startup_timeout_secs".to_string(), TomlValue::Integer(2));
-    codebase.insert("index_timeout_secs".to_string(), TomlValue::Integer(3));
-    tools.insert(configuration.tool.clone(), TomlValue::Table(codebase));
-    fs::write(
-        config_path,
-        toml::to_string_pretty(&doc).map_err(|error| format!("serialize tuned config: {error}"))?,
-    )
-    .map_err(|error| format!("write tuned config {}: {error}", config_path.display()))
-}
-
 pub(super) struct FakeMcpServer {
     pub(super) script_path: PathBuf,
     pub(super) log_path: PathBuf,
@@ -553,7 +467,10 @@ impl CodebaseMemoryFake {
         let request_count = Arc::clone(&engineer_requests);
         let observations = Arc::new(Mutex::new(ModelObservations::default()));
         let observations_for_rule = Arc::clone(&observations);
-        let fake = if lifecycle_profile == Some("result-driven-decision-guidance") {
+        let fake = if matches!(
+            lifecycle_profile,
+            Some("result-driven-decision-guidance" | "provider-result-anchor")
+        ) {
             result_driven_fake::start(request_count, observations_for_rule)?
         } else {
             FakeLlm::start(Script::rule(move |view| {
@@ -679,6 +596,7 @@ impl CodebaseMemoryFake {
                     "graph-consumption"
                         | "sequential-graph-evidence"
                         | "result-driven-decision-guidance"
+                        | "provider-result-anchor"
                 )
             )
         {
@@ -699,6 +617,7 @@ impl CodebaseMemoryFake {
                 "graph-consumption"
                     | "sequential-graph-evidence"
                     | "result-driven-decision-guidance"
+                    | "provider-result-anchor"
             )
         ) && (!code_refinement_seen || !graph_trace_seen || current_root_source_results < 2)
         {
@@ -778,7 +697,10 @@ fn messages_contain(view: &RequestView, needle: &str) -> bool {
 }
 
 fn is_current_root_source_result(content: &str) -> bool {
-    let Ok(result) = serde_json::from_str::<JsonValue>(content) else {
+    let provider_result = content
+        .split_once("\n\n[Decision anchor:")
+        .map_or(content, |(result, _)| result);
+    let Ok(result) = serde_json::from_str::<JsonValue>(provider_result) else {
         return false;
     };
     result.get("binding").and_then(JsonValue::as_str) == Some(CURRENT_ROOT_SOURCE_BINDING)
@@ -815,6 +737,11 @@ mod tests {
     fn recognizes_structured_current_root_source_results() {
         assert!(is_current_root_source_result(
             r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","source":"<fixture source>","binding":"current_prepared_checkout"}"#
+        ));
+        assert!(is_current_root_source_result(
+            r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","source":"<fixture source>","binding":"current_prepared_checkout"}
+
+[Decision anchor: generic guidance]"#
         ));
     }
 
