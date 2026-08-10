@@ -50,6 +50,13 @@ pub struct DecisionRun {
 
 static DECISION_CHAIN_RUN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+fn provider_result(text: &str) -> Option<serde_json::Value> {
+    let result = text
+        .split_once("\n\n[Decision anchor:")
+        .map_or(text, |(result, _)| result);
+    serde_json::from_str(result).ok()
+}
+
 pub fn run(case: DecisionCase) -> DecisionRun {
     let _serial = DECISION_CHAIN_RUN_LOCK
         .get_or_init(|| Mutex::new(()))
@@ -115,8 +122,7 @@ fn decision_chain_fake(
                         return None;
                     }
                     let pointer = format!("/results/0/{field}");
-                    serde_json::from_str::<serde_json::Value>(&message.content)
-                        .ok()?
+                    provider_result(&message.content)?
                         .pointer(&pointer)
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
@@ -128,8 +134,7 @@ fn decision_chain_fake(
                 .iter()
                 .filter(|message| {
                     message.role == "tool"
-                        && serde_json::from_str::<serde_json::Value>(&message.content)
-                            .ok()
+                        && provider_result(&message.content)
                             .is_some_and(|value| value.get("results").is_some())
                 })
                 .count()

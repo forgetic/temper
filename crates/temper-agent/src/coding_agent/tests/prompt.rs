@@ -68,6 +68,9 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "consume it with the work-item requirements before selecting a dependent refinement, trace, or source read",
         "Select and invoke that dependent operation only in a later model turn",
         "Keep genuinely independent discovery parallel",
+        "A `Decision anchor` explicitly marks a bounded successful targeted current-root result",
+        "select from that provider result, not unrelated discovery",
+        "absent for failures, unavailable tools, and truncated or ambiguous output",
         "do not issue producer and consumer calls in the same turn or batch",
         "Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused behavioral tests",
         "smallest semantic diff",
@@ -119,6 +122,7 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "smallest semantic diff",
         "producer and consumer calls",
         "explanatory comments unless the task",
+        "Decision anchor",
     ];
     for prompt in [
         system_prompt(Capability::TriageWorkspace, &[]),

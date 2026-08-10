@@ -37,6 +37,7 @@ mod health;
 mod indexing;
 mod lifecycle_observability;
 mod provider;
+mod result_presentation;
 mod scope;
 mod tool;
 mod tool_schema;

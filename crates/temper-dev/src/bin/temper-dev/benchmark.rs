@@ -109,13 +109,21 @@ pub(super) fn trace_has_confirmed_graph_read(trace: &str) -> bool {
 
 fn value_has_confirmed_graph_read(value: &Value) -> bool {
     match value {
-        Value::String(text) => serde_json::from_str::<Value>(text)
-            .ok()
-            .is_some_and(|payload| confirmed_graph_read_payload(&payload)),
+        Value::String(text) => {
+            provider_payload(text).is_some_and(|payload| confirmed_graph_read_payload(&payload))
+        }
         Value::Array(values) => values.iter().any(value_has_confirmed_graph_read),
         Value::Object(values) => values.values().any(value_has_confirmed_graph_read),
         _ => false,
     }
+}
+
+fn provider_payload(text: &str) -> Option<Value> {
+    let mut values = serde_json::Deserializer::from_str(text).into_iter::<Value>();
+    let payload = values.next()?.ok()?;
+    let suffix = text.get(values.byte_offset()..)?.trim();
+    (suffix.is_empty() || (suffix.starts_with("[Decision anchor:") && suffix.ends_with(']')))
+        .then_some(payload)
 }
 
 fn confirmed_graph_read_payload(payload: &Value) -> bool {
@@ -140,8 +148,7 @@ pub(super) fn trace_has_confirmed_current_root_source(trace: &str, symbol: &str)
 
 fn value_has_confirmed_current_root_source(value: &Value, symbol: &str) -> bool {
     match value {
-        Value::String(text) => serde_json::from_str::<Value>(text)
-            .ok()
+        Value::String(text) => provider_payload(text)
             .is_some_and(|payload| confirmed_current_root_source_payload(&payload, symbol)),
         Value::Array(values) => values
             .iter()
@@ -150,6 +157,24 @@ fn value_has_confirmed_current_root_source(value: &Value, symbol: &str) -> bool 
             .values()
             .any(|value| value_has_confirmed_current_root_source(value, symbol)),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_payload;
+
+    #[test]
+    fn provider_payload_accepts_only_plain_or_decision_anchored_json() {
+        let payload = r#"{"project_route":"confirmed_identity"}"#;
+        assert!(provider_payload(payload).is_some());
+        assert!(
+            provider_payload(&format!(
+                "{payload}\n\n[Decision anchor: bounded successful result.]"
+            ))
+            .is_some()
+        );
+        assert!(provider_payload(&format!("{payload}\nnot an anchor")).is_none());
     }
 }
 
