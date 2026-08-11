@@ -31,6 +31,8 @@ mod result_driven_fake;
 mod result_driven_guidance;
 mod sequential_graph_evidence;
 mod stable_rebind;
+mod typed_lineage_anchor;
+mod typed_lineage_fake;
 pub(super) use configuration::{ToolConfiguration, tune_codebase_memory_config};
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
@@ -39,6 +41,8 @@ const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_GRAPH_RESULT";
 const CURRENT_ROOT_SOURCE_BINDING: &str = "current_prepared_checkout";
 const ENGINEER_SUMMARY: &str =
     "Used codebase-memory graph evidence, then validated the retry-worker repair.";
+const PROVIDER_NEUTRAL_ENGINEER_SUMMARY: &str =
+    "Consumed provider-neutral typed current-root lineage before the minimal repair.";
 const RAW_PROVIDER_FAILURE_NEEDLE: &str = "MCP-FIXTURE-SECRET";
 const SAFE_PROVIDER_FAILURE: &str = "codebase-memory provider or protocol request failed; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
 const BOUNDED_GRAPH_RESULT_NEEDLE: &str = "[codebase-memory output truncated to 16384 bytes]";
@@ -68,7 +72,10 @@ pub(super) fn converge(
         .get("search_graph")
         .copied()
         .unwrap_or_default();
-    let privacy_safe_aggregate = mcp.lifecycle_profile.as_deref() == Some("provider-result-anchor");
+    let privacy_safe_aggregate = matches!(
+        mcp.lifecycle_profile.as_deref(),
+        Some("provider-result-anchor" | "provider-neutral-anchor-lineage")
+    );
     let stable_rebind = stable_rebind_evidence(mcp, &calls)?;
     let privacy_safe_binding = privacy_safe_aggregate
         .then(|| {
@@ -91,6 +98,7 @@ pub(super) fn converge(
             "sequential-graph-evidence"
                 | "result-driven-decision-guidance"
                 | "provider-result-anchor"
+                | "provider-neutral-anchor-lineage"
         )
     ) {
         "one successful provider-shaped graph result".to_string()
@@ -207,10 +215,10 @@ async fn assert_pr_open_with_memory_diff(
 }
 
 fn assert_pr_body_contains_engineer_summary(pr: &PullRequest) -> Result<(), String> {
-    if !pr.body.contains(ENGINEER_SUMMARY) {
+    if !pr.body.contains(ENGINEER_SUMMARY) && !pr.body.contains(PROVIDER_NEUTRAL_ENGINEER_SUMMARY) {
         return Err(format!(
-            "implementation PR body does not contain engineer summary {:?}:\n{}",
-            ENGINEER_SUMMARY, pr.body
+            "implementation PR body does not contain an approved engineer summary:\n{}",
+            pr.body
         ));
     }
     Ok(())
@@ -472,6 +480,8 @@ impl CodebaseMemoryFake {
             Some("result-driven-decision-guidance" | "provider-result-anchor")
         ) {
             result_driven_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("provider-neutral-anchor-lineage") {
+            typed_lineage_fake::start(request_count, observations_for_rule)?
         } else {
             FakeLlm::start(Script::rule(move |view| {
                 if !messages_contain(view, "ROLE: engineer") {
@@ -597,6 +607,7 @@ impl CodebaseMemoryFake {
                         | "sequential-graph-evidence"
                         | "result-driven-decision-guidance"
                         | "provider-result-anchor"
+                        | "provider-neutral-anchor-lineage"
                 )
             )
         {
@@ -618,15 +629,25 @@ impl CodebaseMemoryFake {
                     | "sequential-graph-evidence"
                     | "result-driven-decision-guidance"
                     | "provider-result-anchor"
+                    | "provider-neutral-anchor-lineage"
             )
-        ) && (!code_refinement_seen || !graph_trace_seen || current_root_source_results < 2)
+        ) && !(graph_trace_seen
+            && current_root_source_results >= 2
+            && (mcp.lifecycle_profile.as_deref() == Some("provider-neutral-anchor-lineage")
+                || code_refinement_seen))
         {
             return Err(format!(
                 "fake LLM did not consume the complete graph-to-graph/current-root source chain\n{}",
                 self.log_tail()
             ));
         }
-        if self.engineer_requests() < 9 {
+        let minimum_requests =
+            if mcp.lifecycle_profile.as_deref() == Some("provider-neutral-anchor-lineage") {
+                8
+            } else {
+                9
+            };
+        if self.engineer_requests() < minimum_requests {
             return Err(format!(
                 "fake LLM did not complete the codebase-memory validation loop\n{}",
                 self.log_tail()
@@ -703,15 +724,11 @@ fn is_current_root_source_result(content: &str) -> bool {
     let Ok(result) = serde_json::from_str::<JsonValue>(provider_result) else {
         return false;
     };
+    let selected_source = ["qualified_name", "qualifiedName", "functionName"]
+        .iter()
+        .any(|field| result.get(field).and_then(JsonValue::as_str).is_some());
     result.get("binding").and_then(JsonValue::as_str) == Some(CURRENT_ROOT_SOURCE_BINDING)
-        && result
-            .get("qualified_name")
-            .and_then(JsonValue::as_str)
-            .is_some()
-        && result
-            .get("file_path")
-            .and_then(JsonValue::as_str)
-            .is_some()
+        && selected_source
         && result.get("source").and_then(JsonValue::as_str).is_some()
 }
 
@@ -753,6 +770,16 @@ mod tests {
         ));
         assert!(!is_current_root_source_result(
             r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","source":"<fixture source>","binding":"unconfirmed"}"#
+        ));
+    }
+
+    #[test]
+    fn recognizes_privacy_safe_typed_lineage_source_results_without_a_path() {
+        assert!(is_current_root_source_result(
+            r#"{"qualifiedName":"crate::fixture::selection","source":"<fixture source>","binding":"current_prepared_checkout"}"#
+        ));
+        assert!(is_current_root_source_result(
+            r#"{"functionName":"selection","source":"<fixture source>","binding":"current_prepared_checkout"}"#
         ));
     }
 }

@@ -28,7 +28,7 @@ runner:
   `implementation-pr-handoff`, `codebase-memory-agent`,
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
   `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
-  `model-failure-recovery`, `plan-centric-feature-branch`,
+  `provider-neutral-anchor-lineage`, `model-failure-recovery`, `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
   `runner.uses = "manifest"`. Every run boots real Forgejo, a host
@@ -181,6 +181,21 @@ and aggregate evidence retain only safe aggregate tool, ordering, binding, and
 typed-correlation facts; provider payloads, targets, source paths, digests,
 prompts, and credentials remain ephemeral. This mapping leaves the historical
 `#962` and active `#973`/`#982` relevance rules unchanged.
+
+### Provider-neutral anchor lineage mapping
+
+`provider-neutral-anchor-lineage` is the sole active mapping for
+`ai/temper#1000` and `ai/temper#1001` on `agent/pr-for-feature-1000`. Its
+provider-shaped fixture accepts a later approved transformed typed
+representation rather than requiring exact token reuse, then requires the
+current-root trace plus implementation and focused-test source evidence before
+the minimal repair. It rejects unrelated targets, producer-turn use,
+malformed/cross-root lineage, incomplete evidence, bounded recovery exhaustion,
+and unavailable/systemic fallback as mutation authority. Checked-in declarations
+and aggregate evidence retain only privacy-safe binding, ordering, correlation,
+and lineage type facts; transient provider/model values, targets, source paths,
+digests, traces, credentials, and runtime logs remain ephemeral. This mapping
+does not change the historical `#991` mapping.
 
 ### Structured run evidence
 

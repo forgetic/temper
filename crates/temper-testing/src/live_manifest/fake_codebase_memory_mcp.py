@@ -16,9 +16,14 @@ LIFECYCLE_PROFILE = sys.argv[9]
 STATE_PATH = LOG_PATH + ".state.json"
 SEQUENTIAL_STAGE = 0
 RESULT_DRIVEN_STAGE = 0
+TYPED_LINEAGE_STAGE = 0
 RESULT_DRIVEN_TOKENS = {
     name: "opaque-" + uuid.uuid4().hex
     for name in ["root", "refinement", "trace", "implementation", "behavioral_test"]
+}
+TYPED_LINEAGE_TOKENS = {
+    "root": "crate::fixture::anchor_" + uuid.uuid4().hex,
+    "behavioral_test": "crate::fixture::anchor_" + uuid.uuid4().hex + "_behavior",
 }
 GRAPH_CALLS = 0
 
@@ -149,6 +154,14 @@ def ensure_result_driven_tokens():
     save_state(state)
 
 
+def ensure_typed_lineage_tokens():
+    if not is_typed_lineage_profile():
+        return
+    state = load_state()
+    state["typed_lineage_tokens"] = TYPED_LINEAGE_TOKENS
+    save_state(state)
+
+
 def result_driven_step(expected_stage, expected_token, actual_token):
     global RESULT_DRIVEN_STAGE
     if not is_result_driven_guidance_profile():
@@ -157,6 +170,20 @@ def result_driven_step(expected_stage, expected_token, actual_token):
         return False
     RESULT_DRIVEN_STAGE += 1
     return True
+
+
+def typed_lineage_step(expected_stage, expected_value, actual_value):
+    global TYPED_LINEAGE_STAGE
+    if not is_typed_lineage_profile():
+        return True
+    if TYPED_LINEAGE_STAGE != expected_stage or actual_value != expected_value:
+        return False
+    TYPED_LINEAGE_STAGE += 1
+    return True
+
+
+def terminal_function_name(qualified_name):
+    return qualified_name.rsplit("::", 1)[-1]
 
 
 def normalized_provider_project(project):
@@ -222,11 +249,16 @@ def has_current_root_profile():
         "sequential-graph-evidence",
         "result-driven-decision-guidance",
         "provider-result-anchor",
+        "provider-neutral-anchor-lineage",
     )
 
 
 def is_result_driven_guidance_profile():
     return LIFECYCLE_PROFILE in ("result-driven-decision-guidance", "provider-result-anchor")
+
+
+def is_typed_lineage_profile():
+    return LIFECYCLE_PROFILE == "provider-neutral-anchor-lineage"
 
 
 def is_sequential_graph_evidence_profile():
@@ -264,6 +296,7 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
         ensure_result_driven_tokens()
+        ensure_typed_lineage_tokens()
         params = request.get("params") or {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -306,6 +339,43 @@ for line in sys.stdin:
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
+            if is_typed_lineage_profile():
+                source_stage = {
+                    TYPED_LINEAGE_TOKENS["root"]: (2, "src/lib.rs"),
+                    TYPED_LINEAGE_TOKENS["behavioral_test"]: (3, "tests/dispatch_behavior.rs"),
+                }.get(qualified_name)
+                source = (
+                    current_root_source(project, source_stage[1])
+                    if source_stage is not None
+                    and typed_lineage_step(source_stage[0], qualified_name, qualified_name)
+                    else None
+                )
+                if source is None:
+                    log_tool(name, arguments, is_error=True)
+                    result = text_result("bound source unavailable", True)
+                else:
+                    payload = {
+                        "source": source,
+                        "binding": "current_prepared_checkout",
+                    }
+                    if source_stage[0] == 2:
+                        payload.update({
+                            "qualifiedName": qualified_name,
+                            "implementation_source": qualified_name,
+                            "next": TYPED_LINEAGE_TOKENS["behavioral_test"],
+                            "next_target": {
+                                "qualifiedName": TYPED_LINEAGE_TOKENS["behavioral_test"],
+                            },
+                        })
+                    else:
+                        payload.update({
+                            "functionName": terminal_function_name(qualified_name),
+                            "behavioral_test": terminal_function_name(qualified_name),
+                        })
+                    log_tool(name, arguments, fixture_event="served_typed_lineage_consumer")
+                    result = text_result(json.dumps(payload))
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_result_driven_guidance_profile():
                 source_stage = {
                     RESULT_DRIVEN_TOKENS["implementation"]: (3, "implementation", "src/lib.rs"),
@@ -423,6 +493,30 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "trace_path":
+            if is_typed_lineage_profile():
+                project = arguments.get("project", "")
+                expected = terminal_function_name(TYPED_LINEAGE_TOKENS["root"])
+                successful = (
+                    current_root_source(project, "src/lib.rs") is not None
+                    and typed_lineage_step(1, expected, arguments.get("function_name", ""))
+                )
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_typed_lineage_consumer" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps({
+                        "marker": "TYPED_LINEAGE_TRACE_RESULT",
+                        "qualified_name": TYPED_LINEAGE_TOKENS["root"],
+                        "caller_model": expected,
+                    }))
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_result_driven_guidance_profile():
                 project = arguments.get("project", "")
                 successful = (
@@ -472,6 +566,29 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "search_graph":
+            if is_typed_lineage_profile():
+                project = arguments.get("project", "")
+                successful = (
+                    current_root_source(project, "src/lib.rs") is not None
+                    and typed_lineage_step(0, TYPED_LINEAGE_TOKENS["root"], TYPED_LINEAGE_TOKENS["root"])
+                )
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_typed_lineage_producer" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps({
+                        "marker": "TYPED_LINEAGE_GRAPH_RESULT",
+                        "current_root": TYPED_LINEAGE_TOKENS["root"],
+                        "qualifiedName": TYPED_LINEAGE_TOKENS["root"],
+                    }))
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_result_driven_guidance_profile():
                 project = arguments.get("project", "")
                 successful = (
