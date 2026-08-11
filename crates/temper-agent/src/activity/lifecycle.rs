@@ -357,7 +357,9 @@ fn agent_status(stop: AgentStop) -> AgentLifecycleAgentStatusV1 {
     match stop {
         AgentStop::Completed => AgentLifecycleAgentStatusV1::Succeeded,
         AgentStop::Aborted => AgentLifecycleAgentStatusV1::Cancelled,
-        AgentStop::ModelError | AgentStop::BudgetExhausted => AgentLifecycleAgentStatusV1::Failed,
+        AgentStop::ModelError
+        | AgentStop::BudgetExhausted
+        | AgentStop::DecisionAnchorRecoveryExhausted => AgentLifecycleAgentStatusV1::Failed,
     }
 }
 

@@ -242,10 +242,11 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
                 message.role == "tool" && message.content.contains("FAKE_MCP_SEARCH_RESULT")
             });
             assert!(
-                saw_memory_result && view.messages.iter().any(|message| {
-                    message.role == "tool"
-                        && message.content.contains("[Decision anchor: This is a bounded successful targeted current-root result.")
-                }),
+                saw_memory_result
+                    && view.messages.iter().any(|message| {
+                        message.role == "tool"
+                            && message.content.contains("[Decision anchor: This is a bounded successful targeted current-root result.")
+                    }),
                 "fake LLM did not receive the anchored codebase-memory MCP result"
             );
             observed_memory_result.fetch_add(1, Ordering::SeqCst);
@@ -253,7 +254,7 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
                 turns: vec![Turn::ToolCall {
                     id: "call_trace_memory_caller".to_string(),
                     name: "codebase_memory_trace_path".to_string(),
-                    args: serde_json::json!({ "function_name": "WidgetService" }),
+                    args: serde_json::json!({ "function_name": "crate::WidgetService" }),
                 }],
                 usage: Default::default(),
                 stop: StopReason::ToolCalls,
@@ -263,7 +264,7 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
             turns: vec![Turn::ToolCall {
                 id: "call_read_memory_implementation".to_string(),
                 name: "codebase_memory_get_code_snippet".to_string(),
-                args: serde_json::json!({ "qualified_name": "WidgetService" }),
+                args: serde_json::json!({ "qualified_name": "crate::WidgetService" }),
             }],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
@@ -272,7 +273,7 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
             turns: vec![Turn::ToolCall {
                 id: "call_read_memory_behavior".to_string(),
                 name: "codebase_memory_get_code_snippet".to_string(),
-                args: serde_json::json!({ "qualified_name": "WidgetService" }),
+                args: serde_json::json!({ "qualified_name": "crate::WidgetService" }),
             }],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
@@ -334,8 +335,7 @@ for line in sys.stdin:
         if name == "index_status":
             text = json.dumps({"project": args.get("project", ""), "status": "fresh"})
         else:
-            query = args.get("query") or args.get("pattern") or args.get("function_name") or args.get("qualified_name") or ""
-            text = "FAKE_MCP_SEARCH_RESULT for " + query
+            text = json.dumps({"results": [{"qualified_name": "crate::WidgetService", "summary": "FAKE_MCP_SEARCH_RESULT"}]})
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})

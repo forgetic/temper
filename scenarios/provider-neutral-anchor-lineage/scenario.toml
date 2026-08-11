@@ -1,0 +1,291 @@
+schema = "temper.scenario.v1"
+name = "provider-neutral-anchor-lineage"
+status = "active"
+intent = "Validate provider-neutral typed decision-anchor lineage before one live minimal repair."
+introduced_by = "#1004"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[runner]
+uses = "manifest"
+
+[validation]
+feature = "ai/temper#1000"
+plan = "ai/temper#1001"
+source_branch = "agent/pr-for-feature-1000"
+change = "new"
+
+[feature_contract]
+claim = "A successful targeted provider result can authorize later current-root graph evidence through an approved typed transformation, never conventional or unrelated substitution."
+stimulus = "Run one engineer repair through real Forgejo, a host Actions runner, standalone Temper, and a Jig-driven current-root fixture whose later dependent calls use transient provider-neutral typed representations."
+observable = "Privacy-safe aggregate tool ordering, current-root binding, complete correlation and lineage type facts, focused host validation, minimal repair, and Forgejo/Actions/Temper convergence."
+assertion = "The live agent transforms a successful qualified provider selection into its approved later function representation, then consumes current-root caller/model, implementation, and focused-test evidence before mutation; malformed, cross-root, producer-turn, unrelated, incomplete, exhausted-recovery, and unavailable/systemic paths remain denied or safely fall back without durable sensitive data."
+runtime_budget_seconds = 600
+jig_script_path = "jig/provider-neutral-anchor-lineage.json"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[live_harness]
+ci_poll_cadence = "1s"
+poll_cadence = "1s"
+mechanical_cadence = "1s"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "codebase-memory-agent"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/demo"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Require provider-neutral typed lineage before one focused repair"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready"]
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["landing"]
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the demo repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "start-fake-codebase-memory-mcp"
+action = "mcp.fake_codebase_memory.start"
+project = "actual-demo-project"
+lifecycle_profile = "provider-neutral-anchor-lineage"
+advertises_safe_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status"]
+advertises_hidden_tools = ["index_repository", "delete_project"]
+readiness_delay_ms = 750
+
+[[steps]]
+id = "configure-codebase-memory-tools"
+action = "agent.tools.configure"
+role = "engineer"
+tool = "codebase_memory"
+mode = "required"
+index = "background"
+tool_timeout_secs = 2
+server = "$step:start-fake-codebase-memory-mcp"
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+role = "engineer"
+script_path = "jig/provider-neutral-anchor-lineage.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-demo-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-source-issue"
+action = "issue.seed"
+issue_id = "source"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-convergence"
+action = "workflow.wait_convergence"
+strategy = "codebase-memory"
+until = "engineer consumes approved transformed typed lineage and complete current-root source evidence before the minimal repair; CI passes and the source issue closes"
+
+[expect]
+outcome = "The engineer receives only declared safe codebase-memory tools, confirms the current-root binding, consumes a later approved typed descendant and complete source evidence before mutation, validates the minimal repair, and converges through real CI."
+merged_pull_requests = 1
+closed_parent_issues = 1
+
+[[expect.checks]]
+required = true
+id = "source-finalized"
+artifact = "issue:source"
+state = "closed"
+labels = ["code"]
+
+[[expect.checks]]
+required = true
+id = "implementation-pr-landed"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+required = true
+id = "default-branch-has-engineer-diff"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.events]]
+required = true
+id = "graph-search-exposed"
+event = "agent.tool.exposed"
+fields."tool.name" = "codebase_memory_search_graph"
+fields."mcp.tool" = "search_graph"
+fields."tool.model_visible" = true
+
+[[expect.events]]
+required = true
+id = "graph-trace-exposed"
+event = "agent.tool.exposed"
+fields."tool.name" = "codebase_memory_trace_path"
+fields."mcp.tool" = "trace_path"
+fields."tool.model_visible" = true
+
+[[expect.events]]
+required = true
+id = "safe-source-tool-exposed"
+event = "agent.tool.exposed"
+fields."tool.name" = "codebase_memory_get_code_snippet"
+fields."mcp.tool" = "get_code_snippet"
+fields."tool.model_visible" = true
+
+[[expect.events]]
+required = true
+id = "current-root-rebind-completed"
+event = "codebase_memory.index.lifecycle"
+fields."index.mode" = "background"
+fields."index.outcome" = "completed"
+
+[[expect.sequence]]
+required = true
+id = "typed-lineage-current-root-evidence-before-minimal-patch"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.called", fields = { "mcp.tool" = "search_graph" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_search_graph", "graph.correlation.target_kind" = "graph_query", "graph.lineage.complete" = true, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.called", fields = { "mcp.tool" = "trace_path" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_trace_path", "graph.correlation.target_kind" = "function_name", "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.called", fields = { "mcp.tool" = "get_code_snippet" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_get_code_snippet", "graph.correlation.target_kind" = "qualified_name", "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.called", fields = { "mcp.tool" = "get_code_snippet" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.correlation.tool" = "codebase_memory_get_code_snippet", "graph.correlation.target_kind" = "qualified_name", "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "workspace.diff.produced" },
+]
+
+[[expect.count]]
+required = true
+id = "complete-typed-lineage-correlations"
+event = "mcp.tool.result"
+fields."graph.correlation.complete" = true
+fields."graph.correlation.version" = 1
+fields."graph.lineage.complete" = true
+fields."graph.lineage.version" = 1
+exactly = 4
+
+[[expect.count]]
+required = true
+id = "one-targeted-graph-search"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_graph"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-transformed-graph-trace"
+event = "mcp.tool.called"
+fields."mcp.tool" = "trace_path"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "implementation-and-focused-test-current-root-source-reads"
+event = "mcp.tool.called"
+fields."mcp.tool" = "get_code_snippet"
+exactly = 2
+
+[[expect.count]]
+required = true
+id = "no-unrelated-code-refinement-or-broad-architecture"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_code"
+exactly = 0
+
+[[expect.count]]
+required = true
+id = "no-broad-architecture-call"
+event = "mcp.tool.called"
+fields."mcp.tool" = "get_architecture"
+exactly = 0
+
+[expect.effective_configuration]
+id = "rapid-typed-lineage-harness-cadence"
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 1
+mechanical_cadence_secs = 1
+
+[codebase_memory]
+mode = "required"
+index = "background"
+readiness_delay_ms = 750
+fake_mcp_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status", "index_repository", "delete_project"]
+model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_search_code", "codebase_memory_trace_path", "codebase_memory_get_code_snippet", "codebase_memory_list_projects", "codebase_memory_index_status"]
+model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
+default_project = "acme/demo"
+actual_project = "normalized-temper-v1-<stable-provider-key>"
+graph_consumption_profile = "provider-neutral typed lineage through a later transformed descendant and complete current-root trace/source evidence; aggregate type and correlation facts only"
+global_inventory_forbidden = true
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify privacy-safe aggregate typed-lineage assertions without expanding the declared tool set.",
+  "Add aggregate observability that preserves ordering, lineage type facts, and current-root binding without provider or model values.",
+]
+requires_new_scenario_or_major_update = [
+  "Treating unrelated targets, producer-turn calls, malformed or cross-root lineage, incomplete evidence, recovery exhaustion, or unavailable/systemic fallback as mutation authority.",
+  "Replacing the mandatory live Forgejo/Actions/Temper/Jig stack with a lower-level topology.",
+]

@@ -8,14 +8,14 @@
 //! on the actual provider tool definitions and are not copied into prompts.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use temper_agent_core::{
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory,
-    ToolFailureDiagnostic,
+    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory, ToolFailureDiagnostic,
 };
 use temper_protocol_activity::{GraphCorrelationTargetKindV1, GraphCorrelationV1};
 use temper_protocol_agent::{
@@ -36,6 +36,7 @@ mod confirmation;
 mod health;
 mod indexing;
 mod lifecycle_observability;
+mod lineage;
 mod provider;
 mod result_presentation;
 mod scope;
@@ -47,6 +48,7 @@ use indexing::prepare_indexes;
 use lifecycle_observability::{
     DiscoveryEvidence, DiscoveryOutcome, FailureCategory, emit_discovery, emit_identity_selected,
 };
+use lineage::DecisionAnchorLineages;
 use provider::validate_provider_contract;
 use scope::{WorkspaceScope, discover_workspace_projects};
 #[cfg(test)]
@@ -440,6 +442,9 @@ async fn start_toolset(
     // This state belongs to exactly this toolset build (one agent run) and is
     // shared by every wrapper cloned from the serving client.
     let health = Arc::new(CodebaseMemoryHealth::new(client.cancellation_handle()));
+    // Provider-shaped target values remain in this wrapper-local registry. The
+    // core receives only an opaque root and typed aggregate lineage record.
+    let decision_anchor_lineages = Arc::new(Mutex::new(DecisionAnchorLineages::default()));
 
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
     let mut registered_tool_metadata = Vec::new();
@@ -483,6 +488,7 @@ async fn start_toolset(
             default_project_key,
             call_timeout,
             Arc::clone(&scope),
+            Arc::clone(&decision_anchor_lineages),
         )));
     }
 
@@ -556,6 +562,7 @@ struct McpToolResult<'a> {
     graph_execution_ms: u64,
     duration_ms: u64,
     graph_correlation: Option<&'a GraphCorrelationV1>,
+    decision_anchor_lineage: Option<&'a DecisionAnchorLineageV1>,
 }
 
 fn emit_agent_tool_configured(ev: AgentToolConfigured<'_>) {
@@ -654,6 +661,16 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
             )
         })
         .unwrap_or((0, "", ""));
+    let (lineage_version, lineage_stage, lineage_result_target_kind_count) = ev
+        .decision_anchor_lineage
+        .map(|lineage| {
+            (
+                lineage.version,
+                graph_lineage_stage(lineage.stage),
+                lineage.result_target_kinds.len() as u64,
+            )
+        })
+        .unwrap_or((0, "", 0));
     tracing::debug!(
         target: "temper::agent",
         service = "agent",
@@ -671,6 +688,10 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         graph.correlation.version = correlation_version,
         graph.correlation.tool = correlation_tool,
         graph.correlation.target_kind = correlation_target_kind,
+        graph.lineage.complete = ev.decision_anchor_lineage.is_some(),
+        graph.lineage.version = lineage_version,
+        graph.lineage.stage = lineage_stage,
+        graph.lineage.result_target_kind_count = lineage_result_target_kind_count,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,
@@ -685,6 +706,13 @@ fn graph_correlation_target_kind(kind: GraphCorrelationTargetKindV1) -> &'static
         GraphCorrelationTargetKindV1::QualifiedNamePattern => "qualified_name_pattern",
         GraphCorrelationTargetKindV1::FunctionName => "function_name",
         GraphCorrelationTargetKindV1::QualifiedName => "qualified_name",
+    }
+}
+
+fn graph_lineage_stage(stage: DecisionAnchorLineageStageV1) -> &'static str {
+    match stage {
+        DecisionAnchorLineageStageV1::Root => "root",
+        DecisionAnchorLineageStageV1::CarryForward => "carry_forward",
     }
 }
 
@@ -713,6 +741,7 @@ struct CodebaseMemoryTool {
     default_project_key: Option<&'static str>,
     call_timeout: Duration,
     scope: Arc<WorkspaceScope>,
+    decision_anchor_lineages: Arc<Mutex<DecisionAnchorLineages>>,
 }
 
 impl CodebaseMemoryTool {
@@ -728,6 +757,7 @@ impl CodebaseMemoryTool {
         default_project_key: Option<&'static str>,
         call_timeout: Duration,
         scope: Arc<WorkspaceScope>,
+        decision_anchor_lineages: Arc<Mutex<DecisionAnchorLineages>>,
     ) -> Self {
         debug_assert_eq!(public_name, allowed.public_name);
         Self {
@@ -740,6 +770,7 @@ impl CodebaseMemoryTool {
             default_project_key,
             call_timeout,
             scope,
+            decision_anchor_lineages,
         }
     }
 }

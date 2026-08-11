@@ -1,73 +1,173 @@
 //! Privacy-safe, per-run enforcement for codebase-memory decision anchors.
 //!
-//! The policy never retains provider text, model arguments, paths, or source.
-//! It compares only bounded SHA-256 fingerprints supplied by the trusted
-//! wrapper and drops them with the agent run.
+//! The policy never retains provider text, model arguments, paths, source, or
+//! target digests. The trusted wrapper resolves provider-shaped selections in
+//! process and hands this state only a bounded typed lineage record.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use temper_protocol_activity::{GraphCorrelationToolV1, GraphCorrelationV1};
+use temper_protocol_activity::{
+    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+};
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
 
 use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, SAFE_GRAPH_CORRELATION_DETAIL_KEY};
 
-/// Reserved wrapper detail carrying bounded fingerprints of provider-returned
-/// selection candidates. It is never projected into durable activity metadata.
-pub const SAFE_DECISION_ANCHOR_DETAIL_KEY: &str = "temper_decision_anchor_evidence_v1";
-const DECISION_ANCHOR_EVIDENCE_VERSION: u32 = 1;
-const MAX_RESULT_TARGET_DIGESTS: usize = 256;
+/// Reserved wrapper detail carrying a process-local-root-bound lineage record.
+/// It is deliberately excluded from durable activity metadata.
+pub const SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: &str = "temper_decision_anchor_lineage_v1";
+const DECISION_ANCHOR_LINEAGE_VERSION: u32 = 1;
+/// Six is the complete closed set of targeted wrapper selector kinds.
+pub const MAX_DECISION_ANCHOR_RESULT_TARGET_KINDS: usize = 6;
 
 /// Fixed, model-visible explanation for a locally denied mutation.
 pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked until the successful decision anchor is consumed through later result-derived codebase-memory evidence for the implementation, caller/model, and focused behavioral tests";
 
-/// Closed, privacy-safe evidence extracted transiently from a successful
-/// provider result. The entries are only normalized target fingerprints.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DecisionAnchorEvidenceV1 {
-    pub version: u32,
-    pub result_target_digests: Vec<String>,
+/// Generic, privacy-safe correction injected after a successful result cannot
+/// be consumed as the active anchor's typed descendant.
+pub const DECISION_ANCHOR_RECOVERY_MESSAGE: &str = "decision-anchor recovery required: the successful graph result did not form a compatible current-root descendant. Do not mutate; make a later targeted recovery selection or stop without a product.";
+
+/// Recovery is deliberately short: repeated unrelated or unconsumable results
+/// must not spin the native agent into a mutation-free but landable-looking run.
+const MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS: u8 = 2;
+
+/// Closed selector kinds which may participate in a decision-anchor lineage.
+/// Their wire names intentionally mirror the closed V1 graph-correlation
+/// target types, but lineage is an in-process policy contract rather than an
+/// activity-protocol extension.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionAnchorTargetKindV1 {
+    GraphQuery,
+    Pattern,
+    NamePattern,
+    QualifiedNamePattern,
+    FunctionName,
+    QualifiedName,
 }
 
-impl DecisionAnchorEvidenceV1 {
-    /// Builds a bounded canonical record from already-fingerprinted targets.
-    pub fn new(digests: impl IntoIterator<Item = String>) -> Self {
-        let mut result_target_digests = digests
-            .into_iter()
-            .filter(|digest| is_digest(digest))
-            .collect::<Vec<_>>();
-        result_target_digests.sort();
-        result_target_digests.dedup();
-        result_target_digests.truncate(MAX_RESULT_TARGET_DIGESTS);
-        Self {
-            version: DECISION_ANCHOR_EVIDENCE_VERSION,
-            result_target_digests,
+impl DecisionAnchorTargetKindV1 {
+    /// Maps the existing closed activity correlation kind without widening it.
+    pub const fn from_graph_correlation(kind: GraphCorrelationTargetKindV1) -> Self {
+        match kind {
+            GraphCorrelationTargetKindV1::GraphQuery => Self::GraphQuery,
+            GraphCorrelationTargetKindV1::Pattern => Self::Pattern,
+            GraphCorrelationTargetKindV1::NamePattern => Self::NamePattern,
+            GraphCorrelationTargetKindV1::QualifiedNamePattern => Self::QualifiedNamePattern,
+            GraphCorrelationTargetKindV1::FunctionName => Self::FunctionName,
+            GraphCorrelationTargetKindV1::QualifiedName => Self::QualifiedName,
         }
     }
 
-    /// Rejects unknown versions, duplicate/unbounded fingerprints, and values
-    /// that are not canonical SHA-256 hex before the core policy trusts them.
-    pub fn is_valid(&self) -> bool {
-        self.version == DECISION_ANCHOR_EVIDENCE_VERSION
-            && self.result_target_digests.len() <= MAX_RESULT_TARGET_DIGESTS
-            && self
-                .result_target_digests
-                .iter()
-                .all(|digest| is_digest(digest))
-            && self
-                .result_target_digests
-                .windows(2)
-                .all(|pair| pair[0] < pair[1])
+    const fn is_result_target_kind(self) -> bool {
+        matches!(
+            self,
+            Self::Pattern | Self::FunctionName | Self::QualifiedName
+        )
+    }
+
+    /// Returns whether a provider-result representation may be carried into a
+    /// later wrapper selector. Only exact qualified symbols and their terminal
+    /// function representation are intentionally equivalent.
+    pub const fn can_carry_forward(self, next: Self) -> bool {
+        matches!(
+            (self, next),
+            (
+                Self::QualifiedName,
+                Self::QualifiedName | Self::FunctionName | Self::Pattern
+            ) | (Self::FunctionName, Self::FunctionName | Self::Pattern)
+        )
     }
 }
 
-fn is_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+/// Whether this record begins a new root or was matched to an earlier complete
+/// provider result by the trusted wrapper.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionAnchorLineageStageV1 {
+    Root,
+    CarryForward,
+}
+
+/// Versioned, bounded, provider-neutral decision-anchor lineage.
+///
+/// `root_binding` is an opaque v4 UUID generated by the wrapper. It binds
+/// every carry-forward record to one current root but contains no provider,
+/// model, path, source, target, or digest. `result_target_kinds` exposes only
+/// canonical aggregate type facts; exact candidate values remain wrapper-local.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionAnchorLineageV1 {
+    pub version: u32,
+    pub root_binding: String,
+    pub stage: DecisionAnchorLineageStageV1,
+    pub target_kind: DecisionAnchorTargetKindV1,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_target_kinds: Vec<DecisionAnchorTargetKindV1>,
+}
+
+impl DecisionAnchorLineageV1 {
+    /// Builds the canonical form emitted by the trusted wrapper.
+    pub fn new(
+        root_binding: String,
+        stage: DecisionAnchorLineageStageV1,
+        target_kind: DecisionAnchorTargetKindV1,
+        result_target_kinds: impl IntoIterator<Item = DecisionAnchorTargetKindV1>,
+    ) -> Option<Self> {
+        let mut result_target_kinds = result_target_kinds.into_iter().collect::<Vec<_>>();
+        result_target_kinds.sort();
+        result_target_kinds.dedup();
+        (valid_root_binding(&root_binding)
+            && result_target_kinds.len() <= MAX_DECISION_ANCHOR_RESULT_TARGET_KINDS
+            && result_target_kinds
+                .iter()
+                .all(|kind| kind.is_result_target_kind()))
+        .then_some(Self {
+            version: DECISION_ANCHOR_LINEAGE_VERSION,
+            root_binding,
+            stage,
+            target_kind,
+            result_target_kinds,
+        })
+    }
+
+    /// Rejects unknown versions, malformed opaque bindings, duplicate or
+    /// non-canonical type lists, and records that do not match V1 correlation.
+    pub fn is_valid(&self) -> bool {
+        self.version == DECISION_ANCHOR_LINEAGE_VERSION
+            && valid_root_binding(&self.root_binding)
+            && self.result_target_kinds.len() <= MAX_DECISION_ANCHOR_RESULT_TARGET_KINDS
+            && self
+                .result_target_kinds
+                .iter()
+                .all(|kind| kind.is_result_target_kind())
+            && self
+                .result_target_kinds
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+    }
+
+    /// Checks both the standalone contract and the existing closed V1 graph
+    /// correlation carried beside it.
+    pub fn is_valid_for(&self, correlation: &GraphCorrelationV1) -> bool {
+        self.is_valid()
+            && self.target_kind
+                == DecisionAnchorTargetKindV1::from_graph_correlation(correlation.target_kind)
+    }
+}
+
+fn valid_root_binding(value: &str) -> bool {
+    value.len() == 36
+        && value.as_bytes().get(14) == Some(&b'4')
+        && matches!(value.as_bytes().get(19), Some(b'8' | b'9' | b'a' | b'b'))
+        && value.bytes().enumerate().all(|(index, byte)| {
+            matches!(index, 8 | 13 | 18 | 23) && byte == b'-'
+                || !matches!(index, 8 | 13 | 18 | 23)
+                    && byte.is_ascii_hexdigit()
+                    && !byte.is_ascii_uppercase()
+        })
 }
 
 pub(super) struct DecisionAnchorState {
@@ -79,16 +179,25 @@ pub(super) struct DecisionAnchorState {
 enum AnchorPhase {
     Root(Anchor),
     Trail(Trail),
+    Recovery(Recovery),
+    Exhausted,
 }
 
 struct Anchor {
     produced_turn: usize,
-    result_target_digests: BTreeSet<String>,
+    root_binding: String,
+    result_target_kinds: BTreeSet<DecisionAnchorTargetKindV1>,
 }
 
 struct Trail {
     anchor: Anchor,
     evidence: SourceEvidence,
+}
+
+struct Recovery {
+    anchor: Anchor,
+    evidence: SourceEvidence,
+    attempts: u8,
 }
 
 #[derive(Default)]
@@ -99,12 +208,39 @@ struct SourceEvidence {
 
 struct PendingCodebaseCall {
     turn: usize,
-    result_derived: bool,
 }
 
 struct AnchorOutput {
-    evidence: DecisionAnchorEvidenceV1,
+    lineage: DecisionAnchorLineageV1,
     tool: GraphCorrelationToolV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DecisionAnchorTransition {
+    Unchanged,
+    RecoveryNeeded,
+    RecoveryExhausted,
+}
+
+impl Anchor {
+    fn from_output(turn: usize, lineage: &DecisionAnchorLineageV1) -> Self {
+        Self {
+            produced_turn: turn,
+            root_binding: lineage.root_binding.clone(),
+            result_target_kinds: lineage.result_target_kinds.iter().copied().collect(),
+        }
+    }
+
+    fn is_consumable(&self) -> bool {
+        !self.result_target_kinds.is_empty()
+    }
+
+    fn accepts(&self, call: &PendingCodebaseCall, lineage: &DecisionAnchorLineageV1) -> bool {
+        call.turn > self.produced_turn
+            && lineage.stage == DecisionAnchorLineageStageV1::CarryForward
+            && lineage.root_binding == self.root_binding
+            && self.result_target_kinds.contains(&lineage.target_kind)
+    }
 }
 
 impl DecisionAnchorState {
@@ -128,61 +264,141 @@ impl DecisionAnchorState {
         if !call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
             return;
         }
-        let Some(call_key) = GraphCorrelationV1::target_digest(&call.id) else {
-            return;
-        };
-        let arguments = argument_digests(&call.arguments);
-        let result_derived = self.active_anchor().is_some_and(|anchor| {
-            turn > anchor.produced_turn && !arguments.is_disjoint(&anchor.result_target_digests)
-        });
-        self.calls.insert(
-            call_key,
-            PendingCodebaseCall {
-                turn,
-                result_derived,
-            },
-        );
+        if let Some(call_key) = GraphCorrelationV1::target_digest(&call.id) {
+            self.calls.insert(call_key, PendingCodebaseCall { turn });
+        }
     }
 
-    pub(super) fn on_tool_finished(&mut self, id: &str, name: &str, output: &ToolOutput) {
+    pub(super) fn on_tool_finished(
+        &mut self,
+        id: &str,
+        name: &str,
+        output: &ToolOutput,
+    ) -> DecisionAnchorTransition {
         let Some(call_key) = GraphCorrelationV1::target_digest(id) else {
-            return;
+            return DecisionAnchorTransition::Unchanged;
         };
         let Some(call) = self.calls.remove(&call_key) else {
-            return;
+            return DecisionAnchorTransition::Unchanged;
         };
         let Some(output) = anchor_output(name, output) else {
-            return;
+            return DecisionAnchorTransition::Unchanged;
         };
-        let anchor = Anchor {
-            produced_turn: call.turn,
-            result_target_digests: output.evidence.result_target_digests.into_iter().collect(),
-        };
+        let next_anchor = Anchor::from_output(call.turn, &output.lineage);
 
         match self.phase.take() {
-            None => self.phase = Some(AnchorPhase::Root(anchor)),
-            Some(AnchorPhase::Root(mut root))
-                if call.turn == root.produced_turn && !call.result_derived =>
-            {
-                root.result_target_digests
-                    .extend(anchor.result_target_digests);
+            None if output.lineage.stage == DecisionAnchorLineageStageV1::Root => {
+                self.install_root(next_anchor, 0)
+            }
+            Some(AnchorPhase::Root(root)) if call.turn <= root.produced_turn => {
                 self.phase = Some(AnchorPhase::Root(root));
+                DecisionAnchorTransition::Unchanged
             }
-            Some(AnchorPhase::Root(root))
-                if call.result_derived && call.turn > root.produced_turn =>
-            {
-                let mut evidence = SourceEvidence::default();
-                evidence.record(output.tool, call.turn);
-                self.phase = Some(AnchorPhase::Trail(Trail { anchor, evidence }));
-            }
-            Some(AnchorPhase::Trail(mut trail))
-                if call.result_derived && call.turn > trail.anchor.produced_turn =>
-            {
-                trail.evidence.record(output.tool, call.turn);
-                trail.anchor = anchor;
+            Some(AnchorPhase::Root(root)) => self.advance_or_recover(
+                root,
+                SourceEvidence::default(),
+                &call,
+                &output,
+                next_anchor,
+                1,
+            ),
+            Some(AnchorPhase::Trail(trail)) if call.turn <= trail.anchor.produced_turn => {
                 self.phase = Some(AnchorPhase::Trail(trail));
+                DecisionAnchorTransition::Unchanged
             }
-            Some(phase) => self.phase = Some(phase),
+            Some(AnchorPhase::Trail(trail)) => self.advance_or_recover(
+                trail.anchor,
+                trail.evidence,
+                &call,
+                &output,
+                next_anchor,
+                1,
+            ),
+            Some(AnchorPhase::Recovery(recovery)) if call.turn <= recovery.anchor.produced_turn => {
+                self.phase = Some(AnchorPhase::Recovery(recovery));
+                DecisionAnchorTransition::Unchanged
+            }
+            Some(AnchorPhase::Recovery(recovery)) => {
+                // Only an anchor that itself had no usable typed selections may
+                // be replaced by a fresh later root. A cross-root result cannot
+                // substitute for an otherwise consumable current root.
+                if !recovery.anchor.is_consumable()
+                    && call.turn > recovery.anchor.produced_turn
+                    && output.lineage.stage == DecisionAnchorLineageStageV1::Root
+                {
+                    self.install_root(next_anchor, recovery.attempts.saturating_add(1))
+                } else {
+                    self.advance_or_recover(
+                        recovery.anchor,
+                        recovery.evidence,
+                        &call,
+                        &output,
+                        next_anchor,
+                        recovery.attempts.saturating_add(1),
+                    )
+                }
+            }
+            Some(AnchorPhase::Exhausted) => {
+                self.phase = Some(AnchorPhase::Exhausted);
+                DecisionAnchorTransition::Unchanged
+            }
+            None => {
+                self.phase = None;
+                DecisionAnchorTransition::Unchanged
+            }
+        }
+    }
+
+    fn install_root(&mut self, anchor: Anchor, attempts: u8) -> DecisionAnchorTransition {
+        if anchor.is_consumable() {
+            self.phase = Some(AnchorPhase::Root(anchor));
+            DecisionAnchorTransition::Unchanged
+        } else {
+            self.enter_recovery(anchor, SourceEvidence::default(), attempts)
+        }
+    }
+
+    fn advance_or_recover(
+        &mut self,
+        active: Anchor,
+        mut evidence: SourceEvidence,
+        call: &PendingCodebaseCall,
+        output: &AnchorOutput,
+        next_anchor: Anchor,
+        recovery_attempts: u8,
+    ) -> DecisionAnchorTransition {
+        if active.accepts(call, &output.lineage) {
+            evidence.record(output.tool, call.turn);
+            if next_anchor.is_consumable() {
+                self.phase = Some(AnchorPhase::Trail(Trail {
+                    anchor: next_anchor,
+                    evidence,
+                }));
+                DecisionAnchorTransition::Unchanged
+            } else {
+                self.enter_recovery(next_anchor, evidence, recovery_attempts)
+            }
+        } else {
+            self.enter_recovery(active, evidence, recovery_attempts)
+        }
+    }
+
+    fn enter_recovery(
+        &mut self,
+        anchor: Anchor,
+        evidence: SourceEvidence,
+        attempts: u8,
+    ) -> DecisionAnchorTransition {
+        if attempts >= MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS {
+            self.phase = Some(AnchorPhase::Exhausted);
+            DecisionAnchorTransition::RecoveryExhausted
+        } else {
+            self.phase = Some(AnchorPhase::Recovery(Recovery {
+                anchor,
+                evidence,
+                attempts,
+            }));
+            DecisionAnchorTransition::RecoveryNeeded
         }
     }
 
@@ -191,14 +407,8 @@ impl DecisionAnchorState {
             && self.phase.as_ref().is_some_and(|phase| match phase {
                 AnchorPhase::Root(_) => true,
                 AnchorPhase::Trail(trail) => !trail.evidence.is_complete(),
+                AnchorPhase::Recovery(_) | AnchorPhase::Exhausted => true,
             })
-    }
-
-    fn active_anchor(&self) -> Option<&Anchor> {
-        match self.phase.as_ref()? {
-            AnchorPhase::Root(anchor) => Some(anchor),
-            AnchorPhase::Trail(trail) => Some(&trail.anchor),
-        }
     }
 }
 
@@ -233,39 +443,14 @@ fn anchor_output(name: &str, output: &ToolOutput) -> Option<AnchorOutput> {
     if !correlation.is_valid() || correlation.tool.public_name() != name {
         return None;
     }
-    let evidence: DecisionAnchorEvidenceV1 =
-        serde_json::from_value(details.get(SAFE_DECISION_ANCHOR_DETAIL_KEY)?.clone()).ok()?;
-    evidence.is_valid().then_some(AnchorOutput {
-        evidence,
+    let lineage: DecisionAnchorLineageV1 = serde_json::from_value(
+        details
+            .get(SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY)?
+            .clone(),
+    )
+    .ok()?;
+    lineage.is_valid_for(&correlation).then_some(AnchorOutput {
+        lineage,
         tool: correlation.tool,
     })
-}
-
-fn argument_digests(value: &serde_json::Value) -> BTreeSet<String> {
-    let mut digests = BTreeSet::new();
-    collect_argument_digests(value, &mut digests);
-    digests
-}
-
-fn collect_argument_digests(value: &serde_json::Value, digests: &mut BTreeSet<String>) {
-    match value {
-        serde_json::Value::String(value) => {
-            if let Some(digest) = GraphCorrelationV1::target_digest(value) {
-                digests.insert(digest);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_argument_digests(value, digests);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            for (key, value) in values {
-                if key != "project" && key != "repo" {
-                    collect_argument_digests(value, digests);
-                }
-            }
-        }
-        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
-    }
 }

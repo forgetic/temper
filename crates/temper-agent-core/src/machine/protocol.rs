@@ -262,6 +262,8 @@ pub enum AgentStop {
     Aborted,
     /// The tool-iteration budget was exhausted.
     BudgetExhausted,
+    /// Bounded recovery could not make a successful anchor consumable.
+    DecisionAnchorRecoveryExhausted,
 }
 
 /// Monotonic identity assigned to one model or tool operation.

@@ -1,0 +1,13 @@
+{
+  "phases": [
+    {
+      "name": "provider-neutral-anchor-lineage-runtime",
+      "when": { "messages_contain": ["__provider_neutral_anchor_lineage_fixture_runtime__"] },
+      "sequence": [
+        {
+          "text": "The live fixture owns transient typed lineage responses."
+        }
+      ]
+    }
+  ]
+}

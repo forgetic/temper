@@ -1,6 +1,6 @@
-use super::result_presentation::{decision_anchor_evidence, present_result};
+use super::result_presentation::present_result;
 use super::*;
-use temper_agent_core::SAFE_DECISION_ANCHOR_DETAIL_KEY;
+use temper_agent_core::SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY;
 use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
 };
@@ -104,6 +104,9 @@ impl Tool for CodebaseMemoryTool {
         // provider consumes the input. The returned DTO is a digest, never a
         // raw model argument.
         let graph_correlation = graph_correlation(&self.public_name, &input);
+        // Keep model input only inside this wrapper invocation so the local
+        // lineage registry can compare typed provider identities after success.
+        let lineage_input = input.clone();
 
         if self.mcp_name == "list_projects" {
             return Ok(self.scope.list_projects_output());
@@ -215,6 +218,20 @@ impl Tool for CodebaseMemoryTool {
             return Ok(self.failed_output(&mcp_project, category, timings));
         }
         let presented = present_result(&result.text, graph_correlation.as_ref());
+        // Successful, complete, untruncated targeted calls alone may emit a
+        // lineage record. Raw provider values and model selections stay in the
+        // wrapper-local registry.
+        let decision_anchor_lineage = graph_correlation
+            .as_ref()
+            .and_then(|correlation| {
+                presented.decision_anchor.then(|| {
+                    self.decision_anchor_lineages
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .record(correlation, &lineage_input, &presented.provider_text)
+                })
+            })
+            .flatten();
 
         emit_mcp_tool_result(McpToolResult {
             tool_name: &self.public_name,
@@ -227,6 +244,7 @@ impl Tool for CodebaseMemoryTool {
             graph_execution_ms: timings.graph_execution_ms,
             duration_ms: timings.duration_ms,
             graph_correlation: graph_correlation.as_ref(),
+            decision_anchor_lineage: decision_anchor_lineage.as_ref(),
         });
         let mut details = json!({
             "mcp_tool": self.mcp_name,
@@ -242,10 +260,9 @@ impl Tool for CodebaseMemoryTool {
             details[SAFE_GRAPH_CORRELATION_DETAIL_KEY] =
                 serde_json::to_value(correlation).expect("graph correlation serializes");
         }
-        if presented.decision_anchor {
-            details[SAFE_DECISION_ANCHOR_DETAIL_KEY] =
-                serde_json::to_value(decision_anchor_evidence(&presented.provider_text))
-                    .expect("decision anchor evidence serializes");
+        if let Some(lineage) = decision_anchor_lineage {
+            details[SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY] =
+                serde_json::to_value(lineage).expect("decision-anchor lineage serializes");
         }
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {
@@ -324,6 +341,7 @@ fn emit_failed_mcp_tool_result(
         graph_execution_ms: timings.graph_execution_ms,
         duration_ms: timings.duration_ms,
         graph_correlation: None,
+        decision_anchor_lineage: None,
     });
 }
 

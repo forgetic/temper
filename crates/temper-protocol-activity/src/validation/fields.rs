@@ -219,6 +219,10 @@ fn scope_finished(value: &ScopeFinishedV1, path: &str) -> Result<(), ActivityVal
                 ScopeStatusV1::Failed,
                 AgentTerminalReasonV1::BudgetExhausted
             )
+            | (
+                ScopeStatusV1::Failed,
+                AgentTerminalReasonV1::DecisionAnchorRecoveryExhausted
+            )
             | (ScopeStatusV1::Cancelled, AgentTerminalReasonV1::Aborted)
     );
     if consistent {
