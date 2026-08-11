@@ -228,7 +228,7 @@ impl Tool for CodebaseMemoryTool {
                     self.decision_anchor_lineages
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .record(correlation, &lineage_input, &presented.provider_text)
+                        .record(correlation, &lineage_input, result.typed_parts.as_deref())
                 })
             })
             .flatten();

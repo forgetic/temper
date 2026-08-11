@@ -123,8 +123,11 @@ def bound_snippet(project):
         return None
     return {"source": source, "file_path": file_path}
 
-def tool_result(request_id, payload, is_error=False):
-    send({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": payload}], "isError": is_error}})
+def tool_result(request_id, payload, is_error=False, structured=None):
+    result = {"content": [{"type": "text", "text": payload}], "isError": is_error}
+    if structured is not None:
+        result["structuredContent"] = structured
+    send({"jsonrpc": "2.0", "id": request_id, "result": result})
 
 for line in sys.stdin:
     if not line.strip():
@@ -239,6 +242,22 @@ for line in sys.stdin:
                 else:
                     payload = json.dumps({"unknown": "not-a-lineage-target"})
                 tool_result(request["id"], payload)
+            elif mode == "typed-lineage-parts":
+                tool_result(
+                    request["id"],
+                    "MODEL-VISIBLE-TYPED-RESULT symbol=run",
+                    structured={
+                        "results": [
+                            {"results": [{"symbol": "run"}]},
+                            {"callers": [{"qualifiedName": "crate::engine::caller"}]},
+                            {"related_source_references": [{"qualified_name": "crate::engine::source"}]},
+                            {"source_metadata": {
+                                "next_target": {"qualifiedName": "crate::engine::behavior"},
+                                "source": "PRIVATE-TYPED-PART-SENTINEL"
+                            }}
+                        ]
+                    },
+                )
             else:
                 payload = "PROVIDER-RESULT-SENTINEL" if mode == "anchor-cases" else f"{name} result for {json.dumps(args, sort_keys=True)}\n" + ("x" * 20000)
                 if mode == "anchor-cases" and args.get("query") == "large":

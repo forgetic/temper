@@ -568,3 +568,48 @@ fn invalid_address_and_disconnected_queue_never_panic() {
         });
     }
 }
+
+#[test]
+fn codebase_memory_provider_text_never_enters_activity_metadata() {
+    const PROVIDER_VALUE: &str = "PRIVATE-TYPED-PART-ACTIVITY-SENTINEL";
+    for mode in [
+        CaptureModeV1::Metadata,
+        CaptureModeV1::Transcript,
+        CaptureModeV1::Diagnostic,
+    ] {
+        let recorder = Arc::new(Recorder::default());
+        let factory = ScopeFactory::with_parts(
+            AgentActivityCapturePolicyV1 {
+                capture: mode,
+                ..Default::default()
+            },
+            Arc::new(FakeClock::new(0..10)),
+            vec![recorder.clone()],
+        );
+        let run = factory.main("main", ModelIdentity::new("provider", "model"));
+        run.observability.events.emit(AgentEvent::ToolEnd {
+            id: "memory-result".to_string(),
+            name: "codebase_memory_search_graph".to_string(),
+            status: ToolCallStatus::Succeeded,
+            duration_ms: 1,
+            result: temper_agent_core::ToolResultMetadata {
+                preview: Some(format!("provider output {PROVIDER_VALUE}")),
+                bytes: PROVIDER_VALUE.len() as u64,
+                truncated: false,
+                failure: None,
+                codebase_memory_timing: Some(temper_agent_core::CodebaseMemoryTiming {
+                    readiness_wait_ms: 1,
+                    graph_execution_ms: 1,
+                }),
+                graph_correlation: None,
+            },
+        });
+
+        let wire = serde_json::to_string(&*recorder.0.lock().expect("frames"))
+            .expect("serialize activity metadata");
+        assert!(
+            !wire.contains(PROVIDER_VALUE),
+            "{mode:?} activity retained a provider value"
+        );
+    }
+}

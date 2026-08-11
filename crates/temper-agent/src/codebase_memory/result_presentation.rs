@@ -6,9 +6,6 @@ pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: This is a bounde
 
 pub(super) struct PresentedResult {
     pub(super) text: String,
-    /// The exact bounded provider text shown before any generic anchor suffix.
-    /// It stays in-process only while the wrapper derives typed lineage.
-    pub(super) provider_text: String,
     pub(super) truncated: bool,
     pub(super) decision_anchor: bool,
 }
@@ -34,7 +31,6 @@ pub(super) fn present_result(
     };
     PresentedResult {
         text,
-        provider_text: bounded.text,
         truncated: bounded.truncated,
         decision_anchor: anchored,
     }
