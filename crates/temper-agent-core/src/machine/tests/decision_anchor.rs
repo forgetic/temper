@@ -4,6 +4,7 @@ mod tests {
     use super::super::super::decision_anchor::*;
     use crate::machine::{
         SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
+        SAFE_TOOL_FAILURE_DETAIL_KEY,
     };
     use std::collections::BTreeMap;
     use temper_protocol_activity::{
@@ -97,6 +98,19 @@ mod tests {
         )
     }
 
+    fn unavailable_output() -> ToolOutput {
+        ToolOutput {
+            content: Vec::new(),
+            details: Some(serde_json::json!({
+                SAFE_TOOL_FAILURE_DETAIL_KEY: {
+                    "source": "codebase_memory",
+                    "category": "transport",
+                },
+            })),
+            is_error: true,
+        }
+    }
+
     fn finish(
         state: &mut DecisionAnchorState,
         id: &str,
@@ -123,7 +137,35 @@ mod tests {
     }
 
     #[test]
-    fn blocks_until_a_later_root_bound_trace_and_two_source_reads_complete() {
+    fn requires_a_later_refinement_before_trace_and_source_evidence() {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut state,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
+        assert_eq!(
+            finish_with_kinds(
+                &mut state,
+                "trace",
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                &[DecisionAnchorTargetKindV1::QualifiedName],
+            ),
+            DecisionAnchorTransition::RecoveryNeeded,
+            "a compatible but unrefined trace is not complete evidence"
+        );
+        assert!(state.blocks_mutation("write"));
+    }
+
+    #[test]
+    fn blocks_until_a_later_root_bound_refinement_trace_and_two_source_reads_complete() {
         let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
         state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
         finish(
@@ -173,6 +215,52 @@ mod tests {
         );
 
         assert!(!state.blocks_mutation("write"));
+    }
+
+    #[test]
+    fn trusted_unavailable_next_step_releases_only_the_conventional_fallback() {
+        let mut fallback = DecisionAnchorState::from_effects(&effects()).unwrap();
+        fallback.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut fallback,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        fallback.on_tool_dispatched(&call("refine", "codebase_memory_search_code"), 1);
+        assert_eq!(
+            fallback.on_tool_finished(
+                "refine",
+                "codebase_memory_search_code",
+                &unavailable_output(),
+            ),
+            DecisionAnchorTransition::Unchanged
+        );
+        assert!(
+            !fallback.blocks_mutation("write"),
+            "the unavailable expected descendant must permit conventional fallback"
+        );
+
+        let mut unrelated = DecisionAnchorState::from_effects(&effects()).unwrap();
+        unrelated.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut unrelated,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        unrelated.on_tool_dispatched(&call("unrelated", "codebase_memory_search_graph"), 1);
+        unrelated.on_tool_finished(
+            "unrelated",
+            "codebase_memory_search_graph",
+            &unavailable_output(),
+        );
+        assert!(
+            unrelated.blocks_mutation("write"),
+            "an unrelated provider outage cannot bypass an active anchor"
+        );
     }
 
     #[test]

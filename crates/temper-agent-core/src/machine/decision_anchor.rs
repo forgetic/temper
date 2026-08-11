@@ -13,7 +13,10 @@ use temper_protocol_activity::{
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
 
-use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, SAFE_GRAPH_CORRELATION_DETAIL_KEY};
+use super::protocol::{
+    CODEBASE_MEMORY_TOOL_PREFIX, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+    ToolFailureCategory,
+};
 
 /// Reserved wrapper detail carrying a process-local-root-bound lineage record.
 /// It is deliberately excluded from durable activity metadata.
@@ -185,6 +188,7 @@ enum AnchorPhase {
 
 struct Anchor {
     produced_turn: usize,
+    tool: GraphCorrelationToolV1,
     root_binding: String,
     result_target_kinds: BTreeSet<DecisionAnchorTargetKindV1>,
 }
@@ -202,6 +206,7 @@ struct Recovery {
 
 #[derive(Default)]
 struct SourceEvidence {
+    refinement_turn: Option<usize>,
     trace_turn: Option<usize>,
     source_reads_after_trace: u8,
 }
@@ -223,16 +228,21 @@ pub(super) enum DecisionAnchorTransition {
 }
 
 impl Anchor {
-    fn from_output(turn: usize, lineage: &DecisionAnchorLineageV1) -> Self {
+    fn from_output(turn: usize, output: &AnchorOutput) -> Self {
         Self {
             produced_turn: turn,
-            root_binding: lineage.root_binding.clone(),
-            result_target_kinds: lineage.result_target_kinds.iter().copied().collect(),
+            tool: output.tool,
+            root_binding: output.lineage.root_binding.clone(),
+            result_target_kinds: output.lineage.result_target_kinds.iter().copied().collect(),
         }
     }
 
     fn is_consumable(&self) -> bool {
         !self.result_target_kinds.is_empty()
+    }
+
+    fn initial_evidence(&self) -> SourceEvidence {
+        SourceEvidence::after_root(self.tool, self.produced_turn)
     }
 
     fn accepts(&self, call: &PendingCodebaseCall, lineage: &DecisionAnchorLineageV1) -> bool {
@@ -281,10 +291,20 @@ impl DecisionAnchorState {
         let Some(call) = self.calls.remove(&call_key) else {
             return DecisionAnchorTransition::Unchanged;
         };
+        if trusted_unavailable_provider_output(name, output)
+            && self.unavailable_can_fallback(&call, name)
+        {
+            // The trusted wrapper has already made this bounded failure safe
+            // and instructed the model to use conventional discovery. Only a
+            // failed next evidence step may release the active root; an
+            // unrelated failed discovery call cannot bypass it.
+            self.phase = None;
+            return DecisionAnchorTransition::Unchanged;
+        }
         let Some(output) = anchor_output(name, output) else {
             return DecisionAnchorTransition::Unchanged;
         };
-        let next_anchor = Anchor::from_output(call.turn, &output.lineage);
+        let next_anchor = Anchor::from_output(call.turn, &output);
 
         match self.phase.take() {
             None if output.lineage.stage == DecisionAnchorLineageStageV1::Root => {
@@ -294,15 +314,15 @@ impl DecisionAnchorState {
                 self.phase = Some(AnchorPhase::Root(root));
                 DecisionAnchorTransition::Unchanged
             }
-            Some(AnchorPhase::Root(root)) => self.advance_or_recover(
-                root,
-                SourceEvidence::default(),
-                &call,
-                &output,
-                next_anchor,
-                1,
-            ),
+            Some(AnchorPhase::Root(root)) => {
+                let evidence = root.initial_evidence();
+                self.advance_or_recover(root, evidence, &call, &output, next_anchor, 1)
+            }
             Some(AnchorPhase::Trail(trail)) if call.turn <= trail.anchor.produced_turn => {
+                self.phase = Some(AnchorPhase::Trail(trail));
+                DecisionAnchorTransition::Unchanged
+            }
+            Some(AnchorPhase::Trail(trail)) if trail.evidence.is_complete() => {
                 self.phase = Some(AnchorPhase::Trail(trail));
                 DecisionAnchorTransition::Unchanged
             }
@@ -349,6 +369,32 @@ impl DecisionAnchorState {
         }
     }
 
+    fn unavailable_can_fallback(&self, call: &PendingCodebaseCall, name: &str) -> bool {
+        let tool = match name {
+            "codebase_memory_search_graph" => GraphCorrelationToolV1::SearchGraph,
+            "codebase_memory_search_code" => GraphCorrelationToolV1::SearchCode,
+            "codebase_memory_trace_path" => GraphCorrelationToolV1::TracePath,
+            "codebase_memory_get_code_snippet" => GraphCorrelationToolV1::GetCodeSnippet,
+            _ => return false,
+        };
+        match self.phase.as_ref() {
+            Some(AnchorPhase::Root(anchor)) => {
+                call.turn > anchor.produced_turn
+                    && anchor.initial_evidence().accepts(tool, call.turn)
+            }
+            Some(AnchorPhase::Trail(trail)) => {
+                call.turn > trail.anchor.produced_turn
+                    && !trail.evidence.is_complete()
+                    && trail.evidence.accepts(tool, call.turn)
+            }
+            // A provider outage while bounded recovery is pending has no safe
+            // graph continuation, so conventional discovery is the only
+            // bounded fallback.
+            Some(AnchorPhase::Recovery(_)) => true,
+            Some(AnchorPhase::Exhausted) | None => false,
+        }
+    }
+
     fn install_root(&mut self, anchor: Anchor, attempts: u8) -> DecisionAnchorTransition {
         if anchor.is_consumable() {
             self.phase = Some(AnchorPhase::Root(anchor));
@@ -367,7 +413,7 @@ impl DecisionAnchorState {
         next_anchor: Anchor,
         recovery_attempts: u8,
     ) -> DecisionAnchorTransition {
-        if active.accepts(call, &output.lineage) {
+        if active.accepts(call, &output.lineage) && evidence.accepts(output.tool, call.turn) {
             evidence.record(output.tool, call.turn);
             if next_anchor.is_consumable() {
                 self.phase = Some(AnchorPhase::Trail(Trail {
@@ -413,8 +459,43 @@ impl DecisionAnchorState {
 }
 
 impl SourceEvidence {
+    /// A root `search_code` is itself a sufficiently targeted refinement. A
+    /// broader graph root must instead be refined by a later `search_code`
+    /// result before its caller/model trace may count as source evidence.
+    fn after_root(tool: GraphCorrelationToolV1, turn: usize) -> Self {
+        Self {
+            refinement_turn: (tool == GraphCorrelationToolV1::SearchCode).then_some(turn),
+            trace_turn: None,
+            source_reads_after_trace: 0,
+        }
+    }
+
+    /// The complete evidence path is deliberately closed and ordered:
+    /// refinement, trace, then two source reads. `Anchor::accepts` separately
+    /// proves that each call is a later, compatible descendant of the current
+    /// opaque root.
+    fn accepts(&self, tool: GraphCorrelationToolV1, turn: usize) -> bool {
+        match (
+            self.refinement_turn,
+            self.trace_turn,
+            self.source_reads_after_trace,
+        ) {
+            (None, _, _) => tool == GraphCorrelationToolV1::SearchCode,
+            (Some(refinement_turn), None, _) => {
+                tool == GraphCorrelationToolV1::TracePath && turn > refinement_turn
+            }
+            (_, Some(trace_turn), reads) if reads < 2 => {
+                tool == GraphCorrelationToolV1::GetCodeSnippet && turn > trace_turn
+            }
+            _ => false,
+        }
+    }
+
     fn record(&mut self, tool: GraphCorrelationToolV1, turn: usize) {
         match tool {
+            GraphCorrelationToolV1::SearchCode if self.refinement_turn.is_none() => {
+                self.refinement_turn = Some(turn);
+            }
             GraphCorrelationToolV1::TracePath => {
                 self.trace_turn = Some(turn);
                 self.source_reads_after_trace = 0;
@@ -431,6 +512,25 @@ impl SourceEvidence {
     fn is_complete(&self) -> bool {
         self.trace_turn.is_some() && self.source_reads_after_trace >= 2
     }
+}
+
+fn trusted_unavailable_provider_output(name: &str, output: &ToolOutput) -> bool {
+    if !output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+        return false;
+    }
+    let Some(marker) = output
+        .details
+        .as_ref()
+        .and_then(|details| details.get(SAFE_TOOL_FAILURE_DETAIL_KEY))
+    else {
+        return false;
+    };
+    marker.get("source").and_then(serde_json::Value::as_str) == Some("codebase_memory")
+        && marker
+            .get("category")
+            .and_then(serde_json::Value::as_str)
+            .and_then(ToolFailureCategory::from_stable_str)
+            .is_some()
 }
 
 fn anchor_output(name: &str, output: &ToolOutput) -> Option<AnchorOutput> {

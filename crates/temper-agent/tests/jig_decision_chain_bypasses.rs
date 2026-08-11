@@ -62,6 +62,27 @@ fn jig_agent_blocks_conventional_read_substitution_and_incomplete_source_evidenc
 }
 
 #[test]
+fn jig_agent_uses_conventional_fallback_after_an_unavailable_expected_descendant() {
+    let run = run(DecisionCase::UnavailableAfterRoot);
+
+    assert_eq!(
+        run.mutation,
+        Some("conventional fallback after unavailable provider\n".to_string()),
+        "the trusted unavailable result must release only conventional fallback"
+    );
+    assert_eq!(
+        run.steps,
+        vec![
+            DecisionStep::Discovery,
+            DecisionStep::Refinement,
+            DecisionStep::UnavailableFallback,
+            DecisionStep::Mutation,
+            DecisionStep::Complete,
+        ]
+    );
+}
+
+#[test]
 fn jig_agent_bounds_unconsumable_anchor_recovery_without_a_product() {
     let run = run(DecisionCase::UnconsumableRecoveryExhausted);
 
