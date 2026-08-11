@@ -1,5 +1,7 @@
 //! MCP descriptor/result parsing and JSON rendering helpers.
 
+use std::fmt;
+
 use serde_json::{Value, json};
 
 use super::client::McpError;
@@ -19,7 +21,7 @@ pub struct McpToolDescriptor {
 }
 
 /// Textual result of an MCP `tools/call` response.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct McpToolCallResult {
     pub text: String,
     pub is_error: bool,
@@ -31,10 +33,34 @@ pub struct McpToolCallResult {
 
 /// One raw typed MCP result part. This has crate visibility so only the local
 /// MCP wrapper can inspect it; it is intentionally not serializable.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub(crate) enum McpToolResultPart {
     Content(Value),
     StructuredContent(Value),
+}
+
+// Provider content may be safe to render to the model, but it is never safe
+// to expose through a diagnostic `Debug` path. Keep these implementations
+// deliberately content-free so a future error or tracing call cannot turn the
+// private result-part boundary into an observability boundary.
+impl fmt::Debug for McpToolCallResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("McpToolCallResult")
+            .field("text_bytes", &self.text.len())
+            .field("is_error", &self.is_error)
+            .field("typed_part_count", &self.typed_parts.as_ref().map(Vec::len))
+            .finish()
+    }
+}
+
+impl fmt::Debug for McpToolResultPart {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Content(_) => formatter.write_str("Content(<private>)"),
+            Self::StructuredContent(_) => formatter.write_str("StructuredContent(<private>)"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -203,5 +229,30 @@ mod tests {
             assert!(!result.text.is_empty());
             assert_eq!(result.typed_parts, None);
         }
+    }
+
+    #[test]
+    fn typed_result_debug_never_exposes_provider_values() {
+        let result = parse_call_tool_result(json!({
+            "content": [{"type": "text", "text": "MODEL-VISIBLE-PROVIDER-SENTINEL"}],
+            "structuredContent": {
+                "results": [{"qualifiedName": "crate::private::DEBUG-SENTINEL"}]
+            },
+            "isError": false,
+        }));
+
+        let result_debug = format!("{result:#?}");
+        let parts_debug = format!("{:#?}", result.typed_parts);
+        for private_value in [
+            "MODEL-VISIBLE-PROVIDER-SENTINEL",
+            "crate::private::DEBUG-SENTINEL",
+        ] {
+            assert!(
+                !result_debug.contains(private_value) && !parts_debug.contains(private_value),
+                "Debug output retained {private_value:?}",
+            );
+        }
+        assert!(result_debug.contains("text_bytes"));
+        assert!(result_debug.contains("typed_part_count"));
     }
 }
