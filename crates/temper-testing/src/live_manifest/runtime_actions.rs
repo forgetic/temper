@@ -60,6 +60,7 @@ impl LiveExecutionContext<'_> {
                             | "sequential-graph-evidence"
                             | "result-driven-decision-guidance"
                             | "provider-result-anchor"
+                            | "provider-neutral-anchor-lineage"
                     )
                 ),
             "unknown fake codebase-memory fixture",
@@ -184,6 +185,7 @@ impl LiveExecutionContext<'_> {
                                 | "sequential-graph-evidence"
                                 | "result-driven-decision-guidance"
                                 | "provider-result-anchor"
+                                | "provider-neutral-anchor-lineage"
                         )
                     )
                 }),

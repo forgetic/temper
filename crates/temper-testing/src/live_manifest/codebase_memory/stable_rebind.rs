@@ -21,6 +21,9 @@ pub(super) fn validate_mcp_contract(
         Some("provider-result-anchor") => {
             return super::provider_result_anchor::validate(mcp, calls);
         }
+        Some("provider-neutral-anchor-lineage") => {
+            return super::typed_lineage_anchor::validate(mcp, calls);
+        }
         _ => {}
     }
 
@@ -267,7 +270,11 @@ pub(super) fn stable_rebind_evidence(
             call.name == "get_code_snippet"
                 && matches!(
                     call.fixture_event.as_deref(),
-                    Some("served_current_root_source" | "served_result_derived_consumer")
+                    Some(
+                        "served_current_root_source"
+                            | "served_result_derived_consumer"
+                            | "served_typed_lineage_consumer"
+                    )
                 )
         }),
         global_inventory_avoided: calls.iter().all(|call| call.name != "list_projects"),
@@ -360,6 +367,7 @@ fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
                 | "sequential-graph-evidence"
                 | "result-driven-decision-guidance"
                 | "provider-result-anchor"
+                | "provider-neutral-anchor-lineage"
         )
     )
 }

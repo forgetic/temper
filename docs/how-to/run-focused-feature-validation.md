@@ -53,6 +53,27 @@ later operations must consume successful provider results rather than merely
 replay a successful scripted sequence. Run evidence retains aggregate tool,
 binding, and typed-correlation facts only.
 
+## Provider-neutral anchor lineage example
+
+Feature `ai/temper#1000` resolves to the active
+`scenarios/provider-neutral-anchor-lineage` mapping on
+`agent/pr-for-feature-1000`. From the exact aggregate feature head, run:
+
+```sh
+cargo dev-scenario-validate-feature \
+  --feature ai/temper#1000 \
+  --landing-base origin/main \
+  --source-branch agent/pr-for-feature-1000 \
+  --pr <aggregate-pr-number> \
+  --sha "$(git rev-parse HEAD)" \
+  --output-dir target/focused-validation
+```
+
+Its temporary fixture proves that an approved typed transformation can consume
+a provider-shaped selection in a later turn while unrelated, cross-root,
+incomplete, and recovery/fallback cases stay mutation-free. Durable evidence
+contains only aggregate binding, ordering, correlation, and lineage type facts.
+
 ## CI evidence
 
 `.forgejo/workflows/focused-feature-validation.yml` runs the focused job for
