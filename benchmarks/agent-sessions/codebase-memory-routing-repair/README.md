@@ -93,7 +93,14 @@ bounded failure, exact diff validation, and deterministic correctness only. Jig
 timing and token values are not live effectiveness evidence and must not be used
 to claim the criterion was met.
 
-The first privacy-reviewed production-provider trial report is
+## Privacy-reviewed live evidence
+
+The feature #1009 exact-final-tree smoke and subsequent frozen 5-by-3 matrix are
+recorded in
+[`live-evidence-2026-08-13.md`](live-evidence-2026-08-13.md). Only aggregate
+counts and gate outcomes are checked in; diagnostic exports remain private.
+
+The earlier production-provider trial report is
 [`live-evidence-2026-08-06.md`](live-evidence-2026-08-06.md). It records failed
 or unavailable gates and explicitly blocks deployment; it is not a passing
 baseline.
