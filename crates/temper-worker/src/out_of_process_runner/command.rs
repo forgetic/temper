@@ -70,6 +70,7 @@ impl OutOfProcessRunner {
         runtime_limits_path: Option<&Path>,
         terminal_output_path: Option<&Path>,
         trace_policy_path: Option<&Path>,
+        operator_transcript_path: Option<&Path>,
         lifecycle_address: Option<&str>,
         activity_address: Option<&str>,
         submit_address: Option<&str>,
@@ -99,6 +100,9 @@ impl OutOfProcessRunner {
         }
         if let Some(path) = trace_policy_path {
             command.arg(TRACE_POLICY_FLAG).arg(path);
+        }
+        if let Some(path) = operator_transcript_path {
+            command.arg(OPERATOR_TRANSCRIPT_FLAG).arg(path);
         }
         if let Some(address) = lifecycle_address {
             command.arg(AGENT_LIFECYCLE_ADDRESS_FLAG).arg(address);

@@ -34,6 +34,7 @@ printf '%s' '{"summary":"exact summary","body":"exact body"}' > "$result"
         temper_worker_io::block_on(async move { runner.run("trusted-job", &context, &cwd).await })
     });
     let output = outcome.expect("agent run succeeds");
+    assert!(output.operator_transcript.is_empty());
     assert_eq!(
         output.result,
         WorkspaceResult {
@@ -86,13 +87,13 @@ fn terminal_file_consumer_is_first_party_bounded_and_fail_closed() {
     )
     .expect("write terminal fixture");
 
-    let diagnostic = super::managed_run::first_party_terminal_model_failure(true, &path)
+    let diagnostic = super::output_files::first_party_terminal_model_failure(true, &path)
         .expect("valid first-party terminal is consumed");
     assert_eq!(diagnostic.provider, "openai-codex");
     assert_eq!(diagnostic.http_status, Some(504));
     assert!(diagnostic.retryable);
     assert_eq!(
-        super::managed_run::first_party_terminal_model_failure(false, &path),
+        super::output_files::first_party_terminal_model_failure(false, &path),
         None,
         "third-party commands never consume the carrier"
     );
@@ -103,7 +104,7 @@ fn terminal_file_consumer_is_first_party_bounded_and_fail_closed() {
     )
     .unwrap();
     assert_eq!(
-        super::managed_run::first_party_terminal_model_failure(true, &path),
+        super::output_files::first_party_terminal_model_failure(true, &path),
         None,
         "unsafe provider content is malformed terminal evidence"
     );
@@ -114,7 +115,7 @@ fn terminal_file_consumer_is_first_party_bounded_and_fail_closed() {
     )
     .unwrap();
     assert_eq!(
-        super::managed_run::first_party_terminal_model_failure(true, &path),
+        super::output_files::first_party_terminal_model_failure(true, &path),
         None,
         "oversized terminal files are not read"
     );

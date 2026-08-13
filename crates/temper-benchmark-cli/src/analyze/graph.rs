@@ -30,6 +30,7 @@ struct GraphCall {
     finish_seq: Option<u64>,
     status: Option<ToolStatusV1>,
     graph_correlation: Option<GraphCorrelationV1>,
+    decision_anchor_lineage: Option<temper_protocol_activity::DecisionAnchorLineageV1>,
     failure: Option<ToolFailureCategoryV1>,
     readiness_wait_ms: Option<u64>,
     discovery_duration_ms: Option<u64>,
@@ -188,6 +189,7 @@ fn collect_graph_calls(trace: &NormalizedTrace) -> BTreeMap<CallKey, GraphCall> 
                 call.failure = tool.failure.as_ref().map(|failure| failure.category);
                 if tool.status == ToolStatusV1::Succeeded {
                     call.graph_correlation = tool.graph_correlation.clone();
+                    call.decision_anchor_lineage = tool.decision_anchor_lineage.clone();
                 }
                 if let Some(timing) = tool.codebase_memory_timing {
                     call.readiness_wait_ms = Some(timing.readiness_wait_ms);

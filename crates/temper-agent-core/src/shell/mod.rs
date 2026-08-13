@@ -19,10 +19,11 @@
 mod executor;
 mod streaming;
 mod task_group;
+mod tool_result;
 
 pub use executor::{
     AgentOutcome, AgentShell, EventClock, EventSink, ModelIdentity, NullEventSink,
-    RunObservability, SystemEventClock, TurnHook,
+    OperatorTranscriptSink, RunObservability, SystemEventClock, TurnHook,
 };
 #[cfg(feature = "test-support")]
 pub use streaming::{

@@ -44,6 +44,24 @@ fn trace_export_records_round_trip_events_and_attachments() {
         serde_json::from_str::<TraceExportRecordV1>(&rendered_attachment).unwrap(),
         attachment_record
     );
+
+    let transcript_record =
+        TraceExportRecordV1::operator_transcript(OperatorTranscriptToolResultV1 {
+            version: OPERATOR_TRANSCRIPT_RECORD_VERSION,
+            call_id: "graph-read".to_string(),
+            tool_name: "codebase_memory_search_graph".to_string(),
+            model_result_text: InlineContentV1 {
+                text: "cold stable upsert is ready".to_string(),
+                truncated: false,
+            },
+        });
+    let rendered_transcript = serde_json::to_string(&transcript_record).unwrap();
+    assert!(rendered_transcript.contains("cold stable upsert is ready"));
+    assert!(!format!("{transcript_record:?}").contains("cold stable upsert is ready"));
+    assert_eq!(
+        serde_json::from_str::<TraceExportRecordV1>(&rendered_transcript).unwrap(),
+        transcript_record
+    );
 }
 
 #[test]

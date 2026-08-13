@@ -1,9 +1,9 @@
 use super::{AgentActivityEventV1, ToolStatusV1};
 
 impl AgentActivityEventV1 {
-    /// Drops a malformed, unsupported, or status-inconsistent graph
-    /// correlation before an untrusted activity frame can reach durable
-    /// storage. Valid fingerprints contain no raw argument or result content.
+    /// Drops malformed, unsupported, or status-inconsistent graph evidence
+    /// before an untrusted activity frame can reach durable storage. Valid
+    /// records contain no raw argument or result content.
     pub fn sanitize_graph_correlation(&mut self) {
         let Self::ToolFinished(finished) = self else {
             return;
@@ -18,6 +18,19 @@ impl AgentActivityEventV1 {
             })
         {
             finished.graph_correlation = None;
+        }
+        if finished
+            .decision_anchor_lineage
+            .as_ref()
+            .is_some_and(|lineage| {
+                finished.status != ToolStatusV1::Succeeded
+                    || finished
+                        .graph_correlation
+                        .as_ref()
+                        .is_none_or(|correlation| !lineage.is_valid_for(correlation))
+            })
+        {
+            finished.decision_anchor_lineage = None;
         }
     }
 

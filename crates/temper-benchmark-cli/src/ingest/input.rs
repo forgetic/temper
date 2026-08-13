@@ -14,6 +14,7 @@ use crate::{TraceDiagnosticCodeV1, TraceDiagnosticV1};
 type ParsedExport = (
     Vec<AgentRunEventV1>,
     Vec<BlobAttachmentV1>,
+    Vec<temper_protocol_activity::OperatorTranscriptToolResultV1>,
     Vec<TraceDiagnosticV1>,
 );
 
@@ -46,6 +47,7 @@ pub(super) fn parse_raw_events(
 pub(super) fn read_export(path: &Path, bytes: &[u8]) -> Result<ParsedExport, TraceIngestError> {
     let mut events = Vec::new();
     let mut attachments = Vec::new();
+    let mut operator_transcript = Vec::new();
     let mut diagnostics = Vec::new();
     visit_lines(bytes, &mut diagnostics, |line, value| {
         let record: TraceExportRecordV1 =
@@ -59,10 +61,14 @@ pub(super) fn read_export(path: &Path, bytes: &[u8]) -> Result<ParsedExport, Tra
             TraceExportRecordV1::BlobAttachmentV1 { attachment, .. } => {
                 attachments.push(attachment);
             }
+            TraceExportRecordV1::OperatorTranscriptV1 { record, .. } => {
+                operator_transcript.push(record);
+            }
         }
         Ok(())
     })?;
-    require_events(path, events).map(|events| (events, attachments, diagnostics))
+    require_events(path, events)
+        .map(|events| (events, attachments, operator_transcript, diagnostics))
 }
 
 pub(super) fn detect_export(path: &Path, bytes: &[u8]) -> Result<bool, TraceIngestError> {

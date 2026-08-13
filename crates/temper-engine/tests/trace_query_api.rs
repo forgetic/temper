@@ -479,6 +479,9 @@ fn event_pages_follow_appends_and_jsonl_export_preserves_canonical_order() {
                     TraceExportRecordV1::BlobAttachmentV1 { .. } => {
                         panic!("run-c has no blob attachments")
                     }
+                    TraceExportRecordV1::OperatorTranscriptV1 { .. } => {
+                        panic!("durable engine export has no operator transcript")
+                    }
                 }
             })
             .collect::<Vec<_>>();
@@ -595,6 +598,7 @@ fn prompt_blob_export_is_self_contained_deterministic_and_revalidated() {
                     Some(event.seq)
                 }
                 TraceExportRecordV1::BlobAttachmentV1 { .. } => None,
+                TraceExportRecordV1::OperatorTranscriptV1 { .. } => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(event_sequences, [1, 2, 3, 4]);

@@ -2,9 +2,11 @@
 
 use super::*;
 use crate::machine::{
-    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    CodebaseMemoryTiming, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
+    DecisionAnchorTargetKindV1, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolResultMetadata,
 };
+use crate::shell::tool_result::TOOL_RESULT_PREVIEW_BYTES;
 use async_trait::async_trait;
 use skein::lab::{LabConfig, LabRuntime};
 use skein::types::Budget;
@@ -98,6 +100,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
             false,
             &clock,
             observed.as_ref(),
+            None,
         )
         .await
         .expect("tool was not cancelled")
@@ -118,6 +121,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
                 failure: None,
                 codebase_memory_timing: None,
                 graph_correlation: None,
+                decision_anchor_lineage: None,
             },
         } if id == "call-1" && name == "fake" && preview == "bounded result"
     ));
@@ -188,6 +192,26 @@ fn only_codebase_memory_tools_retain_numeric_graph_timings() {
 }
 
 #[test]
+fn graph_result_metadata_and_debug_remain_content_free() {
+    const SECRET: &str = "Authorization: Bearer GRAPH-RESULT-SECRET";
+    let text = format!("safe readiness {SECRET}");
+    let output = ToolOutput {
+        content: vec![tongs::model::ContentBlock::Text(
+            tongs::model::TextContent {
+                text: text.clone(),
+                text_signature: None,
+            },
+        )],
+        details: None,
+        is_error: false,
+    };
+    let metadata = bounded_tool_result("codebase_memory_search_graph", &output);
+    assert_eq!(metadata.preview, None);
+    assert_eq!(metadata.bytes, text.len() as u64);
+    assert!(!format!("{metadata:?}").contains(SECRET));
+}
+
+#[test]
 fn only_closed_graph_correlation_details_enter_trusted_metadata() {
     const SECRET: &str = "Authorization: Bearer CORE-GRAPH-CORRELATION-SECRET";
     let correlation = GraphCorrelationV1::new(
@@ -214,9 +238,12 @@ fn only_closed_graph_correlation_details_enter_trusted_metadata() {
     };
     let metadata = bounded_tool_result("codebase_memory_search_graph", &output);
     assert_eq!(metadata.graph_correlation, Some(correlation.clone()));
+    assert_eq!(metadata.decision_anchor_lineage, Some(lineage.clone()));
     assert!(
-        !format!("{metadata:?}").contains("00000000-0000-4000-8000-000000000001"),
-        "lineage is never promoted into activity metadata"
+        !serde_json::to_string(&metadata.decision_anchor_lineage)
+            .expect("lineage serializes")
+            .contains(SECRET),
+        "lineage retains no provider value"
     );
     assert!(
         !serde_json::to_string(&metadata.graph_correlation)
@@ -414,6 +441,7 @@ fn codebase_memory_tool_timeout_uses_virtual_time_and_emits_safe_cancelled_bound
             false,
             &SystemEventClock,
             observed.as_ref(),
+            None,
         )
         .await
         .expect("a timeout is returned to the model")
@@ -480,6 +508,7 @@ fn external_cancellation_drops_a_hung_tool_without_advancing_time() {
             false,
             &SystemEventClock,
             observed.as_ref(),
+            None,
         )
         .await
     });

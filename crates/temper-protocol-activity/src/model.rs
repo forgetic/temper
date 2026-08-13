@@ -7,12 +7,14 @@ use temper_protocol_context::W3cTraceContext;
 use crate::{ACTIVITY_PROTOCOL_VERSION, ActivityValidationError};
 
 mod failure;
+mod graph_lineage;
 mod model_call;
 mod prompt;
 mod sanitize;
 mod terminal;
 mod tool_failure;
 pub use failure::*;
+pub use graph_lineage::*;
 pub use model_call::*;
 pub use prompt::*;
 pub use terminal::*;

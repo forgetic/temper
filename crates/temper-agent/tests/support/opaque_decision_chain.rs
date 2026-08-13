@@ -28,6 +28,7 @@ pub enum DecisionCase {
     ProducerTurnDependents,
     ConventionalReadSubstitution,
     IncompleteSourceEvidence,
+    UnavailableAfterRoot,
     UnconsumableRecoveryExhausted,
 }
 
@@ -43,6 +44,7 @@ pub enum DecisionStep {
     MutationBlocked,
     UnrelatedLaterTarget,
     ProducerTurnDependents,
+    UnavailableFallback,
     Recovery,
     BypassStopped,
     Complete,
@@ -98,8 +100,10 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         .await
     });
     match (case, result) {
-        (DecisionCase::Consumed, Ok(result)) => assert_eq!(result.verdict, None),
-        (DecisionCase::Consumed, Err(error)) => {
+        (DecisionCase::Consumed | DecisionCase::UnavailableAfterRoot, Ok(result)) => {
+            assert_eq!(result.verdict, None)
+        }
+        (DecisionCase::Consumed | DecisionCase::UnavailableAfterRoot, Err(error)) => {
             panic!("native Jig agent completes the consumed decision chain: {error}")
         }
         (_, Err(CodingAgentError::NoProduct)) => {}
@@ -392,6 +396,57 @@ fn decision_chain_fake(
                 record(DecisionStep::Complete);
                 Reply::text(r#"{"summary":"Stopped after a blocked incomplete-evidence mutation."}"#)
             }
+            (DecisionCase::UnavailableAfterRoot, 0) => {
+                record(DecisionStep::Discovery);
+                tool_reply(
+                    "discover-implementation",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query": "implementation"}),
+                )
+            }
+            (DecisionCase::UnavailableAfterRoot, 1) => {
+                record(DecisionStep::Refinement);
+                tool_reply(
+                    "unavailable-refinement",
+                    "codebase_memory_search_code",
+                    serde_json::json!({
+                        "pattern": next_target(),
+                        "force_unavailable": true,
+                    }),
+                )
+            }
+            (DecisionCase::UnavailableAfterRoot, 2) => {
+                assert!(
+                    view.messages.iter().any(|message| {
+                        message.role == "tool"
+                            && message
+                                .content
+                                .contains("do not retry codebase-memory immediately")
+                    }),
+                    "the trusted unavailable result must provide bounded fallback guidance"
+                );
+                record(DecisionStep::UnavailableFallback);
+                tool_reply(
+                    "conventional-fallback-read",
+                    "read",
+                    serde_json::json!({"path": "demo/README.md"}),
+                )
+            }
+            (DecisionCase::UnavailableAfterRoot, 3) => {
+                record(DecisionStep::Mutation);
+                tool_reply(
+                    "mutate-after-unavailable-fallback",
+                    "write",
+                    serde_json::json!({
+                        "path": "demo/EVIDENCE.md",
+                        "content": "conventional fallback after unavailable provider\n",
+                    }),
+                )
+            }
+            (DecisionCase::UnavailableAfterRoot, 4) => {
+                record(DecisionStep::Complete);
+                Reply::text(r#"{"summary":"Used conventional discovery after an unavailable provider."}"#)
+            }
             (DecisionCase::UnconsumableRecoveryExhausted, 0) => {
                 record(DecisionStep::Discovery);
                 tool_reply(
@@ -412,6 +467,12 @@ fn decision_chain_fake(
                 assert!(
                     !corrections.is_empty(),
                     "the native agent must inject a generic recovery state"
+                );
+                assert!(
+                    corrections
+                        .iter()
+                        .all(|message| message.content.contains("compatible current-root descendant")),
+                    "recovery guidance must retain the bounded current-root policy"
                 );
                 assert!(
                     corrections

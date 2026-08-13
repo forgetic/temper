@@ -14,10 +14,13 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use temper_agent_core::{
-    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
-    SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory, ToolFailureDiagnostic,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory,
+    ToolFailureDiagnostic,
 };
-use temper_protocol_activity::{GraphCorrelationTargetKindV1, GraphCorrelationV1};
+use temper_protocol_activity::{
+    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, GraphCorrelationTargetKindV1,
+    GraphCorrelationV1,
+};
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
     WorkspaceContext,

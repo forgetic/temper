@@ -3,6 +3,8 @@
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use super::DecisionAnchorLineageV1;
 use sha2::{Digest as _, Sha256};
 
 use super::CapturedContentV1;
@@ -206,6 +208,16 @@ impl GraphCorrelationV1 {
         Some(encoded)
     }
 
+    /// Checks the fixed-width digest representation retained by the activity
+    /// protocol. This validates a digest without revealing or reinterpreting
+    /// the source target that produced it.
+    pub fn is_valid_target_digest(value: &str) -> bool {
+        value.len() == GRAPH_CORRELATION_DIGEST_BYTES * 2
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    }
+
     /// Normalizes a declared structured target without interpreting or
     /// retaining its contents. Control characters, empty values, and overlong
     /// values are omitted rather than truncated.
@@ -222,11 +234,7 @@ impl GraphCorrelationV1 {
     pub fn is_valid(&self) -> bool {
         self.version == GRAPH_CORRELATION_VERSION
             && self.tool.supports_target_kind(self.target_kind)
-            && self.target_digest.len() == GRAPH_CORRELATION_DIGEST_BYTES * 2
-            && self
-                .target_digest
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            && Self::is_valid_target_digest(&self.target_digest)
     }
 }
 
@@ -262,6 +270,8 @@ pub struct ToolFinishedV1 {
     pub codebase_memory_timing: Option<CodebaseMemoryTimingV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_correlation: Option<GraphCorrelationV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_anchor_lineage: Option<DecisionAnchorLineageV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
