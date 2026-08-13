@@ -86,6 +86,10 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
             ConvergenceStrategy::CodebaseMemory,
         ),
         (
+            "mapped-live-graph-consumption",
+            ConvergenceStrategy::CodebaseMemory,
+        ),
+        (
             "implementation-pr-handoff",
             ConvergenceStrategy::ImplementationPrHandoff,
         ),

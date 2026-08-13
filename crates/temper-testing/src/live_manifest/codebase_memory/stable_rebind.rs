@@ -24,6 +24,9 @@ pub(super) fn validate_mcp_contract(
         Some("provider-neutral-anchor-lineage") => {
             return super::typed_lineage_anchor::validate(mcp, calls);
         }
+        Some("mapped-live-graph-consumption") => {
+            return super::mapped_graph_consumption::validate(mcp, calls);
+        }
         _ => {}
     }
 
@@ -274,6 +277,7 @@ pub(super) fn stable_rebind_evidence(
                         "served_current_root_source"
                             | "served_result_derived_consumer"
                             | "served_typed_lineage_consumer"
+                            | "served_mapped_current_root_source"
                     )
                 )
         }),
@@ -368,6 +372,7 @@ fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
                 | "result-driven-decision-guidance"
                 | "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
+                | "mapped-live-graph-consumption"
         )
     )
 }
