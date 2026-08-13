@@ -28,7 +28,8 @@ runner:
   `implementation-pr-handoff`, `codebase-memory-agent`,
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
   `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
-  `provider-neutral-anchor-lineage`, `model-failure-recovery`, `plan-centric-feature-branch`,
+  `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`, `model-failure-recovery`,
+  `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
   `runner.uses = "manifest"`. Every run boots real Forgejo, a host
@@ -196,6 +197,22 @@ and aggregate evidence retain only privacy-safe binding, ordering, correlation,
 and lineage type facts; transient provider/model values, targets, source paths,
 digests, traces, credentials, and runtime logs remain ephemeral. This mapping
 does not change the historical `#991` mapping.
+
+### Mapped live graph-consumption mapping
+
+`mapped-live-graph-consumption` is the sole active mapping for `ai/temper#1009`
+and `ai/temper#1010` on `agent/pr-for-feature-1009`. Its live provider emits
+the approved multi-part nested result, short-symbol, caller-list,
+related-source, and source-metadata shapes. The Jig consumes one root and four
+later-turn carry-forwards through refinement, trace, and two current-root source
+reads before one expected unavailable descendant and its bounded conventional
+fallback; no graph tool is immediately retried. Aggregate evidence retains only safe tool/count/order, binding,
+correlation/lineage-stage, and closed fixture-checkpoint facts. Provider values,
+targets, source, paths, digests, prompts, credentials, and diagnostic traces
+remain ephemeral. Focused native tests retain the denied-path regressions, and
+this live mapping proves unavailable fallback without an immediate graph retry.
+This mapping leaves both
+the historical `#991` and `#1000` mappings unchanged.
 
 ### Structured run evidence
 

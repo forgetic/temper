@@ -7,7 +7,7 @@
 //! ([`AgentRequest`]). Keeping them here — separate from the loop's logic —
 //! lets the protocol be read and depended on without the driving code.
 
-use temper_protocol_activity::GraphCorrelationV1;
+use temper_protocol_activity::{DecisionAnchorLineageV1, GraphCorrelationV1};
 use tongs::model::{AssistantMessage, ContentBlock, Message, ToolCall};
 use tongs::provider::ToolDef;
 use tongs::tools::ToolOutput;
@@ -230,7 +230,7 @@ pub struct CodebaseMemoryTiming {
 /// trusted codebase-memory diagnostic. The original byte count and truncation
 /// bit let capture projections describe omitted content without retaining
 /// arbitrary output.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct ToolResultMetadata {
     pub preview: Option<String>,
     pub bytes: u64,
@@ -238,6 +238,26 @@ pub struct ToolResultMetadata {
     pub failure: Option<ToolFailureDiagnostic>,
     pub codebase_memory_timing: Option<CodebaseMemoryTiming>,
     pub graph_correlation: Option<GraphCorrelationV1>,
+    /// Typed current-root lineage from the trusted wrapper. It is restricted
+    /// to durable activity's closed, provider-neutral schema.
+    pub decision_anchor_lineage: Option<DecisionAnchorLineageV1>,
+}
+
+// A preview may be safe for its explicit consumer but is never safe to expose
+// accidentally through an event or error's diagnostic formatting.
+impl std::fmt::Debug for ToolResultMetadata {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ToolResultMetadata")
+            .field("preview_bytes", &self.preview.as_ref().map(String::len))
+            .field("bytes", &self.bytes)
+            .field("truncated", &self.truncated)
+            .field("failure", &self.failure)
+            .field("codebase_memory_timing", &self.codebase_memory_timing)
+            .field("graph_correlation", &self.graph_correlation)
+            .field("decision_anchor_lineage", &self.decision_anchor_lineage)
+            .finish()
+    }
 }
 
 /// A live streaming fragment of a model response, forwarded by the shell.

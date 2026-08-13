@@ -69,6 +69,7 @@ fn drive_coding_loop(
         lifecycle_address: config.lifecycle_address.clone(),
         lifecycle_reporter: None,
         cancellation: Default::default(),
+        operator_transcript: config.operator_transcript.clone(),
     };
     // The out-of-process supervisor passes its delegated job cgroup as an
     // inherited descriptor. The production factory discovers that descriptor;

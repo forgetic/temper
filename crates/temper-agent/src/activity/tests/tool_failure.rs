@@ -57,6 +57,7 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                     graph_execution_ms: 3,
                 }),
                 graph_correlation: Some(correlation.clone()),
+                decision_anchor_lineage: None,
             },
         });
         let mut failure = ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::ProcessExit);
@@ -76,6 +77,7 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                     graph_execution_ms: 3,
                 }),
                 graph_correlation: Some(correlation.clone()),
+                decision_anchor_lineage: None,
             },
         });
 

@@ -28,6 +28,12 @@ pub(super) fn evidence_lines(
             retained_mcp_log.unwrap_or(&evidence.fake_mcp_log).display()
         ),
     ];
+    if !evidence.aggregate_checkpoints.is_empty() {
+        lines.push(format!(
+            "codebase-memory aggregate checkpoints: {:?}",
+            evidence.aggregate_checkpoints
+        ));
+    }
     lines.push(match (&evidence.produced_file, &evidence.expected_result) {
         (Some(produced_file), Some(expected_result)) => format!(
             "codebase-memory diff: engineer produced {produced_file} after bounded graph evidence containing {expected_result}"

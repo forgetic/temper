@@ -4,6 +4,7 @@ mod correlation;
 mod health;
 mod indexing;
 mod lifecycle;
+mod lineage;
 mod observability;
 mod result_presentation;
 #[path = "test_support.rs"]
@@ -95,7 +96,7 @@ fn codebase_memory_failures_are_classified_without_retaining_source_text() {
     for (error, expected) in cases {
         let output = codebase_memory_failure_output(classify_mcp_error(&error));
         assert!(output.is_error);
-        assert!(!output_text(&output).contains(super::result_presentation::DECISION_ANCHOR));
+        assert!(!output_text(&output).contains("[Decision anchor:"));
         assert_eq!(
             output
                 .details

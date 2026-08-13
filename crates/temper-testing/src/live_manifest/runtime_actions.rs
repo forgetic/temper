@@ -61,6 +61,7 @@ impl LiveExecutionContext<'_> {
                             | "result-driven-decision-guidance"
                             | "provider-result-anchor"
                             | "provider-neutral-anchor-lineage"
+                            | "mapped-live-graph-consumption"
                     )
                 ),
             "unknown fake codebase-memory fixture",
@@ -186,6 +187,7 @@ impl LiveExecutionContext<'_> {
                                 | "result-driven-decision-guidance"
                                 | "provider-result-anchor"
                                 | "provider-neutral-anchor-lineage"
+                                | "mapped-live-graph-consumption"
                         )
                     )
                 }),

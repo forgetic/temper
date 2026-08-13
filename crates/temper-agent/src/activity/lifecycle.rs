@@ -525,6 +525,7 @@ mod tests {
                 failure: None,
                 codebase_memory_timing: None,
                 graph_correlation: None,
+                decision_anchor_lineage: None,
             },
         });
         sink.emit(AgentEvent::Steered { count: 1 });

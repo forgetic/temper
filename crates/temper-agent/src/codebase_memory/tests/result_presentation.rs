@@ -227,3 +227,97 @@ fn wrapper_carries_only_typed_equivalent_provider_identities_under_one_opaque_ro
         }
     });
 }
+
+#[test]
+fn wrapper_uses_private_typed_parts_without_changing_model_text_or_details() {
+    const PRIVATE_TYPED_VALUE: &str = "PRIVATE-TYPED-PART-SENTINEL";
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("typed-parts.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+
+    temper_agent_io::block_on(async move {
+        let tools = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "typed-lineage-parts",
+                &log_path,
+                json!({}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("build toolset")
+        .into_tools();
+        let graph = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_search_graph")
+            .expect("graph wrapper");
+        let trace = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_trace_path")
+            .expect("trace wrapper");
+        let source = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_get_code_snippet")
+            .expect("source wrapper");
+
+        let root_output = graph
+            .execute("root", json!({"query": "start"}), None)
+            .await
+            .expect("root result");
+        let root = lineage(&root_output);
+        let root_text = output_text(&root_output);
+        assert!(root_text.starts_with("MODEL-VISIBLE-TYPED-RESULT symbol=run"));
+        assert!(root_text.ends_with(DECISION_ANCHOR));
+        assert!(
+            !root_text.contains(PRIVATE_TYPED_VALUE),
+            "structured-only values must not alter model-visible text"
+        );
+
+        let trace_output = trace
+            .execute("trace", json!({"function_name": "run"}), None)
+            .await
+            .expect("short-symbol descendant");
+        assert_eq!(
+            lineage(&trace_output).stage,
+            DecisionAnchorLineageStageV1::CarryForward
+        );
+        assert_eq!(lineage(&trace_output).root_binding, root.root_binding);
+
+        for qualified_name in [
+            "crate::engine::caller",
+            "crate::engine::source",
+            "crate::engine::behavior",
+        ] {
+            let output = source
+                .execute(
+                    qualified_name,
+                    json!({"qualified_name": qualified_name}),
+                    None,
+                )
+                .await
+                .expect("approved structured descendant");
+            assert_eq!(
+                lineage(&output).stage,
+                DecisionAnchorLineageStageV1::CarryForward
+            );
+            assert_eq!(lineage(&output).root_binding, root.root_binding);
+        }
+
+        let details = serde_json::to_string(&[root_output.details, trace_output.details])
+            .expect("details serialize");
+        for raw in [
+            PRIVATE_TYPED_VALUE,
+            "crate::engine::caller",
+            "crate::engine::source",
+            "crate::engine::behavior",
+        ] {
+            assert!(!details.contains(raw), "tool details retained {raw:?}");
+        }
+    });
+}

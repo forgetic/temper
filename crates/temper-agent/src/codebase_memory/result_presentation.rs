@@ -2,13 +2,10 @@ use super::MAX_CODEBASE_MEMORY_OUTPUT_BYTES;
 
 /// Model-visible guidance that is deliberately generic: it follows only a
 /// complete, bounded result and never carries provider arguments or fields.
-pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: This is a bounded successful targeted current-root result. In a later model turn, use the provider result above with the work-item requirements to select the next dependent refinement, trace, or exact source read.]";
+pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: This complete typed graph result is eligible for later-turn evidence. In a later model turn, select provider-returned symbols or source identities exactly for dependent refinement, trace, or source reads. Independent evidence reads may remain parallel.]";
 
 pub(super) struct PresentedResult {
     pub(super) text: String,
-    /// The exact bounded provider text shown before any generic anchor suffix.
-    /// It stays in-process only while the wrapper derives typed lineage.
-    pub(super) provider_text: String,
     pub(super) truncated: bool,
     pub(super) decision_anchor: bool,
 }
@@ -34,7 +31,6 @@ pub(super) fn present_result(
     };
     PresentedResult {
         text,
-        provider_text: bounded.text,
         truncated: bounded.truncated,
         decision_anchor: anchored,
     }

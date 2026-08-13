@@ -2,11 +2,17 @@
 
 mod tests {
     use super::super::super::decision_anchor::*;
+    use crate::machine::tests::common::{
+        assistant_tool_calls, calls_llm, complete, llm_responded, run_tools, tool_finished, user,
+    };
     use crate::machine::{
-        SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
+        AgentMachine, AgentRequest, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+        SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
     };
     use std::collections::BTreeMap;
+    use temper_agent_io::{EngineTime, Machine};
     use temper_protocol_activity::{
+        DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
         GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
     };
     use tongs::{
@@ -16,6 +22,10 @@ mod tests {
 
     const ROOT: &str = "00000000-0000-4000-8000-000000000001";
     const OTHER_ROOT: &str = "00000000-0000-4000-8000-000000000002";
+
+    mod root_forest {
+        include!("decision_anchor_root_forest.rs");
+    }
 
     fn effects() -> BTreeMap<String, ToolEffects> {
         [
@@ -97,6 +107,19 @@ mod tests {
         )
     }
 
+    fn unavailable_output() -> ToolOutput {
+        ToolOutput {
+            content: Vec::new(),
+            details: Some(serde_json::json!({
+                SAFE_TOOL_FAILURE_DETAIL_KEY: {
+                    "source": "codebase_memory",
+                    "category": "transport",
+                },
+            })),
+            is_error: true,
+        }
+    }
+
     fn finish(
         state: &mut DecisionAnchorState,
         id: &str,
@@ -123,6 +146,158 @@ mod tests {
     }
 
     #[test]
+    fn direct_trace_and_two_current_root_sources_complete_without_search_code() {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut state,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
+        state.on_tool_dispatched(
+            &call("implementation", "codebase_memory_get_code_snippet"),
+            1,
+        );
+        state.on_tool_dispatched(&call("behavior", "codebase_memory_get_code_snippet"), 1);
+        let trace = output(
+            "codebase_memory_trace_path",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        let implementation = output(
+            "codebase_memory_get_code_snippet",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        let behavior = output(
+            "codebase_memory_get_code_snippet",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        assert_eq!(
+            state.on_tool_batch_finished(&[
+                (
+                    "implementation",
+                    "codebase_memory_get_code_snippet",
+                    &implementation
+                ),
+                ("trace", "codebase_memory_trace_path", &trace),
+                ("behavior", "codebase_memory_get_code_snippet", &behavior),
+            ]),
+            DecisionAnchorTransition::Unchanged,
+        );
+        assert!(
+            !state.blocks_mutation("write"),
+            "a later trace plus sufficient current-root source reads is complete evidence"
+        );
+    }
+
+    #[test]
+    fn parallel_sources_then_trace_batch_completes_the_same_evidence_set() {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut state,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+
+        // Dispatching snippets before the trace must be equivalent to the
+        // trace-first batch: all later read-only siblings are evaluated from
+        // the same pre-batch root once every transport result has settled.
+        state.on_tool_dispatched(
+            &call("implementation", "codebase_memory_get_code_snippet"),
+            1,
+        );
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
+        state.on_tool_dispatched(&call("behavior", "codebase_memory_get_code_snippet"), 1);
+        let implementation = output(
+            "codebase_memory_get_code_snippet",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        let trace = output(
+            "codebase_memory_trace_path",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        let behavior = output(
+            "codebase_memory_get_code_snippet",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        assert_eq!(
+            state.on_tool_batch_finished(&[
+                (
+                    "implementation",
+                    "codebase_memory_get_code_snippet",
+                    &implementation,
+                ),
+                ("trace", "codebase_memory_trace_path", &trace),
+                ("behavior", "codebase_memory_get_code_snippet", &behavior,),
+            ]),
+            DecisionAnchorTransition::Unchanged,
+        );
+        assert!(
+            !state.blocks_mutation("write"),
+            "sibling dispatch order cannot change complete current-root evidence"
+        );
+    }
+
+    #[test]
+    fn root_producer_and_same_turn_dependents_stay_ineligible() {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 0);
+        state.on_tool_dispatched(&call("source-one", "codebase_memory_get_code_snippet"), 0);
+        state.on_tool_dispatched(&call("source-two", "codebase_memory_get_code_snippet"), 0);
+        let root = output(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        let trace = output(
+            "codebase_memory_trace_path",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        let source_one = output(
+            "codebase_memory_get_code_snippet",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        let source_two = output(
+            "codebase_memory_get_code_snippet",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        state.on_tool_batch_finished(&[
+            (
+                "source-two",
+                "codebase_memory_get_code_snippet",
+                &source_two,
+            ),
+            ("trace", "codebase_memory_trace_path", &trace),
+            ("root", "codebase_memory_search_graph", &root),
+            (
+                "source-one",
+                "codebase_memory_get_code_snippet",
+                &source_one,
+            ),
+        ]);
+        assert!(
+            state.blocks_mutation("write"),
+            "the root must be consumed by a later model turn"
+        );
+    }
+
+    #[test]
     fn blocks_until_a_later_root_bound_trace_and_two_source_reads_complete() {
         let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
         state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
@@ -135,15 +310,7 @@ mod tests {
         );
         assert!(state.blocks_mutation("write"));
 
-        state.on_tool_dispatched(&call("refine", "codebase_memory_search_code"), 1);
-        finish(
-            &mut state,
-            "refine",
-            "codebase_memory_search_code",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 2);
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
         finish(
             &mut state,
             "trace",
@@ -151,7 +318,7 @@ mod tests {
             ROOT,
             DecisionAnchorLineageStageV1::CarryForward,
         );
-        state.on_tool_dispatched(&call("source", "codebase_memory_get_code_snippet"), 3);
+        state.on_tool_dispatched(&call("source", "codebase_memory_get_code_snippet"), 2);
         finish(
             &mut state,
             "source",
@@ -163,7 +330,7 @@ mod tests {
             state.blocks_mutation("write"),
             "one source read is incomplete"
         );
-        state.on_tool_dispatched(&call("test", "codebase_memory_get_code_snippet"), 4);
+        state.on_tool_dispatched(&call("test", "codebase_memory_get_code_snippet"), 3);
         finish(
             &mut state,
             "test",
@@ -173,6 +340,183 @@ mod tests {
         );
 
         assert!(!state.blocks_mutation("write"));
+    }
+
+    #[test]
+    fn parallel_trace_and_source_batch_uses_dispatch_order_after_reverse_completion() {
+        let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects());
+        let _ = machine.on_start(EngineTime::ZERO);
+
+        let root_requests = complete(
+            &mut machine,
+            llm_responded(assistant_tool_calls(&[(
+                "root",
+                "codebase_memory_search_graph",
+            )])),
+        );
+        assert_eq!(run_tools(&root_requests), ["root"]);
+        let _ = complete(
+            &mut machine,
+            tool_finished(
+                "root",
+                output(
+                    "codebase_memory_search_graph",
+                    ROOT,
+                    DecisionAnchorLineageStageV1::Root,
+                ),
+            ),
+        );
+
+        let refine_requests = complete(
+            &mut machine,
+            llm_responded(assistant_tool_calls(&[(
+                "refine",
+                "codebase_memory_search_code",
+            )])),
+        );
+        assert_eq!(run_tools(&refine_requests), ["refine"]);
+        let _ = complete(
+            &mut machine,
+            tool_finished(
+                "refine",
+                output(
+                    "codebase_memory_search_code",
+                    ROOT,
+                    DecisionAnchorLineageStageV1::CarryForward,
+                ),
+            ),
+        );
+
+        let batch_requests = complete(
+            &mut machine,
+            llm_responded(assistant_tool_calls(&[
+                ("trace", "codebase_memory_trace_path"),
+                ("implementation", "codebase_memory_get_code_snippet"),
+                ("behavior", "codebase_memory_get_code_snippet"),
+            ])),
+        );
+        assert_eq!(
+            run_tools(&batch_requests),
+            ["trace", "implementation", "behavior"],
+            "the independent reads retain their parallel dispatch batch"
+        );
+
+        // The transport completes snippet -> trace -> snippet. The policy must
+        // wait for the whole batch and evaluate its original dispatch order so
+        // trace precedes both same-turn source reads.
+        assert!(
+            complete(
+                &mut machine,
+                tool_finished(
+                    "implementation",
+                    output(
+                        "codebase_memory_get_code_snippet",
+                        ROOT,
+                        DecisionAnchorLineageStageV1::CarryForward,
+                    ),
+                ),
+            )
+            .is_empty()
+        );
+        assert!(
+            complete(
+                &mut machine,
+                tool_finished(
+                    "trace",
+                    output(
+                        "codebase_memory_trace_path",
+                        ROOT,
+                        DecisionAnchorLineageStageV1::CarryForward,
+                    ),
+                ),
+            )
+            .is_empty()
+        );
+        let final_source = complete(
+            &mut machine,
+            tool_finished(
+                "behavior",
+                output(
+                    "codebase_memory_get_code_snippet",
+                    ROOT,
+                    DecisionAnchorLineageStageV1::CarryForward,
+                ),
+            ),
+        );
+        assert_eq!(
+            calls_llm(&final_source),
+            1,
+            "the drained batch advances once after every completion"
+        );
+
+        let mutation_requests = complete(
+            &mut machine,
+            llm_responded(assistant_tool_calls(&[("mutation", "write")])),
+        );
+        assert!(mutation_requests.iter().any(|request| {
+            matches!(
+                request,
+                AgentRequest::RunTool {
+                    call,
+                    mutation_blocked: false,
+                    ..
+                } if call.id == "mutation"
+            )
+        }));
+    }
+
+    #[test]
+    fn expected_unavailable_source_releases_conventional_fallback() {
+        let mut fallback = DecisionAnchorState::from_effects(&effects()).unwrap();
+        fallback.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut fallback,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        fallback.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
+        finish(
+            &mut fallback,
+            "trace",
+            "codebase_memory_trace_path",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        fallback.on_tool_dispatched(&call("source", "codebase_memory_get_code_snippet"), 2);
+        assert_eq!(
+            fallback.on_tool_finished(
+                "source",
+                "codebase_memory_get_code_snippet",
+                &unavailable_output(),
+            ),
+            DecisionAnchorTransition::Unchanged
+        );
+        assert!(
+            !fallback.blocks_mutation("write"),
+            "the unavailable expected source read must permit conventional fallback"
+        );
+
+        let mut unrelated = DecisionAnchorState::from_effects(&effects()).unwrap();
+        unrelated.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut unrelated,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        unrelated.on_tool_dispatched(&call("unrelated", "codebase_memory_search_graph"), 1);
+        unrelated.on_tool_finished(
+            "unrelated",
+            "codebase_memory_search_graph",
+            &unavailable_output(),
+        );
+        assert!(
+            unrelated.blocks_mutation("write"),
+            "an unrelated provider outage cannot bypass an active anchor"
+        );
     }
 
     #[test]

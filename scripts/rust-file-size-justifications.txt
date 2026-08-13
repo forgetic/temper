@@ -206,3 +206,19 @@ crates/temper-engine/src/lease_applier.rs
 # Live run-evidence assembly keeps final Forge state, provider-request identity,
 # observability, stimuli, and retained-artifact facts in one coherent snapshot.
 crates/temper-scenario-cli/src/bin/temper-scenario/manifest_executor/live.rs
+
+# Typed graph-consumption analyzer coverage intentionally keeps the shared
+# fixture, legacy compatibility, and cross-root privacy cases together.
+crates/temper-benchmark-cli/tests/graph_consumption.rs
+
+# Activity normalization is the single event-to-wire boundary; typed lineage
+# projection stays here so provider-result privacy cannot drift by event path.
+crates/temper-agent/src/activity/normalizer.rs
+
+# Decision-anchor policy regressions keep batch ordering, later-turn admission,
+# bounded fallback, and mutation gating against the same state-machine fixture.
+crates/temper-agent-core/src/machine/tests/decision_anchor.rs
+
+# Typed lineage extraction cases share provider-shape fixtures across canonical
+# aliases, ambiguity rejection, mirrored parts, and privacy-safe digest evidence.
+crates/temper-agent/src/codebase_memory/tests/lineage.rs

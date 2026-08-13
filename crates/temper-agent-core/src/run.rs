@@ -312,12 +312,14 @@ pub fn run_sub_agent_controllable_with_observability(
         events,
         model,
         clock,
+        operator_transcript,
     } = observability;
     let events: Arc<dyn EventSink> = Arc::new(PanicSafeEventSink { inner: events });
     let observability = RunObservability {
         events: Arc::clone(&events),
         model,
         clock,
+        operator_transcript,
     };
     events.emit(AgentEvent::PromptPrepared {
         system_prompt: sub_agent.system_prompt.clone(),

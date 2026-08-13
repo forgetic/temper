@@ -245,7 +245,7 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
                 saw_memory_result
                     && view.messages.iter().any(|message| {
                         message.role == "tool"
-                            && message.content.contains("[Decision anchor: This is a bounded successful targeted current-root result.")
+                            && message.content.contains("[Decision anchor: This complete typed graph result")
                     }),
                 "fake LLM did not receive the anchored codebase-memory MCP result"
             );

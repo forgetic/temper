@@ -9,6 +9,7 @@ use crate::executor::{
 use crate::managed_effect::JoinedBlocking;
 use crate::trace::ActivityEndpoint;
 
+use super::output_files::{first_party_terminal_model_failure, read_operator_transcript};
 use super::*;
 
 struct ForgeHostTask {
@@ -197,6 +198,32 @@ impl OutOfProcessRunner {
         let context_path = temp.path().join("context.json");
         let result_path = temp.path().join("result.json");
         let terminal_output_path = temp.path().join("terminal-output.json");
+        let command_operator_transcript = args
+            .windows(2)
+            .find(|pair| pair[0] == OPERATOR_TRANSCRIPT_FLAG)
+            .map(|pair| PathBuf::from(&pair[1]));
+        let diagnostic_capture = self.trace_policy.as_ref().is_some_and(|policy| {
+            policy.capture == temper_protocol_activity::CaptureModeV1::Diagnostic
+        });
+        let command_operator_transcript = (diagnostic_capture && self.runtime_limits.is_some())
+            .then_some(command_operator_transcript)
+            .flatten();
+        let local_operator_transcript = (self.runtime_limits.is_some()
+            && command_operator_transcript.is_none()
+            && diagnostic_capture)
+            .then(|| temp.path().join("operator-transcript.jsonl"));
+        let operator_transcript_path = command_operator_transcript
+            .as_deref()
+            .or(local_operator_transcript.as_deref());
+        if !diagnostic_capture {
+            if let Some(path) = args
+                .windows(2)
+                .find(|pair| pair[0] == OPERATOR_TRANSCRIPT_FLAG)
+                .map(|pair| Path::new(&pair[1]))
+            {
+                let _ = std::fs::remove_file(path);
+            }
+        }
         let context_bytes = serde_json::to_vec_pretty(context).map_err(|error| {
             AgentRunError::transient(format!("serialize agent context: {error}"))
         })?;
@@ -261,6 +288,7 @@ impl OutOfProcessRunner {
                 .is_some()
                 .then_some(terminal_output_path.as_path()),
             trace_policy_path.as_deref(),
+            local_operator_transcript.as_deref(),
             lifecycle_endpoint
                 .as_ref()
                 .map(|endpoint| endpoint.address()),
@@ -720,31 +748,13 @@ impl OutOfProcessRunner {
         let result = serde_json::from_slice::<WorkspaceResult>(&result_bytes).map_err(|error| {
             AgentRunError::permanent(format!("agent result file is not valid JSON: {error}"))
         })?;
+        let operator_transcript = read_operator_transcript(operator_transcript_path);
         Ok(AgentRunOutput {
             result,
             accepted_submit: fence.is_open().then(|| accepted_submit.latest()).flatten(),
+            operator_transcript,
         })
     }
-}
-
-pub(super) fn first_party_terminal_model_failure(
-    first_party: bool,
-    path: &Path,
-) -> Option<temper_protocol_activity::ModelFailureV1> {
-    if !first_party {
-        return None;
-    }
-    let metadata = std::fs::metadata(path).ok()?;
-    if !metadata.is_file()
-        || metadata.len() > u64::try_from(MAX_AGENT_TERMINAL_OUTPUT_BYTES).unwrap_or(u64::MAX)
-    {
-        return None;
-    }
-    let bytes = std::fs::read(path).ok()?;
-    let mut output: AgentTerminalOutputV1 = serde_json::from_slice(&bytes).ok()?;
-    output.validate().ok()?;
-    output.model_failure.normalize();
-    Some(output.model_failure)
 }
 
 fn bounded_forge_future(

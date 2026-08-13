@@ -73,6 +73,11 @@ for line in sys.stdin:
         rpc_result(request["id"], {"tools": TOOLS})
     elif method == "tools/call":
         params = request.get("params", {})
-        tool_result(request["id"], response(params.get("name"), params.get("arguments") or {}))
+        name = params.get("name")
+        args = params.get("arguments") or {}
+        if name == "search_code" and args.get("force_unavailable"):
+            rpc_result(request["id"], {"content": [{"type": "text", "text": "provider unavailable"}], "isError": True})
+        else:
+            tool_result(request["id"], response(name, args))
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})

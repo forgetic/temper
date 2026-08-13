@@ -131,7 +131,13 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          refinement, trace, or source read. Select and invoke that dependent operation only in\n\
          a later model turn. A `Decision anchor` explicitly marks a bounded successful targeted\n\
          current-root result; select from that provider result, not unrelated discovery. It is\n\
-         absent for failures, unavailable tools, and truncated or ambiguous output. A generic decision-anchor recovery message means a successful result was unconsumable: make a bounded later targeted correction or stop without a product. Failures and unavailable tools retain conventional discovery as the fallback. Keep genuinely independent discovery parallel; do not issue producer and consumer calls in the same turn or batch. Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model,\n\
+         absent for failures, unavailable tools, and truncated or ambiguous output. A generic decision-anchor\n\
+         recovery message means a successful result was unconsumable: make a bounded later targeted\n\
+         correction or stop without a product. Failures and unavailable tools retain conventional\n\
+         discovery as the fallback. Keep genuinely independent discovery parallel. A call that\n\
+         consumes the current result must be in a later model turn; later evidence calls whose\n\
+         selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
+         source evidence covers the selected current-root implementation, its caller/model,\n\
          and focused behavioral tests, sufficient to justify the smallest semantic diff.\n\n\
          Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
          - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
