@@ -118,6 +118,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
                 failure: None,
                 codebase_memory_timing: None,
                 graph_correlation: None,
+                decision_anchor_lineage: None,
             },
         } if id == "call-1" && name == "fake" && preview == "bounded result"
     ));
@@ -214,9 +215,12 @@ fn only_closed_graph_correlation_details_enter_trusted_metadata() {
     };
     let metadata = bounded_tool_result("codebase_memory_search_graph", &output);
     assert_eq!(metadata.graph_correlation, Some(correlation.clone()));
+    assert_eq!(metadata.decision_anchor_lineage, Some(lineage.clone()));
     assert!(
-        !format!("{metadata:?}").contains("00000000-0000-4000-8000-000000000001"),
-        "lineage is never promoted into activity metadata"
+        !serde_json::to_string(&metadata.decision_anchor_lineage)
+            .expect("lineage serializes")
+            .contains(SECRET),
+        "lineage retains no provider value"
     );
     assert!(
         !serde_json::to_string(&metadata.graph_correlation)

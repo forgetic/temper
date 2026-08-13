@@ -127,6 +127,7 @@ fn graph_correlation_fingerprints_closed_targets_without_retaining_raw_arguments
         failure: None,
         codebase_memory_timing: None,
         graph_correlation: Some(correlation),
+        decision_anchor_lineage: None,
     });
     event.validate().expect("closed correlation validates");
     let export = TraceExportRecordV1::event(event.clone());
@@ -150,6 +151,57 @@ fn graph_correlation_fingerprints_closed_targets_without_retaining_raw_arguments
 }
 
 #[test]
+fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        "declared target",
+    )
+    .unwrap();
+    let root = "00000000-0000-4000-8000-000000000001".to_string();
+    let mut event = usage_event(1);
+    event.event = AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
+        call_id: "graph-1".into(),
+        name: "codebase_memory_search_graph".into(),
+        status: ToolStatusV1::Succeeded,
+        duration_ms: 5,
+        result: None,
+        failure: None,
+        codebase_memory_timing: None,
+        graph_correlation: Some(correlation),
+        decision_anchor_lineage: DecisionAnchorLineageV1::new_with_canonical_target_digests(
+            root,
+            DecisionAnchorLineageStageV1::Root,
+            DecisionAnchorTargetKindV1::GraphQuery,
+            [DecisionAnchorTargetKindV1::Pattern],
+            [GraphCorrelationV1::target_digest("forged-root").unwrap()],
+        ),
+    });
+    assert_eq!(
+        event.validate(),
+        Ok(()),
+        "the constructor rejects root canonical evidence before an event is formed"
+    );
+
+    let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+        unreachable!();
+    };
+    finished.decision_anchor_lineage = Some(DecisionAnchorLineageV1 {
+        version: 1,
+        root_binding: "00000000-0000-4000-8000-000000000001".to_string(),
+        stage: DecisionAnchorLineageStageV1::Root,
+        target_kind: DecisionAnchorTargetKindV1::GraphQuery,
+        result_target_kinds: vec![DecisionAnchorTargetKindV1::Pattern],
+        canonical_target_digests: vec![GraphCorrelationV1::target_digest("forged-root").unwrap()],
+    });
+    assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
+    event.event.sanitize_graph_correlation();
+    let AgentActivityEventV1::ToolFinished(finished) = &event.event else {
+        unreachable!();
+    };
+    assert_eq!(finished.decision_anchor_lineage, None);
+}
+#[test]
 fn tool_failures_validate_only_on_non_success_boundaries() {
     let mut event = usage_event(1);
     event.event = AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
@@ -164,6 +216,7 @@ fn tool_failures_validate_only_on_non_success_boundaries() {
             graph_execution_ms: 40,
         }),
         graph_correlation: None,
+        decision_anchor_lineage: None,
     });
     event.validate().expect("failed tool diagnostic validates");
 

@@ -471,6 +471,12 @@ fn decision_chain_fake(
                 assert!(
                     corrections
                         .iter()
+                        .all(|message| message.content.contains("compatible current-root descendant")),
+                    "recovery guidance must retain the bounded current-root policy"
+                );
+                assert!(
+                    corrections
+                        .iter()
                         .all(|message| !message.content.contains("PRIVATE-UNCONSUMABLE-SENTINEL")),
                     "recovery guidance must not retain provider values"
                 );

@@ -8,7 +8,8 @@ use temper_benchmark_cli::{
     ingest_trace, render_run_summary_json, render_run_summary_markdown,
 };
 use temper_protocol_activity::{
-    AgentActivityEventV1, AgentScopeKindV1, CapturedContentV1, GraphCorrelationTargetKindV1,
+    AgentActivityEventV1, AgentScopeKindV1, CapturedContentV1, DecisionAnchorLineageStageV1,
+    DecisionAnchorLineageV1, DecisionAnchorTargetKindV1, GraphCorrelationTargetKindV1,
     GraphCorrelationToolV1, GraphCorrelationV1,
 };
 
@@ -114,6 +115,104 @@ fn graph_consumption_options() -> AnalyzeOptions {
 
 fn graph_consumption_trace() -> NormalizedTrace {
     ingest_trace(fixture("graph-consumption-events.jsonl")).unwrap()
+}
+
+fn apply_typed_lineage(trace: &mut NormalizedTrace) {
+    let root = "00000000-0000-4000-8000-000000000011";
+    let calls = [
+        (
+            "graph-search",
+            DecisionAnchorLineageStageV1::Root,
+            DecisionAnchorTargetKindV1::QualifiedName,
+        ),
+        (
+            "graph-code",
+            DecisionAnchorLineageStageV1::CarryForward,
+            DecisionAnchorTargetKindV1::FunctionName,
+        ),
+        (
+            "graph-trace",
+            DecisionAnchorLineageStageV1::CarryForward,
+            DecisionAnchorTargetKindV1::QualifiedName,
+        ),
+        (
+            "graph-source-delivery",
+            DecisionAnchorLineageStageV1::CarryForward,
+            DecisionAnchorTargetKindV1::QualifiedName,
+        ),
+        (
+            "graph-source-worker",
+            DecisionAnchorLineageStageV1::CarryForward,
+            DecisionAnchorTargetKindV1::QualifiedName,
+        ),
+    ];
+    for (call_id, stage, result_kind) in calls {
+        for event in &mut trace.events {
+            let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+                continue;
+            };
+            if finished.call_id == call_id {
+                let correlation = finished.graph_correlation.as_ref().unwrap();
+                finished.decision_anchor_lineage = DecisionAnchorLineageV1::new(
+                    root.to_string(),
+                    stage,
+                    DecisionAnchorTargetKindV1::from_graph_correlation(correlation.target_kind),
+                    [result_kind],
+                );
+            }
+        }
+    }
+}
+
+fn typed_graph_consumption_trace() -> NormalizedTrace {
+    let mut trace = graph_consumption_trace();
+    apply_typed_lineage(&mut trace);
+    trace
+}
+
+fn clear_finished_lineage(trace: &mut NormalizedTrace, call_id: &str) {
+    for event in &mut trace.events {
+        let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+            continue;
+        };
+        if finished.call_id == call_id {
+            finished.decision_anchor_lineage = None;
+        }
+    }
+}
+
+fn set_finished_lineage_root(trace: &mut NormalizedTrace, call_id: &str, root: &str) {
+    for event in &mut trace.events {
+        let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+            continue;
+        };
+        if finished.call_id == call_id {
+            finished
+                .decision_anchor_lineage
+                .as_mut()
+                .unwrap()
+                .root_binding = root.to_string();
+        }
+    }
+}
+
+fn set_finished_lineage_canonical_digest(
+    trace: &mut NormalizedTrace,
+    call_id: &str,
+    digest: String,
+) {
+    for event in &mut trace.events {
+        let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+            continue;
+        };
+        if finished.call_id == call_id {
+            finished
+                .decision_anchor_lineage
+                .as_mut()
+                .unwrap()
+                .canonical_target_digests = vec![digest.clone()];
+        }
+    }
 }
 
 fn event_has_call(event: &AgentActivityEventV1, call_id: &str) -> bool {
@@ -242,7 +341,10 @@ fn graph_counts(
 
 #[test]
 fn graph_consumption_uses_typed_correlation_for_a_generic_five_call_chain() {
-    let summary = analyze_trace(&graph_consumption_trace(), &graph_consumption_options());
+    let summary = analyze_trace(
+        &typed_graph_consumption_trace(),
+        &graph_consumption_options(),
+    );
     let graph = summary.metrics.graph.as_ref().unwrap();
     assert_eq!((graph.calls, graph.succeeded), (5, 5));
     assert_eq!(
@@ -297,9 +399,8 @@ fn graph_consumption_uses_typed_correlation_for_a_generic_five_call_chain() {
 
 #[test]
 fn v1_correlation_remains_observable_when_no_complete_lineage_can_be_derived() {
-    // Lineage is intentionally wrapper-local and absent from durable activity.
-    // A truncated provider result therefore has no lineage, but its existing
-    // closed V1 input correlation must still give relevance complete coverage.
+    // Historical traces predate typed lineage. They remain readable, while
+    // new mixed-lineage traces remain ineligible for evidence.
     let mut trace = graph_consumption_trace();
     set_finished_result(
         &mut trace,
@@ -324,7 +425,7 @@ fn v1_correlation_remains_observable_when_no_complete_lineage_can_be_derived() {
 
 #[test]
 fn sentinel_results_cannot_substitute_for_exact_typed_correlation() {
-    let mut trace = graph_consumption_trace();
+    let mut trace = typed_graph_consumption_trace();
     set_finished_result(&mut trace, "graph-search", "search-graph-marker", false);
     set_finished_correlation(
         &mut trace,
@@ -391,7 +492,7 @@ fn graph_consumption_rejects_broad_mismatched_cross_scope_and_out_of_order_consu
         ),
     ];
     for (name, mutate, (expected_relevant, expected_irrelevant)) in cases {
-        let mut trace = graph_consumption_trace();
+        let mut trace = typed_graph_consumption_trace();
         mutate(&mut trace);
         let summary = analyze_trace(&trace, &graph_consumption_options());
         assert_eq!(
@@ -433,7 +534,7 @@ fn graph_consumption_marks_missing_malformed_or_lossy_correlation_unavailable() 
         ),
     ];
     for (name, mutate, observed) in cases {
-        let mut trace = graph_consumption_trace();
+        let mut trace = typed_graph_consumption_trace();
         mutate(&mut trace);
         let summary = analyze_trace(&trace, &graph_consumption_options());
         let (relevant, irrelevant, coverage) = graph_counts(&summary);
@@ -477,7 +578,7 @@ fn graph_consumption_rejects_mismatched_or_absent_later_mutations() {
         ),
     ];
     for (name, mutate) in cases {
-        let mut trace = graph_consumption_trace();
+        let mut trace = typed_graph_consumption_trace();
         mutate(&mut trace);
         let summary = analyze_trace(&trace, &graph_consumption_options());
         assert_eq!(
@@ -496,9 +597,123 @@ fn graph_consumption_rejects_mismatched_or_absent_later_mutations() {
 }
 
 #[test]
+fn mixed_or_cross_root_typed_lineage_cannot_confer_relevance() {
+    for (name, mutate) in [
+        (
+            "missing consumer lineage",
+            Box::new(|trace: &mut NormalizedTrace| clear_finished_lineage(trace, "graph-code"))
+                as Box<dyn Fn(&mut NormalizedTrace)>,
+        ),
+        (
+            "different opaque root",
+            Box::new(|trace: &mut NormalizedTrace| {
+                set_finished_lineage_root(
+                    trace,
+                    "graph-source-delivery",
+                    "00000000-0000-4000-8000-000000000012",
+                )
+            }) as Box<dyn Fn(&mut NormalizedTrace)>,
+        ),
+    ] {
+        let mut trace = typed_graph_consumption_trace();
+        mutate(&mut trace);
+        let summary = analyze_trace(&trace, &graph_consumption_options());
+        let graph = summary.metrics.graph.as_ref().unwrap();
+        assert_eq!(
+            (graph.relevant_results, graph.irrelevant_successes),
+            (None, None),
+            "{name} must leave complete relevance evidence unavailable"
+        );
+        assert!(summary.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == TraceDiagnosticCodeV1::GraphEvidenceUnavailable
+                && diagnostic.message.contains("correlation")
+        }));
+        assert!(graph.relevance_coverage.observed < graph.relevance_coverage.expected.unwrap());
+    }
+}
+
+#[test]
+fn forged_root_canonical_digest_cannot_confer_relevance() {
+    let mut trace = typed_graph_consumption_trace();
+    set_finished_lineage_canonical_digest(
+        &mut trace,
+        "graph-search",
+        GraphCorrelationV1::target_digest("forged-root").unwrap(),
+    );
+
+    let summary = analyze_trace(&trace, &graph_consumption_options());
+    assert_eq!(graph_counts(&summary).0, None);
+    assert!(summary.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == TraceDiagnosticCodeV1::GraphEvidenceUnavailable
+            && diagnostic.message.contains("correlation")
+    }));
+}
+
+#[test]
+fn provider_qualified_canonical_digest_counts_as_relevance_without_rewriting_actual_correlation() {
+    let mut trace = typed_graph_consumption_trace();
+    set_finished_correlation(
+        &mut trace,
+        "graph-source-worker",
+        GraphCorrelationToolV1::GetCodeSnippet,
+        GraphCorrelationTargetKindV1::QualifiedName,
+        "provider.route.DeliveryRouter.worker_for",
+    );
+    set_finished_lineage_canonical_digest(
+        &mut trace,
+        "graph-source-worker",
+        GraphCorrelationV1::target_digest("DeliveryRouter::worker_for").unwrap(),
+    );
+
+    let summary = analyze_trace(&trace, &graph_consumption_options());
+    assert_eq!(
+        graph_counts(&summary),
+        (
+            Some(5),
+            Some(0),
+            MetricCoverageV1 {
+                observed: 5,
+                expected: Some(5),
+            },
+        )
+    );
+    let rendered = render_run_summary_json(&summary).unwrap();
+    assert!(!rendered.contains("provider.route.DeliveryRouter.worker_for"));
+}
+
+#[test]
+fn canonical_digest_without_valid_lineage_cannot_confer_relevance() {
+    let mut trace = typed_graph_consumption_trace();
+    set_finished_correlation(
+        &mut trace,
+        "graph-source-worker",
+        GraphCorrelationToolV1::GetCodeSnippet,
+        GraphCorrelationTargetKindV1::QualifiedName,
+        "provider.route.DeliveryRouter.worker_for",
+    );
+    set_finished_lineage_canonical_digest(
+        &mut trace,
+        "graph-source-worker",
+        GraphCorrelationV1::target_digest("DeliveryRouter::worker_for").unwrap(),
+    );
+    set_finished_lineage_root(
+        &mut trace,
+        "graph-source-worker",
+        "00000000-0000-4000-8000-000000000012",
+    );
+
+    let summary = analyze_trace(&trace, &graph_consumption_options());
+    assert_eq!(graph_counts(&summary).0, None);
+    assert!(summary.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == TraceDiagnosticCodeV1::GraphEvidenceUnavailable
+            && diagnostic.message.contains("correlation")
+    }));
+}
+
+#[test]
 fn graph_consumption_redacts_raw_provider_and_argument_values() {
     const SECRET: &str = "Authorization: Bearer BENCHMARK-GRAPH-SECRET";
-    let mut trace = graph_consumption_trace();
+    let mut trace = typed_graph_consumption_trace();
     set_started_arguments(
         &mut trace,
         "graph-search",
@@ -519,4 +734,29 @@ fn graph_consumption_redacts_raw_provider_and_argument_values() {
     ] {
         assert!(!rendered.contains(SECRET));
     }
+}
+
+#[test]
+fn independently_rooted_canonical_descendants_are_relevant_to_their_own_targets() {
+    let mut trace = typed_graph_consumption_trace();
+    set_finished_lineage_root(
+        &mut trace,
+        "graph-source-worker",
+        "00000000-0000-4000-8000-000000000022",
+    );
+    set_finished_lineage_canonical_digest(
+        &mut trace,
+        "graph-source-worker",
+        GraphCorrelationV1::target_digest("repo/src/route.rs").unwrap(),
+    );
+    set_finished_lineage_canonical_digest(
+        &mut trace,
+        "graph-source-delivery",
+        GraphCorrelationV1::target_digest("DeliveryRouter::worker_for").unwrap(),
+    );
+
+    let summary = analyze_trace(&trace, &graph_consumption_options());
+    let graph = summary.metrics.graph.unwrap();
+    assert_eq!(graph.relevant_results, Some(5));
+    assert_eq!(graph.relevance_coverage.observed, 5);
 }

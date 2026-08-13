@@ -7,7 +7,7 @@
 //! ([`AgentRequest`]). Keeping them here — separate from the loop's logic —
 //! lets the protocol be read and depended on without the driving code.
 
-use temper_protocol_activity::GraphCorrelationV1;
+use temper_protocol_activity::{DecisionAnchorLineageV1, GraphCorrelationV1};
 use tongs::model::{AssistantMessage, ContentBlock, Message, ToolCall};
 use tongs::provider::ToolDef;
 use tongs::tools::ToolOutput;
@@ -238,6 +238,9 @@ pub struct ToolResultMetadata {
     pub failure: Option<ToolFailureDiagnostic>,
     pub codebase_memory_timing: Option<CodebaseMemoryTiming>,
     pub graph_correlation: Option<GraphCorrelationV1>,
+    /// Typed current-root lineage from the trusted wrapper. It is restricted
+    /// to durable activity's closed, provider-neutral schema.
+    pub decision_anchor_lineage: Option<DecisionAnchorLineageV1>,
 }
 
 /// A live streaming fragment of a model response, forwarded by the shell.

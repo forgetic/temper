@@ -310,6 +310,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 failure: None,
                 codebase_memory_timing: None,
                 graph_correlation: None,
+                decision_anchor_lineage: None,
             },
         });
         sink.emit(AgentEvent::ToolEnd {
@@ -326,6 +327,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 failure: None,
                 codebase_memory_timing: None,
                 graph_correlation: None,
+                decision_anchor_lineage: None,
             },
         });
         sink.emit(AgentEvent::ToolStart {
@@ -345,6 +347,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 failure: None,
                 codebase_memory_timing: None,
                 graph_correlation: None,
+                decision_anchor_lineage: None,
             },
         });
         let json =
@@ -602,6 +605,7 @@ fn codebase_memory_provider_text_never_enters_activity_metadata() {
                     graph_execution_ms: 1,
                 }),
                 graph_correlation: None,
+                decision_anchor_lineage: None,
             },
         });
 

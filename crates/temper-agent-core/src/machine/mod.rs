@@ -32,7 +32,6 @@ mod protocol;
 pub use core::{AgentMachine, ArgPreviewFn};
 pub use decision_anchor::{
     DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE,
-    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
     SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 pub use protocol::{
@@ -40,6 +39,9 @@ pub use protocol::{
     CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, ModelCallStatus, OperationGeneration,
     SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallStatus,
     ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
+};
+pub use temper_protocol_activity::{
+    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
 };
 
 #[cfg(test)]

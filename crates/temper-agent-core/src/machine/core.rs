@@ -385,19 +385,7 @@ impl AgentMachine {
         // Record the result into the in-flight (front) batch.
         if let Some(batch) = self.pending_batches.front_mut() {
             if let Some(pending) = batch.iter_mut().find(|p| p.call.id == id) {
-                let tool_name = pending.call.name.clone();
-                if let Some(state) = self.decision_anchors.as_mut() {
-                    match state.on_tool_finished(&id, &tool_name, &output) {
-                        DecisionAnchorTransition::Unchanged => {}
-                        DecisionAnchorTransition::RecoveryNeeded => {
-                            self.decision_anchor_recovery = true;
-                        }
-                        DecisionAnchorTransition::RecoveryExhausted => {
-                            self.decision_anchor_exhausted = true;
-                        }
-                    }
-                }
-                pending.result = Some(tool_result_message(&id, &tool_name, output));
+                pending.output = Some(output);
             }
         }
 
@@ -409,8 +397,29 @@ impl AgentMachine {
 
         // Retire the batch: its results join the turn's results in original
         // tool-call order (batches were planned in order, so appending preserves
-        // it). Then run the next batch, or finish the turn.
+        // it). Decision-anchor transitions are also evaluated here, rather
+        // than on each transport completion, so a parallel graph batch always
+        // sees complete results in its original dispatch order.
         if let Some(batch) = self.pending_batches.pop_front() {
+            if let Some(state) = self.decision_anchors.as_mut() {
+                let completed = batch
+                    .iter()
+                    .filter_map(|pending| {
+                        pending.output.as_ref().map(|output| {
+                            (pending.call.id.as_str(), pending.call.name.as_str(), output)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                match state.on_tool_batch_finished(&completed) {
+                    DecisionAnchorTransition::Unchanged => {}
+                    DecisionAnchorTransition::RecoveryNeeded => {
+                        self.decision_anchor_recovery = true;
+                    }
+                    DecisionAnchorTransition::RecoveryExhausted => {
+                        self.decision_anchor_exhausted = true;
+                    }
+                }
+            }
             self.turn_results.extend(batch);
         }
 
@@ -427,9 +436,10 @@ impl AgentMachine {
         // All batches done: append every tool-result message in order, then
         // begin the next model turn.
         for pending in std::mem::take(&mut self.turn_results) {
-            if let Some(result) = pending.result {
-                self.messages
-                    .push(Message::ToolResult(std::sync::Arc::new(result)));
+            if let Some(output) = pending.output {
+                self.messages.push(Message::ToolResult(std::sync::Arc::new(
+                    tool_result_message(&pending.call.id, &pending.call.name, output),
+                )));
             }
         }
         requests.extend(self.begin_turn());

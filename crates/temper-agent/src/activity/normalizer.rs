@@ -500,6 +500,10 @@ impl NormalizingEventSink {
         self.project(
             state.current_turn,
             AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
+                decision_anchor_lineage: metadata.decision_anchor_lineage.filter(|lineage| {
+                    graph_correlation(metadata.graph_correlation.clone(), &name, status)
+                        .is_some_and(|correlation| lineage.is_valid_for(&correlation))
+                }),
                 graph_correlation: graph_correlation(metadata.graph_correlation, &name, status),
                 call_id: id,
                 name,

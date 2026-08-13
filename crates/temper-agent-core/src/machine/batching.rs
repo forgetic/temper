@@ -17,7 +17,7 @@ use tongs::tools::ToolEffects;
 /// shell reports it finished.
 pub(super) struct PendingTool {
     pub(super) call: ToolCall,
-    pub(super) result: Option<tongs::model::ToolResultMessage>,
+    pub(super) output: Option<tongs::tools::ToolOutput>,
 }
 
 /// The effect declaration for a tool name, defaulting to write (serialize) for
@@ -53,7 +53,7 @@ pub(super) fn plan_batches(
             );
             current.push(PendingTool {
                 call: call.clone(),
-                result: None,
+                output: None,
             });
         } else {
             if !current.is_empty() {
@@ -62,7 +62,7 @@ pub(super) fn plan_batches(
             active = Some(call_effects);
             current.push(PendingTool {
                 call: call.clone(),
-                result: None,
+                output: None,
             });
         }
     }

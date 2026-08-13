@@ -2,7 +2,8 @@ use super::result_presentation::present_result;
 use super::*;
 use temper_agent_core::SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY;
 use temper_protocol_activity::{
-    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+    DecisionAnchorLineageV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
+    GraphCorrelationV1,
 };
 
 // Reserve space for the JSON-RPC envelope, tool name, request id, and newline.
@@ -221,7 +222,7 @@ impl Tool for CodebaseMemoryTool {
         // Successful, complete, untruncated targeted calls alone may emit a
         // lineage record. Raw provider values and model selections stay in the
         // wrapper-local registry.
-        let decision_anchor_lineage = graph_correlation
+        let decision_anchor_lineage: Option<DecisionAnchorLineageV1> = graph_correlation
             .as_ref()
             .and_then(|correlation| {
                 presented.decision_anchor.then(|| {

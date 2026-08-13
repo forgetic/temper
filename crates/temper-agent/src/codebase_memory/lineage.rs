@@ -7,10 +7,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
-use temper_agent_core::{
+use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
+    GraphCorrelationTargetKindV1, GraphCorrelationV1,
 };
-use temper_protocol_activity::{GraphCorrelationTargetKindV1, GraphCorrelationV1};
 use uuid::Uuid;
 
 use crate::mcp::McpToolResultPart;
@@ -22,7 +22,7 @@ pub(super) struct DecisionAnchorLineages {
     /// `None` marks an ambiguous value. Once more than one root has offered a
     /// representation, no later model selection may use that representation to
     /// advance either root.
-    selectors: BTreeMap<Selector, Option<String>>,
+    selectors: BTreeMap<Selector, Option<SelectorBinding>>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -35,6 +35,12 @@ struct Selector {
 struct Candidate {
     kind: DecisionAnchorTargetKindV1,
     value: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SelectorBinding {
+    root_binding: String,
+    canonical_target_digests: BTreeSet<String>,
 }
 
 impl DecisionAnchorLineages {
@@ -52,14 +58,19 @@ impl DecisionAnchorLineages {
         }
         let target_kind =
             DecisionAnchorTargetKindV1::from_graph_correlation(correlation.target_kind);
-        let root = self
+        let matched = self
             .selector_for_input(correlation.target_kind, input)
             .and_then(|selector| self.selectors.get(&selector).cloned().flatten());
-        let (root_binding, stage) = match root {
-            Some(root_binding) => (root_binding, DecisionAnchorLineageStageV1::CarryForward),
+        let (root_binding, stage, canonical_target_digests) = match matched {
+            Some(binding) => (
+                binding.root_binding,
+                DecisionAnchorLineageStageV1::CarryForward,
+                binding.canonical_target_digests,
+            ),
             None => (
                 Uuid::new_v4().to_string(),
                 DecisionAnchorLineageStageV1::Root,
+                BTreeSet::new(),
             ),
         };
 
@@ -69,12 +80,18 @@ impl DecisionAnchorLineages {
         let result_target_kinds = match provider_candidates(typed_parts) {
             Some(candidates) => {
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
-                self.register(&root_binding, candidates);
+                self.register(&root_binding, candidates)?;
                 kinds
             }
             None => BTreeSet::new(),
         };
-        DecisionAnchorLineageV1::new(root_binding, stage, target_kind, result_target_kinds)
+        DecisionAnchorLineageV1::new_with_canonical_target_digests(
+            root_binding,
+            stage,
+            target_kind,
+            result_target_kinds,
+            canonical_target_digests,
+        )
     }
 
     fn selector_for_input(
@@ -82,56 +99,61 @@ impl DecisionAnchorLineages {
         target_kind: GraphCorrelationTargetKindV1,
         input: &Value,
     ) -> Option<Selector> {
-        match target_kind {
+        let selector_kind = DecisionAnchorTargetKindV1::from_graph_correlation(target_kind);
+        let value = match target_kind {
             GraphCorrelationTargetKindV1::FunctionName => input
                 .get("function_name")
                 .and_then(Value::as_str)
-                .and_then(canonical_function_name)
-                .map(|value| Selector {
-                    kind: DecisionAnchorTargetKindV1::FunctionName,
-                    value,
-                }),
+                .and_then(canonical_function_name),
             GraphCorrelationTargetKindV1::QualifiedName => input
                 .get("qualified_name")
                 .and_then(Value::as_str)
-                .and_then(canonical_qualified_name)
-                .map(|value| Selector {
-                    kind: DecisionAnchorTargetKindV1::QualifiedName,
-                    value,
+                .and_then(|value| {
+                    canonical_qualified_name(value).or_else(|| canonical_function_name(value))
                 }),
             GraphCorrelationTargetKindV1::Pattern => input
                 .get("pattern")
                 .and_then(Value::as_str)
                 .and_then(|value| {
                     canonical_qualified_name(value).or_else(|| canonical_function_name(value))
-                })
-                .map(|value| Selector {
-                    kind: DecisionAnchorTargetKindV1::Pattern,
-                    value,
                 }),
             GraphCorrelationTargetKindV1::GraphQuery
             | GraphCorrelationTargetKindV1::NamePattern
             | GraphCorrelationTargetKindV1::QualifiedNamePattern => None,
-        }
+        }?;
+        Some(Selector {
+            kind: selector_kind,
+            value,
+        })
     }
 
-    fn register(&mut self, root: &str, candidates: BTreeSet<Candidate>) {
+    fn register(&mut self, root: &str, candidates: BTreeSet<Candidate>) -> Option<()> {
         for candidate in candidates {
+            let canonical_target_digests = canonical_target_digests(&candidate.value)?;
             let selector = Selector {
                 kind: candidate.kind,
                 value: candidate.value,
             };
             match self.selectors.get(&selector) {
                 None => {
-                    self.selectors.insert(selector, Some(root.to_string()));
+                    self.selectors.insert(
+                        selector,
+                        Some(SelectorBinding {
+                            root_binding: root.to_string(),
+                            canonical_target_digests,
+                        }),
+                    );
                 }
-                Some(Some(existing)) if existing == root => {}
+                Some(Some(existing))
+                    if existing.root_binding == root
+                        && existing.canonical_target_digests == canonical_target_digests => {}
                 Some(Some(_)) => {
                     self.selectors.insert(selector, None);
                 }
                 Some(None) => {}
             }
         }
+        Some(())
     }
 }
 
@@ -141,13 +163,33 @@ impl DecisionAnchorLineages {
 /// references, and source metadata may contribute selectors.
 fn provider_candidates(typed_parts: Option<&[McpToolResultPart]>) -> Option<BTreeSet<Candidate>> {
     let typed_parts = typed_parts?;
-    let mut candidates = BTreeSet::new();
+    let mut candidates = BTreeMap::new();
+    let mut content_values = Vec::new();
     for part in typed_parts {
         let value = match part {
             McpToolResultPart::StructuredContent(value) => {
-                value.is_object().then(|| Some(value.clone()))?
+                let value = value.is_object().then(|| Some(value.clone()))?;
+                // MCP servers commonly mirror one result as both JSON text
+                // content and structuredContent. Skip only that exact
+                // cross-representation mirror. Candidate uniqueness is about
+                // provider identities rather than equivalent selectors, so
+                // representation mirrors cannot make a returned symbol
+                // ineligible.
+                if value
+                    .as_ref()
+                    .is_some_and(|value| content_values.contains(value))
+                {
+                    continue;
+                }
+                value
             }
-            McpToolResultPart::Content(block) => content_part_json(block)?,
+            McpToolResultPart::Content(block) => {
+                let value = content_part_json(block)?;
+                if let Some(value) = &value {
+                    content_values.push(value.clone());
+                }
+                value
+            }
         };
         // Non-text blocks and non-JSON text remain fully model-visible, but
         // cannot manufacture a typed lineage candidate. A malformed text
@@ -157,6 +199,7 @@ fn provider_candidates(typed_parts: Option<&[McpToolResultPart]>) -> Option<BTre
         };
         collect_result(&value, &mut candidates)?;
     }
+    let candidates = candidates.into_keys().collect::<BTreeSet<_>>();
     (candidates.len() <= MAX_RESULT_TARGETS).then_some(candidates)
 }
 
@@ -172,7 +215,7 @@ fn content_part_json(block: &Value) -> Option<Option<Value>> {
     }
 }
 
-fn collect_result(value: &Value, candidates: &mut BTreeSet<Candidate>) -> Option<()> {
+fn collect_result(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
     match value {
         Value::Array(values) => {
             for value in values {
@@ -185,7 +228,7 @@ fn collect_result(value: &Value, candidates: &mut BTreeSet<Candidate>) -> Option
     (candidates.len() <= MAX_RESULT_TARGETS).then_some(())
 }
 
-fn collect_result_item(value: &Value, candidates: &mut BTreeSet<Candidate>) -> Option<()> {
+fn collect_result_item(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
     match value {
         Value::Array(values) => {
             for value in values {
@@ -201,7 +244,7 @@ fn collect_result_item(value: &Value, candidates: &mut BTreeSet<Candidate>) -> O
 
 fn collect_result_record(
     values: &serde_json::Map<String, Value>,
-    candidates: &mut BTreeSet<Candidate>,
+    candidates: &mut BTreeMap<Candidate, u8>,
 ) -> Option<()> {
     collect_direct_symbol(values, candidates)?;
 
@@ -210,7 +253,7 @@ fn collect_result_record(
             "results" => collect_result(value, candidates)?,
             "callers" | "caller_list" | "callerList" | "caller_functions" | "callerFunctions"
             | "symbols" | "short_symbols" | "shortSymbols" => {
-                collect_reference_list(value, candidates)?
+                collect_reference_list_or_count(value, candidates)?
             }
             "related_source_references"
             | "relatedSourceReferences"
@@ -218,7 +261,7 @@ fn collect_result_record(
             | "relatedSourceRefs"
             | "related_sources"
             | "relatedSources" => collect_reference_list(value, candidates)?,
-            "next_target" | "nextTarget" => collect_reference(value, candidates)?,
+            "next_target" | "nextTarget" | "function" => collect_reference(value, candidates)?,
             "source_metadata" | "sourceMetadata" => collect_source_metadata(value, candidates)?,
             "symbol" if value.is_object() => collect_reference(value, candidates)?,
             _ => {}
@@ -229,11 +272,27 @@ fn collect_result_record(
 
 fn collect_direct_symbol(
     values: &serde_json::Map<String, Value>,
-    candidates: &mut BTreeSet<Candidate>,
+    candidates: &mut BTreeMap<Candidate, u8>,
 ) -> Option<()> {
-    let qualified = match one_symbol_field(values, &["qualified_name", "qualifiedName"])? {
-        Some(value) => Some(canonical_qualified_name(&value)?),
-        None => None,
+    let qualified_field = one_symbol_field(values, &["qualified_name", "qualifiedName"])?;
+    let (qualified, short_from_qualified_field, invalid_qualified_field) = match &qualified_field {
+        Some(value) => match canonical_qualified_name(value) {
+            Some(qualified) => (Some(qualified), None, false),
+            // The approved provider shape may label a short implementation
+            // symbol as `qualified_name`. Preserve its useful closed
+            // function representation instead of rejecting the entire
+            // otherwise typed result collection.
+            None => match canonical_function_name(value) {
+                Some(short) => (None, Some(short), false),
+                // Native graph records can prefix a qualified identity with a
+                // package name that is not a Rust identifier (for example a
+                // hyphenated package). Its adjacent short `name` is the
+                // approved identity in that shape; without that field this
+                // value remains ineligible.
+                None => (None, None, true),
+            },
+        },
+        None => (None, None, false),
     };
     let short = match one_symbol_field(
         values,
@@ -252,8 +311,35 @@ fn collect_direct_symbol(
         Some(value) => Some(canonical_function_name(&value)?),
         None => None,
     };
+    let selected_short = match (short_from_qualified_field, short) {
+        (Some(from_qualified), Some(short)) if from_qualified == short => Some(short),
+        // Explicit provider symbol fields must agree. A display `name` is
+        // considered only as a fallback below, so it cannot contradict an
+        // otherwise complete qualified identity.
+        (Some(_), Some(_)) => return None,
+        (Some(short), None) | (None, Some(short)) => Some(short),
+        (None, None) => None,
+    };
+    let selected_short = if qualified.is_none() && selected_short.is_none() {
+        // `name` is a provider record's short symbol only beside an explicit
+        // qualified field. A standalone display name must not manufacture a
+        // decision candidate in arbitrary metadata.
+        if qualified_field.is_some() {
+            match one_symbol_field(values, &["name"])? {
+                Some(value) => Some(canonical_function_name(&value)?),
+                None => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        selected_short
+    };
+    if invalid_qualified_field && selected_short.is_none() {
+        return None;
+    }
 
-    match (qualified, short) {
+    match (qualified, selected_short) {
         (Some(qualified), Some(short)) if terminal_function_name(&qualified)? != short => None,
         (Some(qualified), _) => insert_qualified(candidates, qualified),
         (None, Some(short)) => insert_function(candidates, short),
@@ -283,18 +369,31 @@ fn one_symbol_field(
     Some(value)
 }
 
-fn collect_reference_list(value: &Value, candidates: &mut BTreeSet<Candidate>) -> Option<()> {
+fn collect_reference_list(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
     for value in value.as_array()? {
         collect_reference(value, candidates)?;
     }
     Some(())
 }
 
-fn collect_source_metadata(value: &Value, candidates: &mut BTreeSet<Candidate>) -> Option<()> {
+fn collect_reference_list_or_count(
+    value: &Value,
+    candidates: &mut BTreeMap<Candidate, u8>,
+) -> Option<()> {
+    if value.is_u64() {
+        // Source metadata reports caller cardinality under the same field name
+        // used by trace results for an actual caller list.
+        Some(())
+    } else {
+        collect_reference_list(value, candidates)
+    }
+}
+
+fn collect_source_metadata(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
     collect_result_record(value.as_object()?, candidates)
 }
 
-fn collect_reference(value: &Value, candidates: &mut BTreeSet<Candidate>) -> Option<()> {
+fn collect_reference(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
     match value {
         Value::String(value) => insert_reference(candidates, value),
         Value::Object(value) => collect_result_record(value, candidates),
@@ -302,14 +401,14 @@ fn collect_reference(value: &Value, candidates: &mut BTreeSet<Candidate>) -> Opt
     }
 }
 
-fn insert_reference(candidates: &mut BTreeSet<Candidate>, value: &str) -> Option<()> {
+fn insert_reference(candidates: &mut BTreeMap<Candidate, u8>, value: &str) -> Option<()> {
     match canonical_qualified_name(value) {
         Some(value) => insert_qualified(candidates, value),
         None => insert_function(candidates, canonical_function_name(value)?),
     }
 }
 
-fn insert_qualified(candidates: &mut BTreeSet<Candidate>, value: String) -> Option<()> {
+fn insert_qualified(candidates: &mut BTreeMap<Candidate, u8>, value: String) -> Option<()> {
     let function = terminal_function_name(&value)?;
     insert(
         candidates,
@@ -317,11 +416,29 @@ fn insert_qualified(candidates: &mut BTreeSet<Candidate>, value: String) -> Opti
         DecisionAnchorTargetKindV1::Pattern,
         value.clone(),
     )?;
+    // Pattern selectors commonly use the terminal symbol returned beside a
+    // provider-qualified identity. Retain that closed representation too;
+    // the registry's ambiguity handling prevents a shared terminal name from
+    // binding across distinct roots.
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        DecisionAnchorTargetKindV1::Pattern,
+        function.clone(),
+    )?;
     insert(
         candidates,
         DecisionAnchorTargetKindV1::QualifiedName,
         DecisionAnchorTargetKindV1::QualifiedName,
         value,
+    )?;
+    // A source-read wrapper accepts a short `qualified_name` selector. Keep
+    // the provider record's direct name as that closed representation too.
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        function.clone(),
     )?;
     insert(
         candidates,
@@ -331,7 +448,7 @@ fn insert_qualified(candidates: &mut BTreeSet<Candidate>, value: String) -> Opti
     )
 }
 
-fn insert_function(candidates: &mut BTreeSet<Candidate>, value: String) -> Option<()> {
+fn insert_function(candidates: &mut BTreeMap<Candidate, u8>, value: String) -> Option<()> {
     insert(
         candidates,
         DecisionAnchorTargetKindV1::FunctionName,
@@ -342,38 +459,87 @@ fn insert_function(candidates: &mut BTreeSet<Candidate>, value: String) -> Optio
         candidates,
         DecisionAnchorTargetKindV1::FunctionName,
         DecisionAnchorTargetKindV1::FunctionName,
+        value.clone(),
+    )?;
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::FunctionName,
+        DecisionAnchorTargetKindV1::QualifiedName,
         value,
     )
 }
 
 fn insert(
-    candidates: &mut BTreeSet<Candidate>,
+    candidates: &mut BTreeMap<Candidate, u8>,
     source_kind: DecisionAnchorTargetKindV1,
     target_kind: DecisionAnchorTargetKindV1,
     value: String,
 ) -> Option<()> {
     source_kind.can_carry_forward(target_kind).then_some(())?;
+    // A provider may report one identity through multiple approved fields
+    // (for example `qualified_name`, a terminal `name`, and a `symbol` list).
+    // They are equivalent representations of the same result, not ambiguous
+    // independently returned candidates. The registry still rejects a
+    // selector that later appears under a distinct root.
     candidates
-        .insert(Candidate {
+        .entry(Candidate {
             kind: target_kind,
             value,
         })
-        .then_some(())
+        .or_insert(0);
+    Some(())
+}
+
+fn canonical_target_digests(value: &str) -> Option<BTreeSet<String>> {
+    let qualified = canonical_qualified_name(value);
+    let components = qualified
+        .as_deref()
+        .unwrap_or(value)
+        .split("::")
+        .collect::<Vec<_>>();
+    let start = components.len().saturating_sub(3);
+    components[start..]
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            GraphCorrelationV1::target_digest(&components[start + index..].join("::"))
+        })
+        .collect()
 }
 
 fn canonical_qualified_name(value: &str) -> Option<String> {
     let normalized = GraphCorrelationV1::normalize_target(value)?;
-    let components = normalized.split("::").collect::<Vec<_>>();
+    // The production provider uses dotted graph identities while other MCP
+    // adapters use Rust-style `::` paths. Normalize both approved qualified
+    // representations to one opaque registry key; paths, prose, and mixed
+    // punctuation still fail the identifier check below.
+    let normalized = normalized.replace("::", ".");
+    let components = normalized.split('.').collect::<Vec<_>>();
     (components.len() >= 2
-        && components
-            .iter()
-            .all(|component| valid_identifier(component)))
-    .then_some(normalized)
+        && components.iter().all(|component| {
+            // Provider project identities may be dashed at any namespace
+            // level. They are transport/local identity segments, not Rust
+            // symbols; accept their bounded ASCII form while retaining strict
+            // identifier validation for every other component.
+            valid_provider_package_component(component)
+        }))
+    .then(|| components.join("::"))
+}
+
+fn valid_provider_package_component(value: &str) -> bool {
+    valid_identifier(value)
+        || (value.len() > 2
+            && !value.starts_with('-')
+            && !value.ends_with('-')
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
 }
 
 fn canonical_function_name(value: &str) -> Option<String> {
     let normalized = GraphCorrelationV1::normalize_target(value)?;
-    let terminal = normalized.rsplit("::").next()?;
+    let normalized = normalized.replace("::", ".");
+    let terminal = normalized.rsplit('.').next()?;
     valid_identifier(terminal).then(|| terminal.to_string())
 }
 
@@ -386,261 +552,4 @@ fn valid_identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use temper_protocol_activity::{GraphCorrelationTargetKindV1, GraphCorrelationToolV1};
-
-    fn text_parts(value: Value) -> Vec<McpToolResultPart> {
-        vec![McpToolResultPart::Content(serde_json::json!({
-            "type": "text",
-            "text": value.to_string(),
-        }))]
-    }
-
-    fn structured_parts(value: Value) -> Vec<McpToolResultPart> {
-        vec![McpToolResultPart::StructuredContent(value)]
-    }
-
-    fn correlation(kind: GraphCorrelationTargetKindV1) -> GraphCorrelationV1 {
-        let tool = match kind {
-            GraphCorrelationTargetKindV1::GraphQuery
-            | GraphCorrelationTargetKindV1::NamePattern
-            | GraphCorrelationTargetKindV1::QualifiedNamePattern => {
-                GraphCorrelationToolV1::SearchGraph
-            }
-            GraphCorrelationTargetKindV1::Pattern => GraphCorrelationToolV1::SearchCode,
-            GraphCorrelationTargetKindV1::FunctionName => GraphCorrelationToolV1::TracePath,
-            GraphCorrelationTargetKindV1::QualifiedName => GraphCorrelationToolV1::GetCodeSnippet,
-        };
-        GraphCorrelationV1::new(tool, kind, "declared target").unwrap()
-    }
-
-    #[test]
-    fn qualified_symbols_carry_to_equivalent_function_and_qualified_selectors() {
-        let mut lineages = DecisionAnchorLineages::default();
-        let root_parts = text_parts(serde_json::json!([
-            {"qualifiedName":"crate::engine::run","path":"private/src/lib.rs"}
-        ]));
-        let root = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::GraphQuery),
-                &serde_json::json!({"query": "start"}),
-                Some(&root_parts),
-            )
-            .unwrap();
-        assert_eq!(root.stage, DecisionAnchorLineageStageV1::Root);
-        assert_eq!(
-            root.result_target_kinds,
-            vec![
-                DecisionAnchorTargetKindV1::Pattern,
-                DecisionAnchorTargetKindV1::FunctionName,
-                DecisionAnchorTargetKindV1::QualifiedName,
-            ]
-        );
-
-        let function_parts = text_parts(serde_json::json!({"qualified_name":"crate::engine::run"}));
-        let function = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::FunctionName),
-                &serde_json::json!({"function_name": "run"}),
-                Some(&function_parts),
-            )
-            .unwrap();
-        assert_eq!(function.stage, DecisionAnchorLineageStageV1::CarryForward);
-        assert_eq!(function.root_binding, root.root_binding);
-
-        let qualified_parts = text_parts(serde_json::json!({"function_name":"run"}));
-        let qualified = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::QualifiedName),
-                &serde_json::json!({"qualified_name": "crate::engine::run"}),
-                Some(&qualified_parts),
-            )
-            .unwrap();
-        assert_eq!(qualified.stage, DecisionAnchorLineageStageV1::CarryForward);
-        assert_eq!(qualified.root_binding, root.root_binding);
-    }
-
-    #[test]
-    fn approved_structured_result_parts_carry_nested_symbols_callers_sources_and_metadata() {
-        let mut lineages = DecisionAnchorLineages::default();
-        let root_parts = structured_parts(serde_json::json!({
-            "results": [
-                {"results": [{"symbol": "run"}]},
-                {"callers": [{"qualifiedName": "crate::engine::caller"}]},
-                {"related_source_references": [{"qualified_name": "crate::engine::source"}]},
-                {"source_metadata": {
-                    "next_target": {"qualifiedName": "crate::engine::behavior"},
-                    "source": "PRIVATE-SOURCE"
-                }}
-            ]
-        }));
-        let root = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::GraphQuery),
-                &serde_json::json!({"query": "start"}),
-                Some(&root_parts),
-            )
-            .unwrap();
-        assert_eq!(root.stage, DecisionAnchorLineageStageV1::Root);
-        assert_eq!(
-            root.result_target_kinds,
-            vec![
-                DecisionAnchorTargetKindV1::Pattern,
-                DecisionAnchorTargetKindV1::FunctionName,
-                DecisionAnchorTargetKindV1::QualifiedName,
-            ]
-        );
-
-        for (kind, input) in [
-            (
-                GraphCorrelationTargetKindV1::FunctionName,
-                serde_json::json!({"function_name": "run"}),
-            ),
-            (
-                GraphCorrelationTargetKindV1::QualifiedName,
-                serde_json::json!({"qualified_name": "crate::engine::caller"}),
-            ),
-            (
-                GraphCorrelationTargetKindV1::QualifiedName,
-                serde_json::json!({"qualified_name": "crate::engine::source"}),
-            ),
-            (
-                GraphCorrelationTargetKindV1::QualifiedName,
-                serde_json::json!({"qualified_name": "crate::engine::behavior"}),
-            ),
-        ] {
-            let no_candidates = structured_parts(serde_json::json!({}));
-            let carried = lineages
-                .record(&correlation(kind), &input, Some(&no_candidates))
-                .unwrap();
-            assert_eq!(carried.stage, DecisionAnchorLineageStageV1::CarryForward);
-            assert_eq!(carried.root_binding, root.root_binding);
-        }
-
-        let rendered = serde_json::to_string(&root).unwrap();
-        for private in ["crate::engine", "PRIVATE-SOURCE"] {
-            assert!(!rendered.contains(private));
-        }
-    }
-
-    #[test]
-    fn malformed_duplicate_or_oversized_provider_records_do_not_create_carry_forwards() {
-        let mut cases = vec![
-            serde_json::json!([
-                {"qualified_name":"crate::engine::run"},
-                {"qualified_name":"crate::engine::run"}
-            ]),
-            serde_json::json!({"qualified_name": ["not a string"]}),
-            serde_json::json!({"unknown_target":"crate::engine::run"}),
-            serde_json::json!({"callers": "not a list"}),
-        ];
-        cases.push(serde_json::json!({
-            "results": (0..=MAX_RESULT_TARGETS)
-                .map(|index| serde_json::json!({
-                    "qualified_name": format!("crate::engine::run_{index}"),
-                }))
-                .collect::<Vec<_>>(),
-        }));
-        for result in cases {
-            let mut lineages = DecisionAnchorLineages::default();
-            let root_parts = text_parts(result);
-            let root = lineages
-                .record(
-                    &correlation(GraphCorrelationTargetKindV1::GraphQuery),
-                    &serde_json::json!({"query": "start"}),
-                    Some(&root_parts),
-                )
-                .unwrap();
-            assert!(root.result_target_kinds.is_empty());
-            let no_candidates = structured_parts(serde_json::json!({}));
-            let later = lineages
-                .record(
-                    &correlation(GraphCorrelationTargetKindV1::FunctionName),
-                    &serde_json::json!({"function_name": "run"}),
-                    Some(&no_candidates),
-                )
-                .unwrap();
-            assert_eq!(later.stage, DecisionAnchorLineageStageV1::Root);
-            assert_ne!(later.root_binding, root.root_binding);
-        }
-    }
-
-    #[test]
-    fn malformed_or_nontext_result_parts_cannot_create_carry_forwards() {
-        let cases = [
-            McpToolResultPart::Content(serde_json::json!({
-                "text": r#"{\"symbol\":\"run\"}"#,
-            })),
-            McpToolResultPart::Content(serde_json::json!({
-                "type": "text",
-                "text": {"symbol": "run"},
-            })),
-            McpToolResultPart::Content(serde_json::json!({
-                "type": "resource",
-                "text": r#"{\"symbol\":\"run\"}"#,
-            })),
-            McpToolResultPart::StructuredContent(serde_json::json!([{"symbol": "run"}])),
-        ];
-
-        for part in cases {
-            let mut lineages = DecisionAnchorLineages::default();
-            let root_parts = vec![part];
-            let root = lineages
-                .record(
-                    &correlation(GraphCorrelationTargetKindV1::GraphQuery),
-                    &serde_json::json!({"query": "start"}),
-                    Some(&root_parts),
-                )
-                .unwrap();
-            assert!(root.result_target_kinds.is_empty());
-
-            let no_candidates = structured_parts(serde_json::json!({}));
-            let later = lineages
-                .record(
-                    &correlation(GraphCorrelationTargetKindV1::FunctionName),
-                    &serde_json::json!({"function_name": "run"}),
-                    Some(&no_candidates),
-                )
-                .unwrap();
-            assert_eq!(later.stage, DecisionAnchorLineageStageV1::Root);
-        }
-    }
-
-    #[test]
-    fn duplicate_cross_root_candidates_become_ineligible() {
-        let mut lineages = DecisionAnchorLineages::default();
-        let first_parts = structured_parts(serde_json::json!({"symbol": "shared"}));
-        let first = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::GraphQuery),
-                &serde_json::json!({"query": "first"}),
-                Some(&first_parts),
-            )
-            .unwrap();
-        let second_parts = structured_parts(serde_json::json!({"symbol": "shared"}));
-        let second = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::GraphQuery),
-                &serde_json::json!({"query": "second"}),
-                Some(&second_parts),
-            )
-            .unwrap();
-        assert_ne!(first.root_binding, second.root_binding);
-
-        let no_candidates = structured_parts(serde_json::json!({}));
-        let later = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::FunctionName),
-                &serde_json::json!({"function_name": "shared"}),
-                Some(&no_candidates),
-            )
-            .unwrap();
-        assert_eq!(later.stage, DecisionAnchorLineageStageV1::Root);
-        assert_ne!(later.root_binding, first.root_binding);
-        assert_ne!(later.root_binding, second.root_binding);
-    }
 }

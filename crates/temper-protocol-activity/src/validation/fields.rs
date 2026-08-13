@@ -186,6 +186,24 @@ pub(super) fn event(
                     ));
                 }
             }
+            if let Some(lineage) = &value.decision_anchor_lineage {
+                if value.status != ToolStatusV1::Succeeded {
+                    return Err(invalid_event(
+                        &format!("{path}.data.decision_anchor_lineage"),
+                        "is permitted only when tool status is succeeded",
+                    ));
+                }
+                if value
+                    .graph_correlation
+                    .as_ref()
+                    .is_none_or(|correlation| !lineage.is_valid_for(correlation))
+                {
+                    return Err(invalid_event(
+                        &format!("{path}.data.decision_anchor_lineage"),
+                        "must contain complete trusted lineage for the matching graph correlation",
+                    ));
+                }
+            }
             Ok(())
         }
         Event::SteeringApplied(value) => optional_content(

@@ -185,6 +185,7 @@ pub(super) fn produce_first_party_run(collector: &TraceCollector) -> (String, Ag
             failure: None,
             codebase_memory_timing: None,
             graph_correlation: None,
+            decision_anchor_lineage: None,
         },
     });
 

@@ -37,6 +37,7 @@ fn journal_sanitizes_invalid_graph_correlation_without_retaining_raw_input() {
             failure: None,
             codebase_memory_timing: None,
             graph_correlation: Some(malformed),
+            decision_anchor_lineage: None,
         }),
     );
     let valid_tool = event(
@@ -52,6 +53,7 @@ fn journal_sanitizes_invalid_graph_correlation_without_retaining_raw_input() {
             failure: None,
             codebase_memory_timing: None,
             graph_correlation: Some(valid.clone()),
+            decision_anchor_lineage: None,
         }),
     );
 

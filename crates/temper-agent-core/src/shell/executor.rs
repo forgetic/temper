@@ -17,8 +17,9 @@ use tongs::tools::ToolRegistry;
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
     CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
-    OperationGeneration, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
-    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
+    OperationGeneration, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallStatus,
+    ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
@@ -462,6 +463,7 @@ fn bounded_tool_result(name: &str, output: &tongs::tools::ToolOutput) -> ToolRes
     let failure = safe_tool_failure(name, output);
     let codebase_memory_timing = codebase_memory_timing(name, output);
     let graph_correlation = graph_correlation(name, output);
+    let decision_anchor_lineage = decision_anchor_lineage(name, output, graph_correlation.as_ref());
     let text = output
         .content
         .iter()
@@ -480,6 +482,7 @@ fn bounded_tool_result(name: &str, output: &tongs::tools::ToolOutput) -> ToolRes
             failure,
             codebase_memory_timing,
             graph_correlation,
+            decision_anchor_lineage,
         };
     }
     let (preview, truncated) = truncate_utf8(&text, TOOL_RESULT_PREVIEW_BYTES);
@@ -490,7 +493,27 @@ fn bounded_tool_result(name: &str, output: &tongs::tools::ToolOutput) -> ToolRes
         failure,
         codebase_memory_timing,
         graph_correlation,
+        decision_anchor_lineage,
     }
+}
+
+fn decision_anchor_lineage(
+    name: &str,
+    output: &tongs::tools::ToolOutput,
+    correlation: Option<&temper_protocol_activity::GraphCorrelationV1>,
+) -> Option<temper_protocol_activity::DecisionAnchorLineageV1> {
+    if !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) || output.is_error {
+        return None;
+    }
+    let lineage: temper_protocol_activity::DecisionAnchorLineageV1 = serde_json::from_value(
+        output
+            .details
+            .as_ref()?
+            .get(SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY)?
+            .clone(),
+    )
+    .ok()?;
+    lineage.is_valid_for(correlation?).then_some(lineage)
 }
 
 fn graph_correlation(
