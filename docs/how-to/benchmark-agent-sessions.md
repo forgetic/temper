@@ -187,15 +187,19 @@ TEMPER_BENCHMARK_LIVE=1 \
 Do not put provider credentials in a manifest, command transcript, checked-in
 file, or CI lane. Harness mode needs none. Live mode redacts resolved credential
 values from artifacts, but diagnostic traces can still contain source, prompts,
-model output, tool arguments, and tool results.
+model output, tool arguments, and tool results. Bounded successful graph-result
+text is retained only as `operator_transcript_v1` records in the local diagnostic
+export; it is excluded from normalized durable activity and run/aggregate
+summaries. Treat the complete export as operator-sensitive and keep it private.
 
 ## Repetitions and artifacts
 
 `--repetitions N` overrides the manifest default. Every repetition receives a
 fresh fixture copy and baseline commit. The artifact root contains
 `aggregate.json` and `aggregate.md`; each `repetitions/NNN/` directory retains
-the manifest and context snapshots, canonical trace, workspace result,
-validation and diff evidence, and JSON/Markdown run summary. A manifest with an
+the manifest and context snapshots, canonical diagnostic export (including any
+operator-local transcript records), workspace result, validation and diff
+evidence, and JSON/Markdown run summary. A manifest with an
 `expected_patch` also snapshots it as `expected.patch` and records the host-owned
 exact comparison in `validation.json`.
 

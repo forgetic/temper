@@ -16,10 +16,8 @@ use tongs::tools::ToolRegistry;
 
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
-    CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
-    OperationGeneration, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallStatus,
-    ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
+    CODEBASE_MEMORY_TOOL_PREFIX, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, OperationGeneration,
+    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
@@ -28,6 +26,9 @@ use crate::shell::streaming::{
     stream_to_completion,
 };
 use crate::shell::task_group::{CancellationToken, RunTaskGroup, cancel_or};
+use crate::shell::tool_result::{
+    OPERATOR_GRAPH_RESULT_CAPTURE_BYTES, bounded_result_text, bounded_tool_result,
+};
 
 /// The settled result of a sub-agent run.
 #[derive(Clone, Debug)]
@@ -77,12 +78,20 @@ impl ModelIdentity {
     }
 }
 
+/// Explicit private consumer for bounded model-visible graph results. This is
+/// deliberately separate from [`AgentEvent`] so provider text cannot enter
+/// event Debug output, activity metadata, lifecycle transport, or summaries.
+pub trait OperatorTranscriptSink: Send + Sync {
+    fn graph_result(&self, call_id: &str, tool_name: &str, text: &str, truncated: bool);
+}
+
 /// Observability dependencies for one agent invocation.
 #[derive(Clone)]
 pub struct RunObservability {
     pub events: Arc<dyn EventSink>,
     pub model: ModelIdentity,
     pub clock: Arc<dyn EventClock>,
+    pub operator_transcript: Option<Arc<dyn OperatorTranscriptSink>>,
 }
 
 impl RunObservability {
@@ -91,12 +100,21 @@ impl RunObservability {
             events,
             model,
             clock: Arc::new(SystemEventClock),
+            operator_transcript: None,
         }
     }
 
     #[must_use]
     pub fn with_clock(mut self, clock: Arc<dyn EventClock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// Installs the explicit operator-local result consumer. Callers should
+    /// expose this only for diagnostic captures with a private destination.
+    #[must_use]
+    pub fn with_operator_transcript(mut self, sink: Arc<dyn OperatorTranscriptSink>) -> Self {
+        self.operator_transcript = Some(sink);
         self
     }
 }
@@ -134,6 +152,7 @@ pub struct AgentShell {
     events: Arc<dyn EventSink>,
     model: ModelIdentity,
     clock: Arc<dyn EventClock>,
+    operator_transcript: Option<Arc<dyn OperatorTranscriptSink>>,
     operation_limits: AgentOperationLimits,
     task_group: RunTaskGroup,
     turn_hook: Option<Arc<dyn TurnHook>>,
@@ -167,6 +186,7 @@ impl AgentShell {
             events: observability.events,
             model: observability.model,
             clock: observability.clock,
+            operator_transcript: observability.operator_transcript,
             operation_limits,
             task_group,
             turn_hook: None,
@@ -274,6 +294,7 @@ impl AgentShell {
         let tools = Arc::clone(&self.tools);
         let events = Arc::clone(&self.events);
         let clock = Arc::clone(&self.clock);
+        let operator_transcript = self.operator_transcript.clone();
         let cq = self.cq.clone();
         let timeout = self.operation_limits.tool_timeout;
         let (cancellation, task_guard) = self.task_group.register();
@@ -287,6 +308,7 @@ impl AgentShell {
                 mutation_blocked,
                 clock.as_ref(),
                 events.as_ref(),
+                operator_transcript.as_deref(),
             )
             .await
             else {
@@ -369,6 +391,7 @@ async fn execute_tool(
     mutation_blocked: bool,
     clock: &dyn EventClock,
     events: &dyn EventSink,
+    operator_transcript: Option<&dyn OperatorTranscriptSink>,
 ) -> Option<tongs::tools::ToolOutput> {
     let started_ms = clock.now_millis();
     let operation = async {
@@ -425,6 +448,14 @@ async fn execute_tool(
             return None;
         }
     };
+    if status == ToolCallStatus::Succeeded && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+        if let (Some(operator_transcript), Some((text, truncated))) = (
+            operator_transcript,
+            bounded_result_text(&output, OPERATOR_GRAPH_RESULT_CAPTURE_BYTES),
+        ) {
+            operator_transcript.graph_result(&call.id, &call.name, &text, truncated);
+        }
+    }
     events.emit(AgentEvent::ToolEnd {
         id: call.id.clone(),
         name: call.name.clone(),
@@ -451,130 +482,6 @@ fn format_duration(duration: Duration) -> String {
     } else {
         format!("{}ns", duration.as_nanos())
     }
-}
-
-const TOOL_RESULT_PREVIEW_BYTES: usize = 4 * 1024;
-
-/// Extract a bounded text-only candidate from a tool result. Generic structured
-/// details, signatures, images, and arbitrary JSON never enter the event
-/// protocol. A codebase-memory wrapper may contribute only a stable category,
-/// bounded numeric timing fields, and a closed argument fingerprint.
-fn bounded_tool_result(name: &str, output: &tongs::tools::ToolOutput) -> ToolResultMetadata {
-    let failure = safe_tool_failure(name, output);
-    let codebase_memory_timing = codebase_memory_timing(name, output);
-    let graph_correlation = graph_correlation(name, output);
-    let decision_anchor_lineage = decision_anchor_lineage(name, output, graph_correlation.as_ref());
-    let text = output
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            tongs::model::ContentBlock::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let bytes = u64::try_from(text.len()).unwrap_or(u64::MAX);
-    if text.is_empty() {
-        return ToolResultMetadata {
-            preview: None,
-            bytes,
-            truncated: false,
-            failure,
-            codebase_memory_timing,
-            graph_correlation,
-            decision_anchor_lineage,
-        };
-    }
-    let (preview, truncated) = truncate_utf8(&text, TOOL_RESULT_PREVIEW_BYTES);
-    ToolResultMetadata {
-        preview: Some(preview.to_string()),
-        bytes,
-        truncated,
-        failure,
-        codebase_memory_timing,
-        graph_correlation,
-        decision_anchor_lineage,
-    }
-}
-
-fn decision_anchor_lineage(
-    name: &str,
-    output: &tongs::tools::ToolOutput,
-    correlation: Option<&temper_protocol_activity::GraphCorrelationV1>,
-) -> Option<temper_protocol_activity::DecisionAnchorLineageV1> {
-    if !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) || output.is_error {
-        return None;
-    }
-    let lineage: temper_protocol_activity::DecisionAnchorLineageV1 = serde_json::from_value(
-        output
-            .details
-            .as_ref()?
-            .get(SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY)?
-            .clone(),
-    )
-    .ok()?;
-    lineage.is_valid_for(correlation?).then_some(lineage)
-}
-
-fn graph_correlation(
-    name: &str,
-    output: &tongs::tools::ToolOutput,
-) -> Option<temper_protocol_activity::GraphCorrelationV1> {
-    if !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) || output.is_error {
-        return None;
-    }
-    let correlation: temper_protocol_activity::GraphCorrelationV1 = serde_json::from_value(
-        output
-            .details
-            .as_ref()?
-            .get(SAFE_GRAPH_CORRELATION_DETAIL_KEY)?
-            .clone(),
-    )
-    .ok()?;
-    (correlation.is_valid() && correlation.tool.public_name() == name).then_some(correlation)
-}
-
-fn codebase_memory_timing(
-    name: &str,
-    output: &tongs::tools::ToolOutput,
-) -> Option<CodebaseMemoryTiming> {
-    if !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
-        return None;
-    }
-    let timing = output.details.as_ref()?.get("timing")?;
-    Some(CodebaseMemoryTiming {
-        readiness_wait_ms: timing.get("readiness_wait_ms")?.as_u64()?,
-        graph_execution_ms: timing.get("graph_execution_ms")?.as_u64()?,
-    })
-}
-
-fn safe_tool_failure(
-    name: &str,
-    output: &tongs::tools::ToolOutput,
-) -> Option<ToolFailureDiagnostic> {
-    if !output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
-        return None;
-    }
-    let marker = output.details.as_ref()?.get(SAFE_TOOL_FAILURE_DETAIL_KEY)?;
-    if marker.get("source").and_then(serde_json::Value::as_str) != Some("codebase_memory") {
-        return None;
-    }
-    let category = marker
-        .get("category")
-        .and_then(serde_json::Value::as_str)
-        .and_then(ToolFailureCategory::from_stable_str)?;
-    Some(ToolFailureDiagnostic::codebase_memory(category))
-}
-
-fn truncate_utf8(value: &str, maximum_bytes: usize) -> (&str, bool) {
-    if value.len() <= maximum_bytes {
-        return (value, false);
-    }
-    let mut end = maximum_bytes;
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    (&value[..end], true)
 }
 
 /// Builds an error [`tongs::tools::ToolOutput`] carrying `message` as text.

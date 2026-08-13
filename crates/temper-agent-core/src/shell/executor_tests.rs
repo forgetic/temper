@@ -2,9 +2,11 @@
 
 use super::*;
 use crate::machine::{
-    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    CodebaseMemoryTiming, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
+    DecisionAnchorTargetKindV1, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolResultMetadata,
 };
+use crate::shell::tool_result::TOOL_RESULT_PREVIEW_BYTES;
 use async_trait::async_trait;
 use skein::lab::{LabConfig, LabRuntime};
 use skein::types::Budget;
@@ -98,6 +100,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
             false,
             &clock,
             observed.as_ref(),
+            None,
         )
         .await
         .expect("tool was not cancelled")
@@ -186,6 +189,26 @@ fn only_codebase_memory_tools_retain_numeric_graph_timings() {
         bounded_tool_result("codebase_memory_search_graph", &malformed).codebase_memory_timing,
         None
     );
+}
+
+#[test]
+fn graph_result_metadata_and_debug_remain_content_free() {
+    const SECRET: &str = "Authorization: Bearer GRAPH-RESULT-SECRET";
+    let text = format!("safe readiness {SECRET}");
+    let output = ToolOutput {
+        content: vec![tongs::model::ContentBlock::Text(
+            tongs::model::TextContent {
+                text: text.clone(),
+                text_signature: None,
+            },
+        )],
+        details: None,
+        is_error: false,
+    };
+    let metadata = bounded_tool_result("codebase_memory_search_graph", &output);
+    assert_eq!(metadata.preview, None);
+    assert_eq!(metadata.bytes, text.len() as u64);
+    assert!(!format!("{metadata:?}").contains(SECRET));
 }
 
 #[test]
@@ -418,6 +441,7 @@ fn codebase_memory_tool_timeout_uses_virtual_time_and_emits_safe_cancelled_bound
             false,
             &SystemEventClock,
             observed.as_ref(),
+            None,
         )
         .await
         .expect("a timeout is returned to the model")
@@ -484,6 +508,7 @@ fn external_cancellation_drops_a_hung_tool_without_advancing_time() {
             false,
             &SystemEventClock,
             observed.as_ref(),
+            None,
         )
         .await
     });

@@ -32,8 +32,8 @@ use std::path::PathBuf;
 use temper_agent::{AuthChoice, DEFAULT_MAX_ITERATIONS};
 use temper_protocol_activity::{ACTIVITY_ADDRESS_FLAG, TRACE_POLICY_FLAG};
 use temper_protocol_agent::{
-    AGENT_LIFECYCLE_ADDRESS_FLAG, FORGE_CONTEXT_ADDRESS_FLAG, RUNTIME_LIMITS_FLAG,
-    SUBMIT_FOR_PR_ADDRESS_FLAG, TERMINAL_OUTPUT_FLAG, TOOL_CONFIG_FLAG,
+    AGENT_LIFECYCLE_ADDRESS_FLAG, FORGE_CONTEXT_ADDRESS_FLAG, OPERATOR_TRANSCRIPT_FLAG,
+    RUNTIME_LIMITS_FLAG, SUBMIT_FOR_PR_ADDRESS_FLAG, TERMINAL_OUTPUT_FLAG, TOOL_CONFIG_FLAG,
 };
 
 /// The fully-parsed agent command line. Every field originates from a flag; the
@@ -72,6 +72,8 @@ pub(crate) struct Options {
     pub(crate) runtime_limits: Option<PathBuf>,
     /// Optional worker-written shared trace capture policy JSON.
     pub(crate) trace_policy: Option<PathBuf>,
+    /// Optional operator-local graph-result transcript path.
+    pub(crate) operator_transcript: Option<PathBuf>,
     /// Optional debug capture / prompt-overlay dir (`--capture-dir`).
     pub(crate) capture_dir: Option<PathBuf>,
     /// Maximum model/tool iterations (`--max-iterations`).
@@ -97,6 +99,7 @@ impl Options {
         let mut tool_config = None;
         let mut runtime_limits = None;
         let mut trace_policy = None;
+        let mut operator_transcript = None;
         let mut capture_dir = None;
         let mut max_iterations = DEFAULT_MAX_ITERATIONS;
         let mut subagents = false;
@@ -137,6 +140,10 @@ impl Options {
                 flag if flag == TRACE_POLICY_FLAG => {
                     trace_policy = Some(PathBuf::from(value(&mut iter, TRACE_POLICY_FLAG)?))
                 }
+                flag if flag == OPERATOR_TRANSCRIPT_FLAG => {
+                    operator_transcript =
+                        Some(PathBuf::from(value(&mut iter, OPERATOR_TRANSCRIPT_FLAG)?))
+                }
                 "--capture-dir" => {
                     capture_dir = Some(PathBuf::from(value(&mut iter, "--capture-dir")?))
                 }
@@ -174,6 +181,7 @@ impl Options {
             tool_config,
             runtime_limits,
             trace_policy,
+            operator_transcript,
             capture_dir,
             max_iterations,
             subagents,
@@ -182,7 +190,7 @@ impl Options {
 }
 
 pub(crate) const USAGE: &str = "temper agent --context <FILE> --result <FILE> [--workspace <DIR>] \
-[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--activity-address <ADDR>] [--agent-lifecycle-address <ADDR>] [--terminal-output <FILE>] [--tool-config <FILE>] [--runtime-limits <FILE>] [--trace-policy <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
+[--submit-for-pr-address <ADDR>] [--forge-context-address <ADDR>] [--activity-address <ADDR>] [--agent-lifecycle-address <ADDR>] [--terminal-output <FILE>] [--tool-config <FILE>] [--runtime-limits <FILE>] [--trace-policy <FILE>] [--operator-transcript <FILE>] [--provider <anthropic|chatgpt|deepseek>] [--model <ID>] [--investigate-model <ID>] \
 [--provider-url <URL>] [--max-iterations <N>] [--subagents <on|off>] [--capture-dir <DIR>]\n  \
 reads the provider credential from $TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON, runs in \
 --workspace (default cwd), writes the result to --result";
@@ -236,6 +244,7 @@ mod tests {
         assert!(USAGE.contains("--tool-config <FILE>"));
         assert!(USAGE.contains("--runtime-limits <FILE>"));
         assert!(USAGE.contains("--trace-policy <FILE>"));
+        assert!(USAGE.contains("--operator-transcript <FILE>"));
         assert!(USAGE.contains("--activity-address <ADDR>"));
         assert!(USAGE.contains("--agent-lifecycle-address <ADDR>"));
         assert!(USAGE.contains("--terminal-output <FILE>"));
@@ -257,6 +266,7 @@ mod tests {
         assert!(options.tool_config.is_none());
         assert!(options.runtime_limits.is_none());
         assert!(options.trace_policy.is_none());
+        assert!(options.operator_transcript.is_none());
         assert_eq!(options.provider, AuthChoice::ChatGptOAuth);
         assert!(!options.subagents);
     }
@@ -304,6 +314,8 @@ mod tests {
             "/runtime-limits.json",
             "--trace-policy",
             "/trace-policy.json",
+            "--operator-transcript",
+            "/operator-transcript.jsonl",
             "--provider",
             "anthropic",
             "--model",
@@ -353,6 +365,10 @@ mod tests {
         assert_eq!(
             options.trace_policy,
             Some(PathBuf::from("/trace-policy.json"))
+        );
+        assert_eq!(
+            options.operator_transcript,
+            Some(PathBuf::from("/operator-transcript.jsonl"))
         );
         assert_eq!(options.capture_dir, Some(PathBuf::from("/cap")));
         assert_eq!(options.max_iterations, 250);

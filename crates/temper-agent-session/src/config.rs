@@ -58,6 +58,8 @@ pub struct AgentConfig {
     pub submit_for_pr: Option<SubmitForPrHost>,
     /// Optional asynchronous host channel for bounded read-only Forge context.
     pub forge_context: Option<ForgeContextHost>,
+    /// Optional private operator-local graph-result transcript destination.
+    pub operator_transcript: Option<PathBuf>,
 }
 
 impl AgentConfig {
@@ -80,6 +82,7 @@ impl AgentConfig {
             lifecycle_address: None,
             submit_for_pr: None,
             forge_context: None,
+            operator_transcript: None,
         }
     }
 
@@ -98,6 +101,12 @@ impl AgentConfig {
     /// Stores the worker-resolved capture policy for this session.
     pub fn with_trace_policy(mut self, trace_policy: AgentActivityCapturePolicyV1) -> Self {
         self.trace_policy = trace_policy;
+        self
+    }
+
+    /// Stores an optional operator-local diagnostic transcript destination.
+    pub fn with_operator_transcript(mut self, path: Option<PathBuf>) -> Self {
+        self.operator_transcript = path;
         self
     }
 

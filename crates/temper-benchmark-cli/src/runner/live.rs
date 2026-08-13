@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use temper_config::{EnvLookup, EnvMap, LoadInputs, PathResolver};
 use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
+use temper_protocol_agent::OPERATOR_TRANSCRIPT_FLAG;
 use temper_worker::{
     AgentRunner, AgentRuntimeLimitsV1, AgentToolConfig, OutOfProcessRunner, TraceCollector,
     WorkerAgentTraceConfig, WorkerLivenessLimits,
@@ -244,7 +245,10 @@ fn run_live_repetition(
         policy: runtime.trace_policy.clone(),
         spool_root: Some(workspace.temporary_root().join("trace-spool")),
     });
-    let runner = OutOfProcessRunner::new(runtime.command.clone())
+    let mut command = runtime.command.clone();
+    command.push(OPERATOR_TRANSCRIPT_FLAG.to_string());
+    command.push(paths.operator_transcript.display().to_string());
+    let runner = OutOfProcessRunner::new(command)
         .with_env(runtime.env.clone())
         .with_tool_config(runtime.tool_config.clone())
         .with_runtime_limits(runtime.runtime_limits)

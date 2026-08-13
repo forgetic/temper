@@ -302,6 +302,7 @@ impl InProcessAgentRunner {
                         lifecycle_address: None,
                         lifecycle_reporter: Some(lifecycle_reporter),
                         cancellation: agent_cancellation.clone(),
+                        operator_transcript: None,
                     },
                     runtime_limits,
                     containment,
@@ -393,6 +394,7 @@ impl InProcessAgentRunner {
             Ok(AgentRunOutput {
                 result,
                 accepted_submit: accepted_submit.latest(),
+                operator_transcript: Vec::new(),
             })
         })
     }

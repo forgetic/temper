@@ -90,6 +90,11 @@ pub const PROVIDER_CREDENTIALS_ENV: &str = "TEMPER_AGENT_PROVIDER_CREDENTIALS_JS
 /// Process-boundary flag naming the resolved first-party operation-limit file.
 pub const RUNTIME_LIMITS_FLAG: &str = "--runtime-limits";
 
+/// Process-boundary flag naming an operator-local diagnostic transcript file.
+/// The worker never forwards this file into durable activity storage; direct
+/// benchmark runners may retain it as a reviewed local capture artifact.
+pub const OPERATOR_TRANSCRIPT_FLAG: &str = "--operator-transcript";
+
 /// Complete, non-secret first-party agent operation limits.
 ///
 /// This DTO deliberately stores seconds rather than runtime clock types so the

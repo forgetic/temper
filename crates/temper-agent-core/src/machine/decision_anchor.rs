@@ -32,7 +32,8 @@ pub const DECISION_ANCHOR_RECOVERY_MESSAGE: &str = "decision-anchor recovery req
 const MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS: u8 = 2;
 /// One discovery turn may return several independent evidence roots. Bound the
 /// retained opaque forest so provider output cannot grow policy state without limit.
-const MAX_DECISION_ANCHOR_ROOTS: usize = 8;
+/// Sixteen covers the largest legal parallel read batch while remaining fixed.
+const MAX_DECISION_ANCHOR_ROOTS: usize = 16;
 
 pub(super) struct DecisionAnchorState {
     mutation_tools: BTreeSet<String>,

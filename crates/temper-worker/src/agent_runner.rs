@@ -243,7 +243,11 @@ impl<'a> AgentRunRequest<'a> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentRunOutput {
     pub result: WorkspaceResult,
+    /// Latest host-accepted submit proof, if any.
     pub accepted_submit: Option<AcceptedSubmitProof>,
+    /// Bounded graph-result records from the first-party operator-local
+    /// diagnostic transcript. Generic worker consumers ignore this field.
+    pub operator_transcript: Vec<temper_protocol_activity::OperatorTranscriptToolResultV1>,
 }
 
 impl AgentRunOutput {
@@ -251,6 +255,7 @@ impl AgentRunOutput {
         Self {
             result,
             accepted_submit: None,
+            operator_transcript: Vec::new(),
         }
     }
 
@@ -261,6 +266,7 @@ impl AgentRunOutput {
         Self {
             result,
             accepted_submit: Some(accepted_submit),
+            operator_transcript: Vec::new(),
         }
     }
 }

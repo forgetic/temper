@@ -57,6 +57,7 @@ fn finish_normalization_with_evidence(
         source,
         events,
         attachments,
+        operator_transcript: Vec::new(),
         diagnostics: std::mem::take(diagnostics),
     })
 }
