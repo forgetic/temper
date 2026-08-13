@@ -17,6 +17,7 @@ STATE_PATH = LOG_PATH + ".state.json"
 SEQUENTIAL_STAGE = 0
 RESULT_DRIVEN_STAGE = 0
 TYPED_LINEAGE_STAGE = 0
+MAPPED_GRAPH_STAGE = 0
 RESULT_DRIVEN_TOKENS = {
     name: "opaque-" + uuid.uuid4().hex
     for name in ["root", "refinement", "trace", "implementation", "behavioral_test"]
@@ -24,6 +25,12 @@ RESULT_DRIVEN_TOKENS = {
 TYPED_LINEAGE_TOKENS = {
     "root": "crate::fixture::anchor_" + uuid.uuid4().hex,
     "behavioral_test": "crate::fixture::anchor_" + uuid.uuid4().hex + "_behavior",
+}
+MAPPED_GRAPH_TOKENS = {
+    "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
+    "caller": "crate::fixture::delivery_" + uuid.uuid4().hex + "::DeliveryAttempt",
+    "source": "crate::fixture::delivery_" + uuid.uuid4().hex + "::worker_for",
+    "unavailable": "crate::fixture::unavailable_" + uuid.uuid4().hex,
 }
 GRAPH_CALLS = 0
 
@@ -238,8 +245,11 @@ def current_root_source(project, relative_path):
         return None
 
 
-def text_result(text, is_error=False):
-    return {"content": [{"type": "text", "text": text}], "isError": is_error}
+def text_result(text, is_error=False, structured=None):
+    result = {"content": [{"type": "text", "text": text}], "isError": is_error}
+    if structured is not None:
+        result["structuredContent"] = structured
+    return result
 
 
 def has_current_root_profile():
@@ -250,6 +260,7 @@ def has_current_root_profile():
         "result-driven-decision-guidance",
         "provider-result-anchor",
         "provider-neutral-anchor-lineage",
+        "mapped-live-graph-consumption",
     )
 
 
@@ -259,6 +270,28 @@ def is_result_driven_guidance_profile():
 
 def is_typed_lineage_profile():
     return LIFECYCLE_PROFILE == "provider-neutral-anchor-lineage"
+
+
+def is_mapped_graph_profile():
+    return LIFECYCLE_PROFILE == "mapped-live-graph-consumption"
+
+
+def ensure_mapped_graph_tokens():
+    if not is_mapped_graph_profile():
+        return
+    state = load_state()
+    state["mapped_graph_tokens"] = MAPPED_GRAPH_TOKENS
+    save_state(state)
+
+
+def mapped_graph_step(expected_stage, expected_value, actual_value):
+    global MAPPED_GRAPH_STAGE
+    if not is_mapped_graph_profile():
+        return True
+    if MAPPED_GRAPH_STAGE != expected_stage or actual_value != expected_value:
+        return False
+    MAPPED_GRAPH_STAGE += 1
+    return True
 
 
 def is_sequential_graph_evidence_profile():
@@ -297,6 +330,7 @@ for line in sys.stdin:
     elif method == "tools/call":
         ensure_result_driven_tokens()
         ensure_typed_lineage_tokens()
+        ensure_mapped_graph_tokens()
         params = request.get("params") or {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -339,6 +373,68 @@ for line in sys.stdin:
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
+            if is_mapped_graph_profile():
+                source_stage = {
+                    MAPPED_GRAPH_TOKENS["caller"]: (3, "src/lib.rs"),
+                    MAPPED_GRAPH_TOKENS["source"]: (4, "tests/dispatch_behavior.rs"),
+                    MAPPED_GRAPH_TOKENS["unavailable"]: (5, None),
+                }.get(qualified_name)
+                source = (
+                    current_root_source(project, source_stage[1])
+                    if source_stage is not None
+                    and source_stage[1] is not None
+                    and mapped_graph_step(source_stage[0], qualified_name, qualified_name)
+                    else None
+                )
+                unavailable = (
+                    source_stage is not None
+                    and source_stage[0] == 5
+                    and mapped_graph_step(source_stage[0], qualified_name, qualified_name)
+                )
+                if source is None:
+                    log_tool(
+                        name,
+                        arguments,
+                        is_error=True,
+                        fixture_event="served_mapped_unavailable" if unavailable else None,
+                    )
+                    result = text_result("bound source unavailable", True)
+                else:
+                    if source_stage[0] == 3:
+                        payload = {
+                            "name": terminal_function_name(qualified_name),
+                            "qualified_name": qualified_name,
+                            "file_path": source_stage[1],
+                            "source": source,
+                            "binding": "current_prepared_checkout",
+                            "source_metadata": {
+                                "related_source_references": [
+                                    {"qualifiedName": MAPPED_GRAPH_TOKENS["source"]}
+                                ]
+                            },
+                        }
+                    else:
+                        payload = {
+                            "name": terminal_function_name(qualified_name),
+                            "qualified_name": qualified_name,
+                            "file_path": source_stage[1],
+                            "source": source,
+                            "binding": "current_prepared_checkout",
+                            "source_metadata": {
+                                "kind": "focused_test",
+                                "next_target": {
+                                    "qualifiedName": MAPPED_GRAPH_TOKENS["unavailable"]
+                                },
+                            },
+                        }
+                    log_tool(
+                        name,
+                        arguments,
+                        fixture_event="served_mapped_current_root_source",
+                    )
+                    result = text_result(json.dumps(payload), structured=payload)
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_typed_lineage_profile():
                 source_stage = {
                     TYPED_LINEAGE_TOKENS["root"]: (2, "src/lib.rs"),
@@ -447,6 +543,36 @@ for line in sys.stdin:
                     }
                 result = text_result(json.dumps(payload))
         elif name == "search_code":
+            if is_mapped_graph_profile():
+                project = arguments.get("project", "")
+                expected = terminal_function_name(MAPPED_GRAPH_TOKENS["implementation"])
+                successful = (
+                    current_root_source(project, "src/lib.rs") is not None
+                    and mapped_graph_step(1, expected, arguments.get("pattern", ""))
+                )
+                payload = {
+                    "results": [{
+                        "name": expected,
+                        "qualified_name": MAPPED_GRAPH_TOKENS["implementation"],
+                        "file_path": "src/lib.rs",
+                        "related_source_references": [{
+                            "qualifiedName": MAPPED_GRAPH_TOKENS["caller"],
+                        }],
+                    }]
+                }
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_mapped_carry_forward" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_result_driven_guidance_profile():
                 project = arguments.get("project", "")
                 successful = (
@@ -493,6 +619,36 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "trace_path":
+            if is_mapped_graph_profile():
+                project = arguments.get("project", "")
+                expected = terminal_function_name(MAPPED_GRAPH_TOKENS["implementation"])
+                successful = (
+                    current_root_source(project, "src/lib.rs") is not None
+                    and mapped_graph_step(2, expected, arguments.get("function_name", ""))
+                )
+                payload = {
+                    "function": expected,
+                    "callers": [{
+                        "name": terminal_function_name(MAPPED_GRAPH_TOKENS["caller"]),
+                        "qualified_name": MAPPED_GRAPH_TOKENS["caller"],
+                    }],
+                    "related_sources": [{
+                        "qualifiedName": MAPPED_GRAPH_TOKENS["source"],
+                    }],
+                }
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_mapped_carry_forward" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_typed_lineage_profile():
                 project = arguments.get("project", "")
                 expected = terminal_function_name(TYPED_LINEAGE_TOKENS["root"])
@@ -566,6 +722,37 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "search_graph":
+            if is_mapped_graph_profile():
+                project = arguments.get("project", "")
+                successful = (
+                    current_root_source(project, "src/lib.rs") is not None
+                    and mapped_graph_step(0, "worker affinity routing", arguments.get("query", ""))
+                )
+                payload = {
+                    "results": [{
+                        "results": [{
+                            "name": terminal_function_name(MAPPED_GRAPH_TOKENS["implementation"]),
+                            "qualifiedName": MAPPED_GRAPH_TOKENS["implementation"],
+                            "file_path": "src/lib.rs",
+                        }],
+                        "callers": [{
+                            "qualifiedName": MAPPED_GRAPH_TOKENS["caller"],
+                        }],
+                    }]
+                }
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_mapped_root" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_typed_lineage_profile():
                 project = arguments.get("project", "")
                 successful = (

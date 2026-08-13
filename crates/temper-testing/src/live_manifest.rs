@@ -417,6 +417,10 @@ pub struct LiveCodebaseMemoryEvidence {
     pub readiness_delay_ms: Option<u64>,
     /// Provider tool that produced the controlled systemic failure, if any.
     pub forced_failure_tool: Option<String>,
+    /// Privacy-safe live fixture checkpoints. Values, targets, source, and
+    /// arguments remain in ephemeral provider state and logs. The harness
+    /// validates this closed sequence before returning evidence.
+    pub aggregate_checkpoints: Vec<String>,
     pub safe_tools: Vec<String>,
     pub hidden_tools: Vec<String>,
     pub lifecycle: Option<String>,

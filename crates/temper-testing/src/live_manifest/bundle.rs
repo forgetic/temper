@@ -609,6 +609,9 @@ fn parse_duration_literal(raw: &str) -> Result<Duration, String> {
 }
 
 #[cfg(test)]
+#[path = "bundle_mapped_graph_consumption_tests.rs"]
+mod mapped_graph_consumption_tests;
+#[cfg(test)]
 #[path = "bundle_provider_neutral_anchor_lineage_tests.rs"]
 mod provider_neutral_anchor_lineage_tests;
 #[cfg(test)]

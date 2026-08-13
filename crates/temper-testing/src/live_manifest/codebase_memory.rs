@@ -26,6 +26,8 @@ use super::{
 
 mod configuration;
 mod graph_consumption;
+mod mapped_graph_consumption;
+mod mapped_graph_consumption_fake;
 mod provider_result_anchor;
 mod result_driven_fake;
 mod result_driven_guidance;
@@ -74,8 +76,13 @@ pub(super) fn converge(
         .unwrap_or_default();
     let privacy_safe_aggregate = matches!(
         mcp.lifecycle_profile.as_deref(),
-        Some("provider-result-anchor" | "provider-neutral-anchor-lineage")
+        Some(
+            "provider-result-anchor"
+                | "provider-neutral-anchor-lineage"
+                | "mapped-live-graph-consumption"
+        )
     );
+    let aggregate_checkpoints = privacy_safe_checkpoints(mcp, &calls);
     let stable_rebind = stable_rebind_evidence(mcp, &calls)?;
     let privacy_safe_binding = privacy_safe_aggregate
         .then(|| {
@@ -99,6 +106,7 @@ pub(super) fn converge(
                 | "result-driven-decision-guidance"
                 | "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
+                | "mapped-live-graph-consumption"
         )
     ) {
         "one successful provider-shaped graph result".to_string()
@@ -118,6 +126,7 @@ pub(super) fn converge(
                 .forced_systemic_failure
                 .as_ref()
                 .map(|failure| failure.tool.clone()),
+            aggregate_checkpoints,
             safe_tools: mcp
                 .safe_tools
                 .iter()
@@ -482,6 +491,8 @@ impl CodebaseMemoryFake {
             result_driven_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("provider-neutral-anchor-lineage") {
             typed_lineage_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-graph-consumption") {
+            mapped_graph_consumption_fake::start(request_count, observations_for_rule)?
         } else {
             FakeLlm::start(Script::rule(move |view| {
                 if !messages_contain(view, "ROLE: engineer") {
@@ -608,6 +619,7 @@ impl CodebaseMemoryFake {
                         | "result-driven-decision-guidance"
                         | "provider-result-anchor"
                         | "provider-neutral-anchor-lineage"
+                        | "mapped-live-graph-consumption"
                 )
             )
         {
@@ -630,23 +642,28 @@ impl CodebaseMemoryFake {
                     | "result-driven-decision-guidance"
                     | "provider-result-anchor"
                     | "provider-neutral-anchor-lineage"
+                    | "mapped-live-graph-consumption"
             )
         ) && !(graph_trace_seen
             && current_root_source_results >= 2
-            && (mcp.lifecycle_profile.as_deref() == Some("provider-neutral-anchor-lineage")
-                || code_refinement_seen))
+            && (matches!(
+                mcp.lifecycle_profile.as_deref(),
+                Some("provider-neutral-anchor-lineage" | "mapped-live-graph-consumption")
+            ) || code_refinement_seen))
         {
             return Err(format!(
                 "fake LLM did not consume the complete graph-to-graph/current-root source chain\n{}",
                 self.log_tail()
             ));
         }
-        let minimum_requests =
-            if mcp.lifecycle_profile.as_deref() == Some("provider-neutral-anchor-lineage") {
-                8
-            } else {
-                9
-            };
+        let minimum_requests = if matches!(
+            mcp.lifecycle_profile.as_deref(),
+            Some("provider-neutral-anchor-lineage" | "mapped-live-graph-consumption")
+        ) {
+            8
+        } else {
+            9
+        };
         if self.engineer_requests() < minimum_requests {
             return Err(format!(
                 "fake LLM did not complete the codebase-memory validation loop\n{}",
@@ -715,6 +732,24 @@ fn messages_contain(view: &RequestView, needle: &str) -> bool {
     view.messages
         .iter()
         .any(|message| message.content.contains(needle))
+}
+
+fn privacy_safe_checkpoints(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Vec<String> {
+    if mcp.lifecycle_profile.as_deref() != Some("mapped-live-graph-consumption") {
+        return Vec::new();
+    }
+    let allowed = [
+        "served_mapped_root",
+        "served_mapped_carry_forward",
+        "served_mapped_current_root_source",
+        "served_mapped_unavailable",
+    ];
+    calls
+        .iter()
+        .filter_map(|call| call.fixture_event.as_deref())
+        .filter(|event| allowed.contains(event))
+        .map(str::to_string)
+        .collect()
 }
 
 fn is_current_root_source_result(content: &str) -> bool {
