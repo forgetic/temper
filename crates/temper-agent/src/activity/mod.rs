@@ -9,9 +9,11 @@
 mod containment;
 mod lifecycle;
 mod normalizer;
+mod operator_transcript;
 mod transport;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -49,6 +51,9 @@ pub struct AgentActivityConfig {
     pub lifecycle_reporter: Option<AgentLifecycleReporter>,
     /// Cooperative cancellation bridge installed into the core run control.
     pub cancellation: AgentCancellationLatch,
+    /// Optional private file for bounded model-visible graph results. It is
+    /// honored only in diagnostic mode and never joins activity projections.
+    pub operator_transcript: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for AgentActivityConfig {
@@ -63,6 +68,13 @@ impl std::fmt::Debug for AgentActivityConfig {
                 &self.lifecycle_reporter.as_ref().map(|_| "<reporter>"),
             )
             .field("cancellation", &"<latch>")
+            .field(
+                "operator_transcript",
+                &self
+                    .operator_transcript
+                    .as_ref()
+                    .map(|_| "<operator-local>"),
+            )
             .finish()
     }
 }
@@ -128,6 +140,7 @@ pub struct ScopeFactory {
     clock: Arc<dyn ActivityClock>,
     projections: Arc<ProjectionSet>,
     lifecycle_projection: Option<Arc<dyn lifecycle::LifecycleProjection>>,
+    operator_transcript: Option<Arc<operator_transcript::OperatorTranscriptCapture>>,
 }
 
 /// A core run observer plus the unique scope identity it carries. Callers keep
@@ -154,11 +167,17 @@ impl ScopeFactory {
             config.lifecycle_reporter,
             config.cancellation,
         );
+        let operator_transcript = operator_transcript::OperatorTranscriptCapture::open(
+            config.policy.capture,
+            config.operator_transcript.as_deref(),
+        )
+        .map(Arc::new);
         Self {
             policy: config.policy,
             clock: Arc::new(SystemActivityClock::new()),
             projections: Arc::new(ProjectionSet { projections }),
             lifecycle_projection,
+            operator_transcript,
         }
     }
 
@@ -173,6 +192,7 @@ impl ScopeFactory {
             clock,
             projections: Arc::new(ProjectionSet { projections }),
             lifecycle_projection: None,
+            operator_transcript: None,
         }
     }
 
@@ -255,9 +275,13 @@ impl ScopeFactory {
             activity,
             lifecycle,
         });
+        let mut observability = RunObservability::new(sink, model);
+        if let Some(operator_transcript) = &self.operator_transcript {
+            observability = observability.with_operator_transcript(operator_transcript.clone());
+        }
         ScopedRunObservability {
             scope_id,
-            observability: RunObservability::new(sink, model),
+            observability,
         }
     }
 }

@@ -31,13 +31,16 @@ pub struct NormalizedTrace {
     pub events: Vec<AgentRunEventV1>,
     /// Attachments are unique and sorted by their content digest.
     pub attachments: Vec<BlobAttachmentV1>,
+    /// Operator-local diagnostic records are kept distinct from normalized
+    /// durable activity and are appended only when writing a local export.
+    pub operator_transcript: Vec<temper_protocol_activity::OperatorTranscriptToolResultV1>,
     pub diagnostics: Vec<TraceDiagnosticV1>,
 }
 
 impl NormalizedTrace {
-    /// Serializes records in the same deterministic order as the engine export:
-    /// each event is followed by its newly referenced attachments, sorted by
-    /// digest. Every record ends in one newline.
+    /// Serializes local diagnostic export records. Durable activity events and
+    /// their referenced attachments stay canonical; operator-local transcript
+    /// records are appended afterward and never enter the normalized event set.
     pub fn canonical_export(&self) -> Result<Vec<u8>, TraceIngestError> {
         let attachments = self
             .attachments
@@ -65,6 +68,12 @@ impl NormalizedTrace {
                     &TraceExportRecordV1::attachment((*attachment).clone()),
                 )?;
             }
+        }
+        for record in &self.operator_transcript {
+            write_record(
+                &mut bytes,
+                &TraceExportRecordV1::operator_transcript(record.clone()),
+            )?;
         }
         Ok(bytes)
     }
@@ -198,13 +207,16 @@ pub fn ingest_trace(path: impl AsRef<Path>) -> Result<NormalizedTrace, TraceInge
 
     let bytes = read(path, "read trace input")?;
     if detect_export(path, &bytes)? {
-        let (events, attachments, mut diagnostics) = read_export(path, &bytes)?;
-        finish_normalization(
+        let (events, attachments, operator_transcript, mut diagnostics) =
+            read_export(path, &bytes)?;
+        let mut trace = finish_normalization(
             TraceInputKindV1::ExportJsonl,
             events,
             attachments,
             &mut diagnostics,
-        )
+        )?;
+        trace.operator_transcript = operator_transcript;
+        Ok(trace)
     } else {
         let (events, mut diagnostics) = parse_raw_events(path, &bytes)?;
         let run_directory = path.parent().unwrap_or_else(|| Path::new("."));

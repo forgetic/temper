@@ -347,6 +347,9 @@ pub(super) async fn observe_authorized_query(
                 assert_eq!(version, 1);
                 exported_blobs.push(attachment);
             }
+            TraceExportRecordV1::OperatorTranscriptV1 { .. } => {
+                panic!("durable worker export has no operator transcript")
+            }
         }
     }
     assert_eq!(exported_events, events);

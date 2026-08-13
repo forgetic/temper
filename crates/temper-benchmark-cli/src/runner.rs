@@ -10,6 +10,7 @@ use jig_core::ScriptFile;
 use jig_server::FakeLlm;
 use serde::Serialize;
 use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
+use temper_protocol_agent::OPERATOR_TRANSCRIPT_FLAG;
 use temper_protocol_agent::PROVIDER_CREDENTIALS_ENV;
 use temper_worker::{
     AgentRunOutput, AgentRunner, AgentRuntimeLimitsV1, OutOfProcessRunner, TraceCollector,
@@ -325,6 +326,8 @@ fn run_repetition(
         jig.base_url(),
         "--subagents".to_string(),
         "off".to_string(),
+        OPERATOR_TRANSCRIPT_FLAG.to_string(),
+        paths.operator_transcript.display().to_string(),
     ];
     let fixture_provider_state = workspace
         .temporary_root()
@@ -390,6 +393,8 @@ fn finalize_repetition(
 ) -> Result<crate::RunSummaryV1, BenchmarkRunError> {
     if let (Some(redactor), Some(output)) = (redactor, output.as_mut()) {
         output.result = redactor.redacted(&output.result, "workspace result")?;
+        output.operator_transcript =
+            redactor.redacted(&output.operator_transcript, "operator transcript")?;
     }
 
     workspace.verify_context_directories()?;
@@ -426,14 +431,21 @@ fn finalize_repetition(
         });
     }
     let recovered = recovered.pop().expect("one recovered trace");
+    let operator_transcript = output
+        .as_ref()
+        .map(|output| output.operator_transcript.clone())
+        .unwrap_or_default();
     let mut trace = crate::ingest::normalize_worker_trace(
         TraceInputKindV1::JournalDirectory,
         recovered.events,
         recovered.blobs,
     )?;
+    trace.operator_transcript = operator_transcript;
     if let Some(redactor) = redactor {
         redactor.ensure_safe_attachments(&trace.attachments)?;
         trace.events = redactor.redacted(&trace.events, "canonical trace events")?;
+        trace.operator_transcript =
+            redactor.redacted(&trace.operator_transcript, "operator transcript")?;
     }
     let prefixes = manifest
         .manifest()

@@ -91,6 +91,8 @@ pub(super) fn classify_relevance(
                 .iter()
                 .map(|item| item.consumer_call_id.clone()),
         );
+        let ordered_carry_forward =
+            ordered_carry_forward_has_root(call, producer_correlation, calls);
         let matching_targets = options
             .graph_decision_targets
             .iter()
@@ -101,6 +103,8 @@ pub(super) fn classify_relevance(
                     .as_ref()
                     .is_some_and(|expected| {
                         correlation_matches_expected(call, producer_correlation, expected)
+                            && (producer_correlation.target_digest == expected.target_digest
+                                || ordered_carry_forward)
                     })
             })
             .collect::<Vec<_>>();
@@ -120,7 +124,27 @@ pub(super) fn classify_relevance(
             call_evidence.append(&mut target_evidence);
             correlation_unknown |= target_unknown;
         }
-        if !call_evidence.is_empty() || lineage_relevant_calls.contains(&call.call_id) {
+        // One graph call contributes one deterministic proof row. Several
+        // declared targets may validly match a typed root forest, but retaining
+        // all of them duplicates relevance and leaks aggregate shape. Prefer
+        // the earliest consumer, then stable call/target identity.
+        call_evidence.sort_by(|left, right| {
+            (
+                left.consumer_start_seq,
+                &left.consumer_call_id,
+                &left.target,
+            )
+                .cmp(&(
+                    right.consumer_start_seq,
+                    &right.consumer_call_id,
+                    &right.target,
+                ))
+        });
+        call_evidence.truncate(1);
+        if !call_evidence.is_empty()
+            || lineage_relevant_calls.contains(&call.call_id)
+            || ordered_carry_forward
+        {
             observed = observed.saturating_add(1);
             relevant = relevant.saturating_add(1);
             evidence.extend(call_evidence);
@@ -144,6 +168,45 @@ pub(super) fn classify_relevance(
         evidence,
         diagnostics,
     }
+}
+
+fn ordered_carry_forward_has_root(
+    call: &GraphCall,
+    correlation: &temper_protocol_activity::GraphCorrelationV1,
+    calls: &BTreeMap<CallKey, GraphCall>,
+) -> bool {
+    let Some(start_seq) = call.start_seq else {
+        return false;
+    };
+    let Some(carry) = call.decision_anchor_lineage.as_ref().filter(|lineage| {
+        lineage.stage == DecisionAnchorLineageStageV1::CarryForward
+            && lineage.is_valid_for(correlation)
+    }) else {
+        return false;
+    };
+
+    calls.values().any(|root| {
+        root.scope_id == call.scope_id
+            && root.status == Some(ToolStatusV1::Succeeded)
+            && root
+                .finish_seq
+                .is_some_and(|finish_seq| finish_seq < start_seq)
+            && root
+                .graph_correlation
+                .as_ref()
+                .filter(|root_correlation| {
+                    root_correlation.is_valid() && root_correlation.tool.public_name() == root.name
+                })
+                .is_some_and(|root_correlation| {
+                    root.decision_anchor_lineage
+                        .as_ref()
+                        .is_some_and(|lineage| {
+                            lineage.stage == DecisionAnchorLineageStageV1::Root
+                                && lineage.root_binding == carry.root_binding
+                                && lineage.is_valid_for(root_correlation)
+                        })
+                })
+    })
 }
 
 fn forest_lineage_evidence(

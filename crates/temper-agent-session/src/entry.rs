@@ -122,6 +122,7 @@ fn build_config(
     .with_tool_config(read_tool_config(options.tool_config.as_deref())?)
     .with_runtime_limits(read_runtime_limits(options.runtime_limits.as_deref())?)
     .with_trace_policy(read_trace_policy(options.trace_policy.as_deref())?)
+    .with_operator_transcript(options.operator_transcript.clone())
     .with_activity_address(options.activity_address.clone())
     .with_lifecycle_address(options.lifecycle_address.clone());
     let config = match options.submit_for_pr_address {

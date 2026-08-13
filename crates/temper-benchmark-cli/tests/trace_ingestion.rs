@@ -5,9 +5,12 @@ use std::path::{Path, PathBuf};
 
 use temper_benchmark_cli::{
     RUN_SUMMARY_VERSION, RunSummaryV1, TraceDiagnosticCodeV1, TraceIngestError, TraceInputKindV1,
-    ingest_trace,
+    aggregate_run_summaries, ingest_trace,
 };
-use temper_protocol_activity::{AgentActivityEventV1, AgentRunEventV1};
+use temper_protocol_activity::{
+    AgentActivityEventV1, AgentRunEventV1, InlineContentV1, OPERATOR_TRANSCRIPT_RECORD_VERSION,
+    OperatorTranscriptToolResultV1,
+};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -60,6 +63,38 @@ fn journal_and_export_normalize_to_the_same_canonical_stream() {
     assert_eq!(
         journal.canonical_export().unwrap(),
         reingested.canonical_export().unwrap()
+    );
+}
+
+#[test]
+fn operator_transcript_is_local_export_only_and_never_enters_summaries_or_aggregates() {
+    const READINESS: &str = "cold stable upsert is ready";
+    let mut trace = ingest_trace(fixture("complete-export.jsonl")).expect("export ingests");
+    trace.operator_transcript = vec![OperatorTranscriptToolResultV1 {
+        version: OPERATOR_TRANSCRIPT_RECORD_VERSION,
+        call_id: "graph-read".to_string(),
+        tool_name: "codebase_memory_search_graph".to_string(),
+        model_result_text: InlineContentV1 {
+            text: READINESS.to_string(),
+            truncated: false,
+        },
+    }];
+
+    let local_export = String::from_utf8(trace.canonical_export().unwrap()).unwrap();
+    assert!(local_export.contains(READINESS));
+    assert!(
+        !serde_json::to_string(&trace.events)
+            .unwrap()
+            .contains(READINESS)
+    );
+
+    let summary = trace.run_summary();
+    assert!(!serde_json::to_string(&summary).unwrap().contains(READINESS));
+    let aggregate = aggregate_run_summaries([summary]).expect("summary aggregates");
+    assert!(
+        !serde_json::to_string(&aggregate)
+            .unwrap()
+            .contains(READINESS)
     );
 }
 

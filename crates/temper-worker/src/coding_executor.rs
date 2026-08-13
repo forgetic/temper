@@ -361,6 +361,7 @@ async fn execute<R: AgentRunner>(
     let AgentRunOutput {
         result,
         accepted_submit,
+        operator_transcript: _,
     } = match runner
         .run_request(AgentRunRequest::new_controlled(
             &job_id,

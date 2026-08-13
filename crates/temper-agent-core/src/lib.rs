@@ -50,7 +50,7 @@ pub use run::{
 };
 pub use shell::{
     AgentOutcome, AgentShell, EventClock, EventSink, ModelIdentity, NullEventSink,
-    RunObservability, SystemEventClock, TurnHook,
+    OperatorTranscriptSink, RunObservability, SystemEventClock, TurnHook,
 };
 #[cfg(feature = "test-support")]
 pub use shell::{

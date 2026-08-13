@@ -324,6 +324,10 @@ fn artifact_layout_and_snapshots_are_deterministic_and_exclude_secrets() {
     assert_eq!(paths.baselines, paths.root.join("baselines.json"));
     assert_eq!(paths.canonical_trace, paths.root.join("trace.export.jsonl"));
     assert_eq!(
+        paths.operator_transcript,
+        paths.root.join("operator-transcript.jsonl")
+    );
+    assert_eq!(
         paths.workspace_result,
         paths.root.join("workspace-result.json")
     );

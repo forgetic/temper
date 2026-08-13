@@ -264,6 +264,7 @@ impl NativeJigAgentRunner {
                 lifecycle_address: None,
                 lifecycle_reporter: Some(lifecycle_reporter),
                 cancellation: agent_cancellation.clone(),
+                operator_transcript: None,
             },
             temper_protocol_agent::AgentRuntimeLimitsV1::default(),
         );
@@ -366,6 +367,7 @@ impl NativeJigAgentRunner {
         Ok(AgentRunOutput {
             result,
             accepted_submit: accepted_submit.latest(),
+            operator_transcript: Vec::new(),
         })
     }
 

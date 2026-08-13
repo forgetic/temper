@@ -358,6 +358,13 @@ fn graph_consumption_uses_typed_correlation_for_a_generic_five_call_chain() {
             expected: Some(5),
         }
     );
+    assert_eq!(graph.decision_evidence.len(), 5);
+    let distinct_calls = graph
+        .decision_evidence
+        .iter()
+        .map(|evidence| evidence.graph_call_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(distinct_calls.len(), 5);
     assert_eq!(
         graph
             .decision_evidence
@@ -475,7 +482,7 @@ fn graph_consumption_rejects_broad_mismatched_cross_scope_and_out_of_order_consu
                     "unmatched",
                 )
             }),
-            (3, 2),
+            (4, 1),
         ),
         (
             "cross-scope consumer",
@@ -556,36 +563,37 @@ fn graph_consumption_marks_missing_malformed_or_lossy_correlation_unavailable() 
 
 #[test]
 fn graph_consumption_rejects_mismatched_or_absent_later_mutations() {
-    let cases: Vec<(&str, Box<dyn Fn(&mut NormalizedTrace)>)> = vec![
+    for (name, mutate, expected) in [
         (
             "mismatched mutation",
-            Box::new(|trace| {
+            Box::new(|trace: &mut NormalizedTrace| {
                 set_started_arguments(
                     trace,
                     "patch-route",
                     r#"{"patch":"diff --git a/repo/src/other.rs b/repo/src/other.rs"}"#,
                     false,
                 )
-            }),
+            }) as Box<dyn Fn(&mut NormalizedTrace)>,
+            (5, 0),
         ),
         (
             "unconsumed result",
-            Box::new(|trace| {
+            Box::new(|trace: &mut NormalizedTrace| {
                 trace
                     .events
                     .retain(|event| !event_has_call(&event.event, "patch-route"));
-            }),
+            }) as Box<dyn Fn(&mut NormalizedTrace)>,
+            (5, 0),
         ),
-    ];
-    for (name, mutate) in cases {
+    ] {
         let mut trace = typed_graph_consumption_trace();
         mutate(&mut trace);
         let summary = analyze_trace(&trace, &graph_consumption_options());
         assert_eq!(
             graph_counts(&summary),
             (
-                Some(4),
-                Some(1),
+                Some(expected.0),
+                Some(expected.1),
                 MetricCoverageV1 {
                     observed: 5,
                     expected: Some(5),
@@ -703,11 +711,27 @@ fn canonical_digest_without_valid_lineage_cannot_confer_relevance() {
     );
 
     let summary = analyze_trace(&trace, &graph_consumption_options());
-    assert_eq!(graph_counts(&summary).0, None);
-    assert!(summary.diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == TraceDiagnosticCodeV1::GraphEvidenceUnavailable
-            && diagnostic.message.contains("correlation")
-    }));
+    assert_eq!(
+        graph_counts(&summary),
+        (
+            Some(4),
+            Some(1),
+            MetricCoverageV1 {
+                observed: 5,
+                expected: Some(5),
+            },
+        )
+    );
+    let graph = summary.metrics.graph.unwrap();
+    assert_eq!(graph.decision_evidence.len(), 3);
+    assert_eq!(
+        graph
+            .decision_evidence
+            .iter()
+            .filter(|evidence| evidence.graph_call_id == "graph-source-worker")
+            .count(),
+        0
+    );
 }
 
 #[test]
