@@ -64,15 +64,6 @@
       "turns": [
         {
           "tool_call": {
-            "id": "broad_architecture_non_progress",
-            "name": "codebase_memory_get_architecture",
-            "args": {
-              "project": "temper-benchmark/codebase-memory-routing-repair"
-            }
-          }
-        },
-        {
-          "tool_call": {
             "id": "duplicate_worker_refinement_non_progress",
             "name": "codebase_memory_search_code",
             "args": {
@@ -101,6 +92,15 @@
     },
     {
       "turns": [
+        {
+          "tool_call": {
+            "id": "post_decision_broad_architecture",
+            "name": "codebase_memory_get_architecture",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair"
+            }
+          }
+        },
         {
           "tool_call": {
             "id": "post_decision_graph_search",

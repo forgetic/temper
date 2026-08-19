@@ -6,8 +6,9 @@ use std::process::Command;
 
 use serde_json::json;
 use temper_benchmark_cli::{
-    BASELINE_SNAPSHOT_VERSION, BENCHMARK_MANIFEST_SCHEMA, BenchmarkArtifactLayout,
-    BenchmarkManifestError, load_benchmark_manifest, prepare_benchmark_workspace,
+    AcceptanceImprovementMeasureV1, BASELINE_SNAPSHOT_VERSION, BENCHMARK_MANIFEST_SCHEMA,
+    BenchmarkArtifactLayout, BenchmarkManifestError, GraphConsumptionModeV1, GraphDecisionKindV1,
+    load_benchmark_manifest, prepare_benchmark_workspace,
 };
 use tempfile::TempDir;
 
@@ -238,6 +239,29 @@ fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
     assert_eq!(acceptance.matrix_repetitions, 5);
     assert_eq!(acceptance.minimum_relevance_percent, 50);
     assert_eq!(acceptance.minimum_improvement_percent, 20);
+    assert_eq!(
+        acceptance.improvement_measure,
+        AcceptanceImprovementMeasureV1::ConventionalDiscoveryCalls
+    );
+    assert_eq!(
+        acceptance.exact_source_selection_target,
+        "repo/src/route.rs"
+    );
+    assert_eq!(
+        acceptance.required_decision_kinds,
+        [
+            GraphDecisionKindV1::Implementation,
+            GraphDecisionKindV1::Caller,
+            GraphDecisionKindV1::FocusedTest,
+        ]
+    );
+    assert_eq!(
+        acceptance.required_consumption_modes,
+        [
+            GraphConsumptionModeV1::Source,
+            GraphConsumptionModeV1::Selection,
+        ]
+    );
     assert_eq!(acceptance.aggregate_privacy_forbidden_fragments.len(), 4);
     let targets = &manifest.manifest().graph_decision_targets;
     assert_eq!(targets.len(), 5);

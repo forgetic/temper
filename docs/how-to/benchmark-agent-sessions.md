@@ -146,12 +146,12 @@ stable upsert's normalized identity is separately confirmed with a targeted
 ready status and canonical root before serving a cold targeted result and a
 later warm result. Its enabled path starts with two independent useful roots
 and consumes valid later refinement, trace, focused-test source, and caller
-source descendants. One broad architecture call and one duplicate refinement
-reach the fixture as a single non-progressing batch before the caller source
-converges the decision; two later graph attempts are denied locally. Harness
-assertions distinguish ten model graph attempts from eight actual provider
-invocations and retain complete relevance classification above the frozen 50%
-gate. Relevance credits only the manifest-declared ordered graph-to-graph,
+source descendants. One duplicate refinement reaches the fixture as a
+non-progressing batch before the caller source converges the decision; a broad
+and two targeted later graph attempts are denied locally. Harness assertions
+distinguish ten model graph attempts from seven actual provider invocations and
+retain complete typed relevance classification above the frozen 50% gate.
+Relevance credits only the manifest-declared ordered graph-to-graph,
 graph-to-source, and exact-source-selection consumption modes. A run summary
 exposes only call ordering, safe tool names, declared targets/kinds, and
 consumption modes; it excludes tool arguments, source, and provider results.

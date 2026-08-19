@@ -288,12 +288,12 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
     match cli_condition {
         "codebase-memory-enabled" => {
             expect_exact(&run, "/metrics/graph/calls", 10)?;
-            expect_exact(&run, "/metrics/graph/succeeded", 8)?;
-            expect_exact(&run, "/metrics/graph/failed", 2)?;
+            expect_exact(&run, "/metrics/graph/succeeded", 7)?;
+            expect_exact(&run, "/metrics/graph/failed", 3)?;
             expect_exact(&run, "/metrics/graph/relevant_results", 7)?;
-            expect_exact(&run, "/metrics/graph/irrelevant_successes", 1)?;
-            expect_exact(&run, "/metrics/graph/relevance_coverage/observed", 8)?;
-            expect_exact(&run, "/metrics/graph/relevance_coverage/expected", 8)?;
+            expect_exact(&run, "/metrics/graph/irrelevant_successes", 0)?;
+            expect_exact(&run, "/metrics/graph/relevance_coverage/observed", 7)?;
+            expect_exact(&run, "/metrics/graph/relevance_coverage/expected", 7)?;
             expect_exact(
                 &run,
                 "/metrics/graph/typed_correlation_coverage/observed",
@@ -302,14 +302,14 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             expect_exact(
                 &run,
                 "/metrics/graph/typed_correlation_coverage/expected",
-                8,
+                7,
             )?;
             expect_exact(&run, "/metrics/graph/typed_lineage_coverage/observed", 7)?;
-            expect_exact(&run, "/metrics/graph/typed_lineage_coverage/expected", 8)?;
+            expect_exact(&run, "/metrics/graph/typed_lineage_coverage/expected", 7)?;
             expect_exact(
                 &run,
                 "/metrics/graph/failures_by_category/exploration_closed",
-                2,
+                3,
             )?;
             expect_exact(
                 &run,
@@ -340,7 +340,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
                 .map_err(|error| format!("read controlled trace: {error}"))?;
             benchmark::verify_typed_graph_correlation_records(&trace)?;
-            benchmark::verify_provider_invocations(&trace, 8)?;
+            benchmark::verify_provider_invocations(&trace, 7)?;
             for expected in [
                 "cold stable upsert is ready",
                 "warm stable project remains ready",

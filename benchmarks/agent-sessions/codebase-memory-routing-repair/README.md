@@ -43,19 +43,19 @@ serve status or graph reads.
 The enabled Jig begins with two useful independent roots for routing and focused
 behavioral evidence. A later parallel batch refines and traces `worker_slot`
 while reading the root-bound regression test from the confirmed current root.
-Before the final caller source completes the decision chain, one broad
-architecture call and one duplicate refinement reach the provider as a single
-non-progressing batch. Completion then freezes graph exploration: two scripted
-post-decision graph attempts are denied locally while conventional shell and
-source reads remain available for the exact patch.
+Before the final caller source completes the decision chain, one duplicate
+refinement reaches the provider as a non-progressing batch. Completion then
+freezes graph exploration: a broad architecture call and two targeted
+post-decision attempts are denied locally while conventional shell and source
+reads remain available for the exact patch.
 
 The fixture numbers actual provider invocations in its private responses. The
-harness therefore distinguishes ten model graph attempts from eight provider
-invocations, proves the two useful roots and their descendants reached the
-provider, and checks that the two exploration-closed attempts did not. The run
-retains eight completely classified successful results (seven relevant and one
-broad irrelevant result), so deterministic relevance remains above the frozen
-50% aggregate gate without treating RPC success itself as useful.
+harness therefore distinguishes ten model graph attempts from seven provider
+invocations, proves the two useful roots, their descendants, and the admitted
+duplicate reached the provider, and checks that all three exploration-closed
+attempts did not. All seven successful results retain complete typed relevance
+and current-root lineage, so deterministic relevance remains above the frozen
+50% aggregate gate without treating a denied attempt as useful.
 
 The manifest permits only declared provider-shaped typed producer and consumer
 targets, followed by graph-to-graph, graph-to-source, and final exact
