@@ -16,8 +16,9 @@ use tongs::tools::ToolRegistry;
 
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
-    CODEBASE_MEMORY_TOOL_PREFIX, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, OperationGeneration,
-    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
+    CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE, CODEBASE_MEMORY_TOOL_PREFIX,
+    DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, OperationGeneration, ToolCallDenial, ToolCallStatus,
+    ToolFailureCategory, ToolFailureDiagnostic,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
@@ -289,7 +290,7 @@ impl AgentShell {
         operation_generation: OperationGeneration,
         batch_generation: BatchGeneration,
         call: ToolCall,
-        mutation_blocked: bool,
+        denial: Option<ToolCallDenial>,
     ) {
         let tools = Arc::clone(&self.tools);
         let events = Arc::clone(&self.events);
@@ -305,7 +306,7 @@ impl AgentShell {
                 &call,
                 timeout,
                 &cancellation,
-                mutation_blocked,
+                denial,
                 clock.as_ref(),
                 events.as_ref(),
                 operator_transcript.as_deref(),
@@ -354,13 +355,8 @@ impl Executor<AgentMachine> for AgentShell {
                 operation_generation,
                 batch_generation,
                 call,
-                mutation_blocked,
-            } => self.execute_run_tool(
-                operation_generation,
-                batch_generation,
-                call,
-                mutation_blocked,
-            ),
+                denial,
+            } => self.execute_run_tool(operation_generation, batch_generation, call, denial),
             AgentRequest::CancelActive {
                 operation_generation,
                 batch_generation,
@@ -388,17 +384,21 @@ async fn execute_tool(
     call: &ToolCall,
     timeout: Duration,
     cancellation: &CancellationToken,
-    mutation_blocked: bool,
+    denial: Option<ToolCallDenial>,
     clock: &dyn EventClock,
     events: &dyn EventSink,
     operator_transcript: Option<&dyn OperatorTranscriptSink>,
 ) -> Option<tongs::tools::ToolOutput> {
     let started_ms = clock.now_millis();
     let operation = async {
-        if mutation_blocked {
-            return ToolExecution::Finished(tool_error_output(
-                DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
-            ));
+        if let Some(denial) = denial {
+            let message = match denial {
+                ToolCallDenial::DecisionAnchorMutation => DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
+                ToolCallDenial::GraphExplorationClosed => {
+                    CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE
+                }
+            };
+            return ToolExecution::Finished(tool_error_output(message));
         }
         match tools.get(&call.name) {
             Some(tool) => match temper_agent_io::timeout(
@@ -463,7 +463,11 @@ async fn execute_tool(
         duration_ms,
         result: {
             let mut result = bounded_tool_result(&call.name, &output);
-            if timed_out && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+            if denial == Some(ToolCallDenial::GraphExplorationClosed) {
+                result.failure = Some(ToolFailureDiagnostic::codebase_memory(
+                    ToolFailureCategory::ExplorationClosed,
+                ));
+            } else if timed_out && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
                 result.failure = Some(ToolFailureDiagnostic::codebase_memory(
                     ToolFailureCategory::Timeout,
                 ));

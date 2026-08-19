@@ -98,7 +98,7 @@ fn three_discovery_roots_jointly_cover_next_turn_trace_and_sources() {
                 &affinity_trace,
             ),
         ]),
-        DecisionAnchorTransition::Unchanged,
+        DecisionAnchorTransition::Converged,
     );
     assert!(
         !state.blocks_mutation("write"),
@@ -152,6 +152,53 @@ fn later_batch_roots_join_the_forest_but_same_batch_descendants_stay_ineligible(
         state.blocks_mutation("write"),
         "a root discovered in a later batch is retained but its sibling cannot consume it"
     );
+}
+
+#[test]
+fn later_independent_root_expansion_is_bounded() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("initial", "codebase_memory_search_graph"), 0);
+    finish(
+        &mut state,
+        "initial",
+        "codebase_memory_search_graph",
+        ROOT,
+        DecisionAnchorLineageStageV1::Root,
+    );
+
+    let later_roots = [
+        OTHER_ROOT,
+        THIRD_ROOT,
+        "00000000-0000-4000-8000-000000000004",
+        "00000000-0000-4000-8000-000000000005",
+        "00000000-0000-4000-8000-000000000006",
+    ];
+    for (index, root) in later_roots.into_iter().enumerate() {
+        let id = format!("later-root-{index}");
+        state.on_tool_dispatched(
+            &call(&id, "codebase_memory_search_graph"),
+            index.saturating_add(1),
+        );
+        let transition = state.on_tool_finished(
+            &id,
+            "codebase_memory_search_graph",
+            &output(
+                "codebase_memory_search_graph",
+                root,
+                DecisionAnchorLineageStageV1::Root,
+            ),
+        );
+        if index < MAX_LATER_DECISION_ANCHOR_ROOTS {
+            assert_eq!(transition, DecisionAnchorTransition::Unchanged);
+        } else {
+            assert_eq!(transition, DecisionAnchorTransition::ExplorationExhausted);
+        }
+    }
+    assert_eq!(
+        state.on_tool_dispatched(&call("after-limit", "codebase_memory_search_graph"), 7),
+        Some(ToolCallDenial::GraphExplorationClosed)
+    );
+    assert!(state.blocks_mutation("write"));
 }
 
 #[test]

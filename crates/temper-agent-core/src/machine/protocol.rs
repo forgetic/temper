@@ -140,6 +140,7 @@ pub enum ToolFailureCategory {
     ProviderProtocol,
     InvalidModelInput,
     CircuitOpen,
+    ExplorationClosed,
 }
 
 impl ToolFailureCategory {
@@ -154,6 +155,7 @@ impl ToolFailureCategory {
             Self::ProviderProtocol => "provider_protocol",
             Self::InvalidModelInput => "invalid_model_input",
             Self::CircuitOpen => "circuit_open",
+            Self::ExplorationClosed => "exploration_closed",
         }
     }
 
@@ -168,6 +170,7 @@ impl ToolFailureCategory {
             "provider_protocol" => Some(Self::ProviderProtocol),
             "invalid_model_input" => Some(Self::InvalidModelInput),
             "circuit_open" => Some(Self::CircuitOpen),
+            "exploration_closed" => Some(Self::ExplorationClosed),
             _ => None,
         }
     }
@@ -185,6 +188,7 @@ impl ToolFailureCategory {
             Self::CircuitOpen => {
                 "codebase-memory is disabled for this run after a systemic failure"
             }
+            Self::ExplorationClosed => "codebase-memory graph exploration is closed for this run",
         }
     }
 
@@ -194,6 +198,15 @@ impl ToolFailureCategory {
             Self::ProjectNotReady | Self::Timeout | Self::Transport
         )
     }
+}
+
+/// A local admission decision made before a registered tool can be invoked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolCallDenial {
+    /// A trusted anchor still lacks the required later source evidence.
+    DecisionAnchorMutation,
+    /// Graph convergence or its non-progress budget closed graph exploration.
+    GraphExplorationClosed,
 }
 
 /// Safe, bounded evidence for one codebase-memory failure. Messages are
@@ -347,10 +360,9 @@ pub enum AgentRequest {
         operation_generation: OperationGeneration,
         batch_generation: BatchGeneration,
         call: ToolCall,
-        /// A successful decision anchor has not yet been consumed into the
-        /// required source evidence, so the shell must return a local error
-        /// without invoking this workspace-mutating tool.
-        mutation_blocked: bool,
+        /// When present, the shell returns the denial's fixed local result and
+        /// never invokes the registered tool.
+        denial: Option<ToolCallDenial>,
     },
     /// Cancel every model/tool task owned by the shell. The machine finishes
     /// only after the matching [`AgentCompletion::TasksQuiesced`] arrives.

@@ -26,7 +26,8 @@ use crate::model_failure::ModelFailureDiagnostic;
 
 use super::batching::{PendingTool, plan_batches};
 use super::decision_anchor::{
-    DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState, DecisionAnchorTransition,
+    DECISION_ANCHOR_CONVERGENCE_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState,
+    DecisionAnchorTransition,
 };
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
@@ -71,9 +72,12 @@ pub struct AgentMachine {
     /// Results collected this turn across all batches, in original tool-call
     /// order, so the tool-result messages are appended deterministically.
     turn_results: Vec<PendingTool>,
-    /// Optional per-run guard activated only after a trusted codebase-memory
-    /// wrapper returns a successful targeted decision anchor.
+    /// Per-run graph guard enabled whenever codebase-memory tools are present,
+    /// including read-only roles with no mutation authorization.
     decision_anchors: Option<DecisionAnchorState>,
+    /// Fixed convergence instruction queued once complete current-root evidence
+    /// closes graph exploration.
+    decision_anchor_convergence: bool,
     /// Generic, privacy-safe recovery instruction queued by an unconsumable
     /// anchor. It is distinct from operator steering.
     decision_anchor_recovery: bool,
@@ -132,6 +136,7 @@ impl AgentMachine {
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             decision_anchors,
+            decision_anchor_convergence: false,
             decision_anchor_recovery: false,
             decision_anchor_exhausted: false,
             last_assistant: None,
@@ -164,6 +169,7 @@ impl AgentMachine {
         self.active_tool_batch = None;
         self.pending_batches.clear();
         self.cancellation_generation = None;
+        self.decision_anchor_convergence = false;
         self.decision_anchor_recovery = false;
         self.decision_anchor_exhausted = false;
         let final_message = self
@@ -241,6 +247,13 @@ impl AgentMachine {
                 count: steering.len(),
             }));
             self.messages.extend(steering);
+        }
+        if self.decision_anchor_convergence {
+            self.decision_anchor_convergence = false;
+            self.messages.push(Message::User(UserMessage {
+                content: UserContent::Text(DECISION_ANCHOR_CONVERGENCE_MESSAGE.to_string()),
+                timestamp: 0,
+            }));
         }
         if self.decision_anchor_recovery {
             self.decision_anchor_recovery = false;
@@ -322,17 +335,20 @@ impl AgentMachine {
         let mut requests = Vec::new();
         let model_turn = self.turn.saturating_sub(1);
         for call in calls {
-            let mutation_blocked = self.decision_anchors.as_mut().is_some_and(|state| {
-                state.on_tool_dispatched(&call, model_turn);
-                state.blocks_mutation(&call.name)
-            });
-            // The pure core does not know the per-tool rendering rules; the
-            // shell supplies an optional preview fn (agent-log-cleanup plan,
-            // pieces B/D). Absent it, the field stays `None`.
-            let arg_preview = self
-                .arg_preview
-                .as_ref()
-                .and_then(|render| render(&call.name, &call.arguments));
+            let denial = self
+                .decision_anchors
+                .as_mut()
+                .and_then(|state| state.on_tool_dispatched(&call, model_turn));
+            // A locally denied call must not expose even the shell-rendered
+            // argument preview to activity.
+            let arg_preview = denial
+                .is_none()
+                .then(|| {
+                    self.arg_preview
+                        .as_ref()
+                        .and_then(|render| render(&call.name, &call.arguments))
+                })
+                .flatten();
             let operation_generation = self.next_operation_generation();
             operations.insert(call.id.clone(), operation_generation);
             requests.push(AgentRequest::Emit(AgentEvent::ToolStart {
@@ -344,7 +360,7 @@ impl AgentMachine {
                 operation_generation,
                 batch_generation,
                 call,
-                mutation_blocked,
+                denial,
             });
         }
         self.active_llm = None;
@@ -418,6 +434,10 @@ impl AgentMachine {
                     DecisionAnchorTransition::RecoveryExhausted => {
                         self.decision_anchor_exhausted = true;
                     }
+                    DecisionAnchorTransition::Converged => {
+                        self.decision_anchor_convergence = true;
+                    }
+                    DecisionAnchorTransition::ExplorationExhausted => {}
                 }
             }
             self.turn_results.extend(batch);
