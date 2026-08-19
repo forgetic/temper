@@ -83,18 +83,19 @@ fn reply(view: &RequestView) -> Reply {
                 serde_json::json!({"command": "cd demo && rg worker_slot src", "timeout": 60}),
             )
         }
-        4 => tool_batch(&[
-            (
-                "discover-routing-implementation-root",
-                "codebase_memory_search_graph",
-                serde_json::json!({"query": "routing implementation affinity"}),
-            ),
-            (
-                "discover-focused-behavior-root",
-                "codebase_memory_search_graph",
-                serde_json::json!({"query": "focused alias retry behavior"}),
-            ),
-        ]),
+        // Keep the independent roots on distinct model turns. The fixture's
+        // closed provider chain is ordered, while calls within one tool batch
+        // may reach the provider in either order.
+        4 => tool_reply(
+            "discover-routing-implementation-root",
+            "codebase_memory_search_graph",
+            serde_json::json!({"query": "routing implementation affinity"}),
+        ),
+        5 => tool_reply(
+            "discover-focused-behavior-root",
+            "codebase_memory_search_graph",
+            serde_json::json!({"query": "focused alias retry behavior"}),
+        ),
         6 => tool_reply(
             "refine-routing-implementation",
             "codebase_memory_search_code",
