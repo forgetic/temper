@@ -107,6 +107,30 @@ pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -
     let immediate_repeats = immediate_repeats(trace, &calls);
     let immediate_repeat = (failure_observed == non_success).then_some(immediate_repeats);
 
+    let typed_correlation_observed = calls
+        .values()
+        .filter(|call| call.status == Some(ToolStatusV1::Succeeded))
+        .filter(|call| {
+            call.graph_correlation.as_ref().is_some_and(|correlation| {
+                correlation.is_valid() && correlation.tool.public_name() == call.name
+            })
+        })
+        .count() as u64;
+    let typed_lineage_observed = calls
+        .values()
+        .filter(|call| call.status == Some(ToolStatusV1::Succeeded))
+        .filter(|call| {
+            call.graph_correlation.as_ref().is_some_and(|correlation| {
+                correlation.is_valid()
+                    && correlation.tool.public_name() == call.name
+                    && call
+                        .decision_anchor_lineage
+                        .as_ref()
+                        .is_some_and(|lineage| lineage.is_valid_for(correlation))
+            })
+        })
+        .count() as u64;
+
     let actions = collect_actions(trace);
     let relevance = classify_relevance(options, &calls, &actions);
     diagnostics.extend(relevance.diagnostics);
@@ -156,6 +180,14 @@ pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -
                 observed: relevance.observed,
                 expected: Some(succeeded),
             },
+            typed_correlation_coverage: Some(MetricCoverageV1 {
+                observed: typed_correlation_observed,
+                expected: Some(succeeded),
+            }),
+            typed_lineage_coverage: Some(MetricCoverageV1 {
+                observed: typed_lineage_observed,
+                expected: Some(succeeded),
+            }),
             decision_evidence: relevance.evidence,
             conventional_discovery_before_selection: conventional,
         }),

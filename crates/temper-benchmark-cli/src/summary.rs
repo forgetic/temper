@@ -400,6 +400,14 @@ pub struct GraphMetricsV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub irrelevant_successes: Option<u64>,
     pub relevance_coverage: MetricCoverageV1,
+    /// Successful graph calls carrying a complete wrapper-issued typed target
+    /// correlation, over all successful graph calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_correlation_coverage: Option<MetricCoverageV1>,
+    /// Successful graph calls whose decision-anchor lineage is valid for that
+    /// typed correlation. Acceptance requires complete current-chain lineage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_lineage_coverage: Option<MetricCoverageV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decision_evidence: Vec<GraphDecisionEvidenceV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
