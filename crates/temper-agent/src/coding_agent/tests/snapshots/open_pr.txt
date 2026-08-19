@@ -26,6 +26,7 @@ EFFICIENCY:
 - Before submission, retain the smallest semantic submission diff and remove explanatory comments unless the task or established local style requires them.
 - Inspect repository status, the tracked diff, and all untracked deliverables together. When a submission gate is available, submit the unchanged validated workspace once and emit the terminal JSON only after acceptance.
 - Treat 8–12 total responses, at most four mutation responses, and zero validation invalidations as goals, not correctness limits. Task correctness and required validation take priority.
+- Keep repository-index exploration progress-bounded for this role: preserve bounded independent initial roots, but do not repeat non-progressing discovery or grow new roots without a concrete evidence gap. Once a current-root trace and sufficient implementation/caller/test source evidence complete the decision chain, stop graph calls, obey convergence or exploration-closed messages, use conventional reads for any remaining verification, and produce the smallest role-appropriate product.
 
 ---
 FINAL MESSAGE FORMAT (mandatory):

@@ -138,7 +138,12 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          consumes the current result must be in a later model turn; later evidence calls whose\n\
          selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
          source evidence covers the selected current-root implementation, its caller/model,\n\
-         and focused behavioral tests, sufficient to justify the smallest semantic diff.\n\n\
+         and focused behavioral tests, sufficient to justify the smallest semantic diff. Bound later\n\
+         independent roots and do not repeat successful discovery that adds no typed evidence. Once a\n\
+         current-root trace and sufficient implementation/caller/test source evidence complete the\n\
+         decision chain, stop codebase-memory exploration, obey convergence or exploration-closed\n\
+         messages, use conventional reads for any remaining verification, and produce the smallest\n\
+         role-appropriate product.\n\n\
          Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
          - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
            symptom, file, or area; then use call/path tracing and read exact source snippets as\n\
@@ -147,7 +152,10 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          - architect: map affected areas before triage/breakdown only when a genuine topology\n\
            question warrants an architecture view;\n\
          - engineer: start with targeted symbols/code, then trace affected callers before editing;\n\
-         - reviewer: inspect impacted code paths and callers before verdicts.\n\n\
+         - scenario-author: inspect the runtime seam and observable behavior before authoring coverage;\n\
+         - tester: verify impacted behavior and focused tests before a validation verdict;\n\
+         - reviewer: inspect impacted code paths and callers before verdicts;\n\
+         - mechanical roles: use only the graph evidence needed for their narrow deterministic product.\n\n\
          Treat the graph as an index, not truth. Verify exact code with read/grep/git diff\n\
          before editing or making final claims.\n\
 {status}"
@@ -310,6 +318,12 @@ for line in sys.stdin:
             "selected current-root implementation, its caller/model",
             "focused behavioral tests",
             "smallest semantic diff",
+            "Bound later",
+            "do not repeat successful discovery that adds no typed evidence",
+            "stop codebase-memory exploration",
+            "convergence or exploration-closed",
+            "messages, use conventional reads for any remaining verification",
+            "role-appropriate product",
         ] {
             assert!(prompt.contains(expected), "prompt omitted {expected:?}");
         }
@@ -389,7 +403,10 @@ for line in sys.stdin:
                 "- architect: map affected areas before triage/breakdown only when a genuine topology",
                 "question warrants an architecture view;",
                 "- engineer: start with targeted symbols/code, then trace affected callers before editing;",
-                "- reviewer: inspect impacted code paths and callers before verdicts.",
+                "- scenario-author: inspect the runtime seam and observable behavior before authoring coverage;",
+                "- tester: verify impacted behavior and focused tests before a validation verdict;",
+                "- reviewer: inspect impacted code paths and callers before verdicts;",
+                "- mechanical roles: use only the graph evidence needed for their narrow deterministic product.",
                 "Treat the graph as an index, not truth.",
                 "Default project: `acme/demo`",
                 "Project aliases accepted in `project`/`repo`",

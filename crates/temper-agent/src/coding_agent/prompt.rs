@@ -190,6 +190,14 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              available tool over a general shell command for the same operation.\n",
         ),
     }
+    prompt.push_str(
+        "- Keep repository-index exploration progress-bounded for this role: preserve bounded \
+         independent initial roots, but do not repeat non-progressing discovery or grow new roots \
+         without a concrete evidence gap. Once a current-root trace and sufficient \
+         implementation/caller/test source evidence complete the decision chain, stop graph calls, \
+         obey convergence or exploration-closed messages, use conventional reads for any remaining \
+         verification, and produce the smallest role-appropriate product.\n",
+    );
 }
 
 /// Builds the role prompt plus guidance for exactly the tools in the finalized
