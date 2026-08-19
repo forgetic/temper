@@ -6,9 +6,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use temper_benchmark_cli::{
-    AnalyzeOptions, BenchmarkConditionV1, HarnessRunOptions, LiveRunOptions, analyze_trace,
-    compare_benchmarks, ingest_trace, load_comparison_input, render_aggregate_markdown,
-    render_comparison_markdown, render_run_summary_markdown, run_harness, run_live,
+    AnalyzeOptions, BenchmarkAcceptanceOptions, BenchmarkConditionV1, HarnessRunOptions,
+    LiveRunOptions, analyze_trace, compare_benchmarks, ingest_trace, load_comparison_input,
+    render_aggregate_markdown, render_comparison_markdown, render_run_summary_markdown,
+    run_harness, run_live, verify_benchmark_acceptance, write_benchmark_acceptance,
     write_canonical_export, write_comparison_artifacts, write_run_summary,
 };
 use temper_config::EnvMap;
@@ -24,6 +25,7 @@ Usage:
   TEMPER_BENCHMARK_LIVE=1 temper-benchmark run --benchmark <MANIFEST> --mode live --agent-bin <PATH> --output-dir <DIR> [--condition <NAME>] [--config <PATH>] [--secrets <PATH>] [--pool <NAME>] [--repetitions <N>]
   temper-benchmark normalize --trace <PATH> --output <FILE>
   temper-benchmark compare --base <ARTIFACT-OR-SUMMARY> --head <ARTIFACT-OR-SUMMARY> [--output-dir <DIR>]
+  temper-benchmark verify --benchmark <MANIFEST> --candidate-commit <SHA> --smoke <DIR> --enabled <DIR> --disabled <DIR> --unavailable <DIR> --output-dir <DIR>
   temper-benchmark --help
 
 Commands:
@@ -31,6 +33,7 @@ Commands:
   run        Execute fresh direct agent sessions in CI-safe harness or credential-gated live mode
   normalize  Validate journal/events/export input and write canonical export JSONL
   compare    Render a report-only comparison without rerunning either benchmark
+  verify     Evaluate manifest-declared exact-head smoke and frozen-matrix acceptance gates
 ";
 
 fn main() -> ExitCode {
@@ -63,6 +66,10 @@ fn main() -> ExitCode {
         }
         [command, rest @ ..] if command == "compare" => match parse_compare_args(rest) {
             Ok(args) => compare(args),
+            Err(message) => usage_error(message),
+        },
+        [command, rest @ ..] if command == "verify" => match parse_verify_args(rest) {
+            Ok(args) => verify(args),
             Err(message) => usage_error(message),
         },
         [] => {
@@ -233,6 +240,53 @@ fn parse_compare_args(args: &[String]) -> Result<CompareArgs, String> {
     })
 }
 
+struct VerifyArgs {
+    options: BenchmarkAcceptanceOptions,
+}
+
+fn parse_verify_args(args: &[String]) -> Result<VerifyArgs, String> {
+    let allowed = [
+        "--benchmark",
+        "--candidate-commit",
+        "--smoke",
+        "--enabled",
+        "--disabled",
+        "--unavailable",
+        "--output-dir",
+    ];
+    let mut values = BTreeMap::<String, String>::new();
+    let mut index = 0;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        if !allowed.contains(&flag) {
+            return Err(format!("unknown verify argument `{flag}`"));
+        }
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("missing value for `{flag}`"))?;
+        if values.insert(flag.to_string(), value.clone()).is_some() {
+            return Err(format!("duplicate argument `{flag}`"));
+        }
+        index += 2;
+    }
+    let mut required = |flag: &str| {
+        values
+            .remove(flag)
+            .ok_or_else(|| format!("verify requires `{flag}`"))
+    };
+    Ok(VerifyArgs {
+        options: BenchmarkAcceptanceOptions {
+            benchmark: PathBuf::from(required("--benchmark")?),
+            candidate_commit: required("--candidate-commit")?,
+            smoke: PathBuf::from(required("--smoke")?),
+            enabled: PathBuf::from(required("--enabled")?),
+            disabled: PathBuf::from(required("--disabled")?),
+            unavailable: PathBuf::from(required("--unavailable")?),
+            output_dir: PathBuf::from(required("--output-dir")?),
+        },
+    })
+}
+
 fn parse_path_flags(
     args: &[String],
     allowed: &[&str],
@@ -311,6 +365,29 @@ fn compare(args: CompareArgs) -> ExitCode {
         Ok::<_, Box<dyn std::error::Error>>(())
     })();
     report_result(result)
+}
+
+fn verify(args: VerifyArgs) -> ExitCode {
+    let result = (|| {
+        let acceptance = verify_benchmark_acceptance(&args.options)?;
+        write_benchmark_acceptance(&acceptance, &args.options.output_dir)?;
+        let passed = acceptance.passed;
+        let passed_gates = acceptance.gates.iter().filter(|gate| gate.passed).count();
+        println!(
+            "benchmark acceptance {} ({passed_gates}/{} gates passed)",
+            if passed { "passed" } else { "failed" },
+            acceptance.gates.len()
+        );
+        Ok::<_, Box<dyn std::error::Error>>(passed)
+    })();
+    match result {
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
+        Err(error) => {
+            eprintln!("temper-benchmark: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn normalize(trace_path: PathBuf, output_path: PathBuf) -> ExitCode {

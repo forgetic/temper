@@ -83,3 +83,17 @@ unavailable_jig_script = "jig-unavailable.json"
 [annotations]
 provider_region = "loopback"
 cache_warmth = "not-applicable"
+
+[acceptance]
+mode = "live"
+smoke_repetitions = 1
+matrix_repetitions = 5
+provider = "openai-codex"
+model = "gpt-5.6-sol"
+minimum_relevance_percent = 50
+minimum_improvement_percent = 20
+improvement_measure = "conventional_discovery_calls"
+exact_source_selection_target = "repo/src/route.rs"
+required_decision_kinds = ["implementation", "caller", "focused_test"]
+required_consumption_modes = ["source", "selection"]
+privacy_forbidden_fragments = ["MCP-FIXTURE-SECRET", "Authorization: Bearer"]

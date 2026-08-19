@@ -233,6 +233,11 @@ fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
             .is_file()
     );
     assert!(manifest.expected_patch_path().unwrap().is_file());
+    let acceptance = manifest.manifest().acceptance.as_ref().unwrap();
+    assert_eq!(acceptance.smoke_repetitions, 1);
+    assert_eq!(acceptance.matrix_repetitions, 5);
+    assert_eq!(acceptance.minimum_relevance_percent, 50);
+    assert_eq!(acceptance.minimum_improvement_percent, 20);
     let targets = &manifest.manifest().graph_decision_targets;
     assert_eq!(targets.len(), 6);
     assert_eq!(targets[0].target, "worker_slot");

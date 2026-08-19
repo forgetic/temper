@@ -93,6 +93,28 @@ bounded failure, exact diff validation, and deterministic correctness only. Jig
 timing and token values are not live effectiveness evidence and must not be used
 to claim the criterion was met.
 
+## Exact-head acceptance verification
+
+The manifest declares the frozen provider/model, cache annotation, smoke and
+matrix sizes, typed decision evidence, aggregate relevance, privacy, bounded
+unavailable fallback, and conventional-discovery improvement gates. After a
+fresh smoke and three fresh five-run live condition roots have been produced,
+evaluate them with the gate-bearing command (the separate `compare` command
+remains report-only):
+
+```sh
+cargo run -p temper-benchmark-cli -- verify \
+  --benchmark benchmarks/agent-sessions/codebase-memory-routing-repair/benchmark.toml \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  --smoke "$SMOKE_ROOT" --enabled "$ENABLED_ROOT" \
+  --disabled "$DISABLED_ROOT" --unavailable "$UNAVAILABLE_ROOT" \
+  --output-dir "$ACCEPTANCE_ROOT"
+```
+
+The command writes only a typed, privacy-safe `acceptance.json` gate summary
+and exits nonzero when any gate fails. It accepts runner artifact roots, not
+Markdown reports, so historical evidence cannot authorize a current candidate.
+
 ## Privacy-reviewed live evidence
 
 The feature #1009 exact-final-tree smoke and subsequent frozen 5-by-3 matrix are
