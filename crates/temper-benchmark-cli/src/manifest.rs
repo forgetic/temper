@@ -502,9 +502,15 @@ fn validate_acceptance_policy(
             .privacy_forbidden_fragments
             .iter()
             .any(|fragment| fragment.len() < 8)
+        || policy.aggregate_privacy_forbidden_fragments.is_empty()
+        || policy
+            .aggregate_privacy_forbidden_fragments
+            .iter()
+            .any(|fragment| fragment.len() < 8)
     {
         return Err(BenchmarkManifestError::Invalid(
-            "acceptance privacy fragments must each contain at least eight bytes".to_string(),
+            "acceptance privacy fragment sets must be non-empty and contain only values of at least eight bytes"
+                .to_string(),
         ));
     }
     Ok(())

@@ -44,6 +44,10 @@ pub struct BenchmarkAcceptancePolicyV1 {
     /// The snapshotted manifest itself is an input and is excluded from this
     /// output scan so that declarations do not match themselves.
     pub privacy_forbidden_fragments: Vec<String>,
+    /// Source-, command-, host-, and trace-shaped fragments which may exist in
+    /// restricted per-run diagnostics but must never reach aggregate outputs.
+    #[serde(default)]
+    pub aggregate_privacy_forbidden_fragments: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -499,9 +503,15 @@ fn validate_policy(
             .privacy_forbidden_fragments
             .iter()
             .any(|fragment| fragment.len() < 8)
+        || policy.aggregate_privacy_forbidden_fragments.is_empty()
+        || policy
+            .aggregate_privacy_forbidden_fragments
+            .iter()
+            .any(|fragment| fragment.len() < 8)
     {
         return Err(AcceptanceError::Invalid(
-            "privacy fragments must contain at least one value of eight or more bytes".to_string(),
+            "privacy fragment sets must be non-empty and contain only values of eight or more bytes"
+                .to_string(),
         ));
     }
     Ok(())

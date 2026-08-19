@@ -114,7 +114,8 @@ pub(super) fn load_trial_set(
     let baseline_snapshot = baseline_snapshot.ok_or_else(|| {
         AcceptanceError::Invalid("acceptance input contains no typed repetitions".to_string())
     })?;
-    let privacy_safe = scan_privacy(root, &policy.privacy_forbidden_fragments)?;
+    let privacy_safe = scan_privacy(root, &policy.privacy_forbidden_fragments)?
+        && scan_aggregate_privacy(root, &policy.aggregate_privacy_forbidden_fragments)?;
     Ok(TrialSet {
         aggregate,
         validations,
@@ -208,4 +209,18 @@ fn scan_privacy_directory(
         }
     }
     Ok(())
+}
+
+fn scan_aggregate_privacy(root: &Path, forbidden: &[String]) -> Result<bool, AcceptanceError> {
+    for name in ["aggregate.json", "aggregate.md"] {
+        let bytes = read_bytes(&root.join(name))?;
+        if forbidden.iter().any(|fragment| {
+            bytes
+                .windows(fragment.len())
+                .any(|window| window == fragment.as_bytes())
+        }) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
