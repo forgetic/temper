@@ -6,7 +6,10 @@ use temper_protocol_activity::{
     AgentActivityEventV1, GraphCorrelationV1, ToolFailureCategoryV1, ToolStatusV1,
 };
 
-use super::{CallKey, captured_command, content_text, shell::classify_shell_discovery};
+use super::{
+    CallKey, content_text,
+    shell::{captured_shell_command, classify_shell_discovery},
+};
 use crate::{
     AnalyzeOptions, ConventionalDiscoveryMetricsV1, DiagnosticSeverityV1, GraphMetricsV1,
     MetricCoverageV1, NormalizedTrace, TraceDiagnosticCodeV1, TraceDiagnosticV1,
@@ -347,10 +350,9 @@ fn conventional_discovery(
     options: &AnalyzeOptions,
     before_seq: u64,
 ) -> ConventionalDiscoveryAnalysis {
-    // This intentionally recognizes only an unquoted, unescaped shell list
-    // joined by `&&`, `||`, `;`, or newlines. Treating richer shell syntax as
-    // unknown avoids counting a word inside a quote, expansion, pipeline, or
-    // redirection as a separate conventional-discovery command.
+    // The constrained lexer preserves argv boundaries through quoting and
+    // escaping, and recognizes list separators only outside quotes. Richer
+    // shell syntax remains unknown rather than being approximated.
     let mut grep_calls = 0_u64;
     let mut find_calls = 0_u64;
     let mut read_calls = 0_u64;
@@ -372,8 +374,8 @@ fn conventional_discovery(
                     .arguments
                     .as_ref()
                     .and_then(|arguments| content_text(trace, arguments))
-                    .and_then(|arguments| captured_command(&arguments));
-                match command.as_deref().map(|command| {
+                    .and_then(|arguments| captured_shell_command(&arguments));
+                match command.as_ref().map(|command| {
                     classify_shell_discovery(command, &options.discovery_command_prefixes)
                 }) {
                     Some(Ok(classified_segments)) => {
@@ -386,7 +388,7 @@ fn conventional_discovery(
                     )),
                     None => diagnostics.push(unavailable(
                         Some(event.seq),
-                        "shell discovery classification is unavailable because the complete command is omitted or truncated",
+                        "shell discovery classification is unavailable because the complete command is omitted, truncated, redacted, or malformed",
                     )),
                 }
             }
