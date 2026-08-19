@@ -1,22 +1,77 @@
 //! Per-tool salient-argument previews for human-facing agent tool-call logs.
 //!
-//! Given a tool name and its JSON arguments, [`tool_arg_preview`] selects the
-//! one argument worth showing on a single log line and renders it bounded to a
+//! Given a tool name and its JSON arguments, [`tool_start_presentation`] keeps
+//! two representations separate. [`tool_arg_preview`] selects the one argument
+//! worth showing on a single human log line and renders it within a
 //! caller-supplied character budget. Paths are rendered repo-relative against
-//! the workspace `cwd`; free-form bash command lines are redacted first. The
-//! result is intended to slot into the `agent: [repo#n] tool <name> <preview>`
-//! human projection (see `docs/explanation/logging-and-observability.md` §3).
+//! the workspace `cwd`; free-form bash command lines are redacted first.
+//! Eligible bash calls additionally receive a complete structured command or
+//! argv representation for diagnostic activity only. That representation is
+//! omitted, never redacted or truncated, when it is secret-like or over bound.
 //!
 //! The production call site lives in `usage.rs`: the coding agent builds an
 //! `ArgPreviewFn` (capturing the workspace `cwd`) that the pure agent core calls
-//! to fill `ToolStart.arg_preview` (piece D of the agent-log-cleanup plan,
-//! `docs/plans/agent-log-cleanup.md`).
+//! to finalize both fields on `ToolStart`.
 
 use std::path::Path;
 
 use serde_json::Value;
+use temper_agent_core::{DiagnosticToolArguments, ToolStartPresentation};
+use temper_protocol_activity::MAX_INLINE_CONTENT_BYTES;
 
-use crate::observability::{preview, redacted_preview};
+use crate::observability::{contains_secret_like_text, preview, redacted_preview};
+
+/// Finalizes separate human and diagnostic presentations for one tool start.
+pub(crate) fn tool_start_presentation(
+    name: &str,
+    args: &Value,
+    cwd: &Path,
+    preview_budget: usize,
+) -> ToolStartPresentation {
+    ToolStartPresentation {
+        arg_preview: tool_arg_preview(name, args, cwd, preview_budget),
+        diagnostic_arguments: diagnostic_shell_arguments(name, args, MAX_INLINE_CONTENT_BYTES),
+    }
+}
+
+/// Builds complete structured shell evidence without redaction or truncation.
+/// Any value that would need redaction is omitted so downstream analyzers can
+/// never mistake a semantics-changing fragment for complete evidence.
+fn diagnostic_shell_arguments(
+    name: &str,
+    args: &Value,
+    maximum_bytes: usize,
+) -> Option<DiagnosticToolArguments> {
+    if name != "bash" {
+        return None;
+    }
+
+    let representation = if let Some(command) = args.get("command").and_then(Value::as_str) {
+        if command.trim().is_empty() || contains_secret_like_text(command) {
+            return None;
+        }
+        serde_json::json!({"command": command})
+    } else if let Some(argv) = args.get("argv").and_then(Value::as_array) {
+        if argv.is_empty() || !argv.iter().all(Value::is_string) {
+            return None;
+        }
+        let joined = argv
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if contains_secret_like_text(&joined) {
+            return None;
+        }
+        serde_json::json!({"argv": argv})
+    } else {
+        return None;
+    };
+
+    let encoded = serde_json::to_string(&representation).ok()?;
+    (!encoded.is_empty() && encoded.len() <= maximum_bytes)
+        .then(|| DiagnosticToolArguments::new(encoded))
+}
 
 /// Renders the salient argument of a tool call as a bounded single-line
 /// preview, or `None` when there is nothing useful to show.
@@ -315,5 +370,82 @@ mod tests {
         );
         assert!(out.starts_with('`'), "open backtick: {out}");
         assert!(out.ends_with('`'), "close backtick kept: {out}");
+    }
+
+    #[test]
+    fn eligible_bash_command_keeps_short_preview_and_complete_structured_evidence() {
+        let command = "cargo test -p temper-agent --test complete-shell-evidence";
+        let presentation = tool_start_presentation(
+            "bash",
+            &args(serde_json::json!({"command": command, "timeout": 60})),
+            Path::new("/ws/temper"),
+            24,
+        );
+
+        let preview = presentation.arg_preview.expect("human preview");
+        assert!(preview.starts_with('`') && preview.ends_with('`'));
+        assert!(preview.chars().count() <= 24);
+        assert!(preview.ends_with("…`"));
+        assert_eq!(
+            presentation
+                .diagnostic_arguments
+                .expect("diagnostic command")
+                .as_str(),
+            serde_json::json!({"command": command}).to_string()
+        );
+    }
+
+    #[test]
+    fn eligible_argv_is_preserved_as_structured_evidence() {
+        let argv = serde_json::json!(["git", "grep", "two words", ""]);
+        let evidence =
+            diagnostic_shell_arguments("bash", &args(serde_json::json!({"argv": argv})), 200)
+                .expect("diagnostic argv");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(evidence.as_str()).unwrap(),
+            serde_json::json!({"argv": ["git", "grep", "two words", ""]})
+        );
+    }
+
+    #[test]
+    fn secret_like_commands_are_omitted_not_redacted_as_complete() {
+        for command in [
+            "curl --token ghp_secretvalue123456 https://example.com",
+            "curl -H 'Authorization: Bearer sk-secretvalue123456' https://example.com",
+            "PASSWORD=hunter2 cargo test",
+        ] {
+            let presentation = tool_start_presentation(
+                "bash",
+                &args(serde_json::json!({"command": command})),
+                Path::new("/ws/temper"),
+                48,
+            );
+            assert!(presentation.arg_preview.is_some());
+            assert_eq!(presentation.diagnostic_arguments, None, "{command}");
+        }
+    }
+
+    #[test]
+    fn over_limit_unicode_command_is_omitted_without_partial_evidence() {
+        let command = format!("echo {}", "🙂".repeat(10));
+        let encoded = serde_json::json!({"command": command}).to_string();
+        let evidence = diagnostic_shell_arguments(
+            "bash",
+            &args(serde_json::json!({"command": command})),
+            encoded.len() - 1,
+        );
+        assert_eq!(evidence, None);
+    }
+
+    #[test]
+    fn non_shell_diagnostic_evidence_is_unchanged_and_absent() {
+        let presentation = tool_start_presentation(
+            "read",
+            &args(serde_json::json!({"path": "src/lib.rs"})),
+            Path::new("/ws/temper"),
+            48,
+        );
+        assert_eq!(presentation.arg_preview.as_deref(), Some("src/lib.rs"));
+        assert_eq!(presentation.diagnostic_arguments, None);
     }
 }

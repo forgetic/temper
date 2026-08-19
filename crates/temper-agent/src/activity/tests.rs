@@ -19,6 +19,7 @@ use super::transport::ActivityClient;
 use super::*;
 
 mod model_failure;
+mod shell_evidence;
 mod terminal;
 mod tool_failure;
 
@@ -235,6 +236,7 @@ fn metadata_keeps_tool_start_identity_without_any_argument_bytes() {
             id: "call-350".to_string(),
             name: "read".to_string(),
             arg_preview: Some(ARGUMENT.to_string()),
+            diagnostic_arguments: None,
         });
 
         let frames = recorder.0.lock().expect("frames");
@@ -297,6 +299,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
             id: "tool-1".to_string(),
             name: "bash".to_string(),
             arg_preview: Some(secret.clone()),
+            diagnostic_arguments: None,
         });
         sink.emit(AgentEvent::ToolEnd {
             id: "tool-1".to_string(),
@@ -334,6 +337,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
             id: "tool-2".to_string(),
             name: "read".to_string(),
             arg_preview: Some("safe/path.rs".to_string()),
+            diagnostic_arguments: None,
         });
         sink.emit(AgentEvent::ToolEnd {
             id: "tool-2".to_string(),
@@ -475,6 +479,7 @@ fn retries_keep_attempt_boundaries_inside_one_ordered_turn() {
         id: "tool-1".to_string(),
         name: "read".to_string(),
         arg_preview: Some("src/lib.rs".to_string()),
+        diagnostic_arguments: None,
     });
     sink.emit(AgentEvent::ToolEnd {
         id: "tool-1".to_string(),

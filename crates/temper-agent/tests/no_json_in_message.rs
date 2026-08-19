@@ -22,9 +22,10 @@ use std::sync::{Arc, Mutex};
 use temper_agent::activity::{AgentActivityConfig, ScopeFactory};
 use temper_agent::usage::{MAIN_SCOPE, UsageTotals};
 use temper_agent_core::{
-    AgentEvent, AgentStop, ModelCallStatus, ModelFailureDiagnostic, ModelIdentity, ToolCallStatus,
-    ToolResultMetadata,
+    AgentEvent, AgentStop, DiagnosticToolArguments, ModelCallStatus, ModelFailureDiagnostic,
+    ModelIdentity, ToolCallStatus, ToolResultMetadata,
 };
+use temper_protocol_activity::CaptureModeV1;
 use tongs::model::Usage;
 use tongs::provider::ToolDef;
 use tracing::Level;
@@ -123,7 +124,9 @@ fn capture_representative_run() -> Vec<Captured> {
 
     with_default(subscriber, || {
         let totals = Arc::new(UsageTotals::default());
-        let scopes = ScopeFactory::new(AgentActivityConfig::default(), Arc::clone(&totals));
+        let mut config = AgentActivityConfig::default();
+        config.policy.capture = CaptureModeV1::Diagnostic;
+        let scopes = ScopeFactory::new(config, Arc::clone(&totals));
         let logger = scopes
             .main(
                 MAIN_SCOPE,
@@ -162,6 +165,7 @@ fn capture_representative_run() -> Vec<Captured> {
             id: "call_ok".to_string(),
             name: "read".to_string(),
             arg_preview: Some("crates/temper-config/src/resolve.rs".to_string()),
+            diagnostic_arguments: None,
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_ok".to_string(),
@@ -174,6 +178,10 @@ fn capture_representative_run() -> Vec<Captured> {
             id: "call_bad".to_string(),
             name: "bash".to_string(),
             arg_preview: Some("`cargo test -p temper-config`".to_string()),
+            diagnostic_arguments: Some(DiagnosticToolArguments::new(
+                r#"{"command":"cargo test -p temper-config -- COMPLETE-DIAGNOSTIC-SENTINEL-1029"}"#
+                    .to_string(),
+            )),
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_bad".to_string(),
@@ -304,6 +312,12 @@ fn between_state_cause_events_are_not_info() {
 #[test]
 fn between_state_cause_events_render_human_message_at_debug() {
     let captured = capture_representative_run();
+    let rendered = format!("{captured:?}");
+    assert!(rendered.contains("`cargo test -p temper-config`"));
+    assert!(
+        !rendered.contains("COMPLETE-DIAGNOSTIC-SENTINEL-1029"),
+        "complete diagnostic shell evidence leaked into human tracing: {rendered}"
+    );
 
     // Stronger check: each event DOES render at debug with a human message that
     // is NOT raw JSON and carries the expected `event=` field.

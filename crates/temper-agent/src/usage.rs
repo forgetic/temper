@@ -12,21 +12,21 @@ use std::sync::{Arc, Mutex};
 use temper_agent_core::ArgPreviewFn;
 use temper_protocol_activity::{
     AgentActivityChildRecordV1, AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1,
-    CapturedContentV1, ModelCallStatusV1, ModelFailureV1, ToolStatusV1,
+    CapturedContentV1, InlineContentV1, ModelCallStatusV1, ModelFailureV1, ToolStatusV1,
 };
 
 use crate::activity::ActivityProjection;
-use crate::tool_preview::tool_arg_preview;
+use crate::tool_preview::tool_start_presentation;
 
 /// The tracing target every agent observability line is emitted on.
 const AGENT_TARGET: &str = "temper::agent";
 const ARG_PREVIEW_BUDGET: usize = 48;
 
-/// Builds the shell-supplied [`ArgPreviewFn`] that fills `ToolStart.arg_preview`
-/// in the pure core, capturing the workspace `cwd` for repo-relative paths.
+/// Builds the shell-supplied [`ArgPreviewFn`] that finalizes the separate
+/// human preview and diagnostic shell evidence for each `ToolStart`.
 pub fn tool_arg_preview_hook(cwd: PathBuf) -> ArgPreviewFn {
     Arc::new(move |name: &str, args: &serde_json::Value| {
-        tool_arg_preview(name, args, &cwd, ARG_PREVIEW_BUDGET)
+        tool_start_presentation(name, args, &cwd, ARG_PREVIEW_BUDGET)
     })
 }
 
@@ -262,6 +262,28 @@ impl TracingProjection {
 }
 
 impl ActivityProjection for TracingProjection {
+    fn emit_tool_started(
+        &self,
+        record: &AgentActivityChildRecordV1,
+        human_arg_preview: Option<&str>,
+    ) {
+        // Diagnostic activity may carry a complete shell command. Operational
+        // tracing must always receive only the independently finalized short
+        // preview, regardless of durable capture mode.
+        let mut human_record = record.clone();
+        if let AgentActivityEventV1::ToolStarted(started) = &mut human_record.frame.event {
+            started.arguments = human_arg_preview
+                .filter(|value| !value.is_empty())
+                .map(|value| {
+                    CapturedContentV1::Inline(InlineContentV1 {
+                        text: value.to_string(),
+                        truncated: false,
+                    })
+                });
+        }
+        self.emit(&human_record);
+    }
+
     fn emit(&self, record: &AgentActivityChildRecordV1) {
         // Prompt attachments are source-equivalent data and are intentionally
         // outside operational tracing and usage accounting.
@@ -516,8 +538,9 @@ mod tests {
     #[test]
     fn arg_preview_hook_renders_repo_relative_path() {
         let hook = tool_arg_preview_hook(PathBuf::from("/ws/temper"));
-        let preview = hook("read", &serde_json::json!({"path": "/ws/temper/a/b.rs"}));
-        assert_eq!(preview.as_deref(), Some("a/b.rs"));
+        let presentation = hook("read", &serde_json::json!({"path": "/ws/temper/a/b.rs"}));
+        assert_eq!(presentation.arg_preview.as_deref(), Some("a/b.rs"));
+        assert_eq!(presentation.diagnostic_arguments, None);
     }
 }
 

@@ -8,6 +8,7 @@ mod tests {
     use crate::machine::{
         AgentMachine, AgentRequest, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
         SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallDenial,
+        ToolStartPresentation,
     };
     use std::collections::BTreeMap;
     use std::sync::Arc;
@@ -241,9 +242,7 @@ mod tests {
             DecisionAnchorLineageStageV1::Root,
         );
 
-        // Dispatching snippets before the trace must be equivalent to the
-        // trace-first batch: all later read-only siblings are evaluated from
-        // the same pre-batch root once every transport result has settled.
+        // Pre-trace snippets use the same settled pre-batch root as trace-first batches.
         state.on_tool_dispatched(
             &call("implementation", "codebase_memory_get_code_snippet"),
             1,
@@ -383,7 +382,10 @@ mod tests {
     #[test]
     fn parallel_trace_and_source_batch_uses_dispatch_order_after_reverse_completion() {
         let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects())
-            .with_arg_preview(Arc::new(|_, arguments| Some(arguments.to_string())));
+            .with_arg_preview(Arc::new(|_, arguments| ToolStartPresentation {
+                arg_preview: Some(arguments.to_string()),
+                diagnostic_arguments: None,
+            }));
         let _ = machine.on_start(EngineTime::ZERO);
 
         let root_requests = complete(
@@ -440,9 +442,7 @@ mod tests {
             "the independent reads retain their parallel dispatch batch"
         );
 
-        // The transport completes snippet -> trace -> snippet. The policy must
-        // wait for the whole batch and evaluate its original dispatch order so
-        // trace precedes both same-turn source reads.
+        // Reverse transport completion still evaluates the original trace-first dispatch order.
         assert!(
             complete(
                 &mut machine,
