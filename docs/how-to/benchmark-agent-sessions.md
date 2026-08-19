@@ -84,13 +84,19 @@ target = "retry_worker_topic"
 
 Conventional discovery counts `grep`, `find`, and `read` calls before the first
 successful selection whose complete arguments contain a declared target. Shell
-classification uses a deliberately narrow command-list parser: unquoted and
-unescaped words joined with `&&`, `||`, `;`, or newlines. Each parseable segment
-matching a manifest `discovery_command_prefixes` argv prefix and containing an
-argument beyond that prefix counts as discovery. Parseable non-matches count as
-zero. Quoting, escaping, expansions, pipelines, redirects, grouping, globbing,
-comments, missing discovery arguments, omitted command content, and other
-ambiguous syntax remain unknown rather than being guessed.
+classification preserves the captured representation: structured argv is one
+exact command, while structured command strings and complete legacy backtick
+previews use a deliberately narrow command-list lexer. The lexer supports
+single and double quoting, safe backslash escapes, and `&&`, `||`, `;`, or
+newline separators outside quotes. Each parseable segment matching a manifest
+`discovery_command_prefixes` argv prefix and containing an argument beyond that
+prefix counts once. Parseable non-matches count as zero.
+
+Command substitution, expansion, pipelines, redirects, grouping, background
+execution, globbing, comments, assignments, incomplete quotes or escapes,
+missing discovery arguments, omitted/truncated/redacted command content, and
+other ambiguous syntax remain unknown rather than being guessed. Separators in
+quotes or argv arguments are data, not command boundaries.
 
 `shell_command_classification_coverage` measures fully captured and parsed
 shell *calls*, while `classified_shell_segments` counts matching segments in

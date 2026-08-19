@@ -88,10 +88,65 @@ fn parseable_non_discovery_shell_commands_count_as_zero() {
 }
 
 #[test]
-fn quoted_and_escaped_shell_commands_remain_unknown() {
+fn quoted_and_escaped_shell_commands_are_completely_classified() {
+    for (fixture_name, expected_segments) in [
+        ("graph-shell-quoted-events.jsonl", 2),
+        ("graph-shell-escaped-events.jsonl", 3),
+    ] {
+        let summary = shell_discovery_summary(fixture_name);
+        let discovery = summary
+            .metrics
+            .graph
+            .as_ref()
+            .unwrap()
+            .conventional_discovery_before_selection
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(discovery.classified_shell_segments, expected_segments);
+        assert_eq!(discovery.total_calls, Some(expected_segments));
+        assert_eq!(discovery.shell_command_classification_coverage.observed, 1);
+    }
+}
+
+#[test]
+fn argv_is_classified_as_one_exact_command_without_reparsing_arguments() {
+    let summary = shell_discovery_summary("graph-shell-argv-events.jsonl");
+    let discovery = summary
+        .metrics
+        .graph
+        .as_ref()
+        .unwrap()
+        .conventional_discovery_before_selection
+        .as_ref()
+        .unwrap();
+
+    assert_eq!(discovery.classified_shell_segments, 1);
+    assert_eq!(discovery.total_calls, Some(1));
+    assert_eq!(discovery.shell_command_classification_coverage.observed, 1);
+}
+
+#[test]
+fn complete_production_backtick_preview_remains_legacy_compatible() {
+    let summary = shell_discovery_summary("graph-shell-backtick-events.jsonl");
+    let discovery = summary
+        .metrics
+        .graph
+        .as_ref()
+        .unwrap()
+        .conventional_discovery_before_selection
+        .as_ref()
+        .unwrap();
+
+    assert_eq!(discovery.classified_shell_segments, 1);
+    assert_eq!(discovery.total_calls, Some(1));
+}
+
+#[test]
+fn truncated_and_redacted_shell_evidence_never_becomes_zero() {
     for fixture_name in [
-        "graph-shell-quoted-events.jsonl",
-        "graph-shell-escaped-events.jsonl",
+        "graph-shell-truncated-events.jsonl",
+        "graph-shell-redacted-events.jsonl",
     ] {
         let summary = shell_discovery_summary(fixture_name);
         let discovery = summary
@@ -108,9 +163,34 @@ fn quoted_and_escaped_shell_commands_remain_unknown() {
         assert_eq!(discovery.shell_command_classification_coverage.observed, 0);
         assert!(summary.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == TraceDiagnosticCodeV1::GraphEvidenceUnavailable
-                && diagnostic.message.contains("quoting or escaping")
+                && diagnostic
+                    .message
+                    .contains("omitted, truncated, redacted, or malformed")
         }));
     }
+}
+
+#[test]
+fn one_ineligible_shell_call_omits_the_all_component_total() {
+    let summary = shell_discovery_summary("graph-shell-mixed-coverage-events.jsonl");
+    let discovery = summary
+        .metrics
+        .graph
+        .as_ref()
+        .unwrap()
+        .conventional_discovery_before_selection
+        .as_ref()
+        .unwrap();
+
+    assert_eq!(discovery.classified_shell_segments, 1);
+    assert_eq!(discovery.total_calls, None);
+    assert_eq!(
+        discovery.shell_command_classification_coverage,
+        MetricCoverageV1 {
+            observed: 1,
+            expected: Some(2),
+        }
+    );
 }
 
 #[test]

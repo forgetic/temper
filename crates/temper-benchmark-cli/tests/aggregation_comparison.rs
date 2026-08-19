@@ -247,6 +247,7 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
     );
     missing.identity.run_id = "graph-missing".to_string();
     let base = aggregate_run_summaries([complete.clone(), partial, missing]).unwrap();
+    let unavailable_summary = base.runs[1].summary.clone();
 
     assert_eq!(base.outcomes.total, 3);
     assert_eq!(base.metrics["graph_calls"].count, 3);
@@ -273,7 +274,7 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
     graph.irrelevant_successes = Some(2);
     let head = aggregate_run_summaries([complete]).unwrap();
     let comparison = compare_benchmarks(
-        &ComparisonInput::Aggregate(base),
+        &ComparisonInput::Aggregate(base.clone()),
         &ComparisonInput::Aggregate(head),
     )
     .unwrap();
@@ -302,6 +303,25 @@ fn graph_distributions_and_pairwise_comparison_retain_partial_trial_coverage() {
     assert!(
         render_comparison_markdown(&comparison)
             .contains("| graph relevant results | 1 (n=2) | 2 | +1 |")
+    );
+
+    let unavailable_head = aggregate_run_summaries([unavailable_summary]).unwrap();
+    let unavailable_comparison = compare_benchmarks(
+        &ComparisonInput::Aggregate(base),
+        &ComparisonInput::Aggregate(unavailable_head),
+    )
+    .unwrap();
+    let total = unavailable_comparison
+        .primary
+        .iter()
+        .find(|metric| metric.metric == "conventional_discovery_calls_before_selection")
+        .unwrap();
+    assert_eq!(total.base.as_ref().unwrap().count, 1);
+    assert_eq!(total.head, None);
+    assert_eq!(total.median_delta, None);
+    assert!(
+        render_comparison_markdown(&unavailable_comparison)
+            .contains("| conventional discovery calls before selection | 4 | — | — |")
     );
 }
 
