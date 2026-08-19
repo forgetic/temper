@@ -29,7 +29,7 @@ mod core;
 mod decision_anchor;
 mod protocol;
 
-pub use core::{AgentMachine, ArgPreviewFn};
+pub use core::{AgentMachine, ArgPreviewFn, ToolStartPresentationFn};
 pub use decision_anchor::{
     CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE, DECISION_ANCHOR_CONVERGENCE_MESSAGE,
     DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE,
@@ -37,9 +37,10 @@ pub use decision_anchor::{
 };
 pub use protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,
-    CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, ModelCallStatus, OperationGeneration,
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallDenial,
-    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
+    CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, DiagnosticToolArguments, ModelCallStatus,
+    OperationGeneration, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+    StreamDelta, ToolCallDenial, ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
+    ToolResultMetadata, ToolStartPresentation,
 };
 pub use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,

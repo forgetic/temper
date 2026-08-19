@@ -11,7 +11,10 @@ use super::common::{
     calls_llm, complete, final_stop, llm_failed, llm_responded, machine, run, run_tools,
     tool_finished, tool_output, tool_start_previews, user,
 };
-use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop};
+use crate::machine::{
+    AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, DiagnosticToolArguments,
+    ToolStartPresentation,
+};
 use crate::{ModelFailureCategory, ModelFailureDiagnostic};
 
 #[test]
@@ -285,14 +288,20 @@ fn steering_is_injected_at_the_next_turn_boundary() {
 }
 
 #[test]
-fn arg_preview_hook_fills_tool_start_field_from_call_args() {
+fn arg_preview_hook_fills_separate_tool_start_presentations_from_call_args() {
     let mut m = AgentMachine::new(vec![user("inspect")], 10).with_arg_preview(Arc::new(
         |name: &str, args: &serde_json::Value| {
-            // A trivial stand-in for the shell's real per-tool renderer: echo
-            // "<name>:<path>" when a `path` arg is present.
-            args.get("path")
+            // A trivial stand-in for the shell's real per-tool renderer.
+            let preview = args
+                .get("path")
                 .and_then(|p| p.as_str())
-                .map(|path| format!("{name}:{path}"))
+                .map(|path| format!("{name}:{path}"));
+            ToolStartPresentation {
+                arg_preview: preview,
+                diagnostic_arguments: Some(DiagnosticToolArguments::new(
+                    r#"{"command":"complete"}"#.to_string(),
+                )),
+            }
         },
     ));
     let requests = run(
@@ -306,7 +315,11 @@ fn arg_preview_hook_fills_tool_start_field_from_call_args() {
     assert_eq!(
         tool_start_previews(&requests),
         vec![Some("read:src/main.rs".to_string())],
-        "the preview hook should populate ToolStart.arg_preview",
+        "the presentation hook should populate ToolStart.arg_preview",
+    );
+    assert_eq!(
+        super::common::tool_start_diagnostic_arguments(&requests),
+        vec![Some(r#"{"command":"complete"}"#.to_string())],
     );
 }
 
