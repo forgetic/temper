@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use temper_agent_core::ArgPreviewFn;
 use temper_protocol_activity::{
     AgentActivityChildRecordV1, AgentActivityEventV1, AgentActivityFrameV1, AgentScopeKindV1,
-    CapturedContentV1, InlineContentV1, ModelCallStatusV1, ModelFailureV1, ToolStatusV1,
+    CapturedContentV1, InlineContentV1, ModelCallStatusV1, ModelFailureV1, ToolFailureCategoryV1,
+    ToolStatusV1,
 };
 
 use crate::activity::ActivityProjection;
@@ -21,6 +22,21 @@ use crate::tool_preview::tool_start_presentation;
 /// The tracing target every agent observability line is emitted on.
 const AGENT_TARGET: &str = "temper::agent";
 const ARG_PREVIEW_BUDGET: usize = 48;
+
+fn tool_failure_category_name(category: ToolFailureCategoryV1) -> &'static str {
+    match category {
+        ToolFailureCategoryV1::ConfigurationStartup => "configuration_startup",
+        ToolFailureCategoryV1::ProjectNotReady => "project_not_ready",
+        ToolFailureCategoryV1::IndexFailure => "index_failure",
+        ToolFailureCategoryV1::Timeout => "timeout",
+        ToolFailureCategoryV1::Transport => "transport",
+        ToolFailureCategoryV1::ProcessExit => "process_exit",
+        ToolFailureCategoryV1::ProviderProtocol => "provider_protocol",
+        ToolFailureCategoryV1::InvalidModelInput => "invalid_model_input",
+        ToolFailureCategoryV1::CircuitOpen => "circuit_open",
+        ToolFailureCategoryV1::ExplorationClosed => "exploration_closed",
+    }
+}
 
 /// Builds the shell-supplied [`ArgPreviewFn`] that finalizes the separate
 /// human preview and diagnostic shell evidence for each `ToolStart`.
@@ -377,6 +393,15 @@ impl ActivityProjection for TracingProjection {
                     .flatten();
                 let suffix = Self::arg_suffix(preview.as_deref());
                 let name = &tool.name;
+                // Failure categories are closed, privacy-safe protocol values.
+                // Retain the category so live scenarios can distinguish local
+                // admission denials from provider invocations without keeping
+                // tool arguments or results.
+                let failure_category = tool
+                    .failure
+                    .as_ref()
+                    .map(|failure| tool_failure_category_name(failure.category))
+                    .unwrap_or("");
                 let id = &tool.call_id;
                 let duration_ms = tool.duration_ms;
                 if tool.status == ToolStatusV1::Failed {
@@ -387,6 +412,7 @@ impl ActivityProjection for TracingProjection {
                         scope_id = %frame.scope.id,
                         tool = %name,
                         id = %id,
+                        tool.failure.category = failure_category,
                         duration_ms,
                         "agent: tool {name}{suffix} error",
                     );

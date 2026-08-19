@@ -1,0 +1,285 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-graph-convergence"
+status = "active"
+intent = "Validate feature #1026's generic progress-bounded graph convergence, local denial, and unavailable fallback around one minimal live repair."
+introduced_by = "#1033"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/mapped-live-graph-consumption"
+
+[runner]
+uses = "manifest"
+
+[validation]
+feature = "ai/temper#1026"
+plan = "ai/temper#1027"
+source_branch = "agent/pr-for-feature-1026"
+change = "new"
+
+[feature_contract]
+claim = "A generic graph-enabled agent preserves useful independent current-root evidence, receives local convergence guidance once the implementation/caller/test chain is complete, and cannot invoke the provider for redundant post-decision exploration."
+stimulus = "Run one engineer repair through real Forgejo, a host Actions runner, standalone Temper, and Jig; first exercise unavailable-before-completion fallback, then consume independent roots, a refinement, caller trace, duplicate refinement, and two current-root sources before attempting broad, duplicate, and post-decision graph calls."
+observable = "Ordered complete typed lineage stages, a pre-completion unavailable category followed by conventional fallback, closed provider checkpoint counts, three local exploration-closed categories, the minimal repair, host validation, CI success, and workflow convergence."
+assertion = "Unavailable evidence causes one conventional fallback with no immediate graph retry; nine successful provider calls retain typed current-root lineage; convergence injects one privacy-safe instruction; all three post-decision graph attempts are denied locally without another MCP invocation; and the exact minimal repair passes host and Actions gates."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-graph-convergence.json"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[live_harness]
+ci_poll_cadence = "1s"
+poll_cadence = "1s"
+mechanical_cadence = "1s"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "codebase-memory-agent"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/demo"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Bound graph exploration before repairing retry affinity"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the demo repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "start-fake-codebase-memory-mcp"
+action = "mcp.fake_codebase_memory.start"
+project = "actual-demo-project"
+lifecycle_profile = "mapped-live-graph-convergence"
+advertises_safe_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status"]
+advertises_hidden_tools = ["index_repository", "delete_project"]
+readiness_delay_ms = 750
+
+[[steps]]
+id = "configure-codebase-memory-tools"
+action = "agent.tools.configure"
+role = "engineer"
+tool = "codebase_memory"
+mode = "required"
+index = "background"
+tool_timeout_secs = 2
+server = "$step:start-fake-codebase-memory-mcp"
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+role = "engineer"
+script_path = "jig/mapped-live-graph-convergence.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-demo-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-source-issue"
+action = "issue.seed"
+issue_id = "source"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-convergence"
+action = "workflow.wait_convergence"
+strategy = "codebase-memory"
+until = "the engineer falls back after pre-completion unavailability, consumes the bounded current-root chain, receives local convergence guidance, observes local denials without another provider invocation, applies the minimal repair, passes host validation and CI, and closes the source issue"
+
+[expect]
+outcome = "The generic agent handles unavailable-before-completion conventionally, consumes the complete current-root implementation/caller/test chain, stops provider exploration at local convergence, applies only the selected repair, and converges through real Actions CI."
+merged_pull_requests = 1
+closed_parent_issues = 1
+
+[[expect.checks]]
+required = true
+id = "source-finalized"
+artifact = "issue:source"
+state = "closed"
+labels = ["code"]
+
+[[expect.checks]]
+required = true
+id = "implementation-pr-landed"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+required = true
+id = "default-branch-has-minimal-repair"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.events]]
+required = true
+id = "current-root-rebind-completed"
+event = "codebase_memory.index.lifecycle"
+fields."index.mode" = "background"
+fields."index.outcome" = "completed"
+
+[[expect.sequence]]
+required = true
+id = "unavailable-fallback-then-convergence-before-repair"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = true } },
+  { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", "tool.failure.category" = "invalid_model_input" } },
+  { event = "tool.start", fields = { tool = "bash" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "tool.error", fields = { "tool.failure.category" = "exploration_closed" } },
+  { event = "tool.start", fields = { tool = "read" } },
+  { event = "workspace.diff.produced" },
+]
+
+[[expect.count]]
+required = true
+id = "nine-complete-v1-lineages"
+event = "mcp.tool.result"
+fields.is_error = false
+fields."graph.correlation.complete" = true
+fields."graph.correlation.version" = 1
+fields."graph.lineage.complete" = true
+fields."graph.lineage.version" = 1
+exactly = 9
+
+[[expect.count]]
+required = true
+id = "three-independent-root-results"
+event = "mcp.tool.result"
+fields."graph.lineage.stage" = "root"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "six-consumed-carry-forward-results"
+event = "mcp.tool.result"
+fields."graph.lineage.stage" = "carry_forward"
+exactly = 6
+
+[[expect.count]]
+required = true
+id = "one-pre-completion-unavailable-category"
+event = "tool.error"
+fields."tool.failure.category" = "invalid_model_input"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "three-post-decision-local-denials"
+event = "tool.error"
+fields."tool.failure.category" = "exploration_closed"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "three-provider-searches-not-four"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_graph"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "two-provider-refinements-not-three"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_code"
+exactly = 2
+
+[[expect.count]]
+required = true
+id = "two-provider-traces"
+event = "mcp.tool.called"
+fields."mcp.tool" = "trace_path"
+exactly = 2
+
+[[expect.count]]
+required = true
+id = "three-provider-source-requests-not-four"
+event = "mcp.tool.called"
+fields."mcp.tool" = "get_code_snippet"
+exactly = 3
+
+[expect.effective_configuration]
+id = "rapid-convergence-harness-cadence"
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 1
+mechanical_cadence_secs = 1
+
+[codebase_memory]
+mode = "required"
+index = "background"
+readiness_delay_ms = 750
+fake_mcp_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status", "index_repository", "delete_project"]
+model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_search_code", "codebase_memory_trace_path", "codebase_memory_get_code_snippet", "codebase_memory_list_projects", "codebase_memory_index_status"]
+model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
+default_project = "acme/demo"
+actual_project = "normalized-temper-v1-<stable-provider-key>"
+graph_consumption_profile = "pre-completion unavailable fallback; independent current-root roots; implementation refinement, caller trace, duplicate refinement, and implementation/test sources; local broad, duplicate, and post-decision denials; privacy-safe aggregate checkpoints only"
+global_inventory_forbidden = true
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Add privacy-safe aggregate lineage, local-denial, fallback, host-validation, or CI-convergence facts.",
+  "Update generic runtime compatibility without embedding provider values or transient selectors.",
+]
+requires_new_scenario_or_major_update = [
+  "Allowing post-decision graph attempts to invoke the provider after convergence.",
+  "Replacing the live Forgejo/Actions/standalone-Temper/Jig topology with a lower-level test.",
+]

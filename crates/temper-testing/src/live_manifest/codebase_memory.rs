@@ -24,10 +24,13 @@ use super::{
     LivePrivacySafeCodebaseMemoryBindingEvidence,
 };
 
+mod aggregate;
 mod configuration;
 mod graph_consumption;
 mod mapped_graph_consumption;
 mod mapped_graph_consumption_fake;
+mod mapped_graph_convergence;
+mod mapped_graph_convergence_fake;
 mod provider_result_anchor;
 mod result_driven_fake;
 mod result_driven_guidance;
@@ -35,6 +38,7 @@ mod sequential_graph_evidence;
 mod stable_rebind;
 mod typed_lineage_anchor;
 mod typed_lineage_fake;
+use aggregate::privacy_safe_checkpoints;
 pub(super) use configuration::{ToolConfiguration, tune_codebase_memory_config};
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
@@ -45,6 +49,7 @@ const ENGINEER_SUMMARY: &str =
     "Used codebase-memory graph evidence, then validated the retry-worker repair.";
 const PROVIDER_NEUTRAL_ENGINEER_SUMMARY: &str =
     "Consumed provider-neutral typed current-root lineage before the minimal repair.";
+const GRAPH_CONVERGENCE_ENGINEER_SUMMARY: &str = "Consumed bounded current-root graph evidence and local convergence guidance before the minimal repair.";
 const RAW_PROVIDER_FAILURE_NEEDLE: &str = "MCP-FIXTURE-SECRET";
 const SAFE_PROVIDER_FAILURE: &str = "codebase-memory provider or protocol request failed; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
 const BOUNDED_GRAPH_RESULT_NEEDLE: &str = "[codebase-memory output truncated to 16384 bytes]";
@@ -80,6 +85,7 @@ pub(super) fn converge(
             "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
+                | "mapped-live-graph-convergence"
         )
     );
     let aggregate_checkpoints = privacy_safe_checkpoints(mcp, &calls);
@@ -107,6 +113,7 @@ pub(super) fn converge(
                 | "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
+                | "mapped-live-graph-convergence"
         )
     ) {
         "one successful provider-shaped graph result".to_string()
@@ -224,7 +231,10 @@ async fn assert_pr_open_with_memory_diff(
 }
 
 fn assert_pr_body_contains_engineer_summary(pr: &PullRequest) -> Result<(), String> {
-    if !pr.body.contains(ENGINEER_SUMMARY) && !pr.body.contains(PROVIDER_NEUTRAL_ENGINEER_SUMMARY) {
+    if !pr.body.contains(ENGINEER_SUMMARY)
+        && !pr.body.contains(PROVIDER_NEUTRAL_ENGINEER_SUMMARY)
+        && !pr.body.contains(GRAPH_CONVERGENCE_ENGINEER_SUMMARY)
+    {
         return Err(format!(
             "implementation PR body does not contain an approved engineer summary:\n{}",
             pr.body
@@ -493,6 +503,8 @@ impl CodebaseMemoryFake {
             typed_lineage_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-graph-consumption") {
             mapped_graph_consumption_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-graph-convergence") {
+            mapped_graph_convergence_fake::start(request_count, observations_for_rule)?
         } else {
             FakeLlm::start(Script::rule(move |view| {
                 if !messages_contain(view, "ROLE: engineer") {
@@ -620,6 +632,7 @@ impl CodebaseMemoryFake {
                         | "provider-result-anchor"
                         | "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
+                        | "mapped-live-graph-convergence"
                 )
             )
         {
@@ -643,12 +656,17 @@ impl CodebaseMemoryFake {
                     | "provider-result-anchor"
                     | "provider-neutral-anchor-lineage"
                     | "mapped-live-graph-consumption"
+                    | "mapped-live-graph-convergence"
             )
         ) && !(graph_trace_seen
             && current_root_source_results >= 2
             && (matches!(
                 mcp.lifecycle_profile.as_deref(),
-                Some("provider-neutral-anchor-lineage" | "mapped-live-graph-consumption")
+                Some(
+                    "provider-neutral-anchor-lineage"
+                        | "mapped-live-graph-consumption"
+                        | "mapped-live-graph-convergence"
+                )
             ) || code_refinement_seen))
         {
             return Err(format!(
@@ -658,7 +676,11 @@ impl CodebaseMemoryFake {
         }
         let minimum_requests = if matches!(
             mcp.lifecycle_profile.as_deref(),
-            Some("provider-neutral-anchor-lineage" | "mapped-live-graph-consumption")
+            Some(
+                "provider-neutral-anchor-lineage"
+                    | "mapped-live-graph-consumption"
+                    | "mapped-live-graph-convergence"
+            )
         ) {
             8
         } else {
@@ -732,24 +754,6 @@ fn messages_contain(view: &RequestView, needle: &str) -> bool {
     view.messages
         .iter()
         .any(|message| message.content.contains(needle))
-}
-
-fn privacy_safe_checkpoints(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Vec<String> {
-    if mcp.lifecycle_profile.as_deref() != Some("mapped-live-graph-consumption") {
-        return Vec::new();
-    }
-    let allowed = [
-        "served_mapped_root",
-        "served_mapped_carry_forward",
-        "served_mapped_current_root_source",
-        "served_mapped_unavailable",
-    ];
-    calls
-        .iter()
-        .filter_map(|call| call.fixture_event.as_deref())
-        .filter(|event| allowed.contains(event))
-        .map(str::to_string)
-        .collect()
 }
 
 fn is_current_root_source_result(content: &str) -> bool {
