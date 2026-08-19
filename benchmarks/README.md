@@ -47,15 +47,17 @@ The `temper-dev` driver builds `temper-agent`, runs the structural manifest and
 all three controlled codebase-memory conditions, and verifies run and aggregate
 summaries. The structural checks include mutation turns, single-mutation turns,
 and maximum mutations per turn. The controlled checks include complete
-compound-shell classification, targeted graph-result consumption, a normalized
-provider identity confirmed by a separate targeted ready/root response, a
-five-call graph-to-graph/source/selection chain, deterministic cold-then-warm
-readiness, and a bounded privacy-safe unavailable fallback, host validation,
-and exact diff correctness. Its decision summaries retain only declared target
-metadata, call ordering, safe tool names, and consumption modes; diagnostic
-traces can contain controlled source and require restricted review. Those
-fixture signals verify harness behavior, not deployment eligibility or live
-model effectiveness.
+compound-shell classification, two independent useful evidence roots and their
+later descendants, a normalized provider identity confirmed by a separate
+targeted ready/root response, complete classification above the 50% relevance
+gate, one admitted broad/duplicate non-progress batch, and locally denied
+post-convergence graph calls. It separately counts model graph attempts and
+actual provider invocations, while preserving bounded privacy-safe unavailable
+fallback, host validation, and exact diff correctness. Its decision summaries
+retain only declared target metadata, call ordering, safe tool names, and
+consumption modes; diagnostic traces can contain controlled source and require
+restricted review. Those fixture signals verify harness behavior, not
+deployment eligibility or live model effectiveness.
 Malformed or missing scope ancestry is an ingestion error,
 not unavailable historical evidence. If an ingested trace contains a successful mutation without usable model-turn
 identity, all three mutation-turn metrics are unavailable and the summary emits

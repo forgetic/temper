@@ -144,16 +144,21 @@ representative LLM performance**. Deterministic Jig timing is not a CI gate.
 For the controlled routing fixture, the lane also proves that a fixture-only
 stable upsert's normalized identity is separately confirmed with a targeted
 ready status and canonical root before serving a cold targeted result and a
-later warm result. Its enabled path is a five-call chain: targeted graph search,
-symbol refinement, caller tracing, then two current-root source snippets before
-the exact mutation. Relevance credits only the manifest-declared ordered
-graph-to-graph, graph-to-source, and exact-source-selection consumption modes. A run
-summary exposes only call ordering, safe tool names, declared targets/kinds, and
+later warm result. Its enabled path starts with two independent useful roots
+and consumes valid later refinement, trace, focused-test source, and caller
+source descendants. One broad architecture call and one duplicate refinement
+reach the fixture as a single non-progressing batch before the caller source
+converges the decision; two later graph attempts are denied locally. Harness
+assertions distinguish ten model graph attempts from eight actual provider
+invocations and retain complete relevance classification above the frozen 50%
+gate. Relevance credits only the manifest-declared ordered graph-to-graph,
+graph-to-source, and exact-source-selection consumption modes. A run summary
+exposes only call ordering, safe tool names, declared targets/kinds, and
 consumption modes; it excludes tool arguments, source, and provider results.
 The diagnostic trace retains controlled source snippets and therefore remains a
-restricted review artifact. The lane also proves that a parseable compound shell
-command has complete classification coverage, and that one forced-unavailable
-request is safely bounded before conventional fallback.
+restricted review artifact. The lane also proves that a parseable compound
+shell command has complete classification coverage, and that one
+forced-unavailable request is safely bounded before conventional fallback.
 It proves neither live cache behavior nor an effectiveness or deployment gate;
 the fixture Jigs prescribe tool calls and must not be interpreted as model
 decisions. Run the repository lane with:
@@ -189,6 +194,17 @@ TEMPER_BENCHMARK_LIVE=1 \
   --repetitions 5 \
   --output-dir /secure/artifacts/candidate
 ```
+
+For an acceptance candidate, freeze the exact head and run one enabled smoke,
+then five enabled, five disabled, and five forced-unavailable repetitions in
+that order. Invoke `temper-benchmark verify` only after all four artifact roots
+are complete. Never selectively rerun or reorder one condition: any candidate,
+manifest, provider/model, cache annotation, or baseline change restarts the
+sequence at the smoke. The verifier requires complete typed decision relevance,
+exact source selection, the aggregate 50% relevance gate, complete enabled and
+disabled shell classification, unavailable no-retry evidence, byte-exact patch
+and host validation, and privacy-safe aggregate artifacts. Missing evidence is
+unavailable and fails closed; it is never converted to zero.
 
 Do not put provider credentials in a manifest, command transcript, checked-in
 file, or CI lane. Harness mode needs none. Live mode redacts resolved credential

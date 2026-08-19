@@ -238,17 +238,18 @@ fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
     assert_eq!(acceptance.matrix_repetitions, 5);
     assert_eq!(acceptance.minimum_relevance_percent, 50);
     assert_eq!(acceptance.minimum_improvement_percent, 20);
+    assert_eq!(acceptance.aggregate_privacy_forbidden_fragments.len(), 4);
     let targets = &manifest.manifest().graph_decision_targets;
-    assert_eq!(targets.len(), 6);
+    assert_eq!(targets.len(), 5);
     assert_eq!(targets[0].target, "worker_slot");
     assert_eq!(targets[0].consumption[0].target, "worker_slot");
     assert_eq!(targets[1].consumption[0].target, "worker_slot");
-    assert_eq!(targets[2].consumption[0].target, "DeliveryAttempt");
+    assert_eq!(targets[2].target, "DeliveryRouter::worker_for");
     assert_eq!(
         targets[3].consumption[0].target,
-        "DeliveryRouter::worker_for"
+        "alias_retries_stay_on_the_original_ordered_worker"
     );
-    assert_eq!(targets[5].target, "repo/src/route.rs");
+    assert_eq!(targets[4].target, "repo/src/route.rs");
 }
 
 #[test]

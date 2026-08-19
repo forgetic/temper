@@ -137,18 +137,31 @@ fn exact_patch_and_host_validation_are_independent_gates() {
 }
 
 #[test]
-fn privacy_scan_fails_without_copying_the_matched_content() {
-    let fixture = EvidenceFixture::new(MatrixConfig::default());
-    fs::write(
-        fixture.options.enabled.join("repetitions/001/run.md"),
+fn privacy_scan_rejects_sensitive_aggregate_shapes_without_copying_them() {
+    for forbidden in [
         "MCP-FIXTURE-SECRET",
-    )
-    .unwrap();
-    let result = fixture.verify();
-    assert!(!gate(&result, AcceptanceGateV1::DurablePrivacy));
-    write_benchmark_acceptance(&result, &fixture.options.output_dir).unwrap();
-    let artifact = fs::read_to_string(fixture.options.output_dir.join("acceptance.json")).unwrap();
-    assert!(!artifact.contains("MCP-FIXTURE-SECRET"));
+        "Authorization: Bearer",
+        "cd repo && rg worker_slot src",
+        "let routing_topic = attempt.affinity_topic();",
+        "/srv/data/git/runner",
+        "cold stable upsert is ready",
+    ] {
+        let fixture = EvidenceFixture::new(MatrixConfig::default());
+        fs::write(
+            fixture.options.enabled.join("aggregate.md"),
+            format!("# Aggregate\n\n{forbidden}\n"),
+        )
+        .unwrap();
+        let result = fixture.verify();
+        assert!(!gate(&result, AcceptanceGateV1::DurablePrivacy));
+        write_benchmark_acceptance(&result, &fixture.options.output_dir).unwrap();
+        let artifact =
+            fs::read_to_string(fixture.options.output_dir.join("acceptance.json")).unwrap();
+        assert!(
+            !artifact.contains(forbidden),
+            "acceptance output copied forbidden aggregate content"
+        );
+    }
 }
 
 #[test]
@@ -207,6 +220,8 @@ fn passing_five_by_three_input_writes_privacy_safe_artifact() {
         "provider output",
         "trace.export",
         "Authorization: Bearer",
+        "/srv/data/git/runner",
+        "cold stable upsert is ready",
     ] {
         assert!(!text.contains(forbidden), "artifact copied {forbidden:?}");
     }

@@ -11,6 +11,16 @@
               "query": "aliased delivery retry worker affinity"
             }
           }
+        },
+        {
+          "tool_call": {
+            "id": "graph_identify_behavior_evidence",
+            "name": "codebase_memory_search_graph",
+            "args": {
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "query": "alias retry behavioral regression"
+            }
+          }
         }
       ],
       "stop": "tool_calls"
@@ -26,12 +36,7 @@
               "pattern": "worker_slot"
             }
           }
-        }
-      ],
-      "stop": "tool_calls"
-    },
-    {
-      "turns": [
+        },
         {
           "tool_call": {
             "id": "graph_trace_worker_caller",
@@ -39,6 +44,16 @@
             "args": {
               "project": "temper-benchmark/codebase-memory-routing-repair",
               "function_name": "worker_slot"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "graph_source_alias_retry_test",
+            "name": "codebase_memory_get_code_snippet",
+            "args": {
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "qualified_name": "alias_retries_stay_on_the_original_ordered_worker"
             }
           }
         }
@@ -49,11 +64,20 @@
       "turns": [
         {
           "tool_call": {
-            "id": "graph_source_delivery_attempt",
-            "name": "codebase_memory_get_code_snippet",
+            "id": "broad_architecture_non_progress",
+            "name": "codebase_memory_get_architecture",
             "args": {
-              "repo": "temper-benchmark/codebase-memory-routing-repair",
-              "qualified_name": "DeliveryAttempt"
+              "project": "temper-benchmark/codebase-memory-routing-repair"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "duplicate_worker_refinement_non_progress",
+            "name": "codebase_memory_search_code",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "pattern": "worker_slot"
             }
           }
         }
@@ -65,6 +89,31 @@
         {
           "tool_call": {
             "id": "graph_source_delivery_caller",
+            "name": "codebase_memory_get_code_snippet",
+            "args": {
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "qualified_name": "DeliveryRouter::worker_for"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "post_decision_graph_search",
+            "name": "codebase_memory_search_graph",
+            "args": {
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "query": "post decision routing exploration"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "post_decision_source_read",
             "name": "codebase_memory_get_code_snippet",
             "args": {
               "repo": "temper-benchmark/codebase-memory-routing-repair",

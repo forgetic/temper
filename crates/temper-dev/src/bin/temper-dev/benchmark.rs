@@ -2,18 +2,19 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(), String> {
+pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(), String> {
     let evidence = run
         .pointer("/metrics/graph/decision_evidence")
         .and_then(Value::as_array)
         .ok_or_else(|| "enabled run omitted graph decision evidence".to_string())?;
-    let expected = [
+    let expected = BTreeSet::from([
         ("search_graph", "search_code", "graph"),
-        ("search_code", "trace_path", "graph"),
-        ("trace_path", "get_code_snippet", "source"),
-        ("get_code_snippet", "get_code_snippet", "source"),
+        ("search_graph", "get_code_snippet", "source"),
+        ("search_code", "search_code", "graph"),
+        ("trace_path", "search_code", "graph"),
+        ("search_code", "get_code_snippet", "source"),
         ("get_code_snippet", "read", "selection"),
-    ];
+    ]);
     if evidence.len() != expected.len() {
         return Err(format!(
             "enabled decision evidence count was {}; expected {}",
@@ -32,7 +33,8 @@ pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(),
         "kind",
         "target",
     ]);
-    for (entry, (graph_tool, consumer_tool, mode)) in evidence.iter().zip(expected) {
+    let mut observed = BTreeSet::new();
+    for entry in evidence {
         let object = entry
             .as_object()
             .ok_or_else(|| "enabled decision evidence entry was not an object".to_string())?;
@@ -40,14 +42,26 @@ pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(),
         if fields != expected_fields {
             return Err("enabled decision evidence retained unexpected fields".to_string());
         }
-        if object.get("graph_tool").and_then(Value::as_str) != Some(graph_tool)
-            || object.get("consumer_tool").and_then(Value::as_str) != Some(consumer_tool)
-            || object.get("consumption_mode").and_then(Value::as_str) != Some(mode)
-        {
-            return Err(
-                "enabled decision evidence did not preserve the five-call chain".to_string(),
-            );
-        }
+        let tuple = (
+            object
+                .get("graph_tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "enabled decision evidence omitted graph_tool".to_string())?,
+            object
+                .get("consumer_tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "enabled decision evidence omitted consumer_tool".to_string())?,
+            object
+                .get("consumption_mode")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "enabled decision evidence omitted consumption_mode".to_string())?,
+        );
+        observed.insert(tuple);
+    }
+    if observed != expected {
+        return Err(
+            "enabled decision evidence did not preserve the converged root forest".to_string(),
+        );
     }
     Ok(())
 }
@@ -55,9 +69,11 @@ pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(),
 pub(super) fn verify_typed_graph_correlation_records(trace: &str) -> Result<(), String> {
     let expected = [
         ("search_graph", "graph_query"),
+        ("search_graph", "graph_query"),
         ("search_code", "pattern"),
         ("trace_path", "function_name"),
         ("get_code_snippet", "qualified_name"),
+        ("search_code", "pattern"),
         ("get_code_snippet", "qualified_name"),
     ];
     let observed = trace
@@ -105,6 +121,43 @@ pub(super) fn trace_has_confirmed_graph_read(trace: &str) -> bool {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|event| value_has_confirmed_graph_read(&event))
+}
+
+pub(super) fn verify_provider_invocations(trace: &str, expected: u64) -> Result<(), String> {
+    let mut invocations = BTreeSet::new();
+    for event in trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        collect_provider_invocations(&event, &mut invocations);
+    }
+    let expected = (1..=expected).collect::<BTreeSet<_>>();
+    if invocations == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "provider invocation sequence was {invocations:?}; expected {expected:?}"
+        ))
+    }
+}
+
+fn collect_provider_invocations(value: &Value, invocations: &mut BTreeSet<u64>) {
+    match value {
+        Value::String(text) => {
+            if let Some(invocation) = provider_payload(text)
+                .and_then(|payload| payload.get("provider_invocation").and_then(Value::as_u64))
+            {
+                invocations.insert(invocation);
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_provider_invocations(value, invocations)),
+        Value::Object(values) => values
+            .values()
+            .for_each(|value| collect_provider_invocations(value, invocations)),
+        _ => {}
+    }
 }
 
 fn value_has_confirmed_graph_read(value: &Value) -> bool {
@@ -184,7 +237,7 @@ fn confirmed_current_root_source_payload(payload: &Value, symbol: &str) -> bool 
         && payload
             .get("source_path")
             .and_then(Value::as_str)
-            .is_some_and(|path| path.starts_with("src/"))
+            .is_some_and(|path| path.starts_with("src/") || path.starts_with("tests/"))
         && payload.get("source").and_then(Value::as_str).is_some()
         && confirmed_graph_read_payload(payload)
 }
