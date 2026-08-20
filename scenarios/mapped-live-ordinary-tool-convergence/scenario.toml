@@ -1,0 +1,379 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-ordinary-tool-convergence"
+status = "active"
+intent = "Validate feature #1041's graph-guided convergence through graph-local closure, canonical ordinary invocation rejection, one bounded circuit redirect, and one exact live repair."
+introduced_by = "#1048"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[runner]
+uses = "manifest"
+
+[validation]
+feature = "ai/temper#1041"
+plan = "ai/temper#1042"
+source_branch = "agent/pr-for-feature-1041"
+change = "new"
+
+[feature_contract]
+claim = "Successful targeted current-root graph evidence remains consumable before exploration closes, while provider-native ordinary forms canonicalize safely and repeated non-retryable ordinary failures are redirected locally without disabling corrected mutation, validation, or submission."
+stimulus = "Run one engineer repair through real Forgejo, a host Actions runner, standalone Temper, an Anthropic-shaped Jig provider, and a deterministic current-root graph fixture."
+observable = "Canonical tool identities; closed failure category, reason, retry-disposition, retryability, and fallback facts; bounded graph and ordinary counts; one exact fixture diff; host submission; Actions success; PR merge; and source-issue closure."
+assertion = "Five successful targeted graph calls are consumed before one exact exploration_closed denial; one allowlisted provider-native read canonicalizes, one ambiguous write is rejected without effect, one bash failure executes once, its identical retry redirects once without execution, and changed corrected calls write and validate only the minimal repair before accepted submission and workflow convergence."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-ordinary-tool-convergence.json"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[live_harness]
+ci_poll_cadence = "1s"
+poll_cadence = "1s"
+mechanical_cadence = "1s"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+agent_provider = "anthropic"
+repos = ["service"]
+
+[workflow]
+name = "codebase-memory-agent"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/demo"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Converge after graph closure and invalid ordinary calls"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready"]
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["landing"]
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the demo repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "start-fake-codebase-memory-mcp"
+action = "mcp.fake_codebase_memory.start"
+project = "actual-demo-project"
+lifecycle_profile = "mapped-live-ordinary-tool-convergence"
+advertises_safe_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status"]
+advertises_hidden_tools = ["index_repository", "delete_project"]
+readiness_delay_ms = 750
+
+[[steps]]
+id = "configure-codebase-memory-tools"
+action = "agent.tools.configure"
+role = "engineer"
+tool = "codebase_memory"
+mode = "required"
+index = "background"
+tool_timeout_secs = 2
+server = "$step:start-fake-codebase-memory-mcp"
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+role = "engineer"
+script_path = "jig/mapped-live-ordinary-tool-convergence.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-demo-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-source-issue"
+action = "issue.seed"
+issue_id = "source"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-convergence"
+action = "workflow.wait_convergence"
+strategy = "codebase-memory"
+until = "engineer consumes targeted graph evidence, observes graph-local exploration closure, canonicalizes and repairs ordinary invocations through one bounded redirect, produces the minimal diff, passes host validation and Actions, merges the PR, and closes the source issue"
+
+[expect]
+outcome = "The live Anthropic-shaped agent consumes current-root graph evidence, keeps exploration_closed graph-local, rejects one ambiguous ordinary invocation, redirects one identical non-retryable retry without execution, and immediately converges through corrected mutation, shell validation, accepted submission, Actions, merge, and issue closure."
+merged_pull_requests = 1
+closed_parent_issues = 1
+
+[[expect.checks]]
+required = true
+id = "source-finalized"
+artifact = "issue:source"
+state = "closed"
+labels = ["code"]
+
+[[expect.checks]]
+required = true
+id = "implementation-pr-landed"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+required = true
+id = "default-branch-has-exact-engineer-diff"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.events]]
+required = true
+id = "current-root-rebind-completed"
+event = "codebase_memory.index.lifecycle"
+fields."index.mode" = "background"
+fields."index.outcome" = "completed"
+
+[[expect.events]]
+required = true
+id = "exploration-closure-is-closed-and-graph-local"
+event = "tool.error"
+fields.tool = "codebase_memory_get_code_snippet"
+fields.id = "close-convergence-graph-exploration"
+fields."tool.failure.category" = "graph_lifecycle_denial"
+fields."tool.failure.reason" = "exploration_closed"
+fields."tool.failure.retry_disposition" = "conventional_discovery"
+fields."tool.failure.retryable" = false
+fields."tool.failure.conventional_fallback" = true
+
+[[expect.events]]
+required = true
+id = "provider-native-read-has-canonical-identity"
+event = "tool.start"
+fields.tool = "read"
+fields.id = "provider-native-read-after-closure"
+
+[[expect.events]]
+required = true
+id = "ambiguous-write-is-scrubbed-with-canonical-schema-diagnostic"
+event = "tool.error"
+fields.tool = "invalid_tool_invocation"
+fields.id = "reject-ambiguous-provider-native-write"
+fields."tool.failure.category" = "schema_argument_mismatch"
+fields."tool.failure.reason" = "invalid_arguments"
+fields."tool.failure.retry_disposition" = "correct_invocation"
+fields."tool.failure.retryable" = false
+fields."tool.failure.conventional_fallback" = false
+
+[[expect.events]]
+required = true
+id = "identical-retry-is-locally-redirected"
+event = "tool.error"
+fields.tool = "bash"
+fields.id = "ordinary-failure-identical-retry"
+fields.duration_ms = 0
+fields."tool.failure.category" = "circuit_redirect"
+fields."tool.failure.reason" = "repeated_non_retryable"
+fields."tool.failure.retry_disposition" = "correct_invocation"
+fields."tool.failure.retryable" = false
+fields."tool.failure.conventional_fallback" = false
+
+[[expect.events]]
+required = true
+id = "corrected-provider-native-write-has-canonical-identity"
+event = "tool.start"
+fields.tool = "write"
+fields.id = "corrected-provider-native-write"
+
+[[expect.events]]
+required = true
+id = "corrected-shell-validation-remains-available"
+event = "tool.end"
+fields.tool = "bash"
+fields.id = "validate-corrected-minimal-diff"
+
+[[expect.events]]
+required = true
+id = "host-submission-remains-available-and-succeeds"
+event = "tool.end"
+fields.tool = "submit_for_pr"
+fields.id = "submit-corrected-minimal-diff"
+
+[[expect.sequence]]
+required = true
+id = "graph-closure-ordinary-repair-and-submission-converge"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.correlation.complete" = true, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = true } },
+  { event = "tool.start", fields = { tool = "read", id = "provider-native-read-after-closure" } },
+  { event = "tool.error", fields = { tool = "invalid_tool_invocation", "tool.failure.reason" = "invalid_arguments" } },
+  { event = "tool.error", fields = { tool = "bash", id = "ordinary-failure-first-execution", "tool.failure.category" = "execution_failure" } },
+  { event = "tool.error", fields = { tool = "bash", id = "ordinary-failure-identical-retry", "tool.failure.category" = "circuit_redirect" } },
+  { event = "tool.end", fields = { tool = "bash", id = "ordinary-failure-corrected-counter-check" } },
+  { event = "tool.end", fields = { tool = "write", id = "corrected-provider-native-write" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-corrected-minimal-diff" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-corrected-minimal-diff" } },
+  { event = "workspace.diff.produced", fields = { changed_count = 1 } },
+]
+
+[[expect.count]]
+required = true
+id = "five-successful-complete-v1-lineages"
+event = "mcp.tool.result"
+fields."graph.correlation.complete" = true
+fields."graph.correlation.version" = 1
+fields."graph.lineage.complete" = true
+fields."graph.lineage.version" = 1
+exactly = 5
+
+[[expect.count]]
+required = true
+id = "one-targeted-graph-search"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_graph"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-dependent-code-refinement"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_code"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-dependent-graph-trace"
+event = "mcp.tool.called"
+fields."mcp.tool" = "trace_path"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "two-source-reads-and-one-final-closure-with-no-post-closure-retry"
+event = "mcp.tool.called"
+fields."mcp.tool" = "get_code_snippet"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "one-graph-lifecycle-denial"
+event = "tool.error"
+fields."tool.failure.category" = "graph_lifecycle_denial"
+fields."tool.failure.reason" = "exploration_closed"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-schema-argument-rejection"
+event = "tool.error"
+fields."tool.failure.category" = "schema_argument_mismatch"
+fields."tool.failure.reason" = "invalid_arguments"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-underlying-ordinary-execution-failure"
+event = "tool.error"
+fields."tool.failure.category" = "execution_failure"
+fields."tool.failure.reason" = "tool_reported_failure"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-bounded-local-circuit-redirect"
+event = "tool.error"
+fields."tool.failure.category" = "circuit_redirect"
+fields."tool.failure.reason" = "repeated_non_retryable"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-canonical-corrected-write"
+event = "tool.start"
+fields.tool = "write"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "no-broad-architecture-call"
+event = "mcp.tool.called"
+fields."mcp.tool" = "get_architecture"
+exactly = 0
+
+[expect.effective_configuration]
+id = "rapid-ordinary-convergence-harness-cadence"
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 1
+mechanical_cadence_secs = 1
+
+[codebase_memory]
+mode = "required"
+index = "background"
+readiness_delay_ms = 750
+fake_mcp_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status", "index_repository", "delete_project"]
+model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_search_code", "codebase_memory_trace_path", "codebase_memory_get_code_snippet", "codebase_memory_list_projects", "codebase_memory_index_status"]
+model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
+default_project = "acme/demo"
+actual_project = "normalized-temper-v1-<stable-provider-key>"
+graph_consumption_profile = "one targeted root and four later-turn carry-forwards, two current-root sources, one exact exploration_closed denial, then canonical ordinary recovery with one schema rejection, one execution failure, one local redirect, and changed corrected mutation/validation/submission; aggregate closed facts only"
+global_inventory_forbidden = true
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify privacy-safe aggregate category, count, ordering, or convergence assertions.",
+  "Add generic harness observability that proves canonical identity or bounded local redirection without retaining invocation data.",
+]
+requires_new_scenario_or_major_update = [
+  "Treating exploration_closed as a global tool shutdown or allowing a graph retry after closure.",
+  "Retaining raw tool inputs, fingerprints, provider payloads, source, prompts, credentials, host-gate output, or diagnostic traces as scenario evidence.",
+  "Replacing the mandatory live Forgejo/Actions/standalone-Temper/Jig topology with a lower-level test.",
+]

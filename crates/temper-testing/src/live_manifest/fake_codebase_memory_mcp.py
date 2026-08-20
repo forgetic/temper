@@ -26,12 +26,21 @@ TYPED_LINEAGE_TOKENS = {
     "root": "crate::fixture::anchor_" + uuid.uuid4().hex,
     "behavioral_test": "crate::fixture::anchor_" + uuid.uuid4().hex + "_behavior",
 }
-MAPPED_GRAPH_TOKENS = {
-    "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
-    "caller": "crate::fixture::delivery_" + uuid.uuid4().hex + "::DeliveryAttempt",
-    "source": "crate::fixture::delivery_" + uuid.uuid4().hex + "::worker_for",
-    "unavailable": "crate::fixture::unavailable_" + uuid.uuid4().hex,
-}
+MAPPED_GRAPH_TOKENS = (
+    {
+        "implementation": "fixture::routing::worker_slot",
+        "caller": "fixture::delivery::DeliveryAttempt",
+        "source": "fixture::delivery::worker_for",
+        "unavailable": "fixture::unavailable",
+    }
+    if LIFECYCLE_PROFILE == "mapped-live-ordinary-tool-convergence"
+    else {
+        "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
+        "caller": "crate::fixture::delivery_" + uuid.uuid4().hex + "::DeliveryAttempt",
+        "source": "crate::fixture::delivery_" + uuid.uuid4().hex + "::worker_for",
+        "unavailable": "crate::fixture::unavailable_" + uuid.uuid4().hex,
+    }
+)
 GRAPH_CALLS = 0
 
 TOOLS = [
@@ -261,6 +270,7 @@ def has_current_root_profile():
         "provider-result-anchor",
         "provider-neutral-anchor-lineage",
         "mapped-live-graph-consumption",
+        "mapped-live-ordinary-tool-convergence",
     )
 
 
@@ -273,7 +283,14 @@ def is_typed_lineage_profile():
 
 
 def is_mapped_graph_profile():
-    return LIFECYCLE_PROFILE == "mapped-live-graph-consumption"
+    return LIFECYCLE_PROFILE in (
+        "mapped-live-graph-consumption",
+        "mapped-live-ordinary-tool-convergence",
+    )
+
+
+def is_ordinary_convergence_profile():
+    return LIFECYCLE_PROFILE == "mapped-live-ordinary-tool-convergence"
 
 
 def ensure_mapped_graph_tokens():
@@ -392,13 +409,21 @@ for line in sys.stdin:
                     and mapped_graph_step(source_stage[0], qualified_name, qualified_name)
                 )
                 if source is None:
+                    final_fixture_event = None
+                    final_error = "bound source unavailable"
+                    if unavailable:
+                        if is_ordinary_convergence_profile():
+                            final_fixture_event = "served_graph_closure"
+                            final_error = "exploration_closed"
+                        else:
+                            final_fixture_event = "served_mapped_unavailable"
                     log_tool(
                         name,
                         arguments,
                         is_error=True,
-                        fixture_event="served_mapped_unavailable" if unavailable else None,
+                        fixture_event=final_fixture_event,
                     )
-                    result = text_result("bound source unavailable", True)
+                    result = text_result(final_error, True)
                 else:
                     if source_stage[0] == 3:
                         payload = {

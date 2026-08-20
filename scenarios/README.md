@@ -28,7 +28,8 @@ runner:
   `implementation-pr-handoff`, `codebase-memory-agent`,
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
   `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
-  `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`, `model-failure-recovery`,
+  `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`,
+  `mapped-live-ordinary-tool-convergence`, `model-failure-recovery`,
   `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
@@ -213,6 +214,23 @@ remain ephemeral. Focused native tests retain the denied-path regressions, and
 this live mapping proves unavailable fallback without an immediate graph retry.
 This mapping leaves both
 the historical `#991` and `#1000` mappings unchanged.
+
+### Mapped live ordinary-tool convergence mapping
+
+`mapped-live-ordinary-tool-convergence` is the sole active mapping for
+`ai/temper#1041` and `ai/temper#1042` on `agent/pr-for-feature-1041`. It extends
+the mapped current-root consumption seam into one exact `exploration_closed`
+denial and an Anthropic-shaped ordinary recovery sequence. Provider-native
+forms must appear under canonical identities; one ambiguous call receives the
+closed schema diagnostic without execution; one non-retryable failure executes
+once; its identical retry redirects locally once; and changed corrected
+mutation, shell validation, and submission calls remain available through real
+Actions, merge, and source closure. Durable evidence retains only safe names,
+closed category/reason/disposition fields, aggregate counts, ordering, binding,
+and convergence facts. Raw inputs, fingerprints, provider payloads, source,
+prompts, credentials, host-gate output, and diagnostic traces remain ephemeral.
+The historical `mapped-live-graph-consumption` mapping and controlled routing
+benchmark are unchanged.
 
 ### Structured run evidence
 

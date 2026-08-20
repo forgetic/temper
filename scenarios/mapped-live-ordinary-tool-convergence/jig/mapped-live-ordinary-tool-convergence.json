@@ -1,0 +1,13 @@
+{
+  "phases": [
+    {
+      "name": "mapped-live-ordinary-tool-convergence-runtime",
+      "when": { "messages_contain": ["__mapped_live_ordinary_tool_convergence_fixture_runtime__"] },
+      "sequence": [
+        {
+          "text": "The live harness owns transient graph selections and ordinary invocation inputs."
+        }
+      ]
+    }
+  ]
+}

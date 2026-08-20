@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use toml::Value as TomlValue;
 
+#[path = "bundle_provider.rs"]
+mod provider;
+
 pub use super::execution_plan::{
     AgentFixture, ConvergenceStrategy, ForcedSystemicFailureFixture, LateStreamFailureBurst,
     LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan, ManifestStep,
@@ -34,6 +37,7 @@ pub struct ScenarioBundle {
     pub ci_poll_cadence: Duration,
     pub mechanical_cadence: Duration,
     pub observability: ObservabilityFixture,
+    pub agent_provider: String,
     pub recovery: Option<RecoveryFixture>,
     pub ci_failure_evidence: Option<CiFailureEvidenceFixture>,
 }
@@ -95,6 +99,7 @@ impl ScenarioBundle {
             Duration::from_secs(DEFAULT_MECHANICAL_CADENCE_SECS),
         )?;
         let observability = observability_fixture(&manifest)?;
+        let agent_provider = provider::agent_provider_fixture(&manifest)?;
         let recovery = recovery_fixture(&manifest)?;
         let ci_failure_evidence = super::failure_evidence::fixture_from_manifest(&manifest)?;
 
@@ -114,6 +119,7 @@ impl ScenarioBundle {
             ci_poll_cadence,
             mechanical_cadence,
             observability,
+            agent_provider,
             recovery,
             ci_failure_evidence,
         })
@@ -611,6 +617,9 @@ fn parse_duration_literal(raw: &str) -> Result<Duration, String> {
 #[cfg(test)]
 #[path = "bundle_mapped_graph_consumption_tests.rs"]
 mod mapped_graph_consumption_tests;
+#[cfg(test)]
+#[path = "bundle_mapped_ordinary_convergence_tests.rs"]
+mod mapped_ordinary_convergence_tests;
 #[cfg(test)]
 #[path = "bundle_provider_neutral_anchor_lineage_tests.rs"]
 mod provider_neutral_anchor_lineage_tests;
