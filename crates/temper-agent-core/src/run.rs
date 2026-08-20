@@ -251,10 +251,10 @@ pub fn run_sub_agent_controllable_with_hook(
 }
 
 /// [`run_sub_agent_controllable_with_hook`] with an additional optional
-/// [`ArgPreviewFn`] used to fill `ToolStart.arg_preview` from each call's name +
-/// arguments. The preview function lives above the core tier (it knows the
-/// workspace `cwd` and per-tool rendering rules); the pure machine just calls
-/// it. See the agent-log-cleanup plan (pieces B/D).
+/// [`ArgPreviewFn`] used to finalize the separate human preview and diagnostic
+/// shell-argument candidate on `ToolStart`. The presentation function lives
+/// above the core tier (it knows workspace and privacy rendering rules); the
+/// pure machine just calls it.
 pub fn run_sub_agent_controllable_with_hooks(
     handle: RuntimeHandle,
     sub_agent: SubAgent,

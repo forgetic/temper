@@ -364,21 +364,39 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
 
     match cli_condition {
         "codebase-memory-enabled" => {
-            expect_exact(&run, "/metrics/graph/calls", 5)?;
-            expect_exact(&run, "/metrics/graph/succeeded", 5)?;
-            expect_exact(&run, "/metrics/graph/relevant_results", 5)?;
+            expect_exact(&run, "/metrics/graph/calls", 10)?;
+            expect_exact(&run, "/metrics/graph/succeeded", 7)?;
+            expect_exact(&run, "/metrics/graph/failed", 3)?;
+            expect_exact(&run, "/metrics/graph/relevant_results", 7)?;
             expect_exact(&run, "/metrics/graph/irrelevant_successes", 0)?;
-            expect_exact(&run, "/metrics/graph/relevance_coverage/observed", 5)?;
-            expect_exact(&run, "/metrics/graph/relevance_coverage/expected", 5)?;
+            expect_exact(&run, "/metrics/graph/relevance_coverage/observed", 7)?;
+            expect_exact(&run, "/metrics/graph/relevance_coverage/expected", 7)?;
+            expect_exact(
+                &run,
+                "/metrics/graph/typed_correlation_coverage/observed",
+                7,
+            )?;
+            expect_exact(
+                &run,
+                "/metrics/graph/typed_correlation_coverage/expected",
+                7,
+            )?;
+            expect_exact(&run, "/metrics/graph/typed_lineage_coverage/observed", 7)?;
+            expect_exact(&run, "/metrics/graph/typed_lineage_coverage/expected", 7)?;
+            expect_exact(
+                &run,
+                "/metrics/graph/failures_by_category/graph_lifecycle_denial",
+                3,
+            )?;
             expect_exact(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_search_graph/calls",
-                1,
+                3,
             )?;
             expect_exact(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_search_code/calls",
-                1,
+                2,
             )?;
             expect_exact(
                 &run,
@@ -388,16 +406,18 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             expect_exact(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_get_code_snippet/calls",
-                2,
+                3,
             )?;
-            expect_absent(
+            expect_exact(
                 &run,
-                "/metrics/tools/by_name/codebase_memory_get_architecture",
+                "/metrics/tools/by_name/codebase_memory_get_architecture/calls",
+                1,
             )?;
-            benchmark::verify_safe_five_call_decision_evidence(&run)?;
+            benchmark::verify_safe_converged_decision_evidence(&run)?;
             let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
                 .map_err(|error| format!("read controlled trace: {error}"))?;
             benchmark::verify_typed_graph_correlation_records(&trace)?;
+            benchmark::verify_provider_invocations(&trace, 7)?;
             for expected in [
                 "cold stable upsert is ready",
                 "warm stable project remains ready",
@@ -412,7 +432,10 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
                         .to_string(),
                 );
             }
-            for symbol in ["DeliveryAttempt", "DeliveryRouter::worker_for"] {
+            for symbol in [
+                "alias_retries_stay_on_the_original_ordered_worker",
+                "DeliveryRouter::worker_for",
+            ] {
                 if !benchmark::trace_has_confirmed_current_root_source(&trace, symbol) {
                     return Err(format!(
                         "enabled trace omitted confirmed-current-root source for {symbol:?}"

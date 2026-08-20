@@ -22,16 +22,17 @@ Across separate model turns the engineer must consume exactly:
 
 Every successful call has a complete typed V1 correlation and lineage record.
 The first is a root and the next four are carry-forwards bound to that root.
-Both source reads precede one expected unavailable descendant. Its trusted,
-privacy-safe failure releases bounded conventional discovery; the Jig performs
-one fallback read and does not retry a graph tool before the minimal repair,
-focused host validation, Actions pass, PR merge, and source-issue closure.
+Both source reads complete the generic decision chain. A redundant descendant is
+then denied locally with the fixed `graph_lifecycle_denial` category with reason `exploration_closed`, without
+another MCP invocation. Conventional source reading remains available before
+the minimal repair, focused host validation, Actions pass, PR merge, and
+source-issue closure.
 
 Focused native regressions deny unrelated and producer-turn mutation authority
 and retain the complementary negative contract for malformed, ambiguous,
-cross-root, truncated, failed, and unavailable results. In particular, an
-expected unavailable descendant releases bounded conventional fallback while
-an unrelated outage does not bypass an active anchor.
+cross-root, truncated, failed, and unavailable results. The compatibility update
+for feature #1026's generic runtime boundary changes only the redundant
+post-decision call: it is now closed locally instead of reaching the provider.
 
 ## Privacy-safe evidence
 

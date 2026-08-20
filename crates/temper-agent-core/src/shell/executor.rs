@@ -17,8 +17,8 @@ use tongs::tools::ToolRegistry;
 use crate::ToolInvocationCatalog;
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
-    CODEBASE_MEMORY_TOOL_PREFIX, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, OperationGeneration,
-    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason,
+    CODEBASE_MEMORY_TOOL_PREFIX, OperationGeneration, ToolCallDenial, ToolCallStatus,
+    ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
@@ -297,7 +297,7 @@ impl AgentShell {
         operation_generation: OperationGeneration,
         batch_generation: BatchGeneration,
         call: ToolCall,
-        mutation_blocked: bool,
+        denial: Option<ToolCallDenial>,
         rejection: Option<ToolFailureDiagnostic>,
     ) {
         let tools = Arc::clone(&self.tools);
@@ -314,7 +314,7 @@ impl AgentShell {
                 &call,
                 timeout,
                 &cancellation,
-                mutation_blocked,
+                denial,
                 clock.as_ref(),
                 events.as_ref(),
                 operator_transcript.as_deref(),
@@ -365,13 +365,13 @@ impl Executor<AgentMachine> for AgentShell {
                 operation_generation,
                 batch_generation,
                 call,
-                mutation_blocked,
+                denial,
                 rejection,
             } => self.execute_run_tool(
                 operation_generation,
                 batch_generation,
                 call,
-                mutation_blocked,
+                denial,
                 rejection,
             ),
             AgentRequest::RedirectTool {
@@ -434,7 +434,7 @@ async fn execute_tool(
     call: &ToolCall,
     timeout: Duration,
     cancellation: &CancellationToken,
-    mutation_blocked: bool,
+    denial: Option<ToolCallDenial>,
     clock: &dyn EventClock,
     events: &dyn EventSink,
     operator_transcript: Option<&dyn OperatorTranscriptSink>,
@@ -445,11 +445,15 @@ async fn execute_tool(
         if let Some(failure) = preflight_failure {
             return failed_execution(tool_error_output(failure.message.as_str()), failure);
         }
-        if mutation_blocked {
-            return failed_execution(
-                tool_error_output(DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE),
-                ToolFailureDiagnostic::policy_denial(),
-            );
+        if let Some(denial) = denial {
+            let failure = match denial {
+                ToolCallDenial::DecisionAnchorMutation => ToolFailureDiagnostic::policy_denial(),
+                ToolCallDenial::GraphExplorationClosed => ToolFailureDiagnostic::new(
+                    ToolFailureCategory::GraphLifecycleDenial,
+                    ToolFailureReason::ExplorationClosed,
+                ),
+            };
+            return failed_execution(tool_error_output(failure.message.as_str()), failure);
         }
         match tools.get(&call.name) {
             Some(tool) => match temper_agent_io::timeout(

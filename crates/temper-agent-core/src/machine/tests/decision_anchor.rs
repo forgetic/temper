@@ -7,16 +7,18 @@ mod tests {
     };
     use crate::machine::{
         AgentMachine, AgentRequest, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
-        SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+        SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallDenial,
+        ToolStartPresentation,
     };
     use std::collections::BTreeMap;
+    use std::sync::Arc;
     use temper_agent_io::{EngineTime, Machine};
     use temper_protocol_activity::{
         DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
         GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
     };
     use tongs::{
-        model::ToolCall,
+        model::{Message, ToolCall, UserContent},
         tools::{ToolEffects, ToolOutput},
     };
 
@@ -27,12 +29,22 @@ mod tests {
         include!("decision_anchor_root_forest.rs");
     }
 
+    mod convergence {
+        include!("decision_anchor_convergence.rs");
+    }
+
+    mod recovery {
+        include!("decision_anchor_recovery.rs");
+    }
+
     fn effects() -> BTreeMap<String, ToolEffects> {
         [
             ("codebase_memory_search_graph", ToolEffects::read()),
             ("codebase_memory_search_code", ToolEffects::read()),
             ("codebase_memory_trace_path", ToolEffects::read()),
             ("codebase_memory_get_code_snippet", ToolEffects::read()),
+            ("codebase_memory_get_architecture", ToolEffects::read()),
+            ("read", ToolEffects::read()),
             ("write", ToolEffects::write()),
         ]
         .into_iter()
@@ -120,6 +132,32 @@ mod tests {
         }
     }
 
+    fn plain_success() -> ToolOutput {
+        ToolOutput {
+            content: Vec::new(),
+            details: None,
+            is_error: false,
+        }
+    }
+
+    fn message_count(requests: &[AgentRequest], expected: &str) -> usize {
+        requests
+            .iter()
+            .filter_map(|request| match request {
+                AgentRequest::CallLlm { messages, .. } => Some(messages),
+                _ => None,
+            })
+            .flatten()
+            .filter(|message| {
+                matches!(
+                    message,
+                    Message::User(user)
+                        if matches!(&user.content, UserContent::Text(text) if text == expected)
+                )
+            })
+            .count()
+    }
+
     fn finish(
         state: &mut DecisionAnchorState,
         id: &str,
@@ -188,7 +226,7 @@ mod tests {
                 ("trace", "codebase_memory_trace_path", &trace),
                 ("behavior", "codebase_memory_get_code_snippet", &behavior),
             ]),
-            DecisionAnchorTransition::Unchanged,
+            DecisionAnchorTransition::Converged,
         );
         assert!(
             !state.blocks_mutation("write"),
@@ -208,9 +246,7 @@ mod tests {
             DecisionAnchorLineageStageV1::Root,
         );
 
-        // Dispatching snippets before the trace must be equivalent to the
-        // trace-first batch: all later read-only siblings are evaluated from
-        // the same pre-batch root once every transport result has settled.
+        // Pre-trace snippets use the same settled pre-batch root as trace-first batches.
         state.on_tool_dispatched(
             &call("implementation", "codebase_memory_get_code_snippet"),
             1,
@@ -242,7 +278,7 @@ mod tests {
                 ("trace", "codebase_memory_trace_path", &trace),
                 ("behavior", "codebase_memory_get_code_snippet", &behavior,),
             ]),
-            DecisionAnchorTransition::Unchanged,
+            DecisionAnchorTransition::Converged,
         );
         assert!(
             !state.blocks_mutation("write"),
@@ -309,6 +345,11 @@ mod tests {
             DecisionAnchorLineageStageV1::Root,
         );
         assert!(state.blocks_mutation("write"));
+        assert_eq!(
+            state.on_tool_dispatched(&call("blocked-write", "write"), 1),
+            Some(ToolCallDenial::DecisionAnchorMutation),
+            "mutation remains locally denied while current-root evidence is incomplete"
+        );
 
         state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
         finish(
@@ -344,7 +385,11 @@ mod tests {
 
     #[test]
     fn parallel_trace_and_source_batch_uses_dispatch_order_after_reverse_completion() {
-        let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects());
+        let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects())
+            .with_arg_preview(Arc::new(|_, arguments| ToolStartPresentation {
+                arg_preview: Some(arguments.to_string()),
+                diagnostic_arguments: None,
+            }));
         let _ = machine.on_start(EngineTime::ZERO);
 
         let root_requests = complete(
@@ -401,9 +446,7 @@ mod tests {
             "the independent reads retain their parallel dispatch batch"
         );
 
-        // The transport completes snippet -> trace -> snippet. The policy must
-        // wait for the whole batch and evaluate its original dispatch order so
-        // trace precedes both same-turn source reads.
+        // Reverse transport completion still evaluates the original trace-first dispatch order.
         assert!(
             complete(
                 &mut machine,
@@ -448,6 +491,56 @@ mod tests {
             1,
             "the drained batch advances once after every completion"
         );
+        assert_eq!(
+            message_count(&final_source, DECISION_ANCHOR_CONVERGENCE_MESSAGE),
+            1,
+            "completion queues one fixed convergence instruction"
+        );
+
+        let denied_graph = complete(
+            &mut machine,
+            llm_responded(assistant_tool_calls(&[(
+                "post-completion-graph",
+                "codebase_memory_search_graph",
+            )])),
+        );
+        assert!(denied_graph.iter().any(|request| {
+            matches!(
+                request,
+                AgentRequest::RunTool {
+                    call,
+                    denial: Some(ToolCallDenial::GraphExplorationClosed),
+                    ..
+                } if call.id == "post-completion-graph"
+            )
+        }));
+        assert!(denied_graph.iter().any(|request| {
+            matches!(
+                request,
+                AgentRequest::Emit(crate::machine::AgentEvent::ToolStart {
+                    id,
+                    arg_preview: None,
+                    ..
+                }) if id == "post-completion-graph"
+            )
+        }));
+        let after_denial = complete(
+            &mut machine,
+            tool_finished(
+                "post-completion-graph",
+                ToolOutput {
+                    content: vec![tongs::model::ContentBlock::Text(
+                        tongs::model::TextContent {
+                            text: CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE.to_string(),
+                            text_signature: None,
+                        },
+                    )],
+                    details: None,
+                    is_error: true,
+                },
+            ),
+        );
+        assert_eq!(calls_llm(&after_denial), 1);
 
         let mutation_requests = complete(
             &mut machine,
@@ -458,7 +551,7 @@ mod tests {
                 request,
                 AgentRequest::RunTool {
                     call,
-                    mutation_blocked: false,
+                    denial: None,
                     ..
                 } if call.id == "mutation"
             )
@@ -726,63 +819,5 @@ mod tests {
             DecisionAnchorLineageStageV1::CarryForward,
         );
         assert!(cross_root.blocks_mutation("write"));
-    }
-
-    #[test]
-    fn unconsumable_roots_have_two_recovery_attempts_then_stay_blocked() {
-        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-        for (turn, id, expected) in [
-            (0, "root", DecisionAnchorTransition::RecoveryNeeded),
-            (1, "recovery-one", DecisionAnchorTransition::RecoveryNeeded),
-            (
-                2,
-                "recovery-two",
-                DecisionAnchorTransition::RecoveryExhausted,
-            ),
-        ] {
-            state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), turn);
-            assert_eq!(
-                finish_with_kinds(
-                    &mut state,
-                    id,
-                    "codebase_memory_search_graph",
-                    ROOT,
-                    DecisionAnchorLineageStageV1::Root,
-                    &[],
-                ),
-                expected
-            );
-            assert!(state.blocks_mutation("write"));
-        }
-    }
-
-    #[test]
-    fn failed_or_malformed_graph_results_create_no_anchor_or_mutation_block() {
-        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-        state.on_tool_dispatched(&call("failed", "codebase_memory_search_graph"), 0);
-        let failed = ToolOutput {
-            content: Vec::new(),
-            details: None,
-            is_error: true,
-        };
-        assert_eq!(
-            state.on_tool_finished("failed", "codebase_memory_search_graph", &failed),
-            DecisionAnchorTransition::Unchanged
-        );
-        assert!(!state.blocks_mutation("write"));
-
-        state.on_tool_dispatched(&call("malformed", "codebase_memory_search_graph"), 1);
-        let malformed = ToolOutput {
-            content: Vec::new(),
-            details: Some(serde_json::json!({
-                SAFE_GRAPH_CORRELATION_DETAIL_KEY: {"version": 99},
-            })),
-            is_error: false,
-        };
-        assert_eq!(
-            state.on_tool_finished("malformed", "codebase_memory_search_graph", &malformed),
-            DecisionAnchorTransition::Unchanged
-        );
-        assert!(!state.blocks_mutation("write"));
     }
 }

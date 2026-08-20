@@ -442,6 +442,7 @@ mod tests {
             id: "child-tool".to_string(),
             name: "read".to_string(),
             arg_preview: None,
+            diagnostic_arguments: None,
         });
 
         let frames = lifecycle.lock().unwrap();
@@ -512,6 +513,7 @@ mod tests {
             id: "tool-1".to_string(),
             name: "read".to_string(),
             arg_preview: Some("not-forwarded".to_string()),
+            diagnostic_arguments: None,
         });
         sink.emit(AgentEvent::ToolEnd {
             id: "tool-1".to_string(),

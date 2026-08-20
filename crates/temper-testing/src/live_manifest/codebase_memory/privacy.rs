@@ -36,28 +36,3 @@ pub(super) fn write_privacy_safe_mcp_log(
     })?;
     Ok(path)
 }
-
-pub(super) fn privacy_safe_checkpoints(
-    mcp: &FakeMcpServer,
-    calls: &[McpToolCallEvidence],
-) -> Vec<String> {
-    if !matches!(
-        mcp.lifecycle_profile.as_deref(),
-        Some("mapped-live-graph-consumption" | "mapped-live-ordinary-tool-convergence")
-    ) {
-        return Vec::new();
-    }
-    let allowed = [
-        "served_mapped_root",
-        "served_mapped_carry_forward",
-        "served_mapped_current_root_source",
-        "served_mapped_unavailable",
-        "served_graph_closure",
-    ];
-    calls
-        .iter()
-        .filter_map(|call| call.fixture_event.as_deref())
-        .filter(|event| allowed.contains(event))
-        .map(str::to_string)
-        .collect()
-}

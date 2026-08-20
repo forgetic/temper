@@ -183,3 +183,58 @@ fn ordinary_failures_keep_only_shell_owned_diagnostics_in_every_capture_mode() {
         assert!(!rendered.contains("/private/path"));
     }
 }
+
+#[test]
+fn exploration_closed_activity_retains_only_the_stable_local_reason() {
+    const SECRET: &str = "Authorization: Bearer CLOSED-GRAPH-SECRET/src/private.rs";
+    let recorder = Arc::new(Recorder::default());
+    let factory = ScopeFactory::with_parts(
+        AgentActivityCapturePolicyV1 {
+            capture: CaptureModeV1::Diagnostic,
+            max_inline_bytes: 256,
+            ..Default::default()
+        },
+        Arc::new(FakeClock::new(0..10)),
+        vec![recorder.clone()],
+    );
+    let run = factory.main("main", ModelIdentity::new("p", "m"));
+    let mut failure =
+        ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::GraphLifecycleDenial);
+    failure.message = SECRET.to_string();
+    run.observability.events.emit(AgentEvent::ToolEnd {
+        id: "closed-graph".to_string(),
+        name: "codebase_memory_search_graph".to_string(),
+        status: ToolCallStatus::Failed,
+        duration_ms: 0,
+        result: ToolResultMetadata {
+            preview: Some(SECRET.to_string()),
+            bytes: SECRET.len() as u64,
+            truncated: false,
+            failure: Some(failure),
+            codebase_memory_timing: None,
+            graph_correlation: None,
+            decision_anchor_lineage: None,
+        },
+    });
+
+    let frames = recorder.0.lock().expect("frames");
+    let finished = frames
+        .iter()
+        .find_map(|frame| match &frame.event {
+            AgentActivityEventV1::ToolFinished(value) => Some(value),
+            _ => None,
+        })
+        .expect("tool finish retained");
+    let failure = finished.failure.as_ref().expect("safe local reason");
+    assert_eq!(
+        failure.category,
+        ToolFailureCategoryV1::GraphLifecycleDenial
+    );
+    assert_eq!(failure.reason, ToolFailureReasonV1::ExplorationClosed);
+    assert_eq!(
+        failure.message,
+        "codebase-memory exploration is closed for this run; continue with conventional tools"
+    );
+    assert_eq!(finished.result, None);
+    assert!(!serde_json::to_string(&*frames).unwrap().contains(SECRET));
+}

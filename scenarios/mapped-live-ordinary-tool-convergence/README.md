@@ -11,8 +11,9 @@ remain unchanged.
 Real Forgejo, the host Actions runner, standalone Temper, an Anthropic-shaped
 Jig fake LLM, and the temporary codebase-memory provider execute one bounded
 repair. The engineer consumes one targeted root and four later-turn current-root
-carry-forwards before an exact `exploration_closed` denial. Exact graph call
-counts prove there is no post-closure graph retry.
+carry-forwards before the generic boundary returns an exact local
+`exploration_closed` denial. Exact provider-call counts prove the denied call
+never reaches MCP and there is no post-closure graph retry.
 
 After closure, the deterministic ordinary sequence proves:
 

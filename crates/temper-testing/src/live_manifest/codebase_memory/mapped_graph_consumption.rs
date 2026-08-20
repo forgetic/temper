@@ -3,9 +3,9 @@
 //! Provider symbols and paths remain in the temporary MCP state and call log.
 //! The checked-in and returned evidence contains only closed checkpoint names.
 //!
-//! The accepted call list includes one unavailable descendant after the five
-//! successful lineage calls. The runtime Jig proves that it falls back to a
-//! conventional read without making another graph request.
+//! The generic convergence boundary now denies the historical post-decision
+//! descendant locally. The runtime Jig proves that the provider is not invoked
+//! again and that conventional reads remain available.
 
 use std::fs;
 
@@ -24,7 +24,6 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         "trace_path",
         "get_code_snippet",
         "get_code_snippet",
-        "get_code_snippet",
     ];
     if calls
         .iter()
@@ -36,9 +35,9 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
             "mapped graph fixture requires only its declared ordered multi-call chain".into(),
         );
     }
-    if calls[..8].iter().any(|call| call.is_error) || !calls[8].is_error {
+    if calls.iter().any(|call| call.is_error) {
         return Err(
-            "mapped graph fixture requires five successful lineage calls followed by one expected unavailable descendant"
+            "mapped graph fixture requires five successful provider calls before local convergence closes exploration"
                 .into(),
         );
     }
@@ -62,7 +61,6 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     let implementation = token(&tokens, "implementation")?;
     let caller = token(&tokens, "caller")?;
     let source = token(&tokens, "source")?;
-    let unavailable = token(&tokens, "unavailable")?;
     let short = terminal_name(implementation)?;
     if calls[4]
         .arguments
@@ -84,28 +82,15 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
             .get("qualified_name")
             .and_then(JsonValue::as_str)
             != Some(source)
-        || calls[8]
-            .arguments
-            .get("qualified_name")
-            .and_then(JsonValue::as_str)
-            != Some(unavailable)
     {
         return Err("mapped graph fixture did not consume the approved transformed chain".into());
     }
-    let closure_profile =
-        mcp.lifecycle_profile.as_deref() == Some("mapped-live-ordinary-tool-convergence");
-    let expected_final_event = if closure_profile {
-        "served_graph_closure"
-    } else {
-        "served_mapped_unavailable"
-    };
     let expected_events = [
         "served_mapped_root",
         "served_mapped_carry_forward",
         "served_mapped_carry_forward",
         "served_mapped_current_root_source",
         "served_mapped_current_root_source",
-        expected_final_event,
     ];
     if calls[3..]
         .iter()
@@ -169,7 +154,6 @@ mod tests {
         let implementation = "crate::fixture::routing::worker_slot";
         let caller = "crate::fixture::delivery::DeliveryAttempt";
         let source = "crate::fixture::delivery::worker_for";
-        let unavailable = "crate::fixture::unavailable";
         let state_path = workspace.path().join("mcp.state.json");
         fs::write(
             &state_path,
@@ -183,8 +167,7 @@ mod tests {
                 "mapped_graph_tokens": {
                     "implementation": implementation,
                     "caller": caller,
-                    "source": source,
-                    "unavailable": unavailable
+                    "source": source
                 }
             })
             .to_string(),
@@ -242,13 +225,6 @@ mod tests {
                 serde_json::json!({"project": confirmed, "qualified_name": source}),
                 "served_mapped_current_root_source",
             ),
-            McpToolCallEvidence {
-                name: "get_code_snippet".to_string(),
-                arguments: serde_json::json!({"project": confirmed, "qualified_name": unavailable}),
-                delay_ms: None,
-                is_error: true,
-                fixture_event: Some("served_mapped_unavailable".to_string()),
-            },
         ];
         (workspace, mcp, calls)
     }
@@ -270,7 +246,7 @@ mod tests {
         );
 
         let (_workspace, mcp, mut calls) = fixture();
-        calls.pop();
+        calls.remove(5);
         assert!(
             validate(&mcp, &calls)
                 .unwrap_err()

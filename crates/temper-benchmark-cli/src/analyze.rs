@@ -420,13 +420,11 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
                 .get(&key)
                 .and_then(|content| *content)
                 .and_then(|content| content_text(trace, content))
-                .and_then(|text| captured_command(&text));
+                .and_then(|text| shell::captured_shell_command(&text));
             match command {
                 Some(command)
-                    if options
-                        .validation_command_prefixes
-                        .iter()
-                        .any(|prefix| command.trim_start().starts_with(prefix)) =>
+                    if command
+                        .matches_validation_prefixes(&options.validation_command_prefixes) =>
                 {
                     boundary_sequences.insert(event.seq);
                 }
@@ -569,46 +567,6 @@ fn accepted_submit(text: &str) -> Option<bool> {
     } else {
         None
     }
-}
-
-fn captured_command(text: &str) -> Option<String> {
-    let command = if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-        match value {
-            serde_json::Value::String(command) => nonempty(command),
-            serde_json::Value::Array(argv) => argv_strings(&argv),
-            serde_json::Value::Object(object) => object
-                .get("command")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|command| nonempty(command.to_string()))
-                .or_else(|| {
-                    object
-                        .get("argv")
-                        .and_then(serde_json::Value::as_array)
-                        .and_then(|v| argv_strings(v))
-                }),
-            _ => None,
-        }
-    } else {
-        let trimmed = text.trim();
-        let unquoted = trimmed
-            .strip_prefix('`')
-            .and_then(|value| value.strip_suffix('`'))
-            .unwrap_or(trimmed);
-        nonempty(unquoted.to_string())
-    };
-    command.filter(|command| !command.ends_with('…'))
-}
-
-fn argv_strings(values: &[serde_json::Value]) -> Option<String> {
-    values
-        .iter()
-        .map(serde_json::Value::as_str)
-        .collect::<Option<Vec<_>>>()
-        .and_then(|parts| nonempty(parts.join(" ")))
-}
-
-fn nonempty(value: String) -> Option<String> {
-    (!value.trim().is_empty()).then_some(value)
 }
 
 fn record_unavailable_structure(

@@ -18,6 +18,7 @@ EFFICIENCY:
 - When mutation tools are available, prefer creating a complete new file in one operation over many incremental changes.
 - Verify with one focused command (for example, run the relevant test suite once after implementation) rather than re-checking after every small step; do not re-run checks when nothing has changed.
 - Avoid re-reading content just produced, and prefer a specialized available tool over a general shell command for the same operation.
+- Keep repository-index exploration progress-bounded for this role: preserve bounded independent initial roots, but do not repeat non-progressing discovery or grow new roots without a concrete evidence gap. Once a current-root trace and sufficient implementation/caller/test source evidence complete the decision chain, stop graph calls, obey convergence or exploration-closed messages, use conventional reads for any remaining verification, and produce the smallest role-appropriate product.
 
 ---
 FINAL MESSAGE FORMAT (mandatory):

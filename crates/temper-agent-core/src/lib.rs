@@ -33,13 +33,15 @@ pub use invocation::{
 };
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,
-    BatchGeneration, CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming,
+    BatchGeneration, CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE, CODEBASE_MEMORY_TOOL_PREFIX,
+    CodebaseMemoryTiming, DECISION_ANCHOR_CONVERGENCE_MESSAGE,
     DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE,
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    ModelCallStatus, OperationGeneration, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallStatus,
-    ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason, ToolResultMetadata,
-    ToolRetryDisposition,
+    DiagnosticToolArguments, ModelCallStatus, OperationGeneration,
+    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallDenial, ToolCallStatus, ToolFailureCategory,
+    ToolFailureDiagnostic, ToolFailureReason, ToolResultMetadata, ToolRetryDisposition,
+    ToolStartPresentation, ToolStartPresentationFn,
 };
 pub use managed_bash::ManagedBashTool;
 pub use managed_fs::joined_filesystem_tool;

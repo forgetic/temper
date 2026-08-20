@@ -84,13 +84,19 @@ target = "retry_worker_topic"
 
 Conventional discovery counts `grep`, `find`, and `read` calls before the first
 successful selection whose complete arguments contain a declared target. Shell
-classification uses a deliberately narrow command-list parser: unquoted and
-unescaped words joined with `&&`, `||`, `;`, or newlines. Each parseable segment
-matching a manifest `discovery_command_prefixes` argv prefix and containing an
-argument beyond that prefix counts as discovery. Parseable non-matches count as
-zero. Quoting, escaping, expansions, pipelines, redirects, grouping, globbing,
-comments, missing discovery arguments, omitted command content, and other
-ambiguous syntax remain unknown rather than being guessed.
+classification preserves the captured representation: structured argv is one
+exact command, while structured command strings and complete legacy backtick
+previews use a deliberately narrow command-list lexer. The lexer supports
+single and double quoting, safe backslash escapes, and `&&`, `||`, `;`, or
+newline separators outside quotes. Each parseable segment matching a manifest
+`discovery_command_prefixes` argv prefix and containing an argument beyond that
+prefix counts once. Parseable non-matches count as zero.
+
+Command substitution, expansion, pipelines, redirects, grouping, background
+execution, globbing, comments, assignments, incomplete quotes or escapes,
+missing discovery arguments, omitted/truncated/redacted command content, and
+other ambiguous syntax remain unknown rather than being guessed. Separators in
+quotes or argv arguments are data, not command boundaries.
 
 `shell_command_classification_coverage` measures fully captured and parsed
 shell *calls*, while `classified_shell_segments` counts matching segments in
@@ -138,16 +144,21 @@ representative LLM performance**. Deterministic Jig timing is not a CI gate.
 For the controlled routing fixture, the lane also proves that a fixture-only
 stable upsert's normalized identity is separately confirmed with a targeted
 ready status and canonical root before serving a cold targeted result and a
-later warm result. Its enabled path is a five-call chain: targeted graph search,
-symbol refinement, caller tracing, then two current-root source snippets before
-the exact mutation. Relevance credits only the manifest-declared ordered
-graph-to-graph, graph-to-source, and exact-source-selection consumption modes. A run
-summary exposes only call ordering, safe tool names, declared targets/kinds, and
+later warm result. Its enabled path starts with two independent useful roots
+and consumes valid later refinement, trace, focused-test source, and caller
+source descendants. One duplicate refinement reaches the fixture as a
+non-progressing batch before the caller source converges the decision; a broad
+and two targeted later graph attempts are denied locally. Harness assertions
+distinguish ten model graph attempts from seven actual provider invocations and
+retain complete typed relevance classification above the frozen 50% gate.
+Relevance credits only the manifest-declared ordered graph-to-graph,
+graph-to-source, and exact-source-selection consumption modes. A run summary
+exposes only call ordering, safe tool names, declared targets/kinds, and
 consumption modes; it excludes tool arguments, source, and provider results.
 The diagnostic trace retains controlled source snippets and therefore remains a
-restricted review artifact. The lane also proves that a parseable compound shell
-command has complete classification coverage, and that one forced-unavailable
-request is safely bounded before conventional fallback.
+restricted review artifact. The lane also proves that a parseable compound
+shell command has complete classification coverage, and that one
+forced-unavailable request is safely bounded before conventional fallback.
 It proves neither live cache behavior nor an effectiveness or deployment gate;
 the fixture Jigs prescribe tool calls and must not be interpreted as model
 decisions. Run the repository lane with:
@@ -183,6 +194,17 @@ TEMPER_BENCHMARK_LIVE=1 \
   --repetitions 5 \
   --output-dir /secure/artifacts/candidate
 ```
+
+For an acceptance candidate, freeze the exact head and run one enabled smoke,
+then five enabled, five disabled, and five forced-unavailable repetitions in
+that order. Invoke `temper-benchmark verify` only after all four artifact roots
+are complete. Never selectively rerun or reorder one condition: any candidate,
+manifest, provider/model, cache annotation, or baseline change restarts the
+sequence at the smoke. The verifier requires complete typed decision relevance,
+exact source selection, the aggregate 50% relevance gate, complete enabled and
+disabled shell classification, unavailable no-retry evidence, byte-exact patch
+and host validation, and privacy-safe aggregate artifacts. Missing evidence is
+unavailable and fails closed; it is never converted to zero.
 
 Do not put provider credentials in a manifest, command transcript, checked-in
 file, or CI lane. Harness mode needs none. Live mode redacts resolved credential

@@ -87,6 +87,11 @@ pub enum AgentEvent {
         /// (see the agent-log-cleanup plan, pieces B/D). Left `None` here so the
         /// pure machine core need not compute it.
         arg_preview: Option<String>,
+        /// A complete, structured shell-argument representation screened by
+        /// the shell-side presentation hook. This is a diagnostic-capture
+        /// candidate only; transcript and human projections must use
+        /// `arg_preview` instead.
+        diagnostic_arguments: Option<DiagnosticToolArguments>,
     },
     /// A tool finished. Timing is measured by the shell around execution and
     /// `result` is a bounded text-only candidate; unrestricted tool details are
@@ -102,6 +107,60 @@ pub enum AgentEvent {
     Steered { count: usize },
     /// The agent run ended (with the reason it stopped).
     AgentEnd { reason: AgentStop },
+}
+
+/// Complete structured tool arguments eligible only for diagnostic activity.
+///
+/// The value has no `Display` implementation and its `Debug` output exposes
+/// only a byte count. This prevents a complete command from accidentally
+/// becoming an operational log field while it crosses the core event seam.
+#[derive(Clone, Eq, PartialEq)]
+pub struct DiagnosticToolArguments(String);
+
+impl DiagnosticToolArguments {
+    /// Wraps a representation already screened by the shell-side producer for
+    /// secrets, completeness, and its production byte bound.
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Debug for DiagnosticToolArguments {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DiagnosticToolArguments")
+            .field("bytes", &self.0.len())
+            .finish()
+    }
+}
+
+/// The two deliberately separate presentations finalized for a tool start.
+///
+/// `arg_preview` is short, redacted, and human-facing. `diagnostic_arguments`
+/// is complete structured evidence and may be retained only by diagnostic
+/// activity policy.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct ToolStartPresentation {
+    pub arg_preview: Option<String>,
+    pub diagnostic_arguments: Option<DiagnosticToolArguments>,
+}
+
+impl std::fmt::Debug for ToolStartPresentation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ToolStartPresentation")
+            .field("arg_preview", &self.arg_preview)
+            .field("diagnostic_arguments", &self.diagnostic_arguments)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,6 +188,15 @@ pub const SAFE_TOOL_FAILURE_DETAIL_KEY: &str = "temper_safe_tool_failure_v1";
 /// Reserved [`ToolOutput::details`] key for the closed, wrapper-extracted graph
 /// correlation record. Generic tool details never enter activity metadata.
 pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1";
+
+/// A local admission decision made before a registered tool can be invoked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolCallDenial {
+    /// A trusted anchor still lacks the required later source evidence.
+    DecisionAnchorMutation,
+    /// Graph convergence or its non-progress budget closed graph exploration.
+    GraphExplorationClosed,
+}
 
 /// Content-free timing metadata accepted only from Temper's trusted
 /// codebase-memory wrappers.
@@ -263,10 +331,8 @@ pub enum AgentRequest {
         operation_generation: OperationGeneration,
         batch_generation: BatchGeneration,
         call: ToolCall,
-        /// A successful decision anchor has not yet been consumed into the
-        /// required source evidence, so the shell must return a local error
-        /// without invoking this workspace-mutating tool.
-        mutation_blocked: bool,
+        /// Machine-owned policy denial settled without registry execution.
+        denial: Option<ToolCallDenial>,
         /// Catalog-owned preflight rejection. The shell settles this locally
         /// and must not perform a registry lookup or execution.
         rejection: Option<ToolFailureDiagnostic>,
@@ -312,16 +378,19 @@ mod tests {
             id: "call_1".to_string(),
             name: "read".to_string(),
             arg_preview: Some("src/main.rs".to_string()),
+            diagnostic_arguments: None,
         };
         match event {
             AgentEvent::ToolStart {
                 id,
                 name,
                 arg_preview,
+                diagnostic_arguments,
             } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "read");
                 assert_eq!(arg_preview.as_deref(), Some("src/main.rs"));
+                assert_eq!(diagnostic_arguments, None);
             }
             _ => panic!("expected ToolStart"),
         }
@@ -333,6 +402,7 @@ mod tests {
             id: "call_2".to_string(),
             name: "bash".to_string(),
             arg_preview: None,
+            diagnostic_arguments: None,
         };
         assert!(matches!(
             event,
@@ -341,5 +411,21 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn diagnostic_tool_arguments_do_not_expose_content_in_debug() {
+        let secret = "complete-command-sentinel";
+        let event = AgentEvent::ToolStart {
+            id: "call_3".to_string(),
+            name: "bash".to_string(),
+            arg_preview: Some("`short preview`".to_string()),
+            diagnostic_arguments: Some(DiagnosticToolArguments::new(format!(
+                r#"{{"command":"{secret}"}}"#
+            ))),
+        };
+        let debug = format!("{event:?}");
+        assert!(!debug.contains(secret));
+        assert!(debug.contains("bytes"));
     }
 }

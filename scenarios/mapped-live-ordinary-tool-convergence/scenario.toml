@@ -249,7 +249,7 @@ events = [
   { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = true } },
+  { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", "tool.failure.category" = "graph_lifecycle_denial" } },
   { event = "tool.start", fields = { tool = "read", id = "provider-native-read-after-closure" } },
   { event = "tool.error", fields = { tool = "invalid_tool_invocation", "tool.failure.reason" = "invalid_arguments" } },
   { event = "tool.error", fields = { tool = "bash", id = "ordinary-failure-first-execution", "tool.failure.category" = "execution_failure" } },
@@ -294,10 +294,10 @@ exactly = 1
 
 [[expect.count]]
 required = true
-id = "two-source-reads-and-one-final-closure-with-no-post-closure-retry"
+id = "two-source-reads-before-one-local-closure-with-no-provider-retry"
 event = "mcp.tool.called"
 fields."mcp.tool" = "get_code_snippet"
-exactly = 3
+exactly = 2
 
 [[expect.count]]
 required = true

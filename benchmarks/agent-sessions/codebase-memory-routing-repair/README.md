@@ -40,20 +40,32 @@ normalized identity returns `ready` plus the canonical `root_path`. The
 requested opaque stable key remains in fixture state for comparison, but cannot
 serve status or graph reads.
 
-The enabled Jig exercises five ordered, targeted calls through that confirmed
-identity: `search_graph` identifies implementation, caller, and focused-test
-evidence; `search_code` refines `worker_slot`; `trace_path` follows it to the
-delivery caller; and two `get_code_snippet` calls read `DeliveryAttempt` and
-`DeliveryRouter::worker_for` from the confirmed current root before the exact
-patch. The manifest permits only declared provider-shaped typed producer and
-consumer targets, followed by graph-to-graph, graph-to-source, and final exact
-source-selection consumption links. Provider summaries are not relevance markers. The run summary retains
-ordered call IDs, safe tool names, declared target/kind, and consumption mode
-(`graph`, `source`, or `selection`); it never retains tool arguments, source
-text, or provider results as decision evidence. Diagnostic traces do contain the
-controlled source snippets, so they remain local review artifacts and must not
-be published without the same source/privacy review required for live traces.
-The Jig deliberately avoids broad architecture and empty graph searches.
+The enabled Jig begins with two useful independent roots for routing and focused
+behavioral evidence. A later parallel batch refines and traces `worker_slot`
+while reading the root-bound regression test from the confirmed current root.
+Before the final caller source completes the decision chain, one duplicate
+refinement reaches the provider as a non-progressing batch. Completion then
+freezes graph exploration: a broad architecture call and two targeted
+post-decision attempts are denied locally while conventional shell and source
+reads remain available for the exact patch.
+
+The fixture numbers actual provider invocations in its private responses. The
+harness therefore distinguishes ten model graph attempts from seven provider
+invocations, proves the two useful roots, their descendants, and the admitted
+duplicate reached the provider, and checks that all three exploration-closed
+attempts did not. All seven successful results retain complete typed relevance
+and current-root lineage, so deterministic relevance remains above the frozen
+50% aggregate gate without treating a denied attempt as useful.
+
+The manifest permits only declared provider-shaped typed producer and consumer
+targets, followed by graph-to-graph, graph-to-source, and final exact
+source-selection consumption links. Provider summaries are not relevance
+markers. The run summary retains ordered call IDs, safe tool names, declared
+target/kind, and consumption mode (`graph`, `source`, or `selection`); it never
+retains tool arguments, source text, or provider results as decision evidence.
+Diagnostic traces do contain the controlled source snippets, so they remain
+local review artifacts and must not be published without the same
+source/privacy review required for live traces.
 
 The controlled Jigs also run the same closed ordinary-tool recovery sequence in
 every condition after source selection: one `bash` execution reports a typed
@@ -101,6 +113,41 @@ Harness output proves condition plumbing, graph evidence classification, safe
 bounded failure, exact diff validation, and deterministic correctness only. Jig
 timing and token values are not live effectiveness evidence and must not be used
 to claim the criterion was met.
+
+## Exact-head acceptance verification
+
+The manifest declares the frozen provider/model, cache annotation, smoke and
+matrix sizes, typed decision evidence, aggregate relevance, privacy, bounded
+unavailable fallback, and conventional-discovery improvement gates. After a
+fresh smoke and three fresh five-run live condition roots have been produced,
+evaluate them with the gate-bearing command (the separate `compare` command
+remains report-only):
+
+```sh
+cargo run -p temper-benchmark-cli -- verify \
+  --benchmark benchmarks/agent-sessions/codebase-memory-routing-repair/benchmark.toml \
+  --candidate-commit "$CANDIDATE_COMMIT" \
+  --smoke "$SMOKE_ROOT" --enabled "$ENABLED_ROOT" \
+  --disabled "$DISABLED_ROOT" --unavailable "$UNAVAILABLE_ROOT" \
+  --output-dir "$ACCEPTANCE_ROOT"
+```
+
+The command writes only a typed, privacy-safe `acceptance.json` gate summary
+and exits nonzero when any gate fails. It accepts runner artifact roots, not
+Markdown reports, so historical evidence cannot authorize a current candidate.
+Global privacy fragments reject fixture secrets and authorization-shaped values
+anywhere in the evidence roots. Aggregate-only fragments additionally reject
+raw fixture commands, source, host-local paths, and diagnostic result text while
+allowing those controlled values to remain in restricted per-run diagnostics.
+
+Run and freeze a candidate in this order: one enabled smoke; five enabled
+matrix repetitions; five disabled repetitions; five forced-unavailable
+repetitions; then one `verify` invocation over those four immutable roots. Do
+not selectively rerun or reorder a failed condition. A candidate, provider,
+model, cache annotation, baseline, or manifest change invalidates every root and
+restarts the sequence at the smoke. Missing relevance, shell classification,
+or comparison samples remain unavailable and fail closed rather than becoming
+zero.
 
 ## Privacy-reviewed live evidence
 

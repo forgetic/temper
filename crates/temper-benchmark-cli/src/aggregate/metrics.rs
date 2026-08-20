@@ -63,6 +63,7 @@ pub const PRIMARY_METRICS: &[&str] = &[
     "graph_failure_provider_protocol",
     "graph_failure_invalid_model_input",
     "graph_failure_circuit_open",
+    "graph_failure_exploration_closed",
     "failed_edit_attempts",
     "mutations",
     "mutation_turns",
@@ -97,7 +98,7 @@ fn task_correctness(summary: &RunSummaryV1) -> Option<bool> {
     }
 }
 
-fn all_failure_categories() -> [ToolFailureCategoryV1; 9] {
+fn all_failure_categories() -> [ToolFailureCategoryV1; 10] {
     [
         ToolFailureCategoryV1::ConfigurationStartup,
         ToolFailureCategoryV1::ProjectNotReady,
@@ -108,6 +109,7 @@ fn all_failure_categories() -> [ToolFailureCategoryV1; 9] {
         ToolFailureCategoryV1::ProviderProtocol,
         ToolFailureCategoryV1::InvalidModelInput,
         ToolFailureCategoryV1::CircuitOpen,
+        ToolFailureCategoryV1::GraphLifecycleDenial,
     ]
 }
 
@@ -122,11 +124,11 @@ fn failure_metric(category: ToolFailureCategoryV1) -> &'static str {
         ToolFailureCategoryV1::ProviderProtocol => "graph_failure_provider_protocol",
         ToolFailureCategoryV1::InvalidModelInput => "graph_failure_invalid_model_input",
         ToolFailureCategoryV1::CircuitOpen => "graph_failure_circuit_open",
+        ToolFailureCategoryV1::GraphLifecycleDenial => "graph_failure_exploration_closed",
         ToolFailureCategoryV1::SchemaArgumentMismatch
         | ToolFailureCategoryV1::PolicyDenial
         | ToolFailureCategoryV1::ExecutionFailure
         | ToolFailureCategoryV1::Cancellation
-        | ToolFailureCategoryV1::GraphLifecycleDenial
         | ToolFailureCategoryV1::CircuitRedirect => {
             unreachable!("ordinary failure category requested as a graph metric")
         }

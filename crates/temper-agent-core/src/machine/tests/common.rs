@@ -109,6 +109,24 @@ pub(super) fn tool_start_previews(requests: &[AgentRequest]) -> Vec<Option<Strin
         .collect()
 }
 
+/// The diagnostic arguments of every emitted `ToolStart`, in order.
+pub(super) fn tool_start_diagnostic_arguments(requests: &[AgentRequest]) -> Vec<Option<String>> {
+    requests
+        .iter()
+        .filter_map(|request| match request {
+            AgentRequest::Emit(AgentEvent::ToolStart {
+                diagnostic_arguments,
+                ..
+            }) => Some(
+                diagnostic_arguments
+                    .as_ref()
+                    .map(|arguments| arguments.as_str().to_string()),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
 pub(super) fn assistant_error() -> AssistantMessage {
     let mut message = assistant_text("boom");
     message.stop_reason = StopReason::Error;

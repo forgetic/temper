@@ -18,6 +18,7 @@ SEQUENTIAL_STAGE = 0
 RESULT_DRIVEN_STAGE = 0
 TYPED_LINEAGE_STAGE = 0
 MAPPED_GRAPH_STAGE = 0
+GRAPH_CONVERGENCE_STAGE = 0
 RESULT_DRIVEN_TOKENS = {
     name: "opaque-" + uuid.uuid4().hex
     for name in ["root", "refinement", "trace", "implementation", "behavioral_test"]
@@ -41,6 +42,13 @@ MAPPED_GRAPH_TOKENS = (
         "unavailable": "crate::fixture::unavailable_" + uuid.uuid4().hex,
     }
 )
+GRAPH_CONVERGENCE_TOKENS = {
+    "preflight": "crate::fixture::preflight_" + uuid.uuid4().hex + "::probe_slot",
+    "unavailable": "crate::fixture::unavailable_" + uuid.uuid4().hex,
+    "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
+    "caller": "crate::fixture::delivery_" + uuid.uuid4().hex + "::worker_for",
+    "behavioral_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::alias_retry_stays_on_worker",
+}
 GRAPH_CALLS = 0
 
 TOOLS = [
@@ -271,6 +279,7 @@ def has_current_root_profile():
         "provider-neutral-anchor-lineage",
         "mapped-live-graph-consumption",
         "mapped-live-ordinary-tool-convergence",
+        "mapped-live-graph-convergence",
     )
 
 
@@ -291,6 +300,28 @@ def is_mapped_graph_profile():
 
 def is_ordinary_convergence_profile():
     return LIFECYCLE_PROFILE == "mapped-live-ordinary-tool-convergence"
+
+
+def is_graph_convergence_profile():
+    return LIFECYCLE_PROFILE == "mapped-live-graph-convergence"
+
+
+def ensure_graph_convergence_tokens():
+    if not is_graph_convergence_profile():
+        return
+    state = load_state()
+    state["graph_convergence_tokens"] = GRAPH_CONVERGENCE_TOKENS
+    save_state(state)
+
+
+def graph_convergence_step(expected_stage, expected_value, actual_value):
+    global GRAPH_CONVERGENCE_STAGE
+    if not is_graph_convergence_profile():
+        return True
+    if GRAPH_CONVERGENCE_STAGE != expected_stage or actual_value != expected_value:
+        return False
+    GRAPH_CONVERGENCE_STAGE += 1
+    return True
 
 
 def ensure_mapped_graph_tokens():
@@ -348,6 +379,7 @@ for line in sys.stdin:
         ensure_result_driven_tokens()
         ensure_typed_lineage_tokens()
         ensure_mapped_graph_tokens()
+        ensure_graph_convergence_tokens()
         params = request.get("params") or {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -390,6 +422,51 @@ for line in sys.stdin:
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
+            if is_graph_convergence_profile():
+                source_stage = {
+                    GRAPH_CONVERGENCE_TOKENS["unavailable"]: (2, None),
+                    GRAPH_CONVERGENCE_TOKENS["caller"]: (8, "src/route.rs"),
+                    GRAPH_CONVERGENCE_TOKENS["behavioral_test"]: (9, "tests/alias_retry.rs"),
+                }.get(qualified_name)
+                stage_valid = (
+                    source_stage is not None
+                    and graph_convergence_step(source_stage[0], qualified_name, qualified_name)
+                )
+                source = (
+                    current_root_source(project, source_stage[1])
+                    if stage_valid and source_stage[1] is not None
+                    else None
+                )
+                unavailable = stage_valid and source_stage[1] is None
+                if unavailable:
+                    log_tool(
+                        name,
+                        arguments,
+                        is_error=True,
+                        fixture_event="served_convergence_unavailable",
+                    )
+                    result = text_result("invalid argument: selected source is unavailable", True)
+                elif source is None:
+                    log_tool(name, arguments, is_error=True)
+                    result = text_result("bound source unavailable", True)
+                else:
+                    payload = {
+                        "name": terminal_function_name(qualified_name),
+                        "qualified_name": qualified_name,
+                        "source": source,
+                        "binding": "current_prepared_checkout",
+                        "source_metadata": {
+                            "kind": "focused_test" if source_stage[0] == 9 else "implementation"
+                        },
+                    }
+                    log_tool(
+                        name,
+                        arguments,
+                        fixture_event="served_convergence_source",
+                    )
+                    result = text_result(json.dumps(payload), structured=payload)
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_mapped_graph_profile():
                 source_stage = {
                     MAPPED_GRAPH_TOKENS["caller"]: (3, "src/lib.rs"),
@@ -568,6 +645,42 @@ for line in sys.stdin:
                     }
                 result = text_result(json.dumps(payload))
         elif name == "search_code":
+            if is_graph_convergence_profile():
+                project = arguments.get("project", "")
+                expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
+                stage = GRAPH_CONVERGENCE_STAGE
+                successful = (
+                    stage in (5, 7)
+                    and current_root_source(project, "src/route.rs") is not None
+                    and graph_convergence_step(stage, expected, arguments.get("pattern", ""))
+                )
+                payload = {
+                    "results": [{
+                        "name": expected,
+                        "qualified_name": GRAPH_CONVERGENCE_TOKENS["implementation"],
+                        "related_source_references": [{
+                            "qualifiedName": GRAPH_CONVERGENCE_TOKENS["caller"],
+                        }],
+                    }]
+                }
+                event = (
+                    "served_convergence_duplicate"
+                    if stage == 7
+                    else "served_convergence_refinement"
+                )
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event=event if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_mapped_graph_profile():
                 project = arguments.get("project", "")
                 expected = terminal_function_name(MAPPED_GRAPH_TOKENS["implementation"])
@@ -644,6 +757,52 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "trace_path":
+            if is_graph_convergence_profile():
+                project = arguments.get("project", "")
+                stage = GRAPH_CONVERGENCE_STAGE
+                if stage == 1:
+                    expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["preflight"])
+                    selected = GRAPH_CONVERGENCE_TOKENS["unavailable"]
+                    event = "served_convergence_preflight_trace"
+                else:
+                    expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
+                    selected = GRAPH_CONVERGENCE_TOKENS["caller"]
+                    event = "served_convergence_trace"
+                successful = (
+                    stage in (1, 6)
+                    and current_root_source(project, "src/route.rs") is not None
+                    and graph_convergence_step(
+                        stage, expected, arguments.get("function_name", "")
+                    )
+                )
+                payload = {
+                    "function": {
+                        "name": expected,
+                        "qualifiedName": (
+                            GRAPH_CONVERGENCE_TOKENS["preflight"]
+                            if stage == 1
+                            else GRAPH_CONVERGENCE_TOKENS["implementation"]
+                        ),
+                    },
+                    "callers": [{
+                        "name": terminal_function_name(selected),
+                        "qualified_name": selected,
+                    }],
+                    "related_sources": [{"qualifiedName": selected}],
+                }
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event=event if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_mapped_graph_profile():
                 project = arguments.get("project", "")
                 expected = terminal_function_name(MAPPED_GRAPH_TOKENS["implementation"])
@@ -747,6 +906,49 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "search_graph":
+            if is_graph_convergence_profile():
+                project = arguments.get("project", "")
+                stage = GRAPH_CONVERGENCE_STAGE
+                queries = {
+                    0: ("availability preflight", "preflight", "served_convergence_preflight_root"),
+                    3: ("routing implementation affinity", "implementation", "served_convergence_root"),
+                    4: ("focused alias retry behavior", "behavioral_test", "served_convergence_root"),
+                }
+                selected = queries.get(stage)
+                successful = (
+                    selected is not None
+                    and current_root_source(project, "src/route.rs") is not None
+                    and graph_convergence_step(
+                        stage, selected[0], arguments.get("query", "")
+                    )
+                )
+                token = (
+                    GRAPH_CONVERGENCE_TOKENS[selected[1]]
+                    if selected is not None
+                    else GRAPH_CONVERGENCE_TOKENS["preflight"]
+                )
+                payload = {
+                    "results": [{
+                        "results": [{
+                            "name": terminal_function_name(token),
+                            "qualifiedName": token,
+                        }],
+                        "related_source_references": [{"qualifiedName": token}],
+                    }]
+                }
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event=selected[2] if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_mapped_graph_profile():
                 project = arguments.get("project", "")
                 successful = (

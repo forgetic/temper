@@ -13,16 +13,24 @@ use temper_protocol_activity::{
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
 
-use super::protocol::{
-    CODEBASE_MEMORY_TOOL_PREFIX, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, ToolCallDenial};
+
+mod output;
+
+use output::{
+    anchor_output, graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
+    trusted_unavailable_provider_output,
 };
-use super::tool_failure::ToolFailureCategory;
 
 /// Reserved wrapper detail carrying a process-local-root-bound lineage record.
 /// It is deliberately excluded from durable activity metadata.
 pub const SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: &str = "temper_decision_anchor_lineage_v1";
 /// Fixed, model-visible explanation for a locally denied mutation.
 pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked until the successful decision anchor is consumed through later result-derived codebase-memory evidence for the implementation, caller/model, and focused behavioral tests";
+/// Fixed, privacy-safe instruction queued exactly once when graph evidence is complete.
+pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration and produce the smallest role-appropriate product supported by the verified current-root evidence.";
+/// Fixed, privacy-safe result for graph calls denied after convergence or exhaustion.
+pub const CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE: &str = "codebase-memory exploration is closed for this run; continue with conventional tools; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
 
 /// Generic, privacy-safe correction injected after a successful result cannot
 /// be consumed as the active anchor's typed descendant.
@@ -34,11 +42,18 @@ const MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS: u8 = 2;
 /// retained opaque forest so provider output cannot grow policy state without limit.
 /// Sixteen covers the largest legal parallel read batch while remaining fixed.
 const MAX_DECISION_ANCHOR_ROOTS: usize = 16;
+/// Later turns may add only a small fixed number of independent roots.
+pub(super) const MAX_LATER_DECISION_ANCHOR_ROOTS: usize = 4;
+/// Successful graph batches without typed progress eventually close exploration.
+const MAX_NON_PROGRESSING_GRAPH_BATCHES: u8 = 2;
 
 pub(super) struct DecisionAnchorState {
     mutation_tools: BTreeSet<String>,
     phase: Option<AnchorPhase>,
     calls: BTreeMap<String, PendingCodebaseCall>,
+    exploration: ExplorationStatus,
+    later_roots: usize,
+    non_progressing_batches: u8,
 }
 
 enum AnchorPhase {
@@ -46,6 +61,13 @@ enum AnchorPhase {
     Trail(Trail),
     Recovery(Recovery),
     Exhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExplorationStatus {
+    Open,
+    Complete,
+    BudgetExhausted,
 }
 
 struct AnchorForest {
@@ -95,10 +117,19 @@ struct AnchorOutput {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RootMerge {
+    Progress(usize),
+    NoProgress,
+    LimitExceeded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DecisionAnchorTransition {
     Unchanged,
     RecoveryNeeded,
     RecoveryExhausted,
+    Converged,
+    ExplorationExhausted,
 }
 
 impl Anchor {
@@ -173,9 +204,22 @@ impl AnchorForest {
         })
     }
 
-    fn merge(&mut self, next: Self) -> bool {
-        let mut added = false;
-        self.valid &= next.valid;
+    fn merge_limited(&mut self, next: Self, remaining_roots: usize) -> RootMerge {
+        if !next.valid {
+            self.valid = false;
+            return RootMerge::NoProgress;
+        }
+        let new_roots = next
+            .roots
+            .keys()
+            .filter(|root| !self.roots.contains_key(*root))
+            .count();
+        if new_roots > remaining_roots
+            || self.roots.len().saturating_add(new_roots) > MAX_DECISION_ANCHOR_ROOTS
+        {
+            return RootMerge::LimitExceeded;
+        }
+        let mut progressed = false;
         self.latest_produced_turn = self.latest_produced_turn.max(next.latest_produced_turn);
         self.trace_root_turn = match (self.trace_root_turn, next.trace_root_turn) {
             (Some(current), Some(next)) => Some(current.min(next)),
@@ -183,23 +227,27 @@ impl AnchorForest {
             (None, None) => None,
         };
         for (root_binding, next_root) in next.roots {
-            let has_capacity = self.roots.len() < MAX_DECISION_ANCHOR_ROOTS;
             match self.roots.entry(root_binding) {
-                std::collections::btree_map::Entry::Vacant(entry) if has_capacity => {
+                std::collections::btree_map::Entry::Vacant(entry) => {
                     entry.insert(next_root);
-                    added = true;
+                    progressed = true;
                 }
-                std::collections::btree_map::Entry::Vacant(_) => self.valid = false,
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     let existing = entry.get_mut();
                     existing.produced_turn = existing.produced_turn.min(next_root.produced_turn);
+                    let before = existing.result_target_kinds.len();
                     existing
                         .result_target_kinds
                         .extend(next_root.result_target_kinds);
+                    progressed |= existing.result_target_kinds.len() > before;
                 }
             }
         }
-        added
+        if progressed {
+            RootMerge::Progress(new_roots)
+        } else {
+            RootMerge::NoProgress
+        }
     }
 
     fn is_consumable(&self) -> bool {
@@ -230,20 +278,33 @@ impl DecisionAnchorState {
         let has_codebase_memory = effects
             .keys()
             .any(|name| name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX));
-        (has_codebase_memory && !mutation_tools.is_empty()).then_some(Self {
+        has_codebase_memory.then_some(Self {
             mutation_tools,
             phase: None,
             calls: BTreeMap::new(),
+            exploration: ExplorationStatus::Open,
+            later_roots: 0,
+            non_progressing_batches: 0,
         })
     }
 
-    pub(super) fn on_tool_dispatched(&mut self, call: &ToolCall, turn: usize) {
-        if !call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
-            return;
+    pub(super) fn on_tool_dispatched(
+        &mut self,
+        call: &ToolCall,
+        turn: usize,
+    ) -> Option<ToolCallDenial> {
+        if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+            if self.exploration != ExplorationStatus::Open {
+                return Some(ToolCallDenial::GraphExplorationClosed);
+            }
+            if let Some(call_key) = GraphCorrelationV1::target_digest(&call.id) {
+                self.calls.insert(call_key, PendingCodebaseCall { turn });
+            }
         }
-        if let Some(call_key) = GraphCorrelationV1::target_digest(&call.id) {
-            self.calls.insert(call_key, PendingCodebaseCall { turn });
+        if self.blocks_mutation(&call.name) {
+            return Some(ToolCallDenial::DecisionAnchorMutation);
         }
+        None
     }
 
     #[cfg(test)]
@@ -280,11 +341,11 @@ impl DecisionAnchorState {
 
         let prior_phase = self.phase.take();
         if prior_phase.is_none() {
-            // Roots start a new policy phase only after the complete batch
-            // settles. Keep all bounded independent roots from that snapshot;
-            // no sibling from their producer turn is allowed to consume them.
+            // Initial independent roots are collected from the complete batch;
+            // their same-turn siblings can never consume them.
             return match AnchorForest::from_finished(&finished, None) {
-                Some(anchors) => self.install_roots(anchors, 0),
+                Some(anchors) => self.install_roots(anchors, 0, false),
+                None if successful_graph_batch(&finished) => self.record_non_progress(None),
                 None => DecisionAnchorTransition::Unchanged,
             };
         }
@@ -296,6 +357,10 @@ impl DecisionAnchorState {
             }
             Some(AnchorPhase::Trail(trail)) if trail.evidence.is_complete() => {
                 self.phase = Some(AnchorPhase::Trail(trail));
+                if self.exploration == ExplorationStatus::Open {
+                    self.exploration = ExplorationStatus::Complete;
+                    return DecisionAnchorTransition::Converged;
+                }
                 DecisionAnchorTransition::Unchanged
             }
             Some(AnchorPhase::Trail(trail)) => {
@@ -314,7 +379,7 @@ impl DecisionAnchorState {
                     )
                 };
                 if let Some(anchors) = replacement_roots {
-                    self.install_roots(anchors, recovery.attempts.saturating_add(1))
+                    self.install_roots(anchors, recovery.attempts.saturating_add(1), true)
                 } else {
                     self.advance_batch_or_recover(
                         recovery.anchors,
@@ -326,12 +391,27 @@ impl DecisionAnchorState {
             }
             Some(AnchorPhase::Exhausted) => {
                 self.phase = Some(AnchorPhase::Exhausted);
+                self.exploration = ExplorationStatus::BudgetExhausted;
                 DecisionAnchorTransition::Unchanged
             }
         }
     }
 
-    fn install_roots(&mut self, anchors: AnchorForest, attempts: u8) -> DecisionAnchorTransition {
+    fn install_roots(
+        &mut self,
+        anchors: AnchorForest,
+        attempts: u8,
+        later: bool,
+    ) -> DecisionAnchorTransition {
+        if later {
+            let next_count = anchors.roots.len();
+            if next_count > MAX_LATER_DECISION_ANCHOR_ROOTS.saturating_sub(self.later_roots) {
+                self.phase = Some(AnchorPhase::Exhausted);
+                self.exploration = ExplorationStatus::BudgetExhausted;
+                return DecisionAnchorTransition::ExplorationExhausted;
+            }
+            self.later_roots = self.later_roots.saturating_add(next_count);
+        }
         if anchors.is_consumable() {
             if let Some(trace_turn) = anchors.trace_root_turn {
                 let mut evidence = SourceEvidence::default();
@@ -372,8 +452,20 @@ impl DecisionAnchorState {
         // independent implementation/caller/test chains discovered over more
         // than one bounded batch.
         let next_roots = AnchorForest::from_finished(finished, Some(active.latest_produced_turn));
-        let batch_root_trace_turn = next_roots.as_ref().and_then(|roots| roots.trace_root_turn);
-        let roots_progressed = next_roots.is_some_and(|next| active.merge(next));
+        let candidate_root_trace_turn = next_roots.as_ref().and_then(|roots| roots.trace_root_turn);
+        let root_merge = next_roots.map_or(RootMerge::NoProgress, |next| {
+            active.merge_limited(
+                next,
+                MAX_LATER_DECISION_ANCHOR_ROOTS.saturating_sub(self.later_roots),
+            )
+        });
+        let batch_root_trace_turn = (root_merge != RootMerge::LimitExceeded)
+            .then_some(candidate_root_trace_turn)
+            .flatten();
+        if let RootMerge::Progress(added) = root_merge {
+            self.later_roots = self.later_roots.saturating_add(added);
+        }
+        let roots_progressed = matches!(root_merge, RootMerge::Progress(_));
         if !active.valid {
             return self.enter_recovery(active, evidence, recovery_attempts);
         }
@@ -410,11 +502,29 @@ impl DecisionAnchorState {
                 evidence.source_reads_after_trace = 0;
             }
             evidence.record_sources(source_reads);
+            let complete = evidence.is_complete();
             self.phase = Some(AnchorPhase::Trail(Trail {
                 anchors: active,
                 evidence,
             }));
+            if complete {
+                self.exploration = ExplorationStatus::Complete;
+                return DecisionAnchorTransition::Converged;
+            }
+            if root_merge == RootMerge::LimitExceeded {
+                self.exploration = ExplorationStatus::BudgetExhausted;
+                return DecisionAnchorTransition::ExplorationExhausted;
+            }
             return DecisionAnchorTransition::Unchanged;
+        }
+
+        if root_merge == RootMerge::LimitExceeded {
+            self.phase = Some(AnchorPhase::Trail(Trail {
+                anchors: active,
+                evidence,
+            }));
+            self.exploration = ExplorationStatus::BudgetExhausted;
+            return DecisionAnchorTransition::ExplorationExhausted;
         }
 
         if finished.iter().any(|finished| {
@@ -437,9 +547,32 @@ impl DecisionAnchorState {
                 anchors: active,
                 evidence,
             }));
-            DecisionAnchorTransition::Unchanged
+            return DecisionAnchorTransition::Unchanged;
+        }
+
+        // Valid repeated roots and broad successful discovery consume the
+        // fixed non-progress budget. Typed but incompatible descendants (and
+        // targeted results whose lineage is malformed or ambiguous) retain the
+        // established bounded recovery behavior.
+        if successful_graph_batch(finished) && !has_incompatible_targeted_result(finished, &active)
+        {
+            return self.record_non_progress(Some(AnchorPhase::Trail(Trail {
+                anchors: active,
+                evidence,
+            })));
+        }
+
+        self.enter_recovery(active, evidence, recovery_attempts)
+    }
+
+    fn record_non_progress(&mut self, phase: Option<AnchorPhase>) -> DecisionAnchorTransition {
+        self.phase = phase;
+        self.non_progressing_batches = self.non_progressing_batches.saturating_add(1);
+        if self.non_progressing_batches >= MAX_NON_PROGRESSING_GRAPH_BATCHES {
+            self.exploration = ExplorationStatus::BudgetExhausted;
+            DecisionAnchorTransition::ExplorationExhausted
         } else {
-            self.enter_recovery(active, evidence, recovery_attempts)
+            DecisionAnchorTransition::Unchanged
         }
     }
 
@@ -451,6 +584,7 @@ impl DecisionAnchorState {
     ) -> DecisionAnchorTransition {
         if attempts >= MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS {
             self.phase = Some(AnchorPhase::Exhausted);
+            self.exploration = ExplorationStatus::BudgetExhausted;
             DecisionAnchorTransition::RecoveryExhausted
         } else {
             self.phase = Some(AnchorPhase::Recovery(Recovery {
@@ -505,60 +639,4 @@ impl SourceEvidence {
     fn is_complete(&self) -> bool {
         self.trace_turn.is_some() && self.source_reads_after_trace >= 2
     }
-}
-
-fn graph_tool_for_name(name: &str) -> Option<GraphCorrelationToolV1> {
-    match name {
-        "codebase_memory_search_graph" => Some(GraphCorrelationToolV1::SearchGraph),
-        "codebase_memory_search_code" => Some(GraphCorrelationToolV1::SearchCode),
-        "codebase_memory_trace_path" => Some(GraphCorrelationToolV1::TracePath),
-        "codebase_memory_get_code_snippet" => Some(GraphCorrelationToolV1::GetCodeSnippet),
-        _ => None,
-    }
-}
-
-fn trusted_unavailable_provider_output(name: &str, output: &ToolOutput) -> bool {
-    if !output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
-        return false;
-    }
-    let Some(marker) = output
-        .details
-        .as_ref()
-        .and_then(|details| details.get(SAFE_TOOL_FAILURE_DETAIL_KEY))
-    else {
-        return false;
-    };
-    if marker.get("source").and_then(serde_json::Value::as_str) != Some("codebase_memory") {
-        return false;
-    }
-    marker
-        .get("category")
-        .and_then(serde_json::Value::as_str)
-        .and_then(ToolFailureCategory::from_stable_str)
-        // Exploration closure grants no new authority. In particular, an
-        // expected lifecycle denial cannot release an incomplete anchor as if
-        // the provider had become systemically unavailable.
-        .is_some_and(|category| category != ToolFailureCategory::GraphLifecycleDenial)
-}
-
-fn anchor_output(name: &str, output: &ToolOutput) -> Option<AnchorOutput> {
-    if output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
-        return None;
-    }
-    let details = output.details.as_ref()?;
-    let correlation: GraphCorrelationV1 =
-        serde_json::from_value(details.get(SAFE_GRAPH_CORRELATION_DETAIL_KEY)?.clone()).ok()?;
-    if !correlation.is_valid() || correlation.tool.public_name() != name {
-        return None;
-    }
-    let lineage: DecisionAnchorLineageV1 = serde_json::from_value(
-        details
-            .get(SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY)?
-            .clone(),
-    )
-    .ok()?;
-    lineage.is_valid_for(&correlation).then_some(AnchorOutput {
-        lineage,
-        tool: correlation.tool,
-    })
 }

@@ -115,15 +115,15 @@ TOOLS = [
 
 def load_state():
     if not STATE_PATH:
-        return {"graph_reads": [], "projects": {}, "searches": 0}
+        return {"graph_reads": [], "projects": {}, "provider_invocations": 0}
     try:
         with open(STATE_PATH, encoding="utf-8") as handle:
             state = json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError):
-        state = {"graph_reads": [], "projects": {}, "searches": 0}
+        state = {"graph_reads": [], "projects": {}, "provider_invocations": 0}
     state.setdefault("graph_reads", [])
     state.setdefault("projects", {})
-    state.setdefault("searches", 0)
+    state.setdefault("provider_invocations", 0)
     return state
 
 
@@ -163,8 +163,8 @@ def confirmed_graph_read(project, tool):
     # graph read or current-root source snippet.
     if project != NORMALIZED_PROJECT or binding is None:
         return None
-    state["searches"] += 1
-    graph_read_number = state["searches"]
+    state["provider_invocations"] += 1
+    graph_read_number = state["provider_invocations"]
     state["graph_reads"].append(
         {
             "confirmed_project": project,
@@ -178,6 +178,7 @@ def confirmed_graph_read(project, tool):
         "graph_read_project": project,
         "project_route": "confirmed_identity",
         "requested_stable_project": binding["requested_stable_project"],
+        "provider_invocation": graph_read_number,
     }
     return identity, binding, graph_read_number
 
@@ -186,6 +187,10 @@ def current_root_source(project, qualified_name):
     snippet = {
         "DeliveryAttempt": ("src/model.rs", "DeliveryRouter::worker_for"),
         "DeliveryRouter::worker_for": ("src/delivery.rs", "repo/src/route.rs"),
+        "alias_retries_stay_on_the_original_ordered_worker": (
+            "tests/alias_retry.rs",
+            "repo/tests/alias_retry.rs",
+        ),
     }.get(qualified_name)
     graph_read = confirmed_graph_read(project, "get_code_snippet")
     if graph_read is None or snippet is None:
@@ -314,6 +319,25 @@ for line in sys.stdin:
                 tool_result(request_id, "fixture stable project is not ready", True)
             else:
                 identity, _binding, graph_read_number = graph_read
+                query = arguments.get("query", "")
+                if query == "alias retry behavioral regression":
+                    results = [
+                        {
+                            "qualified_name": "alias_retries_stay_on_the_original_ordered_worker",
+                            "file_path": "tests/alias_retry.rs",
+                        }
+                    ]
+                else:
+                    results = [
+                        {
+                            "qualified_name": "worker_slot",
+                            "file_path": "src/route.rs",
+                        },
+                        {
+                            "qualified_name": "DeliveryRouter::worker_for",
+                            "file_path": "src/delivery.rs",
+                        },
+                    ]
                 tool_result(
                     request_id,
                     json.dumps(
@@ -324,11 +348,7 @@ for line in sys.stdin:
                                 if graph_read_number == 1
                                 else "warm stable project remains ready"
                             ),
-                            "results": [
-                                {"qualified_name": "worker_slot", "file_path": "src/route.rs"},
-                                {"qualified_name": "DeliveryRouter::worker_for", "file_path": "src/delivery.rs"},
-                                {"file_path": "tests/alias_retry.rs"},
-                            ],
+                            "results": results,
                         },
                         sort_keys=True,
                     ),
@@ -365,10 +385,7 @@ for line in sys.stdin:
                 tool_result(
                     request_id,
                     json.dumps(
-                        identity
-                        | {
-                            "callers": ["DeliveryAttempt"],
-                        },
+                        identity | {"callers": ["DeliveryRouter::worker_for"]},
                         sort_keys=True,
                     ),
                 )
@@ -380,6 +397,21 @@ for line in sys.stdin:
                 tool_result(request_id, "fixture current-root source is not ready", True)
             else:
                 tool_result(request_id, json.dumps(result, sort_keys=True))
+        elif name == "get_architecture":
+            graph_read = confirmed_graph_read(
+                arguments.get("project", ""), "get_architecture"
+            )
+            if graph_read is None:
+                tool_result(request_id, "fixture stable project is not ready", True)
+            else:
+                identity, _binding, _graph_read_number = graph_read
+                tool_result(
+                    request_id,
+                    json.dumps(
+                        identity | {"architecture": "delivery fixture summary"},
+                        sort_keys=True,
+                    ),
+                )
         else:
             tool_result(
                 request_id,

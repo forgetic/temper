@@ -45,7 +45,7 @@ fn ordinary_convergence_bundle_maps_feature_1041_without_rewriting_history() {
     assert!(manifest.contains("graph-closure-ordinary-repair-and-submission-converge"));
     assert!(manifest.contains("schema_argument_mismatch"));
     assert!(manifest.contains("repeated_non_retryable"));
-    assert!(manifest.contains("two-source-reads-and-one-final-closure-with-no-post-closure-retry"));
+    assert!(manifest.contains("two-source-reads-before-one-local-closure-with-no-provider-retry"));
     assert!(manifest.contains("host-submission-remains-available-and-succeeds"));
     assert!(!manifest.contains("ordinary-tool-attempts"));
     assert!(!manifest.contains("if attempt == 0"));

@@ -84,18 +84,19 @@ pub(super) fn verify_ordinary_failure_recovery(trace: &str) -> Result<(), String
     Ok(())
 }
 
-pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(), String> {
+pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(), String> {
     let evidence = run
         .pointer("/metrics/graph/decision_evidence")
         .and_then(Value::as_array)
         .ok_or_else(|| "enabled run omitted graph decision evidence".to_string())?;
-    let expected = [
+    let expected = BTreeSet::from([
         ("search_graph", "search_code", "graph"),
-        ("search_code", "trace_path", "graph"),
-        ("trace_path", "get_code_snippet", "source"),
-        ("get_code_snippet", "get_code_snippet", "source"),
+        ("search_graph", "get_code_snippet", "source"),
+        ("search_code", "search_code", "graph"),
+        ("trace_path", "search_code", "graph"),
+        ("search_code", "get_code_snippet", "source"),
         ("get_code_snippet", "read", "selection"),
-    ];
+    ]);
     if evidence.len() != expected.len() {
         return Err(format!(
             "enabled decision evidence count was {}; expected {}",
@@ -114,7 +115,8 @@ pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(),
         "kind",
         "target",
     ]);
-    for (entry, (graph_tool, consumer_tool, mode)) in evidence.iter().zip(expected) {
+    let mut observed = BTreeSet::new();
+    for entry in evidence {
         let object = entry
             .as_object()
             .ok_or_else(|| "enabled decision evidence entry was not an object".to_string())?;
@@ -122,26 +124,37 @@ pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(),
         if fields != expected_fields {
             return Err("enabled decision evidence retained unexpected fields".to_string());
         }
-        if object.get("graph_tool").and_then(Value::as_str) != Some(graph_tool)
-            || object.get("consumer_tool").and_then(Value::as_str) != Some(consumer_tool)
-            || object.get("consumption_mode").and_then(Value::as_str) != Some(mode)
-        {
-            return Err(
-                "enabled decision evidence did not preserve the five-call chain".to_string(),
-            );
-        }
+        let tuple = (
+            object
+                .get("graph_tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "enabled decision evidence omitted graph_tool".to_string())?,
+            object
+                .get("consumer_tool")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "enabled decision evidence omitted consumer_tool".to_string())?,
+            object
+                .get("consumption_mode")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "enabled decision evidence omitted consumption_mode".to_string())?,
+        );
+        observed.insert(tuple);
+    }
+    if observed != expected {
+        return Err(
+            "enabled decision evidence did not preserve the converged root forest".to_string(),
+        );
     }
     Ok(())
 }
 
 pub(super) fn verify_typed_graph_correlation_records(trace: &str) -> Result<(), String> {
-    let expected = [
-        ("search_graph", "graph_query"),
-        ("search_code", "pattern"),
-        ("trace_path", "function_name"),
-        ("get_code_snippet", "qualified_name"),
-        ("get_code_snippet", "qualified_name"),
-    ];
+    let expected = std::collections::BTreeMap::from([
+        (("search_graph", "graph_query"), 2_u64),
+        (("search_code", "pattern"), 2),
+        (("trace_path", "function_name"), 1),
+        (("get_code_snippet", "qualified_name"), 2),
+    ]);
     let observed = trace
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -151,22 +164,20 @@ pub(super) fn verify_typed_graph_correlation_records(trace: &str) -> Result<(), 
                 .cloned()
         })
         .collect::<Vec<_>>();
-    if observed.len() != expected.len() {
+    if observed.len() != 7 {
         return Err(format!(
-            "enabled trace retained {} typed graph correlations; expected {}",
-            observed.len(),
-            expected.len()
+            "enabled trace retained {} typed graph correlations; expected 7",
+            observed.len()
         ));
     }
-    for (record, (tool, target_kind)) in observed.iter().zip(expected) {
+    let mut observed_counts = std::collections::BTreeMap::new();
+    for record in &observed {
         let Some(object) = record.as_object() else {
             return Err("enabled trace retained a non-object graph correlation".to_string());
         };
         let fields = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
         if fields != BTreeSet::from(["target_digest", "target_kind", "tool", "version"])
             || object.get("version").and_then(Value::as_u64) != Some(1)
-            || object.get("tool").and_then(Value::as_str) != Some(tool)
-            || object.get("target_kind").and_then(Value::as_str) != Some(target_kind)
             || !object
                 .get("target_digest")
                 .and_then(Value::as_str)
@@ -178,6 +189,18 @@ pub(super) fn verify_typed_graph_correlation_records(trace: &str) -> Result<(), 
                 "enabled trace did not retain only complete typed graph correlations".to_string(),
             );
         }
+        let Some(tool) = object.get("tool").and_then(Value::as_str) else {
+            return Err("enabled typed graph correlation omitted tool".to_string());
+        };
+        let Some(target_kind) = object.get("target_kind").and_then(Value::as_str) else {
+            return Err("enabled typed graph correlation omitted target_kind".to_string());
+        };
+        *observed_counts.entry((tool, target_kind)).or_insert(0) += 1;
+    }
+    if observed_counts != expected {
+        return Err(format!(
+            "enabled typed graph correlations were {observed_counts:?}; expected {expected:?}"
+        ));
     }
     Ok(())
 }
@@ -187,6 +210,43 @@ pub(super) fn trace_has_confirmed_graph_read(trace: &str) -> bool {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|event| value_has_confirmed_graph_read(&event))
+}
+
+pub(super) fn verify_provider_invocations(trace: &str, expected: u64) -> Result<(), String> {
+    let mut invocations = BTreeSet::new();
+    for event in trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+    {
+        collect_provider_invocations(&event, &mut invocations);
+    }
+    let expected = (1..=expected).collect::<BTreeSet<_>>();
+    if invocations == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "provider invocation sequence was {invocations:?}; expected {expected:?}"
+        ))
+    }
+}
+
+fn collect_provider_invocations(value: &Value, invocations: &mut BTreeSet<u64>) {
+    match value {
+        Value::String(text) => {
+            if let Some(invocation) = provider_payload(text)
+                .and_then(|payload| payload.get("provider_invocation").and_then(Value::as_u64))
+            {
+                invocations.insert(invocation);
+            }
+        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_provider_invocations(value, invocations)),
+        Value::Object(values) => values
+            .values()
+            .for_each(|value| collect_provider_invocations(value, invocations)),
+        _ => {}
+    }
 }
 
 fn value_has_confirmed_graph_read(value: &Value) -> bool {
@@ -244,7 +304,42 @@ fn value_has_confirmed_current_root_source(value: &Value, symbol: &str) -> bool 
 
 #[cfg(test)]
 mod tests {
-    use super::provider_payload;
+    use super::{provider_payload, verify_typed_graph_correlation_records};
+
+    fn correlation_event(tool: &str, target_kind: &str) -> String {
+        serde_json::json!({
+            "event": {
+                "event": {
+                    "data": {
+                        "graph_correlation": {
+                            "version": 1,
+                            "tool": tool,
+                            "target_kind": target_kind,
+                            "target_digest": "a".repeat(64),
+                        }
+                    }
+                }
+            }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn typed_graph_correlations_allow_parallel_completion_order() {
+        let records = [
+            ("search_graph", "graph_query"),
+            ("trace_path", "function_name"),
+            ("search_code", "pattern"),
+            ("get_code_snippet", "qualified_name"),
+            ("search_graph", "graph_query"),
+            ("get_code_snippet", "qualified_name"),
+            ("search_code", "pattern"),
+        ]
+        .map(|(tool, target_kind)| correlation_event(tool, target_kind))
+        .join("\n");
+
+        verify_typed_graph_correlation_records(&records).unwrap();
+    }
 
     #[test]
     fn provider_payload_accepts_only_plain_or_decision_anchored_json() {
@@ -266,7 +361,7 @@ fn confirmed_current_root_source_payload(payload: &Value, symbol: &str) -> bool 
         && payload
             .get("source_path")
             .and_then(Value::as_str)
-            .is_some_and(|path| path.starts_with("src/"))
+            .is_some_and(|path| path.starts_with("src/") || path.starts_with("tests/"))
         && payload.get("source").and_then(Value::as_str).is_some()
         && confirmed_graph_read_payload(payload)
 }

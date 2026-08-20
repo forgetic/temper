@@ -500,7 +500,7 @@ fn anthropic_mutation_alias_cannot_bypass_decision_anchor_policy() {
         request,
         AgentRequest::RunTool {
             call,
-            mutation_blocked: true,
+            denial: Some(crate::machine::ToolCallDenial::DecisionAnchorMutation),
             rejection: None,
             ..
         } if call.name == "write"

@@ -29,7 +29,8 @@ runner:
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
   `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
   `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`,
-  `mapped-live-ordinary-tool-convergence`, `model-failure-recovery`,
+  `mapped-live-ordinary-tool-convergence`, `mapped-live-graph-convergence`,
+  `model-failure-recovery`,
   `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
@@ -206,14 +207,32 @@ and `ai/temper#1010` on `agent/pr-for-feature-1009`. Its live provider emits
 the approved multi-part nested result, short-symbol, caller-list,
 related-source, and source-metadata shapes. The Jig consumes one root and four
 later-turn carry-forwards through refinement, trace, and two current-root source
-reads before one expected unavailable descendant and its bounded conventional
-fallback; no graph tool is immediately retried. Aggregate evidence retains only safe tool/count/order, binding,
-correlation/lineage-stage, and closed fixture-checkpoint facts. Provider values,
-targets, source, paths, digests, prompts, credentials, and diagnostic traces
-remain ephemeral. Focused native tests retain the denied-path regressions, and
-this live mapping proves unavailable fallback without an immediate graph retry.
-This mapping leaves both
-the historical `#991` and `#1000` mappings unchanged.
+reads. The generic convergence boundary then denies one redundant descendant
+locally without another provider invocation, while conventional reading remains
+available. Aggregate evidence retains only safe tool/count/order, binding,
+correlation/lineage-stage, local-denial-category, and closed fixture-checkpoint
+facts. Provider values, targets, source, paths, digests, prompts, credentials,
+and diagnostic traces remain ephemeral. Focused native tests retain the denied-
+and unavailable-path regressions. This mapping leaves both the historical
+`#991` and `#1000` mappings unchanged.
+
+### Mapped live graph-convergence mapping
+
+`mapped-live-graph-convergence` is the distinct active mapping for
+`ai/temper#1026` and `ai/temper#1027` on `agent/pr-for-feature-1026`. Its live
+agent first takes conventional fallback after a pre-completion unavailable
+source with no immediate provider retry. It then consumes useful independent
+roots plus the implementation/caller/focused-test chain, including one admitted
+duplicate, before the generic runtime injects privacy-safe convergence guidance.
+Broad, duplicate, and post-decision graph attempts are denied locally without
+another MCP invocation; conventional source reading, the minimal repair, host
+validation, Actions CI, and workflow convergence remain available. Aggregate
+evidence retains only closed counts/order, typed lineage stages, binding facts,
+local-denial categories, and gate outcomes. Provider values, source, target
+values, commands, digests, credentials, paths, and diagnostic traces remain
+private. The historical `#1009`/`#1010` mapping keeps its feature, plan, and
+source-branch lineage; its post-decision compatibility call is now denied by the
+same generic boundary.
 
 ### Mapped live ordinary-tool convergence mapping
 

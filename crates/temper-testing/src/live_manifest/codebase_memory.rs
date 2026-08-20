@@ -24,10 +24,13 @@ use super::{
     LivePrivacySafeCodebaseMemoryBindingEvidence,
 };
 
+mod aggregate;
 mod configuration;
 mod graph_consumption;
 mod mapped_graph_consumption;
 mod mapped_graph_consumption_fake;
+mod mapped_graph_convergence;
+mod mapped_graph_convergence_fake;
 mod mapped_ordinary_convergence_fake;
 mod privacy;
 mod provider_result_anchor;
@@ -37,8 +40,9 @@ mod sequential_graph_evidence;
 mod stable_rebind;
 mod typed_lineage_anchor;
 mod typed_lineage_fake;
+use aggregate::privacy_safe_checkpoints;
 pub(super) use configuration::{ToolConfiguration, tune_codebase_memory_config};
-use privacy::{privacy_safe_checkpoints, write_privacy_safe_mcp_log};
+use privacy::write_privacy_safe_mcp_log;
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
 const MEMORY_FILE: &str = "src/lib.rs";
@@ -48,6 +52,7 @@ const ENGINEER_SUMMARY: &str =
     "Used codebase-memory graph evidence, then validated the retry-worker repair.";
 const PROVIDER_NEUTRAL_ENGINEER_SUMMARY: &str =
     "Consumed provider-neutral typed current-root lineage before the minimal repair.";
+const GRAPH_CONVERGENCE_ENGINEER_SUMMARY: &str = "Consumed bounded current-root graph evidence and local convergence guidance before the minimal repair.";
 const RAW_PROVIDER_FAILURE_NEEDLE: &str = "MCP-FIXTURE-SECRET";
 const SAFE_PROVIDER_FAILURE: &str = "codebase-memory provider or protocol request failed; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
 const BOUNDED_GRAPH_RESULT_NEEDLE: &str = "[codebase-memory output truncated to 16384 bytes]";
@@ -84,6 +89,7 @@ pub(super) fn converge(
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
                 | "mapped-live-ordinary-tool-convergence"
+                | "mapped-live-graph-convergence"
         )
     );
     let aggregate_checkpoints = privacy_safe_checkpoints(mcp, &calls);
@@ -117,6 +123,7 @@ pub(super) fn converge(
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
                 | "mapped-live-ordinary-tool-convergence"
+                | "mapped-live-graph-convergence"
         )
     ) {
         "one successful provider-shaped graph result".to_string()
@@ -234,7 +241,10 @@ async fn assert_pr_open_with_memory_diff(
 }
 
 fn assert_pr_body_contains_engineer_summary(pr: &PullRequest) -> Result<(), String> {
-    if !pr.body.contains(ENGINEER_SUMMARY) && !pr.body.contains(PROVIDER_NEUTRAL_ENGINEER_SUMMARY) {
+    if !pr.body.contains(ENGINEER_SUMMARY)
+        && !pr.body.contains(PROVIDER_NEUTRAL_ENGINEER_SUMMARY)
+        && !pr.body.contains(GRAPH_CONVERGENCE_ENGINEER_SUMMARY)
+    {
         return Err(format!(
             "implementation PR body does not contain an approved engineer summary:\n{}",
             pr.body
@@ -506,6 +516,8 @@ impl CodebaseMemoryFake {
             mapped_graph_consumption_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-ordinary-tool-convergence") {
             mapped_ordinary_convergence_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-graph-convergence") {
+            mapped_graph_convergence_fake::start(request_count, observations_for_rule)?
         } else {
             FakeLlm::start(Script::rule(move |view| {
                 if !messages_contain(view, "ROLE: engineer") {
@@ -571,6 +583,7 @@ impl CodebaseMemoryFake {
                         | "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
                         | "mapped-live-ordinary-tool-convergence"
+                        | "mapped-live-graph-convergence"
                 )
             ),
         })
@@ -643,6 +656,7 @@ impl CodebaseMemoryFake {
                         | "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
                         | "mapped-live-ordinary-tool-convergence"
+                        | "mapped-live-graph-convergence"
                 )
             )
         {
@@ -667,6 +681,7 @@ impl CodebaseMemoryFake {
                     | "provider-neutral-anchor-lineage"
                     | "mapped-live-graph-consumption"
                     | "mapped-live-ordinary-tool-convergence"
+                    | "mapped-live-graph-convergence"
             )
         ) && !(graph_trace_seen
             && current_root_source_results >= 2
@@ -676,6 +691,7 @@ impl CodebaseMemoryFake {
                     "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
                         | "mapped-live-ordinary-tool-convergence"
+                        | "mapped-live-graph-convergence"
                 )
             ) || code_refinement_seen))
         {
@@ -689,7 +705,11 @@ impl CodebaseMemoryFake {
                 15
             } else if matches!(
                 mcp.lifecycle_profile.as_deref(),
-                Some("provider-neutral-anchor-lineage" | "mapped-live-graph-consumption")
+                Some(
+                    "provider-neutral-anchor-lineage"
+                        | "mapped-live-graph-consumption"
+                        | "mapped-live-graph-convergence"
+                )
             ) {
                 8
             } else {
@@ -801,39 +821,5 @@ fn snippet(text: &str, max: usize) -> String {
 const FAKE_MCP_SCRIPT: &str = include_str!("fake_codebase_memory_mcp.py");
 
 #[cfg(test)]
-mod tests {
-    use super::is_current_root_source_result;
-
-    #[test]
-    fn recognizes_structured_current_root_source_results() {
-        assert!(is_current_root_source_result(
-            r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","source":"<fixture source>","binding":"current_prepared_checkout"}"#
-        ));
-        assert!(is_current_root_source_result(
-            r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","source":"<fixture source>","binding":"current_prepared_checkout"}
-
-[Decision anchor: generic guidance]"#
-        ));
-    }
-
-    #[test]
-    fn rejects_legacy_or_incomplete_source_markers() {
-        assert!(!is_current_root_source_result("FAKE_MCP_SNIPPET_RESULT"));
-        assert!(!is_current_root_source_result(
-            r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","binding":"current_prepared_checkout"}"#
-        ));
-        assert!(!is_current_root_source_result(
-            r#"{"qualified_name":"retry_worker_topic","file_path":"src/lib.rs","source":"<fixture source>","binding":"unconfirmed"}"#
-        ));
-    }
-
-    #[test]
-    fn recognizes_privacy_safe_typed_lineage_source_results_without_a_path() {
-        assert!(is_current_root_source_result(
-            r#"{"qualifiedName":"crate::fixture::selection","source":"<fixture source>","binding":"current_prepared_checkout"}"#
-        ));
-        assert!(is_current_root_source_result(
-            r#"{"functionName":"selection","source":"<fixture source>","binding":"current_prepared_checkout"}"#
-        ));
-    }
-}
+#[path = "codebase_memory/result_parsing_tests.rs"]
+mod tests;
