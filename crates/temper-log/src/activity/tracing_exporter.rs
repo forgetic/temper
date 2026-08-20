@@ -76,6 +76,20 @@ impl ActivitySpanExporter for TracingActivitySpanExporter {
         if let Some(terminal_reason) = finished.attributes.terminal_reason {
             span.record("agent.terminal_reason", terminal_reason.as_str());
         }
+        if let Some(failure) = &finished.attributes.tool_failure {
+            span.record("tool.failure.category", failure.category.as_str());
+            span.record("tool.failure.reason", failure.reason.as_str());
+            span.record(
+                "tool.failure.retry_disposition",
+                failure.retry_disposition.as_str(),
+            );
+            span.record("tool.failure.retryable", failure.retryable);
+            span.record(
+                "tool.failure.conventional_fallback",
+                failure.fallback_to_conventional_discovery,
+            );
+            span.record("tool.failure.message", failure.message.as_str());
+        }
         if let Some(failure) = &finished.attributes.model_failure {
             span.record("model.failure.category", failure.category.as_str());
             span.record("model.failure.disposition", failure.disposition.as_str());
@@ -131,6 +145,12 @@ fn tracing_span(start: &ActivitySpanStart, parent: Option<&Span>) -> Span {
                 otel.status_code = tracing::field::Empty,
                 agent.stop_reason = tracing::field::Empty,
                 agent.terminal_reason = tracing::field::Empty,
+                tool.failure.category = tracing::field::Empty,
+                tool.failure.reason = tracing::field::Empty,
+                tool.failure.retry_disposition = tracing::field::Empty,
+                tool.failure.retryable = tracing::field::Empty,
+                tool.failure.conventional_fallback = tracing::field::Empty,
+                tool.failure.message = tracing::field::Empty,
                 model.failure.category = tracing::field::Empty,
                 model.failure.disposition = tracing::field::Empty,
                 model.failure.boundary = tracing::field::Empty,
@@ -183,6 +203,12 @@ fn tracing_span(start: &ActivitySpanStart, parent: Option<&Span>) -> Span {
                 otel.status_code = tracing::field::Empty,
                 agent.stop_reason = tracing::field::Empty,
                 agent.terminal_reason = tracing::field::Empty,
+                tool.failure.category = tracing::field::Empty,
+                tool.failure.reason = tracing::field::Empty,
+                tool.failure.retry_disposition = tracing::field::Empty,
+                tool.failure.retryable = tracing::field::Empty,
+                tool.failure.conventional_fallback = tracing::field::Empty,
+                tool.failure.message = tracing::field::Empty,
                 model.failure.category = tracing::field::Empty,
                 model.failure.disposition = tracing::field::Empty,
                 model.failure.boundary = tracing::field::Empty,

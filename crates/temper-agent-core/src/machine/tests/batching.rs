@@ -13,7 +13,9 @@ use super::common::{
     assistant_text, assistant_tool_calls, calls_llm, complete, llm_responded, machine,
     machine_read_tools, run, run_tools, tool_finished, tool_output, user,
 };
-use crate::machine::{AgentCompletion, AgentMachine, AgentRequest};
+use crate::machine::{
+    AgentCompletion, AgentMachine, AgentRequest, ToolFailureDiagnostic, ToolFailureReason,
+};
 
 #[test]
 fn parallel_batch_runs_concurrently_and_waits_for_all_before_next_call() {
@@ -236,6 +238,7 @@ fn duplicate_and_stale_parallel_completions_settle_each_call_once() {
         batch_generation,
         id: "a".to_string(),
         output: tool_output("a", false),
+        failure: None,
     };
     assert!(
         m.on_completion(EngineTime::ZERO, finish_a).is_empty(),
@@ -249,6 +252,7 @@ fn duplicate_and_stale_parallel_completions_settle_each_call_once() {
                 batch_generation,
                 id: "a".to_string(),
                 output: tool_output("duplicate", false),
+                failure: None,
             },
         )
         .is_empty(),
@@ -262,6 +266,7 @@ fn duplicate_and_stale_parallel_completions_settle_each_call_once() {
                 batch_generation: batch_generation.saturating_add(1),
                 id: "b".to_string(),
                 output: tool_output("stale", false),
+                failure: None,
             },
         )
         .is_empty(),
@@ -275,6 +280,7 @@ fn duplicate_and_stale_parallel_completions_settle_each_call_once() {
             batch_generation,
             id: "b".to_string(),
             output: tool_output("b", false),
+            failure: None,
         },
     );
     assert_eq!(calls_llm(&settled), 1, "the batch settles exactly once");
@@ -286,12 +292,60 @@ fn duplicate_and_stale_parallel_completions_settle_each_call_once() {
             batch_generation,
             id: "b".to_string(),
             output: tool_output("late", false),
+            failure: None,
         },
     );
     assert!(
         late.is_empty(),
         "a prior-batch completion cannot re-dispatch"
     );
+}
+
+#[test]
+fn typed_failure_completion_replaces_arbitrary_output_for_the_next_model_turn() {
+    const SECRET: &str = "Authorization: Bearer MACHINE-TOOL-SECRET";
+    let mut machine = machine_read_tools(&["read"]);
+    let _ = machine.on_start(EngineTime::ZERO);
+    let _ = complete(
+        &mut machine,
+        llm_responded(assistant_tool_calls(&[("failed", "read")])),
+    );
+    let (operation_generation, batch_generation) = machine
+        .active_tool_generations("failed")
+        .expect("active tool");
+    let failure = ToolFailureDiagnostic::execution(ToolFailureReason::ToolReportedFailure);
+    let requests = machine.on_completion(
+        EngineTime::ZERO,
+        AgentCompletion::ToolFinished {
+            operation_generation,
+            batch_generation,
+            id: "failed".to_string(),
+            output: tool_output(SECRET, true),
+            failure: Some(failure.clone()),
+        },
+    );
+    let messages = requests
+        .iter()
+        .find_map(|request| match request {
+            AgentRequest::CallLlm { messages, .. } => Some(messages),
+            _ => None,
+        })
+        .expect("next model call");
+    let result = messages
+        .iter()
+        .find_map(|message| match message {
+            Message::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .expect("tool result");
+    let text = result.content.iter().find_map(|block| match block {
+        tongs::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(text, Some(failure.message.as_str()));
+    assert!(result.details.is_none());
+    assert!(result.is_error);
+    assert!(!format!("{messages:?}").contains(SECRET));
 }
 
 #[test]

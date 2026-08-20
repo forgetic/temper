@@ -357,7 +357,17 @@ impl ActivityProjection for TracingProjection {
                 let name = &tool.name;
                 let id = &tool.call_id;
                 let duration_ms = tool.duration_ms;
-                if tool.status == ToolStatusV1::Failed {
+                if tool.status != ToolStatusV1::Succeeded {
+                    let failure_category = tool.failure.as_ref().map(|value| value.category);
+                    let failure_reason = tool.failure.as_ref().map(|value| value.reason);
+                    let retry_disposition =
+                        tool.failure.as_ref().map(|value| value.retry_disposition);
+                    let retryable = tool.failure.as_ref().map(|value| value.retryable);
+                    let conventional_fallback = tool
+                        .failure
+                        .as_ref()
+                        .map(|value| value.fallback_to_conventional_discovery);
+                    let failure_message = tool.failure.as_ref().map(|value| value.message.as_str());
                     tracing::debug!(
                         target: AGENT_TARGET,
                         event = "tool.error",
@@ -366,6 +376,12 @@ impl ActivityProjection for TracingProjection {
                         tool = %name,
                         id = %id,
                         duration_ms,
+                        tool.failure.category = failure_category.map(|value| value.as_str()),
+                        tool.failure.reason = failure_reason.map(|value| value.as_str()),
+                        tool.failure.retry_disposition = retry_disposition.map(|value| value.as_str()),
+                        tool.failure.retryable = retryable,
+                        tool.failure.conventional_fallback = conventional_fallback,
+                        tool.failure.message = failure_message,
                         "agent: tool {name}{suffix} error",
                     );
                 } else {

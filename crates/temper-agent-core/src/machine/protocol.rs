@@ -14,6 +14,8 @@ use tongs::tools::ToolOutput;
 
 use crate::model_failure::ModelFailureDiagnostic;
 
+use super::tool_failure::ToolFailureDiagnostic;
+
 /// An observability event the machine emits as data (the shell renders/records
 /// it). Keeping events as machine output — rather than callbacks fired from
 /// inside the loop, as pi does — preserves purity and makes the event stream
@@ -128,96 +130,6 @@ pub const SAFE_TOOL_FAILURE_DETAIL_KEY: &str = "temper_safe_tool_failure_v1";
 /// correlation record. Generic tool details never enter activity metadata.
 pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1";
 
-/// Stable failure categories for model-visible codebase-memory tools.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ToolFailureCategory {
-    ConfigurationStartup,
-    ProjectNotReady,
-    IndexFailure,
-    Timeout,
-    Transport,
-    ProcessExit,
-    ProviderProtocol,
-    InvalidModelInput,
-    CircuitOpen,
-}
-
-impl ToolFailureCategory {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ConfigurationStartup => "configuration_startup",
-            Self::ProjectNotReady => "project_not_ready",
-            Self::IndexFailure => "index_failure",
-            Self::Timeout => "timeout",
-            Self::Transport => "transport",
-            Self::ProcessExit => "process_exit",
-            Self::ProviderProtocol => "provider_protocol",
-            Self::InvalidModelInput => "invalid_model_input",
-            Self::CircuitOpen => "circuit_open",
-        }
-    }
-
-    pub fn from_stable_str(value: &str) -> Option<Self> {
-        match value {
-            "configuration_startup" => Some(Self::ConfigurationStartup),
-            "project_not_ready" => Some(Self::ProjectNotReady),
-            "index_failure" => Some(Self::IndexFailure),
-            "timeout" => Some(Self::Timeout),
-            "transport" => Some(Self::Transport),
-            "process_exit" => Some(Self::ProcessExit),
-            "provider_protocol" => Some(Self::ProviderProtocol),
-            "invalid_model_input" => Some(Self::InvalidModelInput),
-            "circuit_open" => Some(Self::CircuitOpen),
-            _ => None,
-        }
-    }
-
-    pub fn safe_message(self) -> &'static str {
-        match self {
-            Self::ConfigurationStartup => "codebase-memory setup did not complete",
-            Self::ProjectNotReady => "codebase-memory project is not ready",
-            Self::IndexFailure => "codebase-memory indexing failed",
-            Self::Timeout => "codebase-memory request timed out",
-            Self::Transport => "codebase-memory transport failed",
-            Self::ProcessExit => "codebase-memory provider process exited",
-            Self::ProviderProtocol => "codebase-memory provider or protocol request failed",
-            Self::InvalidModelInput => "codebase-memory request input was invalid",
-            Self::CircuitOpen => {
-                "codebase-memory is disabled for this run after a systemic failure"
-            }
-        }
-    }
-
-    pub fn retryable(self) -> bool {
-        matches!(
-            self,
-            Self::ProjectNotReady | Self::Timeout | Self::Transport
-        )
-    }
-}
-
-/// Safe, bounded evidence for one codebase-memory failure. Messages are
-/// category-owned constants; raw tool output, stderr, arguments, cache data,
-/// and repository content can never populate this type.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ToolFailureDiagnostic {
-    pub category: ToolFailureCategory,
-    pub retryable: bool,
-    pub fallback_to_conventional_discovery: bool,
-    pub message: String,
-}
-
-impl ToolFailureDiagnostic {
-    pub fn codebase_memory(category: ToolFailureCategory) -> Self {
-        Self {
-            category,
-            retryable: category.retryable(),
-            fallback_to_conventional_discovery: true,
-            message: category.safe_message().to_string(),
-        }
-    }
-}
-
 /// Content-free timing metadata accepted only from Temper's trusted
 /// codebase-memory wrappers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -317,6 +229,10 @@ pub enum AgentCompletion {
         batch_generation: BatchGeneration,
         id: String,
         output: ToolOutput,
+        /// Shell-owned typed outcome. Failed output is reconstructed from this
+        /// value before it enters the next model turn; future machine policy
+        /// consumes this same value rather than parsing output text.
+        failure: Option<ToolFailureDiagnostic>,
     },
     /// The shell has cancelled and joined every model/tool task owned by this
     /// run. The generations identify the matching cancellation request.

@@ -105,7 +105,8 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
         .await
         .expect("tool was not cancelled")
     });
-    assert!(!output.is_error);
+    assert!(!output.output.is_error);
+    assert_eq!(output.failure, None);
     let events = recorder.0.lock().expect("events");
     assert!(matches!(
         &events[0],
@@ -450,13 +451,15 @@ fn codebase_memory_tool_timeout_uses_virtual_time_and_emits_safe_cancelled_bound
     assert_eq!(virtual_elapsed, Duration::from_secs(7).as_nanos() as u64);
     assert!(started.load(Ordering::SeqCst));
     assert!(dropped.load(Ordering::SeqCst));
-    assert!(output.is_error);
+    assert!(output.output.is_error);
     assert_eq!(
-        output.content.iter().find_map(|block| match block {
+        output.output.content.iter().find_map(|block| match block {
             tongs::model::ContentBlock::Text(text) => Some(text.text.as_str()),
             _ => None,
         }),
-        Some("tool `codebase_memory_search_graph` timed out after configured limit 7s")
+        Some(
+            "codebase-memory request timed out; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead"
+        )
     );
     let events = events.0.lock().expect("events");
     assert_eq!(events.len(), 1);
@@ -478,6 +481,53 @@ fn codebase_memory_tool_timeout_uses_virtual_time_and_emits_safe_cancelled_bound
             && failure.fallback_to_conventional_discovery
             && failure.message == "codebase-memory request timed out"
     ));
+}
+
+#[test]
+fn ordinary_tool_timeout_is_typed_and_model_visible_without_runtime_values() {
+    let started = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let tools = ToolRegistry::from_tools(vec![Box::new(HungTool {
+        name: "ordinary_hung",
+        started: Arc::clone(&started),
+        dropped: Arc::clone(&dropped),
+        cancel_on_start: None,
+    })]);
+    let events = Arc::new(Recorder::default());
+    let observed = Arc::clone(&events);
+    let call = ToolCall {
+        id: "ordinary-timeout".to_string(),
+        name: "ordinary_hung".to_string(),
+        arguments: serde_json::json!({"secret": "TIMEOUT-SECRET"}),
+    };
+
+    let (output, virtual_elapsed) = run_in_lab(async move {
+        execute_tool(
+            &tools,
+            &call,
+            Duration::from_secs(3),
+            &CancellationToken::default(),
+            false,
+            &SystemEventClock,
+            observed.as_ref(),
+            None,
+        )
+        .await
+        .expect("timeout returns a model result")
+    });
+
+    assert_eq!(virtual_elapsed, Duration::from_secs(3).as_nanos() as u64);
+    let failure = output.failure.expect("typed timeout");
+    assert_eq!(failure.category, ToolFailureCategory::Timeout);
+    assert_eq!(failure.reason, ToolFailureReason::DeadlineExceeded);
+    assert_eq!(
+        failure.retry_disposition,
+        crate::ToolRetryDisposition::Retryable
+    );
+    let rendered = format!("{failure:?} {:?}", events.0.lock().unwrap());
+    assert!(!rendered.contains("TIMEOUT-SECRET"));
+    assert!(started.load(Ordering::SeqCst));
+    assert!(dropped.load(Ordering::SeqCst));
 }
 
 #[test]
@@ -524,18 +574,13 @@ fn external_cancellation_drops_a_hung_tool_without_advancing_time() {
         AgentEvent::ToolEnd {
             status: ToolCallStatus::Cancelled,
             duration_ms: 0,
+            result: ToolResultMetadata {
+                failure: Some(failure),
+                ..
+            },
             ..
-        }
+        } if failure.category == ToolFailureCategory::Cancellation
+            && failure.reason == ToolFailureReason::RunCancelled
+            && failure.retry_disposition == crate::ToolRetryDisposition::DoNotRetry
     ));
-}
-
-#[test]
-fn configured_timeout_message_names_tool_and_limit() {
-    assert_eq!(
-        format!(
-            "tool `forge` timed out after configured limit {}",
-            format_duration(Duration::from_secs(7))
-        ),
-        "tool `forge` timed out after configured limit 7s"
-    );
 }

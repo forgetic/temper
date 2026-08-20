@@ -19,6 +19,7 @@
 mod executor;
 mod streaming;
 mod task_group;
+mod tool_failure;
 mod tool_result;
 
 pub use executor::{
