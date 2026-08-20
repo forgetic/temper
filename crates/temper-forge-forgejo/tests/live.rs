@@ -571,5 +571,34 @@ fn assert_api_only_ci_requests(requests: &[HttpRequest], token: &str) {
         );
         assert!(!request.path.contains("/user/login"));
         assert!(!request.path.contains("/actions/tasks"));
+        if request.path == runs_path {
+            assert_eq!(
+                request
+                    .query
+                    .iter()
+                    .filter(|(key, _)| key == "page")
+                    .count(),
+                1,
+                "run-list request omitted or duplicated page: {:?}",
+                request.query
+            );
+            assert!(
+                request
+                    .query
+                    .contains(&("limit".to_string(), "200".to_string()))
+            );
+            assert_eq!(
+                request.query.len(),
+                2,
+                "run-list query: {:?}",
+                request.query
+            );
+        } else {
+            assert!(
+                request.query.is_empty(),
+                "provider-run jobs request carried query parameters: {:?}",
+                request.query
+            );
+        }
     }
 }
