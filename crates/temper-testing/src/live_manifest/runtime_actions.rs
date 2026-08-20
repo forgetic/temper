@@ -62,6 +62,7 @@ impl LiveExecutionContext<'_> {
                             | "provider-result-anchor"
                             | "provider-neutral-anchor-lineage"
                             | "mapped-live-graph-consumption"
+                            | "mapped-live-graph-convergence"
                     )
                 ),
             "unknown fake codebase-memory fixture",
@@ -188,6 +189,7 @@ impl LiveExecutionContext<'_> {
                                 | "provider-result-anchor"
                                 | "provider-neutral-anchor-lineage"
                                 | "mapped-live-graph-consumption"
+                                | "mapped-live-graph-convergence"
                         )
                     )
                 }),

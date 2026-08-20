@@ -14,13 +14,13 @@ uses = "manifest"
 feature = "ai/temper#1009"
 plan = "ai/temper#1010"
 source_branch = "agent/pr-for-feature-1009"
-change = "new"
+change = "updated"
 
 [feature_contract]
-claim = "Successful targeted results from the approved multi-part transcript retain one typed current-root lineage across later transformed refinement, trace, and source calls; denied and unavailable paths do not manufacture authority."
+claim = "Successful targeted results from the approved multi-part transcript retain one typed current-root lineage across later transformed refinement, trace, and source calls; the generic convergence boundary denies redundant post-decision graph work locally without manufacturing authority."
 stimulus = "Run one engineer repair through real Forgejo, a host Actions runner, standalone Temper, and a Jig-driven provider whose text and structured result parts expose nested symbols, caller lists, related source references, and source metadata."
-observable = "Ordered complete V1 correlation and lineage-stage facts, current-root binding, privacy-safe producer/carry/source/unavailable checkpoint counts, bounded conventional fallback, the minimal repair, host validation, CI success, and workflow convergence."
-assertion = "The five successful targeted graph calls form a later-turn root/carry chain through both current-root source reads; one expected unavailable descendant then releases conventional fallback with no immediate graph retry before the minimal repair; focused denial regressions remain covered; and aggregate evidence contains no provider value, target, source, path, digest, prompt, credential, or trace."
+observable = "Ordered complete V1 correlation and lineage-stage facts, current-root binding, privacy-safe producer/carry/source/local-denial checkpoint counts, bounded conventional fallback, the minimal repair, host validation, CI success, and workflow convergence."
+assertion = "The five successful targeted graph calls form a later-turn root/carry chain through both current-root source reads; one post-decision descendant is then denied locally with the privacy-safe exploration-closed category and no provider invocation before conventional reading, the minimal repair, and focused denial regression coverage; aggregate evidence contains no provider value, target, source, path, digest, prompt, credential, or trace."
 runtime_budget_seconds = 600
 jig_script_path = "jig/mapped-live-graph-consumption.json"
 
@@ -137,10 +137,10 @@ after = "temper.launch_standalone"
 id = "wait-for-convergence"
 action = "workflow.wait_convergence"
 strategy = "codebase-memory"
-until = "engineer consumes the approved later-turn multi-part lineage and both current-root sources, observes one expected unavailable descendant, falls back without an immediate graph retry, performs the minimal repair, passes host validation and CI, and closes the source issue"
+until = "engineer consumes the approved later-turn multi-part lineage and both current-root sources, receives local convergence guidance, observes one post-decision descendant denial without another provider invocation, reads conventionally, performs the minimal repair, passes host validation and CI, and closes the source issue"
 
 [expect]
-outcome = "The live agent consumes the approved five-call current-root lineage, handles one expected unavailable descendant through conventional fallback without an immediate graph retry, writes only the minimal repair, and converges through real Actions CI while focused regressions retain denial coverage."
+outcome = "The live agent consumes the approved five-call current-root lineage, handles one redundant post-decision descendant through local convergence denial without another provider invocation, reads conventionally, writes only the minimal repair, and converges through real Actions CI while focused regressions retain denial coverage."
 merged_pull_requests = 1
 closed_parent_issues = 1
 
@@ -183,8 +183,8 @@ events = [
   { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = true } },
-  { event = "tool.start", fields = { tool = "read", id = "read-conventional-fallback-source" } },
+  { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", "tool.failure.category" = "exploration_closed" } },
+  { event = "tool.start", fields = { tool = "read" } },
   { event = "workspace.diff.produced" },
 ]
 
@@ -235,17 +235,17 @@ exactly = 1
 
 [[expect.count]]
 required = true
-id = "three-source-requests-with-one-unavailable-descendant"
+id = "two-provider-source-requests-before-one-local-denial"
 event = "mcp.tool.called"
 fields."mcp.tool" = "get_code_snippet"
-exactly = 3
+exactly = 2
 
 [[expect.count]]
 required = true
-id = "one-expected-unavailable-descendant"
-event = "mcp.tool.result"
-fields."mcp.tool" = "get_code_snippet"
-fields.is_error = true
+id = "one-post-decision-local-denial"
+event = "tool.error"
+fields.tool = "codebase_memory_get_code_snippet"
+fields."tool.failure.category" = "exploration_closed"
 exactly = 1
 
 [[expect.count]]
@@ -253,7 +253,6 @@ required = true
 id = "one-conventional-fallback-read"
 event = "tool.start"
 fields.tool = "read"
-fields.id = "read-conventional-fallback-source"
 exactly = 1
 
 [[expect.count]]
@@ -278,7 +277,7 @@ model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_se
 model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
 default_project = "acme/demo"
 actual_project = "normalized-temper-v1-<stable-provider-key>"
-graph_consumption_profile = "approved nested results, short symbol, caller list, related-source, and source-metadata parts; one root plus four later-turn carry-forwards; two current-root sources; one expected unavailable descendant and conventional fallback without immediate graph retry; focused denial regressions; privacy-safe aggregate checkpoints only"
+graph_consumption_profile = "approved nested results, short symbol, caller list, related-source, and source-metadata parts; one root plus four later-turn carry-forwards; two current-root sources; one post-decision descendant denied locally without another provider invocation; conventional reading; focused denial regressions; privacy-safe aggregate checkpoints only"
 global_inventory_forbidden = true
 
 [change_policy]
