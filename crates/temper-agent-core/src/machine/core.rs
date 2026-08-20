@@ -10,8 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use tongs::model::{
-    AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage, UserContent,
-    UserMessage,
+    AssistantMessage, ContentBlock, Message, StopReason, ToolCall, UserContent, UserMessage,
 };
 use tongs::tools::{ToolEffects, ToolOutput};
 
@@ -29,6 +28,8 @@ use super::batching::{PendingTool, plan_batches};
 use super::decision_anchor::{
     DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState, DecisionAnchorTransition,
 };
+use super::messages::{error_assistant, tool_result_message};
+use super::ordinary_failure::OrdinaryFailureCircuit;
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
 };
@@ -66,6 +67,9 @@ pub struct AgentMachine {
     invocation_catalog: Arc<ToolInvocationCatalog>,
     /// Typed local failures for calls scrubbed by the invocation boundary.
     invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
+    /// Bounded per-run ordinary-tool identities. This state contains only
+    /// process-local digests and is never projected through the protocol.
+    ordinary_failures: OrdinaryFailureCircuit,
     /// Effect-compatible batches still to run this turn, in original tool-call
     /// order (front = the batch currently in flight). Each batch's calls run
     /// concurrently; batches run strictly in sequence.
@@ -146,6 +150,7 @@ impl AgentMachine {
             turn: 0,
             invocation_catalog,
             invocation_rejections: BTreeMap::new(),
+            ordinary_failures: OrdinaryFailureCircuit::default(),
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             decision_anchors,
@@ -360,13 +365,25 @@ impl AgentMachine {
                 name: call.name.clone(),
                 arg_preview,
             }));
-            requests.push(AgentRequest::RunTool {
-                operation_generation,
-                batch_generation,
-                rejection: self.invocation_rejections.get(&call.id).cloned(),
-                call,
-                mutation_blocked,
-            });
+            let redirect = (!self.invocation_rejections.contains_key(&call.id))
+                .then(|| self.ordinary_failures.redirect_for(&call))
+                .flatten();
+            if let Some(failure) = redirect {
+                requests.push(AgentRequest::RedirectTool {
+                    operation_generation,
+                    batch_generation,
+                    call,
+                    failure,
+                });
+            } else {
+                requests.push(AgentRequest::RunTool {
+                    operation_generation,
+                    batch_generation,
+                    rejection: self.invocation_rejections.get(&call.id).cloned(),
+                    call,
+                    mutation_blocked,
+                });
+            }
         }
         self.active_llm = None;
         self.active_tool_batch = Some(ActiveToolBatch {
@@ -405,11 +422,19 @@ impl AgentMachine {
         let mut requests = Vec::new();
 
         // Record the result into the in-flight (front) batch.
+        let mut completed_call = None;
         if let Some(batch) = self.pending_batches.front_mut() {
             if let Some(pending) = batch.iter_mut().find(|p| p.call.id == id) {
+                if !self.invocation_rejections.contains_key(&id) {
+                    completed_call = Some(pending.call.clone());
+                }
                 pending.output = Some(output);
-                pending.failure = failure;
+                pending.failure = failure.clone();
             }
+        }
+        if let Some(call) = completed_call {
+            self.ordinary_failures
+                .record_outcome(&call, failure.as_ref());
         }
 
         let batch_done = active.settled.len() == active.operations.len();
@@ -591,50 +616,4 @@ fn extract_tool_calls(content: &[ContentBlock]) -> Vec<ToolCall> {
             _ => None,
         })
         .collect()
-}
-
-/// Builds the tool-result message appended to the conversation after a tool runs.
-fn tool_result_message(
-    tool_call_id: &str,
-    tool_name: &str,
-    output: ToolOutput,
-    failure: Option<ToolFailureDiagnostic>,
-) -> ToolResultMessage {
-    let (content, details, is_error) = match failure {
-        Some(failure) => (
-            vec![ContentBlock::Text(tongs::model::TextContent {
-                text: failure.model_message(),
-                text_signature: None,
-            })],
-            None,
-            true,
-        ),
-        None => (output.content, output.details, output.is_error),
-    };
-    ToolResultMessage {
-        tool_call_id: tool_call_id.to_string(),
-        tool_name: tool_name.to_string(),
-        content,
-        details,
-        is_error,
-        timestamp: 0,
-    }
-}
-
-/// Synthesizes a terminal assistant message carrying an error string, for the
-/// paths where the run ends without a real model message.
-fn error_assistant(message: &str) -> AssistantMessage {
-    AssistantMessage {
-        content: vec![ContentBlock::Text(tongs::model::TextContent {
-            text: message.to_string(),
-            text_signature: None,
-        })],
-        api: String::new(),
-        provider: String::new(),
-        model: String::new(),
-        usage: tongs::model::Usage::default(),
-        stop_reason: StopReason::Error,
-        error_message: Some(message.to_string()),
-        timestamp: 0,
-    }
 }

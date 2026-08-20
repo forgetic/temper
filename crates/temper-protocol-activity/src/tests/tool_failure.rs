@@ -107,6 +107,11 @@ fn ordinary_failure_reasons_and_dispositions_round_trip_canonically() {
             ToolFailureReasonV1::RepeatedNonRetryable,
             ToolRetryDispositionV1::CorrectInvocation,
         ),
+        (
+            ToolFailureCategoryV1::CircuitRedirect,
+            ToolFailureReasonV1::RetryBudgetExhausted,
+            ToolRetryDispositionV1::CorrectInvocation,
+        ),
     ];
 
     for (category, reason, disposition) in cases {

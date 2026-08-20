@@ -271,6 +271,17 @@ pub enum AgentRequest {
         /// and must not perform a registry lookup or execution.
         rejection: Option<ToolFailureDiagnostic>,
     },
+    /// Settle a circuit-broken ordinary invocation locally. The shell emits a
+    /// canonical failed `ToolEnd` and returns a valid model tool result, but it
+    /// must not consult or invoke the tool registry.
+    RedirectTool {
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        call: ToolCall,
+        /// Content-free reason selected entirely by the machine's bounded
+        /// process-local state.
+        failure: ToolFailureDiagnostic,
+    },
     /// Cancel every model/tool task owned by the shell. The machine finishes
     /// only after the matching [`AgentCompletion::TasksQuiesced`] arrives.
     CancelActive {

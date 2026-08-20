@@ -18,11 +18,11 @@ use crate::ToolInvocationCatalog;
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
     CODEBASE_MEMORY_TOOL_PREFIX, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, OperationGeneration,
-    SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
-    ToolFailureReason,
+    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
+use crate::shell::local_tool::{diagnostic_tool_output, local_redirect, tool_error_output};
 use crate::shell::streaming::{
     ModelCallObservability, ModelOperationContext, ModelTaskOutcome, SYSTEM_STREAM_RETRY_RUNTIME,
     stream_to_completion,
@@ -374,6 +374,12 @@ impl Executor<AgentMachine> for AgentShell {
                 mutation_blocked,
                 rejection,
             ),
+            AgentRequest::RedirectTool {
+                operation_generation,
+                batch_generation,
+                call,
+                failure,
+            } => self.execute_redirect_tool(operation_generation, batch_generation, call, failure),
             AgentRequest::CancelActive {
                 operation_generation,
                 batch_generation,
@@ -388,6 +394,23 @@ impl Executor<AgentMachine> for AgentShell {
                 model_failure,
             } => self.execute_finished(stop, final_message, messages, model_failure),
         }
+    }
+}
+
+impl AgentShell {
+    /// Completes a circuit redirect synchronously. Keeping this path distinct
+    /// from `execute_run_tool` makes registry access structurally impossible.
+    fn execute_redirect_tool(
+        &self,
+        operation_generation: OperationGeneration,
+        batch_generation: BatchGeneration,
+        call: ToolCall,
+        failure: ToolFailureDiagnostic,
+    ) {
+        let (event, completion) =
+            local_redirect(operation_generation, batch_generation, call, failure);
+        self.events.emit(event);
+        let _ = self.cq.send(completion);
     }
 }
 
@@ -550,36 +573,6 @@ fn failed_execution(
     ToolExecution::Finished {
         output,
         failure: Some(failure),
-    }
-}
-
-fn diagnostic_tool_output(
-    name: &str,
-    diagnostic: &ToolFailureDiagnostic,
-) -> tongs::tools::ToolOutput {
-    let mut output = tool_error_output(&diagnostic.model_message());
-    if name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
-        output.details = Some(serde_json::json!({
-            SAFE_TOOL_FAILURE_DETAIL_KEY: {
-                "source": "codebase_memory",
-                "category": diagnostic.category.as_str(),
-            }
-        }));
-    }
-    output
-}
-
-/// Builds an error [`tongs::tools::ToolOutput`] carrying `message` as text.
-fn tool_error_output(message: &str) -> tongs::tools::ToolOutput {
-    tongs::tools::ToolOutput {
-        content: vec![tongs::model::ContentBlock::Text(
-            tongs::model::TextContent {
-                text: message.to_string(),
-                text_signature: None,
-            },
-        )],
-        details: None,
-        is_error: true,
     }
 }
 
