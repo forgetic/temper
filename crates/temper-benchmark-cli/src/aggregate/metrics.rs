@@ -19,6 +19,26 @@ pub const PRIMARY_METRICS: &[&str] = &[
     "cache_write_tokens",
     "tool_calls",
     "failed_tool_calls",
+    "ordinary_tool_calls",
+    "ordinary_succeeded_tool_calls",
+    "ordinary_failed_tool_calls",
+    "ordinary_cancelled_tool_calls",
+    "ordinary_repeated_failure_redirects",
+    "ordinary_failure_schema_argument_mismatch",
+    "ordinary_failure_policy_denial",
+    "ordinary_failure_execution_failure",
+    "ordinary_failure_configuration_startup",
+    "ordinary_failure_project_not_ready",
+    "ordinary_failure_index_failure",
+    "ordinary_failure_timeout",
+    "ordinary_failure_transport",
+    "ordinary_failure_process_exit",
+    "ordinary_failure_provider_protocol",
+    "ordinary_failure_invalid_model_input",
+    "ordinary_failure_circuit_open",
+    "ordinary_failure_cancellation",
+    "ordinary_failure_graph_lifecycle_denial",
+    "ordinary_failure_circuit_redirect",
     "task_correct",
     "host_validation_commands",
     "host_validation_failures",
@@ -89,7 +109,7 @@ fn all_failure_categories() -> [ToolFailureCategoryV1; 10] {
         ToolFailureCategoryV1::ProviderProtocol,
         ToolFailureCategoryV1::InvalidModelInput,
         ToolFailureCategoryV1::CircuitOpen,
-        ToolFailureCategoryV1::ExplorationClosed,
+        ToolFailureCategoryV1::GraphLifecycleDenial,
     ]
 }
 
@@ -104,12 +124,61 @@ fn failure_metric(category: ToolFailureCategoryV1) -> &'static str {
         ToolFailureCategoryV1::ProviderProtocol => "graph_failure_provider_protocol",
         ToolFailureCategoryV1::InvalidModelInput => "graph_failure_invalid_model_input",
         ToolFailureCategoryV1::CircuitOpen => "graph_failure_circuit_open",
-        ToolFailureCategoryV1::ExplorationClosed => "graph_failure_exploration_closed",
+        ToolFailureCategoryV1::GraphLifecycleDenial => "graph_failure_exploration_closed",
+        ToolFailureCategoryV1::SchemaArgumentMismatch
+        | ToolFailureCategoryV1::PolicyDenial
+        | ToolFailureCategoryV1::ExecutionFailure
+        | ToolFailureCategoryV1::Cancellation
+        | ToolFailureCategoryV1::CircuitRedirect => {
+            unreachable!("ordinary failure category requested as a graph metric")
+        }
     }
 }
 
 fn has_full_coverage(coverage: &crate::MetricCoverageV1) -> bool {
     coverage.expected == Some(coverage.observed)
+}
+
+fn all_tool_failure_categories() -> [ToolFailureCategoryV1; 15] {
+    [
+        ToolFailureCategoryV1::SchemaArgumentMismatch,
+        ToolFailureCategoryV1::PolicyDenial,
+        ToolFailureCategoryV1::ExecutionFailure,
+        ToolFailureCategoryV1::ConfigurationStartup,
+        ToolFailureCategoryV1::ProjectNotReady,
+        ToolFailureCategoryV1::IndexFailure,
+        ToolFailureCategoryV1::Timeout,
+        ToolFailureCategoryV1::Transport,
+        ToolFailureCategoryV1::ProcessExit,
+        ToolFailureCategoryV1::ProviderProtocol,
+        ToolFailureCategoryV1::InvalidModelInput,
+        ToolFailureCategoryV1::CircuitOpen,
+        ToolFailureCategoryV1::Cancellation,
+        ToolFailureCategoryV1::GraphLifecycleDenial,
+        ToolFailureCategoryV1::CircuitRedirect,
+    ]
+}
+
+fn ordinary_failure_metric(category: ToolFailureCategoryV1) -> &'static str {
+    match category {
+        ToolFailureCategoryV1::SchemaArgumentMismatch => {
+            "ordinary_failure_schema_argument_mismatch"
+        }
+        ToolFailureCategoryV1::PolicyDenial => "ordinary_failure_policy_denial",
+        ToolFailureCategoryV1::ExecutionFailure => "ordinary_failure_execution_failure",
+        ToolFailureCategoryV1::ConfigurationStartup => "ordinary_failure_configuration_startup",
+        ToolFailureCategoryV1::ProjectNotReady => "ordinary_failure_project_not_ready",
+        ToolFailureCategoryV1::IndexFailure => "ordinary_failure_index_failure",
+        ToolFailureCategoryV1::Timeout => "ordinary_failure_timeout",
+        ToolFailureCategoryV1::Transport => "ordinary_failure_transport",
+        ToolFailureCategoryV1::ProcessExit => "ordinary_failure_process_exit",
+        ToolFailureCategoryV1::ProviderProtocol => "ordinary_failure_provider_protocol",
+        ToolFailureCategoryV1::InvalidModelInput => "ordinary_failure_invalid_model_input",
+        ToolFailureCategoryV1::CircuitOpen => "ordinary_failure_circuit_open",
+        ToolFailureCategoryV1::Cancellation => "ordinary_failure_cancellation",
+        ToolFailureCategoryV1::GraphLifecycleDenial => "ordinary_failure_graph_lifecycle_denial",
+        ToolFailureCategoryV1::CircuitRedirect => "ordinary_failure_circuit_redirect",
+    }
 }
 
 pub(crate) fn metric_values(summary: &RunSummaryV1) -> BTreeMap<&'static str, u64> {
@@ -140,6 +209,35 @@ pub(crate) fn metric_values(summary: &RunSummaryV1) -> BTreeMap<&'static str, u6
         values.insert("failed_tool_calls", tools.failed);
         if let Some(value) = tools.cumulative_duration_ms {
             values.insert("tool_duration_ms", value);
+        }
+        if let Some(ordinary) = &tools.ordinary {
+            values.insert("ordinary_tool_calls", ordinary.calls);
+            if has_full_coverage(&ordinary.status_coverage) {
+                values.insert("ordinary_succeeded_tool_calls", ordinary.succeeded);
+                values.insert("ordinary_failed_tool_calls", ordinary.failed);
+                values.insert("ordinary_cancelled_tool_calls", ordinary.cancelled);
+            }
+            if has_full_coverage(&ordinary.status_coverage)
+                && has_full_coverage(&ordinary.failure_category_coverage)
+            {
+                for category in all_tool_failure_categories() {
+                    values.insert(
+                        ordinary_failure_metric(category),
+                        ordinary
+                            .failures_by_category
+                            .get(&category)
+                            .copied()
+                            .unwrap_or(0),
+                    );
+                }
+            }
+            if has_full_coverage(&ordinary.status_coverage)
+                && has_full_coverage(&ordinary.failure_reason_coverage)
+            {
+                if let Some(value) = ordinary.repeated_failure_redirects {
+                    values.insert("ordinary_repeated_failure_redirects", value);
+                }
+            }
         }
     }
     if let Some(correct) = task_correctness(summary) {

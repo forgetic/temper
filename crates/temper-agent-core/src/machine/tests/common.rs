@@ -14,7 +14,9 @@ use tongs::model::{
 use tongs::tools::{ToolEffects, ToolOutput};
 
 use crate::ModelFailureDiagnostic;
-use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop};
+use crate::machine::{
+    AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ToolFailureDiagnostic,
+};
 
 /// A machine whose named tools are all read-only (parallel-safe), so adjacent
 /// tool calls batch together and run concurrently.
@@ -150,7 +152,11 @@ pub(super) fn machine() -> AgentMachine {
 pub(super) enum TestCompletion {
     LlmResponded(AssistantMessage),
     LlmFailed(ModelFailureDiagnostic),
-    ToolFinished { id: String, output: ToolOutput },
+    ToolFinished {
+        id: String,
+        output: ToolOutput,
+        failure: Option<ToolFailureDiagnostic>,
+    },
 }
 
 pub(super) fn llm_responded(message: AssistantMessage) -> TestCompletion {
@@ -169,6 +175,19 @@ pub(super) fn tool_finished(id: impl Into<String>, output: ToolOutput) -> TestCo
     TestCompletion::ToolFinished {
         id: id.into(),
         output,
+        failure: None,
+    }
+}
+
+pub(super) fn tool_failed(
+    id: impl Into<String>,
+    output: ToolOutput,
+    failure: ToolFailureDiagnostic,
+) -> TestCompletion {
+    TestCompletion::ToolFinished {
+        id: id.into(),
+        output,
+        failure: Some(failure),
     }
 }
 
@@ -194,7 +213,11 @@ pub(super) fn complete(m: &mut AgentMachine, completion: TestCompletion) -> Vec<
                 diagnostic,
             }
         }
-        TestCompletion::ToolFinished { id, output } => {
+        TestCompletion::ToolFinished {
+            id,
+            output,
+            failure,
+        } => {
             let (operation_generation, batch_generation) = m
                 .active_tool_generations(&id)
                 .expect("active tool operation");
@@ -203,6 +226,7 @@ pub(super) fn complete(m: &mut AgentMachine, completion: TestCompletion) -> Vec<
                 batch_generation,
                 id,
                 output,
+                failure,
             }
         }
     };

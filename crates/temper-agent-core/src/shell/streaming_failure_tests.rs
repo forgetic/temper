@@ -184,6 +184,7 @@ fn run_scripted(
                 model: &ModelIdentity::new("test-provider", "test-model"),
                 clock: &SystemEventClock,
                 events: observed.as_ref(),
+                invocation_catalog: None,
             },
         )
         .await
@@ -244,6 +245,7 @@ fn unclassified_stream_failure_retries_same_call_and_later_succeeds() {
                 model: &ModelIdentity::new("test-provider", "test-model"),
                 clock: &SystemEventClock,
                 events: observed.as_ref(),
+                invocation_catalog: None,
             },
         )
         .await

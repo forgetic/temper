@@ -10,8 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use tongs::model::{
-    AssistantMessage, ContentBlock, Message, StopReason, ToolCall, ToolResultMessage, UserContent,
-    UserMessage,
+    AssistantMessage, ContentBlock, Message, StopReason, ToolCall, UserContent, UserMessage,
 };
 use tongs::tools::{ToolEffects, ToolOutput};
 
@@ -25,6 +24,7 @@ pub type ToolStartPresentationFn =
 /// Compatibility name retained for the existing run-builder parameter.
 pub type ArgPreviewFn = ToolStartPresentationFn;
 
+use crate::ToolInvocationCatalog;
 use crate::model_failure::ModelFailureDiagnostic;
 
 use super::batching::{PendingTool, plan_batches};
@@ -32,10 +32,13 @@ use super::decision_anchor::{
     DECISION_ANCHOR_CONVERGENCE_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState,
     DecisionAnchorTransition,
 };
+use super::messages::{error_assistant, tool_result_message};
+use super::ordinary_failure::OrdinaryFailureCircuit;
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
     ToolStartPresentation,
 };
+use super::tool_failure::ToolFailureDiagnostic;
 
 /// Where the loop is in the call/tool cycle.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,10 +68,13 @@ pub struct AgentMachine {
     iterations: usize,
     phase: Phase,
     turn: usize,
-    /// Per-tool-name effect declarations, used to plan effect-compatible
-    /// parallel batches. Unknown tools default to a write effect (fail-closed:
-    /// serialize). Static config, supplied at construction by the shell.
-    effects: BTreeMap<String, ToolEffects>,
+    /// Final registry-derived definitions, aliases, schemas, and effects.
+    invocation_catalog: Arc<ToolInvocationCatalog>,
+    /// Typed local failures for calls scrubbed by the invocation boundary.
+    invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
+    /// Bounded per-run ordinary-tool identities. This state contains only
+    /// process-local digests and is never projected through the protocol.
+    ordinary_failures: OrdinaryFailureCircuit,
     /// Effect-compatible batches still to run this turn, in original tool-call
     /// order (front = the batch currently in flight). Each batch's calls run
     /// concurrently; batches run strictly in sequence.
@@ -128,14 +134,30 @@ impl AgentMachine {
         max_iterations: usize,
         effects: BTreeMap<String, ToolEffects>,
     ) -> Self {
-        let decision_anchors = DecisionAnchorState::from_effects(&effects);
+        Self::with_invocation_catalog(
+            initial_messages,
+            max_iterations,
+            Arc::new(ToolInvocationCatalog::permissive(effects)),
+        )
+    }
+
+    /// Build the production machine around one finalized registry-derived
+    /// invocation catalog.
+    pub fn with_invocation_catalog(
+        initial_messages: Vec<Message>,
+        max_iterations: usize,
+        invocation_catalog: Arc<ToolInvocationCatalog>,
+    ) -> Self {
+        let decision_anchors = DecisionAnchorState::from_effects(invocation_catalog.effects());
         Self {
             messages: initial_messages,
             max_iterations,
             iterations: 0,
             phase: Phase::AwaitingLlm,
             turn: 0,
-            effects,
+            invocation_catalog,
+            invocation_rejections: BTreeMap::new(),
+            ordinary_failures: OrdinaryFailureCircuit::default(),
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             decision_anchors,
@@ -281,7 +303,10 @@ impl AgentMachine {
         requests
     }
 
-    fn on_llm_responded(&mut self, assistant: AssistantMessage) -> Vec<AgentRequest> {
+    fn on_llm_responded(&mut self, mut assistant: AssistantMessage) -> Vec<AgentRequest> {
+        // Normalize before the assistant turn is emitted, retained, inspected
+        // by policy, previewed, batched, or dispatched.
+        self.invocation_rejections = self.invocation_catalog.canonicalize_message(&mut assistant);
         let mut requests = vec![AgentRequest::Emit(AgentEvent::AssistantMessage {
             content: assistant.content.clone(),
         })];
@@ -317,7 +342,7 @@ impl AgentMachine {
         // serialized batch. This is pure policy over the calls' declared effects.
         self.phase = Phase::AwaitingTools;
         self.turn_results.clear();
-        self.pending_batches = plan_batches(&self.effects, &tool_calls);
+        self.pending_batches = plan_batches(self.invocation_catalog.effects(), &tool_calls);
         requests.extend(self.dispatch_current_batch());
         requests
     }
@@ -338,13 +363,14 @@ impl AgentMachine {
         let mut requests = Vec::new();
         let model_turn = self.turn.saturating_sub(1);
         for call in calls {
+            let rejection = self.invocation_rejections.get(&call.id).cloned();
             let denial = self
                 .decision_anchors
                 .as_mut()
                 .and_then(|state| state.on_tool_dispatched(&call, model_turn));
-            // A locally denied call must not expose either shell-rendered
-            // argument presentation to activity.
-            let presentation = if denial.is_none() {
+            // A locally rejected or denied call must not expose either
+            // shell-rendered argument presentation to activity.
+            let presentation = if rejection.is_none() && denial.is_none() {
                 self.tool_start_presentation
                     .as_ref()
                     .map(|render| render(&call.name, &call.arguments))
@@ -360,12 +386,25 @@ impl AgentMachine {
                 arg_preview: presentation.arg_preview,
                 diagnostic_arguments: presentation.diagnostic_arguments,
             }));
-            requests.push(AgentRequest::RunTool {
-                operation_generation,
-                batch_generation,
-                call,
-                denial,
-            });
+            let redirect = (rejection.is_none() && denial.is_none())
+                .then(|| self.ordinary_failures.redirect_for(&call))
+                .flatten();
+            if let Some(failure) = redirect {
+                requests.push(AgentRequest::RedirectTool {
+                    operation_generation,
+                    batch_generation,
+                    call,
+                    failure,
+                });
+            } else {
+                requests.push(AgentRequest::RunTool {
+                    operation_generation,
+                    batch_generation,
+                    call,
+                    denial,
+                    rejection,
+                });
+            }
         }
         self.active_llm = None;
         self.active_tool_batch = Some(ActiveToolBatch {
@@ -382,6 +421,7 @@ impl AgentMachine {
         batch_generation: BatchGeneration,
         id: String,
         output: ToolOutput,
+        failure: Option<ToolFailureDiagnostic>,
     ) -> Vec<AgentRequest> {
         // A completion is accepted exactly once and only for the active batch.
         // This fences duplicated calls and late tasks from cancelled or prior
@@ -403,10 +443,19 @@ impl AgentMachine {
         let mut requests = Vec::new();
 
         // Record the result into the in-flight (front) batch.
+        let mut completed_call = None;
         if let Some(batch) = self.pending_batches.front_mut() {
             if let Some(pending) = batch.iter_mut().find(|p| p.call.id == id) {
+                if !self.invocation_rejections.contains_key(&id) {
+                    completed_call = Some(pending.call.clone());
+                }
                 pending.output = Some(output);
+                pending.failure = failure.clone();
             }
+        }
+        if let Some(call) = completed_call {
+            self.ordinary_failures
+                .record_outcome(&call, failure.as_ref());
         }
 
         let batch_done = active.settled.len() == active.operations.len();
@@ -444,6 +493,9 @@ impl AgentMachine {
                     DecisionAnchorTransition::ExplorationExhausted => {}
                 }
             }
+            for pending in &batch {
+                self.invocation_rejections.remove(&pending.call.id);
+            }
             self.turn_results.extend(batch);
         }
 
@@ -462,7 +514,12 @@ impl AgentMachine {
         for pending in std::mem::take(&mut self.turn_results) {
             if let Some(output) = pending.output {
                 self.messages.push(Message::ToolResult(std::sync::Arc::new(
-                    tool_result_message(&pending.call.id, &pending.call.name, output),
+                    tool_result_message(
+                        &pending.call.id,
+                        &pending.call.name,
+                        output,
+                        pending.failure,
+                    ),
                 )));
             }
         }
@@ -542,7 +599,8 @@ impl temper_agent_io::Machine for AgentMachine {
                 batch_generation,
                 id,
                 output,
-            } => self.on_tool_finished(operation_generation, batch_generation, id, output),
+                failure,
+            } => self.on_tool_finished(operation_generation, batch_generation, id, output, failure),
             AgentCompletion::TasksQuiesced {
                 operation_generation,
                 batch_generation,
@@ -583,38 +641,4 @@ fn extract_tool_calls(content: &[ContentBlock]) -> Vec<ToolCall> {
             _ => None,
         })
         .collect()
-}
-
-/// Builds the tool-result message appended to the conversation after a tool runs.
-fn tool_result_message(
-    tool_call_id: &str,
-    tool_name: &str,
-    output: ToolOutput,
-) -> ToolResultMessage {
-    ToolResultMessage {
-        tool_call_id: tool_call_id.to_string(),
-        tool_name: tool_name.to_string(),
-        content: output.content,
-        details: output.details,
-        is_error: output.is_error,
-        timestamp: 0,
-    }
-}
-
-/// Synthesizes a terminal assistant message carrying an error string, for the
-/// paths where the run ends without a real model message.
-fn error_assistant(message: &str) -> AssistantMessage {
-    AssistantMessage {
-        content: vec![ContentBlock::Text(tongs::model::TextContent {
-            text: message.to_string(),
-            text_signature: None,
-        })],
-        api: String::new(),
-        provider: String::new(),
-        model: String::new(),
-        usage: tongs::model::Usage::default(),
-        stop_reason: StopReason::Error,
-        error_message: Some(message.to_string()),
-        timestamp: 0,
-    }
 }

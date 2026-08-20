@@ -1,5 +1,7 @@
 //! Privacy-safe extraction of typed graph output used by decision-anchor policy.
 
+use super::super::protocol::{SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY};
+use super::super::tool_failure::ToolFailureCategory;
 use super::*;
 
 pub(super) fn graph_tool_for_name(name: &str) -> Option<GraphCorrelationToolV1> {
@@ -60,7 +62,9 @@ pub(super) fn trusted_unavailable_provider_output(name: &str, output: &ToolOutpu
             .get("category")
             .and_then(serde_json::Value::as_str)
             .and_then(ToolFailureCategory::from_stable_str)
-            .is_some()
+            // A lifecycle denial cannot release an incomplete anchor as if
+            // the provider were systemically unavailable.
+            .is_some_and(|category| category != ToolFailureCategory::GraphLifecycleDenial)
 }
 
 pub(super) fn anchor_output(name: &str, output: &ToolOutput) -> Option<AnchorOutput> {

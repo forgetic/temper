@@ -23,14 +23,15 @@ fn tool_failure_categories_have_stable_wire_names_and_safe_messages() {
         ),
         (ToolFailureCategoryV1::CircuitOpen, "circuit_open"),
         (
-            ToolFailureCategoryV1::ExplorationClosed,
-            "exploration_closed",
+            ToolFailureCategoryV1::GraphLifecycleDenial,
+            "graph_lifecycle_denial",
         ),
     ];
 
     for (category, wire_name) in cases {
         let value = serde_json::to_value(diagnostic(category)).unwrap();
         assert_eq!(value["category"], wire_name);
+        assert_eq!(value["reason"], category.default_reason().as_str());
         assert_eq!(value["message"], category.safe_message());
         assert!(
             value["fallback_to_conventional_discovery"]
@@ -69,6 +70,79 @@ fn tool_failure_wire_redacts_forged_and_oversized_messages_deterministically() {
     assert!(!parsed.retryable);
     assert!(parsed.fallback_to_conventional_discovery);
     assert!(parsed.message.len() <= MAX_TOOL_FAILURE_MESSAGE_BYTES);
+    assert!(!format!("{forged:?} {parsed:?}").contains(SECRET));
+}
+
+#[test]
+fn ordinary_failure_reasons_and_dispositions_round_trip_canonically() {
+    let cases = [
+        (
+            ToolFailureCategoryV1::SchemaArgumentMismatch,
+            ToolFailureReasonV1::InvalidArguments,
+            ToolRetryDispositionV1::CorrectInvocation,
+        ),
+        (
+            ToolFailureCategoryV1::PolicyDenial,
+            ToolFailureReasonV1::PolicyPrecondition,
+            ToolRetryDispositionV1::SatisfyPolicy,
+        ),
+        (
+            ToolFailureCategoryV1::ExecutionFailure,
+            ToolFailureReasonV1::ToolReportedFailure,
+            ToolRetryDispositionV1::CorrectInvocation,
+        ),
+        (
+            ToolFailureCategoryV1::Timeout,
+            ToolFailureReasonV1::DeadlineExceeded,
+            ToolRetryDispositionV1::Retryable,
+        ),
+        (
+            ToolFailureCategoryV1::Cancellation,
+            ToolFailureReasonV1::RunCancelled,
+            ToolRetryDispositionV1::DoNotRetry,
+        ),
+        (
+            ToolFailureCategoryV1::GraphLifecycleDenial,
+            ToolFailureReasonV1::ExplorationClosed,
+            ToolRetryDispositionV1::ConventionalDiscovery,
+        ),
+        (
+            ToolFailureCategoryV1::CircuitRedirect,
+            ToolFailureReasonV1::RepeatedNonRetryable,
+            ToolRetryDispositionV1::CorrectInvocation,
+        ),
+        (
+            ToolFailureCategoryV1::CircuitRedirect,
+            ToolFailureReasonV1::RetryBudgetExhausted,
+            ToolRetryDispositionV1::CorrectInvocation,
+        ),
+    ];
+
+    for (category, reason, disposition) in cases {
+        let diagnostic = ToolFailureDiagnosticV1::with_reason(category, reason);
+        assert_eq!(diagnostic.retry_disposition, disposition);
+        let json = serde_json::to_string(&diagnostic).unwrap();
+        assert!(json.contains(reason.as_str()));
+        assert!(json.contains(disposition.as_str()));
+        let decoded: ToolFailureDiagnosticV1 = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, diagnostic);
+    }
+}
+
+#[test]
+fn legacy_graph_diagnostic_without_reason_or_disposition_remains_readable() {
+    let legacy = serde_json::json!({
+        "category": "timeout",
+        "retryable": false,
+        "fallback_to_conventional_discovery": false,
+        "message": "untrusted retained value"
+    });
+    let decoded: ToolFailureDiagnosticV1 = serde_json::from_value(legacy).unwrap();
+    assert_eq!(decoded.category, ToolFailureCategoryV1::Timeout);
+    assert_eq!(decoded.reason, ToolFailureReasonV1::GraphTimeout);
+    assert_eq!(decoded.retry_disposition, ToolRetryDispositionV1::Retryable);
+    assert!(decoded.retryable);
+    assert_eq!(decoded.message, "codebase-memory request timed out");
 }
 
 #[test]
@@ -205,6 +279,35 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
     };
     assert_eq!(finished.decision_anchor_lineage, None);
 }
+#[test]
+fn ordinary_tool_failures_validate_without_result_content() {
+    let mut event = usage_event(1);
+    event.event = AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
+        call_id: "ordinary-1".into(),
+        name: "bash".into(),
+        status: ToolStatusV1::Failed,
+        duration_ms: 2,
+        result: None,
+        failure: Some(ToolFailureDiagnosticV1::with_reason(
+            ToolFailureCategoryV1::ExecutionFailure,
+            ToolFailureReasonV1::ToolReportedFailure,
+        )),
+        codebase_memory_timing: None,
+        graph_correlation: None,
+        decision_anchor_lineage: None,
+    });
+    event.validate().expect("ordinary typed failure validates");
+
+    let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+        unreachable!();
+    };
+    finished.result = Some(CapturedContentV1::Inline(InlineContentV1 {
+        text: "Authorization: Bearer RESULT-SECRET".into(),
+        truncated: false,
+    }));
+    assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
+}
+
 #[test]
 fn tool_failures_validate_only_on_non_success_boundaries() {
     let mut event = usage_event(1);

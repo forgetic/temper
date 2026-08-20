@@ -6,7 +6,8 @@ use temper_protocol_activity::{
     AgentTerminalReasonV1, CaptureModeV1, CapturedContentV1, DroppedEventKindV1, InlineContentV1,
     ModelCallFinishedV1, ModelCallStartedV1, ModelCallStatusV1, PromptCaptureDispositionV1,
     PromptPreparedV1, PromptSnapshotV1, PromptToolDefinitionV1, RunFinishedV1, RunStartedV1,
-    RunStatusV1, ScopeFinishedV1, ScopeStartedV1, ScopeStatusV1, StopReasonV1, ToolFinishedV1,
+    RunStatusV1, ScopeFinishedV1, ScopeStartedV1, ScopeStatusV1, StopReasonV1,
+    ToolFailureCategoryV1, ToolFailureDiagnosticV1, ToolFailureReasonV1, ToolFinishedV1,
     ToolStartedV1, ToolStatusV1, TraceGapV1, TurnFinishedV1, TurnStartedV1, UsageV1,
     W3cTraceContext,
 };
@@ -14,6 +15,7 @@ use temper_protocol_activity::{
 use super::*;
 
 mod model_failure;
+mod tool_failure;
 
 const PROMPT_SYSTEM_SENTINEL: &str = "LOG-PROMPT-SYSTEM-SENTINEL-364";
 const PROMPT_USER_SENTINEL: &str = "LOG-PROMPT-USER-SENTINEL-364";

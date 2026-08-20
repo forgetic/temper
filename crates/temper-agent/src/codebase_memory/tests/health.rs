@@ -2,6 +2,7 @@ use super::test_support::*;
 use super::*;
 use serde_json::json;
 use std::time::{Duration, Instant};
+use temper_agent_core::ToolFailureReason;
 use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode};
 use tongs::tools::ToolOutput;
 
@@ -110,6 +111,63 @@ fn systemic_failure_opens_every_wrapper_and_a_new_toolset_resets_health() {
             .expect("new run reaches MCP");
         assert!(!output.is_error);
         assert_eq!(calls_named(&log_path, "search_code").len(), 2);
+    });
+}
+
+#[test]
+fn exploration_closure_is_typed_without_opening_the_systemic_circuit() {
+    let dir = fake_server_script();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let log_path = workspace.path().join("exploration-closure.log");
+    let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+
+    temper_agent_io::block_on(async move {
+        let toolset = build_codebase_memory_toolset(
+            Some(&config(
+                &dir,
+                CodebaseMemoryMode::Required,
+                CodebaseMemoryIndex::Off,
+                "graph-closure",
+                &log_path,
+                json!({}),
+            )),
+            "engineer",
+            &context,
+            workspace.path(),
+        )
+        .await
+        .expect("toolset starts");
+        let tools = toolset.into_tools();
+        let search = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_search_code")
+            .expect("search wrapper");
+        let architecture = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_get_architecture")
+            .expect("architecture wrapper");
+
+        for (id, tool, input) in [
+            ("closed-search", search, json!({"query": "needle"})),
+            ("closed-architecture", architecture, json!({})),
+        ] {
+            let output = tool
+                .execute(id, input, None)
+                .await
+                .expect("closure is a typed result");
+            assert_eq!(category(&output), Some("graph_lifecycle_denial"));
+            assert!(output_text(&output).contains("exploration is closed for this run"));
+            assert!(output_text(&output).contains("conventional discovery"));
+            assert!(output.details.as_ref().unwrap().get("circuit").is_none());
+        }
+
+        assert_eq!(calls_named(&log_path, "search_code").len(), 1);
+        assert_eq!(calls_named(&log_path, "get_architecture").len(), 1);
+        let diagnostic =
+            ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::GraphLifecycleDenial);
+        assert_eq!(diagnostic.reason, ToolFailureReason::ExplorationClosed);
+        assert!(!diagnostic.retryable);
+        assert!(diagnostic.fallback_to_conventional_discovery);
     });
 }
 

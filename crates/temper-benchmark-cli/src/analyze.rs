@@ -3,6 +3,7 @@
 //! Typed metric extraction over a normalized activity stream.
 
 mod graph;
+mod ordinary;
 mod shell;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +20,7 @@ use crate::{
 };
 
 use graph::graph_metrics;
+use ordinary::ordinary_tool_metrics;
 
 /// Analyzer settings supplied by a benchmark manifest or an operator.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -55,7 +57,9 @@ pub fn analyze_trace(trace: &NormalizedTrace, options: &AnalyzeOptions) -> RunSu
     let model = model_metrics(&trace.events);
     summary.metrics.tokens = Some(token_metrics(&trace.events, model.succeeded_attempts));
     summary.metrics.model = Some(model);
-    summary.metrics.tools = Some(tool_metrics(&trace.events));
+    let tools = tool_metrics(&trace.events);
+    summary.metrics.tools = Some(tools.metrics);
+    summary.diagnostics.extend(tools.diagnostics);
     let graph = graph_metrics(trace, options);
     summary.metrics.graph = graph.metrics;
     summary.diagnostics.extend(graph.diagnostics);
@@ -189,7 +193,12 @@ struct ToolCallMetric {
     duration_ms: Option<u64>,
 }
 
-fn tool_metrics(events: &[AgentRunEventV1]) -> ToolMetricsV1 {
+struct ToolAnalysis {
+    metrics: ToolMetricsV1,
+    diagnostics: Vec<TraceDiagnosticV1>,
+}
+
+fn tool_metrics(events: &[AgentRunEventV1]) -> ToolAnalysis {
     let mut calls = BTreeMap::<CallKey, ToolCallMetric>::new();
     for event in events {
         match &event.event {
@@ -265,18 +274,23 @@ fn tool_metrics(events: &[AgentRunEventV1]) -> ToolMetricsV1 {
     });
 
     let call_count = calls.len() as u64;
-    ToolMetricsV1 {
-        calls: call_count,
-        succeeded,
-        failed,
-        cancelled,
-        cumulative_duration_ms: observed_total(duration, duration_count, call_count),
-        duration_coverage: MetricCoverageV1 {
-            observed: duration_count,
-            expected: Some(call_count),
+    let (ordinary, diagnostics) = ordinary_tool_metrics(events);
+    ToolAnalysis {
+        metrics: ToolMetricsV1 {
+            calls: call_count,
+            succeeded,
+            failed,
+            cancelled,
+            cumulative_duration_ms: observed_total(duration, duration_count, call_count),
+            duration_coverage: MetricCoverageV1 {
+                observed: duration_count,
+                expected: Some(call_count),
+            },
+            by_name,
+            slowest,
+            ordinary: Some(ordinary),
         },
-        by_name,
-        slowest,
+        diagnostics,
     }
 }
 

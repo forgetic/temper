@@ -18,10 +18,10 @@ use std::time::Duration;
 use skein::runtime::RuntimeHandle;
 use temper_agent_io::{CqSender, channel, drive, oneshot};
 use tongs::model::{Message, UserContent, UserMessage};
-use tongs::provider::{Provider, StreamOptions, ToolDef};
+use tongs::provider::{Provider, StreamOptions};
 use tongs::tools::ToolRegistry;
-use tongs::tools::tool_to_definition;
 
+use crate::ToolInvocationCatalog;
 use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, ArgPreviewFn};
 use crate::shell::{
     AgentOutcome, AgentShell, EventSink, ModelIdentity, NullEventSink, RunObservability, TurnHook,
@@ -144,6 +144,8 @@ pub enum SubAgentError {
     /// The drive loop ended without the machine producing an outcome (should not
     /// happen — the machine always finishes).
     NoOutcome,
+    /// The finalized registry cannot form one unambiguous invocation contract.
+    InvalidToolCatalog(crate::InvocationCatalogError),
 }
 
 impl std::fmt::Display for SubAgentError {
@@ -154,6 +156,12 @@ impl std::fmt::Display for SubAgentError {
             }
             SubAgentError::NoOutcome => {
                 formatter.write_str("sub-agent drive loop ended without an outcome")
+            }
+            SubAgentError::InvalidToolCatalog(error) => {
+                write!(
+                    formatter,
+                    "cannot assemble tool invocation catalog: {error}"
+                )
             }
         }
     }
@@ -287,21 +295,11 @@ pub fn run_sub_agent_controllable_with_observability(
     ),
     SubAgentError,
 > {
-    let tool_defs: Vec<ToolDef> = sub_agent
-        .tools
-        .tools()
-        .iter()
-        .map(|tool| tool_to_definition(tool.as_ref()))
-        .collect();
-
-    // Effect map for parallel batching: each tool declares its effects, which
-    // the machine uses to plan which adjacent tool calls may run concurrently.
-    let effects: std::collections::BTreeMap<String, tongs::tools::ToolEffects> = sub_agent
-        .tools
-        .tools()
-        .iter()
-        .map(|tool| (tool.name().to_string(), tool.effects()))
-        .collect();
+    let invocation_catalog = Arc::new(
+        ToolInvocationCatalog::from_registry(&sub_agent.tools)
+            .map_err(SubAgentError::InvalidToolCatalog)?,
+    );
+    let tool_defs = invocation_catalog.definitions();
 
     let initial = vec![Message::User(UserMessage {
         content: UserContent::Text(sub_agent.user_message.clone()),
@@ -345,11 +343,16 @@ pub fn run_sub_agent_controllable_with_observability(
         sub_agent.operation_limits,
         observability,
         outcome_tx,
+        Arc::clone(&invocation_catalog),
     );
     if let Some(turn_hook) = turn_hook {
         shell = shell.with_turn_hook(turn_hook);
     }
-    let mut machine = AgentMachine::with_effects(initial, sub_agent.max_iterations, effects);
+    let mut machine = AgentMachine::with_invocation_catalog(
+        initial,
+        sub_agent.max_iterations,
+        invocation_catalog,
+    );
     if let Some(arg_preview) = arg_preview {
         machine = machine.with_arg_preview(arg_preview);
     }

@@ -68,9 +68,8 @@ pub(super) fn run_temper_init(request: TemperInitRequest<'_>) -> Result<(), Stri
     })?;
     let log_file = log_file_truncate(request.log)?;
     let workflow_arg = request.scenario.workflow_path.display().to_string();
-    let status = request
-        .temper
-        .command()
+    let mut command = request.temper.command();
+    command
         .arg("--config")
         .arg(request.bundle_dir)
         .arg("init")
@@ -91,11 +90,14 @@ pub(super) fn run_temper_init(request: TemperInitRequest<'_>) -> Result<(), Stri
         .arg("--admin-user")
         .arg(request.admin_user)
         .arg("--provider")
-        .arg("deepseek")
+        .arg(&request.scenario.agent_provider)
         .arg("--provider-url")
         .arg(request.fake_llm_url)
-        .env("TEMPER_INIT_ADMIN_PASSWORD", request.admin_password)
-        .env("TEMPER_INIT_PROVIDER_KEY", INIT_PROVIDER_KEY)
+        .env("TEMPER_INIT_ADMIN_PASSWORD", request.admin_password);
+    if request.scenario.agent_provider == "deepseek" {
+        command.env("TEMPER_INIT_PROVIDER_KEY", INIT_PROVIDER_KEY);
+    }
+    let status = command
         .env("TEMPER_SCENARIO_RUN_ID", request.scenario_run_id)
         .env(
             "TEMPER_LOG_FORMAT",
@@ -112,6 +114,12 @@ pub(super) fn run_temper_init(request: TemperInitRequest<'_>) -> Result<(), Stri
         .status()
         .map_err(|error| format!("temper init process spawns: {error}"))?;
     if status.success() {
+        if request.scenario.agent_provider == "anthropic" {
+            configure_anthropic_oauth_fixture(
+                request.bundle_dir,
+                &format!("jig-{}", request.scenario_run_id),
+            )?;
+        }
         Ok(())
     } else {
         Err(format!(
@@ -119,6 +127,108 @@ pub(super) fn run_temper_init(request: TemperInitRequest<'_>) -> Result<(), Stri
             read_tail(request.log, 160)
         ))
     }
+}
+
+fn configure_anthropic_oauth_fixture(bundle: &Path, access_token: &str) -> Result<(), String> {
+    let config_path = bundle.join("config.toml");
+    let mut config: TomlValue = fs::read_to_string(&config_path)
+        .map_err(|error| format!("read {}: {error}", config_path.display()))?
+        .parse()
+        .map_err(|error| format!("parse {}: {error}", config_path.display()))?;
+    let profiles = config
+        .get_mut("agent")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|agent| agent.get_mut("profiles"))
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| "generated config has no [agent.profiles] table".to_string())?;
+    if profiles.is_empty() {
+        return Err("generated config has no agent profile for the live provider".to_string());
+    }
+    for (_, profile) in profiles.iter_mut() {
+        profile
+            .as_table_mut()
+            .ok_or_else(|| "generated agent profile is not a table".to_string())?
+            .insert(
+                "credential".to_string(),
+                TomlValue::String("agent-provider".to_string()),
+            );
+    }
+    fs::write(
+        &config_path,
+        toml::to_string_pretty(&config)
+            .map_err(|error| format!("serialize {}: {error}", config_path.display()))?,
+    )
+    .map_err(|error| format!("write {}: {error}", config_path.display()))?;
+
+    let credentials_path = bundle.join("credentials.toml");
+    let mut credentials: TomlValue = fs::read_to_string(&credentials_path)
+        .map_err(|error| format!("read {}: {error}", credentials_path.display()))?
+        .parse()
+        .map_err(|error| format!("parse {}: {error}", credentials_path.display()))?;
+    let root = credentials
+        .as_table_mut()
+        .ok_or_else(|| "generated credentials root is not a table".to_string())?;
+    let agent = root
+        .entry("agent")
+        .or_insert_with(|| TomlValue::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| "generated credentials [agent] is not a table".to_string())?;
+    let providers = agent
+        .entry("providers")
+        .or_insert_with(|| TomlValue::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| "generated credentials [agent.providers] is not a table".to_string())?;
+    providers.insert(
+        "anthropic".to_string(),
+        TomlValue::Table(toml::Table::from_iter([
+            ("type".to_string(), TomlValue::String("oauth".to_string())),
+            (
+                "access".to_string(),
+                TomlValue::String(access_token.to_string()),
+            ),
+            (
+                "refresh".to_string(),
+                TomlValue::String(access_token.to_string()),
+            ),
+            (
+                "expires".to_string(),
+                TomlValue::Integer(9_999_999_999_000_i64),
+            ),
+        ])),
+    );
+    let secrets = root
+        .entry("secrets")
+        .or_insert_with(|| TomlValue::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| "generated credentials [secrets] is not a table".to_string())?;
+    let credential_json = serde_json::json!({
+        "type": "oauth",
+        "access_token": access_token,
+        "refresh_token": access_token,
+        "expires_at_unix_seconds": 9_999_999_999_i64,
+    })
+    .to_string();
+    secrets.insert(
+        "agent-provider".to_string(),
+        TomlValue::Table(toml::Table::from_iter([
+            (
+                "kind".to_string(),
+                TomlValue::String("provider-credentials".to_string()),
+            ),
+            (
+                "provider".to_string(),
+                TomlValue::String("anthropic".to_string()),
+            ),
+            ("auth".to_string(), TomlValue::String("oauth".to_string())),
+            ("value".to_string(), TomlValue::String(credential_json)),
+        ])),
+    );
+    fs::write(
+        &credentials_path,
+        toml::to_string_pretty(&credentials)
+            .map_err(|error| format!("serialize {}: {error}", credentials_path.display()))?,
+    )
+    .map_err(|error| format!("write {}: {error}", credentials_path.display()))
 }
 
 pub(super) fn assert_init_workflow_yaml_matches(

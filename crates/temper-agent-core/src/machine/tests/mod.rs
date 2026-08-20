@@ -12,4 +12,6 @@ mod common;
 
 mod batching;
 mod decision_anchor;
+mod invocation;
 mod loop_lifecycle;
+mod ordinary_failure;

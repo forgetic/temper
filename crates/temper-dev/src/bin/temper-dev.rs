@@ -172,6 +172,10 @@ fn run_dev_benchmark_harness(args: &[OsString]) -> i32 {
             return 1;
         }
     }
+    if let Err(error) = verify_ordinary_condition_comparability(&controlled_root) {
+        eprintln!("temper-dev: controlled benchmark comparison failed: {error}");
+        return 1;
+    }
 
     eprintln!(
         "temper-dev: verified harness artifacts in {} and {}",
@@ -269,6 +273,21 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
     expect_exact(&aggregate, "/metrics/diff_files_changed/median", 1)?;
     expect_exact(&aggregate, "/metrics/diff_insertions/median", 1)?;
     expect_exact(&aggregate, "/metrics/diff_deletions/median", 5)?;
+    expect_at_least(
+        &aggregate,
+        "/metrics/ordinary_failure_execution_failure/median",
+        1,
+    )?;
+    expect_exact(
+        &aggregate,
+        "/metrics/ordinary_failure_circuit_redirect/median",
+        1,
+    )?;
+    expect_exact(
+        &aggregate,
+        "/metrics/ordinary_repeated_failure_redirects/median",
+        1,
+    )?;
 
     let repetition = root.join("repetitions/001");
     let run = read_json(&repetition.join("run.json"))?;
@@ -284,6 +303,64 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
     if !repetition.join("expected.patch").is_file() {
         return Err("controlled repetition omitted expected.patch snapshot".to_string());
     }
+    expect_at_least(
+        &run,
+        "/metrics/tools/ordinary/failure_category_coverage/observed",
+        2,
+    )?;
+    expect_at_least(
+        &run,
+        "/metrics/tools/ordinary/failure_category_coverage/expected",
+        2,
+    )?;
+    expect_equal_numbers(
+        &run,
+        "/metrics/tools/ordinary/failure_category_coverage/observed",
+        "/metrics/tools/ordinary/failure_category_coverage/expected",
+    )?;
+    expect_at_least(
+        &run,
+        "/metrics/tools/ordinary/failure_reason_coverage/observed",
+        2,
+    )?;
+    expect_at_least(
+        &run,
+        "/metrics/tools/ordinary/failure_reason_coverage/expected",
+        2,
+    )?;
+    expect_equal_numbers(
+        &run,
+        "/metrics/tools/ordinary/failure_reason_coverage/observed",
+        "/metrics/tools/ordinary/failure_reason_coverage/expected",
+    )?;
+    expect_at_least(
+        &run,
+        "/metrics/tools/ordinary/failures_by_category/execution_failure",
+        1,
+    )?;
+    expect_exact(
+        &run,
+        "/metrics/tools/ordinary/failures_by_category/circuit_redirect",
+        1,
+    )?;
+    expect_at_least(
+        &run,
+        "/metrics/tools/ordinary/failures_by_reason/tool_reported_failure",
+        1,
+    )?;
+    expect_exact(
+        &run,
+        "/metrics/tools/ordinary/failures_by_reason/repeated_non_retryable",
+        1,
+    )?;
+    expect_exact(
+        &run,
+        "/metrics/tools/ordinary/repeated_failure_redirects",
+        1,
+    )?;
+    let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
+        .map_err(|error| format!("read controlled trace: {error}"))?;
+    benchmark::verify_ordinary_failure_recovery(&trace)?;
 
     match cli_condition {
         "codebase-memory-enabled" => {
@@ -308,7 +385,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             expect_exact(&run, "/metrics/graph/typed_lineage_coverage/expected", 7)?;
             expect_exact(
                 &run,
-                "/metrics/graph/failures_by_category/exploration_closed",
+                "/metrics/graph/failures_by_category/graph_lifecycle_denial",
                 3,
             )?;
             expect_exact(
@@ -418,8 +495,19 @@ fn verify_complete_compound_discovery(run: &Value) -> Result<(), String> {
         "/metrics/graph/conventional_discovery_before_selection/shell_command_classification_coverage/expected",
         1,
     )?;
-    expect_exact(run, "/metrics/tools/by_name/bash/calls", 2)?;
+    expect_exact(run, "/metrics/tools/by_name/bash/calls", 5)?;
     expect_absent(run, "/metrics/tools/by_name/grep")
+}
+
+fn verify_ordinary_condition_comparability(root: &Path) -> Result<(), String> {
+    let disabled = read_json(&root.join("disabled/repetitions/001/run.json"))?;
+    let unavailable = read_json(&root.join("unavailable/repetitions/001/run.json"))?;
+    let pointer = "/metrics/tools/ordinary";
+    if disabled.pointer(pointer) == unavailable.pointer(pointer) {
+        Ok(())
+    } else {
+        Err("disabled and unavailable ordinary-tool metrics differ".to_string())
+    }
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {
@@ -440,6 +528,18 @@ fn expect_at_least(value: &Value, pointer: &str, minimum: u64) -> Result<(), Str
         actual => Err(format!(
             "{pointer} was {actual:?}; expected at least {minimum}"
         )),
+    }
+}
+
+fn expect_equal_numbers(value: &Value, left: &str, right: &str) -> Result<(), String> {
+    let left_value = value.pointer(left).and_then(Value::as_u64);
+    let right_value = value.pointer(right).and_then(Value::as_u64);
+    if left_value.is_some() && left_value == right_value {
+        Ok(())
+    } else {
+        Err(format!(
+            "{left} was {left_value:?}; expected the same count as {right} ({right_value:?})"
+        ))
     }
 }
 

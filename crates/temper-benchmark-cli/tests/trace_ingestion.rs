@@ -330,6 +330,7 @@ fn run_summary_rejects_unknown_fields_and_unsupported_versions() {
     assert_eq!(metrics["turns"], serde_json::json!(1));
     assert_eq!(metrics["model"]["calls"], serde_json::json!(0));
     assert_eq!(metrics["tools"]["calls"], serde_json::json!(1));
+    assert_eq!(metrics["tools"]["ordinary"]["calls"], serde_json::json!(1));
     assert_eq!(metrics["structure"]["mutations"], serde_json::json!(0));
     assert_eq!(metrics["structure"]["mutation_turns"], serde_json::json!(0));
     assert_eq!(
@@ -346,11 +347,16 @@ fn run_summary_rejects_unknown_fields_and_unsupported_versions() {
     );
 
     let mut legacy_v1 = rendered.clone();
+    legacy_v1["metrics"]["tools"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ordinary");
     let structure = legacy_v1["metrics"]["structure"].as_object_mut().unwrap();
     structure.remove("mutation_turns");
     structure.remove("single_mutation_turns");
     structure.remove("max_mutations_per_turn");
     let legacy_v1 = serde_json::from_value::<RunSummaryV1>(legacy_v1).unwrap();
+    assert_eq!(legacy_v1.metrics.tools.as_ref().unwrap().ordinary, None);
     let structure = legacy_v1.metrics.structure.as_ref().unwrap();
     assert_eq!(structure.mutation_turns, None);
     assert_eq!(structure.single_mutation_turns, None);
