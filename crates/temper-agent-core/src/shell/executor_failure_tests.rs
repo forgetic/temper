@@ -342,3 +342,56 @@ fn catalog_preflight_rejection_never_executes_the_registry_tool() {
         ToolFailureReason::InvalidArguments
     );
 }
+
+#[test]
+fn local_circuit_redirect_emits_canonical_failure_without_registry_or_arguments() {
+    const PRIVATE_ARGUMENT: &str = "Authorization: Bearer REDIRECT-ARGUMENT";
+    let failure = ToolFailureDiagnostic::new(
+        ToolFailureCategory::CircuitRedirect,
+        ToolFailureReason::RepeatedNonRetryable,
+    );
+    let call = ToolCall {
+        id: "redirected".to_string(),
+        name: "bash".to_string(),
+        arguments: serde_json::json!({"command":PRIVATE_ARGUMENT}),
+    };
+
+    let (event, completion) = local_redirect(7, 3, call, failure.clone());
+    let AgentEvent::ToolEnd {
+        id,
+        name,
+        status,
+        duration_ms,
+        result,
+    } = event
+    else {
+        panic!("expected canonical tool end");
+    };
+    assert_eq!(id, "redirected");
+    assert_eq!(name, "bash");
+    assert_eq!(status, ToolCallStatus::Failed);
+    assert_eq!(duration_ms, 0);
+    assert_eq!(result.failure.as_ref(), Some(&failure));
+    assert_eq!(result.preview, None);
+    assert!(!format!("{result:?}").contains(PRIVATE_ARGUMENT));
+
+    let AgentCompletion::ToolFinished {
+        operation_generation,
+        batch_generation,
+        id,
+        output,
+        failure: completed_failure,
+    } = completion
+    else {
+        panic!("expected local tool completion");
+    };
+    assert_eq!((operation_generation, batch_generation), (7, 3));
+    assert_eq!(id, "redirected");
+    assert_eq!(completed_failure, Some(failure.clone()));
+    let text = output.content.iter().find_map(|block| match block {
+        tongs::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(text, Some(failure.message.as_str()));
+    assert!(!format!("{output:?}").contains(PRIVATE_ARGUMENT));
+}

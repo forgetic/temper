@@ -103,6 +103,7 @@ pub enum ToolFailureReasonV1 {
     RunCancelled,
     ExplorationClosed,
     RepeatedNonRetryable,
+    RetryBudgetExhausted,
     ConfigurationStartup,
     ProjectNotReady,
     IndexFailure,
@@ -127,6 +128,7 @@ impl ToolFailureReasonV1 {
             Self::RunCancelled => "run_cancelled",
             Self::ExplorationClosed => "exploration_closed",
             Self::RepeatedNonRetryable => "repeated_non_retryable",
+            Self::RetryBudgetExhausted => "retry_budget_exhausted",
             Self::ConfigurationStartup => "configuration_startup",
             Self::ProjectNotReady => "project_not_ready",
             Self::IndexFailure => "index_failure",
@@ -164,6 +166,9 @@ impl ToolFailureReasonV1 {
             Self::RepeatedNonRetryable => {
                 "this tool call repeats a non-retryable failure; change the invocation before trying again"
             }
+            Self::RetryBudgetExhausted => {
+                "this retryable tool call exhausted its fixed execution budget; change the invocation or choose a different action"
+            }
             Self::ConfigurationStartup => "codebase-memory setup did not complete",
             Self::ProjectNotReady => "codebase-memory project is not ready",
             Self::IndexFailure => "codebase-memory indexing failed",
@@ -189,7 +194,8 @@ impl ToolFailureReasonV1 {
             | Self::ToolReportedFailure
             | Self::ToolExecutionError
             | Self::InvalidModelInput
-            | Self::RepeatedNonRetryable => ToolRetryDispositionV1::CorrectInvocation,
+            | Self::RepeatedNonRetryable
+            | Self::RetryBudgetExhausted => ToolRetryDispositionV1::CorrectInvocation,
             Self::PolicyPrecondition | Self::AccessDenied => ToolRetryDispositionV1::SatisfyPolicy,
             Self::ExplorationClosed
             | Self::ConfigurationStartup
@@ -258,7 +264,7 @@ impl ToolFailureReasonV1 {
                 )
                 | (
                     ToolFailureCategoryV1::CircuitRedirect,
-                    Self::RepeatedNonRetryable
+                    Self::RepeatedNonRetryable | Self::RetryBudgetExhausted
                 )
         )
     }

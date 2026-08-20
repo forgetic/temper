@@ -27,6 +27,8 @@
 mod batching;
 mod core;
 mod decision_anchor;
+mod messages;
+mod ordinary_failure;
 mod protocol;
 mod tool_failure;
 

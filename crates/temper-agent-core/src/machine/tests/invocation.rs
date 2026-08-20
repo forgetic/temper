@@ -13,8 +13,12 @@ use temper_agent_io::{EngineTime, Machine};
 use tongs::model::{AssistantMessage, ContentBlock, Message, StopReason, ToolCall, Usage};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
 
-use super::common::{complete, llm_responded, run_tools, tool_finished, tool_output, user};
-use crate::machine::{AgentEvent, AgentMachine, AgentRequest, ToolFailureReason};
+use super::common::{
+    complete, llm_responded, run_tools, tool_failed, tool_finished, tool_output, user,
+};
+use crate::machine::{
+    AgentEvent, AgentMachine, AgentRequest, ToolFailureDiagnostic, ToolFailureReason,
+};
 use crate::{REJECTED_TOOL_NAME, ToolInvocationCatalog};
 
 struct ContractTool {
@@ -77,6 +81,14 @@ fn catalog(names: &[&'static str]) -> Arc<ToolInvocationCatalog> {
                         "required":["path","edits"]
                     }),
                     ToolEffects::write(),
+                ),
+                "bash" => (
+                    serde_json::json!({
+                        "type":"object",
+                        "properties":{"command":{"type":"string"}},
+                        "required":["command"]
+                    }),
+                    ToolEffects::process(),
                 ),
                 "codebase_memory_search_graph" => (
                     serde_json::json!({
@@ -347,6 +359,78 @@ fn canonical_effects_control_alias_batching_before_dispatch() {
     let (call, rejection) = dispatched(&second);
     assert_eq!(call.name, "write");
     assert!(rejection.is_none());
+}
+
+#[test]
+fn anthropic_process_alias_keeps_its_canonical_batch_barrier() {
+    let mut machine = machine(catalog(&["read", "bash"]));
+    let _ = machine.on_start(EngineTime::ZERO);
+    let first = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "anthropic-messages",
+            vec![
+                ("read-call", "Read", serde_json::json!({"file_path":"a"})),
+                ("bash-call", "Bash", serde_json::json!({"command":"true"})),
+            ],
+        )),
+    );
+    assert_eq!(run_tools(&first), ["read-call"]);
+    let second = complete(
+        &mut machine,
+        tool_finished("read-call", tool_output("read", false)),
+    );
+    assert_eq!(run_tools(&second), ["bash-call"]);
+    let (call, rejection) = dispatched(&second);
+    assert_eq!(call.name, "bash");
+    assert!(rejection.is_none());
+}
+
+#[test]
+fn provider_alias_and_canonical_spelling_share_failure_identity() {
+    let mut machine = machine(catalog(&["read"]));
+    let _ = machine.on_start(EngineTime::ZERO);
+    let first = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "anthropic-messages",
+            vec![(
+                "alias",
+                "Read",
+                serde_json::json!({"file_path":"src/lib.rs"}),
+            )],
+        )),
+    );
+    let (call, rejection) = dispatched(&first);
+    assert_eq!(call.name, "read");
+    assert!(rejection.is_none());
+    let _ = complete(
+        &mut machine,
+        tool_failed(
+            "alias",
+            tool_output("failed", true),
+            ToolFailureDiagnostic::execution(ToolFailureReason::ToolReportedFailure),
+        ),
+    );
+
+    let repeated = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "openai-responses",
+            vec![(
+                "canonical",
+                "read",
+                serde_json::json!({"path":"src/lib.rs"}),
+            )],
+        )),
+    );
+    assert!(run_tools(&repeated).is_empty());
+    assert!(repeated.iter().any(|request| matches!(
+        request,
+        AgentRequest::RedirectTool { call, failure, .. }
+            if call.name == "read"
+                && failure.reason == ToolFailureReason::RepeatedNonRetryable
+    )));
 }
 
 #[test]
