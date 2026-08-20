@@ -22,6 +22,7 @@ use tongs::tools::{ToolEffects, ToolOutput};
 /// agent-log-cleanup plan (pieces B/D).
 pub type ArgPreviewFn = Arc<dyn Fn(&str, &serde_json::Value) -> Option<String> + Send + Sync>;
 
+use crate::ToolInvocationCatalog;
 use crate::model_failure::ModelFailureDiagnostic;
 
 use super::batching::{PendingTool, plan_batches};
@@ -61,10 +62,10 @@ pub struct AgentMachine {
     iterations: usize,
     phase: Phase,
     turn: usize,
-    /// Per-tool-name effect declarations, used to plan effect-compatible
-    /// parallel batches. Unknown tools default to a write effect (fail-closed:
-    /// serialize). Static config, supplied at construction by the shell.
-    effects: BTreeMap<String, ToolEffects>,
+    /// Final registry-derived definitions, aliases, schemas, and effects.
+    invocation_catalog: Arc<ToolInvocationCatalog>,
+    /// Typed local failures for calls scrubbed by the invocation boundary.
+    invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
     /// Effect-compatible batches still to run this turn, in original tool-call
     /// order (front = the batch currently in flight). Each batch's calls run
     /// concurrently; batches run strictly in sequence.
@@ -122,14 +123,29 @@ impl AgentMachine {
         max_iterations: usize,
         effects: BTreeMap<String, ToolEffects>,
     ) -> Self {
-        let decision_anchors = DecisionAnchorState::from_effects(&effects);
+        Self::with_invocation_catalog(
+            initial_messages,
+            max_iterations,
+            Arc::new(ToolInvocationCatalog::permissive(effects)),
+        )
+    }
+
+    /// Build the production machine around one finalized registry-derived
+    /// invocation catalog.
+    pub fn with_invocation_catalog(
+        initial_messages: Vec<Message>,
+        max_iterations: usize,
+        invocation_catalog: Arc<ToolInvocationCatalog>,
+    ) -> Self {
+        let decision_anchors = DecisionAnchorState::from_effects(invocation_catalog.effects());
         Self {
             messages: initial_messages,
             max_iterations,
             iterations: 0,
             phase: Phase::AwaitingLlm,
             turn: 0,
-            effects,
+            invocation_catalog,
+            invocation_rejections: BTreeMap::new(),
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             decision_anchors,
@@ -266,7 +282,10 @@ impl AgentMachine {
         requests
     }
 
-    fn on_llm_responded(&mut self, assistant: AssistantMessage) -> Vec<AgentRequest> {
+    fn on_llm_responded(&mut self, mut assistant: AssistantMessage) -> Vec<AgentRequest> {
+        // Normalize before the assistant turn is emitted, retained, inspected
+        // by policy, previewed, batched, or dispatched.
+        self.invocation_rejections = self.invocation_catalog.canonicalize_message(&mut assistant);
         let mut requests = vec![AgentRequest::Emit(AgentEvent::AssistantMessage {
             content: assistant.content.clone(),
         })];
@@ -302,7 +321,7 @@ impl AgentMachine {
         // serialized batch. This is pure policy over the calls' declared effects.
         self.phase = Phase::AwaitingTools;
         self.turn_results.clear();
-        self.pending_batches = plan_batches(&self.effects, &tool_calls);
+        self.pending_batches = plan_batches(self.invocation_catalog.effects(), &tool_calls);
         requests.extend(self.dispatch_current_batch());
         requests
     }
@@ -344,6 +363,7 @@ impl AgentMachine {
             requests.push(AgentRequest::RunTool {
                 operation_generation,
                 batch_generation,
+                rejection: self.invocation_rejections.get(&call.id).cloned(),
                 call,
                 mutation_blocked,
             });
@@ -422,6 +442,9 @@ impl AgentMachine {
                         self.decision_anchor_exhausted = true;
                     }
                 }
+            }
+            for pending in &batch {
+                self.invocation_rejections.remove(&pending.call.id);
             }
             self.turn_results.extend(batch);
         }

@@ -29,6 +29,7 @@ pub(super) struct ModelCallObservability<'a> {
     pub(super) model: &'a ModelIdentity,
     pub(super) clock: &'a dyn EventClock,
     pub(super) events: &'a dyn EventSink,
+    pub(super) invocation_catalog: Option<&'a crate::ToolInvocationCatalog>,
 }
 
 /// Deadline and cancellation authority shared by every retry of one model
@@ -482,9 +483,13 @@ async fn stream_one_attempt(
             }
             Ok(StreamEvent::ToolCallEnd { tool_call, .. }) => {
                 mark_first_token(&mut time_to_first_token_ms, clock, started_ms);
+                let name = observability.invocation_catalog.map_or_else(
+                    || tool_call.name.clone(),
+                    |catalog| catalog.telemetry_name(provider.api(), &tool_call.name),
+                );
                 events.emit(AgentEvent::StreamDelta(StreamDelta::ToolCall {
                     id: tool_call.id,
-                    name: tool_call.name,
+                    name,
                 }));
             }
             Ok(_) => {}

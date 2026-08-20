@@ -14,6 +14,7 @@ use tongs::model::{AssistantMessage, Message, ToolCall};
 use tongs::provider::{Provider, StreamOptions, ToolDef};
 use tongs::tools::ToolRegistry;
 
+use crate::ToolInvocationCatalog;
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
     CODEBASE_MEMORY_TOOL_PREFIX, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, OperationGeneration,
@@ -160,6 +161,7 @@ pub struct AgentShell {
     turn_hook: Option<Arc<dyn TurnHook>>,
     turns_started: std::sync::atomic::AtomicUsize,
     outcome: std::sync::Mutex<Option<temper_agent_io::OneshotSender<AgentOutcome>>>,
+    invocation_catalog: Arc<ToolInvocationCatalog>,
 }
 
 impl AgentShell {
@@ -175,6 +177,7 @@ impl AgentShell {
         operation_limits: AgentOperationLimits,
         observability: RunObservability,
         outcome: temper_agent_io::OneshotSender<AgentOutcome>,
+        invocation_catalog: Arc<ToolInvocationCatalog>,
     ) -> Self {
         let task_group = RunTaskGroup::new(cq.clone());
         Self {
@@ -194,6 +197,7 @@ impl AgentShell {
             turn_hook: None,
             turns_started: std::sync::atomic::AtomicUsize::new(0),
             outcome: std::sync::Mutex::new(Some(outcome)),
+            invocation_catalog,
         }
     }
 
@@ -226,6 +230,7 @@ impl AgentShell {
         let cq = self.cq.clone();
         let turn_hook = self.turn_hook.clone();
         let limits = self.operation_limits;
+        let invocation_catalog = Arc::clone(&self.invocation_catalog);
         let (cancellation, task_guard) = self.task_group.register();
         let turn = self
             .turns_started
@@ -258,6 +263,7 @@ impl AgentShell {
                     model: &model,
                     clock: clock.as_ref(),
                     events: events.as_ref(),
+                    invocation_catalog: Some(invocation_catalog.as_ref()),
                 },
             )
             .await;
@@ -292,6 +298,7 @@ impl AgentShell {
         batch_generation: BatchGeneration,
         call: ToolCall,
         mutation_blocked: bool,
+        rejection: Option<ToolFailureDiagnostic>,
     ) {
         let tools = Arc::clone(&self.tools);
         let events = Arc::clone(&self.events);
@@ -311,6 +318,7 @@ impl AgentShell {
                 clock.as_ref(),
                 events.as_ref(),
                 operator_transcript.as_deref(),
+                rejection,
             )
             .await
             else {
@@ -358,11 +366,13 @@ impl Executor<AgentMachine> for AgentShell {
                 batch_generation,
                 call,
                 mutation_blocked,
+                rejection,
             } => self.execute_run_tool(
                 operation_generation,
                 batch_generation,
                 call,
                 mutation_blocked,
+                rejection,
             ),
             AgentRequest::CancelActive {
                 operation_generation,
@@ -405,9 +415,13 @@ async fn execute_tool(
     clock: &dyn EventClock,
     events: &dyn EventSink,
     operator_transcript: Option<&dyn OperatorTranscriptSink>,
+    preflight_failure: Option<ToolFailureDiagnostic>,
 ) -> Option<ExecutedTool> {
     let started_ms = clock.now_millis();
     let operation = async {
+        if let Some(failure) = preflight_failure {
+            return failed_execution(tool_error_output(failure.message.as_str()), failure);
+        }
         if mutation_blocked {
             return failed_execution(
                 tool_error_output(DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE),

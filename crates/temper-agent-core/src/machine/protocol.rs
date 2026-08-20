@@ -267,6 +267,9 @@ pub enum AgentRequest {
         /// required source evidence, so the shell must return a local error
         /// without invoking this workspace-mutating tool.
         mutation_blocked: bool,
+        /// Catalog-owned preflight rejection. The shell settles this locally
+        /// and must not perform a registry lookup or execution.
+        rejection: Option<ToolFailureDiagnostic>,
     },
     /// Cancel every model/tool task owned by the shell. The machine finishes
     /// only after the matching [`AgentCompletion::TasksQuiesced`] arrives.

@@ -120,6 +120,7 @@ fn run_stalled_model(
                 model: &ModelIdentity::new("test", "stalled"),
                 clock: &SystemEventClock,
                 events: observed.as_ref(),
+                invocation_catalog: None,
             },
         )
         .await
@@ -238,6 +239,7 @@ fn external_model_cancellation_emits_terminal_boundary_without_time_advance() {
                 model: &ModelIdentity::new("test", "cancel"),
                 clock: &SystemEventClock,
                 events: observed.as_ref(),
+                invocation_catalog: None,
             },
         )
         .await
@@ -345,6 +347,7 @@ fn model_attempt_timing_and_usage_use_the_injected_clock() {
                 model: &ModelIdentity::new("fake-provider", "fake-model"),
                 clock: &clock,
                 events: observed.as_ref(),
+                invocation_catalog: None,
             },
         )
         .await;
