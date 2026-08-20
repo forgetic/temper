@@ -107,13 +107,13 @@ mod tests {
         )
     }
 
-    fn unavailable_output() -> ToolOutput {
+    fn failure_output(category: &str) -> ToolOutput {
         ToolOutput {
             content: Vec::new(),
             details: Some(serde_json::json!({
                 SAFE_TOOL_FAILURE_DETAIL_KEY: {
                     "source": "codebase_memory",
-                    "category": "transport",
+                    "category": category,
                 },
             })),
             is_error: true,
@@ -489,7 +489,7 @@ mod tests {
             fallback.on_tool_finished(
                 "source",
                 "codebase_memory_get_code_snippet",
-                &unavailable_output(),
+                &failure_output("transport"),
             ),
             DecisionAnchorTransition::Unchanged
         );
@@ -511,11 +511,49 @@ mod tests {
         unrelated.on_tool_finished(
             "unrelated",
             "codebase_memory_search_graph",
-            &unavailable_output(),
+            &failure_output("transport"),
         );
         assert!(
             unrelated.blocks_mutation("write"),
             "an unrelated provider outage cannot bypass an active anchor"
+        );
+    }
+
+    #[test]
+    fn exploration_closure_cannot_release_incomplete_anchor_authority() {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut state,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
+        finish(
+            &mut state,
+            "trace",
+            "codebase_memory_trace_path",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+        );
+        state.on_tool_dispatched(
+            &call("closed-source", "codebase_memory_get_code_snippet"),
+            2,
+        );
+
+        assert_eq!(
+            state.on_tool_finished(
+                "closed-source",
+                "codebase_memory_get_code_snippet",
+                &failure_output("graph_lifecycle_denial"),
+            ),
+            DecisionAnchorTransition::RecoveryNeeded
+        );
+        assert!(
+            state.blocks_mutation("write"),
+            "closure cannot manufacture the missing source/test evidence"
         );
     }
 
