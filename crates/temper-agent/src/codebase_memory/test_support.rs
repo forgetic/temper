@@ -222,7 +222,9 @@ for line in sys.stdin:
                 time.sleep(0.20)
             elif mode == "graph-timeout":
                 time.sleep(60)
-            if mode == "graph-systemic":
+            if mode == "graph-closure":
+                tool_result(request["id"], "exploration_closed", True)
+            elif mode == "graph-systemic":
                 tool_result(request["id"], "provider protocol is unusable SECRET", True)
             elif mode == "graph-errors" and args.get("query") == "invalid":
                 tool_result(request["id"], "invalid argument: query-local SECRET", True)

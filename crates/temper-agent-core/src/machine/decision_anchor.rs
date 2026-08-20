@@ -528,12 +528,17 @@ fn trusted_unavailable_provider_output(name: &str, output: &ToolOutput) -> bool 
     else {
         return false;
     };
-    marker.get("source").and_then(serde_json::Value::as_str) == Some("codebase_memory")
-        && marker
-            .get("category")
-            .and_then(serde_json::Value::as_str)
-            .and_then(ToolFailureCategory::from_stable_str)
-            .is_some()
+    if marker.get("source").and_then(serde_json::Value::as_str) != Some("codebase_memory") {
+        return false;
+    }
+    marker
+        .get("category")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ToolFailureCategory::from_stable_str)
+        // Exploration closure grants no new authority. In particular, an
+        // expected lifecycle denial cannot release an incomplete anchor as if
+        // the provider had become systemically unavailable.
+        .is_some_and(|category| category != ToolFailureCategory::GraphLifecycleDenial)
 }
 
 fn anchor_output(name: &str, output: &ToolOutput) -> Option<AnchorOutput> {

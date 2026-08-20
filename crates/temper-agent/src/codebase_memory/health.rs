@@ -75,5 +75,10 @@ impl CodebaseMemoryHealth {
 }
 
 fn opens_run_circuit(category: ToolFailureCategory) -> bool {
-    !matches!(category, ToolFailureCategory::InvalidModelInput)
+    !matches!(
+        category,
+        // Both outcomes are request/lifecycle local rather than evidence that
+        // the shared provider process is unusable.
+        ToolFailureCategory::InvalidModelInput | ToolFailureCategory::GraphLifecycleDenial
+    )
 }
