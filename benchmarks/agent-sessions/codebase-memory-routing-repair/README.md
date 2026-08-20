@@ -55,6 +55,15 @@ controlled source snippets, so they remain local review artifacts and must not
 be published without the same source/privacy review required for live traces.
 The Jig deliberately avoids broad architecture and empty graph searches.
 
+The controlled Jigs also run the same closed ordinary-tool recovery sequence in
+every condition after source selection: one `bash` execution reports a typed
+failure, the identical invocation is redirected locally without execution, and
+a corrected invocation succeeds. Run summaries count the execution failure and
+single circuit redirect by closed category/reason, with complete coverage; they
+never retain the command, raw error, or the process-local invocation
+fingerprint. The redirect remains bounded to one event, and disabled and
+unavailable profiles must expose identical ordinary metrics.
+
 Every condition uses the same parseable compound shell fallback before the
 first exact selection: `cd repo && rg ...`. The manifest counts its one `rg`
 segment only when full shell coverage is present; it does not infer a count

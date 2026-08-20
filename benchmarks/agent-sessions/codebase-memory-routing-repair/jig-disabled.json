@@ -51,6 +51,51 @@
       "turns": [
         {
           "tool_call": {
+            "id": "ordinary_failure_initial",
+            "name": "bash",
+            "args": {
+              "command": "false",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "ordinary_failure_repeated",
+            "name": "bash",
+            "args": {
+              "command": "false",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "ordinary_failure_recovery",
+            "name": "bash",
+            "args": {
+              "command": "true",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
             "id": "patch_retry_affinity",
             "name": "apply_patch",
             "args": {

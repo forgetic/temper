@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use temper_protocol_activity::{
     AgentAssignmentIdentityV1, CaptureModeV1, FailureInfoV1, StopReasonV1, ToolFailureCategoryV1,
+    ToolFailureReasonV1,
 };
 use temper_protocol_agent::WorkspaceResult;
 
@@ -256,6 +257,29 @@ pub struct ToolMetricsV1 {
     pub by_name: BTreeMap<String, ToolNameMetricsV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub slowest: Vec<SlowToolCallV1>,
+    /// Graph wrappers retain their separate metric group and are excluded from
+    /// these ordinary-tool totals. Historical summaries leave this absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinary: Option<OrdinaryToolMetricsV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrdinaryToolMetricsV1 {
+    pub calls: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+    pub cancelled: u64,
+    pub status_coverage: MetricCoverageV1,
+    pub failures_by_category: BTreeMap<ToolFailureCategoryV1, u64>,
+    pub failure_category_coverage: MetricCoverageV1,
+    pub failures_by_reason: BTreeMap<ToolFailureReasonV1, u64>,
+    pub failure_reason_coverage: MetricCoverageV1,
+    /// Available only when every ordinary call status and every non-success
+    /// diagnostic are present. This is derived solely from the closed
+    /// circuit-redirect category/reasons, never from arguments or fingerprints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeated_failure_redirects: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -498,6 +522,7 @@ pub enum TraceDiagnosticCodeV1 {
     ValidationEvidenceUnavailable,
     StructureEvidenceUnavailable,
     GraphEvidenceUnavailable,
+    OrdinaryToolEvidenceUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -57,6 +57,21 @@
 | write | 2 | 2 | 0 | 0 | 60 ms | 2/2 |
 | **Total** | **10** | **8** | **1** | **1** | **323 ms** | **10/10** |
 
+### Ordinary failure classification
+
+Graph wrappers are excluded from these totals.
+
+| Metric | Value |
+| --- | ---: |
+| Calls | 10 |
+| Succeeded | 8 |
+| Failed | 1 |
+| Cancelled | 1 |
+| Status coverage | 10/10 |
+| Failure-category coverage | 0/2 |
+| Failure-reason coverage | 0/2 |
+| Repeated-failure redirects | unavailable |
+
 ### Slowest calls
 
 | Rank | Tool | Call ID | Duration |
@@ -97,3 +112,5 @@ _No graph calls or decision-relevance rubric observed._
 | info | host_evidence_unavailable | — | offline traces do not contain host metadata |
 | info | diff_evidence_unavailable | — | offline traces do not contain final workspace diff evidence |
 | info | validation_evidence_unavailable | — | offline traces do not contain host-side validation evidence |
+| warning | ordinary_tool_evidence_unavailable | 10 | ordinary tool completion lacks a closed failure diagnostic; failure classification and repeated-redirect evidence are incomplete |
+| warning | ordinary_tool_evidence_unavailable | 28 | ordinary tool completion lacks a closed failure diagnostic; failure classification and repeated-redirect evidence are incomplete |
