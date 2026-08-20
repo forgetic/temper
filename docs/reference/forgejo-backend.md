@@ -324,9 +324,23 @@ is best-effort on this backend.
 ### CI uses Forgejo 16 per-run jobs APIs
 
 Forgejo 16.0.1 is the minimum supported release for every Temper Forgejo
-integration, not only CI. The backend lists workflow
-runs through `/repos/{owner}/{repo}/actions/runs`, strictly matches them to the
-requested pull request and/or commit, and expands every match through:
+integration, not only CI. The backend lists workflow runs through the explicitly
+paged endpoint:
+
+```text
+GET /repos/{owner}/{repo}/actions/runs?page={1..64}&limit=200
+```
+
+Forgejo ignores `limit` unless `page` is also present, so the traversal starts
+at page one and every physical run-list request carries both keys. The backend
+accepts the wrapped `workflow_runs` and `runs` page shapes, aggregates complete pages,
+and stops only on an empty or short page. One logical CI read makes at most 64
+run-list requests and can successfully aggregate at most 12,799 runs. A full
+page 64, an oversized page, repeated/non-advancing run identities, malformed
+JSON/shape, transport failure, or non-success status fails closed without an
+unpaged retry or fallback. Only after successful aggregation does the backend
+strictly match the requested pull request and/or commit and expand every match
+through:
 
 ```text
 GET /repos/{owner}/{repo}/actions/runs/{provider_run_id}/jobs
@@ -337,6 +351,13 @@ number. Every job must provide `id`, `run_id`, `attempt`, `task_id`, `name`, and
 `status`; those provider coordinates form the portable opaque job id. The
 backend selects the largest provider-reported attempt per stable job id. It
 never infers attempts from names or response order.
+
+`list_ci_jobs_with_presence`, `list_ci_jobs`, and opaque `get_ci_job` all use the
+same bounded inventory traversal, including discovery after page one.
+Pagination failures report only the normalized Actions endpoint, operation,
+page/limit, status or bounded failure class, and capped byte/row facts. Response
+bodies, credentials, authorization values, headers, and provider error text are
+never included.
 
 A non-empty `CiJobQuery.commit_sha` requires matching provider SHA evidence from
 the run or pull-request event payload. PR numbers, refs, branches, and the

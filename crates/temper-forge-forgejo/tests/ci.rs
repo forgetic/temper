@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Offline contracts for Forgejo 16 per-provider-run Actions job reads.
+#[path = "ci/pagination.rs"]
+mod pagination;
 mod support;
 
 use serde_json::{Value, json};
@@ -57,6 +59,22 @@ fn pull(number: u64, head_ref: &str, head_sha: &str) -> String {
     .to_string()
 }
 
+fn assert_run_list_pagination(request: &HttpRequest) {
+    let page = request
+        .query
+        .iter()
+        .find(|(key, _)| key == "page")
+        .and_then(|(_, value)| value.parse::<u32>().ok());
+    let limit = request
+        .query
+        .iter()
+        .find(|(key, _)| key == "limit")
+        .map(|(_, value)| value.as_str());
+    assert!(page.is_some_and(|page| page >= 1), "{:?}", request.query);
+    assert_eq!(limit, Some("200"), "{:?}", request.query);
+    assert_eq!(request.query.len(), 2, "{:?}", request.query);
+}
+
 fn assert_api_only(requests: &[HttpRequest]) {
     for request in requests {
         assert_eq!(request.method, HttpMethod::Get);
@@ -77,6 +95,11 @@ fn assert_api_only(requests: &[HttpRequest]) {
         assert!(!request.path.contains("/user/login"));
         assert!(!request.path.ends_with("/acme/widgets/actions"));
         assert_ne!(request.method, HttpMethod::Post);
+        if request.path.ends_with("/actions/runs") {
+            assert_run_list_pagination(request);
+        } else if request.path.contains("/actions/runs/") && request.path.ends_with("/jobs") {
+            assert!(request.query.is_empty());
+        }
     }
 }
 
