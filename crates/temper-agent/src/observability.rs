@@ -30,6 +30,15 @@ pub(crate) fn redacted_preview(input: &str, max_chars: usize) -> String {
     preview(&redact_secret_like_text(input), max_chars)
 }
 
+/// Returns whether applying the observability redactor would alter this value.
+/// Complete diagnostic evidence uses this as a fail-closed admission check: a
+/// value that needs redaction must be omitted rather than presented as complete.
+pub(crate) fn contains_secret_like_text(input: &str) -> bool {
+    let normalized = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    let redacted = redact_secret_like_text(input);
+    redacted != normalized || redacted.contains(REDACTED)
+}
+
 fn redact_secret_like_text(input: &str) -> String {
     let mut output = Vec::new();
     let mut redact_next = false;
@@ -62,6 +71,12 @@ fn redact_secret_like_text(input: &str) -> String {
                 continue;
             }
             SecretAssignment::None => {}
+        }
+
+        if is_secret_like_flag(raw) {
+            output.push(raw.to_string());
+            redact_next = true;
+            continue;
         }
 
         if looks_like_secret_value(raw) {
@@ -99,6 +114,16 @@ fn secret_assignment(raw: &str) -> SecretAssignment {
 fn is_bearer_marker(raw: &str) -> bool {
     raw.trim_matches(secret_key_wrapper)
         .eq_ignore_ascii_case("bearer")
+}
+
+fn is_secret_like_flag(raw: &str) -> bool {
+    let wrapped = raw.trim_matches(secret_key_wrapper);
+    let is_cli_flag = wrapped.starts_with('-');
+    let is_env_key = wrapped
+        .chars()
+        .all(|character| character.is_ascii_uppercase() || character == '_');
+    let candidate = wrapped.trim_start_matches('-');
+    !candidate.is_empty() && (is_cli_flag || is_env_key) && is_secret_like_key(candidate)
 }
 
 fn is_secret_like_key(key: &str) -> bool {

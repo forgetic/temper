@@ -22,6 +22,10 @@ fn tool_failure_categories_have_stable_wire_names_and_safe_messages() {
             "invalid_model_input",
         ),
         (ToolFailureCategoryV1::CircuitOpen, "circuit_open"),
+        (
+            ToolFailureCategoryV1::ExplorationClosed,
+            "exploration_closed",
+        ),
     ];
 
     for (category, wire_name) in cases {

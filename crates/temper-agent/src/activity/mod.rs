@@ -118,6 +118,17 @@ impl ActivityClock for SystemActivityClock {
 /// projections deliberately inspect `record.frame` and ignore attachments.
 pub trait ActivityProjection: Send + Sync {
     fn emit(&self, record: &AgentActivityChildRecordV1);
+
+    /// Emits a tool-start record with its independently finalized human
+    /// preview. Durable projections use the canonical record by default;
+    /// operational tracing overrides this to avoid reading diagnostic content.
+    fn emit_tool_started(
+        &self,
+        record: &AgentActivityChildRecordV1,
+        _human_arg_preview: Option<&str>,
+    ) {
+        self.emit(record);
+    }
 }
 
 pub(super) struct ProjectionSet {
@@ -128,6 +139,18 @@ impl ProjectionSet {
     pub(super) fn emit(&self, record: &AgentActivityChildRecordV1) {
         for projection in &self.projections {
             let _ = catch_unwind(AssertUnwindSafe(|| projection.emit(record)));
+        }
+    }
+
+    pub(super) fn emit_tool_started(
+        &self,
+        record: &AgentActivityChildRecordV1,
+        human_arg_preview: Option<&str>,
+    ) {
+        for projection in &self.projections {
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                projection.emit_tool_started(record, human_arg_preview)
+            }));
         }
     }
 }

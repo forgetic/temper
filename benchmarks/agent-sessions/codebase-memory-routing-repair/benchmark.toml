@@ -35,24 +35,12 @@ target_kind = "function_name"
 target = "worker_slot"
 
 [[graph_decision_targets]]
-target = "DeliveryAttempt"
+target = "DeliveryRouter::worker_for"
 kind = "caller"
 [graph_decision_targets.producer]
 tool = "trace_path"
 target_kind = "function_name"
 target = "worker_slot"
-[[graph_decision_targets.consumption]]
-tool = "get_code_snippet"
-target_kind = "qualified_name"
-target = "DeliveryAttempt"
-
-[[graph_decision_targets]]
-target = "DeliveryRouter::worker_for"
-kind = "caller"
-[graph_decision_targets.producer]
-tool = "get_code_snippet"
-target_kind = "qualified_name"
-target = "DeliveryAttempt"
 [[graph_decision_targets.consumption]]
 tool = "get_code_snippet"
 target_kind = "qualified_name"
@@ -64,7 +52,11 @@ kind = "focused_test"
 [graph_decision_targets.producer]
 tool = "search_graph"
 target_kind = "graph_query"
-target = "aliased delivery retry worker affinity"
+target = "alias retry behavioral regression"
+[[graph_decision_targets.consumption]]
+tool = "get_code_snippet"
+target_kind = "qualified_name"
+target = "alias_retries_stay_on_the_original_ordered_worker"
 
 [[graph_decision_targets]]
 target = "repo/src/route.rs"
@@ -83,3 +75,18 @@ unavailable_jig_script = "jig-unavailable.json"
 [annotations]
 provider_region = "loopback"
 cache_warmth = "not-applicable"
+
+[acceptance]
+mode = "live"
+smoke_repetitions = 1
+matrix_repetitions = 5
+provider = "openai-codex"
+model = "gpt-5.6-sol"
+minimum_relevance_percent = 50
+minimum_improvement_percent = 20
+improvement_measure = "conventional_discovery_calls"
+exact_source_selection_target = "repo/src/route.rs"
+required_decision_kinds = ["implementation", "caller", "focused_test"]
+required_consumption_modes = ["source", "selection"]
+privacy_forbidden_fragments = ["MCP-FIXTURE-SECRET", "Authorization: Bearer"]
+aggregate_privacy_forbidden_fragments = ["cd repo && rg worker_slot src", "let routing_topic = attempt.affinity_topic();", "/srv/data/git/runner", "cold stable upsert is ready"]

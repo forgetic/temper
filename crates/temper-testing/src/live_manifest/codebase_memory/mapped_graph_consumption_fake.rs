@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use jig_core::{Reply, RequestView, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use serde_json::Value as JsonValue;
+use temper_agent_core::CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE;
 
 use super::{
     BOUNDED_GRAPH_RESULT_NEEDLE, MAX_MODEL_MESSAGE_BYTES, ModelObservations,
@@ -96,8 +97,8 @@ fn reply(view: &RequestView) -> Reply {
         }
         6 => {
             assert!(
-                messages_contain(view, "do not retry codebase-memory immediately"),
-                "unavailable descendant must provide bounded fallback guidance"
+                messages_contain(view, CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE),
+                "post-decision descendant must receive local convergence guidance"
             );
             tool_reply(
                 "read-conventional-fallback-source",

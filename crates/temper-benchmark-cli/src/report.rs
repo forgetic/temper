@@ -354,6 +354,24 @@ fn render_graph(graph: Option<&GraphMetricsV1>, out: &mut String) {
         "Relevance coverage",
         coverage(&graph.relevance_coverage),
     );
+    row(
+        out,
+        "Typed correlation coverage",
+        graph
+            .typed_correlation_coverage
+            .as_ref()
+            .map(coverage)
+            .unwrap_or_else(unavailable),
+    );
+    row(
+        out,
+        "Typed lineage coverage",
+        graph
+            .typed_lineage_coverage
+            .as_ref()
+            .map(coverage)
+            .unwrap_or_else(unavailable),
+    );
     if let Some(discovery) = &graph.conventional_discovery_before_selection {
         row(
             out,

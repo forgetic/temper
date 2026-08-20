@@ -110,6 +110,30 @@ impl NormalizingEventSink {
         }
     }
 
+    fn project_tool_started(
+        &self,
+        turn: Option<u32>,
+        event: AgentActivityEventV1,
+        human_arg_preview: Option<&str>,
+    ) {
+        let timestamp = self.clock.now();
+        let record = AgentActivityChildRecordV1 {
+            frame: AgentActivityFrameV1 {
+                version: ACTIVITY_PROTOCOL_VERSION,
+                occurred_at: timestamp.occurred_at,
+                elapsed_ms: timestamp.elapsed_ms,
+                scope: self.scope.clone(),
+                turn,
+                event,
+            },
+            blobs: Vec::new(),
+        };
+        if record.frame.validate().is_ok() {
+            self.projections
+                .emit_tool_started(&record, human_arg_preview);
+        }
+    }
+
     fn normalize(&self, event: AgentEvent) {
         let mut state = self
             .state
@@ -182,7 +206,8 @@ impl NormalizingEventSink {
                 id,
                 name,
                 arg_preview,
-            } => self.tool_started(&state, id, name, arg_preview),
+                diagnostic_arguments,
+            } => self.tool_started(&state, id, name, arg_preview, diagnostic_arguments),
             AgentEvent::ToolEnd {
                 id,
                 name,
@@ -439,33 +464,42 @@ impl NormalizingEventSink {
         id: String,
         name: String,
         arg_preview: Option<String>,
+        diagnostic_arguments: Option<temper_agent_core::DiagnosticToolArguments>,
     ) {
-        // The start boundary is required in every enabled capture mode, but
-        // arguments are transcript content. Metadata therefore retains only
-        // the call identity and tool name; the worker independently enforces
-        // the same rule for forged child frames.
-        let arguments = if matches!(
-            self.policy.capture,
-            CaptureModeV1::Transcript | CaptureModeV1::Diagnostic
-        ) {
-            arg_preview.and_then(|value| {
-                nonempty(value).map(|value| {
-                    CapturedContentV1::Inline(sanitized_text(
-                        &value,
-                        self.policy.max_inline_bytes as usize,
-                    ))
-                })
-            })
-        } else {
-            None
+        // The start boundary is required in every enabled capture mode.
+        // Metadata retains no arguments. Transcript retains exactly the
+        // existing short preview. Diagnostic mode may replace only a bash
+        // preview with complete, pre-screened structured evidence; it omits
+        // candidates that exceed the configured inline bound rather than
+        // truncating or redacting them into a semantics-changing fragment.
+        let human_arg_preview = arg_preview.clone();
+        let arguments = match self.policy.capture {
+            CaptureModeV1::Off | CaptureModeV1::Metadata => None,
+            CaptureModeV1::Transcript => {
+                captured_arg_preview(arg_preview, self.policy.max_inline_bytes as usize)
+            }
+            CaptureModeV1::Diagnostic if name == "bash" => diagnostic_arguments.and_then(|value| {
+                (!value.as_str().trim().is_empty()
+                    && value.as_str().len() <= self.policy.max_inline_bytes as usize)
+                    .then(|| {
+                        CapturedContentV1::Inline(InlineContentV1 {
+                            text: value.into_string(),
+                            truncated: false,
+                        })
+                    })
+            }),
+            CaptureModeV1::Diagnostic => {
+                captured_arg_preview(arg_preview, self.policy.max_inline_bytes as usize)
+            }
         };
-        self.project(
+        self.project_tool_started(
             state.current_turn,
             AgentActivityEventV1::ToolStarted(ToolStartedV1 {
                 call_id: id,
                 name,
                 arguments,
             }),
+            human_arg_preview.as_deref(),
         );
     }
 
@@ -601,6 +635,13 @@ fn looks_like_workspace_result(value: &str) -> bool {
         "children",
     ];
     !object.is_empty() && object.keys().all(|key| RESULT_KEYS.contains(&key.as_str()))
+}
+
+fn captured_arg_preview(value: Option<String>, maximum_bytes: usize) -> Option<CapturedContentV1> {
+    value.and_then(|value| {
+        nonempty(value)
+            .map(|value| CapturedContentV1::Inline(sanitized_text(&value, maximum_bytes)))
+    })
 }
 
 fn sanitized_text(value: &str, maximum_bytes: usize) -> InlineContentV1 {

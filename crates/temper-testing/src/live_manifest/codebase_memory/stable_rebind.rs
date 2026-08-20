@@ -27,6 +27,9 @@ pub(super) fn validate_mcp_contract(
         Some("mapped-live-graph-consumption") => {
             return super::mapped_graph_consumption::validate(mcp, calls);
         }
+        Some("mapped-live-graph-convergence") => {
+            return super::mapped_graph_convergence::validate(mcp, calls);
+        }
         _ => {}
     }
 
@@ -278,6 +281,7 @@ pub(super) fn stable_rebind_evidence(
                             | "served_result_derived_consumer"
                             | "served_typed_lineage_consumer"
                             | "served_mapped_current_root_source"
+                            | "served_convergence_source"
                     )
                 )
         }),
@@ -373,6 +377,7 @@ fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
                 | "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
+                | "mapped-live-graph-convergence"
         )
     )
 }

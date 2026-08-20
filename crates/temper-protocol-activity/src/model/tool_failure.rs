@@ -22,6 +22,7 @@ pub enum ToolFailureCategoryV1 {
     ProviderProtocol,
     InvalidModelInput,
     CircuitOpen,
+    ExplorationClosed,
 }
 
 impl ToolFailureCategoryV1 {
@@ -40,6 +41,7 @@ impl ToolFailureCategoryV1 {
             Self::CircuitOpen => {
                 "codebase-memory is disabled for this run after a systemic failure"
             }
+            Self::ExplorationClosed => "codebase-memory graph exploration is closed for this run",
         }
     }
 

@@ -79,6 +79,104 @@ impl Tool for FakeTool {
     }
 }
 
+struct InvocationFlagTool {
+    invoked: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl Tool for InvocationFlagTool {
+    fn name(&self) -> &str {
+        "codebase_memory_search_graph"
+    }
+
+    fn label(&self) -> &str {
+        "graph"
+    }
+
+    fn description(&self) -> &str {
+        "must not run after local denial"
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn effects(&self) -> ToolEffects {
+        ToolEffects::read()
+    }
+
+    async fn execute(
+        &self,
+        _tool_call_id: &str,
+        _input: serde_json::Value,
+        _on_update: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
+    ) -> tongs::Result<ToolOutput> {
+        self.invoked.store(true, Ordering::SeqCst);
+        Ok(ToolOutput {
+            content: Vec::new(),
+            details: None,
+            is_error: false,
+        })
+    }
+}
+
+#[test]
+fn exploration_denial_never_invokes_provider_and_emits_only_the_generic_reason() {
+    const SECRET: &str = "Authorization: Bearer LOCAL-DENIAL-SECRET/src/private.rs";
+    let invoked = Arc::new(AtomicBool::new(false));
+    let tools = ToolRegistry::from_tools(vec![Box::new(InvocationFlagTool {
+        invoked: Arc::clone(&invoked),
+    })]);
+    let recorder = Arc::new(Recorder::default());
+    let observed = Arc::clone(&recorder);
+    let call = ToolCall {
+        id: "denied-graph".to_string(),
+        name: "codebase_memory_search_graph".to_string(),
+        arguments: serde_json::json!({"query": SECRET}),
+    };
+    let clock = FakeClock(Mutex::new(VecDeque::from([10, 10])));
+
+    let output = temper_agent_io::block_on(async move {
+        execute_tool(
+            &tools,
+            &call,
+            Duration::from_secs(1),
+            &CancellationToken::default(),
+            Some(ToolCallDenial::GraphExplorationClosed),
+            &clock,
+            observed.as_ref(),
+            None,
+        )
+        .await
+        .expect("local denial returns a model-visible result")
+    });
+
+    assert!(!invoked.load(Ordering::SeqCst));
+    assert!(output.is_error);
+    assert_eq!(
+        bounded_result_text(&output, 1024).map(|(text, _)| text),
+        Some(CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE.to_string())
+    );
+    let events = recorder.0.lock().expect("events");
+    assert!(matches!(
+        &events[0],
+        AgentEvent::ToolEnd {
+            status: ToolCallStatus::Failed,
+            result: ToolResultMetadata {
+                preview: None,
+                failure: Some(failure),
+                graph_correlation: None,
+                decision_anchor_lineage: None,
+                ..
+            },
+            ..
+        } if failure.category == ToolFailureCategory::ExplorationClosed
+            && failure.message == CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE
+    ));
+    let debug = format!("{events:?}");
+    assert!(!debug.contains(SECRET));
+}
+
 #[test]
 fn tool_duration_uses_the_injected_monotonic_clock() {
     let tools = ToolRegistry::from_tools(vec![Box::new(FakeTool)]);
@@ -97,7 +195,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
             &call,
             Duration::from_secs(1),
             &CancellationToken::default(),
-            false,
+            None,
             &clock,
             observed.as_ref(),
             None,
@@ -438,7 +536,7 @@ fn codebase_memory_tool_timeout_uses_virtual_time_and_emits_safe_cancelled_bound
             &call,
             Duration::from_secs(7),
             &CancellationToken::default(),
-            false,
+            None,
             &SystemEventClock,
             observed.as_ref(),
             None,
@@ -505,7 +603,7 @@ fn external_cancellation_drops_a_hung_tool_without_advancing_time() {
             &call,
             Duration::from_secs(600),
             &cancellation,
-            false,
+            None,
             &SystemEventClock,
             observed.as_ref(),
             None,

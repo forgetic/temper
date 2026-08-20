@@ -8,6 +8,7 @@
 //! and reporting layers can consume that stream without knowing where it came
 //! from.
 
+mod acceptance;
 mod aggregate;
 mod analyze;
 mod artifacts;
@@ -20,6 +21,12 @@ mod runner;
 mod summary;
 mod workspace;
 
+pub use acceptance::{
+    AcceptanceError, AcceptanceGateResultV1, AcceptanceGateV1, AcceptanceImprovementMeasureV1,
+    AcceptanceObservationV1, BENCHMARK_ACCEPTANCE_FILE, BENCHMARK_ACCEPTANCE_VERSION,
+    BenchmarkAcceptanceOptions, BenchmarkAcceptancePolicyV1, BenchmarkAcceptanceV1,
+    verify_benchmark_acceptance, write_benchmark_acceptance,
+};
 pub use aggregate::{
     ADVISORY_METRICS, AggregateError, AggregateRunV1, BENCHMARK_AGGREGATE_VERSION,
     BenchmarkAggregateV1, DistributionV1, PRIMARY_METRICS, RunOutcomeCountsV1,

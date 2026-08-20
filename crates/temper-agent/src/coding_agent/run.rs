@@ -449,9 +449,9 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
         provider,
         stream_options,
     };
-    // Salient-arg preview for ToolStart human lines: computed in the pure core
-    // (where the raw call args live) via this shell-supplied closure, which owns
-    // the workspace `cwd` for repo-relative paths (agent-log-cleanup plan, B/D).
+    // Finalize separate ToolStart presentations where raw call arguments live:
+    // the 48-scalar redacted human preview and, for eligible bash calls, a
+    // complete bounded diagnostic-only command representation.
     let arg_preview = crate::usage::tool_arg_preview_hook(cwd.to_path_buf());
     let model_id = provider_config.model_id().to_string();
     let outcome = async {

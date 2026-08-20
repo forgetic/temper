@@ -28,10 +28,14 @@ agent-trace-reader = "replace-with-a-long-random-value"
 `metadata` is the safe default. It records identities, boundary names, timing,
 status, model/provider labels, usage, retries, and gaps. It excludes prompts,
 assistant text, thinking, tool arguments/results, credentials, headers, and
-environment values. `transcript` permits bounded sanitized visible content.
-`diagnostic` additionally permits bounded deltas; thinking still requires
-`capture_thinking = true`. Do not use diagnostic capture as a routine production
-setting.
+environment values. `transcript` permits bounded sanitized visible content and
+retains only the existing short, redacted tool-call preview. `diagnostic`
+additionally permits bounded deltas and complete structured `bash` command/argv
+evidence when the command is secret-free and fits the configured inline bound;
+secret-like or over-limit commands are omitted rather than redacted or
+truncated. Human tracing continues to use only the 48-scalar redacted preview.
+Thinking still requires `capture_thinking = true`. Do not use diagnostic capture
+as a routine production setting.
 
 Run `temper check` after changing capture policy. If no durable state directory
 can be resolved, trace storage is disabled rather than failing assigned work.

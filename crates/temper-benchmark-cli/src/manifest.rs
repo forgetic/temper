@@ -16,7 +16,7 @@ mod security;
 use security::{InputKind, resolve_declared_path, validate_context_repositories};
 pub(crate) use security::{validate_fixture_tree, validate_relative_path};
 
-use crate::GraphDecisionKindV1;
+use crate::{BenchmarkAcceptancePolicyV1, GraphConsumptionModeV1, GraphDecisionKindV1};
 
 /// Schema identifier for an agent-session benchmark manifest.
 pub const BENCHMARK_MANIFEST_SCHEMA: &str = "temper.benchmark.v1";
@@ -66,6 +66,10 @@ pub struct BenchmarkManifestV1 {
     /// Explicit non-secret annotations useful when interpreting a run.
     #[serde(default)]
     pub annotations: BenchmarkAnnotationsV1,
+    /// Optional fail-closed policy evaluated only by the acceptance verifier.
+    /// Ordinary runs and report-only comparisons do not apply these gates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance: Option<BenchmarkAcceptancePolicyV1>,
 }
 
 /// Runner-owned settings for a controlled benchmark condition family.
@@ -411,6 +415,7 @@ fn validate_manifest_values(manifest: &BenchmarkManifestV1) -> Result<(), Benchm
         manifest.annotations.provider_region.as_deref(),
     )?;
     validate_annotation("cache_warmth", manifest.annotations.cache_warmth.as_deref())?;
+    validate_acceptance_policy(manifest)?;
     if manifest.condition_profile.is_some() {
         for kind in [
             GraphDecisionKindV1::Implementation,
@@ -427,6 +432,86 @@ fn validate_manifest_values(manifest: &BenchmarkManifestV1) -> Result<(), Benchm
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_acceptance_policy(
+    manifest: &BenchmarkManifestV1,
+) -> Result<(), BenchmarkManifestError> {
+    let Some(policy) = &manifest.acceptance else {
+        return Ok(());
+    };
+    if manifest.condition_profile.is_none() || manifest.expected_patch.is_none() {
+        return Err(BenchmarkManifestError::Invalid(
+            "`acceptance` requires `condition_profile` and `expected_patch`".to_string(),
+        ));
+    }
+    if manifest.annotations.cache_warmth.is_none() {
+        return Err(BenchmarkManifestError::Invalid(
+            "`acceptance` requires an explicit `annotations.cache_warmth`".to_string(),
+        ));
+    }
+    if policy.smoke_repetitions == 0 || policy.matrix_repetitions == 0 {
+        return Err(BenchmarkManifestError::Invalid(
+            "acceptance repetition counts must be positive".to_string(),
+        ));
+    }
+    if policy.provider.trim().is_empty()
+        || policy.model.trim().is_empty()
+        || !(1..=100).contains(&policy.minimum_relevance_percent)
+        || !(1..=100).contains(&policy.minimum_improvement_percent)
+    {
+        return Err(BenchmarkManifestError::Invalid(
+            "acceptance identity and percentages must be non-empty and valid".to_string(),
+        ));
+    }
+    if !manifest
+        .graph_decision_targets
+        .iter()
+        .any(|target| target.target == policy.exact_source_selection_target)
+    {
+        return Err(BenchmarkManifestError::Invalid(
+            "acceptance exact source selection must name a declared target".to_string(),
+        ));
+    }
+    for required in [
+        GraphDecisionKindV1::Implementation,
+        GraphDecisionKindV1::Caller,
+        GraphDecisionKindV1::FocusedTest,
+    ] {
+        if !policy.required_decision_kinds.contains(&required) {
+            return Err(BenchmarkManifestError::Invalid(
+                "acceptance must require implementation, caller, and focused-test evidence"
+                    .to_string(),
+            ));
+        }
+    }
+    for required in [
+        GraphConsumptionModeV1::Source,
+        GraphConsumptionModeV1::Selection,
+    ] {
+        if !policy.required_consumption_modes.contains(&required) {
+            return Err(BenchmarkManifestError::Invalid(
+                "acceptance must require typed source and exact selection consumption".to_string(),
+            ));
+        }
+    }
+    if policy.privacy_forbidden_fragments.is_empty()
+        || policy
+            .privacy_forbidden_fragments
+            .iter()
+            .any(|fragment| fragment.len() < 8)
+        || policy.aggregate_privacy_forbidden_fragments.is_empty()
+        || policy
+            .aggregate_privacy_forbidden_fragments
+            .iter()
+            .any(|fragment| fragment.len() < 8)
+    {
+        return Err(BenchmarkManifestError::Invalid(
+            "acceptance privacy fragment sets must be non-empty and contain only values of at least eight bytes"
+                .to_string(),
+        ));
     }
     Ok(())
 }

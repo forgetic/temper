@@ -15,21 +15,26 @@ use tongs::model::{
 };
 use tongs::tools::{ToolEffects, ToolOutput};
 
-/// Computes the one-line salient-argument preview shown in `ToolStart`
-/// observability events. Supplied by the shell-side caller (it lives above this
-/// tier, where the workspace `cwd` and per-tool rendering rules are known); the
-/// pure core just calls it with each call's name + parsed arguments. See the
-/// agent-log-cleanup plan (pieces B/D).
-pub type ArgPreviewFn = Arc<dyn Fn(&str, &serde_json::Value) -> Option<String> + Send + Sync>;
+/// Computes the separated human and diagnostic presentations shown in a
+/// `ToolStart` observability event. Supplied by the shell-side caller, where
+/// workspace rendering and secret policy are known; the pure core never
+/// interprets the returned content.
+pub type ToolStartPresentationFn =
+    Arc<dyn Fn(&str, &serde_json::Value) -> ToolStartPresentation + Send + Sync>;
+
+/// Compatibility name retained for the existing run-builder parameter.
+pub type ArgPreviewFn = ToolStartPresentationFn;
 
 use crate::model_failure::ModelFailureDiagnostic;
 
 use super::batching::{PendingTool, plan_batches};
 use super::decision_anchor::{
-    DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState, DecisionAnchorTransition,
+    DECISION_ANCHOR_CONVERGENCE_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState,
+    DecisionAnchorTransition,
 };
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
+    ToolStartPresentation,
 };
 
 /// Where the loop is in the call/tool cycle.
@@ -71,9 +76,12 @@ pub struct AgentMachine {
     /// Results collected this turn across all batches, in original tool-call
     /// order, so the tool-result messages are appended deterministically.
     turn_results: Vec<PendingTool>,
-    /// Optional per-run guard activated only after a trusted codebase-memory
-    /// wrapper returns a successful targeted decision anchor.
+    /// Per-run graph guard enabled whenever codebase-memory tools are present,
+    /// including read-only roles with no mutation authorization.
     decision_anchors: Option<DecisionAnchorState>,
+    /// Fixed convergence instruction queued once complete current-root evidence
+    /// closes graph exploration.
+    decision_anchor_convergence: bool,
     /// Generic, privacy-safe recovery instruction queued by an unconsumable
     /// anchor. It is distinct from operator steering.
     decision_anchor_recovery: bool,
@@ -96,10 +104,9 @@ pub struct AgentMachine {
     active_tool_batch: Option<ActiveToolBatch>,
     /// Fresh operation/batch pair attached to the outstanding cancellation.
     cancellation_generation: Option<(OperationGeneration, BatchGeneration)>,
-    /// Optional shell-supplied preview function used to fill
-    /// `ToolStart.arg_preview` from each call's name + arguments. `None` leaves
-    /// the field unset (the pure default).
-    arg_preview: Option<ArgPreviewFn>,
+    /// Optional shell-supplied presentation function used to fill the separate
+    /// human preview and diagnostic argument candidate on `ToolStart`.
+    tool_start_presentation: Option<ToolStartPresentationFn>,
 }
 
 impl AgentMachine {
@@ -132,6 +139,7 @@ impl AgentMachine {
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             decision_anchors,
+            decision_anchor_convergence: false,
             decision_anchor_recovery: false,
             decision_anchor_exhausted: false,
             last_assistant: None,
@@ -142,14 +150,14 @@ impl AgentMachine {
             active_llm: None,
             active_tool_batch: None,
             cancellation_generation: None,
-            arg_preview: None,
+            tool_start_presentation: None,
         }
     }
 
-    /// Installs the shell-supplied [`ArgPreviewFn`] used to fill
-    /// `ToolStart.arg_preview`. Without it the field stays `None`.
+    /// Installs the shell-supplied [`ArgPreviewFn`] used to finalize the
+    /// separate human and diagnostic `ToolStart` presentations.
     pub fn with_arg_preview(mut self, arg_preview: ArgPreviewFn) -> Self {
-        self.arg_preview = Some(arg_preview);
+        self.tool_start_presentation = Some(arg_preview);
         self
     }
 
@@ -164,6 +172,7 @@ impl AgentMachine {
         self.active_tool_batch = None;
         self.pending_batches.clear();
         self.cancellation_generation = None;
+        self.decision_anchor_convergence = false;
         self.decision_anchor_recovery = false;
         self.decision_anchor_exhausted = false;
         let final_message = self
@@ -241,6 +250,13 @@ impl AgentMachine {
                 count: steering.len(),
             }));
             self.messages.extend(steering);
+        }
+        if self.decision_anchor_convergence {
+            self.decision_anchor_convergence = false;
+            self.messages.push(Message::User(UserMessage {
+                content: UserContent::Text(DECISION_ANCHOR_CONVERGENCE_MESSAGE.to_string()),
+                timestamp: 0,
+            }));
         }
         if self.decision_anchor_recovery {
             self.decision_anchor_recovery = false;
@@ -322,29 +338,33 @@ impl AgentMachine {
         let mut requests = Vec::new();
         let model_turn = self.turn.saturating_sub(1);
         for call in calls {
-            let mutation_blocked = self.decision_anchors.as_mut().is_some_and(|state| {
-                state.on_tool_dispatched(&call, model_turn);
-                state.blocks_mutation(&call.name)
-            });
-            // The pure core does not know the per-tool rendering rules; the
-            // shell supplies an optional preview fn (agent-log-cleanup plan,
-            // pieces B/D). Absent it, the field stays `None`.
-            let arg_preview = self
-                .arg_preview
-                .as_ref()
-                .and_then(|render| render(&call.name, &call.arguments));
+            let denial = self
+                .decision_anchors
+                .as_mut()
+                .and_then(|state| state.on_tool_dispatched(&call, model_turn));
+            // A locally denied call must not expose either shell-rendered
+            // argument presentation to activity.
+            let presentation = if denial.is_none() {
+                self.tool_start_presentation
+                    .as_ref()
+                    .map(|render| render(&call.name, &call.arguments))
+                    .unwrap_or_default()
+            } else {
+                ToolStartPresentation::default()
+            };
             let operation_generation = self.next_operation_generation();
             operations.insert(call.id.clone(), operation_generation);
             requests.push(AgentRequest::Emit(AgentEvent::ToolStart {
                 id: call.id.clone(),
                 name: call.name.clone(),
-                arg_preview,
+                arg_preview: presentation.arg_preview,
+                diagnostic_arguments: presentation.diagnostic_arguments,
             }));
             requests.push(AgentRequest::RunTool {
                 operation_generation,
                 batch_generation,
                 call,
-                mutation_blocked,
+                denial,
             });
         }
         self.active_llm = None;
@@ -418,6 +438,10 @@ impl AgentMachine {
                     DecisionAnchorTransition::RecoveryExhausted => {
                         self.decision_anchor_exhausted = true;
                     }
+                    DecisionAnchorTransition::Converged => {
+                        self.decision_anchor_convergence = true;
+                    }
+                    DecisionAnchorTransition::ExplorationExhausted => {}
                 }
             }
             self.turn_results.extend(batch);

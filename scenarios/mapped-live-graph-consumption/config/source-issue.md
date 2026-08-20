@@ -7,7 +7,8 @@ lineage completely before mutation. Do not use broad architecture or inventory
 calls, do not batch a producer with its consumer, and do not substitute
 unrelated or conventional discovery for a pending successful anchor.
 
-After the complete provider chain, follow the unavailable descendant through one
-conventional source read without immediately retrying codebase-memory, then
-write only the minimal selected repair. Preserve all other behavior and validate
-with `cargo fmt --check && cargo test --quiet`.
+After the complete provider chain, attempt the redundant selected descendant.
+Follow the generic local convergence denial through one conventional source read
+without another provider invocation, then write only the minimal selected
+repair. Preserve all other behavior and validate with
+`cargo fmt --check && cargo test --quiet`.

@@ -20,6 +20,7 @@ pub(super) fn map_tool_failure(value: ToolFailureDiagnostic) -> ToolFailureDiagn
         ToolFailureCategory::ProviderProtocol => ToolFailureCategoryV1::ProviderProtocol,
         ToolFailureCategory::InvalidModelInput => ToolFailureCategoryV1::InvalidModelInput,
         ToolFailureCategory::CircuitOpen => ToolFailureCategoryV1::CircuitOpen,
+        ToolFailureCategory::ExplorationClosed => ToolFailureCategoryV1::ExplorationClosed,
     };
     ToolFailureDiagnosticV1::new(category)
 }
