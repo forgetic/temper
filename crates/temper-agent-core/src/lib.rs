@@ -18,6 +18,7 @@
 mod containment;
 #[cfg(test)]
 mod containment_tests;
+mod invocation;
 pub mod machine;
 mod managed_bash;
 mod managed_fs;
@@ -27,6 +28,9 @@ pub mod shell;
 pub mod subagent_tool;
 
 pub use containment::AgentContainmentContext;
+pub use invocation::{
+    InvocationCatalogError, REJECTED_TOOL_NAME, ToolInvocationCatalog, arguments_match,
+};
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,
     BatchGeneration, CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming,

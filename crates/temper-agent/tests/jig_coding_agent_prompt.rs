@@ -150,6 +150,15 @@ fn coding_agent_prompt_snapshot_equals_anthropic_provider_startup_context() {
             // Anthropic materializes an empty list that the captured ToolDef omits.
             schema.remove("required");
         }
+        // The pinned Anthropic adapter rebuilds the root input_schema from
+        // `properties` and `required`, dropping the root closure marker.
+        // Temper's catalog is the authoritative execution boundary and retains
+        // the closed schema in prompt activity, so restore the marker only for
+        // this exact startup-context comparison. Nested object closures pass
+        // through the adapter unchanged.
+        schema
+            .entry("additionalProperties".to_string())
+            .or_insert(serde_json::Value::Bool(false));
     }
     assert_eq!(
         serde_json::to_value(&snapshot.tools).expect("snapshot tools JSON"),

@@ -101,6 +101,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
             &clock,
             observed.as_ref(),
             None,
+            None,
         )
         .await
         .expect("tool was not cancelled")
@@ -443,6 +444,7 @@ fn codebase_memory_tool_timeout_uses_virtual_time_and_emits_safe_cancelled_bound
             &SystemEventClock,
             observed.as_ref(),
             None,
+            None,
         )
         .await
         .expect("a timeout is returned to the model")
@@ -511,6 +513,7 @@ fn ordinary_tool_timeout_is_typed_and_model_visible_without_runtime_values() {
             &SystemEventClock,
             observed.as_ref(),
             None,
+            None,
         )
         .await
         .expect("timeout returns a model result")
@@ -558,6 +561,7 @@ fn external_cancellation_drops_a_hung_tool_without_advancing_time() {
             false,
             &SystemEventClock,
             observed.as_ref(),
+            None,
             None,
         )
         .await

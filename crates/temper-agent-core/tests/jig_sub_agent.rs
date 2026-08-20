@@ -21,7 +21,7 @@ use temper_agent::ProviderConfig;
 use temper_agent_core::{AgentStop, SubAgent, TurnHook, run_sub_agent, run_sub_agent_with_hook};
 use tongs::provider::StreamOptions;
 use tongs::tools::ToolRegistry;
-use tongs::tools::{create_read_tool, create_write_tool, tool_to_definition};
+use tongs::tools::{create_read_tool, create_write_tool};
 
 #[test]
 fn sub_agent_runs_a_tool_loop_and_completes() {
@@ -272,11 +272,9 @@ fn sub_agent_forwards_live_events_to_the_sink() {
         create_read_tool(checkout.path()),
         create_write_tool(checkout.path()),
     ]);
-    let expected_tools = tools
-        .tools()
-        .iter()
-        .map(|tool| tool_to_definition(tool.as_ref()))
-        .collect::<Vec<_>>();
+    let expected_tools = temper_agent_core::ToolInvocationCatalog::from_registry(&tools)
+        .expect("tool catalog")
+        .definitions();
     let expected_system = "Use the write tool.";
     let expected_user = "Create NOTES.md.";
 

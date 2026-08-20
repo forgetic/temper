@@ -4,7 +4,7 @@ import uuid
 
 TOOLS = [
     {"name": "search_graph", "description": "Targeted graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
-    {"name": "search_code", "description": "Targeted code search", "inputSchema": {"type": "object", "properties": {"pattern": {"type": "string"}, "project": {"type": "string"}}, "required": ["pattern"]}},
+    {"name": "search_code", "description": "Targeted code search", "inputSchema": {"type": "object", "properties": {"pattern": {"type": "string"}, "project": {"type": "string"}, "force_unavailable": {"type": "boolean"}}, "required": ["pattern"]}},
     {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},

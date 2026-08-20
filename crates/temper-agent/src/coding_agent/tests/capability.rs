@@ -110,6 +110,20 @@ fn subagent_tools_register_parallel_safe_and_on_the_right_model() {
             tool.name()
         );
     }
+    let catalog = temper_agent_core::ToolInvocationCatalog::from_registry(&registry)
+        .expect("sub-agent registry is unambiguous");
+    for definition in catalog.definitions() {
+        assert_closed_objects(&definition.parameters);
+        let invocation = catalog.canonicalize(
+            "anthropic-messages",
+            tongs::model::ToolCall {
+                id: format!("call-{}", definition.name),
+                name: definition.name,
+                arguments: serde_json::json!({"task":"inspect"}),
+            },
+        );
+        assert!(invocation.rejection.is_none());
+    }
 
     // The cheap searcher runs on the sub-agent tier; the heavier reviewer on the
     // main model — the two tiers must differ (asserted on the config the factory
@@ -243,4 +257,132 @@ fn forge_tools_are_available_to_every_role_only_with_a_host() {
 
 fn tool_names(registry: &ToolRegistry) -> Vec<&str> {
     registry.tools().iter().map(|tool| tool.name()).collect()
+}
+
+fn assert_closed_objects(schema: &serde_json::Value) {
+    let Some(object) = schema.as_object() else {
+        return;
+    };
+    if object.get("type").and_then(serde_json::Value::as_str) == Some("object")
+        || object.contains_key("properties")
+    {
+        assert_eq!(
+            object.get("additionalProperties"),
+            Some(&serde_json::Value::Bool(false)),
+            "object schema must be closed: {schema}"
+        );
+    }
+    if let Some(properties) = object
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    {
+        for property in properties.values() {
+            assert_closed_objects(property);
+        }
+    }
+    if let Some(items) = object.get("items") {
+        assert_closed_objects(items);
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = object.get(keyword).and_then(serde_json::Value::as_array) {
+            for branch in branches {
+                assert_closed_objects(branch);
+            }
+        }
+    }
+}
+
+#[test]
+fn finalized_ordinary_registry_has_one_closed_schema_and_effect_contract() {
+    use tongs::model::ToolCall;
+
+    let cwd = std::env::temp_dir();
+    let context = super::common::parsed_fixture();
+    let submit: SubmitForPrCallback = std::sync::Arc::new(|_| {
+        Box::pin(async { temper_protocol_agent::SubmitForPrResponse::accepted("ok") })
+    });
+    let forge: ForgeContextHost = std::sync::Arc::new(|_| {
+        Box::pin(async { Err(temper_protocol_agent::ForgeContextErrorCode::NotFound) })
+    });
+    let registry = tool_registry_for_context(
+        Capability::CodingWorkspace,
+        &context,
+        &cwd,
+        Some(submit),
+        Some(forge),
+    );
+    let catalog = temper_agent_core::ToolInvocationCatalog::from_registry(&registry)
+        .expect("final registry is unambiguous");
+    let definitions = catalog.definitions();
+    assert_eq!(definitions.len(), registry.tools().len());
+    for (definition, tool) in definitions.iter().zip(registry.tools()) {
+        assert_eq!(definition.name, tool.name());
+        assert_eq!(catalog.effects().get(tool.name()), Some(&tool.effects()));
+        assert_closed_objects(&definition.parameters);
+    }
+
+    // Runtime usize/u64 inputs are published as integers rather than tongs'
+    // broader number schemas, and edit's runtime non-empty rule is advertised.
+    for (name, fields) in [
+        ("read", &["offset", "limit"][..]),
+        ("ls", &["limit"][..]),
+        ("grep", &["context", "limit"][..]),
+        ("find", &["limit"][..]),
+        ("bash", &["timeout"][..]),
+    ] {
+        for field in fields {
+            assert_eq!(
+                catalog.schema(name).unwrap()["properties"][field]["type"],
+                "integer",
+                "{name}.{field} must match its unsigned runtime parser"
+            );
+        }
+    }
+    assert_eq!(
+        catalog.schema("edit").unwrap()["properties"]["edits"]["minItems"],
+        1
+    );
+
+    let valid = [
+        ("read", serde_json::json!({"path":"a","offset":0,"limit":1})),
+        ("ls", serde_json::json!({"path":".","limit":1})),
+        (
+            "grep",
+            serde_json::json!({"pattern":"x","ignoreCase":true,"context":0,"limit":1}),
+        ),
+        ("find", serde_json::json!({"pattern":"*.rs","limit":1})),
+        ("bash", serde_json::json!({"command":"true","timeout":1})),
+        (
+            "apply_patch",
+            serde_json::json!({"patch":"diff --git a/a b/a"}),
+        ),
+        (
+            "edit",
+            serde_json::json!({"path":"a","edits":[{"oldText":"a","newText":"b"}]}),
+        ),
+        ("write", serde_json::json!({"path":"a","content":"b"})),
+        ("submit_for_pr", serde_json::json!({"summary":"ready"})),
+        (
+            "forge_get_item",
+            serde_json::json!({"repo":"ai/temper","number":1,"type":"issue"}),
+        ),
+        (
+            "forge_list_related",
+            serde_json::json!({"repo":"ai/temper","number":1,"relations":["parent"],"depth":1,"limit":1}),
+        ),
+    ];
+    for (name, arguments) in valid {
+        let invocation = catalog.canonicalize(
+            "openai-completions",
+            ToolCall {
+                id: format!("call-{name}"),
+                name: name.to_string(),
+                arguments,
+            },
+        );
+        assert!(
+            invocation.rejection.is_none(),
+            "canonical {name} fixture must match its published schema"
+        );
+    }
 }
