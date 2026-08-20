@@ -2,6 +2,88 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
+pub(super) fn verify_ordinary_failure_recovery(trace: &str) -> Result<(), String> {
+    let events = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|event| {
+            let data = event.pointer("/event/event/data")?;
+            data.get("status")?;
+            Some((event.pointer("/event/seq")?.as_u64()?, data.clone()))
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        (
+            "ordinary_failure_initial",
+            "failed",
+            Some(("execution_failure", "tool_reported_failure")),
+        ),
+        (
+            "ordinary_failure_repeated",
+            "failed",
+            Some(("circuit_redirect", "repeated_non_retryable")),
+        ),
+        ("ordinary_failure_recovery", "succeeded", None),
+    ];
+    let mut previous_seq = None;
+    for (call_id, status, failure) in expected {
+        let (seq, data) = events
+            .iter()
+            .find(|(_, data)| data.get("call_id").and_then(Value::as_str) == Some(call_id))
+            .ok_or_else(|| format!("controlled trace omitted {call_id}"))?;
+        if previous_seq.is_some_and(|previous| *seq <= previous) {
+            return Err("ordinary failure/recovery events were out of order".to_string());
+        }
+        previous_seq = Some(*seq);
+        if data.get("status").and_then(Value::as_str) != Some(status) {
+            return Err(format!("{call_id} did not finish as {status}"));
+        }
+        match failure {
+            Some((category, reason)) => {
+                let diagnostic = data
+                    .get("failure")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| format!("{call_id} omitted its typed diagnostic"))?;
+                let fields = diagnostic
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>();
+                if fields
+                    != BTreeSet::from([
+                        "category",
+                        "fallback_to_conventional_discovery",
+                        "message",
+                        "reason",
+                        "retry_disposition",
+                        "retryable",
+                    ])
+                    || diagnostic.get("category").and_then(Value::as_str) != Some(category)
+                    || diagnostic.get("reason").and_then(Value::as_str) != Some(reason)
+                {
+                    return Err(format!("{call_id} retained a non-canonical diagnostic"));
+                }
+            }
+            None if data.get("failure").is_some() => {
+                return Err("corrected ordinary call unexpectedly retained a failure".to_string());
+            }
+            None => {}
+        }
+    }
+    let redirects = events
+        .iter()
+        .filter(|(_, data)| {
+            data.pointer("/failure/reason").and_then(Value::as_str)
+                == Some("repeated_non_retryable")
+        })
+        .count();
+    if redirects != 1 {
+        return Err(format!(
+            "ordinary failure sequence retained {redirects} redirects; expected 1"
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn verify_safe_five_call_decision_evidence(run: &Value) -> Result<(), String> {
     let evidence = run
         .pointer("/metrics/graph/decision_evidence")

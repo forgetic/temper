@@ -263,6 +263,42 @@ fn render_tools(tools: Option<&ToolMetricsV1>, out: &mut String) {
     )
     .unwrap();
 
+    writeln!(out, "### Ordinary failure classification\n").unwrap();
+    if let Some(ordinary) = &tools.ordinary {
+        writeln!(out, "Graph wrappers are excluded from these totals.\n").unwrap();
+        writeln!(out, "| Metric | Value |").unwrap();
+        writeln!(out, "| --- | ---: |").unwrap();
+        row(out, "Calls", ordinary.calls);
+        row(out, "Succeeded", ordinary.succeeded);
+        row(out, "Failed", ordinary.failed);
+        row(out, "Cancelled", ordinary.cancelled);
+        row(out, "Status coverage", coverage(&ordinary.status_coverage));
+        row(
+            out,
+            "Failure-category coverage",
+            coverage(&ordinary.failure_category_coverage),
+        );
+        for (category, count) in &ordinary.failures_by_category {
+            row(out, &format!("Category: {}", enum_label(category)), count);
+        }
+        row(
+            out,
+            "Failure-reason coverage",
+            coverage(&ordinary.failure_reason_coverage),
+        );
+        for (reason, count) in &ordinary.failures_by_reason {
+            row(out, &format!("Reason: {}", enum_label(reason)), count);
+        }
+        row(
+            out,
+            "Repeated-failure redirects",
+            optional_count(ordinary.repeated_failure_redirects),
+        );
+        out.push('\n');
+    } else {
+        writeln!(out, "_Unavailable in this historical summary._\n").unwrap();
+    }
+
     writeln!(out, "### Slowest calls\n").unwrap();
     if tools.slowest.is_empty() {
         writeln!(out, "_No completed tool calls._\n").unwrap();
