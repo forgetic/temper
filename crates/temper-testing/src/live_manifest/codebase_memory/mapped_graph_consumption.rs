@@ -92,13 +92,20 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     {
         return Err("mapped graph fixture did not consume the approved transformed chain".into());
     }
+    let closure_profile =
+        mcp.lifecycle_profile.as_deref() == Some("mapped-live-ordinary-tool-convergence");
+    let expected_final_event = if closure_profile {
+        "served_graph_closure"
+    } else {
+        "served_mapped_unavailable"
+    };
     let expected_events = [
         "served_mapped_root",
         "served_mapped_carry_forward",
         "served_mapped_carry_forward",
         "served_mapped_current_root_source",
         "served_mapped_current_root_source",
-        "served_mapped_unavailable",
+        expected_final_event,
     ];
     if calls[3..]
         .iter()

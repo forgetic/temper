@@ -28,6 +28,8 @@ mod configuration;
 mod graph_consumption;
 mod mapped_graph_consumption;
 mod mapped_graph_consumption_fake;
+mod mapped_ordinary_convergence_fake;
+mod privacy;
 mod provider_result_anchor;
 mod result_driven_fake;
 mod result_driven_guidance;
@@ -36,6 +38,7 @@ mod stable_rebind;
 mod typed_lineage_anchor;
 mod typed_lineage_fake;
 pub(super) use configuration::{ToolConfiguration, tune_codebase_memory_config};
+use privacy::{privacy_safe_checkpoints, write_privacy_safe_mcp_log};
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
 const MEMORY_FILE: &str = "src/lib.rs";
@@ -80,10 +83,16 @@ pub(super) fn converge(
             "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
+                | "mapped-live-ordinary-tool-convergence"
         )
     );
     let aggregate_checkpoints = privacy_safe_checkpoints(mcp, &calls);
     let stable_rebind = stable_rebind_evidence(mcp, &calls)?;
+    let evidence_mcp_log = if privacy_safe_aggregate {
+        write_privacy_safe_mcp_log(mcp, &calls)?
+    } else {
+        mcp.log_path.clone()
+    };
     let privacy_safe_binding = privacy_safe_aggregate
         .then(|| {
             stable_rebind
@@ -107,6 +116,7 @@ pub(super) fn converge(
                 | "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
+                | "mapped-live-ordinary-tool-convergence"
         )
     ) {
         "one successful provider-shaped graph result".to_string()
@@ -118,7 +128,7 @@ pub(super) fn converge(
         LiveCodebaseMemoryEvidence {
             produced_file: (!privacy_safe_aggregate).then(|| MEMORY_FILE.to_string()),
             expected_result: (!privacy_safe_aggregate).then_some(expected_result),
-            fake_mcp_log: mcp.log_path.clone(),
+            fake_mcp_log: evidence_mcp_log,
             mcp_search_calls,
             mcp_call_counts: mcp_call_counts.into_iter().collect(),
             readiness_delay_ms: (!privacy_safe_aggregate).then_some(mcp.readiness_delay_ms),
@@ -450,6 +460,7 @@ pub(super) struct CodebaseMemoryFake {
     engineer_requests: Arc<AtomicUsize>,
     observations: Arc<Mutex<ModelObservations>>,
     require_current_root_source: bool,
+    privacy_safe_log: bool,
 }
 
 #[derive(Default)]
@@ -493,6 +504,8 @@ impl CodebaseMemoryFake {
             typed_lineage_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-graph-consumption") {
             mapped_graph_consumption_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-ordinary-tool-convergence") {
+            mapped_ordinary_convergence_fake::start(request_count, observations_for_rule)?
         } else {
             FakeLlm::start(Script::rule(move |view| {
                 if !messages_contain(view, "ROLE: engineer") {
@@ -551,6 +564,15 @@ impl CodebaseMemoryFake {
             engineer_requests,
             observations,
             require_current_root_source,
+            privacy_safe_log: matches!(
+                lifecycle_profile,
+                Some(
+                    "provider-result-anchor"
+                        | "provider-neutral-anchor-lineage"
+                        | "mapped-live-graph-consumption"
+                        | "mapped-live-ordinary-tool-convergence"
+                )
+            ),
         })
     }
 
@@ -620,6 +642,7 @@ impl CodebaseMemoryFake {
                         | "provider-result-anchor"
                         | "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
+                        | "mapped-live-ordinary-tool-convergence"
                 )
             )
         {
@@ -643,12 +666,17 @@ impl CodebaseMemoryFake {
                     | "provider-result-anchor"
                     | "provider-neutral-anchor-lineage"
                     | "mapped-live-graph-consumption"
+                    | "mapped-live-ordinary-tool-convergence"
             )
         ) && !(graph_trace_seen
             && current_root_source_results >= 2
             && (matches!(
                 mcp.lifecycle_profile.as_deref(),
-                Some("provider-neutral-anchor-lineage" | "mapped-live-graph-consumption")
+                Some(
+                    "provider-neutral-anchor-lineage"
+                        | "mapped-live-graph-consumption"
+                        | "mapped-live-ordinary-tool-convergence"
+                )
             ) || code_refinement_seen))
         {
             return Err(format!(
@@ -656,14 +684,17 @@ impl CodebaseMemoryFake {
                 self.log_tail()
             ));
         }
-        let minimum_requests = if matches!(
-            mcp.lifecycle_profile.as_deref(),
-            Some("provider-neutral-anchor-lineage" | "mapped-live-graph-consumption")
-        ) {
-            8
-        } else {
-            9
-        };
+        let minimum_requests =
+            if mcp.lifecycle_profile.as_deref() == Some("mapped-live-ordinary-tool-convergence") {
+                15
+            } else if matches!(
+                mcp.lifecycle_profile.as_deref(),
+                Some("provider-neutral-anchor-lineage" | "mapped-live-graph-consumption")
+            ) {
+                8
+            } else {
+                9
+            };
         if self.engineer_requests() < minimum_requests {
             return Err(format!(
                 "fake LLM did not complete the codebase-memory validation loop\n{}",
@@ -714,6 +745,12 @@ impl CodebaseMemoryFake {
                     let index = start + offset + 1;
                     let view = request.view.as_ref();
                     let prior = view.map(|v| v.prior_tool_results).unwrap_or_default();
+                    if self.privacy_safe_log {
+                        return format!(
+                            "#{index} {} {} role=engineer prior_tool_results={prior}",
+                            request.method, request.path
+                        );
+                    }
                     let last = view
                         .and_then(RequestView::last_message)
                         .map(|m| format!("{}: {}", m.role, snippet(&m.content, 160)))
@@ -732,24 +769,6 @@ fn messages_contain(view: &RequestView, needle: &str) -> bool {
     view.messages
         .iter()
         .any(|message| message.content.contains(needle))
-}
-
-fn privacy_safe_checkpoints(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Vec<String> {
-    if mcp.lifecycle_profile.as_deref() != Some("mapped-live-graph-consumption") {
-        return Vec::new();
-    }
-    let allowed = [
-        "served_mapped_root",
-        "served_mapped_carry_forward",
-        "served_mapped_current_root_source",
-        "served_mapped_unavailable",
-    ];
-    calls
-        .iter()
-        .filter_map(|call| call.fixture_event.as_deref())
-        .filter(|event| allowed.contains(event))
-        .map(str::to_string)
-        .collect()
 }
 
 fn is_current_root_source_result(content: &str) -> bool {
