@@ -34,7 +34,8 @@ pub use machine::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
     ModelCallStatus, OperationGeneration, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
     SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallStatus,
-    ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
+    ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason, ToolResultMetadata,
+    ToolRetryDisposition,
 };
 pub use managed_bash::ManagedBashTool;
 pub use managed_fs::joined_filesystem_tool;

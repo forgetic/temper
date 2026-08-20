@@ -102,6 +102,14 @@ fn failure_metric(category: ToolFailureCategoryV1) -> &'static str {
         ToolFailureCategoryV1::ProviderProtocol => "graph_failure_provider_protocol",
         ToolFailureCategoryV1::InvalidModelInput => "graph_failure_invalid_model_input",
         ToolFailureCategoryV1::CircuitOpen => "graph_failure_circuit_open",
+        ToolFailureCategoryV1::SchemaArgumentMismatch
+        | ToolFailureCategoryV1::PolicyDenial
+        | ToolFailureCategoryV1::ExecutionFailure
+        | ToolFailureCategoryV1::Cancellation
+        | ToolFailureCategoryV1::GraphLifecycleDenial
+        | ToolFailureCategoryV1::CircuitRedirect => {
+            unreachable!("ordinary failure category requested as a graph metric")
+        }
     }
 }
 

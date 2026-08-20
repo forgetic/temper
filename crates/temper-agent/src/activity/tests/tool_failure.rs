@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use temper_agent_core::{
     AgentEvent, CodebaseMemoryTiming, ModelIdentity, ToolCallStatus, ToolFailureCategory,
-    ToolFailureDiagnostic, ToolResultMetadata,
+    ToolFailureDiagnostic, ToolFailureReason, ToolResultMetadata,
 };
 use temper_protocol_activity::{
     AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1,
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
-    ToolFailureCategoryV1,
+    ToolFailureCategoryV1, ToolFailureReasonV1, ToolRetryDispositionV1,
 };
 
 use super::{FakeClock, Recorder, ScopeFactory};
@@ -121,5 +121,65 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
         assert!(!json.contains("PRIVATE-SOURCE-PATH"));
         assert!(!json.contains(CORRELATION_TARGET));
         assert!(!json.contains(&"y".repeat(1_000)));
+    }
+}
+
+#[test]
+fn ordinary_failures_keep_only_shell_owned_diagnostics_in_every_capture_mode() {
+    const SECRET: &str = "Authorization: Bearer ORDINARY-FAILURE-SECRET";
+    for mode in [
+        CaptureModeV1::Metadata,
+        CaptureModeV1::Transcript,
+        CaptureModeV1::Diagnostic,
+    ] {
+        let recorder = Arc::new(Recorder::default());
+        let factory = ScopeFactory::with_parts(
+            AgentActivityCapturePolicyV1 {
+                capture: mode,
+                max_inline_bytes: 256,
+                ..Default::default()
+            },
+            Arc::new(FakeClock::new(0..10)),
+            vec![recorder.clone()],
+        );
+        let run = factory.main("main", ModelIdentity::new("p", "m"));
+        let mut failure = ToolFailureDiagnostic::execution(ToolFailureReason::ToolReportedFailure);
+        failure.message = format!("{SECRET} /private/path");
+        run.observability.events.emit(AgentEvent::ToolEnd {
+            id: "ordinary-failed".to_string(),
+            name: "bash".to_string(),
+            status: ToolCallStatus::Failed,
+            duration_ms: 1,
+            result: ToolResultMetadata {
+                preview: Some(format!("stderr {SECRET}")),
+                bytes: 100,
+                truncated: false,
+                failure: Some(failure),
+                codebase_memory_timing: None,
+                graph_correlation: None,
+                decision_anchor_lineage: None,
+            },
+        });
+
+        let frames = recorder.0.lock().expect("frames");
+        let finished = frames
+            .iter()
+            .find_map(|frame| match &frame.event {
+                AgentActivityEventV1::ToolFinished(value) => Some(value),
+                _ => None,
+            })
+            .expect("tool finish");
+        assert_eq!(finished.name, "bash");
+        assert_eq!(finished.result, None);
+        let diagnostic = finished.failure.as_ref().expect("typed failure");
+        assert_eq!(diagnostic.category, ToolFailureCategoryV1::ExecutionFailure);
+        assert_eq!(diagnostic.reason, ToolFailureReasonV1::ToolReportedFailure);
+        assert_eq!(
+            diagnostic.retry_disposition,
+            ToolRetryDispositionV1::CorrectInvocation
+        );
+        let rendered = format!("{frames:?} {}", serde_json::to_string(&*frames).unwrap());
+        assert!(!rendered.contains(SECRET));
+        assert!(!rendered.contains("/private/path"));
     }
 }

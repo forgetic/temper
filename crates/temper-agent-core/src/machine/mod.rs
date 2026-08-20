@@ -28,6 +28,7 @@ mod batching;
 mod core;
 mod decision_anchor;
 mod protocol;
+mod tool_failure;
 
 pub use core::{AgentMachine, ArgPreviewFn};
 pub use decision_anchor::{
@@ -38,10 +39,13 @@ pub use protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,
     CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, ModelCallStatus, OperationGeneration,
     SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallStatus,
-    ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
+    ToolResultMetadata,
 };
 pub use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
+};
+pub use tool_failure::{
+    ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason, ToolRetryDisposition,
 };
 
 #[cfg(test)]

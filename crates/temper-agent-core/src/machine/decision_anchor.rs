@@ -15,8 +15,8 @@ use tongs::tools::{ToolEffects, ToolOutput};
 
 use super::protocol::{
     CODEBASE_MEMORY_TOOL_PREFIX, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
-    ToolFailureCategory,
 };
+use super::tool_failure::ToolFailureCategory;
 
 /// Reserved wrapper detail carrying a process-local-root-bound lineage record.
 /// It is deliberately excluded from durable activity metadata.

@@ -247,6 +247,7 @@ fn abort_fences_late_operations_and_stale_quiescence() {
             batch_generation: 99,
             id: "late".to_string(),
             output: tool_output("late", false),
+            failure: None,
         },
     );
     assert!(late_tool.is_empty());

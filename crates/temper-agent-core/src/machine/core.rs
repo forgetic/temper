@@ -31,6 +31,7 @@ use super::decision_anchor::{
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
 };
+use super::tool_failure::ToolFailureDiagnostic;
 
 /// Where the loop is in the call/tool cycle.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -362,6 +363,7 @@ impl AgentMachine {
         batch_generation: BatchGeneration,
         id: String,
         output: ToolOutput,
+        failure: Option<ToolFailureDiagnostic>,
     ) -> Vec<AgentRequest> {
         // A completion is accepted exactly once and only for the active batch.
         // This fences duplicated calls and late tasks from cancelled or prior
@@ -386,6 +388,7 @@ impl AgentMachine {
         if let Some(batch) = self.pending_batches.front_mut() {
             if let Some(pending) = batch.iter_mut().find(|p| p.call.id == id) {
                 pending.output = Some(output);
+                pending.failure = failure;
             }
         }
 
@@ -438,7 +441,12 @@ impl AgentMachine {
         for pending in std::mem::take(&mut self.turn_results) {
             if let Some(output) = pending.output {
                 self.messages.push(Message::ToolResult(std::sync::Arc::new(
-                    tool_result_message(&pending.call.id, &pending.call.name, output),
+                    tool_result_message(
+                        &pending.call.id,
+                        &pending.call.name,
+                        output,
+                        pending.failure,
+                    ),
                 )));
             }
         }
@@ -518,7 +526,8 @@ impl temper_agent_io::Machine for AgentMachine {
                 batch_generation,
                 id,
                 output,
-            } => self.on_tool_finished(operation_generation, batch_generation, id, output),
+                failure,
+            } => self.on_tool_finished(operation_generation, batch_generation, id, output, failure),
             AgentCompletion::TasksQuiesced {
                 operation_generation,
                 batch_generation,
@@ -566,13 +575,25 @@ fn tool_result_message(
     tool_call_id: &str,
     tool_name: &str,
     output: ToolOutput,
+    failure: Option<ToolFailureDiagnostic>,
 ) -> ToolResultMessage {
+    let (content, details, is_error) = match failure {
+        Some(failure) => (
+            vec![ContentBlock::Text(tongs::model::TextContent {
+                text: failure.model_message(),
+                text_signature: None,
+            })],
+            None,
+            true,
+        ),
+        None => (output.content, output.details, output.is_error),
+    };
     ToolResultMessage {
         tool_call_id: tool_call_id.to_string(),
         tool_name: tool_name.to_string(),
-        content: output.content,
-        details: output.details,
-        is_error: output.is_error,
+        content,
+        details,
+        is_error,
         timestamp: 0,
     }
 }

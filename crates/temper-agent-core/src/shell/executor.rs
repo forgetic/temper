@@ -17,7 +17,8 @@ use tongs::tools::ToolRegistry;
 use crate::machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, BatchGeneration,
     CODEBASE_MEMORY_TOOL_PREFIX, DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, OperationGeneration,
-    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
+    ToolFailureReason,
 };
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::run::AgentOperationLimits;
@@ -26,6 +27,7 @@ use crate::shell::streaming::{
     stream_to_completion,
 };
 use crate::shell::task_group::{CancellationToken, RunTaskGroup, cancel_or};
+use crate::shell::tool_failure::{advertised_arguments_match, trusted_first_party_failure};
 use crate::shell::tool_result::{
     OPERATOR_GRAPH_RESULT_CAPTURE_BYTES, bounded_result_text, bounded_tool_result,
 };
@@ -318,7 +320,8 @@ impl AgentShell {
                 operation_generation,
                 batch_generation,
                 id: call.id,
-                output,
+                output: output.output,
+                failure: output.failure,
             });
         });
     }
@@ -379,8 +382,18 @@ impl Executor<AgentMachine> for AgentShell {
 }
 
 enum ToolExecution {
-    Finished(tongs::tools::ToolOutput),
-    TimedOut(tongs::tools::ToolOutput),
+    Finished {
+        output: tongs::tools::ToolOutput,
+        failure: Option<ToolFailureDiagnostic>,
+    },
+    TimedOut {
+        failure: ToolFailureDiagnostic,
+    },
+}
+
+struct ExecutedTool {
+    output: tongs::tools::ToolOutput,
+    failure: Option<ToolFailureDiagnostic>,
 }
 
 async fn execute_tool(
@@ -392,13 +405,14 @@ async fn execute_tool(
     clock: &dyn EventClock,
     events: &dyn EventSink,
     operator_transcript: Option<&dyn OperatorTranscriptSink>,
-) -> Option<tongs::tools::ToolOutput> {
+) -> Option<ExecutedTool> {
     let started_ms = clock.now_millis();
     let operation = async {
         if mutation_blocked {
-            return ToolExecution::Finished(tool_error_output(
-                DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
-            ));
+            return failed_execution(
+                tool_error_output(DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE),
+                ToolFailureDiagnostic::policy_denial(),
+            );
         }
         match tools.get(&call.name) {
             Some(tool) => match temper_agent_io::timeout(
@@ -407,43 +421,86 @@ async fn execute_tool(
             )
             .await
             {
-                Ok(Ok(output)) => ToolExecution::Finished(output),
-                Ok(Err(error)) => ToolExecution::Finished(tool_error_output(&format!(
-                    "tool `{}` failed: {error}",
-                    call.name
-                ))),
-                Err(_) => ToolExecution::TimedOut(tool_error_output(&format!(
-                    "tool `{}` timed out after configured limit {}",
-                    call.name,
-                    format_duration(timeout)
-                ))),
+                Ok(Ok(output)) if output.is_error => {
+                    let failure = crate::shell::tool_result::safe_tool_failure(&call.name, &output)
+                        .or_else(|| trusted_first_party_failure(&call.name, &output))
+                        .unwrap_or_else(|| {
+                            if advertised_arguments_match(&tool.parameters(), &call.arguments) {
+                                ToolFailureDiagnostic::execution(
+                                    ToolFailureReason::ToolReportedFailure,
+                                )
+                            } else {
+                                ToolFailureDiagnostic::schema(ToolFailureReason::InvalidArguments)
+                            }
+                        });
+                    failed_execution(output, failure)
+                }
+                Ok(Ok(output)) => ToolExecution::Finished {
+                    output,
+                    failure: None,
+                },
+                Ok(Err(error)) => {
+                    let invalid_arguments = matches!(&error, tongs::error::Error::Decode(_))
+                        || matches!(&error, tongs::error::Error::Tool(_))
+                            && !advertised_arguments_match(&tool.parameters(), &call.arguments);
+                    let failure = match error {
+                        _ if invalid_arguments => {
+                            ToolFailureDiagnostic::schema(ToolFailureReason::InvalidArguments)
+                        }
+                        tongs::error::Error::Aborted => ToolFailureDiagnostic::cancelled(),
+                        _ => {
+                            ToolFailureDiagnostic::execution(ToolFailureReason::ToolExecutionError)
+                        }
+                    };
+                    failed_execution(tool_error_output(failure.message.as_str()), failure)
+                }
+                Err(_) => ToolExecution::TimedOut {
+                    failure: if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+                        ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::Timeout)
+                    } else {
+                        ToolFailureDiagnostic::timeout()
+                    },
+                },
             },
             None => {
-                ToolExecution::Finished(tool_error_output(&format!("unknown tool `{}`", call.name)))
+                let failure = ToolFailureDiagnostic::schema(ToolFailureReason::UnknownTool);
+                failed_execution(tool_error_output(failure.message.as_str()), failure)
             }
         }
     };
 
     let settled = cancel_or(cancellation, operation).await;
     let duration_ms = clock.now_millis().saturating_sub(started_ms);
-    let (output, status, timed_out) = match settled {
-        Some(ToolExecution::Finished(output)) => {
-            let status = if output.is_error {
+    let (raw_output, status, failure) = match settled {
+        Some(ToolExecution::Finished { output, failure }) => {
+            let status = if failure
+                .as_ref()
+                .is_some_and(|failure| failure.category == ToolFailureCategory::Cancellation)
+            {
+                ToolCallStatus::Cancelled
+            } else if failure.is_some() {
                 ToolCallStatus::Failed
             } else {
                 ToolCallStatus::Succeeded
             };
-            (output, status, false)
+            (output, status, failure)
         }
-        Some(ToolExecution::TimedOut(output)) => (output, ToolCallStatus::Cancelled, true),
+        Some(ToolExecution::TimedOut { failure }) => (
+            tool_error_output(failure.message.as_str()),
+            ToolCallStatus::Cancelled,
+            Some(failure),
+        ),
         None => {
-            let output = tool_error_output(&format!("tool `{}` cancelled", call.name));
+            let failure = ToolFailureDiagnostic::cancelled();
+            let output = tool_error_output(failure.message.as_str());
+            let mut result = bounded_tool_result(&call.name, &output);
+            result.failure = Some(failure);
             events.emit(AgentEvent::ToolEnd {
                 id: call.id.clone(),
                 name: call.name.clone(),
                 status: ToolCallStatus::Cancelled,
                 duration_ms,
-                result: bounded_tool_result(&call.name, &output),
+                result,
             });
             return None;
         }
@@ -451,37 +508,51 @@ async fn execute_tool(
     if status == ToolCallStatus::Succeeded && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
         if let (Some(operator_transcript), Some((text, truncated))) = (
             operator_transcript,
-            bounded_result_text(&output, OPERATOR_GRAPH_RESULT_CAPTURE_BYTES),
+            bounded_result_text(&raw_output, OPERATOR_GRAPH_RESULT_CAPTURE_BYTES),
         ) {
             operator_transcript.graph_result(&call.id, &call.name, &text, truncated);
         }
     }
+    let mut result = bounded_tool_result(&call.name, &raw_output);
+    result.failure = failure.clone();
     events.emit(AgentEvent::ToolEnd {
         id: call.id.clone(),
         name: call.name.clone(),
         status,
         duration_ms,
-        result: {
-            let mut result = bounded_tool_result(&call.name, &output);
-            if timed_out && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
-                result.failure = Some(ToolFailureDiagnostic::codebase_memory(
-                    ToolFailureCategory::Timeout,
-                ));
-            }
-            result
-        },
+        result,
     });
-    Some(output)
+
+    let output = failure.as_ref().map_or(raw_output, |diagnostic| {
+        diagnostic_tool_output(&call.name, diagnostic)
+    });
+    Some(ExecutedTool { output, failure })
 }
 
-fn format_duration(duration: Duration) -> String {
-    if duration.subsec_nanos() == 0 {
-        format!("{}s", duration.as_secs())
-    } else if duration.subsec_nanos() % 1_000_000 == 0 {
-        format!("{}ms", duration.as_millis())
-    } else {
-        format!("{}ns", duration.as_nanos())
+fn failed_execution(
+    output: tongs::tools::ToolOutput,
+    failure: ToolFailureDiagnostic,
+) -> ToolExecution {
+    ToolExecution::Finished {
+        output,
+        failure: Some(failure),
     }
+}
+
+fn diagnostic_tool_output(
+    name: &str,
+    diagnostic: &ToolFailureDiagnostic,
+) -> tongs::tools::ToolOutput {
+    let mut output = tool_error_output(&diagnostic.model_message());
+    if name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+        output.details = Some(serde_json::json!({
+            SAFE_TOOL_FAILURE_DETAIL_KEY: {
+                "source": "codebase_memory",
+                "category": diagnostic.category.as_str(),
+            }
+        }));
+    }
+    output
 }
 
 /// Builds an error [`tongs::tools::ToolOutput`] carrying `message` as text.
@@ -498,6 +569,9 @@ fn tool_error_output(message: &str) -> tongs::tools::ToolOutput {
     }
 }
 
+#[cfg(test)]
+#[path = "executor_failure_tests.rs"]
+mod failure_tests;
 #[cfg(test)]
 #[path = "executor_tests.rs"]
 mod tests;

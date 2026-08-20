@@ -1,13 +1,15 @@
 use crate::{
     AgentActivityEventV1, AgentAssignmentIdentityV1, AgentScopeKindV1, AgentScopeV1,
     AgentTerminalReasonV1, BlobMediaTypeV1, CapturedContentV1, FailureInfoV1, InlineContentV1,
-    MAX_IDENTIFIER_BYTES, MAX_INLINE_CONTENT_BYTES, MAX_TOOL_FAILURE_MESSAGE_BYTES,
-    MODEL_CALL_RETRY_FAILURE_MESSAGE, ModelCallStatusV1, PromptCaptureDispositionV1,
-    PromptPreparedV1, PromptSnapshotV1, ScopeFinishedV1, ScopeStatusV1, ToolFailureDiagnosticV1,
-    ToolStatusV1,
+    MAX_IDENTIFIER_BYTES, MAX_INLINE_CONTENT_BYTES, MODEL_CALL_RETRY_FAILURE_MESSAGE,
+    ModelCallStatusV1, PromptCaptureDispositionV1, PromptPreparedV1, PromptSnapshotV1,
+    ScopeFinishedV1, ScopeStatusV1, ToolStatusV1,
 };
 
-use super::{ActivityValidationCode, ActivityValidationError, error, validate_blob_reference};
+use super::{
+    ActivityValidationCode, ActivityValidationError, error, tool_failure::validate_tool_failure,
+    validate_blob_reference,
+};
 
 pub(super) fn assignment(
     identity: &AgentAssignmentIdentityV1,
@@ -134,17 +136,17 @@ pub(super) fn event(
             identifier(&value.name, &format!("{path}.data.name"))?;
             optional_content(value.result.as_ref(), &format!("{path}.data.result"))?;
             if let Some(failure) = &value.failure {
-                tool_failure(failure, &format!("{path}.data.failure"))?;
-                if !value.name.starts_with("codebase_memory_") {
-                    return Err(invalid_event(
-                        &format!("{path}.data.failure"),
-                        "is reserved for trusted codebase-memory tool names",
-                    ));
-                }
+                validate_tool_failure(failure, &format!("{path}.data.failure"))?;
                 if value.status == ToolStatusV1::Succeeded {
                     return Err(invalid_event(
                         &format!("{path}.data.failure"),
                         "is permitted only when tool status is failed or cancelled",
+                    ));
+                }
+                if value.result.is_some() {
+                    return Err(invalid_event(
+                        &format!("{path}.data.result"),
+                        "must be omitted when a typed tool failure is present",
                     ));
                 }
             }
@@ -433,40 +435,6 @@ fn failure(value: &FailureInfoV1, path: &str) -> Result<(), ActivityValidationEr
             ActivityValidationCode::OversizedInlineValue,
             format!("{path}.message"),
             format!("exceeds {MAX_INLINE_CONTENT_BYTES} UTF-8 bytes"),
-        ));
-    }
-    Ok(())
-}
-
-fn tool_failure(
-    value: &ToolFailureDiagnosticV1,
-    path: &str,
-) -> Result<(), ActivityValidationError> {
-    if value.message != value.category.safe_message() {
-        return Err(invalid_event(
-            &format!("{path}.message"),
-            "must use the fixed summary for its tool-failure category",
-        ));
-    }
-    if value.message.is_empty() || value.message.len() > MAX_TOOL_FAILURE_MESSAGE_BYTES {
-        return Err(error(
-            ActivityValidationCode::OversizedInlineValue,
-            format!("{path}.message"),
-            format!("must be between 1 and {MAX_TOOL_FAILURE_MESSAGE_BYTES} UTF-8 bytes"),
-        ));
-    }
-    if value.retryable != value.category.retryable() {
-        return Err(invalid_event(
-            &format!("{path}.retryable"),
-            "must use the fixed retryability for its tool-failure category",
-        ));
-    }
-    if value.fallback_to_conventional_discovery
-        != value.category.fallback_to_conventional_discovery()
-    {
-        return Err(invalid_event(
-            &format!("{path}.fallback_to_conventional_discovery"),
-            "must use the fixed fallback guidance for its tool-failure category",
         ));
     }
     Ok(())

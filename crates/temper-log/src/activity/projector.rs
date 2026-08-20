@@ -118,12 +118,13 @@ impl CanonicalActivityProjector {
             Event::TraceGap(gap) => self.record_gap(event, gap),
             Event::ModelCallRetrying(retry) => self.finish_retry(event, retry),
             Event::ModelCallFinished(model) => self.finish_model(event, model),
-            Event::ToolFinished(tool) => self.finish_span(
-                event,
-                &tool_span_id(event, &tool.call_id),
-                tool.duration_ms,
-                tool_status(tool.status),
-            ),
+            Event::ToolFinished(tool) => {
+                let span_id = tool_span_id(event, &tool.call_id);
+                self.with_active(event, &span_id, |span| {
+                    span.attributes.tool_failure = tool.failure.clone();
+                });
+                self.finish_span(event, &span_id, tool.duration_ms, tool_status(tool.status));
+            }
             Event::TurnFinished(turn) => {
                 self.with_active(event, &turn_span_id(event), |span| {
                     span.attributes.stop_reason = Some(stop_reason(turn.stop_reason));

@@ -185,6 +185,7 @@ pub(super) fn complete(m: &mut AgentMachine, completion: TestCompletion) -> Vec<
                 batch_generation,
                 id,
                 output,
+                failure: None,
             }
         }
     };
