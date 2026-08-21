@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    GraphCorrelationTargetKindV1, GraphCorrelationV1,
+    DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationV1,
 };
 use uuid::Uuid;
 
@@ -47,11 +47,23 @@ impl DecisionAnchorLineages {
     /// Derives one trusted output record after a successful, complete targeted
     /// wrapper result. Callers must not invoke this for provider errors, empty
     /// output, or truncation.
+    #[cfg(test)]
     pub(super) fn record(
         &mut self,
         correlation: &GraphCorrelationV1,
         input: &Value,
         typed_parts: Option<&[McpToolResultPart]>,
+    ) -> Option<DecisionAnchorLineageV1> {
+        self.record_with_evidence_kind(correlation, input, typed_parts, None)
+    }
+
+    /// Records lineage with an optional wrapper-validated source purpose.
+    pub(super) fn record_with_evidence_kind(
+        &mut self,
+        correlation: &GraphCorrelationV1,
+        input: &Value,
+        typed_parts: Option<&[McpToolResultPart]>,
+        decision_evidence_kind: Option<DecisionEvidenceKindV1>,
     ) -> Option<DecisionAnchorLineageV1> {
         if !correlation.is_valid() {
             return None;
@@ -85,12 +97,13 @@ impl DecisionAnchorLineages {
             }
             None => BTreeSet::new(),
         };
-        DecisionAnchorLineageV1::new_with_canonical_target_digests(
+        DecisionAnchorLineageV1::new_with_canonical_target_digests_and_evidence_kind(
             root_binding,
             stage,
             target_kind,
             result_target_kinds,
             canonical_target_digests,
+            decision_evidence_kind,
         )
     }
 
