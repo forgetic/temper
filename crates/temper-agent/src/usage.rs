@@ -390,6 +390,43 @@ impl ActivityProjection for TracingProjection {
                         .as_ref()
                         .map(|value| value.fallback_to_conventional_discovery);
                     let failure_message = tool.failure.as_ref().map(|value| value.message.as_str());
+                    let graph_reason = tool
+                        .failure
+                        .as_ref()
+                        .and_then(|value| value.graph_exploration.as_ref())
+                        .map(|value| match value.reason {
+                            temper_protocol_activity::GraphExplorationClosedReasonV1::Completed => {
+                                "completed"
+                            }
+                            temper_protocol_activity::GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => {
+                                "recoverable_incomplete_evidence"
+                            }
+                            temper_protocol_activity::GraphExplorationClosedReasonV1::RecoveryExhausted => {
+                                "recovery_exhausted"
+                            }
+                        });
+                    let graph_missing = tool.failure.as_ref().and_then(|value| {
+                        value.graph_exploration.as_ref().map(|details| {
+                            details
+                                .missing_evidence
+                                .iter()
+                                .map(|kind| kind.as_str())
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                    });
+                    let graph_action = tool.failure.as_ref().and_then(|value| {
+                        value
+                            .graph_exploration
+                            .as_ref()
+                            .map(|details| details.permitted_action.as_str())
+                    });
+                    let graph_remaining = tool.failure.as_ref().and_then(|value| {
+                        value
+                            .graph_exploration
+                            .as_ref()
+                            .map(|details| details.remaining_allowance)
+                    });
                     tracing::debug!(
                         target: AGENT_TARGET,
                         event = "tool.error",
@@ -404,6 +441,10 @@ impl ActivityProjection for TracingProjection {
                         tool.failure.retryable = retryable,
                         tool.failure.conventional_fallback = conventional_fallback,
                         tool.failure.message = failure_message,
+                        tool.failure.graph.reason = graph_reason,
+                        tool.failure.graph.missing_evidence = graph_missing.as_deref(),
+                        tool.failure.graph.permitted_action = graph_action,
+                        tool.failure.graph.remaining_allowance = graph_remaining,
                         "agent: tool {name}{suffix} error",
                     );
                 } else {

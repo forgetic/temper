@@ -80,12 +80,18 @@ fn reply(view: &RequestView) -> Reply {
         3 => tool_reply(
             "read-mapped-current-root-implementation",
             "codebase_memory_get_code_snippet",
-            serde_json::json!({"qualified_name": result_at(view, "/callers/0/qualified_name")}),
+            serde_json::json!({
+                "qualified_name": result_at(view, "/callers/0/qualified_name"),
+                "decision_evidence_kind": "caller",
+            }),
         ),
         4 => tool_reply(
             "read-mapped-current-root-focused-test",
             "codebase_memory_get_code_snippet",
-            serde_json::json!({"qualified_name": result_at(view, "/source_metadata/related_source_references/0/qualifiedName")}),
+            serde_json::json!({
+                "qualified_name": result_at(view, "/source_metadata/related_source_references/0/qualifiedName"),
+                "decision_evidence_kind": "focused_test",
+            }),
         ),
         5 => {
             assert_complete_source_evidence(view);

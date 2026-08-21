@@ -75,12 +75,18 @@ fn reply(view: &RequestView) -> Reply {
         3 => tool_reply(
             "read-convergence-current-root-implementation",
             "codebase_memory_get_code_snippet",
-            serde_json::json!({"qualified_name": "fixture::delivery::DeliveryAttempt"}),
+            serde_json::json!({
+                "qualified_name": "fixture::delivery::DeliveryAttempt",
+                "decision_evidence_kind": "caller",
+            }),
         ),
         4 => tool_reply(
             "read-convergence-current-root-focused-test",
             "codebase_memory_get_code_snippet",
-            serde_json::json!({"qualified_name": "fixture::delivery::worker_for"}),
+            serde_json::json!({
+                "qualified_name": "fixture::delivery::worker_for",
+                "decision_evidence_kind": "focused_test",
+            }),
         ),
         5 => tool_reply(
             "close-convergence-graph-exploration",
