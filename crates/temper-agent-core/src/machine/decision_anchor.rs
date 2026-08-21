@@ -194,7 +194,11 @@ impl DecisionAnchorState {
                 let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.as_mut() else {
                     return Some(ToolCallDenial::GraphExplorationClosed);
                 };
-                if recovery.remaining == 0 || already_pending || !recovery.evidence.needs(gap) {
+                if recovery.remaining == 0
+                    || already_pending
+                    || !recovery.evidence.needs(gap)
+                    || !recovery.anchors.supports(gap)
+                {
                     return Some(ToolCallDenial::GraphExplorationClosed);
                 }
                 recovery.remaining = recovery.remaining.saturating_sub(1);
@@ -322,6 +326,7 @@ impl DecisionAnchorState {
             self.later_roots = self.later_roots.saturating_add(next_count);
         }
         if anchors.is_consumable() {
+            self.non_progressing_batches = 0;
             if let Some(trace_turn) = anchors.trace_root_turn {
                 let mut evidence = SourceEvidence::default();
                 evidence.record_trace(trace_turn);
@@ -408,6 +413,7 @@ impl DecisionAnchorState {
         let progressed = trace_progressed || evidence_progressed || refinement || roots_progressed;
 
         if progressed {
+            self.non_progressing_batches = 0;
             let mut evidence = evidence;
             evidence.refinement_seen |= refinement;
             if let Some(trace_turn) = batch_trace_turn {

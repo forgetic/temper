@@ -124,6 +124,18 @@ impl AnchorForest {
         self.valid && self.roots.values().any(Anchor::is_consumable)
     }
 
+    pub(super) fn supports(&self, gap: DecisionGap) -> bool {
+        let target_kind = match gap {
+            DecisionGap::Trace => DecisionAnchorTargetKindV1::FunctionName,
+            DecisionGap::Evidence(_) => DecisionAnchorTargetKindV1::QualifiedName,
+        };
+        self.valid
+            && self
+                .roots
+                .values()
+                .any(|root| root.result_target_kinds.contains(&target_kind))
+    }
+
     pub(super) fn accepts(
         &self,
         call: &PendingCodebaseCall,

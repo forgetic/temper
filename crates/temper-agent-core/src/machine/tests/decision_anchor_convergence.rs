@@ -109,3 +109,69 @@ fn repeated_non_progressing_discovery_closes_graph_exploration() {
         None
     );
 }
+
+#[test]
+fn typed_progress_resets_the_open_non_progress_budget() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    finish(
+        &mut state,
+        "root",
+        "codebase_memory_search_graph",
+        ROOT,
+        DecisionAnchorLineageStageV1::Root,
+    );
+
+    state.on_tool_dispatched(
+        &call("broad-before-trace", "codebase_memory_get_architecture"),
+        1,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "broad-before-trace",
+            "codebase_memory_get_architecture",
+            &plain_success(),
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+
+    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 2);
+    assert_eq!(
+        state.on_tool_finished(
+            "trace",
+            "codebase_memory_trace_path",
+            &output(
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+            ),
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+
+    state.on_tool_dispatched(
+        &call("broad-after-trace", "codebase_memory_get_architecture"),
+        3,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "broad-after-trace",
+            "codebase_memory_get_architecture",
+            &plain_success(),
+        ),
+        DecisionAnchorTransition::Unchanged,
+        "successful typed lineage progress starts a fresh bounded exploration window",
+    );
+    state.on_tool_dispatched(
+        &call("broad-exhausts", "codebase_memory_get_architecture"),
+        4,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "broad-exhausts",
+            "codebase_memory_get_architecture",
+            &plain_success(),
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+}

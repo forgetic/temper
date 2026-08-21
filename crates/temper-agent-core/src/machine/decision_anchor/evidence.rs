@@ -9,7 +9,7 @@ impl DecisionAnchorState {
         evidence: SourceEvidence,
     ) -> DecisionAnchorTransition {
         debug_assert!(!evidence.is_complete());
-        if !anchors.is_consumable() {
+        if !evidence.has_recovery_path(&anchors) {
             self.phase = Some(AnchorPhase::Exhausted);
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
@@ -89,6 +89,12 @@ impl DecisionAnchorState {
             return DecisionAnchorTransition::Unchanged;
         }
 
+        if !evidence.has_recovery_path(&anchors) {
+            self.phase = Some(AnchorPhase::Exhausted);
+            self.exploration = ExplorationStatus::BudgetExhausted;
+            return DecisionAnchorTransition::RecoveryExhausted;
+        }
+
         if remaining == 0 {
             self.phase = Some(AnchorPhase::Exhausted);
             self.exploration = ExplorationStatus::BudgetExhausted;
@@ -147,6 +153,22 @@ impl SourceEvidence {
 
     pub(super) fn has_trace(&self) -> bool {
         self.trace_turn.is_some()
+    }
+
+    fn has_recovery_path(&self, anchors: &AnchorForest) -> bool {
+        if !self.has_trace() {
+            return anchors.supports(DecisionGap::Trace);
+        }
+        [
+            DecisionEvidenceKindV1::Implementation,
+            DecisionEvidenceKindV1::Caller,
+            DecisionEvidenceKindV1::FocusedTest,
+        ]
+        .into_iter()
+        .any(|kind| {
+            let gap = DecisionGap::Evidence(kind);
+            self.needs(gap) && anchors.supports(gap)
+        })
     }
 
     pub(super) fn is_complete(&self) -> bool {

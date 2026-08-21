@@ -179,6 +179,135 @@ fn exhausted_broad_search_admits_only_parallel_calls_for_named_missing_gaps() {
 }
 
 #[test]
+fn missing_trace_can_advance_before_the_typed_source_gaps() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    install_consumable_root(&mut state);
+    enter_budget_recovery(&mut state, 1);
+
+    assert_eq!(
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 3),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "trace",
+            "codebase_memory_trace_path",
+            &output(
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+            ),
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    assert!(state.blocks_mutation("write"));
+
+    for (id, kind) in [
+        ("implementation", DecisionEvidenceKindV1::Implementation),
+        ("caller", DecisionEvidenceKindV1::Caller),
+        ("test", DecisionEvidenceKindV1::FocusedTest),
+    ] {
+        assert_eq!(state.on_tool_dispatched(&source_call(id, kind), 4), None);
+    }
+    let implementation = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    let caller = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Caller,
+    );
+    let test = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::FocusedTest,
+    );
+    assert_eq!(
+        state.on_tool_batch_finished(&[
+            (
+                "implementation",
+                "codebase_memory_get_code_snippet",
+                &implementation,
+            ),
+            ("caller", "codebase_memory_get_code_snippet", &caller),
+            ("test", "codebase_memory_get_code_snippet", &test),
+        ]),
+        DecisionAnchorTransition::Converged,
+    );
+    assert!(!state.blocks_mutation("write"));
+}
+
+#[test]
+fn recovery_denies_unsupported_gap_and_stops_when_last_path_depletes() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    assert_eq!(
+        finish_with_kinds(
+            &mut state,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+            &[DecisionAnchorTargetKindV1::FunctionName],
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+    state.on_tool_dispatched(
+        &call("broad-one", "codebase_memory_get_architecture"),
+        1,
+    );
+    state.on_tool_finished(
+        "broad-one",
+        "codebase_memory_get_architecture",
+        &plain_success(),
+    );
+    state.on_tool_dispatched(
+        &call("broad-two", "codebase_memory_get_architecture"),
+        2,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "broad-two",
+            "codebase_memory_get_architecture",
+            &plain_success(),
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    assert_eq!(
+        state.on_tool_dispatched(
+            &source_call("unsupported-source", DecisionEvidenceKindV1::Implementation),
+            3,
+        ),
+        Some(ToolCallDenial::GraphExplorationClosed),
+        "a source selector absent from the current root cannot consume recovery allowance",
+    );
+    assert_eq!(
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 3),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "trace",
+            "codebase_memory_trace_path",
+            &output(
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+            ),
+        ),
+        DecisionAnchorTransition::RecoveryExhausted,
+        "once the only supported gap is filled, impossible remaining gaps terminate recovery",
+    );
+    assert!(state.blocks_mutation("write"));
+    assert_eq!(
+        state.on_tool_dispatched(&call("later", "codebase_memory_trace_path"), 4),
+        Some(ToolCallDenial::GraphExplorationClosed),
+    );
+}
+
+#[test]
 fn each_missing_typed_purpose_can_complete_after_budget_exhaustion() {
     let required = [
         DecisionEvidenceKindV1::Implementation,
