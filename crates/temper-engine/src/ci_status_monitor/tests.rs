@@ -430,6 +430,8 @@ fn terminal_job(
 
 mod cadence;
 mod missing;
+#[path = "tests/paged_forgejo.rs"]
+mod paged_forgejo;
 
 #[test]
 fn recovery_required_terminal_emits_typed_transition_with_evidence() {

@@ -1885,6 +1885,7 @@ dependencies = [
  "skein",
  "temper-engine-io",
  "temper-forge",
+ "temper-forge-forgejo",
  "temper-forge-memory",
  "temper-log",
  "temper-protocol-activity",
