@@ -439,6 +439,10 @@ fn agent_terminal_report<T>(
             AgentTerminalStatus::Failed,
             Some(AgentTerminalReasonV1::BudgetExhausted),
         ),
+        Err(CodingAgentError::DecisionAnchorRecoveryExhausted) => (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::DecisionAnchorRecoveryExhausted),
+        ),
         Err(CodingAgentError::Aborted { authority }) => (
             if abort_is_authoritative(*authority, worker_cancellation_requested) {
                 AgentTerminalStatus::Cancelled
@@ -602,6 +606,7 @@ fn coding_agent_failure_class(
         | CodingAgentError::CodebaseMemory(_)
         | CodingAgentError::Parse { .. } => FailureClass::Transient,
         CodingAgentError::NoProduct
+        | CodingAgentError::DecisionAnchorRecoveryExhausted
         | CodingAgentError::UndeclaredVerdict { .. }
         | CodingAgentError::InvalidVerdictResult(_) => FailureClass::Permanent,
     }

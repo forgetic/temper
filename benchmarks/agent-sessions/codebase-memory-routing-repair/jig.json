@@ -53,7 +53,8 @@
             "name": "codebase_memory_get_code_snippet",
             "args": {
               "repo": "temper-benchmark/codebase-memory-routing-repair",
-              "qualified_name": "alias_retries_stay_on_the_original_ordered_worker"
+              "qualified_name": "alias_retries_stay_on_the_original_ordered_worker",
+              "decision_evidence_kind": "focused_test"
             }
           }
         }
@@ -64,7 +65,46 @@
       "turns": [
         {
           "tool_call": {
-            "id": "duplicate_worker_refinement_non_progress",
+            "id": "duplicate_worker_refinement_non_progress_one",
+            "name": "codebase_memory_search_code",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "pattern": "worker_slot"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "duplicate_worker_refinement_exhausts_budget",
+            "name": "codebase_memory_search_code",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "pattern": "worker_slot"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "recovery_broad_architecture_denied",
+            "name": "codebase_memory_get_architecture",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "recovery_duplicate_worker_refinement_denied",
             "name": "codebase_memory_search_code",
             "args": {
               "project": "temper-benchmark/codebase-memory-routing-repair",
@@ -83,7 +123,8 @@
             "name": "codebase_memory_get_code_snippet",
             "args": {
               "repo": "temper-benchmark/codebase-memory-routing-repair",
-              "qualified_name": "DeliveryRouter::worker_for"
+              "qualified_name": "DeliveryRouter::worker_for",
+              "decision_evidence_kind": "caller"
             }
           }
         }

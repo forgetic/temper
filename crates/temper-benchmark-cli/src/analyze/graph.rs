@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use temper_protocol_activity::{
-    AgentActivityEventV1, GraphCorrelationV1, ToolFailureCategoryV1, ToolStatusV1,
+    AgentActivityEventV1, GraphCorrelationV1, ToolFailureCategoryV1, ToolFailureReasonV1,
+    ToolStatusV1,
 };
 
 use super::{
@@ -34,7 +35,7 @@ struct GraphCall {
     status: Option<ToolStatusV1>,
     graph_correlation: Option<GraphCorrelationV1>,
     decision_anchor_lineage: Option<temper_protocol_activity::DecisionAnchorLineageV1>,
-    failure: Option<ToolFailureCategoryV1>,
+    failure: Option<(ToolFailureCategoryV1, ToolFailureReasonV1)>,
     readiness_wait_ms: Option<u64>,
     discovery_duration_ms: Option<u64>,
 }
@@ -76,6 +77,7 @@ pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -
 
     let non_success = failed.saturating_add(cancelled);
     let mut failures_by_category = BTreeMap::new();
+    let mut failures_by_reason = BTreeMap::new();
     let mut failure_observed = 0_u64;
     for call in calls.values().filter(|call| {
         matches!(
@@ -83,8 +85,9 @@ pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -
             Some(ToolStatusV1::Failed | ToolStatusV1::Cancelled)
         )
     }) {
-        if let Some(category) = call.failure {
+        if let Some((category, reason)) = call.failure {
             *failures_by_category.entry(category).or_default() += 1;
+            *failures_by_reason.entry(reason).or_default() += 1;
             failure_observed = failure_observed.saturating_add(1);
         }
     }
@@ -151,6 +154,7 @@ pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -
             failed,
             cancelled,
             failures_by_category,
+            failures_by_reason,
             status_coverage: MetricCoverageV1 {
                 observed: status_observed,
                 expected: Some(call_count),
@@ -159,6 +163,10 @@ pub(super) fn graph_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -
                 observed: failure_observed,
                 expected: Some(non_success),
             },
+            failure_reason_coverage: Some(MetricCoverageV1 {
+                observed: failure_observed,
+                expected: Some(non_success),
+            }),
             cumulative_readiness_wait_ms: readiness_wait,
             readiness_wait_coverage: MetricCoverageV1 {
                 observed: readiness_observed,
@@ -221,7 +229,10 @@ fn collect_graph_calls(trace: &NormalizedTrace) -> BTreeMap<CallKey, GraphCall> 
                     });
                 call.finish_seq = Some(event.seq);
                 call.status = Some(tool.status);
-                call.failure = tool.failure.as_ref().map(|failure| failure.category);
+                call.failure = tool
+                    .failure
+                    .as_ref()
+                    .map(|failure| (failure.category, failure.reason));
                 if tool.status == ToolStatusV1::Succeeded {
                     call.graph_correlation = tool.graph_correlation.clone();
                     call.decision_anchor_lineage = tool.decision_anchor_lineage.clone();
@@ -296,7 +307,10 @@ fn immediate_repeats(trace: &NormalizedTrace, calls: &BTreeMap<CallKey, GraphCal
         .collect::<Vec<_>>();
     calls
         .values()
-        .filter(|call| call.failure.is_some_and(systemic_failure))
+        .filter(|call| {
+            call.failure
+                .is_some_and(|(category, _)| systemic_failure(category))
+        })
         .filter(|call| {
             let Some(finish_seq) = call.finish_seq else {
                 return false;

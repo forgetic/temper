@@ -31,7 +31,7 @@ runner:
   `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
   `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`,
   `mapped-live-ordinary-tool-convergence`, `mapped-live-graph-convergence`,
-  `model-failure-recovery`,
+  `mapped-live-decision-gap-recovery`, `model-failure-recovery`,
   `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
@@ -251,6 +251,24 @@ and convergence facts. Raw inputs, fingerprints, provider payloads, source,
 prompts, credentials, host-gate output, and diagnostic traces remain ephemeral.
 The historical `mapped-live-graph-consumption` mapping and controlled routing
 benchmark are unchanged.
+
+### Mapped live decision-gap recovery mapping
+
+`mapped-live-decision-gap-recovery` is the sole active mapping for
+`ai/temper#1069` and `ai/temper#1070` on `agent/pr-for-feature-1069`. Its live
+agent completes implementation, trace, and focused-test evidence, then exhausts
+normal exploration with two non-progressing duplicate refinements while caller
+evidence remains missing. Broad and duplicate recovery calls retain the exact
+closed missing-kind, permitted-action, and allowance fields and are denied
+locally. One typed current-root caller source reaches the provider, completes
+the chain, and permits the exact repair, host submission, Actions, merge, and
+source closure. The temporary validator also requires recovery exhaustion to
+retain `stop_without_product` with zero allowance. Aggregate evidence is limited
+to closed counts, types, lifecycle fields, binding facts, checkpoint categories,
+and gate outcomes; provider output, selectors, source, prompts, commands,
+credentials, paths, host-gate output, and diagnostic traces remain ephemeral.
+The historical graph-consumption, graph-convergence, and ordinary-tool-
+convergence mappings retain their original identities and contracts.
 
 ### Bounded Forgejo Actions pagination mapping
 

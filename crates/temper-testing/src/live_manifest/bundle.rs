@@ -618,6 +618,9 @@ fn parse_duration_literal(raw: &str) -> Result<Duration, String> {
 #[path = "bundle_actions_history_tests.rs"]
 mod actions_history_tests;
 #[cfg(test)]
+#[path = "bundle_mapped_decision_gap_recovery_tests.rs"]
+mod mapped_decision_gap_recovery_tests;
+#[cfg(test)]
 #[path = "bundle_mapped_graph_consumption_tests.rs"]
 mod mapped_graph_consumption_tests;
 #[cfg(test)]

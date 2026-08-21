@@ -3,7 +3,8 @@
 use super::*;
 use crate::machine::{
     CodebaseMemoryTiming, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
-    DecisionAnchorTargetKindV1, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphExplorationClosedReasonV1,
+    GraphExplorationClosedV1, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
     SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolResultMetadata,
 };
 use crate::shell::tool_result::TOOL_RESULT_PREVIEW_BYTES;
@@ -121,7 +122,7 @@ impl Tool for InvocationFlagTool {
 }
 
 #[test]
-fn exploration_denial_never_invokes_provider_and_emits_only_the_generic_reason() {
+fn completed_exploration_denial_never_invokes_provider_and_retains_only_closed_details() {
     const SECRET: &str = "Authorization: Bearer LOCAL-DENIAL-SECRET/src/private.rs";
     let invoked = Arc::new(AtomicBool::new(false));
     let tools = ToolRegistry::from_tools(vec![Box::new(InvocationFlagTool {
@@ -142,7 +143,9 @@ fn exploration_denial_never_invokes_provider_and_emits_only_the_generic_reason()
             &call,
             Duration::from_secs(1),
             &CancellationToken::default(),
-            Some(ToolCallDenial::GraphExplorationClosed),
+            Some(ToolCallDenial::GraphExplorationClosed(Some(
+                GraphExplorationClosedV1::completed(),
+            ))),
             &clock,
             observed.as_ref(),
             None,
@@ -173,6 +176,11 @@ fn exploration_denial_never_invokes_provider_and_emits_only_the_generic_reason()
             ..
         } if failure.category == ToolFailureCategory::GraphLifecycleDenial
             && failure.reason == ToolFailureReason::ExplorationClosed
+            && failure.graph_exploration.as_ref().is_some_and(|details| {
+                details.reason == GraphExplorationClosedReasonV1::Completed
+                    && details.missing_evidence.is_empty()
+                    && details.remaining_allowance == 0
+            })
     ));
     let debug = format!("{events:?}");
     assert!(!debug.contains(SECRET));
@@ -316,16 +324,17 @@ fn graph_result_metadata_and_debug_remain_content_free() {
 fn only_closed_graph_correlation_details_enter_trusted_metadata() {
     const SECRET: &str = "Authorization: Bearer CORE-GRAPH-CORRELATION-SECRET";
     let correlation = GraphCorrelationV1::new(
-        GraphCorrelationToolV1::SearchGraph,
-        GraphCorrelationTargetKindV1::GraphQuery,
+        GraphCorrelationToolV1::GetCodeSnippet,
+        GraphCorrelationTargetKindV1::QualifiedName,
         SECRET,
     )
     .expect("complete target");
-    let lineage = DecisionAnchorLineageV1::new(
+    let lineage = DecisionAnchorLineageV1::new_with_decision_evidence_kind(
         "00000000-0000-4000-8000-000000000001".to_string(),
-        DecisionAnchorLineageStageV1::Root,
-        DecisionAnchorTargetKindV1::GraphQuery,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionAnchorTargetKindV1::QualifiedName,
         [DecisionAnchorTargetKindV1::QualifiedName],
+        DecisionEvidenceKindV1::Implementation,
     )
     .expect("canonical lineage");
     let output = ToolOutput {
@@ -337,9 +346,16 @@ fn only_closed_graph_correlation_details_enter_trusted_metadata() {
         })),
         is_error: false,
     };
-    let metadata = bounded_tool_result("codebase_memory_search_graph", &output);
+    let metadata = bounded_tool_result("codebase_memory_get_code_snippet", &output);
     assert_eq!(metadata.graph_correlation, Some(correlation.clone()));
     assert_eq!(metadata.decision_anchor_lineage, Some(lineage.clone()));
+    assert_eq!(
+        metadata
+            .decision_anchor_lineage
+            .as_ref()
+            .and_then(|lineage| lineage.decision_evidence_kind),
+        Some(DecisionEvidenceKindV1::Implementation)
+    );
     assert!(
         !serde_json::to_string(&metadata.decision_anchor_lineage)
             .expect("lineage serializes")
@@ -362,7 +378,8 @@ fn only_closed_graph_correlation_details_enter_trusted_metadata() {
         ..output
     };
     assert_eq!(
-        bounded_tool_result("codebase_memory_search_graph", &malformed_output).graph_correlation,
+        bounded_tool_result("codebase_memory_get_code_snippet", &malformed_output)
+            .graph_correlation,
         None
     );
     let failed_output = ToolOutput {
@@ -370,7 +387,7 @@ fn only_closed_graph_correlation_details_enter_trusted_metadata() {
         ..malformed_output
     };
     assert_eq!(
-        bounded_tool_result("codebase_memory_search_graph", &failed_output).graph_correlation,
+        bounded_tool_result("codebase_memory_get_code_snippet", &failed_output).graph_correlation,
         None
     );
 }

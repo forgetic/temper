@@ -8,13 +8,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    GraphCorrelationToolV1, GraphCorrelationV1,
+    DecisionEvidenceKindV1, GraphCorrelationToolV1, GraphCorrelationV1, GraphExplorationClosedV1,
+    GraphRecoveryEvidenceKindV1, MAX_GRAPH_RECOVERY_ALLOWANCE_V1,
 };
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
 
 use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, ToolCallDenial};
 
+mod anchors;
+mod evidence;
 mod output;
 
 use output::{
@@ -46,6 +49,9 @@ const MAX_DECISION_ANCHOR_ROOTS: usize = 16;
 pub(super) const MAX_LATER_DECISION_ANCHOR_ROOTS: usize = 4;
 /// Successful graph batches without typed progress eventually close exploration.
 const MAX_NON_PROGRESSING_GRAPH_BATCHES: u8 = 2;
+/// Budget exhaustion preserves exactly enough attempts to fill every possible
+/// trace/evidence gap once, without reopening broad graph exploration.
+const MAX_DECISION_GAP_RECOVERY_CALLS: u8 = MAX_GRAPH_RECOVERY_ALLOWANCE_V1;
 
 pub(super) struct DecisionAnchorState {
     mutation_tools: BTreeSet<String>,
@@ -60,12 +66,14 @@ enum AnchorPhase {
     Root(AnchorForest),
     Trail(Trail),
     Recovery(Recovery),
-    Exhausted,
+    GapRecovery(GapRecovery),
+    Exhausted(SourceEvidence),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExplorationStatus {
     Open,
+    GapRecovery,
     Complete,
     BudgetExhausted,
 }
@@ -93,16 +101,28 @@ struct Recovery {
     attempts: u8,
 }
 
+struct GapRecovery {
+    anchors: AnchorForest,
+    evidence: SourceEvidence,
+    remaining: u8,
+}
+
 #[derive(Default)]
 struct SourceEvidence {
-    refinement_seen: bool,
     trace_turn: Option<usize>,
-    source_reads_after_trace: u8,
+    decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DecisionGap {
+    Trace,
+    Evidence(DecisionEvidenceKindV1),
 }
 
 #[derive(Clone, Copy)]
 struct PendingCodebaseCall {
     turn: usize,
+    recovery_gap: Option<DecisionGap>,
 }
 
 struct FinishedCodebaseCall<'a> {
@@ -127,145 +147,10 @@ enum RootMerge {
 pub(super) enum DecisionAnchorTransition {
     Unchanged,
     RecoveryNeeded,
+    GapRecoveryNeeded,
     RecoveryExhausted,
     Converged,
     ExplorationExhausted,
-}
-
-impl Anchor {
-    fn from_output(turn: usize, lineage: &DecisionAnchorLineageV1) -> Self {
-        Self {
-            produced_turn: turn,
-            result_target_kinds: lineage.result_target_kinds.iter().copied().collect(),
-        }
-    }
-
-    fn is_consumable(&self) -> bool {
-        !self.result_target_kinds.is_empty()
-    }
-
-    fn accepts(&self, call: &PendingCodebaseCall, lineage: &DecisionAnchorLineageV1) -> bool {
-        call.turn > self.produced_turn && self.result_target_kinds.contains(&lineage.target_kind)
-    }
-}
-
-impl AnchorForest {
-    fn from_finished(
-        finished: &[FinishedCodebaseCall<'_>],
-        after_turn: Option<usize>,
-    ) -> Option<Self> {
-        let mut roots = BTreeMap::new();
-        let mut valid = true;
-        let mut latest_produced_turn = 0;
-        let mut trace_root_turn: Option<usize> = None;
-        let mut saw_root = false;
-
-        for finished in finished {
-            let Some(output) = anchor_output(finished.name, finished.output) else {
-                continue;
-            };
-            if output.lineage.stage != DecisionAnchorLineageStageV1::Root
-                || after_turn.is_some_and(|turn| finished.call.turn <= turn)
-            {
-                continue;
-            }
-            saw_root = true;
-            latest_produced_turn = latest_produced_turn.max(finished.call.turn);
-            if output.tool == GraphCorrelationToolV1::TracePath {
-                trace_root_turn = Some(
-                    trace_root_turn.map_or(finished.call.turn, |turn| turn.min(finished.call.turn)),
-                );
-            }
-            if roots.len() >= MAX_DECISION_ANCHOR_ROOTS {
-                // Overflowing roots are not partially usable: that would make
-                // policy depend on an arbitrary provider-result subset.
-                valid = false;
-                continue;
-            }
-            match roots.entry(output.lineage.root_binding.clone()) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(Anchor::from_output(finished.call.turn, &output.lineage));
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    let existing = entry.get_mut();
-                    existing.produced_turn = existing.produced_turn.min(finished.call.turn);
-                    existing
-                        .result_target_kinds
-                        .extend(output.lineage.result_target_kinds.iter().copied());
-                }
-            }
-        }
-
-        saw_root.then_some(Self {
-            roots,
-            valid,
-            latest_produced_turn,
-            trace_root_turn,
-        })
-    }
-
-    fn merge_limited(&mut self, next: Self, remaining_roots: usize) -> RootMerge {
-        if !next.valid {
-            self.valid = false;
-            return RootMerge::NoProgress;
-        }
-        let new_roots = next
-            .roots
-            .keys()
-            .filter(|root| !self.roots.contains_key(*root))
-            .count();
-        if new_roots > remaining_roots
-            || self.roots.len().saturating_add(new_roots) > MAX_DECISION_ANCHOR_ROOTS
-        {
-            return RootMerge::LimitExceeded;
-        }
-        let mut progressed = false;
-        self.latest_produced_turn = self.latest_produced_turn.max(next.latest_produced_turn);
-        self.trace_root_turn = match (self.trace_root_turn, next.trace_root_turn) {
-            (Some(current), Some(next)) => Some(current.min(next)),
-            (Some(turn), None) | (None, Some(turn)) => Some(turn),
-            (None, None) => None,
-        };
-        for (root_binding, next_root) in next.roots {
-            match self.roots.entry(root_binding) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(next_root);
-                    progressed = true;
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    let existing = entry.get_mut();
-                    existing.produced_turn = existing.produced_turn.min(next_root.produced_turn);
-                    let before = existing.result_target_kinds.len();
-                    existing
-                        .result_target_kinds
-                        .extend(next_root.result_target_kinds);
-                    progressed |= existing.result_target_kinds.len() > before;
-                }
-            }
-        }
-        if progressed {
-            RootMerge::Progress(new_roots)
-        } else {
-            RootMerge::NoProgress
-        }
-    }
-
-    fn is_consumable(&self) -> bool {
-        self.valid && self.roots.values().any(Anchor::is_consumable)
-    }
-
-    fn accepts(&self, call: &PendingCodebaseCall, lineage: &DecisionAnchorLineageV1) -> bool {
-        self.valid
-            && lineage.stage == DecisionAnchorLineageStageV1::CarryForward
-            && self
-                .roots
-                .get(&lineage.root_binding)
-                .is_some_and(|root| root.accepts(call, lineage))
-    }
-
-    fn contains_producer_turn(&self, call: &PendingCodebaseCall) -> bool {
-        call.turn <= self.latest_produced_turn
-    }
 }
 
 impl DecisionAnchorState {
@@ -294,11 +179,39 @@ impl DecisionAnchorState {
         turn: usize,
     ) -> Option<ToolCallDenial> {
         if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+            let call_key = GraphCorrelationV1::target_digest(&call.id);
             if self.exploration != ExplorationStatus::Open {
-                return Some(ToolCallDenial::GraphExplorationClosed);
+                let denial = self.graph_exploration_denial();
+                if self.exploration != ExplorationStatus::GapRecovery || call_key.is_none() {
+                    return Some(denial);
+                }
+                let Some(gap) = DecisionGap::from_call(call) else {
+                    return Some(denial);
+                };
+                let already_pending = self
+                    .calls
+                    .values()
+                    .any(|pending| pending.recovery_gap == Some(gap));
+                let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.as_mut() else {
+                    return Some(denial);
+                };
+                if recovery.remaining == 0
+                    || already_pending
+                    || !recovery.evidence.needs(gap)
+                    || !recovery.anchors.supports(gap)
+                {
+                    return Some(denial);
+                }
+                recovery.remaining = recovery.remaining.saturating_sub(1);
             }
-            if let Some(call_key) = GraphCorrelationV1::target_digest(&call.id) {
-                self.calls.insert(call_key, PendingCodebaseCall { turn });
+            if let Some(call_key) = call_key {
+                self.calls.insert(
+                    call_key,
+                    PendingCodebaseCall {
+                        turn,
+                        recovery_gap: DecisionGap::from_call(call),
+                    },
+                );
             }
         }
         if self.blocks_mutation(&call.name) {
@@ -389,8 +302,11 @@ impl DecisionAnchorState {
                     )
                 }
             }
-            Some(AnchorPhase::Exhausted) => {
-                self.phase = Some(AnchorPhase::Exhausted);
+            Some(AnchorPhase::GapRecovery(recovery)) => {
+                self.advance_gap_recovery(recovery, &finished)
+            }
+            Some(AnchorPhase::Exhausted(evidence)) => {
+                self.phase = Some(AnchorPhase::Exhausted(evidence));
                 self.exploration = ExplorationStatus::BudgetExhausted;
                 DecisionAnchorTransition::Unchanged
             }
@@ -406,13 +322,12 @@ impl DecisionAnchorState {
         if later {
             let next_count = anchors.roots.len();
             if next_count > MAX_LATER_DECISION_ANCHOR_ROOTS.saturating_sub(self.later_roots) {
-                self.phase = Some(AnchorPhase::Exhausted);
-                self.exploration = ExplorationStatus::BudgetExhausted;
-                return DecisionAnchorTransition::ExplorationExhausted;
+                return self.enter_gap_recovery(anchors, SourceEvidence::default());
             }
             self.later_roots = self.later_roots.saturating_add(next_count);
         }
         if anchors.is_consumable() {
+            self.non_progressing_batches = 0;
             if let Some(trace_turn) = anchors.trace_root_turn {
                 let mut evidence = SourceEvidence::default();
                 evidence.record_trace(trace_turn);
@@ -477,31 +392,34 @@ impl DecisionAnchorState {
             .chain(batch_root_trace_turn)
             .min();
         let trace_turn = evidence.trace_turn.or(batch_trace_turn);
-        let source_reads = trace_turn.map_or(0, |trace_turn| {
-            compatible
-                .iter()
-                .filter(|(call, output)| {
-                    output.tool == GraphCorrelationToolV1::GetCodeSnippet && call.turn >= trace_turn
-                })
-                .count() as u8
-        });
-        let refinement = !evidence.refinement_seen
-            && compatible
-                .iter()
-                .any(|(_, output)| output.tool == GraphCorrelationToolV1::SearchCode);
-        let progressed =
-            batch_trace_turn.is_some() || source_reads > 0 || refinement || roots_progressed;
+        let decision_kinds = compatible
+            .iter()
+            .filter_map(|(call, output)| match output.tool {
+                // A successful current-root code refinement is itself typed
+                // implementation evidence. Semantic caller and test purposes
+                // remain explicit wrapper-validated source declarations.
+                GraphCorrelationToolV1::SearchCode => Some(DecisionEvidenceKindV1::Implementation),
+                GraphCorrelationToolV1::GetCodeSnippet
+                    if trace_turn.is_some_and(|trace_turn| call.turn >= trace_turn) =>
+                {
+                    output.lineage.decision_evidence_kind
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let trace_progressed = !evidence.has_trace() && batch_trace_turn.is_some();
+        let evidence_progressed = decision_kinds
+            .iter()
+            .any(|kind| !evidence.decision_kinds.contains(kind));
+        let progressed = trace_progressed || evidence_progressed || roots_progressed;
 
         if progressed {
+            self.non_progressing_batches = 0;
             let mut evidence = evidence;
-            evidence.refinement_seen |= refinement;
             if let Some(trace_turn) = batch_trace_turn {
                 evidence.record_trace(trace_turn);
             }
-            if batch_trace_turn.is_some() {
-                evidence.source_reads_after_trace = 0;
-            }
-            evidence.record_sources(source_reads);
+            evidence.record_decision_kinds(decision_kinds);
             let complete = evidence.is_complete();
             self.phase = Some(AnchorPhase::Trail(Trail {
                 anchors: active,
@@ -512,30 +430,32 @@ impl DecisionAnchorState {
                 return DecisionAnchorTransition::Converged;
             }
             if root_merge == RootMerge::LimitExceeded {
-                self.exploration = ExplorationStatus::BudgetExhausted;
-                return DecisionAnchorTransition::ExplorationExhausted;
+                let Some(AnchorPhase::Trail(trail)) = self.phase.take() else {
+                    unreachable!("the incomplete trail was installed above")
+                };
+                return self.enter_gap_recovery(trail.anchors, trail.evidence);
             }
             return DecisionAnchorTransition::Unchanged;
         }
 
         if root_merge == RootMerge::LimitExceeded {
-            self.phase = Some(AnchorPhase::Trail(Trail {
-                anchors: active,
-                evidence,
-            }));
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::ExplorationExhausted;
+            return self.enter_gap_recovery(active, evidence);
         }
 
         if finished.iter().any(|finished| {
             trusted_unavailable_provider_output(finished.name, finished.output)
                 && !active.contains_producer_turn(&finished.call)
-                && evidence.expects(graph_tool_for_name(finished.name), batch_trace_turn)
+                && evidence.expects(
+                    finished.call.recovery_gap,
+                    graph_tool_for_name(finished.name),
+                    batch_trace_turn,
+                )
         }) {
             // The trusted wrapper has already supplied fixed, bounded fallback
             // guidance. Release only an unavailable viable evidence step; an
             // unrelated failed graph discovery call cannot bypass this root.
             self.phase = None;
+            self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::Unchanged;
         }
 
@@ -566,14 +486,24 @@ impl DecisionAnchorState {
     }
 
     fn record_non_progress(&mut self, phase: Option<AnchorPhase>) -> DecisionAnchorTransition {
-        self.phase = phase;
         self.non_progressing_batches = self.non_progressing_batches.saturating_add(1);
         if self.non_progressing_batches >= MAX_NON_PROGRESSING_GRAPH_BATCHES {
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            DecisionAnchorTransition::ExplorationExhausted
-        } else {
-            DecisionAnchorTransition::Unchanged
+            return match phase {
+                Some(AnchorPhase::Trail(trail)) => {
+                    self.enter_gap_recovery(trail.anchors, trail.evidence)
+                }
+                Some(AnchorPhase::Root(anchors)) => {
+                    self.enter_gap_recovery(anchors, SourceEvidence::default())
+                }
+                phase => {
+                    self.phase = phase;
+                    self.exploration = ExplorationStatus::BudgetExhausted;
+                    DecisionAnchorTransition::ExplorationExhausted
+                }
+            };
         }
+        self.phase = phase;
+        DecisionAnchorTransition::Unchanged
     }
 
     fn enter_recovery(
@@ -583,7 +513,7 @@ impl DecisionAnchorState {
         attempts: u8,
     ) -> DecisionAnchorTransition {
         if attempts >= MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS {
-            self.phase = Some(AnchorPhase::Exhausted);
+            self.phase = Some(AnchorPhase::Exhausted(evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
             DecisionAnchorTransition::RecoveryExhausted
         } else {
@@ -596,47 +526,41 @@ impl DecisionAnchorState {
         }
     }
 
+    pub(super) fn recovery_details(&self) -> Option<GraphExplorationClosedV1> {
+        let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
+            return None;
+        };
+        GraphExplorationClosedV1::recoverable(recovery.evidence.missing_kinds(), recovery.remaining)
+    }
+
+    fn graph_exploration_denial(&self) -> ToolCallDenial {
+        let details = match self.exploration {
+            ExplorationStatus::Complete => Some(GraphExplorationClosedV1::completed()),
+            ExplorationStatus::GapRecovery => self.recovery_details().or_else(|| {
+                let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
+                    return None;
+                };
+                GraphExplorationClosedV1::exhausted(recovery.evidence.missing_kinds())
+            }),
+            ExplorationStatus::BudgetExhausted => match self.phase.as_ref() {
+                Some(AnchorPhase::Exhausted(evidence)) => {
+                    GraphExplorationClosedV1::exhausted(evidence.missing_kinds())
+                }
+                _ => None,
+            },
+            ExplorationStatus::Open => None,
+        };
+        ToolCallDenial::GraphExplorationClosed(details)
+    }
+
     pub(super) fn blocks_mutation(&self, name: &str) -> bool {
         self.mutation_tools.contains(name)
             && self.phase.as_ref().is_some_and(|phase| match phase {
                 AnchorPhase::Root(_) => true,
                 AnchorPhase::Trail(trail) => !trail.evidence.is_complete(),
-                AnchorPhase::Recovery(_) | AnchorPhase::Exhausted => true,
+                AnchorPhase::Recovery(_)
+                | AnchorPhase::GapRecovery(_)
+                | AnchorPhase::Exhausted(_) => true,
             })
-    }
-}
-
-impl SourceEvidence {
-    fn record_trace(&mut self, turn: usize) {
-        self.trace_turn = Some(self.trace_turn.map_or(turn, |current| current.min(turn)));
-    }
-
-    fn record_sources(&mut self, count: u8) {
-        self.source_reads_after_trace = self.source_reads_after_trace.saturating_add(count);
-    }
-
-    /// Search-code is an optional refinement. A direct current-root trace is
-    /// equally valid, and snippets may share that trace's read-only batch.
-    fn expects(
-        &self,
-        tool: Option<GraphCorrelationToolV1>,
-        batch_trace_turn: Option<usize>,
-    ) -> bool {
-        match tool {
-            Some(GraphCorrelationToolV1::SearchCode) => true,
-            Some(GraphCorrelationToolV1::TracePath) => !self.has_trace(),
-            Some(GraphCorrelationToolV1::GetCodeSnippet) => {
-                self.has_trace() || batch_trace_turn.is_some()
-            }
-            Some(GraphCorrelationToolV1::SearchGraph) | None => false,
-        }
-    }
-
-    fn has_trace(&self) -> bool {
-        self.trace_turn.is_some()
-    }
-
-    fn is_complete(&self) -> bool {
-        self.trace_turn.is_some() && self.source_reads_after_trace >= 2
     }
 }

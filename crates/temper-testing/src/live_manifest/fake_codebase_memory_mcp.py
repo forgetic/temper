@@ -19,6 +19,7 @@ RESULT_DRIVEN_STAGE = 0
 TYPED_LINEAGE_STAGE = 0
 MAPPED_GRAPH_STAGE = 0
 GRAPH_CONVERGENCE_STAGE = 0
+DECISION_GAP_RECOVERY_STAGE = 0
 RESULT_DRIVEN_TOKENS = {
     name: "opaque-" + uuid.uuid4().hex
     for name in ["root", "refinement", "trace", "implementation", "behavioral_test"]
@@ -280,6 +281,7 @@ def has_current_root_profile():
         "mapped-live-graph-consumption",
         "mapped-live-ordinary-tool-convergence",
         "mapped-live-graph-convergence",
+        "mapped-live-decision-gap-recovery",
     )
 
 
@@ -306,8 +308,12 @@ def is_graph_convergence_profile():
     return LIFECYCLE_PROFILE == "mapped-live-graph-convergence"
 
 
+def is_decision_gap_recovery_profile():
+    return LIFECYCLE_PROFILE == "mapped-live-decision-gap-recovery"
+
+
 def ensure_graph_convergence_tokens():
-    if not is_graph_convergence_profile():
+    if not (is_graph_convergence_profile() or is_decision_gap_recovery_profile()):
         return
     state = load_state()
     state["graph_convergence_tokens"] = GRAPH_CONVERGENCE_TOKENS
@@ -321,6 +327,16 @@ def graph_convergence_step(expected_stage, expected_value, actual_value):
     if GRAPH_CONVERGENCE_STAGE != expected_stage or actual_value != expected_value:
         return False
     GRAPH_CONVERGENCE_STAGE += 1
+    return True
+
+
+def decision_gap_recovery_step(expected_stage, expected_value, actual_value):
+    global DECISION_GAP_RECOVERY_STAGE
+    if not is_decision_gap_recovery_profile():
+        return True
+    if DECISION_GAP_RECOVERY_STAGE != expected_stage or actual_value != expected_value:
+        return False
+    DECISION_GAP_RECOVERY_STAGE += 1
     return True
 
 
@@ -422,6 +438,41 @@ for line in sys.stdin:
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
+            if is_decision_gap_recovery_profile():
+                source_stage = {
+                    GRAPH_CONVERGENCE_TOKENS["behavioral_test"]: (4, "tests/alias_retry.rs"),
+                    GRAPH_CONVERGENCE_TOKENS["caller"]: (7, "src/route.rs"),
+                }.get(qualified_name)
+                stage_valid = (
+                    source_stage is not None
+                    and decision_gap_recovery_step(
+                        source_stage[0], qualified_name, qualified_name
+                    )
+                )
+                source = (
+                    current_root_source(project, source_stage[1])
+                    if stage_valid
+                    else None
+                )
+                if source is None:
+                    log_tool(name, arguments, is_error=True)
+                    result = text_result("bound source unavailable", True)
+                else:
+                    payload = {
+                        "name": terminal_function_name(qualified_name),
+                        "qualified_name": qualified_name,
+                        "source": source,
+                        "binding": "current_prepared_checkout",
+                    }
+                    event = (
+                        "served_gap_recovery_source"
+                        if source_stage[0] == 7
+                        else "served_gap_source"
+                    )
+                    log_tool(name, arguments, fixture_event=event)
+                    result = text_result(json.dumps(payload), structured=payload)
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_graph_convergence_profile():
                 source_stage = {
                     GRAPH_CONVERGENCE_TOKENS["unavailable"]: (2, None),
@@ -645,6 +696,40 @@ for line in sys.stdin:
                     }
                 result = text_result(json.dumps(payload))
         elif name == "search_code":
+            if is_decision_gap_recovery_profile():
+                project = arguments.get("project", "")
+                expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
+                stage = DECISION_GAP_RECOVERY_STAGE
+                successful = (
+                    stage in (2, 5, 6)
+                    and current_root_source(project, "src/route.rs") is not None
+                    and decision_gap_recovery_step(
+                        stage, expected, arguments.get("pattern", "")
+                    )
+                )
+                payload = {
+                    "results": [{
+                        "name": expected,
+                        "qualified_name": GRAPH_CONVERGENCE_TOKENS["implementation"],
+                        "related_source_references": [{
+                            "qualifiedName": GRAPH_CONVERGENCE_TOKENS["caller"],
+                        }],
+                    }]
+                }
+                event = "served_gap_duplicate" if stage in (5, 6) else "served_gap_refinement"
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event=event if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_graph_convergence_profile():
                 project = arguments.get("project", "")
                 expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
@@ -757,6 +842,41 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "trace_path":
+            if is_decision_gap_recovery_profile():
+                project = arguments.get("project", "")
+                expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
+                successful = (
+                    current_root_source(project, "src/route.rs") is not None
+                    and decision_gap_recovery_step(
+                        3, expected, arguments.get("function_name", "")
+                    )
+                )
+                payload = {
+                    "function": {
+                        "name": expected,
+                        "qualifiedName": GRAPH_CONVERGENCE_TOKENS["implementation"],
+                    },
+                    "callers": [{
+                        "name": terminal_function_name(GRAPH_CONVERGENCE_TOKENS["caller"]),
+                        "qualified_name": GRAPH_CONVERGENCE_TOKENS["caller"],
+                    }],
+                    "related_sources": [{
+                        "qualifiedName": GRAPH_CONVERGENCE_TOKENS["caller"],
+                    }],
+                }
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_gap_trace" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_graph_convergence_profile():
                 project = arguments.get("project", "")
                 stage = GRAPH_CONVERGENCE_STAGE
@@ -906,6 +1026,48 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "search_graph":
+            if is_decision_gap_recovery_profile():
+                project = arguments.get("project", "")
+                stage = DECISION_GAP_RECOVERY_STAGE
+                queries = {
+                    0: ("routing implementation affinity", "implementation"),
+                    1: ("focused alias retry behavior", "behavioral_test"),
+                }
+                selected = queries.get(stage)
+                successful = (
+                    selected is not None
+                    and current_root_source(project, "src/route.rs") is not None
+                    and decision_gap_recovery_step(
+                        stage, selected[0], arguments.get("query", "")
+                    )
+                )
+                token = (
+                    GRAPH_CONVERGENCE_TOKENS[selected[1]]
+                    if selected is not None
+                    else GRAPH_CONVERGENCE_TOKENS["implementation"]
+                )
+                payload = {
+                    "results": [{
+                        "results": [{
+                            "name": terminal_function_name(token),
+                            "qualifiedName": token,
+                        }],
+                        "related_source_references": [{"qualifiedName": token}],
+                    }]
+                }
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_gap_root" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_graph_convergence_profile():
                 project = arguments.get("project", "")
                 stage = GRAPH_CONVERGENCE_STAGE

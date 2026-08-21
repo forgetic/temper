@@ -43,19 +43,27 @@ serve status or graph reads.
 The enabled Jig begins with two useful independent roots for routing and focused
 behavioral evidence. A later parallel batch refines and traces `worker_slot`
 while reading the root-bound regression test from the confirmed current root.
-Before the final caller source completes the decision chain, one duplicate
-refinement reaches the provider as a non-progressing batch. Completion then
-freezes graph exploration: a broad architecture call and two targeted
-post-decision attempts are denied locally while conventional shell and source
-reads remain available for the exact patch.
+Before the final caller source completes the decision chain, two duplicate
+refinements reach the provider as consecutive non-progressing batches and
+exhaust normal exploration. The machine then reports exactly `caller` as
+missing, reserves the four-call targeted current-root recovery allowance, and
+denies a broad architecture request and another duplicate refinement locally
+without consuming that allowance. One targeted current-root caller source read
+reaches the provider and completes the chain. Completion then freezes graph
+exploration: a broad architecture call and two targeted post-decision attempts
+are denied locally while conventional shell and source reads remain available
+for the exact patch.
 
 The fixture numbers actual provider invocations in its private responses. The
-harness therefore distinguishes ten model graph attempts from seven provider
-invocations, proves the two useful roots, their descendants, and the admitted
-duplicate reached the provider, and checks that all three exploration-closed
-attempts did not. All seven successful results retain complete typed relevance
-and current-root lineage, so deterministic relevance remains above the frozen
-50% aggregate gate without treating a denied attempt as useful.
+harness therefore bounds the enabled run to sixteen model turns, distinguishes
+thirteen model graph attempts from eight provider invocations, proves the two
+useful roots, their descendants, both admitted duplicates, and the targeted
+recovery reached the provider, and checks that the two recovery denials and all
+three post-completion denials did not. Both recovery denials retain the exact
+missing-kind guidance and the unchanged allowance of four. All eight successful
+results retain complete typed relevance and current-root lineage, so
+deterministic relevance remains above the frozen 50% aggregate gate without
+treating any denied attempt as useful.
 
 The manifest permits only declared provider-shaped typed producer and consumer
 targets, followed by graph-to-graph, graph-to-source, and final exact

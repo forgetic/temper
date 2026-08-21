@@ -264,21 +264,39 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
             turns: vec![Turn::ToolCall {
                 id: "call_read_memory_implementation".to_string(),
                 name: "codebase_memory_get_code_snippet".to_string(),
-                args: serde_json::json!({ "qualified_name": "crate::WidgetService" }),
+                args: serde_json::json!({
+                    "qualified_name": "crate::WidgetService",
+                    "decision_evidence_kind": "implementation"
+                }),
             }],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
         },
         3 => Reply {
             turns: vec![Turn::ToolCall {
-                id: "call_read_memory_behavior".to_string(),
+                id: "call_read_memory_caller".to_string(),
                 name: "codebase_memory_get_code_snippet".to_string(),
-                args: serde_json::json!({ "qualified_name": "crate::WidgetService" }),
+                args: serde_json::json!({
+                    "qualified_name": "crate::WidgetService",
+                    "decision_evidence_kind": "caller"
+                }),
             }],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
         },
         4 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_read_memory_behavior".to_string(),
+                name: "codebase_memory_get_code_snippet".to_string(),
+                args: serde_json::json!({
+                    "qualified_name": "crate::WidgetService",
+                    "decision_evidence_kind": "focused_test"
+                }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        5 => Reply {
             turns: vec![Turn::ToolCall {
                 id: "call_write_memory_notes".to_string(),
                 name: "write".to_string(),

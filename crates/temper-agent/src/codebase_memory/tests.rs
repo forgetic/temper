@@ -1,6 +1,7 @@
 mod bridge;
 mod confirmation;
 mod correlation;
+mod decision_evidence;
 mod health;
 mod indexing;
 mod lifecycle;

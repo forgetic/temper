@@ -115,12 +115,18 @@ fn reply(view: &RequestView) -> Reply {
             (
                 "read-current-root-routing-implementation",
                 "codebase_memory_get_code_snippet",
-                serde_json::json!({"qualified_name": result_at(view, "/callers/0/qualified_name")}),
+                serde_json::json!({
+                    "qualified_name": result_at(view, "/callers/0/qualified_name"),
+                    "decision_evidence_kind": "caller",
+                }),
             ),
             (
                 "read-current-root-focused-test",
                 "codebase_memory_get_code_snippet",
-                serde_json::json!({"qualified_name": result_at(view, "/results/0/results/0/qualifiedName")}),
+                serde_json::json!({
+                    "qualified_name": result_at(view, "/results/0/results/0/qualifiedName"),
+                    "decision_evidence_kind": "focused_test",
+                }),
             ),
         ]),
         11 => {

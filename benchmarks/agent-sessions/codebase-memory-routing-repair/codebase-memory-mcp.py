@@ -179,6 +179,7 @@ def confirmed_graph_read(project, tool):
         "project_route": "confirmed_identity",
         "requested_stable_project": binding["requested_stable_project"],
         "provider_invocation": graph_read_number,
+        "provider_tool": tool,
     }
     return identity, binding, graph_read_number
 

@@ -1,0 +1,308 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-decision-gap-recovery"
+status = "active"
+intent = "Validate feature #1069's bounded decision-gap recovery, actionable diagnostics, provider-free local denials, minimal live repair, and safe no-product exhaustion contract."
+introduced_by = "#1075"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/mapped-live-graph-consumption"
+
+[runner]
+uses = "manifest"
+
+[validation]
+feature = "ai/temper#1069"
+plan = "ai/temper#1070"
+source_branch = "agent/pr-for-feature-1069"
+change = "new"
+
+[feature_contract]
+claim = "Exhausting broad or duplicate graph exploration cannot deadlock required typed evidence: exact missing kinds retain one bounded current-root recovery path, while impossible recovery stops safely without a product."
+stimulus = "Run one engineer repair through real Forgejo, a host Actions runner, standalone Temper, Jig, and a deterministic current-root provider; establish implementation/trace/focused-test evidence, exhaust two duplicate refinements, deny broad and duplicate recovery calls locally, and admit one typed caller recovery."
+observable = "Closed missing-caller, permitted-action, and allowance fields; typed evidence kinds; bounded provider and denial counts; one exact repair; host validation; Actions success; merge; issue closure; and the closed safe stop_without_product exhaustion contract."
+assertion = "Two non-progressing provider refinements exhaust normal exploration with only caller missing; broad and duplicate recovery attempts expose the exact actionable diagnostic without provider invocation; one current-root caller source reaches MCP and completes the chain; three post-completion calls stay local; the repair converges; and exhausted recovery has no landable product path."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-decision-gap-recovery.json"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[live_harness]
+ci_poll_cadence = "1s"
+poll_cadence = "1s"
+mechanical_cadence = "1s"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "codebase-memory-agent"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/demo"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Recover missing caller evidence after graph budget exhaustion"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the demo repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "start-fake-codebase-memory-mcp"
+action = "mcp.fake_codebase_memory.start"
+project = "actual-demo-project"
+lifecycle_profile = "mapped-live-decision-gap-recovery"
+advertises_safe_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status"]
+advertises_hidden_tools = ["index_repository", "delete_project"]
+readiness_delay_ms = 750
+
+[[steps]]
+id = "configure-codebase-memory-tools"
+action = "agent.tools.configure"
+role = "engineer"
+tool = "codebase_memory"
+mode = "required"
+index = "background"
+tool_timeout_secs = 2
+server = "$step:start-fake-codebase-memory-mcp"
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+role = "engineer"
+script_path = "jig/mapped-live-decision-gap-recovery.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-demo-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-source-issue"
+action = "issue.seed"
+issue_id = "source"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-convergence"
+action = "workflow.wait_convergence"
+strategy = "codebase-memory"
+until = "the engineer observes exact missing-caller recovery guidance, completes one bounded current-root caller read, applies the minimal repair, passes host validation and Actions, merges the PR, and closes the source issue"
+
+[expect]
+outcome = "The live agent exhausts only non-progress exploration, receives exact actionable caller recovery, completes the typed chain with one additional provider call, and converges through one minimal repair while impossible exhaustion remains a safe no-product terminal."
+merged_pull_requests = 1
+closed_parent_issues = 1
+
+[[expect.checks]]
+required = true
+id = "source-finalized"
+artifact = "issue:source"
+state = "closed"
+labels = ["code"]
+
+[[expect.checks]]
+required = true
+id = "implementation-pr-landed"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+required = true
+id = "default-branch-has-minimal-repair"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.events]]
+required = true
+id = "current-root-rebind-completed"
+event = "codebase_memory.index.lifecycle"
+fields."index.mode" = "background"
+fields."index.outcome" = "completed"
+
+[[expect.events]]
+required = true
+id = "recoverable-incomplete-caller-diagnostic"
+event = "tool.error"
+fields.tool = "codebase_memory_search_graph"
+fields.id = "recovery-broad-search-denied"
+fields."tool.failure.category" = "graph_lifecycle_denial"
+fields."tool.failure.reason" = "decision_evidence_incomplete"
+fields."tool.failure.retry_disposition" = "correct_invocation"
+fields."tool.failure.retryable" = false
+fields."tool.failure.conventional_fallback" = false
+fields."tool.failure.graph.reason" = "recoverable_incomplete_evidence"
+fields."tool.failure.graph.missing_evidence" = "caller"
+fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
+fields."tool.failure.graph.remaining_allowance" = 4
+
+[[expect.events]]
+required = true
+id = "targeted-caller-recovery-reaches-provider-once"
+event = "mcp.tool.result"
+fields."mcp.tool" = "get_code_snippet"
+fields.is_error = false
+fields."graph.lineage.stage" = "carry_forward"
+fields."graph.lineage.decision_evidence_kind" = "caller"
+
+[[expect.events]]
+required = true
+id = "focused-test-purpose-is-typed"
+event = "mcp.tool.result"
+fields."mcp.tool" = "get_code_snippet"
+fields.is_error = false
+fields."graph.lineage.decision_evidence_kind" = "focused_test"
+
+[[expect.sequence]]
+required = true
+id = "decision-gap-recovery-before-minimal-repair"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false } },
+  { event = "tool.error", fields = { id = "recovery-broad-search-denied", "tool.failure.reason" = "decision_evidence_incomplete" } },
+  { event = "tool.error", fields = { id = "recovery-duplicate-refinement-denied", "tool.failure.reason" = "decision_evidence_incomplete" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "caller" } },
+  { event = "tool.error", fields = { id = "post-completion-broad-search-denied", "tool.failure.reason" = "exploration_closed" } },
+  { event = "tool.start", fields = { tool = "read", id = "read-route-after-recovery" } },
+  { event = "workspace.diff.produced", fields = { changed_count = 1 } },
+]
+
+[[expect.count]]
+required = true
+id = "eight-complete-v1-lineages"
+event = "mcp.tool.result"
+fields.is_error = false
+fields."graph.correlation.complete" = true
+fields."graph.correlation.version" = 1
+fields."graph.lineage.complete" = true
+fields."graph.lineage.version" = 1
+exactly = 8
+
+[[expect.count]]
+required = true
+id = "two-provider-roots-not-three"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_graph"
+exactly = 2
+
+[[expect.count]]
+required = true
+id = "three-provider-refinements-not-four"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_code"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "one-provider-trace"
+event = "mcp.tool.called"
+fields."mcp.tool" = "trace_path"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "two-provider-sources-including-one-recovery"
+event = "mcp.tool.called"
+fields."mcp.tool" = "get_code_snippet"
+exactly = 2
+
+[[expect.count]]
+required = true
+id = "two-recoverable-local-denials"
+event = "tool.error"
+fields."tool.failure.reason" = "decision_evidence_incomplete"
+fields."tool.failure.graph.missing_evidence" = "caller"
+fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
+fields."tool.failure.graph.remaining_allowance" = 4
+exactly = 2
+
+[[expect.count]]
+required = true
+id = "three-post-completion-local-denials"
+event = "tool.error"
+fields."tool.failure.reason" = "exploration_closed"
+fields."tool.failure.graph.reason" = "completed"
+exactly = 3
+
+[expect.effective_configuration]
+id = "rapid-decision-gap-recovery-harness-cadence"
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 1
+mechanical_cadence_secs = 1
+
+[codebase_memory]
+mode = "required"
+index = "background"
+readiness_delay_ms = 750
+fake_mcp_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status", "index_repository", "delete_project"]
+model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_search_code", "codebase_memory_trace_path", "codebase_memory_get_code_snippet", "codebase_memory_list_projects", "codebase_memory_index_status"]
+model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
+default_project = "acme/demo"
+actual_project = "normalized-temper-v1-<stable-provider-key>"
+graph_consumption_profile = "two independent roots; implementation refinement, caller trace, typed focused-test source, two non-progressing duplicate refinements; exact missing-caller recovery guidance; local broad and duplicate denials; one admitted typed caller source; completion closure; safe stop_without_product exhaustion; privacy-safe aggregate checkpoints only"
+global_inventory_forbidden = true
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Tighten closed missing-kind, permitted-action, allowance, provider-count, typed-evidence, or convergence assertions.",
+  "Update generic privacy-safe lifecycle observability without retaining provider values or diagnostic traces.",
+]
+requires_new_scenario_or_major_update = [
+  "Allowing broad or duplicate recovery attempts to reach the provider.",
+  "Allowing recovery exhaustion to produce mutation or a landable-looking product.",
+  "Retaining raw tool inputs, provider output, source, prompts, commands, credentials, host-gate output, paths, or diagnostic traces.",
+  "Replacing the mandatory live Forgejo/Actions/standalone-Temper/Jig topology with a lower-level test.",
+]

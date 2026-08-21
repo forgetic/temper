@@ -1,9 +1,10 @@
 use super::result_presentation::present_result;
+use super::tool_schema::DECISION_EVIDENCE_KIND_PARAMETER;
 use super::*;
 use temper_agent_core::SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY;
 use temper_protocol_activity::{
-    DecisionAnchorLineageV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
-    GraphCorrelationV1,
+    DecisionAnchorLineageV1, DecisionEvidenceKindV1, GraphCorrelationTargetKindV1,
+    GraphCorrelationToolV1, GraphCorrelationV1,
 };
 
 // This is a closed provider outcome, not text to search within an arbitrary
@@ -76,6 +77,22 @@ impl Tool for CodebaseMemoryTool {
         if let Some(cause) = self.health.open_cause() {
             return Ok(self.circuit_open_output(cause, ToolCallTimings::default()));
         }
+        let mut input = input;
+        let decision_evidence_kind =
+            match take_decision_evidence_kind(&self.public_name, &mut input) {
+                Ok(kind) => kind,
+                Err(()) => {
+                    let timings = ToolCallTimings {
+                        duration_ms: budget.elapsed_ms(),
+                        ..ToolCallTimings::default()
+                    };
+                    return Ok(self.failed_output(
+                        "",
+                        ToolFailureCategory::InvalidModelInput,
+                        timings,
+                    ));
+                }
+            };
 
         let scope = Arc::clone(&self.scope);
         let mcp_name = self.mcp_name.clone();
@@ -233,7 +250,12 @@ impl Tool for CodebaseMemoryTool {
                     self.decision_anchor_lineages
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .record(correlation, &lineage_input, result.typed_parts.as_deref())
+                        .record_with_evidence_kind(
+                            correlation,
+                            &lineage_input,
+                            result.typed_parts.as_deref(),
+                            decision_evidence_kind,
+                        )
                 })
             })
             .flatten();
@@ -459,6 +481,24 @@ pub(super) fn classify_provider_failure(message: &str) -> ToolFailureCategory {
     } else {
         ToolFailureCategory::ProviderProtocol
     }
+}
+
+/// Removes Temper's wrapper-owned declaration before any MCP request. Only a
+/// source wrapper may turn one exact closed value into trusted lineage.
+fn take_decision_evidence_kind(
+    public_name: &str,
+    input: &mut Value,
+) -> std::result::Result<Option<DecisionEvidenceKindV1>, ()> {
+    let Some(object) = input.as_object_mut() else {
+        return Ok(None);
+    };
+    let Some(value) = object.remove(DECISION_EVIDENCE_KIND_PARAMETER) else {
+        return Ok(None);
+    };
+    if public_name != GraphCorrelationToolV1::GetCodeSnippet.public_name() {
+        return Err(());
+    }
+    serde_json::from_value(value).map(Some).map_err(|_| ())
 }
 
 /// Extracts a single unambiguous, allowlisted target from a targeted wrapper

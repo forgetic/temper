@@ -38,6 +38,7 @@ pub enum DecisionStep {
     Refinement,
     Trace,
     ImplementationSource,
+    CallerSource,
     BehavioralTestSource,
     Mutation,
     MutationAttempt,
@@ -106,7 +107,10 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         (DecisionCase::Consumed | DecisionCase::UnavailableAfterRoot, Err(error)) => {
             panic!("native Jig agent completes the consumed decision chain: {error}")
         }
-        (_, Err(CodingAgentError::NoProduct)) => {}
+        (
+            _,
+            Err(CodingAgentError::NoProduct | CodingAgentError::DecisionAnchorRecoveryExhausted),
+        ) => {}
         (_, Ok(result)) => {
             panic!("a stopped bypass must not produce a landable result: {result:?}")
         }
@@ -198,23 +202,40 @@ fn decision_chain_fake(
                 tool_reply(
                     "read-implementation",
                     "codebase_memory_get_code_snippet",
-                    serde_json::json!({"qualified_name": next_target()}),
+                    serde_json::json!({
+                        "qualified_name": next_target(),
+                        "decision_evidence_kind": "implementation",
+                    }),
                 )
             }
             (DecisionCase::Consumed, 4) => {
+                record(DecisionStep::CallerSource);
+                tool_reply(
+                    "read-caller",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": next_target(),
+                        "decision_evidence_kind": "caller",
+                    }),
+                )
+            }
+            (DecisionCase::Consumed, 5) => {
                 record(DecisionStep::BehavioralTestSource);
                 tool_reply(
                     "read-behavioral-test",
                     "codebase_memory_get_code_snippet",
-                    serde_json::json!({"qualified_name": next_target()}),
+                    serde_json::json!({
+                        "qualified_name": next_target(),
+                        "decision_evidence_kind": "focused_test",
+                    }),
                 )
             }
-            (DecisionCase::Consumed, 5) => {
+            (DecisionCase::Consumed, 6) => {
                 assert!(
                     !provider_values("current_root").is_empty()
                         && provider_values("caller_model").len() == 1
                         && provider_values("implementation_source").len() == 1
-                        && provider_values("behavioral_test").len() == 1,
+                        && provider_values("behavioral_test").len() == 2,
                     "mutation requires consumed current-root, caller/model, and focused behavioral-test evidence"
                 );
                 record(DecisionStep::Mutation);
@@ -227,7 +248,7 @@ fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::Consumed, 6) => {
+            (DecisionCase::Consumed, 7) => {
                 record(DecisionStep::Complete);
                 Reply::text(r#"{"summary":"Mutated after consumed result-derived evidence."}"#)
             }
@@ -376,7 +397,10 @@ fn decision_chain_fake(
                 tool_reply(
                     "read-implementation",
                     "codebase_memory_get_code_snippet",
-                    serde_json::json!({"qualified_name": next_target()}),
+                    serde_json::json!({
+                        "qualified_name": next_target(),
+                        "decision_evidence_kind": "implementation",
+                    }),
                 )
             }
             (DecisionCase::IncompleteSourceEvidence, 4) => {

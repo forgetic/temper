@@ -27,6 +27,8 @@ use super::{
 mod aggregate;
 mod configuration;
 mod graph_consumption;
+mod mapped_decision_gap_recovery;
+mod mapped_decision_gap_recovery_fake;
 mod mapped_graph_consumption;
 mod mapped_graph_consumption_fake;
 mod mapped_graph_convergence;
@@ -90,6 +92,7 @@ pub(super) fn converge(
                 | "mapped-live-graph-consumption"
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
+                | "mapped-live-decision-gap-recovery"
         )
     );
     let aggregate_checkpoints = privacy_safe_checkpoints(mcp, &calls);
@@ -124,6 +127,7 @@ pub(super) fn converge(
                 | "mapped-live-graph-consumption"
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
+                | "mapped-live-decision-gap-recovery"
         )
     ) {
         "one successful provider-shaped graph result".to_string()
@@ -518,6 +522,8 @@ impl CodebaseMemoryFake {
             mapped_ordinary_convergence_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-graph-convergence") {
             mapped_graph_convergence_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-decision-gap-recovery") {
+            mapped_decision_gap_recovery_fake::start(request_count, observations_for_rule)?
         } else {
             FakeLlm::start(Script::rule(move |view| {
                 if !messages_contain(view, "ROLE: engineer") {
@@ -584,6 +590,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-graph-consumption"
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
+                        | "mapped-live-decision-gap-recovery"
                 )
             ),
         })
@@ -657,6 +664,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-graph-consumption"
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
+                        | "mapped-live-decision-gap-recovery"
                 )
             )
         {
@@ -682,6 +690,7 @@ impl CodebaseMemoryFake {
                     | "mapped-live-graph-consumption"
                     | "mapped-live-ordinary-tool-convergence"
                     | "mapped-live-graph-convergence"
+                    | "mapped-live-decision-gap-recovery"
             )
         ) && !(graph_trace_seen
             && current_root_source_results >= 2
@@ -692,6 +701,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-graph-consumption"
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
+                        | "mapped-live-decision-gap-recovery"
                 )
             ) || code_refinement_seen))
         {
@@ -709,6 +719,7 @@ impl CodebaseMemoryFake {
                     "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
                         | "mapped-live-graph-convergence"
+                        | "mapped-live-decision-gap-recovery"
                 )
             ) {
                 8
