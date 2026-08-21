@@ -62,6 +62,7 @@ impl LiveExecutionContext<'_> {
                             | "provider-result-anchor"
                             | "provider-neutral-anchor-lineage"
                             | "mapped-live-graph-consumption"
+                            | "mapped-live-ordinary-tool-convergence"
                             | "mapped-live-graph-convergence"
                     )
                 ),
@@ -189,6 +190,7 @@ impl LiveExecutionContext<'_> {
                                 | "provider-result-anchor"
                                 | "provider-neutral-anchor-lineage"
                                 | "mapped-live-graph-consumption"
+                                | "mapped-live-ordinary-tool-convergence"
                                 | "mapped-live-graph-convergence"
                         )
                     )

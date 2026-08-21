@@ -109,7 +109,8 @@ fn hermetic_real_stack_delivers_bundle_and_services_repeated_forge_reads() {
                     .collect::<Vec<_>>()
                     .join("\n");
                 assert!(transcript.contains("Plan lineage delivery"));
-                assert!(transcript.contains("not_authorized"));
+                assert!(transcript.contains("tool execution was denied by policy"));
+                assert!(!transcript.contains("not_authorized"));
                 tool_call(
                     "write_evidence",
                     "write",

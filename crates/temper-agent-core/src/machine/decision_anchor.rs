@@ -13,10 +13,7 @@ use temper_protocol_activity::{
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
 
-use super::protocol::{
-    CODEBASE_MEMORY_TOOL_PREFIX, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
-    ToolCallDenial, ToolFailureCategory,
-};
+use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, ToolCallDenial};
 
 mod output;
 
@@ -33,8 +30,7 @@ pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation b
 /// Fixed, privacy-safe instruction queued exactly once when graph evidence is complete.
 pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration and produce the smallest role-appropriate product supported by the verified current-root evidence.";
 /// Fixed, privacy-safe result for graph calls denied after convergence or exhaustion.
-pub const CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE: &str =
-    "codebase-memory graph exploration is closed for this run";
+pub const CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE: &str = "codebase-memory exploration is closed for this run; continue with conventional tools; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
 
 /// Generic, privacy-safe correction injected after a successful result cannot
 /// be consumed as the active anchor's typed descendant.

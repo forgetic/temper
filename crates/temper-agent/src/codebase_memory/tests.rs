@@ -140,6 +140,22 @@ fn codebase_memory_failures_are_classified_without_retaining_source_text() {
         classify_provider_failure("no matches"),
         ToolFailureCategory::ProviderProtocol
     );
+    assert_eq!(
+        classify_provider_failure("exploration_closed"),
+        ToolFailureCategory::GraphLifecycleDenial
+    );
+    for near_match in [
+        "EXPLORATION_CLOSED",
+        "exploration_closed\n",
+        "provider says exploration_closed",
+        "exploration closed",
+    ] {
+        assert_eq!(
+            classify_provider_failure(near_match),
+            ToolFailureCategory::ProviderProtocol,
+            "provider lifecycle classification must use the exact closed outcome"
+        );
+    }
 }
 
 #[test]

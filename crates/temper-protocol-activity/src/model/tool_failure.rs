@@ -9,10 +9,14 @@ use sha2::{Digest as _, Sha256};
 
 use super::CapturedContentV1;
 
-/// Stable failure categories emitted by Temper's codebase-memory bridge.
+/// Stable failure categories emitted for every model-visible tool. Existing
+/// graph category wire names remain unchanged.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolFailureCategoryV1 {
+    SchemaArgumentMismatch,
+    PolicyDenial,
+    ExecutionFailure,
     ConfigurationStartup,
     ProjectNotReady,
     IndexFailure,
@@ -22,53 +26,280 @@ pub enum ToolFailureCategoryV1 {
     ProviderProtocol,
     InvalidModelInput,
     CircuitOpen,
-    ExplorationClosed,
+    Cancellation,
+    GraphLifecycleDenial,
+    CircuitRedirect,
 }
 
 impl ToolFailureCategoryV1 {
-    /// Fixed content-free summary. A category, never provider text, owns the
-    /// message projected into the activity stream.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SchemaArgumentMismatch => "schema_argument_mismatch",
+            Self::PolicyDenial => "policy_denial",
+            Self::ExecutionFailure => "execution_failure",
+            Self::ConfigurationStartup => "configuration_startup",
+            Self::ProjectNotReady => "project_not_ready",
+            Self::IndexFailure => "index_failure",
+            Self::Timeout => "timeout",
+            Self::Transport => "transport",
+            Self::ProcessExit => "process_exit",
+            Self::ProviderProtocol => "provider_protocol",
+            Self::InvalidModelInput => "invalid_model_input",
+            Self::CircuitOpen => "circuit_open",
+            Self::Cancellation => "cancellation",
+            Self::GraphLifecycleDenial => "graph_lifecycle_denial",
+            Self::CircuitRedirect => "circuit_redirect",
+        }
+    }
+
+    pub const fn default_reason(self) -> ToolFailureReasonV1 {
+        match self {
+            Self::SchemaArgumentMismatch => ToolFailureReasonV1::InvalidArguments,
+            Self::PolicyDenial => ToolFailureReasonV1::AccessDenied,
+            Self::ExecutionFailure => ToolFailureReasonV1::ToolExecutionError,
+            Self::ConfigurationStartup => ToolFailureReasonV1::ConfigurationStartup,
+            Self::ProjectNotReady => ToolFailureReasonV1::ProjectNotReady,
+            Self::IndexFailure => ToolFailureReasonV1::IndexFailure,
+            Self::Timeout => ToolFailureReasonV1::GraphTimeout,
+            Self::Transport => ToolFailureReasonV1::Transport,
+            Self::ProcessExit => ToolFailureReasonV1::ProcessExit,
+            Self::ProviderProtocol => ToolFailureReasonV1::ProviderProtocol,
+            Self::InvalidModelInput => ToolFailureReasonV1::InvalidModelInput,
+            Self::CircuitOpen => ToolFailureReasonV1::GraphCircuitOpen,
+            Self::Cancellation => ToolFailureReasonV1::RunCancelled,
+            Self::GraphLifecycleDenial => ToolFailureReasonV1::ExplorationClosed,
+            Self::CircuitRedirect => ToolFailureReasonV1::RepeatedNonRetryable,
+        }
+    }
+
+    /// Fixed content-free summary for legacy callers that only know a
+    /// category. New diagnostics use the more precise closed reason.
+    pub const fn safe_message(self) -> &'static str {
+        self.default_reason().safe_message()
+    }
+
+    pub const fn retryable(self) -> bool {
+        matches!(
+            self.default_reason().retry_disposition(),
+            ToolRetryDispositionV1::Retryable
+        )
+    }
+
+    pub const fn fallback_to_conventional_discovery(self) -> bool {
+        self.default_reason().fallback_to_conventional_discovery()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolFailureReasonV1 {
+    UnknownTool,
+    InvalidArguments,
+    PolicyPrecondition,
+    AccessDenied,
+    ToolReportedFailure,
+    ToolExecutionError,
+    DeadlineExceeded,
+    RunCancelled,
+    ExplorationClosed,
+    RepeatedNonRetryable,
+    RetryBudgetExhausted,
+    ConfigurationStartup,
+    ProjectNotReady,
+    IndexFailure,
+    GraphTimeout,
+    Transport,
+    ProcessExit,
+    ProviderProtocol,
+    InvalidModelInput,
+    GraphCircuitOpen,
+}
+
+impl ToolFailureReasonV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnknownTool => "unknown_tool",
+            Self::InvalidArguments => "invalid_arguments",
+            Self::PolicyPrecondition => "policy_precondition",
+            Self::AccessDenied => "access_denied",
+            Self::ToolReportedFailure => "tool_reported_failure",
+            Self::ToolExecutionError => "tool_execution_error",
+            Self::DeadlineExceeded => "deadline_exceeded",
+            Self::RunCancelled => "run_cancelled",
+            Self::ExplorationClosed => "exploration_closed",
+            Self::RepeatedNonRetryable => "repeated_non_retryable",
+            Self::RetryBudgetExhausted => "retry_budget_exhausted",
+            Self::ConfigurationStartup => "configuration_startup",
+            Self::ProjectNotReady => "project_not_ready",
+            Self::IndexFailure => "index_failure",
+            Self::GraphTimeout => "graph_timeout",
+            Self::Transport => "transport",
+            Self::ProcessExit => "process_exit",
+            Self::ProviderProtocol => "provider_protocol",
+            Self::InvalidModelInput => "invalid_model_input",
+            Self::GraphCircuitOpen => "graph_circuit_open",
+        }
+    }
+
     pub const fn safe_message(self) -> &'static str {
         match self {
+            Self::UnknownTool => "tool name is not registered; use a listed canonical tool name",
+            Self::InvalidArguments => {
+                "tool arguments did not match the canonical schema; correct the call and try again"
+            }
+            Self::PolicyPrecondition => {
+                "workspace mutation blocked until the successful decision anchor is consumed through later result-derived codebase-memory evidence for the implementation, caller/model, and focused behavioral tests"
+            }
+            Self::AccessDenied => {
+                "tool execution was denied by policy; use only authorized resources or satisfy the required precondition"
+            }
+            Self::ToolReportedFailure | Self::ToolExecutionError => {
+                "tool execution failed; correct the invocation or choose a different action"
+            }
+            Self::DeadlineExceeded => {
+                "tool execution timed out; retry with a bounded operation or a different approach"
+            }
+            Self::RunCancelled => "tool execution was cancelled; do not assume it completed",
+            Self::ExplorationClosed => {
+                "codebase-memory exploration is closed for this run; continue with conventional tools"
+            }
+            Self::RepeatedNonRetryable => {
+                "this tool call repeats a non-retryable failure; change the invocation before trying again"
+            }
+            Self::RetryBudgetExhausted => {
+                "this retryable tool call exhausted its fixed execution budget; change the invocation or choose a different action"
+            }
             Self::ConfigurationStartup => "codebase-memory setup did not complete",
             Self::ProjectNotReady => "codebase-memory project is not ready",
             Self::IndexFailure => "codebase-memory indexing failed",
-            Self::Timeout => "codebase-memory request timed out",
+            Self::GraphTimeout => "codebase-memory request timed out",
             Self::Transport => "codebase-memory transport failed",
             Self::ProcessExit => "codebase-memory provider process exited",
             Self::ProviderProtocol => "codebase-memory provider or protocol request failed",
             Self::InvalidModelInput => "codebase-memory request input was invalid",
-            Self::CircuitOpen => {
+            Self::GraphCircuitOpen => {
                 "codebase-memory is disabled for this run after a systemic failure"
             }
-            Self::ExplorationClosed => "codebase-memory graph exploration is closed for this run",
         }
     }
 
-    /// Whether another call may succeed without changing model input or the
-    /// provider configuration.
-    pub const fn retryable(self) -> bool {
+    pub const fn retry_disposition(self) -> ToolRetryDispositionV1 {
+        match self {
+            Self::ProjectNotReady
+            | Self::GraphTimeout
+            | Self::Transport
+            | Self::DeadlineExceeded => ToolRetryDispositionV1::Retryable,
+            Self::UnknownTool
+            | Self::InvalidArguments
+            | Self::ToolReportedFailure
+            | Self::ToolExecutionError
+            | Self::InvalidModelInput
+            | Self::RepeatedNonRetryable
+            | Self::RetryBudgetExhausted => ToolRetryDispositionV1::CorrectInvocation,
+            Self::PolicyPrecondition | Self::AccessDenied => ToolRetryDispositionV1::SatisfyPolicy,
+            Self::ExplorationClosed
+            | Self::ConfigurationStartup
+            | Self::IndexFailure
+            | Self::ProcessExit
+            | Self::ProviderProtocol
+            | Self::GraphCircuitOpen => ToolRetryDispositionV1::ConventionalDiscovery,
+            Self::RunCancelled => ToolRetryDispositionV1::DoNotRetry,
+        }
+    }
+
+    pub const fn fallback_to_conventional_discovery(self) -> bool {
         matches!(
             self,
-            Self::ProjectNotReady | Self::Timeout | Self::Transport
+            Self::ExplorationClosed
+                | Self::ConfigurationStartup
+                | Self::ProjectNotReady
+                | Self::IndexFailure
+                | Self::GraphTimeout
+                | Self::Transport
+                | Self::ProcessExit
+                | Self::ProviderProtocol
+                | Self::InvalidModelInput
+                | Self::GraphCircuitOpen
         )
     }
 
-    /// Whether ordinary filesystem discovery is the safe fallback.
-    pub const fn fallback_to_conventional_discovery(self) -> bool {
-        true
+    pub const fn valid_for(self, category: ToolFailureCategoryV1) -> bool {
+        matches!(
+            (category, self),
+            (
+                ToolFailureCategoryV1::SchemaArgumentMismatch,
+                Self::UnknownTool | Self::InvalidArguments
+            ) | (
+                ToolFailureCategoryV1::PolicyDenial,
+                Self::PolicyPrecondition | Self::AccessDenied
+            ) | (
+                ToolFailureCategoryV1::ExecutionFailure,
+                Self::ToolReportedFailure | Self::ToolExecutionError
+            ) | (
+                ToolFailureCategoryV1::ConfigurationStartup,
+                Self::ConfigurationStartup
+            ) | (
+                ToolFailureCategoryV1::ProjectNotReady,
+                Self::ProjectNotReady
+            ) | (ToolFailureCategoryV1::IndexFailure, Self::IndexFailure)
+                | (
+                    ToolFailureCategoryV1::Timeout,
+                    Self::DeadlineExceeded | Self::GraphTimeout
+                )
+                | (ToolFailureCategoryV1::Transport, Self::Transport)
+                | (ToolFailureCategoryV1::ProcessExit, Self::ProcessExit)
+                | (
+                    ToolFailureCategoryV1::ProviderProtocol,
+                    Self::ProviderProtocol
+                )
+                | (
+                    ToolFailureCategoryV1::InvalidModelInput,
+                    Self::InvalidModelInput
+                )
+                | (ToolFailureCategoryV1::CircuitOpen, Self::GraphCircuitOpen)
+                | (ToolFailureCategoryV1::Cancellation, Self::RunCancelled)
+                | (
+                    ToolFailureCategoryV1::GraphLifecycleDenial,
+                    Self::ExplorationClosed
+                )
+                | (
+                    ToolFailureCategoryV1::CircuitRedirect,
+                    Self::RepeatedNonRetryable | Self::RetryBudgetExhausted
+                )
+        )
     }
 }
 
-/// Bounded diagnostic safe for metadata, transcript, and diagnostic capture.
-///
-/// Serialization and deserialization always replace `message` with the fixed
-/// summary for `category`. This keeps even directly forged or retained wire
-/// values from projecting raw stderr, credentials, arguments, cache contents,
-/// provider text, or repository content.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRetryDispositionV1 {
+    Retryable,
+    CorrectInvocation,
+    SatisfyPolicy,
+    ConventionalDiscovery,
+    DoNotRetry,
+}
+
+impl ToolRetryDispositionV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::CorrectInvocation => "correct_invocation",
+            Self::SatisfyPolicy => "satisfy_policy",
+            Self::ConventionalDiscovery => "conventional_discovery",
+            Self::DoNotRetry => "do_not_retry",
+        }
+    }
+}
+
+/// Bounded diagnostic safe for metadata, transcript, logs, and diagnostic
+/// capture. Serialization, deserialization, and Debug reconstruct all derived
+/// values from the closed category/reason pair.
+#[derive(Clone, Eq, PartialEq)]
 pub struct ToolFailureDiagnosticV1 {
     pub category: ToolFailureCategoryV1,
+    pub reason: ToolFailureReasonV1,
+    pub retry_disposition: ToolRetryDispositionV1,
     pub retryable: bool,
     pub fallback_to_conventional_discovery: bool,
     pub message: String,
@@ -76,16 +307,46 @@ pub struct ToolFailureDiagnosticV1 {
 
 impl ToolFailureDiagnosticV1 {
     pub fn new(category: ToolFailureCategoryV1) -> Self {
+        Self::with_reason(category, category.default_reason())
+    }
+
+    pub fn with_reason(category: ToolFailureCategoryV1, reason: ToolFailureReasonV1) -> Self {
+        let reason = if reason.valid_for(category) {
+            reason
+        } else {
+            category.default_reason()
+        };
+        let retry_disposition = reason.retry_disposition();
         Self {
             category,
-            retryable: category.retryable(),
-            fallback_to_conventional_discovery: category.fallback_to_conventional_discovery(),
-            message: category.safe_message().to_string(),
+            reason,
+            retry_disposition,
+            retryable: retry_disposition == ToolRetryDispositionV1::Retryable,
+            fallback_to_conventional_discovery: reason.fallback_to_conventional_discovery(),
+            message: reason.safe_message().to_string(),
         }
     }
 
     pub fn normalize(&mut self) {
-        *self = Self::new(self.category);
+        *self = Self::with_reason(self.category, self.reason);
+    }
+}
+
+impl std::fmt::Debug for ToolFailureDiagnosticV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let canonical = Self::with_reason(self.category, self.reason);
+        formatter
+            .debug_struct("ToolFailureDiagnosticV1")
+            .field("category", &canonical.category)
+            .field("reason", &canonical.reason)
+            .field("retry_disposition", &canonical.retry_disposition)
+            .field("retryable", &canonical.retryable)
+            .field(
+                "fallback_to_conventional_discovery",
+                &canonical.fallback_to_conventional_discovery,
+            )
+            .field("message", &canonical.message)
+            .finish()
     }
 }
 
@@ -284,10 +545,25 @@ pub enum ToolStatusV1 {
     Cancelled,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(deny_unknown_fields)]
 struct ToolFailureDiagnosticWire {
     category: ToolFailureCategoryV1,
+    reason: ToolFailureReasonV1,
+    retry_disposition: ToolRetryDispositionV1,
+    retryable: bool,
+    fallback_to_conventional_discovery: bool,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolFailureDiagnosticWireInput {
+    category: ToolFailureCategoryV1,
+    #[serde(default)]
+    reason: Option<ToolFailureReasonV1>,
+    #[serde(default)]
+    retry_disposition: Option<ToolRetryDispositionV1>,
     retryable: bool,
     fallback_to_conventional_discovery: bool,
     message: String,
@@ -298,9 +574,11 @@ impl Serialize for ToolFailureDiagnosticV1 {
     where
         S: Serializer,
     {
-        let canonical = Self::new(self.category);
+        let canonical = Self::with_reason(self.category, self.reason);
         ToolFailureDiagnosticWire {
             category: canonical.category,
+            reason: canonical.reason,
+            retry_disposition: canonical.retry_disposition,
             retryable: canonical.retryable,
             fallback_to_conventional_discovery: canonical.fallback_to_conventional_discovery,
             message: canonical.message,
@@ -314,7 +592,19 @@ impl<'de> Deserialize<'de> for ToolFailureDiagnosticV1 {
     where
         D: Deserializer<'de>,
     {
-        let wire = ToolFailureDiagnosticWire::deserialize(deserializer)?;
-        Ok(Self::new(wire.category))
+        let wire = ToolFailureDiagnosticWireInput::deserialize(deserializer)?;
+        // Read legacy diagnostics that predate reason/disposition. Every
+        // untrusted derived field is intentionally ignored and reconstructed.
+        let _ = (
+            wire.retry_disposition,
+            wire.retryable,
+            wire.fallback_to_conventional_discovery,
+            wire.message,
+        );
+        Ok(Self::with_reason(
+            wire.category,
+            wire.reason
+                .unwrap_or_else(|| wire.category.default_reason()),
+        ))
     }
 }

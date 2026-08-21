@@ -23,7 +23,7 @@ Across separate model turns the engineer must consume exactly:
 Every successful call has a complete typed V1 correlation and lineage record.
 The first is a root and the next four are carry-forwards bound to that root.
 Both source reads complete the generic decision chain. A redundant descendant is
-then denied locally with the fixed `exploration_closed` category, without
+then denied locally with the fixed `graph_lifecycle_denial` category with reason `exploration_closed`, without
 another MCP invocation. Conventional source reading remains available before
 the minimal repair, focused host validation, Actions pass, PR merge, and
 source-issue closure.

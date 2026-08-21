@@ -121,7 +121,7 @@ fn codebase_memory_timing(name: &str, output: &ToolOutput) -> Option<CodebaseMem
     })
 }
 
-fn safe_tool_failure(name: &str, output: &ToolOutput) -> Option<ToolFailureDiagnostic> {
+pub(super) fn safe_tool_failure(name: &str, output: &ToolOutput) -> Option<ToolFailureDiagnostic> {
     if !output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
         return None;
     }

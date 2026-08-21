@@ -1775,6 +1775,7 @@ dependencies = [
  "jig-server",
  "serde",
  "serde_json",
+ "sha2",
  "skein",
  "temper-agent",
  "temper-agent-io",

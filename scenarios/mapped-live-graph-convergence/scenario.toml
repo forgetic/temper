@@ -180,7 +180,7 @@ events = [
   { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.lineage.stage" = "carry_forward" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.stage" = "carry_forward" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.stage" = "carry_forward" } },
-  { event = "tool.error", fields = { "tool.failure.category" = "exploration_closed" } },
+  { event = "tool.error", fields = { "tool.failure.category" = "graph_lifecycle_denial" } },
   { event = "tool.start", fields = { tool = "read" } },
   { event = "workspace.diff.produced" },
 ]
@@ -221,7 +221,7 @@ exactly = 1
 required = true
 id = "three-post-decision-local-denials"
 event = "tool.error"
-fields."tool.failure.category" = "exploration_closed"
+fields."tool.failure.category" = "graph_lifecycle_denial"
 exactly = 3
 
 [[expect.count]]

@@ -6,6 +6,10 @@ use temper_protocol_activity::{
     GraphCorrelationV1,
 };
 
+// This is a closed provider outcome, not text to search within an arbitrary
+// failure. Near-matches remain provider/protocol failures.
+const EXPLORATION_CLOSED_PROVIDER_OUTCOME: &str = "exploration_closed";
+
 // Reserve space for the JSON-RPC envelope, tool name, request id, and newline.
 // This keeps oversized model input on the local side of the process-fatal MCP
 // record bound.
@@ -357,10 +361,7 @@ fn codebase_memory_failure_output_with_timings(
     circuit_cause: Option<ToolFailureCategory>,
 ) -> ToolOutput {
     let diagnostic = ToolFailureDiagnostic::codebase_memory(category);
-    let text = format!(
-        "{}; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead",
-        diagnostic.message
-    );
+    let text = diagnostic.model_message();
     let mut details = json!({
         SAFE_TOOL_FAILURE_DETAIL_KEY: {
             "source": "codebase_memory",
@@ -438,6 +439,9 @@ fn explicitly_invalid_input(message: &str) -> bool {
 }
 
 pub(super) fn classify_provider_failure(message: &str) -> ToolFailureCategory {
+    if message == EXPLORATION_CLOSED_PROVIDER_OUTCOME {
+        return ToolFailureCategory::GraphLifecycleDenial;
+    }
     let lowered = message.to_ascii_lowercase();
     if lowered.contains("timed out") || lowered.contains("timeout") {
         ToolFailureCategory::Timeout

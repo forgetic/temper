@@ -30,7 +30,8 @@ runner:
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
   `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
   `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`,
-  `mapped-live-graph-convergence`, `model-failure-recovery`,
+  `mapped-live-ordinary-tool-convergence`, `mapped-live-graph-convergence`,
+  `model-failure-recovery`,
   `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
@@ -234,6 +235,23 @@ private. The historical `#1009`/`#1010` mapping keeps its feature, plan, and
 source-branch lineage; its post-decision compatibility call is now denied by the
 same generic boundary.
 
+### Mapped live ordinary-tool convergence mapping
+
+`mapped-live-ordinary-tool-convergence` is the sole active mapping for
+`ai/temper#1041` and `ai/temper#1042` on `agent/pr-for-feature-1041`. It extends
+the mapped current-root consumption seam into one exact `exploration_closed`
+denial and an Anthropic-shaped ordinary recovery sequence. Provider-native
+forms must appear under canonical identities; one ambiguous call receives the
+closed schema diagnostic without execution; one non-retryable failure executes
+once; its identical retry redirects locally once; and changed corrected
+mutation, shell validation, and submission calls remain available through real
+Actions, merge, and source closure. Durable evidence retains only safe names,
+closed category/reason/disposition fields, aggregate counts, ordering, binding,
+and convergence facts. Raw inputs, fingerprints, provider payloads, source,
+prompts, credentials, host-gate output, and diagnostic traces remain ephemeral.
+The historical `mapped-live-graph-consumption` mapping and controlled routing
+benchmark are unchanged.
+
 ### Bounded Forgejo Actions pagination mapping
 
 `forgejo-actions-pagination-landing` is the sole active mapping for
@@ -241,10 +259,11 @@ same generic boundary.
 closed oversized history in disposable Forgejo 16.0.1 only after one real
 implementation run materializes. The dedicated CI-success monitor must then
 traverse explicit `page` plus `limit` requests, recover the exact head after page
-one, and trigger targeted automatic landing before the 600-second role-feed and mechanical fallbacks. Aggregate evidence retains
-only bounded counts, sizes, key names, identities, and timing facts; generated
-provider rows, response bodies, headers, credentials, and authorization values
-remain outside the checked-in corpus.
+one, and trigger targeted automatic landing before the 600-second role-feed and
+mechanical fallbacks. Aggregate evidence retains only bounded counts, sizes, key
+names, identities, and timing facts; generated provider rows, response bodies,
+headers, credentials, and authorization values remain outside the checked-in
+corpus.
 
 ### Structured run evidence
 

@@ -145,6 +145,7 @@ fn deliver_tool(m: &mut AgentMachine, id: String) -> Vec<AgentRequest> {
             batch_generation,
             id,
             output: output(),
+            failure: None,
         },
     )
 }

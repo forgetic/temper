@@ -18,6 +18,7 @@
 mod containment;
 #[cfg(test)]
 mod containment_tests;
+mod invocation;
 pub mod machine;
 mod managed_bash;
 mod managed_fs;
@@ -27,6 +28,9 @@ pub mod shell;
 pub mod subagent_tool;
 
 pub use containment::AgentContainmentContext;
+pub use invocation::{
+    InvocationCatalogError, REJECTED_TOOL_NAME, ToolInvocationCatalog, arguments_match,
+};
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,
     BatchGeneration, CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE, CODEBASE_MEMORY_TOOL_PREFIX,
@@ -36,7 +40,8 @@ pub use machine::{
     DiagnosticToolArguments, ModelCallStatus, OperationGeneration,
     SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
     SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallDenial, ToolCallStatus, ToolFailureCategory,
-    ToolFailureDiagnostic, ToolResultMetadata, ToolStartPresentation, ToolStartPresentationFn,
+    ToolFailureDiagnostic, ToolFailureReason, ToolResultMetadata, ToolRetryDisposition,
+    ToolStartPresentation, ToolStartPresentationFn,
 };
 pub use managed_bash::ManagedBashTool;
 pub use managed_fs::joined_filesystem_tool;

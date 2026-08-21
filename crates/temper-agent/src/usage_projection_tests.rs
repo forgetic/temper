@@ -5,7 +5,9 @@ use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityChildRecordV1, AgentActivityEventV1,
     AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1, AgentTerminalReasonV1, FailureCodeV1,
     FailureInfoV1, ModelCallFinishedV1, ModelCallRetryingV1, ModelCallStatusV1,
-    ModelFailureCategoryV1, ModelFailureV1, ScopeFinishedV1, ScopeStatusV1,
+    ModelFailureCategoryV1, ModelFailureV1, ScopeFinishedV1, ScopeStatusV1, ToolFailureCategoryV1,
+    ToolFailureDiagnosticV1, ToolFailureReasonV1, ToolFinishedV1, ToolRetryDispositionV1,
+    ToolStatusV1,
 };
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
@@ -209,4 +211,65 @@ fn retrying_and_terminal_logs_use_finished_call_diagnostics() {
     let rendered = format!("{failures:?}");
     assert!(!rendered.contains(temper_protocol_activity::MODEL_CALL_RETRY_FAILURE_MESSAGE));
     assert!(!rendered.contains("SECRET-SENTINEL-532"));
+}
+
+#[test]
+fn tool_error_logging_projects_only_closed_failure_fields() {
+    const SECRET: &str = "Authorization: Bearer TOOL-LOG-SECRET";
+    let capture = CaptureLayer::default();
+    let events = capture.0.clone();
+    let subscriber = registry().with(capture);
+
+    with_default(subscriber, || {
+        let projection = TracingProjection::new(Arc::new(UsageTotals::default()));
+        let mut diagnostic = ToolFailureDiagnosticV1::with_reason(
+            ToolFailureCategoryV1::ExecutionFailure,
+            ToolFailureReasonV1::ToolReportedFailure,
+        );
+        diagnostic.message = SECRET.to_string();
+        // Canonical activity deserialization/normalization owns this boundary;
+        // model that here before operational logging receives the record.
+        diagnostic.normalize();
+        projection.emit(&record(AgentActivityEventV1::ToolFinished(
+            ToolFinishedV1 {
+                call_id: "ordinary-failure".into(),
+                name: "bash".into(),
+                status: ToolStatusV1::Failed,
+                duration_ms: 3,
+                result: None,
+                failure: Some(diagnostic),
+                codebase_memory_timing: None,
+                graph_correlation: None,
+                decision_anchor_lineage: None,
+            },
+        )));
+    });
+
+    let event = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|event| event.get("event").map(String::as_str) == Some("tool.error"))
+        .cloned()
+        .expect("tool error log");
+    assert_eq!(
+        event.get("tool.failure.category").map(String::as_str),
+        Some("execution_failure")
+    );
+    assert_eq!(
+        event.get("tool.failure.reason").map(String::as_str),
+        Some("tool_reported_failure")
+    );
+    assert_eq!(
+        event
+            .get("tool.failure.retry_disposition")
+            .map(String::as_str),
+        Some(ToolRetryDispositionV1::CorrectInvocation.as_str())
+    );
+    assert_eq!(
+        event.get("tool.failure.retryable").map(String::as_str),
+        Some("false")
+    );
+    let rendered = format!("{event:?}");
+    assert!(!rendered.contains(SECRET));
 }

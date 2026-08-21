@@ -222,3 +222,23 @@ crates/temper-agent-core/src/machine/tests/decision_anchor.rs
 # Typed lineage extraction cases share provider-shape fixtures across canonical
 # aliases, ambiguity rejection, mirrored parts, and privacy-safe digest evidence.
 crates/temper-agent/src/codebase_memory/tests/lineage.rs
+
+# Tool executor coverage shares one injected-clock and registry fixture so local
+# denials, timeouts, cancellation, and trusted metadata use the same shell seam.
+crates/temper-agent-core/src/shell/executor_tests.rs
+
+# The agent machine is the single pure turn/batch transition owner; policy
+# dispatch and completion fencing remain together for state-machine review.
+crates/temper-agent-core/src/machine/core.rs
+
+# The developer CLI keeps controlled benchmark verification and scenario-driver
+# argument handling at one operator-facing command boundary.
+crates/temper-dev/src/bin/temper-dev.rs
+
+# Live bundle contract tests share the checked-in scenario loader and action
+# vocabulary needed to reject cross-scenario configuration drift.
+crates/temper-testing/src/live_manifest/bundle_tests.rs
+
+# Live bundle loading keeps resolved fixture validation, cadence policy, and
+# typed scenario assembly together while provider and action parsing stay split.
+crates/temper-testing/src/live_manifest/bundle.rs

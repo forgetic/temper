@@ -7,7 +7,7 @@ pub(super) fn privacy_safe_checkpoints(
     calls: &[McpToolCallEvidence],
 ) -> Vec<String> {
     let allowed: &[&str] = match mcp.lifecycle_profile.as_deref() {
-        Some("mapped-live-graph-consumption") => &[
+        Some("mapped-live-graph-consumption" | "mapped-live-ordinary-tool-convergence") => &[
             "served_mapped_root",
             "served_mapped_carry_forward",
             "served_mapped_current_root_source",

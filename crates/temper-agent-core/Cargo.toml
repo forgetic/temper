@@ -17,6 +17,7 @@ futures.workspace = true
 tongs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 temper-agent-io = { path = "../temper-agent-io" }
 temper-process-containment = { path = "../temper-process-containment" }
 temper-protocol-activity = { path = "../temper-protocol-activity" }

@@ -193,7 +193,27 @@
           "name": "submit_for_pr",
           "duration_ms": 5
         }
-      ]
+      ],
+      "ordinary": {
+        "calls": 10,
+        "succeeded": 8,
+        "failed": 1,
+        "cancelled": 1,
+        "status_coverage": {
+          "observed": 10,
+          "expected": 10
+        },
+        "failures_by_category": {},
+        "failure_category_coverage": {
+          "observed": 0,
+          "expected": 2
+        },
+        "failures_by_reason": {},
+        "failure_reason_coverage": {
+          "observed": 0,
+          "expected": 2
+        }
+      }
     },
     "structure": {
       "failed_edit_attempts": 1,
@@ -222,6 +242,18 @@
       "code": "validation_evidence_unavailable",
       "severity": "info",
       "message": "offline traces do not contain host-side validation evidence"
+    },
+    {
+      "code": "ordinary_tool_evidence_unavailable",
+      "severity": "warning",
+      "message": "ordinary tool completion lacks a closed failure diagnostic; failure classification and repeated-redirect evidence are incomplete",
+      "seq": 10
+    },
+    {
+      "code": "ordinary_tool_evidence_unavailable",
+      "severity": "warning",
+      "message": "ordinary tool completion lacks a closed failure diagnostic; failure classification and repeated-redirect evidence are incomplete",
+      "seq": 28
     }
   ]
 }

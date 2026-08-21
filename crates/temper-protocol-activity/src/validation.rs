@@ -12,6 +12,7 @@ use crate::{
 
 mod fields;
 mod model_failure;
+mod tool_failure;
 use fields::{assignment, event, identifier, scope, timestamp, version};
 pub(crate) use model_failure::{
     is_non_retryable_provider_code, is_retryable_provider_code, validate_model_failure_at,

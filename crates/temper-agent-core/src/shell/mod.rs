@@ -17,8 +17,10 @@
 //! - [`task_group`] — per-run cancellation and quiescence tracking.
 
 mod executor;
+mod local_tool;
 mod streaming;
 mod task_group;
+mod tool_failure;
 mod tool_result;
 
 pub use executor::{

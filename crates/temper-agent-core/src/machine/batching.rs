@@ -18,6 +18,7 @@ use tongs::tools::ToolEffects;
 pub(super) struct PendingTool {
     pub(super) call: ToolCall,
     pub(super) output: Option<tongs::tools::ToolOutput>,
+    pub(super) failure: Option<super::tool_failure::ToolFailureDiagnostic>,
 }
 
 /// The effect declaration for a tool name, defaulting to write (serialize) for
@@ -54,6 +55,7 @@ pub(super) fn plan_batches(
             current.push(PendingTool {
                 call: call.clone(),
                 output: None,
+                failure: None,
             });
         } else {
             if !current.is_empty() {
@@ -63,6 +65,7 @@ pub(super) fn plan_batches(
             current.push(PendingTool {
                 call: call.clone(),
                 output: None,
+                failure: None,
             });
         }
     }

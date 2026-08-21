@@ -18,7 +18,7 @@ refinement, caller trace, one deliberately duplicate refinement, and current-roo
 implementation and focused-test sources. Completing that evidence injects the
 generic privacy-safe convergence instruction. The Jig then attempts broad,
 duplicate, and post-decision graph work. All three attempts receive the closed
-local `exploration_closed` category and none reaches the temporary provider.
+local `graph_lifecycle_denial` category with reason `exploration_closed` and none reaches the temporary provider.
 Conventional source reads remain available before the exact one-file repair,
 host validation, Actions pass, PR merge, and source-issue closure.
 
