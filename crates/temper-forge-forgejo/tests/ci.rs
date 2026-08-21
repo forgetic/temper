@@ -3,6 +3,8 @@
 #[path = "ci/pagination.rs"]
 mod pagination;
 mod support;
+#[path = "ci/transport.rs"]
+mod transport;
 
 use serde_json::{Value, json};
 use support::{MockHttpClient, block_on, forge, pull_id, repo_id};
