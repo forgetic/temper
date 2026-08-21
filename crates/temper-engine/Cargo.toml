@@ -33,6 +33,7 @@ temper-workflow = { path = "../temper-workflow" }
 
 [dev-dependencies]
 temper-forge-memory = { path = "../temper-forge-memory" }
+temper-forge-forgejo = { path = "../temper-forge-forgejo" }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 
