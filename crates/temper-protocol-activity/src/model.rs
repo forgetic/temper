@@ -8,6 +8,7 @@ use crate::{ACTIVITY_PROTOCOL_VERSION, ActivityValidationError};
 
 mod failure;
 mod graph_lineage;
+mod graph_recovery;
 mod model_call;
 mod prompt;
 mod sanitize;
@@ -15,6 +16,7 @@ mod terminal;
 mod tool_failure;
 pub use failure::*;
 pub use graph_lineage::*;
+pub use graph_recovery::*;
 pub use model_call::*;
 pub use prompt::*;
 pub use terminal::*;

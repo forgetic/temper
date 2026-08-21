@@ -74,7 +74,7 @@ fn read_only_roles_converge_and_close_graph_tools_without_mutation_effects() {
     );
     assert_eq!(
         state.on_tool_dispatched(&call("extra", "codebase_memory_search_graph"), 2),
-        Some(ToolCallDenial::GraphExplorationClosed)
+        completed_graph_denial()
     );
     assert_eq!(
         state.on_tool_dispatched(&call("conventional", "read"), 2),
@@ -102,7 +102,7 @@ fn repeated_non_progressing_discovery_closes_graph_exploration() {
     }
     assert_eq!(
         state.on_tool_dispatched(&call("broad-three", "codebase_memory_get_architecture"), 2),
-        Some(ToolCallDenial::GraphExplorationClosed)
+        legacy_graph_denial()
     );
     assert_eq!(
         state.on_tool_dispatched(&call("conventional", "read"), 2),

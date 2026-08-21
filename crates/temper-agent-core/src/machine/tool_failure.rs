@@ -1,5 +1,7 @@
 //! Closed, privacy-safe diagnostics for model-visible tool failures.
 
+use temper_protocol_activity::GraphExplorationClosedV1;
+
 /// Stable failure categories for every model-visible tool. Existing graph
 /// category spellings are retained for wire compatibility.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +106,8 @@ pub enum ToolFailureReason {
     DeadlineExceeded,
     RunCancelled,
     ExplorationClosed,
+    DecisionEvidenceIncomplete,
+    DecisionEvidenceRecoveryExhausted,
     RepeatedNonRetryable,
     RetryBudgetExhausted,
     ConfigurationStartup,
@@ -129,6 +133,8 @@ impl ToolFailureReason {
             Self::DeadlineExceeded => "deadline_exceeded",
             Self::RunCancelled => "run_cancelled",
             Self::ExplorationClosed => "exploration_closed",
+            Self::DecisionEvidenceIncomplete => "decision_evidence_incomplete",
+            Self::DecisionEvidenceRecoveryExhausted => "decision_evidence_recovery_exhausted",
             Self::RepeatedNonRetryable => "repeated_non_retryable",
             Self::RetryBudgetExhausted => "retry_budget_exhausted",
             Self::ConfigurationStartup => "configuration_startup",
@@ -164,6 +170,12 @@ impl ToolFailureReason {
             Self::RunCancelled => "tool execution was cancelled; do not assume it completed",
             Self::ExplorationClosed => {
                 "codebase-memory exploration is closed for this run; continue with conventional tools"
+            }
+            Self::DecisionEvidenceIncomplete => {
+                "required decision evidence is incomplete; use only the permitted targeted current-root recovery action"
+            }
+            Self::DecisionEvidenceRecoveryExhausted => {
+                "decision-evidence recovery is exhausted; stop without a product"
             }
             Self::RepeatedNonRetryable => {
                 "this tool call repeats a non-retryable failure; change the invocation before trying again"
@@ -205,7 +217,10 @@ impl ToolFailureReason {
             | Self::ProcessExit
             | Self::ProviderProtocol
             | Self::GraphCircuitOpen => ToolRetryDisposition::ConventionalDiscovery,
-            Self::RunCancelled => ToolRetryDisposition::DoNotRetry,
+            Self::DecisionEvidenceIncomplete => ToolRetryDisposition::CorrectInvocation,
+            Self::RunCancelled | Self::DecisionEvidenceRecoveryExhausted => {
+                ToolRetryDisposition::DoNotRetry
+            }
         }
     }
 
@@ -261,6 +276,8 @@ impl ToolFailureReason {
                 | (
                     ToolFailureCategory::GraphLifecycleDenial,
                     Self::ExplorationClosed
+                        | Self::DecisionEvidenceIncomplete
+                        | Self::DecisionEvidenceRecoveryExhausted
                 )
                 | (
                     ToolFailureCategory::CircuitRedirect,
@@ -301,6 +318,7 @@ impl ToolRetryDisposition {
 pub struct ToolFailureDiagnostic {
     pub category: ToolFailureCategory,
     pub reason: ToolFailureReason,
+    pub graph_exploration: Option<GraphExplorationClosedV1>,
     pub retry_disposition: ToolRetryDisposition,
     pub retryable: bool,
     pub fallback_to_conventional_discovery: bool,
@@ -309,7 +327,12 @@ pub struct ToolFailureDiagnostic {
 
 impl ToolFailureDiagnostic {
     pub fn new(category: ToolFailureCategory, reason: ToolFailureReason) -> Self {
-        let reason = if reason.valid_for(category) {
+        let reason = if reason.valid_for(category)
+            && !matches!(
+                reason,
+                ToolFailureReason::DecisionEvidenceIncomplete
+                    | ToolFailureReason::DecisionEvidenceRecoveryExhausted
+            ) {
             reason
         } else {
             category.default_reason()
@@ -318,10 +341,40 @@ impl ToolFailureDiagnostic {
         Self {
             category,
             reason,
+            graph_exploration: None,
             retry_disposition,
             retryable: retry_disposition == ToolRetryDisposition::Retryable,
             fallback_to_conventional_discovery: reason.fallback_to_conventional_discovery(),
             message: reason.safe_message().to_string(),
+        }
+    }
+
+    pub fn graph_exploration(details: GraphExplorationClosedV1) -> Self {
+        if !details.is_valid() {
+            return Self::codebase_memory(ToolFailureCategory::GraphLifecycleDenial);
+        }
+        let reason = match details.failure_reason() {
+            temper_protocol_activity::ToolFailureReasonV1::ExplorationClosed => {
+                ToolFailureReason::ExplorationClosed
+            }
+            temper_protocol_activity::ToolFailureReasonV1::DecisionEvidenceIncomplete => {
+                ToolFailureReason::DecisionEvidenceIncomplete
+            }
+            temper_protocol_activity::ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted => {
+                ToolFailureReason::DecisionEvidenceRecoveryExhausted
+            }
+            _ => return Self::codebase_memory(ToolFailureCategory::GraphLifecycleDenial),
+        };
+        let retry_disposition = reason.retry_disposition();
+        let message = details.model_message();
+        Self {
+            category: ToolFailureCategory::GraphLifecycleDenial,
+            reason,
+            graph_exploration: Some(details),
+            retry_disposition,
+            retryable: retry_disposition == ToolRetryDisposition::Retryable,
+            fallback_to_conventional_discovery: reason.fallback_to_conventional_discovery(),
+            message,
         }
     }
 
@@ -366,7 +419,10 @@ impl ToolFailureDiagnostic {
     }
 
     pub fn canonical(&self) -> Self {
-        Self::new(self.category, self.reason)
+        match self.graph_exploration.clone() {
+            Some(details) if details.is_valid() => Self::graph_exploration(details),
+            _ => Self::new(self.category, self.reason),
+        }
     }
 
     /// Canonical model-visible rendering. Conventional-discovery guidance is
@@ -391,6 +447,7 @@ impl std::fmt::Debug for ToolFailureDiagnostic {
             .debug_struct("ToolFailureDiagnostic")
             .field("category", &canonical.category)
             .field("reason", &canonical.reason)
+            .field("graph_exploration", &canonical.graph_exploration)
             .field("retry_disposition", &canonical.retry_disposition)
             .field("retryable", &canonical.retryable)
             .field(

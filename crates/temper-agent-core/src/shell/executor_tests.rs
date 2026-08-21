@@ -3,7 +3,8 @@
 use super::*;
 use crate::machine::{
     CodebaseMemoryTiming, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
-    DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphExplorationClosedReasonV1,
+    GraphExplorationClosedV1, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
     SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolResultMetadata,
 };
 use crate::shell::tool_result::TOOL_RESULT_PREVIEW_BYTES;
@@ -121,7 +122,7 @@ impl Tool for InvocationFlagTool {
 }
 
 #[test]
-fn exploration_denial_never_invokes_provider_and_emits_only_the_generic_reason() {
+fn completed_exploration_denial_never_invokes_provider_and_retains_only_closed_details() {
     const SECRET: &str = "Authorization: Bearer LOCAL-DENIAL-SECRET/src/private.rs";
     let invoked = Arc::new(AtomicBool::new(false));
     let tools = ToolRegistry::from_tools(vec![Box::new(InvocationFlagTool {
@@ -142,7 +143,9 @@ fn exploration_denial_never_invokes_provider_and_emits_only_the_generic_reason()
             &call,
             Duration::from_secs(1),
             &CancellationToken::default(),
-            Some(ToolCallDenial::GraphExplorationClosed),
+            Some(ToolCallDenial::GraphExplorationClosed(Some(
+                GraphExplorationClosedV1::completed(),
+            ))),
             &clock,
             observed.as_ref(),
             None,
@@ -173,6 +176,11 @@ fn exploration_denial_never_invokes_provider_and_emits_only_the_generic_reason()
             ..
         } if failure.category == ToolFailureCategory::GraphLifecycleDenial
             && failure.reason == ToolFailureReason::ExplorationClosed
+            && failure.graph_exploration.as_ref().is_some_and(|details| {
+                details.reason == GraphExplorationClosedReasonV1::Completed
+                    && details.missing_evidence.is_empty()
+                    && details.remaining_allowance == 0
+            })
     ));
     let debug = format!("{events:?}");
     assert!(!debug.contains(SECRET));

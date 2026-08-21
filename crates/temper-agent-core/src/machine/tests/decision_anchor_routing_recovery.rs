@@ -91,7 +91,7 @@ fn caller_source_after_duplicate_refinement_completes_parallel_root_evidence() {
     assert!(!state.blocks_mutation("write"));
     assert_eq!(
         state.on_tool_dispatched(&call("closed", "codebase_memory_search_graph"), 4),
-        Some(ToolCallDenial::GraphExplorationClosed),
+        completed_graph_denial(),
     );
     assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 4), None);
 }

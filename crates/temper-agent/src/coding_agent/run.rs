@@ -552,7 +552,7 @@ pub(crate) fn ensure_completed_outcome(
             Err(CodingAgentError::BudgetExhausted { max_iterations })
         }
         temper_agent_core::AgentStop::DecisionAnchorRecoveryExhausted => {
-            Err(CodingAgentError::NoProduct)
+            Err(CodingAgentError::DecisionAnchorRecoveryExhausted)
         }
         temper_agent_core::AgentStop::Aborted => Err(CodingAgentError::Aborted {
             authority: if worker_cancellation_requested {

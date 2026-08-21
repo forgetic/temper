@@ -2,9 +2,10 @@
 
 use std::fmt::Write as _;
 
+use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::DecisionAnchorLineageV1;
+use super::{DecisionAnchorLineageV1, GraphExplorationClosedV1};
 use sha2::{Digest as _, Sha256};
 
 use super::CapturedContentV1;
@@ -102,6 +103,8 @@ pub enum ToolFailureReasonV1 {
     DeadlineExceeded,
     RunCancelled,
     ExplorationClosed,
+    DecisionEvidenceIncomplete,
+    DecisionEvidenceRecoveryExhausted,
     RepeatedNonRetryable,
     RetryBudgetExhausted,
     ConfigurationStartup,
@@ -127,6 +130,8 @@ impl ToolFailureReasonV1 {
             Self::DeadlineExceeded => "deadline_exceeded",
             Self::RunCancelled => "run_cancelled",
             Self::ExplorationClosed => "exploration_closed",
+            Self::DecisionEvidenceIncomplete => "decision_evidence_incomplete",
+            Self::DecisionEvidenceRecoveryExhausted => "decision_evidence_recovery_exhausted",
             Self::RepeatedNonRetryable => "repeated_non_retryable",
             Self::RetryBudgetExhausted => "retry_budget_exhausted",
             Self::ConfigurationStartup => "configuration_startup",
@@ -162,6 +167,12 @@ impl ToolFailureReasonV1 {
             Self::RunCancelled => "tool execution was cancelled; do not assume it completed",
             Self::ExplorationClosed => {
                 "codebase-memory exploration is closed for this run; continue with conventional tools"
+            }
+            Self::DecisionEvidenceIncomplete => {
+                "required decision evidence is incomplete; use only the permitted targeted current-root recovery action"
+            }
+            Self::DecisionEvidenceRecoveryExhausted => {
+                "decision-evidence recovery is exhausted; stop without a product"
             }
             Self::RepeatedNonRetryable => {
                 "this tool call repeats a non-retryable failure; change the invocation before trying again"
@@ -203,7 +214,10 @@ impl ToolFailureReasonV1 {
             | Self::ProcessExit
             | Self::ProviderProtocol
             | Self::GraphCircuitOpen => ToolRetryDispositionV1::ConventionalDiscovery,
-            Self::RunCancelled => ToolRetryDispositionV1::DoNotRetry,
+            Self::DecisionEvidenceIncomplete => ToolRetryDispositionV1::CorrectInvocation,
+            Self::RunCancelled | Self::DecisionEvidenceRecoveryExhausted => {
+                ToolRetryDispositionV1::DoNotRetry
+            }
         }
     }
 
@@ -261,6 +275,8 @@ impl ToolFailureReasonV1 {
                 | (
                     ToolFailureCategoryV1::GraphLifecycleDenial,
                     Self::ExplorationClosed
+                        | Self::DecisionEvidenceIncomplete
+                        | Self::DecisionEvidenceRecoveryExhausted
                 )
                 | (
                     ToolFailureCategoryV1::CircuitRedirect,
@@ -294,11 +310,12 @@ impl ToolRetryDispositionV1 {
 
 /// Bounded diagnostic safe for metadata, transcript, logs, and diagnostic
 /// capture. Serialization, deserialization, and Debug reconstruct all derived
-/// values from the closed category/reason pair.
+/// values from the closed category/reason/details tuple.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ToolFailureDiagnosticV1 {
     pub category: ToolFailureCategoryV1,
     pub reason: ToolFailureReasonV1,
+    pub graph_exploration: Option<GraphExplorationClosedV1>,
     pub retry_disposition: ToolRetryDispositionV1,
     pub retryable: bool,
     pub fallback_to_conventional_discovery: bool,
@@ -311,7 +328,12 @@ impl ToolFailureDiagnosticV1 {
     }
 
     pub fn with_reason(category: ToolFailureCategoryV1, reason: ToolFailureReasonV1) -> Self {
-        let reason = if reason.valid_for(category) {
+        let reason = if reason.valid_for(category)
+            && !matches!(
+                reason,
+                ToolFailureReasonV1::DecisionEvidenceIncomplete
+                    | ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted
+            ) {
             reason
         } else {
             category.default_reason()
@@ -320,6 +342,7 @@ impl ToolFailureDiagnosticV1 {
         Self {
             category,
             reason,
+            graph_exploration: None,
             retry_disposition,
             retryable: retry_disposition == ToolRetryDispositionV1::Retryable,
             fallback_to_conventional_discovery: reason.fallback_to_conventional_discovery(),
@@ -327,18 +350,50 @@ impl ToolFailureDiagnosticV1 {
         }
     }
 
+    pub fn with_graph_exploration(details: GraphExplorationClosedV1) -> Self {
+        if !details.is_valid() {
+            return Self::new(ToolFailureCategoryV1::GraphLifecycleDenial);
+        }
+        let reason = details.failure_reason();
+        let retry_disposition = reason.retry_disposition();
+        let message = details.model_message();
+        Self {
+            category: ToolFailureCategoryV1::GraphLifecycleDenial,
+            reason,
+            graph_exploration: Some(details),
+            retry_disposition,
+            retryable: retry_disposition == ToolRetryDispositionV1::Retryable,
+            fallback_to_conventional_discovery: reason.fallback_to_conventional_discovery(),
+            message,
+        }
+    }
+
+    pub fn canonical(&self) -> Self {
+        match self.graph_exploration.clone() {
+            Some(details)
+                if self.category == ToolFailureCategoryV1::GraphLifecycleDenial
+                    && details.is_valid()
+                    && self.reason == details.failure_reason() =>
+            {
+                Self::with_graph_exploration(details)
+            }
+            _ => Self::with_reason(self.category, self.reason),
+        }
+    }
+
     pub fn normalize(&mut self) {
-        *self = Self::with_reason(self.category, self.reason);
+        *self = self.canonical();
     }
 }
 
 impl std::fmt::Debug for ToolFailureDiagnosticV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let canonical = Self::with_reason(self.category, self.reason);
+        let canonical = self.canonical();
         formatter
             .debug_struct("ToolFailureDiagnosticV1")
             .field("category", &canonical.category)
             .field("reason", &canonical.reason)
+            .field("graph_exploration", &canonical.graph_exploration)
             .field("retry_disposition", &canonical.retry_disposition)
             .field("retryable", &canonical.retryable)
             .field(
@@ -550,6 +605,8 @@ pub enum ToolStatusV1 {
 struct ToolFailureDiagnosticWire {
     category: ToolFailureCategoryV1,
     reason: ToolFailureReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    graph_exploration: Option<GraphExplorationClosedV1>,
     retry_disposition: ToolRetryDispositionV1,
     retryable: bool,
     fallback_to_conventional_discovery: bool,
@@ -563,6 +620,8 @@ struct ToolFailureDiagnosticWireInput {
     #[serde(default)]
     reason: Option<ToolFailureReasonV1>,
     #[serde(default)]
+    graph_exploration: Option<GraphExplorationClosedV1>,
+    #[serde(default)]
     retry_disposition: Option<ToolRetryDispositionV1>,
     retryable: bool,
     fallback_to_conventional_discovery: bool,
@@ -574,10 +633,11 @@ impl Serialize for ToolFailureDiagnosticV1 {
     where
         S: Serializer,
     {
-        let canonical = Self::with_reason(self.category, self.reason);
+        let canonical = self.canonical();
         ToolFailureDiagnosticWire {
             category: canonical.category,
             reason: canonical.reason,
+            graph_exploration: canonical.graph_exploration,
             retry_disposition: canonical.retry_disposition,
             retryable: canonical.retryable,
             fallback_to_conventional_discovery: canonical.fallback_to_conventional_discovery,
@@ -601,10 +661,31 @@ impl<'de> Deserialize<'de> for ToolFailureDiagnosticV1 {
             wire.fallback_to_conventional_discovery,
             wire.message,
         );
-        Ok(Self::with_reason(
-            wire.category,
-            wire.reason
-                .unwrap_or_else(|| wire.category.default_reason()),
-        ))
+        let reason = wire
+            .reason
+            .unwrap_or_else(|| wire.category.default_reason());
+        match wire.graph_exploration {
+            Some(details)
+                if wire.category == ToolFailureCategoryV1::GraphLifecycleDenial
+                    && details.is_valid()
+                    && reason == details.failure_reason() =>
+            {
+                Ok(Self::with_graph_exploration(details))
+            }
+            Some(_) => Err(D::Error::custom(
+                "graph exploration details do not match the closed failure reason",
+            )),
+            None if matches!(
+                reason,
+                ToolFailureReasonV1::DecisionEvidenceIncomplete
+                    | ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted
+            ) =>
+            {
+                Err(D::Error::custom(
+                    "decision-evidence closure reason requires graph exploration details",
+                ))
+            }
+            None => Ok(Self::with_reason(wire.category, reason)),
+        }
     }
 }

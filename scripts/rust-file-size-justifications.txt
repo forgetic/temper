@@ -93,6 +93,22 @@ crates/temper-forge-forgejo/tests/issues.rs
 # Argument parser matrix tests are table-like and mostly assertion fixtures.
 crates/temper-testing/src/worker_bin/args_parse_tests.rs
 
+# Decision-anchor recovery diagnostics share opaque-root fixtures and transition
+# helpers so missing-kind, allowance, exhaustion, and convergence assertions cannot drift.
+crates/temper-agent-core/src/machine/tests/decision_anchor_recovery.rs
+
+# Tool-failure categories, reasons, canonical derived fields, and wire normalization
+# remain one auditable compatibility boundary; graph recovery values live separately.
+crates/temper-protocol-activity/src/model/tool_failure.rs
+
+# Aggregate/comparison tests share canonical trace-derived summary fixtures so
+# recovery-exhaustion outcome accounting is checked against the existing metric matrix.
+crates/temper-benchmark-cli/tests/aggregation_comparison.rs
+
+# Standalone agent-runner tests share terminal-report and failure-class helpers
+# needed to prove recovery exhaustion remains failed and permanently non-landable.
+crates/temper-cli-daemon/src/standalone/agent_runner/tests.rs
+
 # Shared scenario builder data for real Forgejo tests; splitting risks hiding
 # the scenario flow until the fixture model is revised.
 crates/temper-testing/src/scenarios.rs

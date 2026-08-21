@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
+use temper_protocol_activity::GraphExplorationClosedV1;
 use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, ToolCall, UserContent, UserMessage,
 };
@@ -91,6 +92,8 @@ pub struct AgentMachine {
     /// Generic, privacy-safe recovery instruction queued by an unconsumable
     /// anchor. It is distinct from operator steering.
     decision_anchor_recovery: bool,
+    /// Actionable, privacy-safe guidance for bounded missing-evidence recovery.
+    decision_anchor_gap_recovery: Option<GraphExplorationClosedV1>,
     /// Stops the run after the active batch drains once bounded recovery fails.
     decision_anchor_exhausted: bool,
     /// The most recent assistant message (the run's product on completion).
@@ -163,6 +166,7 @@ impl AgentMachine {
             decision_anchors,
             decision_anchor_convergence: false,
             decision_anchor_recovery: false,
+            decision_anchor_gap_recovery: None,
             decision_anchor_exhausted: false,
             last_assistant: None,
             model_failure: None,
@@ -196,6 +200,7 @@ impl AgentMachine {
         self.cancellation_generation = None;
         self.decision_anchor_convergence = false;
         self.decision_anchor_recovery = false;
+        self.decision_anchor_gap_recovery = None;
         self.decision_anchor_exhausted = false;
         let final_message = self
             .last_assistant
@@ -284,6 +289,15 @@ impl AgentMachine {
             self.decision_anchor_recovery = false;
             self.messages.push(Message::User(UserMessage {
                 content: UserContent::Text(DECISION_ANCHOR_RECOVERY_MESSAGE.to_string()),
+                timestamp: 0,
+            }));
+        }
+        if let Some(details) = self.decision_anchor_gap_recovery.take() {
+            self.messages.push(Message::User(UserMessage {
+                content: UserContent::Text(format!(
+                    "{}. Do not mutate until every missing evidence kind is complete.",
+                    details.model_message()
+                )),
                 timestamp: 0,
             }));
         }
@@ -481,9 +495,11 @@ impl AgentMachine {
                     .collect::<Vec<_>>();
                 match state.on_tool_batch_finished(&completed) {
                     DecisionAnchorTransition::Unchanged => {}
-                    DecisionAnchorTransition::RecoveryNeeded
-                    | DecisionAnchorTransition::GapRecoveryNeeded => {
+                    DecisionAnchorTransition::RecoveryNeeded => {
                         self.decision_anchor_recovery = true;
+                    }
+                    DecisionAnchorTransition::GapRecoveryNeeded => {
+                        self.decision_anchor_gap_recovery = state.recovery_details();
                     }
                     DecisionAnchorTransition::RecoveryExhausted => {
                         self.decision_anchor_exhausted = true;

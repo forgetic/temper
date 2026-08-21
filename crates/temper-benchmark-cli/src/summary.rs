@@ -408,8 +408,12 @@ pub struct GraphMetricsV1 {
     pub failed: u64,
     pub cancelled: u64,
     pub failures_by_category: BTreeMap<ToolFailureCategoryV1, u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub failures_by_reason: BTreeMap<ToolFailureReasonV1, u64>,
     pub status_coverage: MetricCoverageV1,
     pub failure_category_coverage: MetricCoverageV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason_coverage: Option<MetricCoverageV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cumulative_readiness_wait_ms: Option<u64>,
     pub readiness_wait_coverage: MetricCoverageV1,

@@ -107,7 +107,10 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         (DecisionCase::Consumed | DecisionCase::UnavailableAfterRoot, Err(error)) => {
             panic!("native Jig agent completes the consumed decision chain: {error}")
         }
-        (_, Err(CodingAgentError::NoProduct)) => {}
+        (
+            _,
+            Err(CodingAgentError::NoProduct | CodingAgentError::DecisionAnchorRecoveryExhausted),
+        ) => {}
         (_, Ok(result)) => {
             panic!("a stopped bypass must not produce a landable result: {result:?}")
         }

@@ -448,7 +448,10 @@ async fn execute_tool(
         if let Some(denial) = denial {
             let failure = match denial {
                 ToolCallDenial::DecisionAnchorMutation => ToolFailureDiagnostic::policy_denial(),
-                ToolCallDenial::GraphExplorationClosed => ToolFailureDiagnostic::new(
+                ToolCallDenial::GraphExplorationClosed(Some(details)) => {
+                    ToolFailureDiagnostic::graph_exploration(details)
+                }
+                ToolCallDenial::GraphExplorationClosed(None) => ToolFailureDiagnostic::new(
                     ToolFailureCategory::GraphLifecycleDenial,
                     ToolFailureReason::ExplorationClosed,
                 ),

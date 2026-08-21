@@ -7,12 +7,13 @@ use std::process::Command;
 use temper_benchmark_cli::{
     AnalyzeOptions, BenchmarkAnnotationsV1, BenchmarkModeV1, BenchmarkRunV1, ComparisonInput,
     DiffStatisticsV1, DistributionV1, GraphDecisionCorrelationV1, GraphDecisionKindV1,
-    GraphDecisionTargetV1, RunSummaryV1, ValidationEvidenceV1, aggregate_run_summaries,
-    analyze_trace, collect_environment_metadata, compare_benchmarks, ingest_trace,
-    load_comparison_input, render_aggregate_markdown, render_comparison_markdown,
+    GraphDecisionTargetV1, MetricCoverageV1, RunSummaryV1, ValidationEvidenceV1,
+    aggregate_run_summaries, analyze_trace, collect_environment_metadata, compare_benchmarks,
+    ingest_trace, load_comparison_input, render_aggregate_markdown, render_comparison_markdown,
 };
 use temper_protocol_activity::{
     AgentActivityEventV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1, ModelCallStartedV1,
+    ToolFailureReasonV1,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -187,6 +188,41 @@ fn correctness_and_host_validation_distributions_retain_unavailable_trials() {
     assert_eq!(aggregate.metrics["task_correct"].max, 1);
     assert_eq!(aggregate.metrics["host_validation_commands"].count, 2);
     assert_eq!(aggregate.metrics["host_validation_failures"].count, 2);
+}
+
+#[test]
+fn aggregate_never_counts_recovery_exhaustion_as_successful_or_task_correct() {
+    let mut exhausted = analyze_trace(
+        &ingest_trace(fixture("graph-metrics-events.jsonl")).unwrap(),
+        &AnalyzeOptions::default(),
+    );
+    exhausted.identity.run_id = "recovery-exhausted".to_string();
+    exhausted.terminal = summary("successful-terminal", 1, 10).terminal;
+    exhausted.validation = Some(ValidationEvidenceV1 {
+        command_count: 1,
+        succeeded: 1,
+        failed: 0,
+    });
+    let graph = exhausted.metrics.graph.as_mut().expect("graph metrics");
+    graph
+        .failures_by_reason
+        .insert(ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted, 1);
+    graph.failure_reason_coverage = Some(MetricCoverageV1 {
+        observed: 1,
+        expected: Some(1),
+    });
+
+    let aggregate = aggregate_run_summaries([exhausted]).unwrap();
+    assert_eq!(aggregate.outcomes.succeeded, 0);
+    assert_eq!(aggregate.outcomes.failed, 1);
+    assert_eq!(
+        aggregate.metrics["task_correct"],
+        DistributionV1::from_values(vec![0]).unwrap()
+    );
+    assert_eq!(
+        aggregate.metrics["graph_failure_decision_evidence_recovery_exhausted"],
+        DistributionV1::from_values(vec![1]).unwrap()
+    );
 }
 
 #[test]

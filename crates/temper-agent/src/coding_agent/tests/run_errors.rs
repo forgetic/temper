@@ -153,7 +153,15 @@ fn exhausted_decision_anchor_recovery_cannot_reach_result_parsing() {
     let error = ensure_completed_outcome(&outcome, "test-model", 7, false)
         .expect_err("recovery exhaustion must not produce a landable result");
 
-    assert!(matches!(error, CodingAgentError::NoProduct));
+    assert!(matches!(
+        error,
+        CodingAgentError::DecisionAnchorRecoveryExhausted
+    ));
+    assert!(
+        CodingAgentError::DecisionAnchorRecoveryExhausted
+            .to_string()
+            .contains("decision_anchor_recovery_exhausted")
+    );
 }
 
 #[test]

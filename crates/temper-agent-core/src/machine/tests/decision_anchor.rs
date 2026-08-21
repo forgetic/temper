@@ -17,7 +17,8 @@ mod tests {
     use temper_protocol_activity::{
         DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
         DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
-        GraphCorrelationV1,
+        GraphCorrelationV1, GraphExplorationClosedReasonV1, GraphExplorationClosedV1,
+        GraphRecoveryEvidenceKindV1,
     };
     use tongs::{
         model::{ContentBlock, Message, ToolCall, UserContent},
@@ -45,6 +46,42 @@ mod tests {
 
     mod evidence {
         include!("decision_anchor_evidence.rs");
+    }
+
+    fn all_missing() -> [GraphRecoveryEvidenceKindV1; 4] {
+        [
+            GraphRecoveryEvidenceKindV1::Trace,
+            GraphRecoveryEvidenceKindV1::Implementation,
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ]
+    }
+
+    fn completed_graph_denial() -> Option<ToolCallDenial> {
+        Some(ToolCallDenial::GraphExplorationClosed(Some(
+            GraphExplorationClosedV1::completed(),
+        )))
+    }
+
+    fn recovery_graph_denial(
+        missing: impl IntoIterator<Item = GraphRecoveryEvidenceKindV1>,
+        remaining: u8,
+    ) -> Option<ToolCallDenial> {
+        Some(ToolCallDenial::GraphExplorationClosed(
+            GraphExplorationClosedV1::recoverable(missing, remaining),
+        ))
+    }
+
+    fn exhausted_graph_denial(
+        missing: impl IntoIterator<Item = GraphRecoveryEvidenceKindV1>,
+    ) -> Option<ToolCallDenial> {
+        Some(ToolCallDenial::GraphExplorationClosed(
+            GraphExplorationClosedV1::exhausted(missing),
+        ))
+    }
+
+    fn legacy_graph_denial() -> Option<ToolCallDenial> {
+        Some(ToolCallDenial::GraphExplorationClosed(None))
     }
 
     fn effects() -> BTreeMap<String, ToolEffects> {
@@ -205,6 +242,23 @@ mod tests {
                 )
             })
             .count()
+    }
+
+    fn message_containing(requests: &[AgentRequest], expected: &str) -> bool {
+        requests
+            .iter()
+            .filter_map(|request| match request {
+                AgentRequest::CallLlm { messages, .. } => Some(messages),
+                _ => None,
+            })
+            .flatten()
+            .any(|message| {
+                matches!(
+                    message,
+                    Message::User(user)
+                        if matches!(&user.content, UserContent::Text(text) if text.contains(expected))
+                )
+            })
     }
 
     fn finish(
@@ -386,9 +440,10 @@ mod tests {
                 request,
                 AgentRequest::RunTool {
                     call,
-                    denial: Some(ToolCallDenial::GraphExplorationClosed),
+                    denial: Some(ToolCallDenial::GraphExplorationClosed(Some(details))),
                     ..
                 } if call.id == "post-completion-graph"
+                    && details.reason == GraphExplorationClosedReasonV1::Completed
             )
         }));
         assert!(denied_graph.iter().any(|request| {
@@ -475,7 +530,7 @@ mod tests {
                 &source_call("retry", DecisionEvidenceKindV1::Implementation),
                 3,
             ),
-            Some(ToolCallDenial::GraphExplorationClosed),
+            legacy_graph_denial(),
             "fallback must not immediately reopen graph exploration"
         );
 

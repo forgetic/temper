@@ -10,7 +10,7 @@ impl DecisionAnchorState {
     ) -> DecisionAnchorTransition {
         debug_assert!(!evidence.is_complete());
         if !evidence.has_recovery_path(&anchors) {
-            self.phase = Some(AnchorPhase::Exhausted);
+            self.phase = Some(AnchorPhase::Exhausted(evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
         }
@@ -90,13 +90,13 @@ impl DecisionAnchorState {
         }
 
         if !evidence.has_recovery_path(&anchors) {
-            self.phase = Some(AnchorPhase::Exhausted);
+            self.phase = Some(AnchorPhase::Exhausted(evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
         }
 
         if remaining == 0 {
-            self.phase = Some(AnchorPhase::Exhausted);
+            self.phase = Some(AnchorPhase::Exhausted(evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
         }
@@ -169,6 +169,32 @@ impl SourceEvidence {
             let gap = DecisionGap::Evidence(kind);
             self.needs(gap) && anchors.supports(gap)
         })
+    }
+
+    pub(super) fn missing_kinds(&self) -> Vec<GraphRecoveryEvidenceKindV1> {
+        let mut missing = Vec::new();
+        if !self.has_trace() {
+            missing.push(GraphRecoveryEvidenceKindV1::Trace);
+        }
+        for (evidence_kind, recovery_kind) in [
+            (
+                DecisionEvidenceKindV1::Implementation,
+                GraphRecoveryEvidenceKindV1::Implementation,
+            ),
+            (
+                DecisionEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::Caller,
+            ),
+            (
+                DecisionEvidenceKindV1::FocusedTest,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ),
+        ] {
+            if !self.decision_kinds.contains(&evidence_kind) {
+                missing.push(recovery_kind);
+            }
+        }
+        missing
     }
 
     pub(super) fn is_complete(&self) -> bool {
