@@ -53,7 +53,8 @@
             "name": "codebase_memory_get_code_snippet",
             "args": {
               "repo": "temper-benchmark/codebase-memory-routing-repair",
-              "qualified_name": "alias_retries_stay_on_the_original_ordered_worker"
+              "qualified_name": "alias_retries_stay_on_the_original_ordered_worker",
+              "decision_evidence_kind": "focused_test"
             }
           }
         }
@@ -83,7 +84,8 @@
             "name": "codebase_memory_get_code_snippet",
             "args": {
               "repo": "temper-benchmark/codebase-memory-routing-repair",
-              "qualified_name": "DeliveryRouter::worker_for"
+              "qualified_name": "DeliveryRouter::worker_for",
+              "decision_evidence_kind": "caller"
             }
           }
         }
