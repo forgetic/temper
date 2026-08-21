@@ -25,7 +25,8 @@ runner:
 
 - `manifest` — validation-grade end-to-end execution. The checked-in
   `basic-delivery`, `forgejo-exact-head-ci-repair`, `forgejo-v16-api-ci`,
-  `implementation-pr-handoff`, `codebase-memory-agent`,
+  `forgejo-actions-pagination-landing`, `implementation-pr-handoff`,
+  `codebase-memory-agent`,
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
   `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
   `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`,
@@ -233,6 +234,18 @@ private. The historical `#1009`/`#1010` mapping keeps its feature, plan, and
 source-branch lineage; its post-decision compatibility call is now denied by the
 same generic boundary.
 
+### Bounded Forgejo Actions pagination mapping
+
+`forgejo-actions-pagination-landing` is the sole active mapping for
+`ai/temper#1055` and `ai/temper#1057` on `agent/pr-for-feature-1055`. It seeds a
+closed oversized history in disposable Forgejo 16.0.1 only after one real
+implementation run materializes. The dedicated CI-success monitor must then
+traverse explicit `page` plus `limit` requests, recover the exact head after page
+one, and trigger targeted automatic landing before the 600-second role-feed and mechanical fallbacks. Aggregate evidence retains
+only bounded counts, sizes, key names, identities, and timing facts; generated
+provider rows, response bodies, headers, credentials, and authorization values
+remain outside the checked-in corpus.
+
 ### Structured run evidence
 
 `temper-scenario run` can also write a versioned JSON run-evidence artifact:
@@ -304,8 +317,9 @@ evidence:
 - `[[expect.checks]] artifact = "pull_request"` (or `pull_request:<id>`) supports
   `state`, `labels`, `labels_cleared`, `title`, `body_prefix`,
   `body_prefix_file`, `stale_body_absent`, `metadata_kind`, `metadata_parent`,
-  `correlation_key`, and `ci = "passed"`/`"failed"` against final PR, body,
-  metadata, and CI-job conclusion facts.
+  `correlation_key`, `author`, `merged_by_one_of`, and
+  `ci = "passed"`/`"failed"` against final PR, body, identity, metadata, and
+  CI-job conclusion facts.
 - `[[expect.events]]`, `[[expect.sequence]]`, and `[[expect.count]]` assert over
   captured structured Temper JSON events from live manifest runs. They support
   event presence, ordered sequences, and grouped count/no-duplicate checks over
@@ -332,6 +346,10 @@ evidence:
   publications, rejects stale failure proof on repaired jobs, and compares
   convergence timing with the effective broad role-feed cadence. Missing head,
   publication, configuration, or timing evidence blocks a required assertion.
+- `[expect.actions_history]` checks the closed oversized-history fixture's seed
+  bounds, full-inventory versus transport-cap relationship, largest bounded
+  page, observed page count, later-page target selection, webhook isolation, and
+  zero dropped provenance without retaining provider rows or response bodies.
 
 A focused dedicated-CI contract can assert both retained configuration and
 verified proof provenance without scenario-specific Rust dispatch:
@@ -410,15 +428,33 @@ timeout_ms = 120000
 ```
 
 It must follow the source `issue.seed` and precede convergence. The harness
-pauses standalone Temper after the implementation PR appears, waits for that
-PR's real exact-head-green run, inserts only a bounded synthetic history into
-the disposable loopback Forgejo fixture, and restarts Temper. Counts are limited
+waits until the implementation PR and its real exact-head provider jobs
+materialize, disables the bounded repository-hook inventory, inserts only a
+bounded synthetic history into the disposable loopback Forgejo fixture while
+the workflow remains in flight, and keeps standalone Temper running. The
+eventual exact-head-green run must then be discovered through the seeded pages.
+Counts are limited
 to 51–256 runs, payloads to 64–96 KiB, and timeouts to 180 seconds; the declared
 run/payload product must exceed the 16 MiB HTTP cap. Evidence retains only the
 seed count, payload size, cap, summed per-row inventory lower bound, largest
-paged response, page count, selected target page, later-page boolean, and
-provenance-drop count. Response bodies, provider rows, headers, and credentials
-are never retained.
+paged response, page count, selected target page, later-page and webhook-isolation
+booleans, and provenance-drop count. Response bodies, provider rows, headers,
+and credentials are never retained.
+
+Declare the corresponding aggregate assertion without exposing provider data:
+
+```toml
+[expect.actions_history]
+seeded_run_count = 201
+payload_bytes_per_run = 90000
+full_inventory_exceeds_transport_cap = true
+largest_paged_response_below_transport_cap = true
+minimum_pages_observed = 2
+minimum_target_run_page = 2
+later_page_selection = true
+webhooks_disabled = true
+provenance_drop_count = 0
+```
 
 Model-recovery scenarios additionally have bounded, pre-convergence primitives:
 

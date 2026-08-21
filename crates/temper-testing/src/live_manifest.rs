@@ -229,6 +229,8 @@ pub struct LiveActionsHistoryEvidence {
     pub pages_observed: usize,
     pub target_run_page: usize,
     pub later_page_selection: bool,
+    /// True after bounded repository hooks are disabled for CI-poll isolation.
+    pub webhooks_disabled: bool,
     /// Filled from the shared recorder when terminal evidence is assembled.
     pub provenance_drop_count: usize,
 }
@@ -348,7 +350,7 @@ impl LiveManifestEvidence {
         }
         if let Some(history) = &self.actions_history {
             lines.push(format!(
-                "  actions_history: seeded_runs={} payload_bytes_per_run={} transport_cap_bytes={} full_inventory_lower_bound_bytes={} largest_paged_response_bytes={} pages_observed={} target_run_page={} later_page_selection={} provenance_dropped={}",
+                "  actions_history: seeded_runs={} payload_bytes_per_run={} transport_cap_bytes={} full_inventory_lower_bound_bytes={} largest_paged_response_bytes={} pages_observed={} target_run_page={} later_page_selection={} webhooks_disabled={} provenance_dropped={}",
                 history.seeded_run_count,
                 history.payload_bytes_per_run,
                 history.transport_cap_bytes,
@@ -357,6 +359,7 @@ impl LiveManifestEvidence {
                 history.pages_observed,
                 history.target_run_page,
                 history.later_page_selection,
+                history.webhooks_disabled,
                 history.provenance_drop_count,
             ));
         }

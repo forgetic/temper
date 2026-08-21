@@ -188,6 +188,10 @@ pub(crate) struct PullRequestStateEvidence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) merged_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) head_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) head_sha: Option<String>,
@@ -245,6 +249,8 @@ pub(crate) struct ActionsHistoryEvidence {
     pub(crate) pages_observed: usize,
     pub(crate) target_run_page: usize,
     pub(crate) later_page_selection: bool,
+    #[serde(default)]
+    pub(crate) webhooks_disabled: bool,
     pub(crate) provenance_drop_count: usize,
 }
 

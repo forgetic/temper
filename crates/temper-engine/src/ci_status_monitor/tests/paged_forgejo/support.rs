@@ -12,7 +12,7 @@ use temper_runner::RepositoryTarget;
 use temper_workflow::{RawWorkflowSpec, ValidatedWorkflow};
 
 pub(super) const HEAD: &str = "exacthead123456789";
-const PAGE_LIMIT: usize = 200;
+const PAGE_LIMIT: usize = 50;
 const PROVENANCE_CAPACITY: usize = 256;
 
 const LANDING_WORKFLOW: &str = r#"
@@ -179,7 +179,7 @@ fn inventory_response(
             .iter()
             .find(|(key, _)| key == "limit")
             .map(|(_, value)| value.as_str()),
-        Some("200")
+        Some("50")
     );
     assert_eq!(request.query.len(), 2);
 

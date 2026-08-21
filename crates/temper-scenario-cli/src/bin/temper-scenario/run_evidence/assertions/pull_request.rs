@@ -14,7 +14,7 @@ use super::common::{
 };
 use super::support::{
     ResultBuilder, SelectedPullRequest, SelectionProblem, ci_conclusion_failed,
-    ci_conclusion_passed, select_pull_request,
+    ci_conclusion_passed, select_pull_request, string_array,
 };
 
 pub(super) fn evaluate_pull_request_check(
@@ -69,6 +69,22 @@ pub(super) fn evaluate_pull_request_check(
             builder = builder.failed("title must be a string");
         }
     }
+    if let Some(value) = check.get("author") {
+        if let Some(expected) = value.as_str() {
+            builder = evaluate_author(builder, expected, pull_request);
+        } else {
+            builder = builder.failed("author must be a string");
+        }
+    }
+    if let Some(value) = check.get("merged_by_one_of") {
+        match string_array(value, "merged_by_one_of") {
+            Ok(expected) if expected.is_empty() => {
+                builder = builder.failed("merged_by_one_of must contain at least one identity")
+            }
+            Ok(expected) => builder = evaluate_merged_by_one_of(builder, &expected, pull_request),
+            Err(message) => builder = builder.failed(message),
+        }
+    }
     if let Some(value) = check.get("body_prefix") {
         if let Some(expected) = value.as_str() {
             builder = evaluate_body_prefix(builder, expected, pull_request);
@@ -114,6 +130,51 @@ pub(super) fn evaluate_pull_request_check(
     builder = reject_repo_fields_for_non_repo(builder, check);
 
     builder.build()
+}
+
+fn evaluate_author(
+    builder: ResultBuilder,
+    expected: &str,
+    pull_request: &PullRequestStateEvidence,
+) -> ResultBuilder {
+    match pull_request.author.as_deref() {
+        Some(actual) if actual == expected => builder.passed(format!(
+            "pull request #{} author matched `{expected}`",
+            pull_request.number
+        )),
+        Some(actual) => builder.failed(format!(
+            "expected pull request #{} author `{expected}`, observed `{actual}`",
+            pull_request.number
+        )),
+        None => builder.missing_fact(format!(
+            "run evidence has no author fact for pull request #{}",
+            pull_request.number
+        )),
+    }
+}
+
+fn evaluate_merged_by_one_of(
+    builder: ResultBuilder,
+    expected: &[String],
+    pull_request: &PullRequestStateEvidence,
+) -> ResultBuilder {
+    let Some(actual) = pull_request.merged_by.as_deref() else {
+        return builder.missing_fact(format!(
+            "run evidence has no merger identity for pull request #{}",
+            pull_request.number
+        ));
+    };
+    if expected.iter().any(|candidate| candidate == actual) {
+        builder.passed(format!(
+            "pull request #{} was merged by allowed automation identity `{actual}`",
+            pull_request.number
+        ))
+    } else {
+        builder.failed(format!(
+            "pull request #{} was merged by `{actual}`, expected one of {:?}",
+            pull_request.number, expected
+        ))
+    }
 }
 
 fn evaluate_title(
