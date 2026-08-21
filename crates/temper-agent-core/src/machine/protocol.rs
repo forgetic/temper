@@ -7,7 +7,9 @@
 //! ([`AgentRequest`]). Keeping them here — separate from the loop's logic —
 //! lets the protocol be read and depended on without the driving code.
 
-use temper_protocol_activity::{DecisionAnchorLineageV1, GraphCorrelationV1};
+use temper_protocol_activity::{
+    DecisionAnchorLineageV1, GraphCorrelationV1, GraphExplorationClosedV1,
+};
 use tongs::model::{AssistantMessage, ContentBlock, Message, ToolCall};
 use tongs::provider::ToolDef;
 use tongs::tools::ToolOutput;
@@ -190,12 +192,13 @@ pub const SAFE_TOOL_FAILURE_DETAIL_KEY: &str = "temper_safe_tool_failure_v1";
 pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1";
 
 /// A local admission decision made before a registered tool can be invoked.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallDenial {
     /// A trusted anchor still lacks the required later source evidence.
     DecisionAnchorMutation,
     /// Graph convergence or its non-progress budget closed graph exploration.
-    GraphExplorationClosed,
+    /// Details are absent only for the legacy provider-unavailable fallback.
+    GraphExplorationClosed(Option<GraphExplorationClosedV1>),
 }
 
 /// Content-free timing metadata accepted only from Temper's trusted

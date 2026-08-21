@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    DecisionEvidenceKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+    DecisionEvidenceKindV1, GraphCorrelationToolV1, GraphCorrelationV1, GraphExplorationClosedV1,
+    GraphRecoveryEvidenceKindV1, MAX_GRAPH_RECOVERY_ALLOWANCE_V1,
 };
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
@@ -50,7 +51,7 @@ pub(super) const MAX_LATER_DECISION_ANCHOR_ROOTS: usize = 4;
 const MAX_NON_PROGRESSING_GRAPH_BATCHES: u8 = 2;
 /// Budget exhaustion preserves exactly enough attempts to fill every possible
 /// trace/evidence gap once, without reopening broad graph exploration.
-const MAX_DECISION_GAP_RECOVERY_CALLS: u8 = 4;
+const MAX_DECISION_GAP_RECOVERY_CALLS: u8 = MAX_GRAPH_RECOVERY_ALLOWANCE_V1;
 
 pub(super) struct DecisionAnchorState {
     mutation_tools: BTreeSet<String>,
@@ -66,7 +67,7 @@ enum AnchorPhase {
     Trail(Trail),
     Recovery(Recovery),
     GapRecovery(GapRecovery),
-    Exhausted,
+    Exhausted(SourceEvidence),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -180,25 +181,26 @@ impl DecisionAnchorState {
         if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
             let call_key = GraphCorrelationV1::target_digest(&call.id);
             if self.exploration != ExplorationStatus::Open {
+                let denial = self.graph_exploration_denial();
                 if self.exploration != ExplorationStatus::GapRecovery || call_key.is_none() {
-                    return Some(ToolCallDenial::GraphExplorationClosed);
+                    return Some(denial);
                 }
                 let Some(gap) = DecisionGap::from_call(call) else {
-                    return Some(ToolCallDenial::GraphExplorationClosed);
+                    return Some(denial);
                 };
                 let already_pending = self
                     .calls
                     .values()
                     .any(|pending| pending.recovery_gap == Some(gap));
                 let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.as_mut() else {
-                    return Some(ToolCallDenial::GraphExplorationClosed);
+                    return Some(denial);
                 };
                 if recovery.remaining == 0
                     || already_pending
                     || !recovery.evidence.needs(gap)
                     || !recovery.anchors.supports(gap)
                 {
-                    return Some(ToolCallDenial::GraphExplorationClosed);
+                    return Some(denial);
                 }
                 recovery.remaining = recovery.remaining.saturating_sub(1);
             }
@@ -303,8 +305,8 @@ impl DecisionAnchorState {
             Some(AnchorPhase::GapRecovery(recovery)) => {
                 self.advance_gap_recovery(recovery, &finished)
             }
-            Some(AnchorPhase::Exhausted) => {
-                self.phase = Some(AnchorPhase::Exhausted);
+            Some(AnchorPhase::Exhausted(evidence)) => {
+                self.phase = Some(AnchorPhase::Exhausted(evidence));
                 self.exploration = ExplorationStatus::BudgetExhausted;
                 DecisionAnchorTransition::Unchanged
             }
@@ -511,7 +513,7 @@ impl DecisionAnchorState {
         attempts: u8,
     ) -> DecisionAnchorTransition {
         if attempts >= MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS {
-            self.phase = Some(AnchorPhase::Exhausted);
+            self.phase = Some(AnchorPhase::Exhausted(evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
             DecisionAnchorTransition::RecoveryExhausted
         } else {
@@ -524,14 +526,41 @@ impl DecisionAnchorState {
         }
     }
 
+    pub(super) fn recovery_details(&self) -> Option<GraphExplorationClosedV1> {
+        let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
+            return None;
+        };
+        GraphExplorationClosedV1::recoverable(recovery.evidence.missing_kinds(), recovery.remaining)
+    }
+
+    fn graph_exploration_denial(&self) -> ToolCallDenial {
+        let details = match self.exploration {
+            ExplorationStatus::Complete => Some(GraphExplorationClosedV1::completed()),
+            ExplorationStatus::GapRecovery => self.recovery_details().or_else(|| {
+                let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
+                    return None;
+                };
+                GraphExplorationClosedV1::exhausted(recovery.evidence.missing_kinds())
+            }),
+            ExplorationStatus::BudgetExhausted => match self.phase.as_ref() {
+                Some(AnchorPhase::Exhausted(evidence)) => {
+                    GraphExplorationClosedV1::exhausted(evidence.missing_kinds())
+                }
+                _ => None,
+            },
+            ExplorationStatus::Open => None,
+        };
+        ToolCallDenial::GraphExplorationClosed(details)
+    }
+
     pub(super) fn blocks_mutation(&self, name: &str) -> bool {
         self.mutation_tools.contains(name)
             && self.phase.as_ref().is_some_and(|phase| match phase {
                 AnchorPhase::Root(_) => true,
                 AnchorPhase::Trail(trail) => !trail.evidence.is_complete(),
-                AnchorPhase::Recovery(_) | AnchorPhase::GapRecovery(_) | AnchorPhase::Exhausted => {
-                    true
-                }
+                AnchorPhase::Recovery(_)
+                | AnchorPhase::GapRecovery(_)
+                | AnchorPhase::Exhausted(_) => true,
             })
     }
 }

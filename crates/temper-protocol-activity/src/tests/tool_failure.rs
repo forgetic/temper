@@ -74,6 +74,107 @@ fn tool_failure_wire_redacts_forged_and_oversized_messages_deterministically() {
 }
 
 #[test]
+fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
+    const SECRET: &str = "Authorization: Bearer RECOVERY-SECRET/src/private.rs";
+    let details = GraphExplorationClosedV1::recoverable(
+        [
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+            GraphRecoveryEvidenceKindV1::Trace,
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::Caller,
+        ],
+        3,
+    )
+    .expect("bounded recovery details");
+    assert_eq!(
+        details.missing_evidence,
+        [
+            GraphRecoveryEvidenceKindV1::Trace,
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ]
+    );
+    let diagnostic = ToolFailureDiagnosticV1::with_graph_exploration(details.clone());
+    assert_eq!(
+        diagnostic.reason,
+        ToolFailureReasonV1::DecisionEvidenceIncomplete
+    );
+    assert_eq!(
+        diagnostic.retry_disposition,
+        ToolRetryDispositionV1::CorrectInvocation
+    );
+    assert!(!diagnostic.fallback_to_conventional_discovery);
+    assert!(diagnostic.message.contains("remaining allowance: 3"));
+    assert!(diagnostic.message.contains("trace, caller, focused_test"));
+
+    let encoded = serde_json::to_string(&diagnostic).unwrap();
+    assert!(encoded.contains(r#""permitted_action":"targeted_current_root_graph_call""#));
+    assert!(!encoded.contains(SECRET));
+    assert_eq!(
+        serde_json::from_str::<ToolFailureDiagnosticV1>(&encoded).unwrap(),
+        diagnostic
+    );
+    let mut malformed: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    malformed["graph_exploration"]["missing_evidence"] =
+        serde_json::json!(["focused_test", "trace"]);
+    assert!(serde_json::from_value::<ToolFailureDiagnosticV1>(malformed).is_err());
+
+    let mut event = usage_event(1);
+    event.event = AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
+        call_id: "closed-recovery".into(),
+        name: "codebase_memory_search_graph".into(),
+        status: ToolStatusV1::Failed,
+        duration_ms: 0,
+        result: None,
+        failure: Some(diagnostic),
+        codebase_memory_timing: None,
+        graph_correlation: None,
+        decision_anchor_lineage: None,
+    });
+    event.validate().expect("closed recovery details validate");
+
+    let mut forged = details;
+    forged.missing_evidence.reverse();
+    let mut forged_diagnostic =
+        ToolFailureDiagnosticV1::with_graph_exploration(GraphExplorationClosedV1::completed());
+    forged_diagnostic.reason = ToolFailureReasonV1::DecisionEvidenceIncomplete;
+    forged_diagnostic.graph_exploration = Some(forged);
+    let AgentActivityEventV1::ToolFinished(finished) = &mut event.event else {
+        unreachable!();
+    };
+    finished.failure = Some(forged_diagnostic);
+    assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
+    assert!(!format!("{event:?}").contains(SECRET));
+}
+
+#[test]
+fn completed_and_exhausted_graph_closures_have_distinct_safe_actions() {
+    let completed =
+        ToolFailureDiagnosticV1::with_graph_exploration(GraphExplorationClosedV1::completed());
+    assert_eq!(completed.reason, ToolFailureReasonV1::ExplorationClosed);
+    assert_eq!(
+        completed.graph_exploration.unwrap().permitted_action,
+        GraphRecoveryPermittedActionV1::ConventionalDiscovery
+    );
+
+    let exhausted = ToolFailureDiagnosticV1::with_graph_exploration(
+        GraphExplorationClosedV1::exhausted([GraphRecoveryEvidenceKindV1::Implementation]).unwrap(),
+    );
+    assert_eq!(
+        exhausted.reason,
+        ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted
+    );
+    assert_eq!(
+        exhausted.retry_disposition,
+        ToolRetryDispositionV1::DoNotRetry
+    );
+    assert_eq!(
+        exhausted.graph_exploration.unwrap().permitted_action,
+        GraphRecoveryPermittedActionV1::StopWithoutProduct
+    );
+}
+
+#[test]
 fn ordinary_failure_reasons_and_dispositions_round_trip_canonically() {
     let cases = [
         (

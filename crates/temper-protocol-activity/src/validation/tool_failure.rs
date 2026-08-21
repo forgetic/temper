@@ -1,6 +1,6 @@
 use crate::{
     ActivityValidationError, MAX_TOOL_FAILURE_MESSAGE_BYTES, ToolFailureDiagnosticV1,
-    ToolRetryDispositionV1,
+    ToolFailureReasonV1, ToolRetryDispositionV1,
 };
 
 use super::{ActivityValidationCode, error};
@@ -15,10 +15,38 @@ pub(super) fn validate_tool_failure(
             "must use a closed reason valid for its tool-failure category",
         ));
     }
-    if value.message != value.reason.safe_message() {
+    match &value.graph_exploration {
+        Some(details)
+            if !details.is_valid()
+                || details.failure_reason() != value.reason
+                || value.category != crate::ToolFailureCategoryV1::GraphLifecycleDenial =>
+        {
+            return Err(invalid_event(
+                &format!("{path}.graph_exploration"),
+                "must be canonical graph-lifecycle recovery details for the closed reason",
+            ));
+        }
+        None if matches!(
+            value.reason,
+            ToolFailureReasonV1::DecisionEvidenceIncomplete
+                | ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted
+        ) =>
+        {
+            return Err(invalid_event(
+                &format!("{path}.graph_exploration"),
+                "is required for a decision-evidence closure reason",
+            ));
+        }
+        _ => {}
+    }
+    let expected_message = value.graph_exploration.as_ref().map_or_else(
+        || value.reason.safe_message().to_string(),
+        |details| details.model_message(),
+    );
+    if value.message != expected_message {
         return Err(invalid_event(
             &format!("{path}.message"),
-            "must use the fixed summary for its tool-failure reason",
+            "must be reconstructed from the closed tool-failure reason and graph details",
         ));
     }
     if value.message.is_empty() || value.message.len() > MAX_TOOL_FAILURE_MESSAGE_BYTES {

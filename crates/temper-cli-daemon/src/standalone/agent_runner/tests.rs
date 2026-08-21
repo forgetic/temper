@@ -53,6 +53,15 @@ fn typed_stops_preserve_retry_and_cancellation_authority() {
     assert_eq!(budget.class, FailureClass::Transient);
     assert!(budget.message.contains("budget_exhausted"));
 
+    let exhausted =
+        classify_coding_agent_error(CodingAgentError::DecisionAnchorRecoveryExhausted, false);
+    assert_eq!(exhausted.class, FailureClass::Permanent);
+    assert!(
+        exhausted
+            .message
+            .contains("decision_anchor_recovery_exhausted")
+    );
+
     let requested = classify_coding_agent_error(
         CodingAgentError::Aborted {
             authority: AgentAbortAuthority::WorkerRequested,
@@ -109,6 +118,16 @@ fn typed_terminal_report_distinguishes_success_failure_and_cancellation() {
         (
             AgentTerminalStatus::Failed,
             Some(AgentTerminalReasonV1::BudgetExhausted)
+        )
+    );
+    assert_eq!(
+        agent_terminal_report(
+            &Result::<(), CodingAgentError>::Err(CodingAgentError::DecisionAnchorRecoveryExhausted,),
+            false,
+        ),
+        (
+            AgentTerminalStatus::Failed,
+            Some(AgentTerminalReasonV1::DecisionAnchorRecoveryExhausted)
         )
     );
     assert_eq!(

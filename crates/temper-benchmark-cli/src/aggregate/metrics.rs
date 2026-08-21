@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use temper_protocol_activity::ToolFailureCategoryV1;
+use temper_protocol_activity::{ToolFailureCategoryV1, ToolFailureReasonV1};
 
 use crate::{RunSummaryV1, RunTerminalStatusV1};
 
@@ -64,6 +64,8 @@ pub const PRIMARY_METRICS: &[&str] = &[
     "graph_failure_invalid_model_input",
     "graph_failure_circuit_open",
     "graph_failure_exploration_closed",
+    "graph_failure_decision_evidence_incomplete",
+    "graph_failure_decision_evidence_recovery_exhausted",
     "failed_edit_attempts",
     "mutations",
     "mutation_turns",
@@ -87,6 +89,9 @@ pub const ADVISORY_METRICS: &[&str] = &[
 ];
 
 fn task_correctness(summary: &RunSummaryV1) -> Option<bool> {
+    if recovery_exhausted(summary) {
+        return Some(false);
+    }
     match summary.terminal.as_ref().map(|terminal| terminal.status) {
         Some(RunTerminalStatusV1::Failed | RunTerminalStatusV1::Cancelled) => Some(false),
         Some(RunTerminalStatusV1::Succeeded) => {
@@ -96,6 +101,21 @@ fn task_correctness(summary: &RunSummaryV1) -> Option<bool> {
         }
         None => None,
     }
+}
+
+fn recovery_exhausted(summary: &RunSummaryV1) -> bool {
+    summary
+        .metrics
+        .graph
+        .as_ref()
+        .and_then(|graph| {
+            graph
+                .failures_by_reason
+                .get(&ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted)
+        })
+        .copied()
+        .unwrap_or(0)
+        > 0
 }
 
 fn all_failure_categories() -> [ToolFailureCategoryV1; 10] {
@@ -282,6 +302,28 @@ pub(crate) fn metric_values(summary: &RunSummaryV1) -> BTreeMap<&'static str, u6
                         .unwrap_or(0),
                 );
             }
+        }
+        if graph
+            .failure_reason_coverage
+            .as_ref()
+            .is_some_and(has_full_coverage)
+        {
+            values.insert(
+                "graph_failure_decision_evidence_incomplete",
+                graph
+                    .failures_by_reason
+                    .get(&ToolFailureReasonV1::DecisionEvidenceIncomplete)
+                    .copied()
+                    .unwrap_or(0),
+            );
+            values.insert(
+                "graph_failure_decision_evidence_recovery_exhausted",
+                graph
+                    .failures_by_reason
+                    .get(&ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted)
+                    .copied()
+                    .unwrap_or(0),
+            );
         }
         if has_full_coverage(&graph.readiness_wait_coverage) {
             if let Some(value) = graph.cumulative_readiness_wait_ms {

@@ -454,6 +454,7 @@ fn agent_error_class(
             }
         }
         CodingAgentError::NoProduct
+        | CodingAgentError::DecisionAnchorRecoveryExhausted
         | CodingAgentError::UndeclaredVerdict { .. }
         | CodingAgentError::InvalidVerdictResult(_) => {
             temper_protocol_worker::FailureClass::Permanent
@@ -548,6 +549,10 @@ mod tests {
             false,
         );
         assert_eq!(parse.class, FailureClass::Transient);
+        assert_eq!(
+            agent_error(CodingAgentError::DecisionAnchorRecoveryExhausted, false).class,
+            FailureClass::Permanent
+        );
         assert_eq!(
             agent_error(CodingAgentError::NoProduct, false).class,
             FailureClass::Permanent

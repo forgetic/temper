@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use temper_protocol_activity::ToolFailureReasonV1;
 
 use crate::{BenchmarkConditionV1, BenchmarkModeV1, RunSummaryV1, RunTerminalStatusV1};
 
@@ -351,6 +352,10 @@ fn outcome_counts(runs: &[AggregateRunV1]) -> RunOutcomeCountsV1 {
         incomplete: 0,
     };
     for run in runs {
+        if recovery_exhausted(&run.summary) {
+            counts.failed += 1;
+            continue;
+        }
         match run
             .summary
             .terminal
@@ -364,4 +369,19 @@ fn outcome_counts(runs: &[AggregateRunV1]) -> RunOutcomeCountsV1 {
         }
     }
     counts
+}
+
+fn recovery_exhausted(summary: &RunSummaryV1) -> bool {
+    summary
+        .metrics
+        .graph
+        .as_ref()
+        .and_then(|graph| {
+            graph
+                .failures_by_reason
+                .get(&ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted)
+        })
+        .copied()
+        .unwrap_or(0)
+        > 0
 }

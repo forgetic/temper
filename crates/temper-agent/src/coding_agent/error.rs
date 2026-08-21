@@ -37,6 +37,9 @@ pub enum CodingAgentError {
     AgentStopped(String),
     /// The model requested another tool round after the configured budget.
     BudgetExhausted { max_iterations: usize },
+    /// Bounded current-root recovery ended with required evidence still missing.
+    /// This stop is terminal and its final model text is never parsed as a product.
+    DecisionAnchorRecoveryExhausted,
     /// The run was aborted before normal completion.
     Aborted { authority: AgentAbortAuthority },
     /// The provider reported the requested model is unavailable (e.g. a model
@@ -84,6 +87,9 @@ impl std::fmt::Display for CodingAgentError {
             CodingAgentError::BudgetExhausted { max_iterations } => write!(
                 formatter,
                 "budget_exhausted: agent exceeded the {max_iterations}-iteration tool budget"
+            ),
+            CodingAgentError::DecisionAnchorRecoveryExhausted => formatter.write_str(
+                "decision_anchor_recovery_exhausted: required decision evidence remains incomplete; nothing to land",
             ),
             CodingAgentError::Aborted { authority } => {
                 write!(

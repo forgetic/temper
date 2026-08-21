@@ -44,6 +44,12 @@ pub(super) fn map_tool_failure(value: ToolFailureDiagnostic) -> ToolFailureDiagn
         ToolFailureReason::DeadlineExceeded => ToolFailureReasonV1::DeadlineExceeded,
         ToolFailureReason::RunCancelled => ToolFailureReasonV1::RunCancelled,
         ToolFailureReason::ExplorationClosed => ToolFailureReasonV1::ExplorationClosed,
+        ToolFailureReason::DecisionEvidenceIncomplete => {
+            ToolFailureReasonV1::DecisionEvidenceIncomplete
+        }
+        ToolFailureReason::DecisionEvidenceRecoveryExhausted => {
+            ToolFailureReasonV1::DecisionEvidenceRecoveryExhausted
+        }
         ToolFailureReason::RepeatedNonRetryable => ToolFailureReasonV1::RepeatedNonRetryable,
         ToolFailureReason::RetryBudgetExhausted => ToolFailureReasonV1::RetryBudgetExhausted,
         ToolFailureReason::ConfigurationStartup => ToolFailureReasonV1::ConfigurationStartup,
@@ -56,5 +62,8 @@ pub(super) fn map_tool_failure(value: ToolFailureDiagnostic) -> ToolFailureDiagn
         ToolFailureReason::InvalidModelInput => ToolFailureReasonV1::InvalidModelInput,
         ToolFailureReason::GraphCircuitOpen => ToolFailureReasonV1::GraphCircuitOpen,
     };
-    ToolFailureDiagnosticV1::with_reason(category, reason)
+    match value.graph_exploration {
+        Some(details) => ToolFailureDiagnosticV1::with_graph_exploration(details),
+        None => ToolFailureDiagnosticV1::with_reason(category, reason),
+    }
 }

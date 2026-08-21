@@ -106,7 +106,7 @@ fn exhausted_broad_search_admits_only_parallel_calls_for_named_missing_gaps() {
     ] {
         assert_eq!(
             state.on_tool_dispatched(&call(id, name), 3),
-            Some(ToolCallDenial::GraphExplorationClosed),
+            recovery_graph_denial(all_missing(), 4),
         );
     }
     assert_eq!(state.on_tool_dispatched(&call("ordinary", "read"), 3), None);
@@ -127,7 +127,7 @@ fn exhausted_broad_search_admits_only_parallel_calls_for_named_missing_gaps() {
             &source_call("duplicate", DecisionEvidenceKindV1::Implementation),
             3,
         ),
-        Some(ToolCallDenial::GraphExplorationClosed),
+        recovery_graph_denial(all_missing(), 2),
         "a pending purpose cannot consume a second recovery slot",
     );
     assert_eq!(
@@ -140,6 +140,11 @@ fn exhausted_broad_search_admits_only_parallel_calls_for_named_missing_gaps() {
             3,
         ),
         None,
+    );
+    assert_eq!(
+        state.on_tool_dispatched(&call("allowance-depleted", "codebase_memory_search_graph"), 3),
+        exhausted_graph_denial(all_missing()),
+        "zero remaining allowance permits only a mandatory safe stop",
     );
 
     let trace = output(
@@ -174,7 +179,7 @@ fn exhausted_broad_search_admits_only_parallel_calls_for_named_missing_gaps() {
     assert!(!state.blocks_mutation("write"));
     assert_eq!(
         state.on_tool_dispatched(&call("closed", "codebase_memory_trace_path"), 4),
-        Some(ToolCallDenial::GraphExplorationClosed),
+        completed_graph_denial(),
     );
 }
 
@@ -280,7 +285,7 @@ fn recovery_denies_unsupported_gap_and_stops_when_last_path_depletes() {
             &source_call("unsupported-source", DecisionEvidenceKindV1::Implementation),
             3,
         ),
-        Some(ToolCallDenial::GraphExplorationClosed),
+        recovery_graph_denial(all_missing(), 4),
         "a source selector absent from the current root cannot consume recovery allowance",
     );
     assert_eq!(
@@ -303,7 +308,11 @@ fn recovery_denies_unsupported_gap_and_stops_when_last_path_depletes() {
     assert!(state.blocks_mutation("write"));
     assert_eq!(
         state.on_tool_dispatched(&call("later", "codebase_memory_trace_path"), 4),
-        Some(ToolCallDenial::GraphExplorationClosed),
+        exhausted_graph_denial([
+            GraphRecoveryEvidenceKindV1::Implementation,
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ]),
     );
 }
 
@@ -338,14 +347,28 @@ fn each_missing_typed_purpose_can_complete_after_budget_exhaustion() {
 
         assert_eq!(
             state.on_tool_dispatched(&call("duplicate-trace", "codebase_memory_trace_path"), turn + 2),
-            Some(ToolCallDenial::GraphExplorationClosed),
+            recovery_graph_denial(
+                [match missing {
+                    DecisionEvidenceKindV1::Implementation => GraphRecoveryEvidenceKindV1::Implementation,
+                    DecisionEvidenceKindV1::Caller => GraphRecoveryEvidenceKindV1::Caller,
+                    DecisionEvidenceKindV1::FocusedTest => GraphRecoveryEvidenceKindV1::FocusedTest,
+                }],
+                4,
+            ),
         );
         assert_eq!(
             state.on_tool_dispatched(
                 &source_call("satisfied", satisfied.expect("two purposes were installed")),
                 turn + 2,
             ),
-            Some(ToolCallDenial::GraphExplorationClosed),
+            recovery_graph_denial(
+                [match missing {
+                    DecisionEvidenceKindV1::Implementation => GraphRecoveryEvidenceKindV1::Implementation,
+                    DecisionEvidenceKindV1::Caller => GraphRecoveryEvidenceKindV1::Caller,
+                    DecisionEvidenceKindV1::FocusedTest => GraphRecoveryEvidenceKindV1::FocusedTest,
+                }],
+                4,
+            ),
         );
         assert_eq!(
             state.on_tool_dispatched(&source_call("missing", missing), turn + 2),
@@ -395,7 +418,7 @@ fn expected_unavailable_gap_releases_fallback_without_reopening_graph() {
     assert!(!state.blocks_mutation("write"));
     assert_eq!(
         state.on_tool_dispatched(&source_call("retry", DecisionEvidenceKindV1::Caller), 7),
-        Some(ToolCallDenial::GraphExplorationClosed),
+        legacy_graph_denial(),
     );
 }
 
@@ -411,7 +434,7 @@ fn read_only_roles_retain_the_same_bounded_gap_path() {
 
     assert_eq!(
         state.on_tool_dispatched(&call("broad", "codebase_memory_search_graph"), 3),
-        Some(ToolCallDenial::GraphExplorationClosed),
+        recovery_graph_denial(all_missing(), 4),
     );
     for (id, kind) in [
         ("implementation", DecisionEvidenceKindV1::Implementation),
@@ -458,6 +481,52 @@ fn read_only_roles_retain_the_same_bounded_gap_path() {
         DecisionAnchorTransition::Converged,
     );
     assert_eq!(state.on_tool_dispatched(&call("ordinary", "read"), 4), None);
+}
+
+#[test]
+fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
+    let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects());
+    let _ = machine.on_start(EngineTime::ZERO);
+    let _ = complete(
+        &mut machine,
+        llm_responded(assistant_tool_calls(&[("root", "codebase_memory_search_graph")])),
+    );
+    let _ = complete(
+        &mut machine,
+        tool_finished(
+            "root",
+            output(
+                "codebase_memory_search_graph",
+                ROOT,
+                DecisionAnchorLineageStageV1::Root,
+            ),
+        ),
+    );
+
+    let mut recovery_requests = Vec::new();
+    for id in ["broad-one", "broad-two"] {
+        let _ = complete(
+            &mut machine,
+            llm_responded(assistant_tool_calls(&[(
+                id,
+                "codebase_memory_get_architecture",
+            )])),
+        );
+        recovery_requests = complete(&mut machine, tool_finished(id, plain_success()));
+    }
+
+    assert!(message_containing(
+        &recovery_requests,
+        "missing evidence: [trace, implementation, caller, focused_test]"
+    ));
+    assert!(message_containing(
+        &recovery_requests,
+        "permitted action: targeted_current_root_graph_call; remaining allowance: 4"
+    ));
+    assert!(!message_containing(
+        &recovery_requests,
+        DECISION_ANCHOR_RECOVERY_MESSAGE
+    ));
 }
 
 #[test]

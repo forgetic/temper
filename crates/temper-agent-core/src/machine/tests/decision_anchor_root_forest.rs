@@ -199,7 +199,7 @@ fn later_independent_root_expansion_is_bounded() {
     }
     assert_eq!(
         state.on_tool_dispatched(&call("after-limit", "codebase_memory_search_graph"), 7),
-        Some(ToolCallDenial::GraphExplorationClosed)
+        recovery_graph_denial(all_missing(), 4)
     );
     assert!(state.blocks_mutation("write"));
 }
