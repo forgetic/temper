@@ -8,9 +8,9 @@ use toml::Value as TomlValue;
 mod provider;
 
 pub use super::execution_plan::{
-    AgentFixture, ConvergenceStrategy, ForcedSystemicFailureFixture, LateStreamFailureBurst,
-    LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan, ManifestStep,
-    TerminalHistorySeedFixture,
+    ActionsHistorySeedFixture, AgentFixture, ConvergenceStrategy, ForcedSystemicFailureFixture,
+    LateStreamFailureBurst, LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan,
+    ManifestStep, TerminalHistorySeedFixture,
 };
 pub use super::failure_evidence::CiFailureEvidenceFixture;
 
@@ -614,6 +614,9 @@ fn parse_duration_literal(raw: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs(amount.saturating_mul(multiplier)))
 }
 
+#[cfg(test)]
+#[path = "bundle_actions_history_tests.rs"]
+mod actions_history_tests;
 #[cfg(test)]
 #[path = "bundle_mapped_graph_consumption_tests.rs"]
 mod mapped_graph_consumption_tests;

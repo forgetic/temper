@@ -45,6 +45,9 @@ pub(super) fn validate_action_links(
             | ManifestAction::SeedTerminalHistory {
                 fixture: super::TerminalHistorySeedFixture { repo_id, .. },
             }
+            | ManifestAction::SeedActionsHistory {
+                fixture: super::ActionsHistorySeedFixture { repo_id, .. },
+            }
             | ManifestAction::SeedPullRequest { repo_id, .. }
                 if !repository_ids.contains(repo_id.as_str()) =>
             {
@@ -88,6 +91,16 @@ pub(super) fn validate_action_links(
                     return Err(format!(
                         "step `{}` references unknown actionable issue fixture `{}`",
                         step.id, fixture.actionable_issue_id
+                    ));
+                }
+            }
+            ManifestAction::SeedActionsHistory { fixture } => {
+                if !issue_ids.contains(fixture.source_issue_id.as_str())
+                    && !issue_bindings.contains(fixture.source_issue_id.as_str())
+                {
+                    return Err(format!(
+                        "step `{}` references unknown source issue fixture or binding `{}`",
+                        step.id, fixture.source_issue_id
                     ));
                 }
             }

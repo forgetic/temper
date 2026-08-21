@@ -15,6 +15,7 @@ const REQUEST_RULE_FIELDS: &[&str] = &[
     "accepts_json",
     "query_keys",
     "at_least",
+    "all_matching",
 ];
 
 pub(super) fn evaluate_requests(
@@ -66,6 +67,23 @@ pub(super) fn evaluate_requests(
                 continue;
             }
         };
+        let all_matching = match rule.get("all_matching") {
+            Some(value) => match value.as_bool() {
+                Some(value) if !forbidden => value,
+                Some(_) => {
+                    builder = builder.failed(format!(
+                        "{label}[{index}].all_matching is supported only for required requests"
+                    ));
+                    continue;
+                }
+                None => {
+                    builder =
+                        builder.failed(format!("{label}[{index}].all_matching must be a boolean"));
+                    continue;
+                }
+            },
+            None => false,
+        };
         let minimum = match rule.get("at_least") {
             Some(value) => match value.as_integer().filter(|count| *count >= 0) {
                 Some(value) => value as usize,
@@ -79,6 +97,44 @@ pub(super) fn evaluate_requests(
             None => 1,
         };
         for expanded_rule in expanded {
+            if all_matching {
+                let candidates = artifact
+                    .final_state
+                    .ci
+                    .requests
+                    .iter()
+                    .filter(|request| request_matches_selector(request, &expanded_rule))
+                    .collect::<Vec<_>>();
+                if candidates.is_empty() {
+                    builder = builder.missing_fact(format!(
+                        "{label}[{index}] retained no requests matching the universal rule selector"
+                    ));
+                    continue;
+                }
+                if candidates.len() < minimum {
+                    builder = builder.failed(format!(
+                        "{label}[{index}] selected {} request(s), required at least {minimum}",
+                        candidates.len()
+                    ));
+                    continue;
+                }
+                let violations = candidates
+                    .iter()
+                    .filter(|request| !request_matches(request, &expanded_rule))
+                    .count();
+                if violations == 0 {
+                    builder = builder.passed(format!(
+                        "{label}[{index}] matched all {} selected request(s)",
+                        candidates.len()
+                    ));
+                } else {
+                    builder = builder.failed(format!(
+                        "{label}[{index}] rejected {violations} of {} selected request(s)",
+                        candidates.len()
+                    ));
+                }
+                continue;
+            }
             let matches = artifact
                 .final_state
                 .ci
@@ -166,7 +222,7 @@ fn expand_rule(
         .collect())
 }
 
-fn request_matches(request: &CiRequestEvidence, rule: &toml::Table) -> bool {
+fn request_matches_selector(request: &CiRequestEvidence, rule: &toml::Table) -> bool {
     if let Some(expected) = rule.get("method") {
         let Some(expected) = expected.as_str() else {
             return false;
@@ -187,6 +243,13 @@ fn request_matches(request: &CiRequestEvidence, rule: &toml::Table) -> bool {
         if !request.path.contains(expected) {
             return false;
         }
+    }
+    true
+}
+
+fn request_matches(request: &CiRequestEvidence, rule: &toml::Table) -> bool {
+    if !request_matches_selector(request, rule) {
+        return false;
     }
     if let Some(expected) = rule.get("authentication_scheme") {
         let Some(expected) = expected.as_str() else {

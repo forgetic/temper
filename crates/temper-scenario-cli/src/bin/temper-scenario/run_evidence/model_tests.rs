@@ -75,6 +75,7 @@ fn legacy_ci_evidence_defaults_new_provenance_fields() {
     assert!(state.observations.is_empty());
     assert!(state.requests.is_empty());
     assert_eq!(state.request_capture_dropped, None);
+    assert_eq!(state.actions_history, None);
 }
 
 #[test]
@@ -127,12 +128,24 @@ fn serialized_request_provenance_contains_no_header_or_query_values() {
         requests: vec![CiRequestEvidence {
             method: "GET".to_string(),
             path: "/api/v1/repos/acme/service/actions/runs".to_string(),
-            query_keys: vec!["limit".to_string()],
+            query_keys: vec!["page".to_string(), "limit".to_string()],
             authentication_present: true,
             authentication_scheme: Some("token".to_string()),
             accepts_json: true,
         }],
         request_capture_dropped: Some(0),
+        actions_history: Some(ActionsHistoryEvidence {
+            seeded_run_count: 201,
+            payload_bytes_per_run: 90_000,
+            transport_cap_bytes: 16 * 1024 * 1024,
+            full_inventory_lower_bound_bytes: 18_000_000,
+            largest_paged_response_bytes: 5_000_000,
+            pages_observed: 5,
+            target_run_page: 5,
+            later_page_selection: true,
+            webhooks_disabled: true,
+            provenance_drop_count: 0,
+        }),
     };
 
     let serialized = serde_json::to_string(&state).unwrap();
@@ -141,4 +154,7 @@ fn serialized_request_provenance_contains_no_header_or_query_values() {
     assert!(!serialized.contains("Authorization"));
     assert!(!serialized.contains("secret-token"));
     assert!(!serialized.contains("application/json"));
+    assert!(!serialized.contains("event_payload"));
+    assert!(!serialized.contains("provider-record"));
+    assert!(serialized.contains("full_inventory_lower_bound_bytes"));
 }

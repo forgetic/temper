@@ -75,3 +75,64 @@ pub(crate) fn ci_requests(evidence: &LiveManifestEvidence) -> Vec<run_evidence::
         })
         .collect()
 }
+
+pub(crate) fn actions_history(
+    evidence: &LiveManifestEvidence,
+) -> Option<run_evidence::ActionsHistoryEvidence> {
+    evidence
+        .actions_history
+        .as_ref()
+        .map(project_actions_history)
+}
+
+fn project_actions_history(
+    history: &temper_testing::live_manifest::LiveActionsHistoryEvidence,
+) -> run_evidence::ActionsHistoryEvidence {
+    run_evidence::ActionsHistoryEvidence {
+        seeded_run_count: history.seeded_run_count,
+        payload_bytes_per_run: history.payload_bytes_per_run,
+        transport_cap_bytes: history.transport_cap_bytes,
+        full_inventory_lower_bound_bytes: history.full_inventory_lower_bound_bytes,
+        largest_paged_response_bytes: history.largest_paged_response_bytes,
+        pages_observed: history.pages_observed,
+        target_run_page: history.target_run_page,
+        later_page_selection: history.later_page_selection,
+        webhooks_disabled: history.webhooks_disabled,
+        provenance_drop_count: history.provenance_drop_count,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn actions_history_projection_keeps_only_bounded_aggregate_facts() {
+        let projected =
+            project_actions_history(&temper_testing::live_manifest::LiveActionsHistoryEvidence {
+                seeded_run_count: 201,
+                payload_bytes_per_run: 90_000,
+                transport_cap_bytes: 16 * 1024 * 1024,
+                full_inventory_lower_bound_bytes: 18_000_000,
+                largest_paged_response_bytes: 5_000_000,
+                pages_observed: 5,
+                target_run_page: 5,
+                later_page_selection: true,
+                webhooks_disabled: true,
+                provenance_drop_count: 0,
+            });
+        assert_eq!(projected.seeded_run_count, 201);
+        assert_eq!(projected.target_run_page, 5);
+        assert!(projected.later_page_selection);
+        assert!(projected.webhooks_disabled);
+        let serialized = serde_json::to_string(&projected).expect("projection serializes");
+        for forbidden in [
+            "event_payload",
+            "Authorization",
+            "secret-token",
+            "provider-record",
+        ] {
+            assert!(!serialized.contains(forbidden));
+        }
+    }
+}

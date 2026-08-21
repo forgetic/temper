@@ -188,6 +188,10 @@ pub(crate) struct PullRequestStateEvidence {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) labels: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) merged_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) head_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) head_sha: Option<String>,
@@ -230,6 +234,24 @@ pub(crate) struct CiStateEvidence {
     pub(crate) requests: Vec<CiRequestEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) request_capture_dropped: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) actions_history: Option<ActionsHistoryEvidence>,
+}
+
+/// Bounded aggregate facts; provider records and payloads are never retained.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ActionsHistoryEvidence {
+    pub(crate) seeded_run_count: usize,
+    pub(crate) payload_bytes_per_run: usize,
+    pub(crate) transport_cap_bytes: usize,
+    pub(crate) full_inventory_lower_bound_bytes: usize,
+    pub(crate) largest_paged_response_bytes: usize,
+    pub(crate) pages_observed: usize,
+    pub(crate) target_run_page: usize,
+    pub(crate) later_page_selection: bool,
+    #[serde(default)]
+    pub(crate) webhooks_disabled: bool,
+    pub(crate) provenance_drop_count: usize,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]

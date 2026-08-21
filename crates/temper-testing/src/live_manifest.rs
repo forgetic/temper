@@ -7,6 +7,7 @@
 //! root test now supplies only the binary path/serialization lock and delegates
 //! the topology proof here so later CLI wiring can reuse the same evidence model.
 
+mod actions_history;
 mod bundle;
 mod codebase_memory;
 mod convergence;
@@ -34,10 +35,10 @@ use std::time::Duration;
 
 use crate::forgejo_runtime::RunWorkspace;
 pub use bundle::{
-    AgentFixture, ConvergenceStrategy, ForcedSystemicFailureFixture, IntakeFixture,
-    LateStreamFailureBurst, LateStreamFailureFixture, ManifestAction, ManifestExecutionPlan,
-    ManifestStep, ObservabilityFixture, RecoveryFixture, RepoFixture, ScenarioBundle,
-    TerminalHistorySeedFixture,
+    ActionsHistorySeedFixture, AgentFixture, ConvergenceStrategy, ForcedSystemicFailureFixture,
+    IntakeFixture, LateStreamFailureBurst, LateStreamFailureFixture, ManifestAction,
+    ManifestExecutionPlan, ManifestStep, ObservabilityFixture, RecoveryFixture, RepoFixture,
+    ScenarioBundle, TerminalHistorySeedFixture,
 };
 pub use failure_evidence::{CiFailureEvidenceFixture, LiveCiFailureEvidence};
 pub use handoff::{LiveHandoffCaseEvidence, LiveHandoffEvidence};
@@ -195,6 +196,8 @@ pub struct LiveManifestEvidence {
     pub plan_feature: Option<LivePlanFeatureEvidence>,
     /// Scenario-seeded terminal-history shape and webhook-isolation facts.
     pub terminal_history: Option<LiveTerminalHistoryEvidence>,
+    /// Bounded facts from an oversized real Forgejo Actions inventory fixture.
+    pub actions_history: Option<LiveActionsHistoryEvidence>,
     pub stimuli: Vec<StimulusOutcome>,
     pub logs: LiveLogPaths,
 }
@@ -213,6 +216,23 @@ pub struct LiveTerminalHistoryEvidence {
     pub actionable_older_than_history: bool,
     pub actionable_recovered: bool,
     pub cold_authority_rebuilt: bool,
+}
+
+/// Privacy-safe facts from a bounded oversized Actions-history seed action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveActionsHistoryEvidence {
+    pub seeded_run_count: usize,
+    pub payload_bytes_per_run: usize,
+    pub transport_cap_bytes: usize,
+    pub full_inventory_lower_bound_bytes: usize,
+    pub largest_paged_response_bytes: usize,
+    pub pages_observed: usize,
+    pub target_run_page: usize,
+    pub later_page_selection: bool,
+    /// True after bounded repository hooks are disabled for CI-poll isolation.
+    pub webhooks_disabled: bool,
+    /// Filled from the shared recorder when terminal evidence is assembled.
+    pub provenance_drop_count: usize,
 }
 
 impl LiveManifestEvidence {
@@ -326,6 +346,21 @@ impl LiveManifestEvidence {
                 history.actionable_older_than_history,
                 history.actionable_recovered,
                 history.cold_authority_rebuilt,
+            ));
+        }
+        if let Some(history) = &self.actions_history {
+            lines.push(format!(
+                "  actions_history: seeded_runs={} payload_bytes_per_run={} transport_cap_bytes={} full_inventory_lower_bound_bytes={} largest_paged_response_bytes={} pages_observed={} target_run_page={} later_page_selection={} webhooks_disabled={} provenance_dropped={}",
+                history.seeded_run_count,
+                history.payload_bytes_per_run,
+                history.transport_cap_bytes,
+                history.full_inventory_lower_bound_bytes,
+                history.largest_paged_response_bytes,
+                history.pages_observed,
+                history.target_run_page,
+                history.later_page_selection,
+                history.webhooks_disabled,
+                history.provenance_drop_count,
             ));
         }
         lines.push(format!(

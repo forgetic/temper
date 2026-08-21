@@ -238,3 +238,7 @@ crates/temper-dev/src/bin/temper-dev.rs
 # Live bundle contract tests share the checked-in scenario loader and action
 # vocabulary needed to reject cross-scenario configuration drift.
 crates/temper-testing/src/live_manifest/bundle_tests.rs
+
+# Live bundle loading keeps resolved fixture validation, cadence policy, and
+# typed scenario assembly together while provider and action parsing stay split.
+crates/temper-testing/src/live_manifest/bundle.rs

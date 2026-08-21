@@ -119,11 +119,21 @@ failure evidence after every latest job is terminal; a terminal job mixed with
 queued or running work stays pending.
 
 The live backend contract in `temper-forge-forgejo/tests/live.rs` records every
-CI read. It requires only token-authenticated `/api/v1/.../actions/runs` and
+CI read. It requires only token-authenticated, explicitly paged
+`/api/v1/.../actions/runs?page=…&limit=…` and
 `/api/v1/.../actions/runs/{provider_run_id}/jobs` requests, round-trips provider
 run/job/attempt/task identity, and observes one success plus one status-only
 failure mapped to `Unknown`. It rejects any login, repository Actions HTML,
 live-view POST, or repository-wide tasks request.
+
+The hermetic transport regression in
+`temper-forge-forgejo/tests/ci/transport.rs` uses the production
+`EngineHttpClient` and `ForgejoForge` against a bounded loopback Forgejo
+16-shaped server. A test-only `limit`-only control advertises an inventory over
+the client's 16 MiB buffered-response cap, while production reads prove that
+explicit page slices stay below the cap and find exact-head and opaque runs
+after page one. The fixture retains only aggregate byte/request counts, bounded
+failure classes, and redacted request shapes.
 
 ## PR head preparation
 

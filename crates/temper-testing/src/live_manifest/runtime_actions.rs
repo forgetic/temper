@@ -436,4 +436,88 @@ impl LiveExecutionContext<'_> {
         self.standalone = Some(standalone);
         Ok(())
     }
+
+    pub(super) fn seed_actions_history(
+        &mut self,
+        fixture: &super::super::ActionsHistorySeedFixture,
+    ) -> Result<(), String> {
+        require(
+            self.actions_history.is_none(),
+            "oversized Actions history has already been seeded",
+        )?;
+        require(
+            fixture.repo_id == self.harness.scenario.repo.id,
+            &format!(
+                "forgejo.actions.seed_oversized_history references unavailable repository `{}`",
+                fixture.repo_id
+            ),
+        )?;
+        let issue = self
+            .issues
+            .get(&fixture.source_issue_id)
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "source issue binding `{}` has not been seeded",
+                    fixture.source_issue_id
+                )
+            })?;
+        let forge = required_ref(&self.forge, "temper.launch_standalone")?;
+        let repository = required_ref(&self.repository, "temper.launch_standalone")?;
+        let deadline = Instant::now() + fixture.timeout;
+        let pull = super::super::convergence::poll_until(
+            deadline,
+            required_mut(&mut self.standalone, "temper.launch_standalone")?,
+            || {
+                engine_block_on(
+                    super::super::actions_history::implementation_pr_ready_for_history_seed(
+                        forge, repository, issue,
+                    ),
+                )
+            },
+        )?;
+
+        let target_run_id = loop {
+            match engine_block_on(super::super::actions_history::exact_head_run(
+                forge, repository, &pull,
+            )) {
+                Ok(run_id) => break run_id,
+                Err(error) if Instant::now() < deadline => {
+                    if !required_mut(&mut self.runner, "forgejo_runner.ready")?.is_running() {
+                        return Err(format!(
+                            "forgejo-runner exited while waiting for exact-head CI: {error}"
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "exact-head CI did not materialize before the bounded fixture timeout: {error}"
+                    ));
+                }
+            }
+        };
+        let head_sha = pull
+            .head_sha
+            .as_deref()
+            .ok_or_else(|| "implementation PR has no exact head SHA".to_string())?;
+        let server = required_ref(&self.server, "forgejo.provision")?;
+        let admin_token = required_ref(&self.admin_token, "forgejo.provision")?;
+        super::super::actions_history::disable_repository_webhooks(
+            server,
+            admin_token,
+            &self.harness.scenario.repo,
+        )?;
+        let mut capture = super::super::actions_history::seed_and_measure(
+            server,
+            admin_token,
+            &self.harness.scenario.repo,
+            target_run_id,
+            head_sha,
+            fixture,
+        )?;
+        capture.evidence.webhooks_disabled = true;
+        self.actions_history = Some(capture);
+        Ok(())
+    }
 }

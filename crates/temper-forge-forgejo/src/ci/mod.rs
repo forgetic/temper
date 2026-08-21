@@ -64,9 +64,7 @@ impl<C: HttpClient> ForgejoForge<C> {
             target.commit_sha = Some(commit.to_string());
         }
 
-        let runs: Vec<ActionRunDto> = self
-            .fetch_actions_runs("list Forgejo Actions runs", &fetch::runs_path(&repo))
-            .await?;
+        let runs: Vec<ActionRunDto> = self.fetch_actions_runs(&fetch::runs_path(&repo)).await?;
         let mut matched: Vec<ActionRunDto> = if target.has_filter() {
             runs.into_iter()
                 .filter(|run| match_run(run, &target).is_some())
@@ -124,7 +122,7 @@ impl<C: HttpClient> ForgejoForge<C> {
         let coord = parse_ci_job_id(id)?;
         let repo_id = format_repository_id(&coord.repo);
         let runs: Vec<ActionRunDto> = self
-            .fetch_actions_runs("list Forgejo Actions runs", &fetch::runs_path(&coord.repo))
+            .fetch_actions_runs(&fetch::runs_path(&coord.repo))
             .await?;
         let Some(run) = runs.into_iter().find(|run| run.id == coord.run_id) else {
             return Ok(None);

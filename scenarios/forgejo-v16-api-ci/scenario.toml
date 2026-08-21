@@ -132,7 +132,7 @@ job_outcomes = [
   { status = "completed", conclusion = "unknown", provider_conclusion = "failure", exactly = 1 },
 ]
 required_requests = [
-  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["page", "limit"], all_matching = true },
   { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
 ]
 forbidden_requests = [

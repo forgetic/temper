@@ -6,6 +6,7 @@ use temper_forge_forgejo::ForgejoForge;
 use temper_forge_model::{CreateIssue, ItemNumber, PullRequestQuery, RepositoryId};
 use temper_workflow::parse_metadata_block;
 
+use super::actions_history::ActionsHistoryCapture;
 use super::codebase_memory::{FakeMcpServer, ToolConfiguration};
 use super::failure_evidence::FailureEvidenceServer;
 use super::process::{
@@ -82,6 +83,7 @@ struct LiveExecutionContext<'a> {
     stimuli: Vec<StimulusOutcome>,
     convergence: Option<ConvergenceOutput>,
     terminal_history: Option<LiveTerminalHistoryEvidence>,
+    actions_history: Option<ActionsHistoryCapture>,
 }
 
 struct ConvergenceOutput {
@@ -131,6 +133,7 @@ impl<'a> LiveExecutionContext<'a> {
             stimuli: Vec::new(),
             convergence: None,
             terminal_history: None,
+            actions_history: None,
         }
     }
 
@@ -161,6 +164,7 @@ impl<'a> LiveExecutionContext<'a> {
                 after_pr_binding.as_deref(),
             ),
             ManifestAction::SeedTerminalHistory { fixture } => self.seed_terminal_history(fixture),
+            ManifestAction::SeedActionsHistory { fixture } => self.seed_actions_history(fixture),
             ManifestAction::SeedPullRequest {
                 repo_id,
                 source_issue_id,
@@ -584,6 +588,7 @@ pub(super) fn action_name(action: &ManifestAction) -> &'static str {
         ManifestAction::LaunchTemper { .. } => "temper.launch_standalone",
         ManifestAction::SeedIssue { .. } => "issue.seed",
         ManifestAction::SeedTerminalHistory { .. } => "history.seed_terminal",
+        ManifestAction::SeedActionsHistory { .. } => "forgejo.actions.seed_oversized_history",
         ManifestAction::SeedPullRequest { .. } => "pr.seed_existing",
         ManifestAction::StartCodebaseMemoryMcp { .. } => "mcp.fake_codebase_memory.start",
         ManifestAction::ConfigureAgentTools { .. } => "agent.tools.configure",

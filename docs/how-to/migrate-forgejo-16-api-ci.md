@@ -6,9 +6,10 @@ with token-authenticated Actions run/job APIs. It does **not** automate a Forgej
 migration. An operator owns every backup, rehearsal, service change, and
 production verification step.
 
-The required CI endpoint is:
+The required CI endpoints are:
 
 ```text
+GET /api/v1/repos/{owner}/{repo}/actions/runs?page={1..64}&limit=50
 GET /api/v1/repos/{owner}/{repo}/actions/runs/{provider_run_id}/jobs
 ```
 
@@ -16,6 +17,17 @@ GET /api/v1/repos/{owner}/{repo}/actions/runs/{provider_run_id}/jobs
 repository-local display number. Requests use the same Forge API token as other
 Temper reads. The API-only binary has no login, HTML, live-view, repository-wide
 tasks, or password fallback.
+
+Forgejo 16.0.1 ignores a run-list `limit` when `page` is absent. Temper therefore
+starts at page one and sends both `page` and `limit=50` on every run-inventory
+request. Wrapped `workflow_runs` and `runs` pages are aggregated until an empty
+or short page. The traversal permits at most 64 requests (3,199 runs in a
+successful traversal); a full final page, repeated/non-advancing page,
+oversized or malformed response, status failure, or transport failure is an
+error and never triggers an unpaged fallback. Pagination diagnostics retain
+only the normalized endpoint, operation, page/limit, status or bounded failure
+class, and capped byte/row counts—never bodies, credentials, authorization
+values, headers, or provider error text.
 
 ## Required order
 
@@ -99,7 +111,9 @@ window:
 
 - `/api/v1/version` still reports 16.0.1;
 - Temper's Forge requests authenticate with a token and CI reads use only run
-  discovery plus `/actions/runs/{provider_run_id}/jobs`;
+  discovery plus `/actions/runs/{provider_run_id}/jobs`; every retained run-list
+  request has exactly one `page` and one `limit` key, beginning at page one, and
+  no unpaged request occurs;
 - the observed job IDs, run ID, attempt, task identity, and commit ownership are
   stable across list/get reads;
 - a current-head success permits landing;

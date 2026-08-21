@@ -3,15 +3,61 @@
 
 use crate::ids::RepoCoord;
 use crate::map::pr_branch_name;
-use crate::types::{ActionJobDto, PullRequestDto};
+use crate::types::{ActionJobDto, ActionRunDto, PullRequestDto};
 use crate::{ForgejoForge, HttpClient, HttpMethod};
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use temper_forge_model::{ForgeError, ForgeResult, ItemNumber};
 
-/// Bound on Actions run-list responses, mirroring the reference tooling.
-const ACTIONS_LIMIT: &str = "200";
+/// Fixed provider page size for Actions run inventory.
+const ACTIONS_PAGE_LIMIT: usize = 50;
+/// Maximum Actions run-list requests made by one logical CI read.
+const ACTIONS_MAX_PAGES: u32 = 64;
+const ACTIONS_ENDPOINT: &str = "/api/v1/repos/{owner}/{repo}/actions/runs";
+const ACTIONS_OPERATION: &str = "list_runs";
+const MAX_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
+
+#[derive(Copy, Clone)]
+enum ActionsPaginationFailure {
+    Transport,
+    Status(u16),
+    Malformed,
+    OversizedPage,
+    NonAdvancingPage,
+    PageCeiling,
+}
+
+impl ActionsPaginationFailure {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::Transport => "transport",
+            Self::Status(_) => "status",
+            Self::Malformed => "malformed",
+            Self::OversizedPage => "oversized_page",
+            Self::NonAdvancingPage => "non_advancing_page",
+            Self::PageCeiling => "page_ceiling",
+        }
+    }
+
+    const fn status(self) -> Option<u16> {
+        match self {
+            Self::Status(status) => Some(status),
+            _ => None,
+        }
+    }
+}
+
+struct RunsPageDecodeError {
+    rows: Option<usize>,
+}
+
+fn bounded_fact(value: Option<usize>, maximum: usize) -> String {
+    match value {
+        None => "unknown".to_string(),
+        Some(value) if value <= maximum => value.to_string(),
+        Some(_) => format!(">{maximum}"),
+    }
+}
 
 impl<C: HttpClient> ForgejoForge<C> {
     /// Fetches a pull request's head SHA and head ref for run matching.
@@ -42,23 +88,86 @@ impl<C: HttpClient> ForgejoForge<C> {
         Ok(Some((head.sha.filter(|sha| !sha.is_empty()), branch)))
     }
 
-    /// Fetches the Actions runs endpoint and decodes its list response.
+    /// Fetches and aggregates a bounded sequence of Actions run pages.
     ///
-    /// Missing or unsupported Actions APIs fail closed. There is deliberately no
-    /// HTML, login, live-view, or repository-wide tasks fallback.
-    pub(super) async fn fetch_actions_runs<T: DeserializeOwned>(
-        &self,
-        context: &str,
-        path: &str,
-    ) -> ForgeResult<Vec<T>> {
-        let query = vec![("limit".to_string(), ACTIONS_LIMIT.to_string())];
-        let response = self.send(HttpMethod::Get, path, query, None).await?;
-        match response.status {
-            200..=299 => extract_runs_array(context, &response.body),
-            other => Err(ForgeError::Backend(format!(
-                "{context}: Forgejo Actions unavailable (HTTP {other})"
-            ))),
+    /// Traversal starts at page one, and every request carries both `page` and
+    /// `limit`.
+    /// A short (including empty) page terminates the traversal. Sixty-four full
+    /// pages, an oversized page, or repeated provider run identities fail
+    /// closed; no unpaged or non-API fallback is attempted.
+    pub(super) async fn fetch_actions_runs(&self, path: &str) -> ForgeResult<Vec<ActionRunDto>> {
+        let mut runs = Vec::new();
+        let mut seen_run_ids = HashSet::new();
+
+        for page in 1..=ACTIONS_MAX_PAGES {
+            // This path deliberately does not use a generic list helper or an
+            // unpaged retry. Every physical request is fully page-qualified.
+            let query = vec![
+                ("page".to_string(), page.to_string()),
+                ("limit".to_string(), ACTIONS_PAGE_LIMIT.to_string()),
+            ];
+            let response = match self.send(HttpMethod::Get, path, query, None).await {
+                Ok(response) => response,
+                Err(_) => {
+                    return Err(actions_pagination_error(
+                        page,
+                        ActionsPaginationFailure::Transport,
+                        None,
+                        None,
+                    ));
+                }
+            };
+            let response_bytes = response.body.len();
+            if !response.is_success() {
+                return Err(actions_pagination_error(
+                    page,
+                    ActionsPaginationFailure::Status(response.status),
+                    Some(response_bytes),
+                    None,
+                ));
+            }
+            let page_runs = extract_runs_page(&response.body).map_err(|error| {
+                actions_pagination_error(
+                    page,
+                    ActionsPaginationFailure::Malformed,
+                    Some(response_bytes),
+                    error.rows,
+                )
+            })?;
+            let page_len = page_runs.len();
+            if page_len > ACTIONS_PAGE_LIMIT {
+                return Err(actions_pagination_error(
+                    page,
+                    ActionsPaginationFailure::OversizedPage,
+                    Some(response_bytes),
+                    Some(page_len),
+                ));
+            }
+            if page_runs.iter().any(|run| run.id == 0)
+                || page_runs.iter().any(|run| !seen_run_ids.insert(run.id))
+            {
+                return Err(actions_pagination_error(
+                    page,
+                    ActionsPaginationFailure::NonAdvancingPage,
+                    Some(response_bytes),
+                    Some(page_len),
+                ));
+            }
+            runs.extend(page_runs);
+            if page_len < ACTIONS_PAGE_LIMIT {
+                return Ok(runs);
+            }
+            if page == ACTIONS_MAX_PAGES {
+                return Err(actions_pagination_error(
+                    page,
+                    ActionsPaginationFailure::PageCeiling,
+                    Some(response_bytes),
+                    Some(page_len),
+                ));
+            }
         }
+
+        unreachable!("bounded Actions page loop always returns")
     }
 
     /// Fetches and validates one provider run's Forgejo 16 jobs response.
@@ -105,31 +214,57 @@ pub(super) fn jobs_path(repo: &RepoCoord, run_id: u64) -> String {
     format!("/repos/{}/actions/runs/{run_id}/jobs", repo.path_segment())
 }
 
-/// Tolerantly decodes the established runs list shape.
-fn extract_runs_array<T: DeserializeOwned>(context: &str, body: &str) -> ForgeResult<Vec<T>> {
-    let trimmed = body.trim_start();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-    if trimmed.starts_with('[') {
-        return serde_json::from_str::<Vec<T>>(body).map_err(|error| {
-            ForgeError::Backend(format!("{context}: failed to decode array: {error}"))
-        });
-    }
-    let value: Value = serde_json::from_str(body).map_err(|error| {
-        ForgeError::Backend(format!("{context}: failed to decode response: {error}"))
-    })?;
+/// Decodes one of Forgejo's two established wrapped run-list shapes.
+fn extract_runs_page(body: &str) -> Result<Vec<ActionRunDto>, RunsPageDecodeError> {
+    let value: Value =
+        serde_json::from_str(body).map_err(|_| RunsPageDecodeError { rows: None })?;
     for key in ["workflow_runs", "runs"] {
         match value.get(key) {
             None | Some(Value::Null) => continue,
-            Some(array) => {
-                return serde_json::from_value(array.clone()).map_err(|error| {
-                    ForgeError::Backend(format!("{context}: failed to decode `{key}`: {error}"))
+            Some(Value::Array(rows)) => {
+                let row_count = rows.len();
+                return serde_json::from_value(Value::Array(rows.clone())).map_err(|_| {
+                    RunsPageDecodeError {
+                        rows: Some(row_count),
+                    }
                 });
             }
+            Some(_) => return Err(RunsPageDecodeError { rows: None }),
         }
     }
-    Ok(Vec::new())
+    Err(RunsPageDecodeError { rows: None })
+}
+
+fn actions_pagination_error(
+    page: u32,
+    failure: ActionsPaginationFailure,
+    response_bytes: Option<usize>,
+    response_rows: Option<usize>,
+) -> ForgeError {
+    let status = failure
+        .status()
+        .map_or_else(|| "none".to_string(), |status| status.to_string());
+    let response_bytes = bounded_fact(response_bytes, MAX_DIAGNOSTIC_BYTES);
+    let response_rows = bounded_fact(response_rows, ACTIONS_PAGE_LIMIT + 1);
+    tracing::warn!(
+        target: "temper_forge_forgejo",
+        endpoint = ACTIONS_ENDPOINT,
+        operation = ACTIONS_OPERATION,
+        page,
+        limit = ACTIONS_PAGE_LIMIT,
+        status = %status,
+        failure_class = failure.code(),
+        response_bytes = %response_bytes,
+        response_rows = %response_rows,
+        "Forgejo Actions pagination failed"
+    );
+    ForgeError::Backend(format!(
+        "Forgejo Actions pagination failed: endpoint={ACTIONS_ENDPOINT} \
+         operation={ACTIONS_OPERATION} page={page} limit={ACTIONS_PAGE_LIMIT} \
+         status={status} failure={} response_bytes={response_bytes} \
+         response_rows={response_rows}",
+        failure.code()
+    ))
 }
 
 fn validate_jobs(context: &str, run_id: u64, jobs: &[ActionJobDto]) -> ForgeResult<()> {
