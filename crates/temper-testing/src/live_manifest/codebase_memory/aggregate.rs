@@ -22,6 +22,14 @@ pub(super) fn privacy_safe_checkpoints(
             "served_convergence_duplicate",
             "served_convergence_source",
         ],
+        Some("mapped-live-decision-gap-recovery") => &[
+            "served_gap_root",
+            "served_gap_refinement",
+            "served_gap_trace",
+            "served_gap_source",
+            "served_gap_duplicate",
+            "served_gap_recovery_source",
+        ],
         _ => return Vec::new(),
     };
     calls

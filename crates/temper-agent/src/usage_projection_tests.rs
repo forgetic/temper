@@ -273,3 +273,59 @@ fn tool_error_logging_projects_only_closed_failure_fields() {
     let rendered = format!("{event:?}");
     assert!(!rendered.contains(SECRET));
 }
+
+#[test]
+fn graph_recovery_logging_projects_only_closed_actionable_fields() {
+    let capture = CaptureLayer::default();
+    let events = capture.0.clone();
+    let subscriber = registry().with(capture);
+
+    with_default(subscriber, || {
+        let projection = TracingProjection::new(Arc::new(UsageTotals::default()));
+        let details = temper_protocol_activity::GraphExplorationClosedV1::recoverable(
+            [temper_protocol_activity::GraphRecoveryEvidenceKindV1::Caller],
+            4,
+        )
+        .expect("recoverable graph details");
+        projection.emit(&record(AgentActivityEventV1::ToolFinished(
+            ToolFinishedV1 {
+                call_id: "recovery-broad-denied".into(),
+                name: "codebase_memory_search_graph".into(),
+                status: ToolStatusV1::Failed,
+                duration_ms: 0,
+                result: None,
+                failure: Some(ToolFailureDiagnosticV1::with_graph_exploration(details)),
+                codebase_memory_timing: None,
+                graph_correlation: None,
+                decision_anchor_lineage: None,
+            },
+        )));
+    });
+
+    let event = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|event| event.get("event").map(String::as_str) == Some("tool.error"))
+        .cloned()
+        .expect("graph recovery tool error log");
+    for (field, expected) in [
+        ("tool.failure.reason", "decision_evidence_incomplete"),
+        (
+            "tool.failure.graph.reason",
+            "recoverable_incomplete_evidence",
+        ),
+        ("tool.failure.graph.missing_evidence", "caller"),
+        (
+            "tool.failure.graph.permitted_action",
+            "targeted_current_root_graph_call",
+        ),
+        ("tool.failure.graph.remaining_allowance", "4"),
+    ] {
+        assert_eq!(
+            event.get(field).map(String::as_str),
+            Some(expected),
+            "{field}"
+        );
+    }
+}
