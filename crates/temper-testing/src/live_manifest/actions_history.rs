@@ -4,7 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 use temper_forge_forgejo::ForgejoForge;
-use temper_forge_model::{CiJobConclusion, CiJobQuery, CiJobStatus, PullRequest, RepositoryId};
+use temper_forge_model::{
+    CiJobQuery, ItemNumber, PullRequest, PullRequestState, RepositoryId, UserId,
+};
 
 use super::{
     ActionsHistorySeedFixture, CiRequestEvidence, LiveActionsHistoryEvidence, RepoFixture,
@@ -26,7 +28,41 @@ pub(super) struct ActionsHistoryCapture {
     pub requests: Vec<CiRequestEvidence>,
 }
 
-pub(super) async fn exact_green_run(
+pub(super) async fn implementation_pr_ready_for_history_seed(
+    forge: &ForgejoForge,
+    repository: &RepositoryId,
+    issue_number: ItemNumber,
+) -> Result<PullRequest, String> {
+    let pull = super::convergence::implementation_pr(forge, repository, issue_number).await?;
+    if pull.author_id != UserId::new(super::ENGINEER) || pull.state != PullRequestState::Open {
+        return Err("the engineer implementation PR is not open for history seeding".to_string());
+    }
+    for label in ["implementation", "landing"] {
+        if !pull.labels.iter().any(|candidate| candidate == label) {
+            return Err(format!(
+                "implementation PR is missing `{label}` before history seeding"
+            ));
+        }
+    }
+    let issue = forge
+        .get_issue_by_number(repository, issue_number)
+        .await
+        .map_err(|error| format!("source issue lookup failed: {error}"))?
+        .ok_or("source issue disappeared")?;
+    if !issue.labels.iter().any(|label| label == "code")
+        || issue.labels.iter().any(|label| {
+            matches!(
+                label.as_str(),
+                "untriaged" | "ready" | "in-progress" | "needs-human"
+            )
+        })
+    {
+        return Err("source issue claim has not settled before history seeding".to_string());
+    }
+    Ok(pull)
+}
+
+pub(super) async fn exact_head_run(
     forge: &ForgejoForge,
     repository: &RepositoryId,
     pull: &PullRequest,
@@ -49,15 +85,10 @@ pub(super) async fn exact_green_run(
         return Err("the implementation PR has no matching provider run yet".to_string());
     }
     let jobs = listing.into_jobs();
-    if jobs.is_empty()
-        || jobs.iter().any(|job| {
-            job.commit_sha != head_sha
-                || job.status != CiJobStatus::Completed
-                || job.conclusion != Some(CiJobConclusion::Success)
-        })
-    {
+    if jobs.is_empty() || jobs.iter().any(|job| job.commit_sha != head_sha) {
         return Err(
-            "the implementation PR exact-head run is not green and complete yet".to_string(),
+            "the implementation PR exact-head run has not materialized provider jobs yet"
+                .to_string(),
         );
     }
     let run_ids = jobs
@@ -74,6 +105,73 @@ pub(super) async fn exact_green_run(
         ));
     };
     Ok(*run_id)
+}
+
+pub(super) fn disable_repository_webhooks(
+    server: &ForgejoServer,
+    admin_token: &str,
+    repo: &RepoFixture,
+) -> Result<(), String> {
+    if !server.base_url().starts_with("http://127.0.0.1:") {
+        return Err("webhook isolation is restricted to disposable loopback Forgejo".to_string());
+    }
+    let client = temper_engine_io::http::BlockingJsonClient::new();
+    let collection = format!(
+        "{}/api/v1/repos/{}/hooks?page=1&limit=8",
+        server.base_url(),
+        repo.slug
+    );
+    let response = client
+        .send_with_timeout(
+            "GET",
+            collection,
+            Some(admin_token),
+            None,
+            PROBE_REQUEST_TIMEOUT,
+        )
+        .map_err(|error| format!("list bounded disposable repository hooks: {error}"))?;
+    if response.status != 200 {
+        return Err(format!(
+            "bounded disposable repository hook list returned status {}",
+            response.status
+        ));
+    }
+    let hooks: Value = serde_json::from_slice(&response.body)
+        .map_err(|_| "bounded disposable repository hook list was not JSON".to_string())?;
+    let hooks = hooks
+        .as_array()
+        .ok_or_else(|| "bounded disposable repository hook list was not an array".to_string())?;
+    if hooks.len() > 8 {
+        return Err("disposable repository hook inventory exceeded its closed bound".to_string());
+    }
+    for hook in hooks {
+        let id = hook
+            .get("id")
+            .and_then(Value::as_u64)
+            .filter(|id| *id > 0)
+            .ok_or_else(|| "disposable repository hook omitted its bounded identity".to_string())?;
+        let endpoint = format!(
+            "{}/api/v1/repos/{}/hooks/{id}",
+            server.base_url(),
+            repo.slug
+        );
+        let response = client
+            .send_with_timeout(
+                "DELETE",
+                endpoint,
+                Some(admin_token),
+                None,
+                PROBE_REQUEST_TIMEOUT,
+            )
+            .map_err(|error| format!("disable disposable repository hook: {error}"))?;
+        if !matches!(response.status, 200 | 204) {
+            return Err(format!(
+                "disable disposable repository hook returned status {}",
+                response.status
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn seed_and_measure(
@@ -320,6 +418,7 @@ fn measure_inventory(
             pages_observed,
             target_run_page,
             later_page_selection: true,
+            webhooks_disabled: false,
             provenance_drop_count: 0,
         },
         requests,

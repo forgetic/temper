@@ -16,6 +16,8 @@ const SUPPORTED_CHECK_FIELDS: &[&str] = &[
     "labels_cleared",
     "ci",
     "title",
+    "author",
+    "merged_by_one_of",
     "body_prefix",
     "body_prefix_file",
     "stale_body_absent",

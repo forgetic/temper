@@ -143,6 +143,7 @@ fn serialized_request_provenance_contains_no_header_or_query_values() {
             pages_observed: 5,
             target_run_page: 5,
             later_page_selection: true,
+            webhooks_disabled: true,
             provenance_drop_count: 0,
         }),
     };

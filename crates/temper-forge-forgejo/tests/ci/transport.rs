@@ -14,15 +14,16 @@ use temper_forge_forgejo::{
 };
 use temper_forge_model::{CiJobId, CiJobQuery, PullRequestId, RepositoryId};
 
-const PAGE_LIMIT: usize = 200;
+const PAGE_LIMIT: usize = 50;
 const INVENTORY_RUNS: usize = 401;
+const INVENTORY_PAGES: usize = 9;
 const RUN_PADDING_BYTES: usize = 42 * 1024;
 const EXACT_RUN_ID: u64 = 900;
 const OPAQUE_RUN_ID: u64 = 901;
 const EXACT_HEAD: &str = "exacthead123456789";
 const AUTHENTICATION_SENTINEL: &str = "TRANSPORT-AUTHENTICATION-SENTINEL";
 const RESPONSE_PAYLOAD_SENTINEL: &str = "TRANSPORT-RESPONSE-PAYLOAD-SENTINEL";
-const PRODUCTION_REQUEST_CEILING: u64 = 9;
+const PRODUCTION_REQUEST_CEILING: u64 = (INVENTORY_PAGES * 2 + 3) as u64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RouteShape {
@@ -442,7 +443,7 @@ fn production_stack_pages_oversized_forgejo_16_inventory() {
         .iter()
         .filter(|request| request.path.ends_with("/actions/runs"))
         .collect::<Vec<_>>();
-    assert_eq!(run_reads.len(), 6);
+    assert_eq!(run_reads.len(), INVENTORY_PAGES * 2);
     assert!(run_reads.iter().all(|request| {
         request.query_keys == ["page".to_string(), "limit".to_string()]
             && request.authentication_present
@@ -472,7 +473,7 @@ fn production_stack_pages_oversized_forgejo_16_inventory() {
         .iter()
         .filter(|fact| fact.shape.route == RouteShape::RunInventory)
         .collect::<Vec<_>>();
-    assert_eq!(inventory_reads.len(), 7);
+    assert_eq!(inventory_reads.len(), INVENTORY_PAGES * 2 + 1);
     assert_eq!(inventory_reads[0].shape.page, None);
     assert_eq!(inventory_reads[0].shape.limit, Some(PAGE_LIMIT));
     assert_eq!(inventory_reads[0].shape.query_keys, [QueryKeyShape::Limit]);
@@ -487,7 +488,10 @@ fn production_stack_pages_oversized_forgejo_16_inventory() {
             .iter()
             .map(|fact| fact.shape.page)
             .collect::<Vec<_>>(),
-        [Some(1), Some(2), Some(3), Some(1), Some(2), Some(3)]
+        (1..=INVENTORY_PAGES)
+            .chain(1..=INVENTORY_PAGES)
+            .map(Some)
+            .collect::<Vec<_>>()
     );
     assert!(inventory_reads[1..].iter().all(|fact| {
         fact.shape.limit == Some(PAGE_LIMIT)

@@ -97,6 +97,7 @@ fn project_actions_history(
         pages_observed: history.pages_observed,
         target_run_page: history.target_run_page,
         later_page_selection: history.later_page_selection,
+        webhooks_disabled: history.webhooks_disabled,
         provenance_drop_count: history.provenance_drop_count,
     }
 }
@@ -117,11 +118,13 @@ mod tests {
                 pages_observed: 5,
                 target_run_page: 5,
                 later_page_selection: true,
+                webhooks_disabled: true,
                 provenance_drop_count: 0,
             });
         assert_eq!(projected.seeded_run_count, 201);
         assert_eq!(projected.target_run_page, 5);
         assert!(projected.later_page_selection);
+        assert!(projected.webhooks_disabled);
         let serialized = serde_json::to_string(&projected).expect("projection serializes");
         for forbidden in [
             "event_payload",

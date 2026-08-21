@@ -182,6 +182,8 @@ fn pull_request(
         body: None,
         state: Some(pull.state.clone()),
         labels: pull.labels.clone(),
+        author: None,
+        merged_by: None,
         head_branch: Some(pull.source_branch.clone()),
         head_sha: pull.head_sha.clone(),
         merged_sha: pull.merged_sha.clone(),

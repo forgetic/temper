@@ -1,0 +1,232 @@
+schema = "temper.scenario.v1"
+name = "forgejo-actions-pagination-landing"
+status = "active"
+stability = "provisional"
+intent = "Prove bounded multi-page Forgejo Actions discovery lets the dedicated exact-head-green path land one implementation PR automatically."
+introduced_by = "#1062"
+owner_area = "delivery-validation"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/basic-delivery"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/forgejo-actions-pagination-landing.json"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[live_harness]
+ci_poll_cadence = "1s"
+poll_cadence = "600s"
+poll_backstop = "600s"
+mechanical_cadence = "600s"
+
+[workflow]
+name = "basic-delivery"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/service"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[validation]
+feature = "ai/temper#1055"
+plan = "ai/temper#1057"
+source_branch = "agent/pr-for-feature-1055"
+change = "new"
+
+[feature_contract]
+claim = "Explicit bounded Forgejo Actions pages preserve exact-head-green discovery after page one and let the dedicated CI-success path land automatically."
+stimulus = "Create one implementation PR in disposable Forgejo 16.0.1, wait for its in-flight provider jobs, seed a bounded Actions inventory whose full-history lower bound exceeds the transport cap and moves the target run after page one, then let the real run finish green."
+observable = "Bounded count, size, page, request-key, exact-head identity, cadence, automation merger, and ordered CI-success/merge/closure facts from real Forgejo, the host runner, standalone Temper, and Jig agents."
+assertion = "Every retained run-list request has page and limit with zero drops; bounded pages recover the later-page exact head; ci_poll success causes the automation merge and parent closure before broad fallback, without legacy, UI, login, tasks, live-view, mutation, repair, or manual intervention."
+runtime_budget_seconds = 600
+jig_script_path = "jig/forgejo-actions-pagination-landing.json"
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start disposable Forgejo 16.0.1 for the isolated service repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner."
+
+[[steps]]
+id = "configure-jig-agents"
+action = "jig.fake_llm"
+roles = ["architect", "engineer"]
+script_path = "jig/forgejo-actions-pagination-landing.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-intake-issue"
+action = "issue.seed"
+issue_id = "intake"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "seed-oversized-actions-history"
+action = "forgejo.actions.seed_oversized_history"
+repo = "service"
+source_issue_id = "intake"
+seeded_runs = 201
+payload_bytes = 90000
+timeout_ms = 180000
+
+[[steps]]
+id = "wait-for-automatic-landing"
+action = "workflow.wait_convergence"
+strategy = "single-pull-request"
+until = "the dedicated CI-success path finds the exact-head run after page one, merges the sole implementation PR, and closes its parent issue"
+
+[expect]
+template = "single-pr-merged-source-closed"
+templates = ["no-duplicate-prs"]
+outcome = "Bounded multi-page Actions discovery finds the exact green head and dedicated CI monitoring automatically lands the sole implementation PR."
+merged_pull_requests = 1
+closed_parent_issues = 1
+created_pull_requests = 1
+
+[expect.effective_configuration]
+id = "dedicated-ci-precedes-broad-fallbacks"
+required = true
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 600
+mechanical_cadence_secs = 600
+
+[expect.actions_history]
+id = "bounded-history-selects-later-page-head"
+required = true
+seeded_run_count = 201
+payload_bytes_per_run = 90000
+full_inventory_exceeds_transport_cap = true
+largest_paged_response_below_transport_cap = true
+minimum_pages_observed = 2
+minimum_target_run_page = 2
+later_page_selection = true
+webhooks_disabled = true
+provenance_drop_count = 0
+
+[[expect.checks]]
+required = true
+id = "parent-advanced-and-closed"
+artifact = "issue:intake"
+state = "closed"
+labels = ["code"]
+labels_cleared = ["ready", "in-progress", "needs-human"]
+
+[[expect.checks]]
+required = true
+id = "automation-landed-engineer-implementation"
+artifact = "pull_request:implementation"
+state = "merged"
+labels = ["implementation"]
+labels_cleared = ["landing", "needs-human"]
+ci = "passed"
+author = "engineer"
+merged_by_one_of = ["basicadmin", "bot"]
+
+[[expect.checks]]
+required = true
+id = "default-branch-contains-engineer-diff"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.count]]
+required = true
+id = "exactly-one-implementation-pr"
+event = "pr.opened"
+action = "created"
+group_by = ["source_artifact"]
+exactly = 1
+
+[[expect.events]]
+required = true
+id = "dedicated-ci-success-observed-exact-head"
+event = "ci.completed"
+pr_ref = "$implementation_pr"
+conclusion = "success"
+fields."trigger.source" = "ci_poll"
+
+[[expect.sequence]]
+required = true
+id = "dedicated-ci-success-lands-before-resolution"
+scope = "source_artifact"
+events = [
+  { event = "pr.opened", action = "created", source_artifact = "$source_artifact" },
+  { event = "ci.completed", pr_ref = "$implementation_pr", conclusion = "success" },
+  { event = "mechanical.phase", artifact_ref = "$implementation_pr", fields = { "mechanical.scope" = "targeted", "mechanical.phase" = "automated_scan" } },
+  { event = "pr.merged", pr_ref = "$implementation_pr" },
+  { event = "item.resolved", artifact_ref = "$source_artifact" },
+  { event = "ci.completed", pr_ref = "$implementation_pr", conclusion = "success", fields = { "trigger.source" = "ci_poll" } },
+]
+
+[[expect.ci_provenance]]
+id = "paged-actions-api-only"
+required = true
+pull_request = "implementation"
+matching_provider_run = true
+materialized_jobs = true
+job_count = 1
+provider_run_count = 1
+stable_identities = true
+exact_head = true
+job_outcomes = [
+  { name = "build", status = "completed", conclusion = "success", exactly = 1 },
+]
+required_requests = [
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["page", "limit"], at_least = 2, all_matching = true },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
+]
+forbidden_requests = [
+  { route_contains = "/actions/tasks" },
+  { route_contains = "/user/login" },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions" },
+  { method = "GET", route = "/{repo}/actions" },
+  { method = "POST", route_contains = "/actions" },
+  { method = "PUT", route_contains = "/actions" },
+  { method = "PATCH", route_contains = "/actions" },
+  { method = "DELETE", route_contains = "/actions" },
+]
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Tighten bounded count, size, request, identity, timing, or causality assertions without changing the one-PR path.",
+  "Update the scenario-owned Jig response while preserving one green implementation head and no manual merge.",
+]
+requires_new_scenario_or_major_update = [
+  "Changing the mapped feature, plan, or inherited feature branch.",
+  "Replacing disposable Forgejo 16.0.1, the host runner, standalone Temper, or Jig agents with mocks.",
+  "Allowing unpaged Actions reads, manual merge, repair, or broad fallback to supply landing causality.",
+]

@@ -1,0 +1,73 @@
+{
+  "phases": [
+    {
+      "name": "architect-triage",
+      "when": {
+        "messages_contain": [
+          "ROLE: architect"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_inspect_pagination_service",
+                "name": "bash",
+                "args": {
+                  "command": "find service -maxdepth 2 -type f -print | sort"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"verdict\":\"ready_code\",\"body\":\"## Code spec\\n\\nAdd `service/src/banner.py` with a `service_banner(environment)` helper that identifies the active environment. Default to `development` when no environment is supplied.\"}"
+        }
+      ]
+    },
+    {
+      "name": "engineer-implementation",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_write_pagination_service_banner",
+                "name": "write",
+                "args": {
+                  "path": "service/src/banner.py",
+                  "content": "\"\"\"Service banner helpers.\"\"\"\n\n\ndef service_banner(environment=None):\n    \"\"\"Identify the active service environment.\"\"\"\n    active_environment = environment or \"development\"\n    return f\"Service environment: {active_environment}\"\n\n\n__all__ = [\"service_banner\"]\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "call_submit_pagination_implementation",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "Added the environment-aware service banner."
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"title\":\"Add environment-aware service banner\",\"body\":\"# Implementation report\\n\\nAdded one environment-aware service banner helper.\",\"summary\":\"Added the environment-aware service banner.\"}"
+        }
+      ]
+    }
+  ]
+}

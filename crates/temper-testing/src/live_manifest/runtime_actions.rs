@@ -467,84 +467,55 @@ impl LiveExecutionContext<'_> {
             deadline,
             required_mut(&mut self.standalone, "temper.launch_standalone")?,
             || {
-                engine_block_on(super::super::convergence::implementation_pr(
-                    forge, repository, issue,
-                ))
+                engine_block_on(
+                    super::super::actions_history::implementation_pr_ready_for_history_seed(
+                        forge, repository, issue,
+                    ),
+                )
             },
         )?;
 
-        required_mut(&mut self.standalone, "temper.launch_standalone")?.kill_and_wait()?;
-        let pre_seed_log = self
-            .logs
-            .standalone_log
-            .with_file_name("standalone.before-actions-history.log");
-        std::fs::copy(&self.logs.standalone_log, &pre_seed_log).map_err(|error| {
-            format!(
-                "archive pre-Actions-history standalone log {} to {}: {error}",
-                self.logs.standalone_log.display(),
-                pre_seed_log.display()
-            )
-        })?;
-
-        let seed_result = (|| {
-            let target_run_id = loop {
-                match engine_block_on(super::super::actions_history::exact_green_run(
-                    forge, repository, &pull,
-                )) {
-                    Ok(run_id) => break run_id,
-                    Err(error) if Instant::now() < deadline => {
-                        if !required_mut(&mut self.runner, "forgejo_runner.ready")?.is_running() {
-                            return Err(format!(
-                                "forgejo-runner exited while waiting for exact-head CI: {error}"
-                            ));
-                        }
-                        std::thread::sleep(Duration::from_millis(250));
-                    }
-                    Err(error) => {
+        let target_run_id = loop {
+            match engine_block_on(super::super::actions_history::exact_head_run(
+                forge, repository, &pull,
+            )) {
+                Ok(run_id) => break run_id,
+                Err(error) if Instant::now() < deadline => {
+                    if !required_mut(&mut self.runner, "forgejo_runner.ready")?.is_running() {
                         return Err(format!(
-                            "exact-head CI did not complete before the bounded fixture timeout: {error}"
+                            "forgejo-runner exited while waiting for exact-head CI: {error}"
                         ));
                     }
+                    std::thread::sleep(Duration::from_millis(250));
                 }
-            };
-            let head_sha = pull
-                .head_sha
-                .as_deref()
-                .ok_or_else(|| "implementation PR has no exact head SHA".to_string())?;
-            super::super::actions_history::seed_and_measure(
-                required_ref(&self.server, "forgejo.provision")?,
-                required_ref(&self.admin_token, "forgejo.provision")?,
-                &self.harness.scenario.repo,
-                target_run_id,
-                head_sha,
-                fixture,
-            )
-        })();
-
-        let restart_result = (|| {
-            let mut standalone = spawn_temper_standalone(
-                &self.harness.temper,
-                &self.bundle_dir,
-                &self.logs.standalone_log,
-                &self.harness.scenario.observability,
-                &self.scenario_run_id,
-            )?;
-            wait_for_standalone(&mut standalone)?;
-            self.standalone = Some(standalone);
-            Ok::<(), String>(())
-        })();
-        match (seed_result, restart_result) {
-            (Ok(capture), Ok(())) => {
-                self.actions_history = Some(capture);
-                Ok(())
+                Err(error) => {
+                    return Err(format!(
+                        "exact-head CI did not materialize before the bounded fixture timeout: {error}"
+                    ));
+                }
             }
-            (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => Err(format!(
-                "restart standalone Temper after Actions history seed: {error}"
-            )),
-            (Err(seed), Err(restart)) => Err(format!(
-                "{seed}; restarting standalone Temper also failed: {restart}"
-            )),
-        }
+        };
+        let head_sha = pull
+            .head_sha
+            .as_deref()
+            .ok_or_else(|| "implementation PR has no exact head SHA".to_string())?;
+        let server = required_ref(&self.server, "forgejo.provision")?;
+        let admin_token = required_ref(&self.admin_token, "forgejo.provision")?;
+        super::super::actions_history::disable_repository_webhooks(
+            server,
+            admin_token,
+            &self.harness.scenario.repo,
+        )?;
+        let mut capture = super::super::actions_history::seed_and_measure(
+            server,
+            admin_token,
+            &self.harness.scenario.repo,
+            target_run_id,
+            head_sha,
+            fixture,
+        )?;
+        capture.evidence.webhooks_disabled = true;
+        self.actions_history = Some(capture);
+        Ok(())
     }
 }

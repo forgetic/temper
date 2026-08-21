@@ -1,0 +1,46 @@
+# Bundled CI workflow for the basic-delivery example.
+#
+# `temper init` intentionally creates an empty/non-auto-initialized repository and
+# does not seed project content. run.sh commits this file explicitly as
+# `.forgejo/workflows/ci.yml` in the repository's first default-branch commit,
+# alongside a tiny README, before `temper serve standalone` starts. That keeps CI
+# project-owned instead of provisioner-owned.
+#
+# It runs directly on the host (`runs-on: host`, no containers) because the
+# bundled forgejo-runner is registered in host mode. It checks out the PR head
+# and runs a light validation that an ordinary product diff passes: every shell
+# script in the tree must parse (`sh -n`). When the engineer leaves a non-shell
+# diff there is nothing to validate and the job is a pass-through. This is
+# deliberately minimal: a REAL project replaces this entire file with its real CI
+# (build, test, lint) and pairs the engineer with a coding agent whose diffs pass
+# it.
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - name: keep the implementation head open for bounded history seeding
+        run: sleep 45
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: validate engineer PR head
+        run: |
+          echo "basic-delivery demo CI: validating PR head ${GITHUB_SHA}"
+          status=0
+          found=0
+          # Parse-check every shell script the engineer may have produced. A
+          # syntax error fails CI; no shell scripts ⇒ nothing to check ⇒ pass.
+          for f in $(git ls-files '*.sh'); do
+            found=1
+            echo "sh -n $f"
+            if ! sh -n "$f"; then
+              echo "::error file=$f::shell syntax error"
+              status=1
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "no shell scripts in the tree; pass-through validation"
+          fi
+          [ "$status" -eq 0 ] && echo "ok"
+          exit "$status"
