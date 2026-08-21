@@ -46,6 +46,7 @@ pub use protocol::{
 };
 pub use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
+    DecisionEvidenceKindV1,
 };
 pub use tool_failure::{
     ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason, ToolRetryDisposition,

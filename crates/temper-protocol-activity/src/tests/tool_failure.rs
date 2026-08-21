@@ -271,6 +271,7 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
         target_kind: DecisionAnchorTargetKindV1::GraphQuery,
         result_target_kinds: vec![DecisionAnchorTargetKindV1::Pattern],
         canonical_target_digests: vec![GraphCorrelationV1::target_digest("forged-root").unwrap()],
+        decision_evidence_kind: None,
     });
     assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
     event.event.sanitize_graph_correlation();
@@ -279,6 +280,67 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
     };
     assert_eq!(finished.decision_anchor_lineage, None);
 }
+
+#[test]
+fn decision_evidence_is_closed_source_only_and_privacy_safe() {
+    const SECRET: &str = "Authorization: Bearer DECISION-EVIDENCE-SECRET";
+    let source = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::GetCodeSnippet,
+        GraphCorrelationTargetKindV1::QualifiedName,
+        SECRET,
+    )
+    .unwrap();
+    let lineage = DecisionAnchorLineageV1::new_with_decision_evidence_kind(
+        "00000000-0000-4000-8000-000000000001".to_string(),
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        [],
+        DecisionEvidenceKindV1::FocusedTest,
+    )
+    .unwrap();
+    assert!(lineage.is_valid_for(&source));
+    let encoded = serde_json::to_string(&lineage).unwrap();
+    assert!(encoded.contains(r#""decision_evidence_kind":"focused_test""#));
+    assert!(!encoded.contains(SECRET));
+
+    let invalid_kind = serde_json::json!({
+        "version": 1,
+        "root_binding": "00000000-0000-4000-8000-000000000001",
+        "stage": "carry_forward",
+        "target_kind": "qualified_name",
+        "decision_evidence_kind": "test-like provider prose"
+    });
+    assert!(serde_json::from_value::<DecisionAnchorLineageV1>(invalid_kind).is_err());
+    assert!(
+        DecisionAnchorLineageV1::new_with_decision_evidence_kind(
+            "00000000-0000-4000-8000-000000000001".to_string(),
+            DecisionAnchorLineageStageV1::Root,
+            DecisionAnchorTargetKindV1::GraphQuery,
+            [],
+            DecisionEvidenceKindV1::Implementation,
+        )
+        .is_none(),
+        "non-source lineage cannot manufacture semantic evidence"
+    );
+
+    let mut event = usage_event(1);
+    event.event = AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
+        call_id: "source-1".into(),
+        name: "codebase_memory_get_code_snippet".into(),
+        status: ToolStatusV1::Succeeded,
+        duration_ms: 5,
+        result: None,
+        failure: None,
+        codebase_memory_timing: None,
+        graph_correlation: Some(source),
+        decision_anchor_lineage: Some(lineage),
+    });
+    event.validate().expect("closed source evidence validates");
+    let activity = serde_json::to_string(&event).unwrap();
+    assert!(activity.contains(r#""decision_evidence_kind":"focused_test""#));
+    assert!(!activity.contains(SECRET));
+}
+
 #[test]
 fn ordinary_tool_failures_validate_without_result_content() {
     let mut event = usage_event(1);

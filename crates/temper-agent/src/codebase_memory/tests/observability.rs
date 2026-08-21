@@ -10,7 +10,8 @@ use temper_agent_core::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
 };
 use temper_protocol_activity::{
-    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+    DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
+    GraphCorrelationV1,
 };
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
@@ -263,23 +264,24 @@ fn lifecycle_events_have_exact_safe_fields_levels_and_unavailable_bytes() {
 fn mcp_results_project_only_complete_typed_correlation_facts() {
     const DECLARED_TARGET: &str = "alias retry worker affinity";
     let correlation = GraphCorrelationV1::new(
-        GraphCorrelationToolV1::SearchGraph,
-        GraphCorrelationTargetKindV1::GraphQuery,
+        GraphCorrelationToolV1::GetCodeSnippet,
+        GraphCorrelationTargetKindV1::QualifiedName,
         DECLARED_TARGET,
     )
     .expect("complete declared graph target");
 
-    let lineage = DecisionAnchorLineageV1::new(
+    let lineage = DecisionAnchorLineageV1::new_with_decision_evidence_kind(
         "00000000-0000-4000-8000-000000000001".to_string(),
         DecisionAnchorLineageStageV1::Root,
-        DecisionAnchorTargetKindV1::GraphQuery,
+        DecisionAnchorTargetKindV1::QualifiedName,
         [DecisionAnchorTargetKindV1::QualifiedName],
+        DecisionEvidenceKindV1::Caller,
     )
     .expect("canonical lineage");
     let events = capture(|| {
         emit_mcp_tool_result(McpToolResult {
-            tool_name: "codebase_memory_search_graph",
-            mcp_tool: "search_graph",
+            tool_name: "codebase_memory_get_code_snippet",
+            mcp_tool: "get_code_snippet",
             mcp_project: "normalized-safe-project",
             is_error: false,
             truncated: false,
@@ -292,21 +294,25 @@ fn mcp_results_project_only_complete_typed_correlation_facts() {
         });
     });
 
-    let result = event(&events, "mcp.tool.result", "mcp.tool", "search_graph");
+    let result = event(&events, "mcp.tool.result", "mcp.tool", "get_code_snippet");
     assert_eq!(result.fields["graph.correlation.complete"], "true");
     assert_eq!(result.fields["graph.correlation.version"], "1");
     assert_eq!(
         result.fields["graph.correlation.tool"],
-        "codebase_memory_search_graph"
+        "codebase_memory_get_code_snippet"
     );
     assert_eq!(
         result.fields["graph.correlation.target_kind"],
-        "graph_query"
+        "qualified_name"
     );
     assert_eq!(result.fields["graph.lineage.complete"], "true");
     assert_eq!(result.fields["graph.lineage.version"], "1");
     assert_eq!(result.fields["graph.lineage.stage"], "root");
     assert_eq!(result.fields["graph.lineage.result_target_kind_count"], "1");
+    assert_eq!(
+        result.fields["graph.lineage.decision_evidence_kind"],
+        "caller"
+    );
     let rendered = format!("{result:#?}");
     assert!(!rendered.contains(DECLARED_TARGET));
     assert!(!rendered.contains(&correlation.target_digest));

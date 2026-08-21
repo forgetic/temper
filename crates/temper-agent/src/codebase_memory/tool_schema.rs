@@ -3,6 +3,8 @@ use serde_json::{Map, Value, json};
 use super::AllowedCodebaseMemoryTool;
 use super::scope::WorkspaceScope;
 
+pub(super) const DECISION_EVIDENCE_KIND_PARAMETER: &str = "decision_evidence_kind";
+
 pub(super) fn default_project_key(mcp_name: &str, input_schema: &Value) -> Option<&'static str> {
     if mcp_name == "list_projects" {
         return None;
@@ -62,6 +64,16 @@ pub(super) fn scoped_parameters(
                         }),
                     );
                 }
+            }
+            if allowed.mcp_name == "get_code_snippet" {
+                properties.insert(
+                    DECISION_EVIDENCE_KIND_PARAMETER.to_string(),
+                    json!({
+                        "type": "string",
+                        "enum": ["implementation", "caller", "focused_test"],
+                        "description": "Explicit closed decision-evidence purpose for this source read. Temper removes this wrapper-owned field before the MCP request.",
+                    }),
+                );
             }
         }
         if normalizes_project {

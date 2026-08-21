@@ -6,8 +6,9 @@ use temper_agent_core::{
 };
 use temper_protocol_activity::{
     AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1,
-    GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
-    ToolFailureCategoryV1, ToolFailureReasonV1, ToolRetryDispositionV1,
+    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
+    DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
+    GraphCorrelationV1, ToolFailureCategoryV1, ToolFailureReasonV1, ToolRetryDispositionV1,
 };
 
 use super::{FakeClock, Recorder, ScopeFactory};
@@ -122,6 +123,65 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
         assert!(!json.contains(CORRELATION_TARGET));
         assert!(!json.contains(&"y".repeat(1_000)));
     }
+}
+
+#[test]
+fn activity_carries_only_closed_source_decision_evidence() {
+    const SECRET: &str = "Authorization: Bearer ACTIVITY-EVIDENCE-SECRET";
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::GetCodeSnippet,
+        GraphCorrelationTargetKindV1::QualifiedName,
+        SECRET,
+    )
+    .unwrap();
+    let lineage = DecisionAnchorLineageV1::new_with_decision_evidence_kind(
+        "00000000-0000-4000-8000-000000000001".to_string(),
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        [],
+        DecisionEvidenceKindV1::Implementation,
+    )
+    .unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let factory = ScopeFactory::with_parts(
+        AgentActivityCapturePolicyV1 {
+            capture: CaptureModeV1::Diagnostic,
+            max_inline_bytes: 64,
+            ..Default::default()
+        },
+        Arc::new(FakeClock::new(0..10)),
+        vec![recorder.clone()],
+    );
+    let run = factory.main("main", ModelIdentity::new("p", "m"));
+    run.observability.events.emit(AgentEvent::ToolEnd {
+        id: "source-evidence".to_string(),
+        name: "codebase_memory_get_code_snippet".to_string(),
+        status: ToolCallStatus::Succeeded,
+        duration_ms: 4,
+        result: ToolResultMetadata {
+            preview: Some(format!("provider source {SECRET}")),
+            bytes: 128,
+            truncated: false,
+            failure: None,
+            codebase_memory_timing: None,
+            graph_correlation: Some(correlation),
+            decision_anchor_lineage: Some(lineage.clone()),
+        },
+    });
+
+    let frames = recorder.0.lock().expect("frames");
+    let finished = frames
+        .iter()
+        .find_map(|frame| match &frame.event {
+            AgentActivityEventV1::ToolFinished(value) => Some(value),
+            _ => None,
+        })
+        .expect("source completion");
+    assert_eq!(finished.decision_anchor_lineage.as_ref(), Some(&lineage));
+    assert_eq!(finished.result, None);
+    let activity = serde_json::to_string(&*frames).unwrap();
+    assert!(activity.contains(r#""decision_evidence_kind":"implementation""#));
+    assert!(!activity.contains(SECRET));
 }
 
 #[test]

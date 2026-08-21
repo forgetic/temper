@@ -18,8 +18,8 @@ use temper_agent_core::{
     ToolFailureDiagnostic,
 };
 use temper_protocol_activity::{
-    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, GraphCorrelationTargetKindV1,
-    GraphCorrelationV1,
+    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionEvidenceKindV1,
+    GraphCorrelationTargetKindV1, GraphCorrelationV1,
 };
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
@@ -664,6 +664,11 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
             )
         })
         .unwrap_or((0, "", ""));
+    let lineage_evidence_kind = ev
+        .decision_anchor_lineage
+        .and_then(|lineage| lineage.decision_evidence_kind)
+        .map(decision_evidence_kind)
+        .unwrap_or("");
     let (lineage_version, lineage_stage, lineage_result_target_kind_count) = ev
         .decision_anchor_lineage
         .map(|lineage| {
@@ -695,6 +700,7 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         graph.lineage.version = lineage_version,
         graph.lineage.stage = lineage_stage,
         graph.lineage.result_target_kind_count = lineage_result_target_kind_count,
+        graph.lineage.decision_evidence_kind = lineage_evidence_kind,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,
@@ -716,6 +722,14 @@ fn graph_lineage_stage(stage: DecisionAnchorLineageStageV1) -> &'static str {
     match stage {
         DecisionAnchorLineageStageV1::Root => "root",
         DecisionAnchorLineageStageV1::CarryForward => "carry_forward",
+    }
+}
+
+fn decision_evidence_kind(kind: DecisionEvidenceKindV1) -> &'static str {
+    match kind {
+        DecisionEvidenceKindV1::Implementation => "implementation",
+        DecisionEvidenceKindV1::Caller => "caller",
+        DecisionEvidenceKindV1::FocusedTest => "focused_test",
     }
 }
 
