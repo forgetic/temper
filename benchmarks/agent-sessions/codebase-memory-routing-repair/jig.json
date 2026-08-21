@@ -65,7 +65,46 @@
       "turns": [
         {
           "tool_call": {
-            "id": "duplicate_worker_refinement_non_progress",
+            "id": "duplicate_worker_refinement_non_progress_one",
+            "name": "codebase_memory_search_code",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "pattern": "worker_slot"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "duplicate_worker_refinement_exhausts_budget",
+            "name": "codebase_memory_search_code",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair",
+              "pattern": "worker_slot"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "recovery_broad_architecture_denied",
+            "name": "codebase_memory_get_architecture",
+            "args": {
+              "project": "temper-benchmark/codebase-memory-routing-repair"
+            }
+          }
+        },
+        {
+          "tool_call": {
+            "id": "recovery_duplicate_worker_refinement_denied",
             "name": "codebase_memory_search_code",
             "args": {
               "project": "temper-benchmark/codebase-memory-routing-repair",
