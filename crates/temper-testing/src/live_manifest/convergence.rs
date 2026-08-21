@@ -363,7 +363,7 @@ async fn assert_converged(
     })
 }
 
-async fn implementation_pr(
+pub(super) async fn implementation_pr(
     forge: &ForgejoForge,
     repository: &RepositoryId,
     issue: ItemNumber,

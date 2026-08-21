@@ -107,7 +107,7 @@ job_outcomes = [
   { status = "completed", conclusion = "unknown", provider_conclusion = "failure", exactly = 1 },
 ]
 required_requests = [
-  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["page", "limit"], all_matching = true },
   { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
 ]
 forbidden_requests = [
@@ -291,6 +291,45 @@ verification = "protected_producer"
         assert_eq!(
             assertions.results[0].status,
             super::super::model::ASSERTION_STATUS_PASSED
+        );
+    }
+
+    #[test]
+    fn universal_request_rule_rejects_one_unpaged_read_and_fails_closed() {
+        let mut unpaged = artifact_json();
+        let mut bad = unpaged["final_state"]["ci"]["requests"][0].clone();
+        bad["query_keys"] = json!(["limit"]);
+        unpaged["final_state"]["ci"]["requests"]
+            .as_array_mut()
+            .expect("request array")
+            .push(bad);
+        let assertions = evaluate(MANIFEST, deserialize(unpaged)).expect("unpaged evaluates");
+        assert_eq!(
+            assertions.results[0].status,
+            super::super::model::ASSERTION_STATUS_FAILED
+        );
+        assert!(
+            assertions.results[0]
+                .details
+                .iter()
+                .any(|detail| detail.contains("rejected 1 of 2"))
+        );
+
+        let mut missing = artifact_json();
+        missing["final_state"]["ci"]["requests"][0]["path"] =
+            json!("/api/v1/repos/acme/service/issues");
+        let assertions = evaluate(MANIFEST, deserialize(missing)).expect("missing evaluates");
+        assert_eq!(
+            assertions.results[0].status,
+            super::super::model::ASSERTION_STATUS_MISSING_FACT
+        );
+
+        let mut dropped = artifact_json();
+        dropped["final_state"]["ci"]["request_capture_dropped"] = json!(1);
+        let assertions = evaluate(MANIFEST, deserialize(dropped)).expect("dropped evaluates");
+        assert_eq!(
+            assertions.results[0].status,
+            super::super::model::ASSERTION_STATUS_FAILED
         );
     }
 
@@ -482,7 +521,7 @@ verification = "protected_producer"
                         {
                             "method": "GET",
                             "path": "/api/v1/repos/acme/service/actions/runs",
-                            "query_keys": ["limit"],
+                            "query_keys": ["page", "limit"],
                             "authentication_present": true,
                             "authentication_scheme": "token",
                             "accepts_json": true

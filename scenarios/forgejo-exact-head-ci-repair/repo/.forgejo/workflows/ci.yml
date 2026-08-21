@@ -82,7 +82,7 @@ jobs:
               with urllib.request.urlopen(request, timeout=10) as response:
                   return json.load(response)
 
-          runs_document = get_json(f"/repos/{repo}/actions/runs?limit=50")
+          runs_document = get_json(f"/repos/{repo}/actions/runs?page=1&limit=50")
           runs = runs_document.get("workflow_runs", runs_document.get("runs", []))
           matching_runs = [
               run

@@ -22,8 +22,8 @@ mod codebase_memory;
 
 use super::observability::capture_observability;
 use artifacts::{RetainedLogPaths, copy_report_artifacts, stimulus_log_paths};
+pub(super) use ci::{actions_history, ci_requests, verified_failure_proof};
 use ci::{ci_job, ci_observation};
-pub(super) use ci::{ci_requests, verified_failure_proof};
 
 const PRIMARY_TEMPER_BIN_ENV: &str = "TEMPER_SCENARIO_TEMPER_BIN";
 const COMPAT_TEMPER_BIN_ENV: &str = "TEMPER_BIN";
@@ -187,6 +187,7 @@ fn live_artifact(
                 failure_evidence: None,
                 requests: ci_requests(evidence),
                 request_capture_dropped: Some(evidence.ci_request_capture_dropped),
+                actions_history: actions_history(evidence),
             },
         }
     } else {
@@ -308,6 +309,7 @@ fn live_artifact(
                 }),
                 requests: ci_requests(evidence),
                 request_capture_dropped: Some(evidence.ci_request_capture_dropped),
+                actions_history: actions_history(evidence),
             },
         }
     };

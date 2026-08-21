@@ -23,6 +23,7 @@ pub(super) fn validate_action_order(
     let mut tools_configured = false;
     let mut temper_started = false;
     let mut issue_bindings = BTreeSet::<&str>::new();
+    let mut actions_history_seeded = false;
 
     for (index, step) in steps.iter().enumerate() {
         let prerequisite = |required: bool, message: &str| {
@@ -124,6 +125,21 @@ pub(super) fn validate_action_order(
                         step.id, fixture.actionable_issue_id
                     ));
                 }
+            }
+            ManifestAction::SeedActionsHistory { fixture } => {
+                prerequisite(temper_started, "temper.launch_standalone")?;
+                prerequisite(repository_seeded, "repo.seed")?;
+                prerequisite(
+                    issue_bindings.contains(fixture.source_issue_id.as_str()),
+                    &format!("issue.seed binding `{}`", fixture.source_issue_id),
+                )?;
+                if actions_history_seeded {
+                    return Err(format!(
+                        "step `{}` seeds oversized Actions history more than once",
+                        step.id
+                    ));
+                }
+                actions_history_seeded = true;
             }
             ManifestAction::SeedPullRequest {
                 source_issue_id, ..

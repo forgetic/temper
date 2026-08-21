@@ -65,7 +65,7 @@ fn assert_bounded_api_requests(requests: &[HttpRequest]) {
             assert!(
                 request
                     .query
-                    .contains(&("limit".to_string(), "200".to_string())),
+                    .contains(&("limit".to_string(), "50".to_string())),
                 "{:?}",
                 request.query
             );
@@ -79,7 +79,7 @@ fn assert_bounded_api_requests(requests: &[HttpRequest]) {
 #[test]
 fn later_page_exact_head_runs_are_aggregated_before_stable_selection() {
     let client = MockHttpClient::new();
-    let mut first_page = noise_runs(1_000, 199);
+    let mut first_page = noise_runs(1_000, 49);
     first_page.push(run(900, HEAD));
     client.push_response(200, workflow_runs(first_page));
     client.push_response(200, runs_alias(vec![run(902, HEAD)]));
@@ -109,7 +109,7 @@ fn later_page_exact_head_runs_are_aggregated_before_stable_selection() {
 #[test]
 fn opaque_get_finds_a_provider_run_after_page_one() {
     let client = MockHttpClient::new();
-    client.push_response(200, workflow_runs(noise_runs(1_000, 200)));
+    client.push_response(200, workflow_runs(noise_runs(1_000, 50)));
     client.push_response(200, workflow_runs(vec![run(900, HEAD)]));
     client.push_response(200, jobs(vec![job(31, 900, "build")]));
 
@@ -156,7 +156,7 @@ fn short_and_empty_pages_terminate_without_extra_requests() {
 #[test]
 fn repeated_full_pages_fail_closed_without_an_unpaged_fallback() {
     let client = MockHttpClient::new();
-    let mut rows = noise_runs(1_000, 200);
+    let mut rows = noise_runs(1_000, 50);
     rows[0]["prettyref"] = json!("RESPONSE-BODY-SENTINEL");
     let body = workflow_runs(rows);
     client.push_response(200, body.clone());
@@ -173,7 +173,7 @@ fn repeated_full_pages_fail_closed_without_an_unpaged_fallback() {
 
     let rendered = error.to_string();
     assert!(rendered.contains("failure=non_advancing_page"));
-    assert!(rendered.contains("page=2 limit=200"));
+    assert!(rendered.contains("page=2 limit=50"));
     assert!(!rendered.contains("RESPONSE-BODY-SENTINEL"));
     assert!(!rendered.contains("test-token"));
     assert_eq!(client.call_count(), 2);
@@ -184,7 +184,7 @@ fn repeated_full_pages_fail_closed_without_an_unpaged_fallback() {
 fn full_page_at_the_fixed_ceiling_fails_closed() {
     let client = MockHttpClient::new();
     for page in 0..64_u64 {
-        client.push_response(200, workflow_runs(noise_runs(10_000 + page * 200, 200)));
+        client.push_response(200, workflow_runs(noise_runs(10_000 + page * 50, 50)));
     }
 
     let error = block_on(forge(client.clone()).list_ci_jobs(
@@ -198,7 +198,7 @@ fn full_page_at_the_fixed_ceiling_fails_closed() {
 
     let rendered = error.to_string();
     assert!(rendered.contains("failure=page_ceiling"));
-    assert!(rendered.contains("page=64 limit=200"));
+    assert!(rendered.contains("page=64 limit=50"));
     assert_eq!(client.call_count(), 64);
     assert_bounded_api_requests(&client.recorded());
 }
@@ -215,7 +215,7 @@ fn pagination_failures_report_only_bounded_redacted_diagnostics() {
         status_error
             .contains("endpoint=/api/v1/repos/{owner}/{repo}/actions/runs operation=list_runs")
     );
-    assert!(status_error.contains("page=1 limit=200 status=401 failure=status"));
+    assert!(status_error.contains("page=1 limit=50 status=401 failure=status"));
     assert!(status_error.contains("response_bytes="));
     assert!(!status_error.contains("STATUS-BODY-SENTINEL"));
     assert!(!status_error.contains("provider-secret"));

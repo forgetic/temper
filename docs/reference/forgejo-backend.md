@@ -328,14 +328,14 @@ integration, not only CI. The backend lists workflow runs through the explicitly
 paged endpoint:
 
 ```text
-GET /repos/{owner}/{repo}/actions/runs?page={1..64}&limit=200
+GET /repos/{owner}/{repo}/actions/runs?page={1..64}&limit=50
 ```
 
 Forgejo ignores `limit` unless `page` is also present, so the traversal starts
 at page one and every physical run-list request carries both keys. The backend
 accepts the wrapped `workflow_runs` and `runs` page shapes, aggregates complete pages,
 and stops only on an empty or short page. One logical CI read makes at most 64
-run-list requests and can successfully aggregate at most 12,799 runs. A full
+run-list requests and can successfully aggregate at most 3,199 runs. A full
 page 64, an oversized page, repeated/non-advancing run identities, malformed
 JSON/shape, transport failure, or non-success status fails closed without an
 unpaged retry or fallback. Only after successful aggregation does the backend
