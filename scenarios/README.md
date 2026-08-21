@@ -377,7 +377,7 @@ job_outcomes = [
   { status = "completed", conclusion = "unknown", provider_conclusion = "failure", exactly = 1 },
 ]
 required_requests = [
-  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["page", "limit"], all_matching = true },
   { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
 ]
 forbidden_requests = [
@@ -390,7 +390,35 @@ forbidden_requests = [
 
 `{repo}` resolves from structured provider evidence. A rule containing
 `{provider_run_id}` is expanded once for every retained run identity. Required
-request rules match at least once by default and accept `at_least = <n>`.
+request rules match at least once by default and accept `at_least = <n>`. Set
+`all_matching = true` on a required rule to select requests by method/route and
+require every selected request to satisfy authentication, JSON, and query-key
+constraints. An empty selection, missing capture count, or any dropped request
+fails closed.
+
+The live-only oversized Actions-history fixture is also a closed typed action:
+
+```toml
+[[steps]]
+id = "seed-oversized-actions-history"
+action = "forgejo.actions.seed_oversized_history"
+repo = "service"
+source_issue_id = "intake"
+seeded_runs = 201
+payload_bytes = 90000
+timeout_ms = 120000
+```
+
+It must follow the source `issue.seed` and precede convergence. The harness
+pauses standalone Temper after the implementation PR appears, waits for that
+PR's real exact-head-green run, inserts only a bounded synthetic history into
+the disposable loopback Forgejo fixture, and restarts Temper. Counts are limited
+to 51–256 runs, payloads to 64–96 KiB, and timeouts to 180 seconds; the declared
+run/payload product must exceed the 16 MiB HTTP cap. Evidence retains only the
+seed count, payload size, cap, summed per-row inventory lower bound, largest
+paged response, page count, selected target page, later-page boolean, and
+provenance-drop count. Response bodies, provider rows, headers, and credentials
+are never retained.
 
 Model-recovery scenarios additionally have bounded, pre-convergence primitives:
 

@@ -234,7 +234,7 @@ job_outcomes = [
   { name = "ordinary-source-check", status = "completed", conclusion = "failure", provider_conclusion = "failure", exactly = 1 },
 ]
 required_requests = [
-  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["page", "limit"], all_matching = true },
   { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
   { method = "GET", route_contains = "/v1/forgejo-failures", authentication_scheme = "bearer", accepts_json = true, query_keys = ["repository_id", "run_id"] },
   { method = "POST", route = "/v1/forgejo-failures", authentication_scheme = "bearer", accepts_json = true },
@@ -255,7 +255,7 @@ job_outcomes = [
   { name = "ordinary-source-check", status = "completed", conclusion = "success", provider_conclusion = "success", exactly = 1 },
 ]
 required_requests = [
-  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["limit"] },
+  { method = "GET", route = "/api/v1/repos/{repo}/actions/runs", authentication_scheme = "token", accepts_json = true, query_keys = ["page", "limit"], all_matching = true },
   { method = "GET", route = "/api/v1/repos/{repo}/actions/runs/{provider_run_id}/jobs", authentication_scheme = "token", accepts_json = true },
 ]
 

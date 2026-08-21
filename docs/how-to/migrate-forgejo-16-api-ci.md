@@ -9,7 +9,7 @@ production verification step.
 The required CI endpoints are:
 
 ```text
-GET /api/v1/repos/{owner}/{repo}/actions/runs?page={1..64}&limit=200
+GET /api/v1/repos/{owner}/{repo}/actions/runs?page={1..64}&limit=50
 GET /api/v1/repos/{owner}/{repo}/actions/runs/{provider_run_id}/jobs
 ```
 
@@ -19,9 +19,9 @@ Temper reads. The API-only binary has no login, HTML, live-view, repository-wide
 tasks, or password fallback.
 
 Forgejo 16.0.1 ignores a run-list `limit` when `page` is absent. Temper therefore
-starts at page one and sends both `page` and `limit=200` on every run-inventory
+starts at page one and sends both `page` and `limit=50` on every run-inventory
 request. Wrapped `workflow_runs` and `runs` pages are aggregated until an empty
-or short page. The traversal permits at most 64 requests (12,799 runs in a
+or short page. The traversal permits at most 64 requests (3,199 runs in a
 successful traversal); a full final page, repeated/non-advancing page,
 oversized or malformed response, status failure, or transport failure is an
 error and never triggers an unpaged fallback. Pagination diagnostics retain

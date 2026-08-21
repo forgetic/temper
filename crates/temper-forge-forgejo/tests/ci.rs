@@ -71,7 +71,7 @@ fn assert_run_list_pagination(request: &HttpRequest) {
         .find(|(key, _)| key == "limit")
         .map(|(_, value)| value.as_str());
     assert!(page.is_some_and(|page| page >= 1), "{:?}", request.query);
-    assert_eq!(limit, Some("200"), "{:?}", request.query);
+    assert_eq!(limit, Some("50"), "{:?}", request.query);
     assert_eq!(request.query.len(), 2, "{:?}", request.query);
 }
 

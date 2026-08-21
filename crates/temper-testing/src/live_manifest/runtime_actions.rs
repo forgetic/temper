@@ -434,4 +434,117 @@ impl LiveExecutionContext<'_> {
         self.standalone = Some(standalone);
         Ok(())
     }
+
+    pub(super) fn seed_actions_history(
+        &mut self,
+        fixture: &super::super::ActionsHistorySeedFixture,
+    ) -> Result<(), String> {
+        require(
+            self.actions_history.is_none(),
+            "oversized Actions history has already been seeded",
+        )?;
+        require(
+            fixture.repo_id == self.harness.scenario.repo.id,
+            &format!(
+                "forgejo.actions.seed_oversized_history references unavailable repository `{}`",
+                fixture.repo_id
+            ),
+        )?;
+        let issue = self
+            .issues
+            .get(&fixture.source_issue_id)
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "source issue binding `{}` has not been seeded",
+                    fixture.source_issue_id
+                )
+            })?;
+        let forge = required_ref(&self.forge, "temper.launch_standalone")?;
+        let repository = required_ref(&self.repository, "temper.launch_standalone")?;
+        let deadline = Instant::now() + fixture.timeout;
+        let pull = super::super::convergence::poll_until(
+            deadline,
+            required_mut(&mut self.standalone, "temper.launch_standalone")?,
+            || {
+                engine_block_on(super::super::convergence::implementation_pr(
+                    forge, repository, issue,
+                ))
+            },
+        )?;
+
+        required_mut(&mut self.standalone, "temper.launch_standalone")?.kill_and_wait()?;
+        let pre_seed_log = self
+            .logs
+            .standalone_log
+            .with_file_name("standalone.before-actions-history.log");
+        std::fs::copy(&self.logs.standalone_log, &pre_seed_log).map_err(|error| {
+            format!(
+                "archive pre-Actions-history standalone log {} to {}: {error}",
+                self.logs.standalone_log.display(),
+                pre_seed_log.display()
+            )
+        })?;
+
+        let seed_result = (|| {
+            let target_run_id = loop {
+                match engine_block_on(super::super::actions_history::exact_green_run(
+                    forge, repository, &pull,
+                )) {
+                    Ok(run_id) => break run_id,
+                    Err(error) if Instant::now() < deadline => {
+                        if !required_mut(&mut self.runner, "forgejo_runner.ready")?.is_running() {
+                            return Err(format!(
+                                "forgejo-runner exited while waiting for exact-head CI: {error}"
+                            ));
+                        }
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "exact-head CI did not complete before the bounded fixture timeout: {error}"
+                        ));
+                    }
+                }
+            };
+            let head_sha = pull
+                .head_sha
+                .as_deref()
+                .ok_or_else(|| "implementation PR has no exact head SHA".to_string())?;
+            super::super::actions_history::seed_and_measure(
+                required_ref(&self.server, "forgejo.provision")?,
+                required_ref(&self.admin_token, "forgejo.provision")?,
+                &self.harness.scenario.repo,
+                target_run_id,
+                head_sha,
+                fixture,
+            )
+        })();
+
+        let restart_result = (|| {
+            let mut standalone = spawn_temper_standalone(
+                &self.harness.temper,
+                &self.bundle_dir,
+                &self.logs.standalone_log,
+                &self.harness.scenario.observability,
+                &self.scenario_run_id,
+            )?;
+            wait_for_standalone(&mut standalone)?;
+            self.standalone = Some(standalone);
+            Ok::<(), String>(())
+        })();
+        match (seed_result, restart_result) {
+            (Ok(capture), Ok(())) => {
+                self.actions_history = Some(capture);
+                Ok(())
+            }
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(error)) => Err(format!(
+                "restart standalone Temper after Actions history seed: {error}"
+            )),
+            (Err(seed), Err(restart)) => Err(format!(
+                "{seed}; restarting standalone Temper also failed: {restart}"
+            )),
+        }
+    }
 }

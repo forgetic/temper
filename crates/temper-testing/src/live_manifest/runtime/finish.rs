@@ -76,6 +76,11 @@ impl LiveExecutionContext<'_> {
                 accepts_json: request.accepts_json,
             })
             .collect();
+        let actions_history = self.actions_history.take().map(|mut capture| {
+            ci_requests.append(&mut capture.requests);
+            capture.evidence.provenance_drop_count = ci_request_capture_dropped;
+            capture.evidence
+        });
         let ci_failure_evidence = self
             .failure_evidence
             .as_ref()
@@ -116,6 +121,7 @@ impl LiveExecutionContext<'_> {
             codebase_memory: convergence.codebase_memory,
             plan_feature: convergence.plan_feature,
             terminal_history: self.terminal_history,
+            actions_history,
             stimuli: self.stimuli,
             logs: self.logs,
         })

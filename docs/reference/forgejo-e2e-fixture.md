@@ -119,7 +119,8 @@ failure evidence after every latest job is terminal; a terminal job mixed with
 queued or running work stays pending.
 
 The live backend contract in `temper-forge-forgejo/tests/live.rs` records every
-CI read. It requires only token-authenticated `/api/v1/.../actions/runs` and
+CI read. It requires only token-authenticated, explicitly paged
+`/api/v1/.../actions/runs?page=…&limit=…` and
 `/api/v1/.../actions/runs/{provider_run_id}/jobs` requests, round-trips provider
 run/job/attempt/task identity, and observes one success plus one status-only
 failure mapped to `Unknown`. It rejects any login, repository Actions HTML,

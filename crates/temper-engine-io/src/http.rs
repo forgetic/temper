@@ -339,6 +339,7 @@ impl JsonClient {
         if let Some(token) = token {
             headers.push(("Authorization".to_string(), format!("token {token}")));
         }
+        headers.push(("Accept".to_string(), "application/json".to_string()));
         if body.is_some() {
             headers.push(("Content-Type".to_string(), "application/json".to_string()));
         }
@@ -414,6 +415,37 @@ impl BlockingJsonClient {
             client
                 .send(&method, url, token.as_deref(), body.as_ref())
                 .await
+        })
+    }
+
+    /// Send one request synchronously with a hard deadline.
+    pub fn send_with_timeout(
+        &self,
+        method: &str,
+        url: impl Into<String>,
+        token: Option<&str>,
+        body: Option<&serde_json::Value>,
+        timeout: Duration,
+    ) -> Result<HttpResponseData, String> {
+        let client = self.client.clone();
+        let method = method.to_string();
+        let url = url.into();
+        let token = token.map(str::to_string);
+        let body = body.cloned();
+        crate::runtime::block_on_runtime_with(&self.runtime, move |cx, _handle| async move {
+            match skein::time::timeout(
+                crate::runtime::timer_now(&cx),
+                timeout,
+                Box::pin(client.send(&method, url, token.as_deref(), body.as_ref())),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(format!(
+                    "HTTP request timed out after {}s",
+                    timeout.as_secs()
+                )),
+            }
         })
     }
 

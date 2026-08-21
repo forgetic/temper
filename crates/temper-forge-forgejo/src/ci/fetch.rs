@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashSet};
 use temper_forge_model::{ForgeError, ForgeResult, ItemNumber};
 
 /// Fixed provider page size for Actions run inventory.
-const ACTIONS_PAGE_LIMIT: usize = 200;
+const ACTIONS_PAGE_LIMIT: usize = 50;
 /// Maximum Actions run-list requests made by one logical CI read.
 const ACTIONS_MAX_PAGES: u32 = 64;
 const ACTIONS_ENDPOINT: &str = "/api/v1/repos/{owner}/{repo}/actions/runs";

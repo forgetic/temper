@@ -44,6 +44,18 @@ fn walker_dispatches_every_manifest_action_in_declared_order() {
             },
         ),
         step(
+            "actions-history",
+            ManifestAction::SeedActionsHistory {
+                fixture: super::ActionsHistorySeedFixture {
+                    repo_id: "service".to_string(),
+                    source_issue_id: "source".to_string(),
+                    seeded_runs: 201,
+                    payload_bytes: 90_000,
+                    timeout: Duration::from_secs(120),
+                },
+            },
+        ),
+        step(
             "pr",
             ManifestAction::SeedPullRequest {
                 repo_id: "service".to_string(),
@@ -105,6 +117,7 @@ fn walker_dispatches_every_manifest_action_in_declared_order() {
     assert_eq!(dispatched.last(), Some(&"workflow.wait_convergence"));
     assert!(dispatched.contains(&"mcp.fake_codebase_memory.start"));
     assert!(dispatched.contains(&"pr.seed_existing"));
+    assert!(dispatched.contains(&"forgejo.actions.seed_oversized_history"));
     assert!(dispatched.contains(&"forgejo_runner.restart"));
 }
 

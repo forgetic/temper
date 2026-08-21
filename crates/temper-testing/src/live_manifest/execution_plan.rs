@@ -6,6 +6,8 @@ use toml::Value as TomlValue;
 
 use super::stimuli::{StimulusKind, StimulusSpec};
 
+#[path = "execution_plan/actions_history.rs"]
+mod actions_history;
 #[path = "execution_links.rs"]
 mod execution_links;
 #[path = "execution_order.rs"]
@@ -154,6 +156,9 @@ pub enum ManifestAction {
     SeedTerminalHistory {
         fixture: TerminalHistorySeedFixture,
     },
+    SeedActionsHistory {
+        fixture: ActionsHistorySeedFixture,
+    },
     SeedPullRequest {
         repo_id: String,
         source_issue_id: String,
@@ -194,6 +199,7 @@ impl ManifestAction {
             Self::LaunchTemper { .. } => "temper.launch_standalone",
             Self::SeedIssue { .. } => "issue.seed",
             Self::SeedTerminalHistory { .. } => "history.seed_terminal",
+            Self::SeedActionsHistory { .. } => "forgejo.actions.seed_oversized_history",
             Self::SeedPullRequest { .. } => "pr.seed_existing",
             Self::StartCodebaseMemoryMcp { .. } => "mcp.fake_codebase_memory.start",
             Self::ConfigureAgentTools { .. } => "agent.tools.configure",
@@ -278,6 +284,16 @@ pub struct TerminalHistorySeedFixture {
     pub sibling_closed_issues: usize,
     pub sibling_issue_labels: Vec<String>,
     pub omit_webhooks: bool,
+}
+
+/// Closed, bounded fixture for moving one real exact-head run beyond page one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActionsHistorySeedFixture {
+    pub repo_id: String,
+    pub source_issue_id: String,
+    pub seeded_runs: usize,
+    pub payload_bytes: usize,
+    pub timeout: Duration,
 }
 
 fn validate_live_topology(manifest: &TomlValue) -> Result<(), String> {
@@ -373,6 +389,7 @@ fn parse_action(name: &str, table: &toml::Table, index: usize) -> Result<Manifes
             after_pr_binding: optional_table_string(table, "after_pr_binding", &field)?,
         }),
         "history.seed_terminal" => terminal_history::parse(table, index),
+        "forgejo.actions.seed_oversized_history" => actions_history::parse(table, index),
         "pr.seed_existing" => Ok(ManifestAction::SeedPullRequest {
             repo_id: required_table_string(table, "repo", &field)?,
             source_issue_id: required_table_string(table, "source_issue_id", &field)?,
