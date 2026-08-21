@@ -108,7 +108,6 @@ struct GapRecovery {
 
 #[derive(Default)]
 struct SourceEvidence {
-    refinement_seen: bool,
     trace_turn: Option<usize>,
     decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
 }
@@ -391,31 +390,30 @@ impl DecisionAnchorState {
             .chain(batch_root_trace_turn)
             .min();
         let trace_turn = evidence.trace_turn.or(batch_trace_turn);
-        let decision_kinds = trace_turn.map_or_else(BTreeSet::new, |trace_turn| {
-            compatible
-                .iter()
-                .filter_map(|(call, output)| {
-                    (output.tool == GraphCorrelationToolV1::GetCodeSnippet
-                        && call.turn >= trace_turn)
-                        .then_some(output.lineage.decision_evidence_kind)
-                        .flatten()
-                })
-                .collect()
-        });
-        let refinement = !evidence.refinement_seen
-            && compatible
-                .iter()
-                .any(|(_, output)| output.tool == GraphCorrelationToolV1::SearchCode);
+        let decision_kinds = compatible
+            .iter()
+            .filter_map(|(call, output)| match output.tool {
+                // A successful current-root code refinement is itself typed
+                // implementation evidence. Semantic caller and test purposes
+                // remain explicit wrapper-validated source declarations.
+                GraphCorrelationToolV1::SearchCode => Some(DecisionEvidenceKindV1::Implementation),
+                GraphCorrelationToolV1::GetCodeSnippet
+                    if trace_turn.is_some_and(|trace_turn| call.turn >= trace_turn) =>
+                {
+                    output.lineage.decision_evidence_kind
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         let trace_progressed = !evidence.has_trace() && batch_trace_turn.is_some();
         let evidence_progressed = decision_kinds
             .iter()
             .any(|kind| !evidence.decision_kinds.contains(kind));
-        let progressed = trace_progressed || evidence_progressed || refinement || roots_progressed;
+        let progressed = trace_progressed || evidence_progressed || roots_progressed;
 
         if progressed {
             self.non_progressing_batches = 0;
             let mut evidence = evidence;
-            evidence.refinement_seen |= refinement;
             if let Some(trace_turn) = batch_trace_turn {
                 evidence.record_trace(trace_turn);
             }

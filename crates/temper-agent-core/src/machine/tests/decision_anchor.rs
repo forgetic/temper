@@ -39,6 +39,10 @@ mod tests {
         include!("decision_anchor_recovery.rs");
     }
 
+    mod routing_recovery {
+        include!("decision_anchor_routing_recovery.rs");
+    }
+
     mod evidence {
         include!("decision_anchor_evidence.rs");
     }
