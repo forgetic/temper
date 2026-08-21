@@ -18,28 +18,46 @@ fn read_only_roles_converge_and_close_graph_tools_without_mutation_effects() {
         ROOT,
         DecisionAnchorLineageStageV1::Root,
     );
-    for id in ["trace", "implementation", "test"] {
-        let name = if id == "trace" {
-            "codebase_memory_trace_path"
-        } else {
-            "codebase_memory_get_code_snippet"
-        };
-        state.on_tool_dispatched(&call(id, name), 1);
+    for (id, name, evidence_kind) in [
+        ("trace", "codebase_memory_trace_path", None),
+        (
+            "implementation",
+            "codebase_memory_get_code_snippet",
+            Some(DecisionEvidenceKindV1::Implementation),
+        ),
+        (
+            "caller",
+            "codebase_memory_get_code_snippet",
+            Some(DecisionEvidenceKindV1::Caller),
+        ),
+        (
+            "test",
+            "codebase_memory_get_code_snippet",
+            Some(DecisionEvidenceKindV1::FocusedTest),
+        ),
+    ] {
+        let call = evidence_kind.map_or_else(|| call(id, name), |kind| source_call(id, kind));
+        state.on_tool_dispatched(&call, 1);
     }
     let trace = output(
         "codebase_memory_trace_path",
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
     );
-    let implementation = output(
-        "codebase_memory_get_code_snippet",
+    let implementation = output_with_evidence(
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Implementation,
     );
-    let test = output(
-        "codebase_memory_get_code_snippet",
+    let caller = output_with_evidence(
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Caller,
+    );
+    let test = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::FocusedTest,
     );
     assert_eq!(
         state.on_tool_batch_finished(&[
@@ -49,6 +67,7 @@ fn read_only_roles_converge_and_close_graph_tools_without_mutation_effects() {
                 "codebase_memory_get_code_snippet",
                 &implementation,
             ),
+            ("caller", "codebase_memory_get_code_snippet", &caller),
             ("test", "codebase_memory_get_code_snippet", &test),
         ]),
         DecisionAnchorTransition::Converged

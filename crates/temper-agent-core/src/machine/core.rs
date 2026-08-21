@@ -481,7 +481,8 @@ impl AgentMachine {
                     .collect::<Vec<_>>();
                 match state.on_tool_batch_finished(&completed) {
                     DecisionAnchorTransition::Unchanged => {}
-                    DecisionAnchorTransition::RecoveryNeeded => {
+                    DecisionAnchorTransition::RecoveryNeeded
+                    | DecisionAnchorTransition::GapRecoveryNeeded => {
                         self.decision_anchor_recovery = true;
                     }
                     DecisionAnchorTransition::RecoveryExhausted => {

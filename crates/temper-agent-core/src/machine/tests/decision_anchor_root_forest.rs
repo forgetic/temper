@@ -47,12 +47,15 @@ fn three_discovery_roots_jointly_cover_next_turn_trace_and_sources() {
 
     state.on_tool_dispatched(&call("affinity-trace", "codebase_memory_trace_path"), 1);
     state.on_tool_dispatched(
-        &call("affinity-source", "codebase_memory_get_code_snippet"),
+        &source_call("affinity-source", DecisionEvidenceKindV1::Implementation),
         1,
     );
-    state.on_tool_dispatched(&call("retry-source", "codebase_memory_get_code_snippet"), 1);
     state.on_tool_dispatched(
-        &call("caller-source", "codebase_memory_get_code_snippet"),
+        &source_call("retry-source", DecisionEvidenceKindV1::FocusedTest),
+        1,
+    );
+    state.on_tool_dispatched(
+        &source_call("caller-source", DecisionEvidenceKindV1::Caller),
         1,
     );
     let affinity_trace = output(
@@ -60,20 +63,20 @@ fn three_discovery_roots_jointly_cover_next_turn_trace_and_sources() {
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
     );
-    let affinity_source = output(
-        "codebase_memory_get_code_snippet",
+    let affinity_source = output_with_evidence(
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Implementation,
     );
-    let retry_source = output(
-        "codebase_memory_get_code_snippet",
+    let retry_source = output_with_evidence(
         OTHER_ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::FocusedTest,
     );
-    let caller_source = output(
-        "codebase_memory_get_code_snippet",
+    let caller_source = output_with_evidence(
         THIRD_ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Caller,
     );
     assert_eq!(
         state.on_tool_batch_finished(&[
@@ -191,7 +194,7 @@ fn later_independent_root_expansion_is_bounded() {
         if index < MAX_LATER_DECISION_ANCHOR_ROOTS {
             assert_eq!(transition, DecisionAnchorTransition::Unchanged);
         } else {
-            assert_eq!(transition, DecisionAnchorTransition::ExplorationExhausted);
+            assert_eq!(transition, DecisionAnchorTransition::GapRecoveryNeeded);
         }
     }
     assert_eq!(
@@ -230,22 +233,34 @@ fn independent_trace_root_is_evidence_for_later_forest_sources() {
     ]);
 
     state.on_tool_dispatched(
-        &call("implementation-source", "codebase_memory_get_code_snippet"),
+        &source_call(
+            "implementation-source",
+            DecisionEvidenceKindV1::Implementation,
+        ),
         1,
     );
     state.on_tool_dispatched(
-        &call("caller-source", "codebase_memory_get_code_snippet"),
+        &source_call("caller-source", DecisionEvidenceKindV1::Caller),
         1,
     );
-    let implementation_source = output(
-        "codebase_memory_get_code_snippet",
+    state.on_tool_dispatched(
+        &source_call("test-source", DecisionEvidenceKindV1::FocusedTest),
+        1,
+    );
+    let implementation_source = output_with_evidence(
         OTHER_ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Implementation,
     );
-    let caller_source = output(
-        "codebase_memory_get_code_snippet",
+    let caller_source = output_with_evidence(
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Caller,
+    );
+    let test_source = output_with_evidence(
+        OTHER_ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::FocusedTest,
     );
     state.on_tool_batch_finished(&[
         (
@@ -257,6 +272,11 @@ fn independent_trace_root_is_evidence_for_later_forest_sources() {
             "caller-source",
             "codebase_memory_get_code_snippet",
             &caller_source,
+        ),
+        (
+            "test-source",
+            "codebase_memory_get_code_snippet",
+            &test_source,
         ),
     ]);
     assert!(!state.blocks_mutation("write"));

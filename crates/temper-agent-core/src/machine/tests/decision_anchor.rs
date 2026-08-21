@@ -3,7 +3,8 @@
 mod tests {
     use super::super::super::decision_anchor::*;
     use crate::machine::tests::common::{
-        assistant_tool_calls, calls_llm, complete, llm_responded, run_tools, tool_finished, user,
+        assistant_tool_calls, calls_llm, complete, final_stop, llm_responded, run_tools,
+        tool_finished, user,
     };
     use crate::machine::{
         AgentMachine, AgentRequest, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
@@ -15,10 +16,11 @@ mod tests {
     use temper_agent_io::{EngineTime, Machine};
     use temper_protocol_activity::{
         DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-        GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+        DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
+        GraphCorrelationV1,
     };
     use tongs::{
-        model::{Message, ToolCall, UserContent},
+        model::{ContentBlock, Message, ToolCall, UserContent},
         tools::{ToolEffects, ToolOutput},
     };
 
@@ -35,6 +37,10 @@ mod tests {
 
     mod recovery {
         include!("decision_anchor_recovery.rs");
+    }
+
+    mod evidence {
+        include!("decision_anchor_evidence.rs");
     }
 
     fn effects() -> BTreeMap<String, ToolEffects> {
@@ -57,6 +63,17 @@ mod tests {
             id: id.to_string(),
             name: name.to_string(),
             arguments: serde_json::json!({"target": "not used by the policy"}),
+        }
+    }
+
+    fn source_call(id: &str, kind: DecisionEvidenceKindV1) -> ToolCall {
+        ToolCall {
+            id: id.to_string(),
+            name: "codebase_memory_get_code_snippet".to_string(),
+            arguments: serde_json::json!({
+                "qualified_name": "not used by the policy",
+                "decision_evidence_kind": kind,
+            }),
         }
     }
 
@@ -119,6 +136,34 @@ mod tests {
         )
     }
 
+    fn output_with_evidence(
+        root: &str,
+        stage: DecisionAnchorLineageStageV1,
+        evidence_kind: DecisionEvidenceKindV1,
+    ) -> ToolOutput {
+        let (tool, kind) = correlation("codebase_memory_get_code_snippet");
+        let lineage = DecisionAnchorLineageV1::new_with_decision_evidence_kind(
+            root.to_string(),
+            stage,
+            DecisionAnchorTargetKindV1::from_graph_correlation(kind),
+            [
+                DecisionAnchorTargetKindV1::Pattern,
+                DecisionAnchorTargetKindV1::FunctionName,
+                DecisionAnchorTargetKindV1::QualifiedName,
+            ],
+            evidence_kind,
+        )
+        .unwrap();
+        ToolOutput {
+            content: Vec::new(),
+            details: Some(serde_json::json!({
+                SAFE_GRAPH_CORRELATION_DETAIL_KEY: GraphCorrelationV1::new(tool, kind, "request").unwrap(),
+                SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: lineage,
+            })),
+            is_error: false,
+        }
+    }
+
     fn failure_output(category: &str) -> ToolOutput {
         ToolOutput {
             content: Vec::new(),
@@ -168,6 +213,19 @@ mod tests {
         state.on_tool_finished(id, name, &output(name, root, stage));
     }
 
+    fn finish_with_evidence(
+        state: &mut DecisionAnchorState,
+        id: &str,
+        root: &str,
+        kind: DecisionEvidenceKindV1,
+    ) -> DecisionAnchorTransition {
+        state.on_tool_finished(
+            id,
+            "codebase_memory_get_code_snippet",
+            &output_with_evidence(root, DecisionAnchorLineageStageV1::CarryForward, kind),
+        )
+    }
+
     fn finish_with_kinds(
         state: &mut DecisionAnchorState,
         id: &str,
@@ -181,206 +239,6 @@ mod tests {
             name,
             &output_with_kinds(name, root, stage, result_target_kinds),
         )
-    }
-
-    #[test]
-    fn direct_trace_and_two_current_root_sources_complete_without_search_code() {
-        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
-        finish(
-            &mut state,
-            "root",
-            "codebase_memory_search_graph",
-            ROOT,
-            DecisionAnchorLineageStageV1::Root,
-        );
-
-        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
-        state.on_tool_dispatched(
-            &call("implementation", "codebase_memory_get_code_snippet"),
-            1,
-        );
-        state.on_tool_dispatched(&call("behavior", "codebase_memory_get_code_snippet"), 1);
-        let trace = output(
-            "codebase_memory_trace_path",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        let implementation = output(
-            "codebase_memory_get_code_snippet",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        let behavior = output(
-            "codebase_memory_get_code_snippet",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        assert_eq!(
-            state.on_tool_batch_finished(&[
-                (
-                    "implementation",
-                    "codebase_memory_get_code_snippet",
-                    &implementation
-                ),
-                ("trace", "codebase_memory_trace_path", &trace),
-                ("behavior", "codebase_memory_get_code_snippet", &behavior),
-            ]),
-            DecisionAnchorTransition::Converged,
-        );
-        assert!(
-            !state.blocks_mutation("write"),
-            "a later trace plus sufficient current-root source reads is complete evidence"
-        );
-    }
-
-    #[test]
-    fn parallel_sources_then_trace_batch_completes_the_same_evidence_set() {
-        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
-        finish(
-            &mut state,
-            "root",
-            "codebase_memory_search_graph",
-            ROOT,
-            DecisionAnchorLineageStageV1::Root,
-        );
-
-        // Pre-trace snippets use the same settled pre-batch root as trace-first batches.
-        state.on_tool_dispatched(
-            &call("implementation", "codebase_memory_get_code_snippet"),
-            1,
-        );
-        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
-        state.on_tool_dispatched(&call("behavior", "codebase_memory_get_code_snippet"), 1);
-        let implementation = output(
-            "codebase_memory_get_code_snippet",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        let trace = output(
-            "codebase_memory_trace_path",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        let behavior = output(
-            "codebase_memory_get_code_snippet",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        assert_eq!(
-            state.on_tool_batch_finished(&[
-                (
-                    "implementation",
-                    "codebase_memory_get_code_snippet",
-                    &implementation,
-                ),
-                ("trace", "codebase_memory_trace_path", &trace),
-                ("behavior", "codebase_memory_get_code_snippet", &behavior,),
-            ]),
-            DecisionAnchorTransition::Converged,
-        );
-        assert!(
-            !state.blocks_mutation("write"),
-            "sibling dispatch order cannot change complete current-root evidence"
-        );
-    }
-
-    #[test]
-    fn root_producer_and_same_turn_dependents_stay_ineligible() {
-        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
-        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 0);
-        state.on_tool_dispatched(&call("source-one", "codebase_memory_get_code_snippet"), 0);
-        state.on_tool_dispatched(&call("source-two", "codebase_memory_get_code_snippet"), 0);
-        let root = output(
-            "codebase_memory_search_graph",
-            ROOT,
-            DecisionAnchorLineageStageV1::Root,
-        );
-        let trace = output(
-            "codebase_memory_trace_path",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        let source_one = output(
-            "codebase_memory_get_code_snippet",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        let source_two = output(
-            "codebase_memory_get_code_snippet",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        state.on_tool_batch_finished(&[
-            (
-                "source-two",
-                "codebase_memory_get_code_snippet",
-                &source_two,
-            ),
-            ("trace", "codebase_memory_trace_path", &trace),
-            ("root", "codebase_memory_search_graph", &root),
-            (
-                "source-one",
-                "codebase_memory_get_code_snippet",
-                &source_one,
-            ),
-        ]);
-        assert!(
-            state.blocks_mutation("write"),
-            "the root must be consumed by a later model turn"
-        );
-    }
-
-    #[test]
-    fn blocks_until_a_later_root_bound_trace_and_two_source_reads_complete() {
-        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
-        finish(
-            &mut state,
-            "root",
-            "codebase_memory_search_graph",
-            ROOT,
-            DecisionAnchorLineageStageV1::Root,
-        );
-        assert!(state.blocks_mutation("write"));
-        assert_eq!(
-            state.on_tool_dispatched(&call("blocked-write", "write"), 1),
-            Some(ToolCallDenial::DecisionAnchorMutation),
-            "mutation remains locally denied while current-root evidence is incomplete"
-        );
-
-        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
-        finish(
-            &mut state,
-            "trace",
-            "codebase_memory_trace_path",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        state.on_tool_dispatched(&call("source", "codebase_memory_get_code_snippet"), 2);
-        finish(
-            &mut state,
-            "source",
-            "codebase_memory_get_code_snippet",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        assert!(
-            state.blocks_mutation("write"),
-            "one source read is incomplete"
-        );
-        state.on_tool_dispatched(&call("test", "codebase_memory_get_code_snippet"), 3);
-        finish(
-            &mut state,
-            "test",
-            "codebase_memory_get_code_snippet",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-
-        assert!(!state.blocks_mutation("write"));
     }
 
     #[test]
@@ -437,12 +295,13 @@ mod tests {
             llm_responded(assistant_tool_calls(&[
                 ("trace", "codebase_memory_trace_path"),
                 ("implementation", "codebase_memory_get_code_snippet"),
+                ("caller", "codebase_memory_get_code_snippet"),
                 ("behavior", "codebase_memory_get_code_snippet"),
             ])),
         );
         assert_eq!(
             run_tools(&batch_requests),
-            ["trace", "implementation", "behavior"],
+            ["trace", "implementation", "caller", "behavior"],
             "the independent reads retain their parallel dispatch batch"
         );
 
@@ -452,10 +311,10 @@ mod tests {
                 &mut machine,
                 tool_finished(
                     "implementation",
-                    output(
-                        "codebase_memory_get_code_snippet",
+                    output_with_evidence(
                         ROOT,
                         DecisionAnchorLineageStageV1::CarryForward,
+                        DecisionEvidenceKindV1::Implementation,
                     ),
                 ),
             )
@@ -475,14 +334,28 @@ mod tests {
             )
             .is_empty()
         );
+        assert!(
+            complete(
+                &mut machine,
+                tool_finished(
+                    "caller",
+                    output_with_evidence(
+                        ROOT,
+                        DecisionAnchorLineageStageV1::CarryForward,
+                        DecisionEvidenceKindV1::Caller,
+                    ),
+                ),
+            )
+            .is_empty()
+        );
         let final_source = complete(
             &mut machine,
             tool_finished(
                 "behavior",
-                output(
-                    "codebase_memory_get_code_snippet",
+                output_with_evidence(
                     ROOT,
                     DecisionAnchorLineageStageV1::CarryForward,
+                    DecisionEvidenceKindV1::FocusedTest,
                 ),
             ),
         );
@@ -577,7 +450,10 @@ mod tests {
             ROOT,
             DecisionAnchorLineageStageV1::CarryForward,
         );
-        fallback.on_tool_dispatched(&call("source", "codebase_memory_get_code_snippet"), 2);
+        fallback.on_tool_dispatched(
+            &source_call("source", DecisionEvidenceKindV1::Implementation),
+            2,
+        );
         assert_eq!(
             fallback.on_tool_finished(
                 "source",
@@ -589,6 +465,14 @@ mod tests {
         assert!(
             !fallback.blocks_mutation("write"),
             "the unavailable expected source read must permit conventional fallback"
+        );
+        assert_eq!(
+            fallback.on_tool_dispatched(
+                &source_call("retry", DecisionEvidenceKindV1::Implementation),
+                3,
+            ),
+            Some(ToolCallDenial::GraphExplorationClosed),
+            "fallback must not immediately reopen graph exploration"
         );
 
         let mut unrelated = DecisionAnchorState::from_effects(&effects()).unwrap();
@@ -632,7 +516,7 @@ mod tests {
             DecisionAnchorLineageStageV1::CarryForward,
         );
         state.on_tool_dispatched(
-            &call("closed-source", "codebase_memory_get_code_snippet"),
+            &source_call("closed-source", DecisionEvidenceKindV1::Implementation),
             2,
         );
 
