@@ -1,0 +1,13 @@
+{
+  "phases": [
+    {
+      "name": "mapped-live-denied-shell-classification-runtime",
+      "when": { "messages_contain": ["__mapped_live_denied_shell_classification_fixture_runtime__"] },
+      "sequence": [
+        {
+          "text": "The live fixture owns transient invocation and provider data; only closed classification, lineage, non-execution, and convergence facts may be retained."
+        }
+      ]
+    }
+  ]
+}
