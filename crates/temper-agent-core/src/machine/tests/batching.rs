@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use temper_agent_io::{EngineTime, Machine};
-use tongs::model::Message;
+use tongs::model::{ContentBlock, Message};
 use tongs::tools::ToolEffects;
 
 use super::common::{
@@ -348,6 +348,131 @@ fn typed_failure_completion_replaces_arbitrary_output_for_the_next_model_turn() 
     assert!(!format!("{messages:?}").contains(SECRET));
 }
 
+#[test]
+fn graph_result_before_serialized_bash_denial_retains_closed_disposition() {
+    use crate::machine::{
+        AgentEvent, DiagnosticToolArguments, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+        SAFE_GRAPH_CORRELATION_DETAIL_KEY, ToolCallDenial, ToolStartPresentation,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use temper_protocol_activity::{
+        DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
+        GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+        ShellDiscoveryDispositionStatusV1, ShellDiscoveryDispositionV1,
+    };
+    const PRIVATE_COMMAND: &str = "DENIED-COMMAND PRIVATE-ARGV /private/path PROVIDER-VALUE PROMPT-VALUE CREDENTIAL-VALUE PROCESS-LOCAL-VALUE";
+    let mut effects = BTreeMap::new();
+    effects.insert(
+        "codebase_memory_search_graph".to_string(),
+        ToolEffects::read(),
+    );
+    effects.insert("bash".to_string(), ToolEffects::process());
+    let presentations = Arc::new(AtomicUsize::new(0));
+    let observed_presentations = Arc::clone(&presentations);
+    let mut machine = AgentMachine::with_effects(vec![user("inspect then run")], 10, effects)
+        .with_arg_preview(Arc::new(move |_, arguments| {
+            observed_presentations.fetch_add(1, Ordering::SeqCst);
+            ToolStartPresentation {
+                arg_preview: Some(arguments.to_string()),
+                diagnostic_arguments: Some(DiagnosticToolArguments::new(arguments.to_string())),
+            }
+        }));
+    let _ = machine.on_start(EngineTime::ZERO);
+    let mut mixed = assistant_tool_calls(&[
+        ("root", "codebase_memory_search_graph"),
+        ("denied-shell", "bash"),
+    ]);
+    let ContentBlock::ToolCall(shell) = &mut mixed.content[1] else {
+        panic!("bash fixture must be a tool call");
+    };
+    shell.arguments = serde_json::json!({"command": PRIVATE_COMMAND, "argv": ["PRIVATE-ARGV"]});
+    let graph = complete(&mut machine, llm_responded(mixed));
+    assert_eq!(run_tools(&graph), ["root"]);
+    let graph_start = graph
+        .iter()
+        .find_map(|request| match request {
+            AgentRequest::Emit(event @ AgentEvent::ToolStart { id, .. }) if id == "root" => {
+                Some(event)
+            }
+            _ => None,
+        })
+        .expect("graph start");
+    assert!(matches!(
+        graph_start,
+        AgentEvent::ToolStart {
+            shell_discovery_disposition: None,
+            ..
+        }
+    ));
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        "request",
+    )
+    .unwrap();
+    let lineage = DecisionAnchorLineageV1::new(
+        "00000000-0000-4000-8000-000000000001".to_string(),
+        DecisionAnchorLineageStageV1::Root,
+        DecisionAnchorTargetKindV1::GraphQuery,
+        [DecisionAnchorTargetKindV1::QualifiedName],
+    )
+    .unwrap();
+    let denied = complete(
+        &mut machine,
+        tool_finished(
+            "root",
+            tongs::tools::ToolOutput {
+                content: Vec::new(),
+                details: Some(serde_json::json!({
+                    SAFE_GRAPH_CORRELATION_DETAIL_KEY: correlation,
+                    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: lineage,
+                })),
+                is_error: false,
+            },
+        ),
+    );
+    assert!(denied.iter().any(|request| matches!(
+        request,
+        AgentRequest::RunTool {
+            call,
+            denial: Some(ToolCallDenial::DecisionAnchorMutation),
+            rejection: None,
+            ..
+        } if call.id == "denied-shell" && call.name == "bash"
+    )));
+    let shell_start = denied
+        .iter()
+        .find_map(|request| match request {
+            AgentRequest::Emit(event @ AgentEvent::ToolStart { id, .. })
+                if id == "denied-shell" =>
+            {
+                Some(event)
+            }
+            _ => None,
+        })
+        .expect("denied shell start");
+    let AgentEvent::ToolStart {
+        arg_preview,
+        diagnostic_arguments,
+        shell_discovery_disposition,
+        ..
+    } = shell_start
+    else {
+        unreachable!();
+    };
+    assert_eq!(arg_preview, &None);
+    assert_eq!(diagnostic_arguments, &None);
+    assert_eq!(
+        *shell_discovery_disposition,
+        Some(ShellDiscoveryDispositionV1::excluded_never_executed_local_policy_denial())
+    );
+    assert_eq!(
+        shell_discovery_disposition.unwrap().status,
+        ShellDiscoveryDispositionStatusV1::ExcludedNeverExecutedLocalPolicyDenial
+    );
+    assert_eq!(presentations.load(Ordering::SeqCst), 1);
+    assert!(!format!("{shell_start:?}").contains(PRIVATE_COMMAND));
+}
 #[test]
 fn results_across_serial_batches_preserve_original_order() {
     // read, write ⇒ two batches; even though they run in sequence, the appended

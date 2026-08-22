@@ -40,7 +40,8 @@ pub use machine::{
     DecisionEvidenceKindV1, DiagnosticToolArguments, GraphExplorationClosedReasonV1,
     GraphExplorationClosedV1, GraphRecoveryEvidenceKindV1, GraphRecoveryPermittedActionV1,
     ModelCallStatus, OperationGeneration, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta, ToolCallDenial,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+    ShellDiscoveryDispositionStatusV1, ShellDiscoveryDispositionV1, StreamDelta, ToolCallDenial,
     ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason,
     ToolResultMetadata, ToolRetryDisposition, ToolStartPresentation, ToolStartPresentationFn,
 };

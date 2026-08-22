@@ -564,6 +564,49 @@ pub struct CodebaseMemoryTimingV1 {
     pub graph_execution_ms: u64,
 }
 
+/// Current version of the closed disposition for a shell start denied before
+/// registry or process execution.
+pub const SHELL_DISCOVERY_DISPOSITION_VERSION: u32 = 1;
+
+/// Closed classification state retained for a never-executed shell start.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellDiscoveryDispositionStatusV1 {
+    ExcludedNeverExecutedLocalPolicyDenial,
+}
+
+/// Privacy-safe shell discovery classification for a locally denied start.
+///
+/// The enclosing tool boundary owns call identity. This record deliberately
+/// has no command, argument, path, provider, prompt, credential, or process
+/// field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellDiscoveryDispositionV1 {
+    pub version: u32,
+    pub status: ShellDiscoveryDispositionStatusV1,
+    pub matching_discovery_segments: u32,
+}
+
+impl ShellDiscoveryDispositionV1 {
+    pub const fn excluded_never_executed_local_policy_denial() -> Self {
+        Self {
+            version: SHELL_DISCOVERY_DISPOSITION_VERSION,
+            status: ShellDiscoveryDispositionStatusV1::ExcludedNeverExecutedLocalPolicyDenial,
+            matching_discovery_segments: 0,
+        }
+    }
+
+    pub const fn is_valid(self) -> bool {
+        self.version == SHELL_DISCOVERY_DISPOSITION_VERSION
+            && self.matching_discovery_segments == 0
+            && matches!(
+                self.status,
+                ShellDiscoveryDispositionStatusV1::ExcludedNeverExecutedLocalPolicyDenial
+            )
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolStartedV1 {
@@ -571,6 +614,8 @@ pub struct ToolStartedV1 {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<CapturedContentV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_discovery_disposition: Option<ShellDiscoveryDispositionV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

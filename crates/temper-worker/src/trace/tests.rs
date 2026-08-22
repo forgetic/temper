@@ -430,6 +430,7 @@ fn metadata_policy_rejects_forged_message_and_tool_argument_content() {
             text: "forged argument bytes".to_string(),
             truncated: false,
         })),
+        shell_discovery_disposition: None,
     });
     assert!(matches!(
         run.accept_frame(tool),
