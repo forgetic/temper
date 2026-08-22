@@ -122,6 +122,15 @@ bounded failure, exact diff validation, and deterministic correctness only. Jig
 timing and token values are not live effectiveness evidence and must not be used
 to claim the criterion was met.
 
+The controlled denominator also permits a closed, never-executed local shell
+denial. Its argument-free `bash` start must pair by scope and call with exactly
+one later `Failed` completion carrying `policy_denial` /
+`policy_precondition`. A valid exclusion contributes one observed and one
+expected shell call, zero shell segments, and no conventional-discovery credit.
+Missing, malformed, mismatched, differently failed, or command-bearing pairs
+remain incomplete, omit the aggregate sample, and fail the same frozen
+classification gate; they are never interpreted as zero-discovery evidence.
+
 ## Exact-head acceptance verification
 
 The manifest declares the frozen provider/model, cache annotation, smoke and

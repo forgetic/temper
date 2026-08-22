@@ -391,6 +391,13 @@ fn decisive_selection(options: &AnalyzeOptions, actions: &[Action]) -> DecisiveS
     }
 }
 
+struct ShellCompletion {
+    seq: u64,
+    name: String,
+    status: ToolStatusV1,
+    failure: Option<(ToolFailureCategoryV1, ToolFailureReasonV1)>,
+}
+
 fn conventional_discovery(
     trace: &NormalizedTrace,
     options: &AnalyzeOptions,
@@ -405,6 +412,24 @@ fn conventional_discovery(
     let mut shell_segments = 0_u64;
     let mut shell_observed = 0_u64;
     let mut shell_expected = 0_u64;
+    let mut completions = BTreeMap::<CallKey, Vec<ShellCompletion>>::new();
+    for event in &trace.events {
+        let AgentActivityEventV1::ToolFinished(tool) = &event.event else {
+            continue;
+        };
+        completions
+            .entry(CallKey::new(event, &tool.call_id))
+            .or_default()
+            .push(ShellCompletion {
+                seq: event.seq,
+                name: tool.name.clone(),
+                status: tool.status,
+                failure: tool
+                    .failure
+                    .as_ref()
+                    .map(|failure| (failure.category, failure.reason)),
+            });
+    }
     let mut diagnostics = Vec::new();
     for event in trace.events.iter().filter(|event| event.seq < before_seq) {
         let AgentActivityEventV1::ToolStarted(tool) = &event.event else {
@@ -416,6 +441,34 @@ fn conventional_discovery(
             "read" => read_calls = read_calls.saturating_add(1),
             "bash" => {
                 shell_expected = shell_expected.saturating_add(1);
+                if let Some(disposition) = tool.shell_discovery_disposition {
+                    let completion = completions
+                        .get(&CallKey::new(event, &tool.call_id))
+                        .and_then(|completions| {
+                            (completions.len() == 1).then_some(&completions[0])
+                        });
+                    let valid_pair = disposition.is_valid()
+                        && tool.arguments.is_none()
+                        && completion.is_some_and(|completion| {
+                            completion.seq > event.seq
+                                && completion.name == tool.name
+                                && completion.status == ToolStatusV1::Failed
+                                && completion.failure
+                                    == Some((
+                                        ToolFailureCategoryV1::PolicyDenial,
+                                        ToolFailureReasonV1::PolicyPrecondition,
+                                    ))
+                        });
+                    if valid_pair {
+                        shell_observed = shell_observed.saturating_add(1);
+                    } else {
+                        diagnostics.push(unavailable(
+                            Some(event.seq),
+                            "shell discovery classification is unavailable because the excluded denial disposition and its same-scope, same-call failed policy completion are missing or inconsistent",
+                        ));
+                    }
+                    continue;
+                }
                 let command = tool
                     .arguments
                     .as_ref()

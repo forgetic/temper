@@ -108,6 +108,18 @@ shell coverage; do not use component medians as a material-improvement gate. A
 configured rubric still emits known zero graph counts in a graph-disabled
 condition instead of dropping that trial.
 
+A trusted `excluded_never_executed_local_policy_denial` disposition is the one
+explicit exception to command parsing. It counts as one observed shell call
+only when its `bash` start contains no arguments and the same scope and call has
+one later `Failed` completion with `policy_denial` / `policy_precondition`.
+That call remains in the coverage denominator but contributes zero classified
+segments and zero conventional-discovery credit. Thus one valid exclusion has
+coverage `1/1`, not `0/0`. A missing completion or disposition, duplicate or
+mismatched identity, another status or failure, malformed metadata, or a
+disposition combined with command content remains unavailable. These cases do
+not relax omission of `total_calls`, aggregate samples, or the complete-control
+classification acceptance gate.
+
 Failure categories come from typed safe diagnostics. Every category except
 `invalid_model_input` is systemic for the immediate-repeat metric: a repeat is
 counted only when the next tool started in that scope is another graph tool.
