@@ -443,6 +443,7 @@ mod tests {
             name: "read".to_string(),
             arg_preview: None,
             diagnostic_arguments: None,
+            shell_discovery_disposition: None,
         });
 
         let frames = lifecycle.lock().unwrap();
@@ -514,6 +515,7 @@ mod tests {
             name: "read".to_string(),
             arg_preview: Some("not-forwarded".to_string()),
             diagnostic_arguments: None,
+            shell_discovery_disposition: None,
         });
         sink.emit(AgentEvent::ToolEnd {
             id: "tool-1".to_string(),

@@ -1,3 +1,7 @@
+# Activity normalization integration coverage keeps shared capture-mode clocks,
+# projections, and ordered boundary assertions together; focused cases live in submodules.
+crates/temper-agent/src/activity/tests.rs
+
 # Codebase-memory live scenario flow keeps Forgejo/runner/Temper setup,
 # fake MCP wiring, and final-state probes together until manifest primitives are extracted.
 crates/temper-testing/src/live_manifest/codebase_memory.rs

@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use temper_protocol_activity::GraphExplorationClosedV1;
+use temper_protocol_activity::{GraphExplorationClosedV1, ShellDiscoveryDispositionV1};
 use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, ToolCall, UserContent, UserMessage,
 };
@@ -37,7 +37,7 @@ use super::messages::{error_assistant, tool_result_message};
 use super::ordinary_failure::OrdinaryFailureCircuit;
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
-    ToolStartPresentation,
+    ToolCallDenial, ToolStartPresentation,
 };
 use super::tool_failure::ToolFailureDiagnostic;
 
@@ -382,6 +382,10 @@ impl AgentMachine {
                 .decision_anchors
                 .as_mut()
                 .and_then(|state| state.on_tool_dispatched(&call, model_turn));
+            let shell_discovery_disposition = (rejection.is_none()
+                && call.name == "bash"
+                && matches!(&denial, Some(ToolCallDenial::DecisionAnchorMutation)))
+            .then(ShellDiscoveryDispositionV1::excluded_never_executed_local_policy_denial);
             // A locally rejected or denied call must not expose either
             // shell-rendered argument presentation to activity.
             let presentation = if rejection.is_none() && denial.is_none() {
@@ -399,6 +403,7 @@ impl AgentMachine {
                 name: call.name.clone(),
                 arg_preview: presentation.arg_preview,
                 diagnostic_arguments: presentation.diagnostic_arguments,
+                shell_discovery_disposition,
             }));
             let redirect = (rejection.is_none() && denial.is_none())
                 .then(|| self.ordinary_failures.redirect_for(&call))

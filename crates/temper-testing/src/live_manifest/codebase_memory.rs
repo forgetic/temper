@@ -29,6 +29,8 @@ mod configuration;
 mod graph_consumption;
 mod mapped_decision_gap_recovery;
 mod mapped_decision_gap_recovery_fake;
+mod mapped_denied_shell_classification;
+mod mapped_denied_shell_classification_fake;
 mod mapped_graph_consumption;
 mod mapped_graph_consumption_fake;
 mod mapped_graph_convergence;
@@ -84,17 +86,7 @@ pub(super) fn converge(
         .get("search_graph")
         .copied()
         .unwrap_or_default();
-    let privacy_safe_aggregate = matches!(
-        mcp.lifecycle_profile.as_deref(),
-        Some(
-            "provider-result-anchor"
-                | "provider-neutral-anchor-lineage"
-                | "mapped-live-graph-consumption"
-                | "mapped-live-ordinary-tool-convergence"
-                | "mapped-live-graph-convergence"
-                | "mapped-live-decision-gap-recovery"
-        )
-    );
+    let privacy_safe_aggregate = privacy::is_privacy_safe_profile(mcp.lifecycle_profile.as_deref());
     let aggregate_checkpoints = privacy_safe_checkpoints(mcp, &calls);
     let stable_rebind = stable_rebind_evidence(mcp, &calls)?;
     let evidence_mcp_log = if privacy_safe_aggregate {
@@ -125,6 +117,7 @@ pub(super) fn converge(
                 | "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
+                | "mapped-live-denied-shell-classification"
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
                 | "mapped-live-decision-gap-recovery"
@@ -518,6 +511,8 @@ impl CodebaseMemoryFake {
             typed_lineage_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-graph-consumption") {
             mapped_graph_consumption_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-denied-shell-classification") {
+            mapped_denied_shell_classification_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-ordinary-tool-convergence") {
             mapped_ordinary_convergence_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-graph-convergence") {
@@ -582,17 +577,7 @@ impl CodebaseMemoryFake {
             engineer_requests,
             observations,
             require_current_root_source,
-            privacy_safe_log: matches!(
-                lifecycle_profile,
-                Some(
-                    "provider-result-anchor"
-                        | "provider-neutral-anchor-lineage"
-                        | "mapped-live-graph-consumption"
-                        | "mapped-live-ordinary-tool-convergence"
-                        | "mapped-live-graph-convergence"
-                        | "mapped-live-decision-gap-recovery"
-                )
-            ),
+            privacy_safe_log: privacy::is_privacy_safe_profile(lifecycle_profile),
         })
     }
 
@@ -662,6 +647,7 @@ impl CodebaseMemoryFake {
                         | "provider-result-anchor"
                         | "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
+                        | "mapped-live-denied-shell-classification"
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
@@ -688,6 +674,7 @@ impl CodebaseMemoryFake {
                     | "provider-result-anchor"
                     | "provider-neutral-anchor-lineage"
                     | "mapped-live-graph-consumption"
+                    | "mapped-live-denied-shell-classification"
                     | "mapped-live-ordinary-tool-convergence"
                     | "mapped-live-graph-convergence"
                     | "mapped-live-decision-gap-recovery"
@@ -699,6 +686,7 @@ impl CodebaseMemoryFake {
                 Some(
                     "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
+                        | "mapped-live-denied-shell-classification"
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
@@ -718,6 +706,7 @@ impl CodebaseMemoryFake {
                 Some(
                     "provider-neutral-anchor-lineage"
                         | "mapped-live-graph-consumption"
+                        | "mapped-live-denied-shell-classification"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
                 )

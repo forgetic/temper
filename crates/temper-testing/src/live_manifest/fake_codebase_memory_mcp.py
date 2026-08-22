@@ -279,6 +279,7 @@ def has_current_root_profile():
         "provider-result-anchor",
         "provider-neutral-anchor-lineage",
         "mapped-live-graph-consumption",
+        "mapped-live-denied-shell-classification",
         "mapped-live-ordinary-tool-convergence",
         "mapped-live-graph-convergence",
         "mapped-live-decision-gap-recovery",
@@ -296,6 +297,7 @@ def is_typed_lineage_profile():
 def is_mapped_graph_profile():
     return LIFECYCLE_PROFILE in (
         "mapped-live-graph-consumption",
+        "mapped-live-denied-shell-classification",
         "mapped-live-ordinary-tool-convergence",
     )
 

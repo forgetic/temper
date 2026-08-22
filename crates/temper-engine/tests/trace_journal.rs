@@ -237,6 +237,7 @@ fn valid_blobs_are_content_addressed_and_durable() {
             arguments: Some(CapturedContentV1::Blob {
                 blob: attachment.blob.clone(),
             }),
+            shell_discovery_disposition: None,
         }),
     );
     let activity = AgentActivityBatch {
@@ -283,6 +284,7 @@ fn invalid_blob_does_not_bind_or_append_the_run() {
             call_id: "tool-2".to_string(),
             name: "read".to_string(),
             arguments: Some(CapturedContentV1::Blob { blob: reference }),
+            shell_discovery_disposition: None,
         }),
     );
     let invalid = AgentActivityBatch {
@@ -383,6 +385,7 @@ fn policy_and_quota_omit_optional_content_without_blocking_terminal_events() {
             arguments: Some(CapturedContentV1::Blob {
                 blob: oversized_blob.blob.clone(),
             }),
+            shell_discovery_disposition: None,
         }),
     );
     let activity = AgentActivityBatch {

@@ -23,7 +23,8 @@ use temper_agent::activity::{AgentActivityConfig, ScopeFactory};
 use temper_agent::usage::{MAIN_SCOPE, UsageTotals};
 use temper_agent_core::{
     AgentEvent, AgentStop, DiagnosticToolArguments, ModelCallStatus, ModelFailureDiagnostic,
-    ModelIdentity, ToolCallStatus, ToolResultMetadata,
+    ModelIdentity, ShellDiscoveryDispositionV1, ToolCallStatus, ToolFailureDiagnostic,
+    ToolResultMetadata,
 };
 use temper_protocol_activity::CaptureModeV1;
 use tongs::model::Usage;
@@ -166,6 +167,7 @@ fn capture_representative_run() -> Vec<Captured> {
             name: "read".to_string(),
             arg_preview: Some("crates/temper-config/src/resolve.rs".to_string()),
             diagnostic_arguments: None,
+            shell_discovery_disposition: None,
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_ok".to_string(),
@@ -182,6 +184,7 @@ fn capture_representative_run() -> Vec<Captured> {
                 r#"{"command":"cargo test -p temper-config -- COMPLETE-DIAGNOSTIC-SENTINEL-1029"}"#
                     .to_string(),
             )),
+            shell_discovery_disposition: None,
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_bad".to_string(),
@@ -189,6 +192,28 @@ fn capture_representative_run() -> Vec<Captured> {
             status: ToolCallStatus::Failed,
             duration_ms: 7,
             result: ToolResultMetadata::default(),
+        });
+        logger.emit(AgentEvent::ToolStart {
+            id: "call_denied".to_string(),
+            name: "bash".to_string(),
+            arg_preview: Some("DENIED-RAW-COMMAND-SENTINEL-1084".to_string()),
+            diagnostic_arguments: Some(DiagnosticToolArguments::new(
+                r#"{"command":"DENIED-RAW-COMMAND-SENTINEL-1084","argv":["DENIED-ARGV-SENTINEL-1084"],"path":"/private/denied-1084","provider":"DENIED-PROVIDER-SENTINEL-1084","prompt":"DENIED-PROMPT-SENTINEL-1084","credential":"DENIED-CREDENTIAL-SENTINEL-1084","process_local":"DENIED-PROCESS-SENTINEL-1084"}"#
+                    .to_string(),
+            )),
+            shell_discovery_disposition: Some(
+                ShellDiscoveryDispositionV1::excluded_never_executed_local_policy_denial(),
+            ),
+        });
+        logger.emit(AgentEvent::ToolEnd {
+            id: "call_denied".to_string(),
+            name: "bash".to_string(),
+            status: ToolCallStatus::Failed,
+            duration_ms: 0,
+            result: ToolResultMetadata {
+                failure: Some(ToolFailureDiagnostic::policy_denial()),
+                ..Default::default()
+            },
         });
         logger.emit(AgentEvent::ModelCallFinished {
             turn: 0,
@@ -314,10 +339,21 @@ fn between_state_cause_events_render_human_message_at_debug() {
     let captured = capture_representative_run();
     let rendered = format!("{captured:?}");
     assert!(rendered.contains("`cargo test -p temper-config`"));
-    assert!(
-        !rendered.contains("COMPLETE-DIAGNOSTIC-SENTINEL-1029"),
-        "complete diagnostic shell evidence leaked into human tracing: {rendered}"
-    );
+    for forbidden in [
+        "COMPLETE-DIAGNOSTIC-SENTINEL-1029",
+        "DENIED-RAW-COMMAND-SENTINEL-1084",
+        "DENIED-ARGV-SENTINEL-1084",
+        "/private/denied-1084",
+        "DENIED-PROVIDER-SENTINEL-1084",
+        "DENIED-PROMPT-SENTINEL-1084",
+        "DENIED-CREDENTIAL-SENTINEL-1084",
+        "DENIED-PROCESS-SENTINEL-1084",
+    ] {
+        assert!(
+            !rendered.contains(forbidden),
+            "private shell evidence leaked into human tracing: {forbidden}: {rendered}"
+        );
+    }
 
     // Stronger check: each event DOES render at debug with a human message that
     // is NOT raw JSON and carries the expected `event=` field.
