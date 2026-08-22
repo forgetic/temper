@@ -9,6 +9,7 @@
 
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, GraphCorrelationV1, GraphExplorationClosedV1,
+    ShellDiscoveryDispositionV1,
 };
 use tongs::model::{AssistantMessage, ContentBlock, Message, ToolCall};
 use tongs::provider::ToolDef;
@@ -94,6 +95,9 @@ pub enum AgentEvent {
         /// candidate only; transcript and human projections must use
         /// `arg_preview` instead.
         diagnostic_arguments: Option<DiagnosticToolArguments>,
+        /// Closed discovery classification present only when machine-owned
+        /// admission denies `bash` before registry or process execution.
+        shell_discovery_disposition: Option<ShellDiscoveryDispositionV1>,
     },
     /// A tool finished. Timing is measured by the shell around execution and
     /// `result` is a bounded text-only candidate; unrestricted tool details are
@@ -382,6 +386,7 @@ mod tests {
             name: "read".to_string(),
             arg_preview: Some("src/main.rs".to_string()),
             diagnostic_arguments: None,
+            shell_discovery_disposition: None,
         };
         match event {
             AgentEvent::ToolStart {
@@ -389,11 +394,13 @@ mod tests {
                 name,
                 arg_preview,
                 diagnostic_arguments,
+                shell_discovery_disposition,
             } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "read");
                 assert_eq!(arg_preview.as_deref(), Some("src/main.rs"));
                 assert_eq!(diagnostic_arguments, None);
+                assert_eq!(shell_discovery_disposition, None);
             }
             _ => panic!("expected ToolStart"),
         }
@@ -406,6 +413,7 @@ mod tests {
             name: "bash".to_string(),
             arg_preview: None,
             diagnostic_arguments: None,
+            shell_discovery_disposition: None,
         };
         assert!(matches!(
             event,
@@ -426,6 +434,7 @@ mod tests {
             diagnostic_arguments: Some(DiagnosticToolArguments::new(format!(
                 r#"{{"command":"{secret}"}}"#
             ))),
+            shell_discovery_disposition: None,
         };
         let debug = format!("{event:?}");
         assert!(!debug.contains(secret));

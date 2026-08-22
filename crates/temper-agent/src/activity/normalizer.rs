@@ -207,7 +207,15 @@ impl NormalizingEventSink {
                 name,
                 arg_preview,
                 diagnostic_arguments,
-            } => self.tool_started(&state, id, name, arg_preview, diagnostic_arguments),
+                shell_discovery_disposition,
+            } => self.tool_started(
+                &state,
+                id,
+                name,
+                arg_preview,
+                diagnostic_arguments,
+                shell_discovery_disposition,
+            ),
             AgentEvent::ToolEnd {
                 id,
                 name,
@@ -465,7 +473,15 @@ impl NormalizingEventSink {
         name: String,
         arg_preview: Option<String>,
         diagnostic_arguments: Option<temper_agent_core::DiagnosticToolArguments>,
+        shell_discovery_disposition: Option<temper_agent_core::ShellDiscoveryDispositionV1>,
     ) {
+        let denied_shell = name == "bash"
+            && shell_discovery_disposition.is_some_and(|disposition| disposition.is_valid());
+        let (arg_preview, diagnostic_arguments) = if denied_shell {
+            (None, None)
+        } else {
+            (arg_preview, diagnostic_arguments)
+        };
         // The start boundary is required in every enabled capture mode.
         // Metadata retains no arguments. Transcript retains exactly the
         // existing short preview. Diagnostic mode may replace only a bash
@@ -498,6 +514,7 @@ impl NormalizingEventSink {
                 call_id: id,
                 name,
                 arguments,
+                shell_discovery_disposition,
             }),
             human_arg_preview.as_deref(),
         );

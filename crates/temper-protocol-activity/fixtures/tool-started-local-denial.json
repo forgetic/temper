@@ -1,0 +1,12 @@
+{
+  "type": "tool.started",
+  "data": {
+    "call_id": "denied-bash",
+    "name": "bash",
+    "shell_discovery_disposition": {
+      "version": 1,
+      "status": "excluded_never_executed_local_policy_denial",
+      "matching_discovery_segments": 0
+    }
+  }
+}

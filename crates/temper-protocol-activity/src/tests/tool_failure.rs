@@ -263,6 +263,108 @@ fn old_tool_finished_events_omit_the_optional_failure() {
 }
 
 #[test]
+fn local_shell_denial_disposition_is_closed_versioned_and_privacy_safe() {
+    const PRIVATE: [&str; 7] = [
+        "DENIED-COMMAND",
+        "PRIVATE-ARGV",
+        "/private/path",
+        "PROVIDER-VALUE",
+        "PROMPT-VALUE",
+        "CREDENTIAL-VALUE",
+        "PROCESS-LOCAL-VALUE",
+    ];
+    let disposition = ShellDiscoveryDispositionV1::excluded_never_executed_local_policy_denial();
+    assert!(disposition.is_valid());
+    let encoded = serde_json::to_string(&disposition).unwrap();
+    assert_eq!(
+        encoded,
+        r#"{"version":1,"status":"excluded_never_executed_local_policy_denial","matching_discovery_segments":0}"#
+    );
+    let debug = format!("{disposition:?}");
+    for private in PRIVATE {
+        assert!(!encoded.contains(private));
+        assert!(!debug.contains(private));
+    }
+
+    let event: AgentActivityEventV1 = round_trip(&fixture("tool-started-local-denial.json"));
+    let AgentActivityEventV1::ToolStarted(started) = &event else {
+        panic!("local denial fixture must be a tool start");
+    };
+    assert_eq!(started.arguments, None);
+    assert_eq!(started.shell_discovery_disposition, Some(disposition));
+    let mut run_event = usage_event(1);
+    run_event.event = event;
+    run_event.validate().expect("closed denial validates");
+}
+
+#[test]
+fn malformed_or_untrusted_shell_dispositions_fail_closed() {
+    let canonical = serde_json::json!({
+        "call_id": "denied-bash",
+        "name": "bash",
+        "shell_discovery_disposition": {
+            "version": 1,
+            "status": "excluded_never_executed_local_policy_denial",
+            "matching_discovery_segments": 0
+        }
+    });
+    let started: ToolStartedV1 = serde_json::from_value(canonical.clone()).unwrap();
+
+    for malformed in [
+        {
+            let mut value = started.clone();
+            value.name = "read".into();
+            value
+        },
+        {
+            let mut value = started.clone();
+            value.shell_discovery_disposition.as_mut().unwrap().version = 2;
+            value
+        },
+        {
+            let mut value = started.clone();
+            value
+                .shell_discovery_disposition
+                .as_mut()
+                .unwrap()
+                .matching_discovery_segments = 1;
+            value
+        },
+        {
+            let mut value = started.clone();
+            value.arguments = Some(CapturedContentV1::Inline(InlineContentV1 {
+                text: "DENIED-COMMAND".into(),
+                truncated: false,
+            }));
+            value
+        },
+    ] {
+        let mut event = usage_event(1);
+        event.event = AgentActivityEventV1::ToolStarted(malformed);
+        assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
+    }
+
+    let mut unknown_status = canonical.clone();
+    unknown_status["shell_discovery_disposition"]["status"] = serde_json::json!("executed");
+    assert!(serde_json::from_value::<ToolStartedV1>(unknown_status).is_err());
+    let mut unknown_field = canonical;
+    unknown_field["shell_discovery_disposition"]["command"] = serde_json::json!("DENIED-COMMAND");
+    assert!(serde_json::from_value::<ToolStartedV1>(unknown_field).is_err());
+}
+
+#[test]
+fn legacy_tool_start_without_disposition_remains_readable() {
+    let legacy = serde_json::json!({
+        "call_id": "legacy-bash",
+        "name": "bash"
+    });
+    let parsed: ToolStartedV1 = serde_json::from_value(legacy.clone()).unwrap();
+    assert_eq!(parsed.arguments, None);
+    assert_eq!(parsed.shell_discovery_disposition, None);
+    assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
+}
+
+#[test]
 fn graph_correlation_fingerprints_closed_targets_without_retaining_raw_arguments() {
     const SECRET: &str = "Authorization: Bearer GRAPH-CORRELATION-SECRET";
     let correlation = GraphCorrelationV1::new(

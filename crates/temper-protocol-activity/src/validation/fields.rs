@@ -129,7 +129,28 @@ pub(super) fn event(
         Event::ToolStarted(value) => {
             identifier(&value.call_id, &format!("{path}.data.call_id"))?;
             identifier(&value.name, &format!("{path}.data.name"))?;
-            optional_content(value.arguments.as_ref(), &format!("{path}.data.arguments"))
+            optional_content(value.arguments.as_ref(), &format!("{path}.data.arguments"))?;
+            if let Some(disposition) = value.shell_discovery_disposition {
+                if value.name != "bash" {
+                    return Err(invalid_event(
+                        &format!("{path}.data.shell_discovery_disposition"),
+                        "is reserved for the trusted bash tool",
+                    ));
+                }
+                if !disposition.is_valid() {
+                    return Err(invalid_event(
+                        &format!("{path}.data.shell_discovery_disposition"),
+                        "must contain the supported zero-segment closed disposition",
+                    ));
+                }
+                if value.arguments.is_some() {
+                    return Err(invalid_event(
+                        &format!("{path}.data.arguments"),
+                        "must be omitted for a never-executed local policy denial",
+                    ));
+                }
+            }
+            Ok(())
         }
         Event::ToolFinished(value) => {
             identifier(&value.call_id, &format!("{path}.data.call_id"))?;

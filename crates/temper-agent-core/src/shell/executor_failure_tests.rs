@@ -280,6 +280,102 @@ fn shell_owns_schema_policy_and_execution_classification_without_raw_values() {
 }
 
 #[test]
+fn decision_anchor_shell_denial_never_invokes_registry_or_exposes_arguments() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct NeverRunBash(Arc<AtomicUsize>);
+
+    #[async_trait]
+    impl Tool for NeverRunBash {
+        fn name(&self) -> &str {
+            "bash"
+        }
+        fn description(&self) -> &str {
+            "must not execute"
+        }
+        fn parameters(&self) -> serde_json::Value {
+            serde_json::json!({"type":"object"})
+        }
+        fn effects(&self) -> ToolEffects {
+            ToolEffects::process()
+        }
+        async fn execute(
+            &self,
+            _: &str,
+            _: serde_json::Value,
+            _: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
+        ) -> tongs::Result<ToolOutput> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolOutput::text("unexpected"))
+        }
+    }
+
+    const PRIVATE: [&str; 7] = [
+        "DENIED-COMMAND",
+        "PRIVATE-ARGV",
+        "/private/path",
+        "PROVIDER-VALUE",
+        "PROMPT-VALUE",
+        "CREDENTIAL-VALUE",
+        "PROCESS-LOCAL-VALUE",
+    ];
+    let executions = Arc::new(AtomicUsize::new(0));
+    let tools = ToolRegistry::from_tools(vec![Box::new(NeverRunBash(Arc::clone(&executions)))]);
+    let clock = FakeClock(Mutex::new(VecDeque::from([10, 10])));
+    let recorder = Arc::new(Recorder::default());
+    let observed = Arc::clone(&recorder);
+    let call = ToolCall {
+        id: "denied-shell".to_string(),
+        name: "bash".to_string(),
+        arguments: serde_json::json!({
+            "command": PRIVATE.join(" "),
+            "argv": PRIVATE,
+        }),
+    };
+    let output = temper_agent_io::block_on(async move {
+        execute_tool(
+            &tools,
+            &call,
+            Duration::from_secs(1),
+            &CancellationToken::default(),
+            Some(ToolCallDenial::DecisionAnchorMutation),
+            &clock,
+            observed.as_ref(),
+            None,
+            None,
+        )
+        .await
+        .expect("local denial settles")
+    });
+
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
+    let failure = output.failure.expect("typed policy failure");
+    assert_eq!(failure.category, ToolFailureCategory::PolicyDenial);
+    assert_eq!(failure.reason, ToolFailureReason::PolicyPrecondition);
+    let model_text = output.output.content.iter().find_map(|block| match block {
+        tongs::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    });
+    assert_eq!(model_text, Some(failure.message.as_str()));
+
+    let event = recorder.0.lock().expect("events").remove(0);
+    let AgentEvent::ToolEnd { status, result, .. } = &event else {
+        panic!("denied shell must emit a completion");
+    };
+    assert_eq!(*status, ToolCallStatus::Failed);
+    assert_eq!(result.failure.as_ref(), Some(&failure));
+    assert_eq!(
+        result.preview.as_deref(),
+        Some(failure.message.as_str()),
+        "the completion may retain only the canonical model-visible failure"
+    );
+    let rendered = format!("{event:?} {failure:?} {:?}", output.output);
+    for private in PRIVATE {
+        assert!(!rendered.contains(private), "denial leaked {private}");
+    }
+}
+
+#[test]
 fn catalog_preflight_rejection_never_executes_the_registry_tool() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

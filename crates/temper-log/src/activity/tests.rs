@@ -178,6 +178,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
                     text: "Authorization: Bearer secret".into(),
                     truncated: false,
                 })),
+                shell_discovery_disposition: None,
             }),
         ),
         event(
