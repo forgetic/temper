@@ -621,6 +621,9 @@ mod actions_history_tests;
 #[path = "bundle_mapped_decision_gap_recovery_tests.rs"]
 mod mapped_decision_gap_recovery_tests;
 #[cfg(test)]
+#[path = "bundle_mapped_denied_shell_classification_tests.rs"]
+mod mapped_denied_shell_classification_tests;
+#[cfg(test)]
 #[path = "bundle_mapped_graph_consumption_tests.rs"]
 mod mapped_graph_consumption_tests;
 #[cfg(test)]

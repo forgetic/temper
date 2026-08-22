@@ -346,6 +346,15 @@ impl ActivityProjection for TracingProjection {
                 let suffix = Self::arg_suffix(preview.as_deref());
                 let name = &tool.name;
                 let id = &tool.call_id;
+                let arguments_present = preview.is_some();
+                let shell_discovery_disposition = tool.shell_discovery_disposition;
+                let shell_discovery_status = shell_discovery_disposition.map(|value| {
+                    match value.status {
+                        temper_protocol_activity::ShellDiscoveryDispositionStatusV1::ExcludedNeverExecutedLocalPolicyDenial => {
+                            "excluded_never_executed_local_policy_denial"
+                        }
+                    }
+                });
                 tracing::debug!(
                     target: AGENT_TARGET,
                     event = "tool.start",
@@ -353,6 +362,10 @@ impl ActivityProjection for TracingProjection {
                     scope_id = %frame.scope.id,
                     tool = %name,
                     id = %id,
+                    tool.arguments.present = arguments_present,
+                    tool.shell_discovery_disposition.version = shell_discovery_disposition.map(|value| value.version),
+                    tool.shell_discovery_disposition.status = shell_discovery_status,
+                    tool.shell_discovery_disposition.matching_discovery_segments = shell_discovery_disposition.map(|value| value.matching_discovery_segments),
                     "agent: tool {name}{suffix}",
                 );
                 if let Some(preview) = preview {

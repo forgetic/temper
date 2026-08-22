@@ -5,9 +5,9 @@ use temper_protocol_activity::{
     ACTIVITY_PROTOCOL_VERSION, AgentActivityChildRecordV1, AgentActivityEventV1,
     AgentActivityFrameV1, AgentScopeKindV1, AgentScopeV1, AgentTerminalReasonV1, FailureCodeV1,
     FailureInfoV1, ModelCallFinishedV1, ModelCallRetryingV1, ModelCallStatusV1,
-    ModelFailureCategoryV1, ModelFailureV1, ScopeFinishedV1, ScopeStatusV1, ToolFailureCategoryV1,
-    ToolFailureDiagnosticV1, ToolFailureReasonV1, ToolFinishedV1, ToolRetryDispositionV1,
-    ToolStatusV1,
+    ModelFailureCategoryV1, ModelFailureV1, ScopeFinishedV1, ScopeStatusV1,
+    ShellDiscoveryDispositionV1, ToolFailureCategoryV1, ToolFailureDiagnosticV1,
+    ToolFailureReasonV1, ToolFinishedV1, ToolRetryDispositionV1, ToolStartedV1, ToolStatusV1,
 };
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
@@ -272,6 +272,52 @@ fn tool_error_logging_projects_only_closed_failure_fields() {
     );
     let rendered = format!("{event:?}");
     assert!(!rendered.contains(SECRET));
+}
+
+#[test]
+fn denied_shell_start_logging_projects_only_the_closed_disposition() {
+    let capture = CaptureLayer::default();
+    let events = capture.0.clone();
+    let subscriber = registry().with(capture);
+
+    with_default(subscriber, || {
+        let projection = TracingProjection::new(Arc::new(UsageTotals::default()));
+        projection.emit(&record(AgentActivityEventV1::ToolStarted(ToolStartedV1 {
+            call_id: "denied-shell".into(),
+            name: "bash".into(),
+            arguments: None,
+            shell_discovery_disposition: Some(
+                ShellDiscoveryDispositionV1::excluded_never_executed_local_policy_denial(),
+            ),
+        })));
+    });
+
+    let event = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|event| event.get("event").map(String::as_str) == Some("tool.start"))
+        .cloned()
+        .expect("denied shell start log");
+    for (field, expected) in [
+        ("tool.arguments.present", "false"),
+        ("tool.shell_discovery_disposition.version", "1"),
+        (
+            "tool.shell_discovery_disposition.status",
+            "excluded_never_executed_local_policy_denial",
+        ),
+        (
+            "tool.shell_discovery_disposition.matching_discovery_segments",
+            "0",
+        ),
+    ] {
+        assert_eq!(
+            event.get(field).map(String::as_str),
+            Some(expected),
+            "{field}"
+        );
+    }
+    assert!(!format!("{event:?}").contains("command"));
 }
 
 #[test]

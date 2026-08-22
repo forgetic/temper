@@ -30,6 +30,7 @@ runner:
   `codebase-memory-remediation`, `codebase-memory-graph-consumption`,
   `sequential-graph-evidence`, `result-driven-decision-guidance`, `provider-result-anchor`,
   `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`,
+  `mapped-live-denied-shell-classification`,
   `mapped-live-ordinary-tool-convergence`, `mapped-live-graph-convergence`,
   `mapped-live-decision-gap-recovery`, `model-failure-recovery`,
   `plan-centric-feature-branch`,
@@ -269,6 +270,24 @@ and gate outcomes; provider output, selectors, source, prompts, commands,
 credentials, paths, host-gate output, and diagnostic traces remain ephemeral.
 The historical graph-consumption, graph-convergence, and ordinary-tool-
 convergence mappings retain their original identities and contracts.
+
+### Mapped live denied-shell classification mapping
+
+`mapped-live-denied-shell-classification` is the sole active mapping for
+`ai/temper#1082` and `ai/temper#1083` on `agent/pr-for-feature-1082`. Its first
+model turn requests graph discovery followed by a shell process barrier. The
+provider result lands first and remains a valid decision anchor; the serialized
+shell call is denied locally before execution with an argument-free, versioned
+`excluded_never_executed_local_policy_denial` disposition, zero matching
+segments, and a paired `policy_denial` / `policy_precondition` completion. A
+transient canary proves non-execution. Later turns consume the selected
+implementation, caller/model, and focused-test current-root chain before the
+exact repair, host validation, Actions, merge, and source closure. Aggregate
+evidence is limited to closed counts, order, disposition, coverage,
+non-execution, lineage, exact-head, and gate facts; invocation data, source,
+paths, provider output, prompts, credentials, fingerprints, host output, and
+diagnostic traces remain ephemeral. All historical mapped-live scenarios keep
+their original feature, plan, and branch identities.
 
 ### Bounded Forgejo Actions pagination mapping
 

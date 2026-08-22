@@ -27,6 +27,9 @@ pub(super) fn validate_mcp_contract(
         Some("mapped-live-graph-consumption") => {
             return super::mapped_graph_consumption::validate(mcp, calls);
         }
+        Some("mapped-live-denied-shell-classification") => {
+            return super::mapped_denied_shell_classification::validate(mcp, calls);
+        }
         Some("mapped-live-ordinary-tool-convergence") => {
             return super::mapped_graph_consumption::validate(mcp, calls);
         }
@@ -385,6 +388,7 @@ fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
                 | "provider-result-anchor"
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
+                | "mapped-live-denied-shell-classification"
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
                 | "mapped-live-decision-gap-recovery"
