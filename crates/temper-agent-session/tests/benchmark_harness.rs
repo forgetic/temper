@@ -162,7 +162,11 @@ cache_warmth = "cold"
         assert_eq!(run["validation"]["succeeded"], 2);
         assert_eq!(run["host"]["provider_region"], "loopback");
         assert_eq!(run["host"]["observed_models"][0]["provider"], "deepseek");
-        assert!(run["metrics"]["model"]["calls"].as_u64().unwrap() >= 4);
+        assert_eq!(
+            run["metrics"]["model"]["calls"].as_u64().unwrap(),
+            3,
+            "the Jig batches both independent writes before submit and terminal turns"
+        );
         assert!(
             fs::read_to_string(root.join("trace.export.jsonl"))
                 .unwrap()
@@ -221,11 +225,7 @@ fn write_jig_script(root: &Path) {
                                 "content": "changed benchmark fixture\n"
                             }
                         }
-                    }],
-                    "stop": "tool_calls"
-                },
-                {
-                    "turns": [{
+                    }, {
                         "tool_call": {
                             "id": "call_write_output",
                             "name": "write",
