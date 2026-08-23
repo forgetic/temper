@@ -49,6 +49,7 @@ GRAPH_CONVERGENCE_TOKENS = {
     "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
     "caller": "crate::fixture::delivery_" + uuid.uuid4().hex + "::worker_for",
     "behavioral_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::alias_retry_stays_on_worker",
+    "active_behavioral_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::ordinary_retry_keeps_topic_affinity",
 }
 GRAPH_CALLS = 0
 
@@ -441,21 +442,28 @@ for line in sys.stdin:
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
             if is_decision_gap_recovery_profile():
-                source_stage = {
-                    GRAPH_CONVERGENCE_TOKENS["behavioral_test"]: (4, "tests/alias_retry.rs"),
-                    GRAPH_CONVERGENCE_TOKENS["caller"]: (7, "src/route.rs"),
-                }.get(qualified_name)
-                stage_valid = (
-                    source_stage is not None
-                    and decision_gap_recovery_step(
-                        source_stage[0], qualified_name, qualified_name
+                stage = DECISION_GAP_RECOVERY_STAGE
+                if stage in (2, 3) and qualified_name == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]:
+                    source_path = "tests/alias_retry.rs"
+                    event = "served_gap_sibling_source"
+                elif stage in (5, 6, 7) and qualified_name in (
+                    GRAPH_CONVERGENCE_TOKENS["caller"],
+                    GRAPH_CONVERGENCE_TOKENS["active_behavioral_test"],
+                ):
+                    source_path = (
+                        "src/route.rs"
+                        if qualified_name == GRAPH_CONVERGENCE_TOKENS["caller"]
+                        else "tests/alias_retry.rs"
                     )
+                    event = "served_gap_active_source"
+                else:
+                    source_path = None
+                    event = None
+                stage_valid = (
+                    source_path is not None
+                    and decision_gap_recovery_step(stage, qualified_name, qualified_name)
                 )
-                source = (
-                    current_root_source(project, source_stage[1])
-                    if stage_valid
-                    else None
-                )
+                source = current_root_source(project, source_path) if stage_valid else None
                 if source is None:
                     log_tool(name, arguments, is_error=True)
                     result = text_result("bound source unavailable", True)
@@ -466,11 +474,6 @@ for line in sys.stdin:
                         "source": source,
                         "binding": "current_prepared_checkout",
                     }
-                    event = (
-                        "served_gap_recovery_source"
-                        if source_stage[0] == 7
-                        else "served_gap_source"
-                    )
                     log_tool(name, arguments, fixture_event=event)
                     result = text_result(json.dumps(payload), structured=payload)
                 send({"jsonrpc": "2.0", "id": request["id"], "result": result})
@@ -699,37 +702,8 @@ for line in sys.stdin:
                 result = text_result(json.dumps(payload))
         elif name == "search_code":
             if is_decision_gap_recovery_profile():
-                project = arguments.get("project", "")
-                expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
-                stage = DECISION_GAP_RECOVERY_STAGE
-                successful = (
-                    stage in (2, 5, 6)
-                    and current_root_source(project, "src/route.rs") is not None
-                    and decision_gap_recovery_step(
-                        stage, expected, arguments.get("pattern", "")
-                    )
-                )
-                payload = {
-                    "results": [{
-                        "name": expected,
-                        "qualified_name": GRAPH_CONVERGENCE_TOKENS["implementation"],
-                        "related_source_references": [{
-                            "qualifiedName": GRAPH_CONVERGENCE_TOKENS["caller"],
-                        }],
-                    }]
-                }
-                event = "served_gap_duplicate" if stage in (5, 6) else "served_gap_refinement"
-                log_tool(
-                    name,
-                    arguments,
-                    is_error=not successful,
-                    fixture_event=event if successful else None,
-                )
-                result = (
-                    text_result(json.dumps(payload), structured=payload)
-                    if successful
-                    else text_result("bound source unavailable", True)
-                )
+                log_tool(name, arguments, is_error=True)
+                result = text_result("decision-gap refinement must stay local", True)
                 send({"jsonrpc": "2.0", "id": request["id"], "result": result})
                 continue
             if is_graph_convergence_profile():
@@ -850,7 +824,7 @@ for line in sys.stdin:
                 successful = (
                     current_root_source(project, "src/route.rs") is not None
                     and decision_gap_recovery_step(
-                        3, expected, arguments.get("function_name", "")
+                        4, expected, arguments.get("function_name", "")
                     )
                 )
                 payload = {
@@ -870,7 +844,7 @@ for line in sys.stdin:
                     name,
                     arguments,
                     is_error=not successful,
-                    fixture_event="served_gap_trace" if successful else None,
+                    fixture_event="served_gap_active_trace" if successful else None,
                 )
                 result = (
                     text_result(json.dumps(payload), structured=payload)
@@ -1032,8 +1006,14 @@ for line in sys.stdin:
                 project = arguments.get("project", "")
                 stage = DECISION_GAP_RECOVERY_STAGE
                 queries = {
-                    0: ("routing implementation affinity", "implementation"),
-                    1: ("focused alias retry behavior", "behavioral_test"),
+                    0: ("routing implementation affinity", [
+                        GRAPH_CONVERGENCE_TOKENS["implementation"],
+                        GRAPH_CONVERGENCE_TOKENS["caller"],
+                        GRAPH_CONVERGENCE_TOKENS["active_behavioral_test"],
+                    ]),
+                    1: ("focused alias retry behavior", [
+                        GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
+                    ]),
                 }
                 selected = queries.get(stage)
                 successful = (
@@ -1043,18 +1023,19 @@ for line in sys.stdin:
                         stage, selected[0], arguments.get("query", "")
                     )
                 )
-                token = (
-                    GRAPH_CONVERGENCE_TOKENS[selected[1]]
-                    if selected is not None
-                    else GRAPH_CONVERGENCE_TOKENS["implementation"]
-                )
+                tokens = selected[1] if selected is not None else []
                 payload = {
                     "results": [{
-                        "results": [{
-                            "name": terminal_function_name(token),
-                            "qualifiedName": token,
-                        }],
-                        "related_source_references": [{"qualifiedName": token}],
+                        "results": [
+                            {
+                                "name": terminal_function_name(token),
+                                "qualifiedName": token,
+                            }
+                            for token in tokens
+                        ],
+                        "related_source_references": [
+                            {"qualifiedName": token} for token in tokens
+                        ],
                     }]
                 }
                 log_tool(
