@@ -130,11 +130,22 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
     match capability {
         Capability::CodingWorkspace => prompt.push_str(
             "\nEFFICIENCY:\n\
-             - Scale discovery to the task. When repository-index tools are available for a \
-             concrete or already-localized defect, start with targeted symbol/code search, then \
-             use only needed call/path tracing and exact source reads; avoid empty or broad graph \
+             - Scale discovery to the task. When repository-index tools are available and the task \
+             requires code discovery, make the first discovery action a targeted graph symbol/code \
+             search tied to the reported symptom, file, or area. Do not run a compound shell inventory \
+             before graph-based source selection or combine repository status, formatting/output, file \
+             discovery, sorting, and truncation in one preselection shell command. Use conventional \
+             discovery before selection only when repository-index tools are disabled or unavailable, \
+             or when a bounded targeted graph attempt cannot provide the required evidence. Keep \
+             fallback shell discovery minimal—one simple discovery command plus a necessary directory \
+             change, if any—and make every command-list segment fully classifiable: use literal or quoted \
+             words and only `&&`, `||`, `;`, or newline separators. Do not use pipelines, redirects, \
+             expansions or substitutions, assignments, grouping, globbing, comments, or background \
+             operators. Repository status, validation, and other operational checks remain available \
+             after source selection; run them as separate calls rather than bundling them with discovery. \
+             Then use only needed call/path tracing and exact source reads; avoid empty or broad graph \
              searches and broad architecture calls. Reserve architecture views for genuine topology \
-             questions. For non-local topology work, batch independent status and targeted discovery \
+             questions. For non-local topology work, batch genuinely independent targeted discovery \
              calls into one response; skip ritual discovery when the task is already localized.\n\
              - For work requiring implementation selection, caller/data-flow understanding, or \
              behavioral preservation, use every successful targeted graph result as a decision \

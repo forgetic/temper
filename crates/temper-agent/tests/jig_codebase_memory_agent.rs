@@ -84,6 +84,11 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "first request should include prompt guidance only because tools registered"
     );
     for expected in [
+        "use a targeted repository-index",
+        "query before any shell inventory",
+        "Do not precede graph-based source selection with a compound",
+        "keep repository status, validation, and other operational checks as separate",
+        "calls after selection",
         "Use them early for non-trivial tasks, but choose the narrowest useful query",
         "- concrete defects: begin with a targeted symbol or code search tied to the reported",
         "then use call/path tracing and read exact source snippets as",

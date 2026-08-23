@@ -131,7 +131,10 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
     Some(format!(
         "\nCODEBASE MEMORY:\n\
          You have repository-index tools for architecture, symbol search, code search,\n\
-         and call/impact tracing.\n\n\
+         and call/impact tracing. For work that needs code discovery, use a targeted repository-index\n\
+         query before any shell inventory. Do not precede graph-based source selection with a compound\n\
+         shell inventory; keep repository status, validation, and other operational checks as separate\n\
+         calls after selection.\n\n\
          When work requires implementation selection, caller/data-flow understanding, or\n\
          behavioral preservation, use every successful targeted graph result as a decision\n\
          checkpoint: consume it with the work-item requirements before selecting a dependent\n\
@@ -311,6 +314,11 @@ for line in sys.stdin:
         .expect("registered tool renders prompt section");
 
         for expected in [
+            "use a targeted repository-index",
+            "query before any shell inventory",
+            "Do not precede graph-based source selection with a compound",
+            "keep repository status, validation, and other operational checks as separate",
+            "calls after selection",
             "implementation selection, caller/data-flow understanding, or",
             "use every successful targeted graph result as a decision",
             "checkpoint: consume it with the work-item requirements",

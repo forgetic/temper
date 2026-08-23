@@ -7,12 +7,22 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
     let engineer = system_prompt(Capability::CodingWorkspace, &[]);
     for expected in [
         "Scale discovery to the task",
-        "When repository-index tools are available for a concrete or already-localized defect",
-        "start with targeted symbol/code search",
+        "When repository-index tools are available and the task requires code discovery",
+        "make the first discovery action a targeted graph symbol/code search",
+        "Do not run a compound shell inventory before graph-based source selection",
+        "combine repository status, formatting/output, file discovery, sorting, and truncation",
+        "Use conventional discovery before selection only when repository-index tools are disabled or unavailable",
+        "bounded targeted graph attempt cannot provide the required evidence",
+        "fallback shell discovery minimal—one simple discovery command plus a necessary directory change",
+        "make every command-list segment fully classifiable",
+        "only `&&`, `||`, `;`, or newline separators",
+        "Do not use pipelines, redirects, expansions or substitutions, assignments, grouping, globbing, comments, or background operators",
+        "Repository status, validation, and other operational checks remain available after source selection",
+        "run them as separate calls rather than bundling them with discovery",
         "use only needed call/path tracing and exact source reads",
         "avoid empty or broad graph searches and broad architecture calls",
         "Reserve architecture views for genuine topology questions",
-        "For non-local topology work, batch independent status and targeted discovery calls",
+        "For non-local topology work, batch genuinely independent targeted discovery calls",
         "skip ritual discovery when the task is already localized",
         "work requiring implementation selection, caller/data-flow understanding, or behavioral preservation",
         "use every successful targeted graph result as a decision checkpoint",
@@ -78,6 +88,7 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
     ];
     let engineer_only_guidance = [
         "Scale discovery to the task",
+        "compound shell inventory before graph-based source selection",
         "implementation contract internally",
         "one to four mutation responses",
         "model-turn batching",
@@ -122,6 +133,20 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
             );
         }
     }
+}
+
+#[test]
+fn coding_prompt_orders_graph_discovery_before_classifiable_shell_fallback() {
+    let engineer = system_prompt(Capability::CodingWorkspace, &[]);
+    let graph_first = engineer
+        .find("make the first discovery action a targeted graph symbol/code search")
+        .expect("coding prompt requires graph-first discovery");
+    let fallback = engineer
+        .find("fallback shell discovery minimal")
+        .expect("coding prompt retains bounded conventional fallback");
+    assert!(graph_first < fallback);
+    assert!(engineer.contains("make every command-list segment fully classifiable"));
+    assert!(engineer.contains("after source selection; run them as separate calls"));
 }
 
 #[test]
