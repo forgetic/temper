@@ -1,11 +1,13 @@
 # Mapped live decision-gap recovery
 
-This active checked-in scenario maps feature `ai/temper#1069` and plan
-`ai/temper#1070` on `agent/pr-for-feature-1069`. It is additive: the historical
-`mapped-live-graph-consumption`, historical `mapped-live-graph-convergence`, and
-historical `mapped-live-ordinary-tool-convergence` mappings keep their original
-feature, plan, and branch identities. Feature `ai/temper#1091` strengthens this
-same mapping in place; it does not replace or relabel the #1069/#1070 scenario.
+This active checked-in scenario maps feature `ai/temper#1091` and plan
+`ai/temper#1092` on `agent/pr-for-feature-1091`. It updates the scenario in place
+without changing its `introduced_by = "#1075"` provenance. The former feature
+`ai/temper#1069`, plan `ai/temper#1070`, and source branch
+`agent/pr-for-feature-1069` remain explicit historical audit metadata for the
+original decision-gap contract. The historical `mapped-live-graph-consumption`,
+`mapped-live-graph-convergence`, and `mapped-live-ordinary-tool-convergence`
+mappings also keep their original feature, plan, and branch identities.
 
 ## Live contract
 
@@ -65,9 +67,9 @@ cargo dev-scenario-run scenarios/mapped-live-graph-convergence
 cargo dev-scenario-run scenarios/mapped-live-ordinary-tool-convergence
 cargo dev-scenario-run scenarios/mapped-live-decision-gap-recovery
 cargo dev-scenario-validate-feature \
-  --feature ai/temper#1069 \
+  --feature ai/temper#1091 \
   --landing-base origin/main \
-  --source-branch agent/pr-for-feature-1069 \
+  --source-branch agent/pr-for-feature-1091 \
   --pr <scenario-pr-number> \
   --sha "$(git rev-parse HEAD)" \
   --output-dir target/focused-validation

@@ -13,11 +13,13 @@ extends = "scenarios/mapped-live-graph-consumption"
 [runner]
 uses = "manifest"
 
+# Historical mapping audit: feature ai/temper#1069, plan ai/temper#1070, and
+# source branch agent/pr-for-feature-1069. The introduced_by provenance is unchanged.
 [validation]
-feature = "ai/temper#1069"
-plan = "ai/temper#1070"
-source_branch = "agent/pr-for-feature-1069"
-change = "new"
+feature = "ai/temper#1091"
+plan = "ai/temper#1092"
+source_branch = "agent/pr-for-feature-1091"
+change = "updated"
 
 [feature_contract]
 claim = "Bounded decision-gap recovery is root-local and progress-based: only calls admitted for the immutable active-root snapshot can reach the provider or spend allowance, while an impossible remaining gap terminates safely without a product."

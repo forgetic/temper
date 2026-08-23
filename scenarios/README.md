@@ -255,11 +255,14 @@ benchmark are unchanged.
 
 ### Mapped live decision-gap recovery mapping
 
-`mapped-live-decision-gap-recovery` is the sole active mapping for
-`ai/temper#1069` and `ai/temper#1070` on `agent/pr-for-feature-1069`. Its live
-agent now records feature `#1091`'s in-place strengthening without changing
-those historical mapping fields. Distinct routing and behavioral roots exhaust
-normal exploration through two sibling focused-test reads. In one immutable
+`mapped-live-decision-gap-recovery` is the sole active mapping for feature
+`ai/temper#1091` and plan `ai/temper#1092` on
+`agent/pr-for-feature-1091`. This updates the scenario in place without changing
+its `introduced_by = "#1075"` provenance. The former feature
+`ai/temper#1069`, plan `ai/temper#1070`, and source branch
+`agent/pr-for-feature-1069` remain historical audit metadata for the original
+decision-gap contract. Distinct routing and behavioral roots exhaust normal
+exploration through two sibling focused-test reads. In one immutable
 recovery batch, cross-root caller and focused-test reads remain local while only
 the compatible active-root trace reaches the provider. Trace progress reports
 the actual remaining implementation, caller, and focused-test kinds with
@@ -273,8 +276,8 @@ counts, types, lifecycle fields, binding facts, shell disposition, approved
 checkpoint categories, and gate outcomes; provider output, selectors, roots,
 source, prompts, commands, arguments, credentials, paths, host-gate output, and
 diagnostic traces remain ephemeral. The historical graph-consumption,
-graph-convergence, ordinary-tool-convergence, and decision-gap metadata retain
-their original identities and contracts.
+graph-convergence, and ordinary-tool-convergence mappings retain their original
+identities and contracts.
 
 ### Mapped live denied-shell classification mapping
 
