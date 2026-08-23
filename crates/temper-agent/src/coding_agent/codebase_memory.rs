@@ -143,14 +143,23 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          current-root result; select from that provider result, not unrelated discovery. It is\n\
          absent for failures, unavailable tools, and truncated or ambiguous output. A generic decision-anchor\n\
          recovery message means a successful result was unconsumable: make a bounded later targeted\n\
-         correction or stop without a product. Select the likely implementation identity returned by\n\
-         targeted search before choosing dependent caller work. For inbound caller understanding, trace\n\
-         from that implementation identity rather than an outer caller or wrapper returned beside it.\n\
+         correction or stop without a product. Before selecting the initial graph route, derive query\n\
+         terms from the requested behavior and intended repair. If the work item also names an incidental\n\
+         field, accessor, or symbol, begin with a task-semantic graph query that describes the behavior;\n\
+         do not lead with a name pattern or identifier token. Narrow with identifiers returned by that\n\
+         semantic result only afterward. Among returned implementation candidates, favor the one whose\n\
+         result context matches the requested behavior, then use the shortest provider-derived refinement\n\
+         and implementation-to-caller chain needed for the decision. Consume the exact behaviorally relevant\n\
+         caller source; do not choose an outer wrapper or incidental caller merely because it can carry a\n\
+         caller evidence label.\n\
          Provider-returned caller/callee identities from targeted and exact-source results are preferred\n\
          later-turn caller/model selectors when the typed relationship satisfies the evidence gap. A\n\
          complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
-         manufacture caller evidence by rereading the traced symbol as its own caller. Independent test\n\
-         roots never satisfy the active implementation root. Once implementation and caller source evidence\n\
+         manufacture caller evidence by rereading the traced symbol as its own caller. During ordinary\n\
+         discovery, search the graph for the requested behavioral regression before broad or\n\
+         identifier-derived focused-test search, then consume the exact test returned by that semantic\n\
+         search. An independent test root remains useful discovery evidence but never satisfies the active\n\
+         implementation root. Once implementation and caller source evidence\n\
          are complete, a listed focused-test traversal uses the provider-returned caller in a later\n\
          `trace_path` call with relationship `calls`, direction `inbound`, and test inclusion enabled.\n\
          Read the exact provider-returned test with `get_code_snippet` / `qualified_name` /\n\
@@ -158,7 +167,11 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          After a local\n\
          decision-evidence denial, follow only the compatible recovery menu and never repeat the denied\n\
          tool/selector/evidence-kind tuple. Do not batch speculative snippets with a traversal, and do not\n\
-         issue the test source read until a later turn has received that traversal's typed result. Failures and unavailable tools retain conventional\n\
+         issue the test source read until a later turn has received that traversal's typed result. When\n\
+         multiple typed routes could fill a decision gap, favor the route whose producer query, returned\n\
+         implementation, and consumer chain are semantically connected to the requested behavior; an\n\
+         evidence-kind declaration alone does not make an incidental route preferable. Keep every source\n\
+         selector provider-derived and on the active root. Failures and unavailable tools retain conventional\n\
          discovery as the fallback. Keep genuinely independent discovery parallel. A call that\n\
          consumes the current result must be in a later model turn; later evidence calls whose\n\
          selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
@@ -344,15 +357,26 @@ for line in sys.stdin:
             "current-root result; select from that provider result, not unrelated discovery.",
             "absent for failures, unavailable tools, and truncated or ambiguous output.",
             "Keep genuinely independent discovery parallel",
-            "Select the likely implementation identity returned by",
-            "before choosing dependent caller work",
-            "from that implementation identity rather than an outer caller or wrapper",
+            "derive query",
+            "terms from the requested behavior and intended repair",
+            "also names an incidental",
+            "begin with a task-semantic graph query that describes the behavior",
+            "do not lead with a name pattern or identifier token",
+            "Narrow with identifiers returned by that",
+            "semantic result only afterward",
+            "shortest provider-derived refinement",
+            "implementation-to-caller chain",
+            "exact behaviorally relevant",
+            "incidental caller merely because it can carry a",
+            "caller evidence label",
             "Provider-returned caller/callee identities from targeted and exact-source results",
             "later-turn caller/model selectors",
             "complete empty inbound trace settles that selected symbol's graph-caller relationship",
             "manufacture caller evidence by rereading the traced symbol as its own caller",
-            "Independent test",
-            "roots never satisfy the active implementation root",
+            "search the graph for the requested behavioral regression",
+            "identifier-derived focused-test search",
+            "consume the exact test returned by that semantic",
+            "independent test root remains useful discovery evidence but never satisfies the active",
             "focused-test traversal uses the provider-returned caller",
             "`trace_path` call with relationship `calls`, direction `inbound`, and test inclusion enabled",
             "Read the exact provider-returned test with `get_code_snippet` / `qualified_name` /",
@@ -362,6 +386,14 @@ for line in sys.stdin:
             "tool/selector/evidence-kind tuple",
             "Do not batch speculative snippets with a traversal",
             "issue the test source read until a later turn has received that traversal's typed result",
+            "multiple typed routes could fill a decision gap",
+            "whose producer query, returned",
+            "implementation, and consumer chain are semantically connected to the requested behavior",
+            "requested behavior; an",
+            "evidence-kind declaration alone does not make an incidental route",
+            "preferable",
+            "Keep every source",
+            "selector provider-derived and on the active root",
             "Do not mutate until consumed",
             "selected current-root implementation, its caller/model",
             "focused behavioral tests",

@@ -33,13 +33,23 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "select from that provider result, not unrelated discovery",
         "absent for failures, unavailable tools, and truncated or ambiguous output",
         "do not issue producer and consumer calls in the same turn or batch",
-        "Select the likely implementation identity returned by targeted search before choosing dependent caller work",
-        "trace from that implementation identity rather than an outer caller or wrapper",
+        "Derive the initial graph query from the requested behavior and intended repair",
+        "task also names an incidental field, accessor, or symbol",
+        "begin with a task-semantic graph query",
+        "rather than a name pattern or identifier token",
+        "narrow only with identifiers returned by that result",
+        "behaviorally relevant implementation candidate",
+        "shortest provider-derived refinement and implementation-to-caller chain",
+        "exact relevant caller source instead of an outer wrapper or incidental caller",
+        "merely accepts a caller evidence label",
         "Provider-returned caller/callee identities from targeted and exact-source results",
         "preferred later-turn caller/model selectors",
         "complete empty inbound trace settles that selected symbol's graph-caller relationship",
         "do not manufacture caller evidence by rereading the traced symbol as its own caller",
-        "Independent test roots never satisfy the active implementation root",
+        "search the graph for the requested behavioral regression",
+        "before broad or identifier-derived focused-test search",
+        "consume the exact test returned by that semantic search",
+        "independent test root remains discovery evidence but never satisfies the active implementation root",
         "if focused-test evidence is still missing and the recovery menu lists it",
         "provider-returned caller in a later turn with `trace_path` / `function_name`",
         "relationship `calls`, direction",
@@ -47,6 +57,11 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "Read the exact test identity returned by that traversal",
         "`get_code_snippet` / `qualified_name` / `focused_test` in another later turn",
         "selector discovery, not focused-test source evidence",
+        "multiple typed routes could fill a decision gap",
+        "producer query, returned implementation, and consumer chain are semantically connected",
+        "evidence-kind declaration alone cannot make an incidental route preferable",
+        "Keep every source selector",
+        "provider-derived and on the active root",
         "After a local decision-evidence denial",
         "follow only this compatible menu",
         "never repeat the denied tool/selector/evidence-kind tuple",
@@ -173,10 +188,10 @@ fn coding_prompt_orders_graph_discovery_before_classifiable_shell_fallback() {
 fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
     let engineer = system_prompt(Capability::CodingWorkspace, &[]);
     let selection = engineer
-        .find("Select the likely implementation identity returned by targeted search")
+        .find("Choose the behaviorally relevant implementation candidate")
         .expect("coding prompt selects the implementation root");
     let trace = engineer
-        .find("trace from that implementation identity rather than an outer caller or wrapper")
+        .find("shortest provider-derived refinement and implementation-to-caller chain")
         .expect("coding prompt traces inbound from the implementation root");
     let relationships = engineer
         .find("Provider-returned caller/callee identities from targeted and exact-source results")
@@ -193,9 +208,9 @@ fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
     assert!(selection < trace && trace < relationships && relationships < empty);
     assert!(empty < denial);
     assert!(engineer.contains("do not manufacture caller evidence by rereading the traced symbol"));
-    assert!(
-        engineer.contains("Independent test roots never satisfy the active implementation root")
-    );
+    assert!(engineer.contains(
+        "independent test root remains discovery evidence but never satisfies the active implementation root"
+    ));
     assert!(engineer.contains("Read the exact test identity returned by that traversal"));
     assert!(engineer.contains("another later turn"));
 }
