@@ -6,8 +6,8 @@ use jig_core::{Reply, RequestView, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use serde_json::Value as JsonValue;
 use temper_agent::{
-    ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
-    run_coding_agent_native_with_tool_config,
+    CodingAgentError, ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
+    WorkspaceWorkItem, run_coding_agent_native_with_tool_config,
 };
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
@@ -21,6 +21,8 @@ use coding_agent_workspace::{REPO_DIR, TempCheckout};
 const IMPLEMENTATION: &str = "crate::routing::select_worker";
 const CALLER: &str = "crate::delivery::dispatch";
 const FOCUSED_TEST: &str = "crate::tests::keeps_affinity";
+#[path = "jig_caller_trace_routing/focused_test_fallback.rs"]
+mod focused_test_fallback;
 #[path = "jig_caller_trace_routing/semantic_routing.rs"]
 mod semantic_routing;
 static JIG_LOCK: Mutex<()> = Mutex::new(());
@@ -525,7 +527,7 @@ CALL_LOG = os.path.join(os.path.dirname(__file__), "calls.jsonl")
 TOOLS = [
     {"name": "search_graph", "description": "Targeted graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "name_pattern": {"type": "string"}, "project": {"type": "string"}}}},
     {"name": "search_code", "description": "Targeted code search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "pattern": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
-    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}}, "required": ["function_name"]}},
+    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "depth": {"type": "integer"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "index_repository", "description": "Index repository", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path", "name"]}},
@@ -562,6 +564,10 @@ for line in sys.stdin:
                 result(request["id"], {"results": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}, {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "is_test": True}]})
             elif arguments.get("query") == "renamed replay shard ownership regression":
                 result(request["id"], {"results": [{"qualified_name": SEMANTIC_FOCUSED_TEST, "name": "renamed_replay_preserves_shard_ownership", "is_test": True}]})
+            elif arguments.get("query") == "request affinity remains stable across worker selection":
+                result(request["id"], {"results": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "is_test": True}]})
+            elif arguments.get("query") == "request affinity regression without a matching test":
+                result(request["id"], {"results": []})
             elif arguments.get("name_pattern") == "dispatch_key":
                 result(request["id"], {"results": [{"qualified_name": INCIDENTAL_IMPLEMENTATION, "name": "legacy_dispatch_key"}]})
             else:
@@ -581,7 +587,10 @@ for line in sys.stdin:
             elif selected == CALLER:
                 assert arguments.get("mode") == "calls"
                 assert arguments.get("include_tests") is True
-                result(request["id"], {"function": {"qualified_name": CALLER, "name": "dispatch"}, "mode": "calls", "direction": "inbound", "include_tests": True, "complete": True, "callers": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "is_test": True}]})
+                if arguments.get("depth") == 1:
+                    result(request["id"], {"function": {"qualified_name": CALLER, "name": "dispatch"}, "mode": "calls", "direction": "inbound", "include_tests": True, "complete": True, "callers": []})
+                else:
+                    result(request["id"], {"function": {"qualified_name": CALLER, "name": "dispatch"}, "mode": "calls", "direction": "inbound", "include_tests": True, "complete": True, "callers": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "is_test": True}]})
             elif selected == SEMANTIC_IMPLEMENTATION:
                 result(request["id"], {"function": {"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}, "direction": "inbound", "complete": True, "callers": [{"qualified_name": SEMANTIC_CALLER, "name": "route_renamed_job"}]})
             else:

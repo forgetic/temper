@@ -33,6 +33,7 @@ impl GraphRecoveryEvidenceKindV1 {
 pub enum GraphRecoverySelectorOriginV1 {
     CallerEvidenceResult,
     FocusedTestResult,
+    TaskSemanticQuery,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -117,6 +118,19 @@ impl GraphRecoveryActionV1 {
         }
     }
 
+    /// Discovers a focused test after a settled empty caller traversal.
+    pub const fn focused_test_semantic_fallback() -> Self {
+        Self {
+            tool: GraphCorrelationToolV1::SearchGraph,
+            selector_kind: DecisionAnchorTargetKindV1::GraphQuery,
+            evidence_kind: GraphRecoveryEvidenceKindV1::FocusedTest,
+            selector_origin: Some(GraphRecoverySelectorOriginV1::TaskSemanticQuery),
+            relationship: None,
+            direction: None,
+            include_tests: false,
+        }
+    }
+
     pub fn is_valid(self) -> bool {
         match (self.tool, self.selector_kind, self.evidence_kind) {
             (
@@ -159,6 +173,16 @@ impl GraphRecoveryActionV1 {
                     && self.direction == Some(GraphRecoveryDirectionV1::Inbound)
                     && self.include_tests
             }
+            (
+                GraphCorrelationToolV1::SearchGraph,
+                DecisionAnchorTargetKindV1::GraphQuery,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ) => {
+                self.selector_origin == Some(GraphRecoverySelectorOriginV1::TaskSemanticQuery)
+                    && self.relationship.is_none()
+                    && self.direction.is_none()
+                    && !self.include_tests
+            }
             _ => false,
         }
     }
@@ -181,6 +205,7 @@ impl GraphRecoveryActionV1 {
                     "/selector=caller_evidence_result"
                 }
                 GraphRecoverySelectorOriginV1::FocusedTestResult => "/selector=focused_test_result",
+                GraphRecoverySelectorOriginV1::TaskSemanticQuery => "/selector=task_semantic_query",
             });
         }
         if self.relationship == Some(GraphRecoveryRelationshipV1::Calls) {
@@ -384,7 +409,7 @@ impl GraphExplorationClosedV1 {
                     message
                 } else {
                     format!(
-                        "{message}; compatible actions: [{}]; next: exact later-turn typed-result selectors only; listed traversal fields mandatory; no search, root switch, speculative snippet batch, denied retry, or mutation",
+                        "{message}; compatible actions: [{}]; next: typed-result selectors except one listed task-semantic query; listed traversal fields mandatory; no other search, root switch, retry, or mutation",
                         action_labels(&self.compatible_actions),
                     )
                 }
@@ -486,7 +511,7 @@ mod tests {
         let message = details.model_message();
         assert_eq!(
             message,
-            "decision-evidence recovery required; missing evidence: [trace, caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 2; compatible actions: [trace_path/function_name/trace, get_code_snippet/qualified_name/caller]; next: exact later-turn typed-result selectors only; listed traversal fields mandatory; no search, root switch, speculative snippet batch, denied retry, or mutation"
+            "decision-evidence recovery required; missing evidence: [trace, caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 2; compatible actions: [trace_path/function_name/trace, get_code_snippet/qualified_name/caller]; next: typed-result selectors except one listed task-semantic query; listed traversal fields mandatory; no other search, root switch, retry, or mutation"
         );
         assert!(!message.contains(PRIVATE_SELECTOR));
         assert!(!message.contains("root_binding"));

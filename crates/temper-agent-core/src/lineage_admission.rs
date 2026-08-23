@@ -95,6 +95,20 @@ impl EligibleLineageAdmission {
         })
     }
 
+    pub fn focused_test_semantic_fallback(
+        root_binding: String,
+        selector_kind: DecisionAnchorTargetKindV1,
+    ) -> Option<Self> {
+        (selector_kind == DecisionAnchorTargetKindV1::GraphQuery).then_some(())?;
+        Some(Self {
+            root_binding: OpaqueLineageRootBinding::new(root_binding)?,
+            selector_kind,
+            tool_kind: GraphCorrelationToolV1::SearchGraph,
+            evidence_purpose: None,
+            recovery_purpose: Some(DecisionEvidenceKindV1::FocusedTest),
+        })
+    }
+
     pub const fn selector_kind(&self) -> DecisionAnchorTargetKindV1 {
         self.selector_kind
     }

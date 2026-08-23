@@ -22,14 +22,17 @@ mod admission;
 mod focused_test;
 
 pub(super) use admission::DecisionAnchorLineageRegistry;
-use focused_test::provider_focused_test_candidates;
+use focused_test::{
+    FocusedTestDiscovery, FocusedTestRecoveryState, SelectorOrigin, focused_test_discovery,
+};
 
 #[derive(Default)]
 pub(super) struct DecisionAnchorLineages {
-    /// `None` marks an ambiguous value. Once more than one root has offered a
-    /// representation, no later model selection may use that representation to
+    /// `None` marks a value offered by more than one root; such a value cannot
     /// advance either root.
     selectors: BTreeMap<Selector, Option<SelectorBinding>>,
+    focused_test_recovery: BTreeMap<String, FocusedTestRecoveryState>,
+    semantic_fallback_queries: BTreeMap<String, Option<String>>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -50,12 +53,6 @@ struct SelectorBinding {
     canonical_target_digests: BTreeSet<String>,
     caller_evidence_result: bool,
     focused_test_result: bool,
-}
-
-#[derive(Clone, Copy)]
-enum SelectorOrigin {
-    CallerEvidenceResult,
-    FocusedTestResult,
 }
 
 impl DecisionAnchorLineages {
@@ -85,14 +82,29 @@ impl DecisionAnchorLineages {
         }
         let target_kind =
             DecisionAnchorTargetKindV1::from_graph_correlation(correlation.target_kind);
-        let matched = self
+        let selector_binding = self
             .selector_for_input(correlation.target_kind, input)
             .and_then(|selector| self.selectors.get(&selector).cloned().flatten());
-        let (root_binding, stage, canonical_target_digests) = match matched {
-            Some(binding) => (
-                binding.root_binding,
+        let fallback_root = (correlation.tool == GraphCorrelationToolV1::SearchGraph
+            && correlation.target_kind == GraphCorrelationTargetKindV1::GraphQuery)
+            .then(|| {
+                self.semantic_fallback_queries
+                    .remove(&correlation.target_digest)
+                    .flatten()
+            })
+            .flatten();
+        let matched_root = selector_binding
+            .as_ref()
+            .map(|binding| binding.root_binding.clone())
+            .or_else(|| fallback_root.clone());
+        let (root_binding, stage, canonical_target_digests) = match matched_root {
+            Some(root_binding) => (
+                root_binding,
                 DecisionAnchorLineageStageV1::CarryForward,
-                binding.canonical_target_digests,
+                selector_binding
+                    .as_ref()
+                    .map(|binding| binding.canonical_target_digests.clone())
+                    .unwrap_or_default(),
             ),
             None => (
                 Uuid::new_v4().to_string(),
@@ -101,14 +113,27 @@ impl DecisionAnchorLineages {
             ),
         };
 
-        // Any malformed, duplicate, unsupported, or oversized provider record
-        // contributes no carry-forward values. The current successful result is
-        // still a root/carry record, but it cannot unlock an additional hop.
+        let FocusedTestDiscovery {
+            candidates: focused_tests,
+            outcome: focused_test_discovery,
+            is_traversal: is_focused_test_traversal,
+        } = focused_test_discovery(
+            correlation,
+            input,
+            selector_binding
+                .as_ref()
+                .is_some_and(|binding| binding.caller_evidence_result),
+            fallback_root.is_some(),
+            typed_parts,
+        );
+
         let result_target_kinds = match provider_candidates(typed_parts) {
             Some(candidates) => {
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
                 self.register(&root_binding, candidates.clone())?;
-                if correlation.tool == GraphCorrelationToolV1::SearchGraph {
+                if correlation.tool == GraphCorrelationToolV1::SearchGraph
+                    && fallback_root.is_none()
+                {
                     self.mark_candidates(
                         &root_binding,
                         candidates.clone(),
@@ -118,11 +143,11 @@ impl DecisionAnchorLineages {
                 if decision_evidence_kind == Some(DecisionEvidenceKindV1::Caller) {
                     self.mark_candidates(
                         &root_binding,
-                        candidates.clone(),
+                        candidates,
                         SelectorOrigin::CallerEvidenceResult,
                     )?;
                 }
-                if let Some(focused_tests) = provider_focused_test_candidates(typed_parts) {
+                if let Some(focused_tests) = focused_tests {
                     self.mark_candidates(
                         &root_binding,
                         focused_tests,
@@ -133,13 +158,20 @@ impl DecisionAnchorLineages {
             }
             None => BTreeSet::new(),
         };
-        DecisionAnchorLineageV1::new_with_canonical_target_digests_and_evidence_kind(
+        self.record_focused_test_recovery(
+            &root_binding,
+            is_focused_test_traversal,
+            fallback_root.is_some(),
+            focused_test_discovery,
+        );
+        DecisionAnchorLineageV1::new_with_metadata(
             root_binding,
             stage,
             target_kind,
             result_target_kinds,
             canonical_target_digests,
             decision_evidence_kind,
+            focused_test_discovery,
         )
     }
 
@@ -202,31 +234,6 @@ impl DecisionAnchorLineages {
                     self.selectors.insert(selector, None);
                 }
                 Some(None) => {}
-            }
-        }
-        Some(())
-    }
-
-    fn mark_candidates(
-        &mut self,
-        root: &str,
-        candidates: BTreeSet<Candidate>,
-        origin: SelectorOrigin,
-    ) -> Option<()> {
-        for candidate in candidates {
-            let selector = Selector {
-                kind: candidate.kind,
-                value: candidate.value,
-            };
-            let Some(Some(binding)) = self.selectors.get_mut(&selector) else {
-                continue;
-            };
-            if binding.root_binding != root {
-                continue;
-            }
-            match origin {
-                SelectorOrigin::CallerEvidenceResult => binding.caller_evidence_result = true,
-                SelectorOrigin::FocusedTestResult => binding.focused_test_result = true,
             }
         }
         Some(())

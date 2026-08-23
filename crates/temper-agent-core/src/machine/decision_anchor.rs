@@ -8,8 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    DecisionEvidenceKindV1, GraphCorrelationToolV1, GraphCorrelationV1, GraphExplorationClosedV1,
-    GraphRecoveryActionV1, GraphRecoveryEvidenceKindV1, MAX_GRAPH_RECOVERY_ALLOWANCE_V1,
+    DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1, GraphCorrelationToolV1,
+    GraphCorrelationV1, GraphExplorationClosedV1, GraphRecoveryActionV1,
+    GraphRecoveryEvidenceKindV1, MAX_GRAPH_RECOVERY_ALLOWANCE_V1,
 };
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
@@ -107,7 +108,11 @@ struct GapRecovery {
 struct SourceEvidence {
     trace_turn: Option<usize>,
     decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
+    focused_test_selector_available: bool,
     focused_test_traversal_turn: Option<usize>,
+    focused_test_traversal_outcome: Option<FocusedTestDiscoveryOutcomeV1>,
+    focused_test_fallback_turn: Option<usize>,
+    focused_test_fallback_outcome: Option<FocusedTestDiscoveryOutcomeV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -319,12 +324,26 @@ impl DecisionAnchorState {
                     if call.recovery_gap
                         == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)) =>
                 {
-                    anchor.evidence.record_focused_test_traversal(call.turn)
+                    anchor.evidence.record_focused_test_traversal(call.turn);
+                    anchor.evidence.record_focused_test_discovery(
+                        output.tool,
+                        output.lineage.focused_test_discovery,
+                    );
                 }
                 GraphCorrelationToolV1::TracePath => anchor.evidence.record_trace(call.turn),
                 GraphCorrelationToolV1::SearchCode => anchor
                     .evidence
                     .record_decision_kinds([DecisionEvidenceKindV1::Implementation]),
+                GraphCorrelationToolV1::SearchGraph
+                    if call.recovery_gap
+                        == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)) =>
+                {
+                    anchor.evidence.record_focused_test_fallback(call.turn);
+                    anchor.evidence.record_focused_test_discovery(
+                        output.tool,
+                        output.lineage.focused_test_discovery,
+                    );
+                }
                 GraphCorrelationToolV1::GetCodeSnippet
                     if anchor.evidence.has_trace()
                         || batch_trace_turns
