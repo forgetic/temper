@@ -17,6 +17,10 @@ use crate::mcp::McpToolResultPart;
 
 const MAX_RESULT_TARGETS: usize = 64;
 
+mod admission;
+
+pub(super) use admission::DecisionAnchorLineageRegistry;
+
 #[derive(Default)]
 pub(super) struct DecisionAnchorLineages {
     /// `None` marks an ambiguous value. Once more than one root has offered a

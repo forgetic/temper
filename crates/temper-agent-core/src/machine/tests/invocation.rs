@@ -7,6 +7,7 @@
 //! native filesystem keys.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use temper_agent_io::{EngineTime, Machine};
@@ -19,7 +20,19 @@ use super::common::{
 use crate::machine::{
     AgentEvent, AgentMachine, AgentRequest, ToolFailureDiagnostic, ToolFailureReason,
 };
-use crate::{REJECTED_TOOL_NAME, ToolInvocationCatalog};
+use crate::{
+    LineageAdmissionOutcome, LineageAdmissionResolver, LineageAdmissionStatus, REJECTED_TOOL_NAME,
+    ToolInvocationCatalog,
+};
+
+struct CountingAdmission(AtomicUsize);
+
+impl LineageAdmissionResolver for CountingAdmission {
+    fn resolve(&self, _tool_name: &str, _arguments: &serde_json::Value) -> LineageAdmissionOutcome {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
+    }
+}
 
 struct ContractTool {
     name: &'static str,
@@ -149,6 +162,31 @@ fn dispatched(requests: &[AgentRequest]) -> (&ToolCall, Option<&crate::ToolFailu
             _ => None,
         })
         .expect("one dispatched call")
+}
+
+#[test]
+fn canonical_graph_call_queries_run_local_admission_before_dispatch() {
+    let admission = Arc::new(CountingAdmission(AtomicUsize::new(0)));
+    let mut machine = machine(catalog(&["codebase_memory_search_graph"]))
+        .with_lineage_admission(admission.clone());
+    let _ = machine.on_start(EngineTime::ZERO);
+    let requests = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "openai-responses",
+            vec![(
+                "call",
+                "codebase_memory_search_graph",
+                serde_json::json!({"query":"private selector remains wrapper-local"}),
+            )],
+        )),
+    );
+    assert_eq!(admission.0.load(Ordering::SeqCst), 1);
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, AgentRequest::RunTool { .. }))
+    );
 }
 
 #[test]

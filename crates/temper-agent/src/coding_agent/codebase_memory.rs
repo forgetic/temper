@@ -5,7 +5,7 @@ use crate::codebase_memory::{
 use std::path::Path;
 use std::time::Duration;
 
-use temper_agent_core::AgentContainmentContext;
+use temper_agent_core::{AgentContainmentContext, LineageAdmissionHandle};
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
 use tongs::tools::ToolRegistry;
 
@@ -19,6 +19,7 @@ pub(super) struct PreparedCodebaseMemoryTools {
 pub(super) struct PreparedCodebaseMemoryGuidance {
     prompt_section: Option<String>,
     registered_safe_names: Vec<String>,
+    lineage_admission: Option<LineageAdmissionHandle>,
 }
 
 impl PreparedCodebaseMemoryTools {
@@ -29,10 +30,12 @@ impl PreparedCodebaseMemoryTools {
         registry: &mut ToolRegistry,
     ) -> PreparedCodebaseMemoryGuidance {
         let registered_safe_names = self.toolset.registered_tool_names().to_vec();
+        let lineage_admission = self.toolset.lineage_admission();
         self.toolset.append_to_registry(registry);
         PreparedCodebaseMemoryGuidance {
             prompt_section: self.prompt_section,
             registered_safe_names,
+            lineage_admission,
         }
     }
 }
@@ -50,6 +53,10 @@ impl PreparedCodebaseMemoryGuidance {
         } else {
             None
         }
+    }
+
+    pub(super) fn lineage_admission(&self) -> Option<LineageAdmissionHandle> {
+        self.lineage_admission.clone()
     }
 }
 
@@ -358,6 +365,7 @@ for line in sys.stdin:
                 .expect("absent config is ok");
             assert!(absent.prompt_section.is_none());
             assert!(absent.toolset.registered_tool_names().is_empty());
+            assert!(absent.toolset.lineage_admission().is_none());
 
             let role_mismatch = config(&dir, CodebaseMemoryMode::Required, vec!["reviewer"]);
             let mismatch = prepare_codebase_memory_tools(
@@ -392,6 +400,7 @@ for line in sys.stdin:
                 .prompt_section
                 .clone()
                 .expect("registered tools produce prompt section");
+            assert!(prepared.toolset.lineage_admission().is_some());
             for expected in [
                 "CODEBASE MEMORY",
                 "repository-index tools for architecture, symbol search, code search",
@@ -436,6 +445,10 @@ for line in sys.stdin:
             let empty_registry = tongs::tools::ToolRegistry::new();
             let mut registry = tongs::tools::ToolRegistry::new();
             let guidance = prepared.append_to_registry(&mut registry);
+            assert!(
+                guidance.lineage_admission().is_some(),
+                "the finalized codebase-memory composition retains its run-local admission handle"
+            );
             assert!(
                 guidance
                     .prompt_section_for_registry(&empty_registry)
