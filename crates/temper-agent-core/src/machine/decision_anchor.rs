@@ -107,6 +107,7 @@ struct GapRecovery {
 struct SourceEvidence {
     trace_turn: Option<usize>,
     decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
+    focused_test_traversal_turn: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -314,6 +315,12 @@ impl DecisionAnchorState {
             };
             let before = anchor.evidence.progress_count();
             match output.tool {
+                GraphCorrelationToolV1::TracePath
+                    if call.recovery_gap
+                        == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)) =>
+                {
+                    anchor.evidence.record_focused_test_traversal(call.turn)
+                }
                 GraphCorrelationToolV1::TracePath => anchor.evidence.record_trace(call.turn),
                 GraphCorrelationToolV1::SearchCode => anchor
                     .evidence
@@ -435,16 +442,10 @@ impl DecisionAnchorState {
             return None;
         };
         let active = recovery.anchors.roots.get(&recovery.active_root)?;
-        let compatible_actions = active
-            .evidence
-            .compatible_gaps(active)
-            .into_iter()
-            .map(|gap| GraphRecoveryActionV1::for_evidence(gap.recovery_kind()))
-            .collect::<Vec<_>>();
         GraphExplorationClosedV1::recoverable_with_actions(
             active.evidence.missing_kinds(),
             recovery.remaining,
-            compatible_actions,
+            active.evidence.compatible_actions(active),
         )
     }
 

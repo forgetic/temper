@@ -9,7 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationV1,
+    DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
+    GraphCorrelationV1,
 };
 use uuid::Uuid;
 
@@ -18,8 +19,10 @@ use crate::mcp::McpToolResultPart;
 const MAX_RESULT_TARGETS: usize = 64;
 
 mod admission;
+mod focused_test;
 
 pub(super) use admission::DecisionAnchorLineageRegistry;
+use focused_test::provider_focused_test_candidates;
 
 #[derive(Default)]
 pub(super) struct DecisionAnchorLineages {
@@ -45,6 +48,14 @@ struct Candidate {
 struct SelectorBinding {
     root_binding: String,
     canonical_target_digests: BTreeSet<String>,
+    caller_evidence_result: bool,
+    focused_test_result: bool,
+}
+
+#[derive(Clone, Copy)]
+enum SelectorOrigin {
+    CallerEvidenceResult,
+    FocusedTestResult,
 }
 
 impl DecisionAnchorLineages {
@@ -96,7 +107,28 @@ impl DecisionAnchorLineages {
         let result_target_kinds = match provider_candidates(typed_parts) {
             Some(candidates) => {
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
-                self.register(&root_binding, candidates)?;
+                self.register(&root_binding, candidates.clone())?;
+                if correlation.tool == GraphCorrelationToolV1::SearchGraph {
+                    self.mark_candidates(
+                        &root_binding,
+                        candidates.clone(),
+                        SelectorOrigin::FocusedTestResult,
+                    )?;
+                }
+                if decision_evidence_kind == Some(DecisionEvidenceKindV1::Caller) {
+                    self.mark_candidates(
+                        &root_binding,
+                        candidates.clone(),
+                        SelectorOrigin::CallerEvidenceResult,
+                    )?;
+                }
+                if let Some(focused_tests) = provider_focused_test_candidates(typed_parts) {
+                    self.mark_candidates(
+                        &root_binding,
+                        focused_tests,
+                        SelectorOrigin::FocusedTestResult,
+                    )?;
+                }
                 kinds
             }
             None => BTreeSet::new(),
@@ -158,6 +190,8 @@ impl DecisionAnchorLineages {
                         Some(SelectorBinding {
                             root_binding: root.to_string(),
                             canonical_target_digests,
+                            caller_evidence_result: false,
+                            focused_test_result: false,
                         }),
                     );
                 }
@@ -168,6 +202,31 @@ impl DecisionAnchorLineages {
                     self.selectors.insert(selector, None);
                 }
                 Some(None) => {}
+            }
+        }
+        Some(())
+    }
+
+    fn mark_candidates(
+        &mut self,
+        root: &str,
+        candidates: BTreeSet<Candidate>,
+        origin: SelectorOrigin,
+    ) -> Option<()> {
+        for candidate in candidates {
+            let selector = Selector {
+                kind: candidate.kind,
+                value: candidate.value,
+            };
+            let Some(Some(binding)) = self.selectors.get_mut(&selector) else {
+                continue;
+            };
+            if binding.root_binding != root {
+                continue;
+            }
+            match origin {
+                SelectorOrigin::CallerEvidenceResult => binding.caller_evidence_result = true,
+                SelectorOrigin::FocusedTestResult => binding.focused_test_result = true,
             }
         }
         Some(())

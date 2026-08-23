@@ -75,6 +75,9 @@ fn successful_targeted_results_present_only_a_bounded_provider_neutral_decision_
             "Preserve typed caller/callee identities for later source reads",
             "complete empty inbound trace settles the selected symbol's graph-caller relationship",
             "do not manufacture a caller by rereading that same symbol",
+            "implementation and caller source are complete but focused-test source is missing",
+            "later inbound calls traversal from the returned caller with tests included",
+            "read an exact test identity returned by that traversal only in another later turn",
         ] {
             assert!(
                 DECISION_ANCHOR.contains(guidance),

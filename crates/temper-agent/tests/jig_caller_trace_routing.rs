@@ -64,6 +64,7 @@ fn jig_routes_empty_inbound_trace_and_exact_source_relationships() {
             "trace_path",
             "get_code_snippet",
             "get_code_snippet",
+            "trace_path",
             "get_code_snippet",
         ]
     );
@@ -71,7 +72,11 @@ fn jig_routes_empty_inbound_trace_and_exact_source_relationships() {
     assert_eq!(calls[1]["arguments"]["direction"], "inbound");
     assert_eq!(calls[2]["arguments"]["qualified_name"], IMPLEMENTATION);
     assert_eq!(calls[3]["arguments"]["qualified_name"], CALLER);
-    assert_eq!(calls[4]["arguments"]["qualified_name"], FOCUSED_TEST);
+    assert_eq!(calls[4]["arguments"]["function_name"], CALLER);
+    assert_eq!(calls[4]["arguments"]["mode"], "calls");
+    assert_eq!(calls[4]["arguments"]["direction"], "inbound");
+    assert_eq!(calls[4]["arguments"]["include_tests"], true);
+    assert_eq!(calls[5]["arguments"]["qualified_name"], FOCUSED_TEST);
     assert_eq!(
         calls
             .iter()
@@ -124,8 +129,8 @@ fn jig_does_not_repeat_a_locally_denied_selector_evidence_pair() {
             .iter()
             .filter(|call| call["name"] == "trace_path")
             .count(),
-        1,
-        "the locally denied duplicate trace must not reach the provider or be retried"
+        2,
+        "only the implementation trace and one caller-to-test traversal may reach the provider"
     );
     assert_eq!(
         calls
@@ -135,6 +140,16 @@ fn jig_does_not_repeat_a_locally_denied_selector_evidence_pair() {
             .count(),
         1,
         "recovery must use returned relationship identities instead of rereading the implementation"
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| {
+                call["name"] == "get_code_snippet" && call["arguments"]["qualified_name"] == CALLER
+            })
+            .count(),
+        1,
+        "speculative and repeated focused-test reads of the caller must stay local"
     );
 }
 
@@ -150,15 +165,14 @@ fn minimal_routing_reply(view: &RequestView) -> Reply {
                 "implementation",
             )
         }
-        3 => {
-            let (caller, _) = exact_source_relationships(view);
-            source_reply("read-returned-caller", caller, "caller")
-        }
-        4 => {
-            let (_, test) = exact_source_relationships(view);
-            source_reply("read-returned-focused-test", test, "focused_test")
-        }
-        5 => tool_reply(
+        3 => source_reply("read-returned-caller", caller_relationship(view), "caller"),
+        4 => test_trace_reply("find-focused-test-from-caller", caller_relationship(view)),
+        5 => source_reply(
+            "read-returned-focused-test",
+            focused_test_relationship(view),
+            "focused_test",
+        ),
+        6 => tool_reply(
             "write-after-routed-evidence",
             "write",
             serde_json::json!({
@@ -166,7 +180,7 @@ fn minimal_routing_reply(view: &RequestView) -> Reply {
                 "content": "caller route verified\n"
             }),
         ),
-        6 => Reply::text(
+        7 => Reply::text(
             r#"{"summary":"Selected the implementation root and consumed returned caller evidence."}"#,
         ),
         count => panic!("unexpected minimal routing tool-result count {count}"),
@@ -198,38 +212,62 @@ fn recovery_routing_reply(view: &RequestView) -> Reply {
                 view,
                 "decision-evidence recovery required"
             ));
-            trace_reply("denied-satisfied-trace", implementation_target(view))
+            source_reply(
+                "recover-returned-caller",
+                caller_relationship(view),
+                "caller",
+            )
         }
         6 => {
-            assert!(messages_contain(
-                view,
-                "decision-evidence recovery required"
-            ));
-            assert!(messages_contain(
-                view,
-                "missing evidence: [caller, focused_test]"
-            ));
-            let (caller, test) = exact_source_relationships(view);
+            assert!(messages_contain(view, "missing evidence: [focused_test]"));
+            for expected in [
+                "selector=caller_evidence_result",
+                "relationship=calls",
+                "direction=inbound",
+                "include_tests=true",
+            ] {
+                assert!(messages_contain(view, expected), "menu omitted {expected}");
+            }
             tool_batch(&[
                 (
-                    "recover-returned-caller",
+                    "speculative-implementation-test-denied",
                     "codebase_memory_get_code_snippet",
                     serde_json::json!({
-                        "qualified_name": caller,
-                        "decision_evidence_kind": "caller"
+                        "qualified_name": caller_relationship(view),
+                        "decision_evidence_kind": "focused_test"
                     }),
                 ),
                 (
-                    "recover-returned-focused-test",
-                    "codebase_memory_get_code_snippet",
+                    "recover-test-selector-from-caller",
+                    "codebase_memory_trace_path",
                     serde_json::json!({
-                        "qualified_name": test,
-                        "decision_evidence_kind": "focused_test"
+                        "function_name": caller_relationship(view),
+                        "mode": "calls",
+                        "direction": "inbound",
+                        "include_tests": true
                     }),
                 ),
             ])
         }
-        8 => tool_reply(
+        8 => tool_batch(&[
+            (
+                "repeat-speculative-implementation-test-denied",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": caller_relationship(view),
+                    "decision_evidence_kind": "focused_test"
+                }),
+            ),
+            (
+                "recover-exact-returned-focused-test",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": focused_test_relationship(view),
+                    "decision_evidence_kind": "focused_test"
+                }),
+            ),
+        ]),
+        10 => tool_reply(
             "write-after-compatible-recovery",
             "write",
             serde_json::json!({
@@ -237,7 +275,7 @@ fn recovery_routing_reply(view: &RequestView) -> Reply {
                 "content": "denied trace was not repeated\n"
             }),
         ),
-        9 => Reply::text(
+        11 => Reply::text(
             r#"{"summary":"Followed the compatible menu without repeating the denied trace."}"#,
         ),
         count => panic!("unexpected recovery routing tool-result count {count}"),
@@ -257,6 +295,19 @@ fn trace_reply(id: &str, function_name: String) -> Reply {
         id,
         "codebase_memory_trace_path",
         serde_json::json!({"function_name": function_name, "direction": "inbound"}),
+    )
+}
+
+fn test_trace_reply(id: &str, function_name: String) -> Reply {
+    tool_reply(
+        id,
+        "codebase_memory_trace_path",
+        serde_json::json!({
+            "function_name": function_name,
+            "mode": "calls",
+            "direction": "inbound",
+            "include_tests": true
+        }),
     )
 }
 
@@ -315,20 +366,30 @@ fn implementation_target(view: &RequestView) -> String {
         .expect("targeted search returned a likely implementation")
 }
 
-fn exact_source_relationships(view: &RequestView) -> (String, String) {
-    let source = provider_results(view)
+fn caller_relationship(view: &RequestView) -> String {
+    provider_results(view)
         .into_iter()
         .find(|result| result.get("source").is_some() && result.get("callers").is_some())
-        .expect("exact implementation source returned typed relationships");
-    let caller = source
-        .pointer("/callers/0/qualified_name")
-        .and_then(JsonValue::as_str)
-        .expect("exact source returned a caller");
-    let test = source
-        .pointer("/related_source_references/0/qualified_name")
-        .and_then(JsonValue::as_str)
-        .expect("exact source returned a focused test");
-    (caller.to_string(), test.to_string())
+        .and_then(|result| {
+            result
+                .pointer("/callers/0/qualified_name")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        })
+        .expect("exact implementation source returned a caller")
+}
+
+fn focused_test_relationship(view: &RequestView) -> String {
+    provider_results(view)
+        .into_iter()
+        .find(|result| result.get("include_tests").and_then(JsonValue::as_bool) == Some(true))
+        .and_then(|result| {
+            result
+                .pointer("/callers/0/qualified_name")
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        })
+        .expect("test-inclusive caller traversal returned a focused test")
 }
 
 fn assert_empty_inbound_trace(view: &RequestView) {
@@ -456,7 +517,7 @@ CALL_LOG = os.path.join(os.path.dirname(__file__), "calls.jsonl")
 
 TOOLS = [
     {"name": "search_code", "description": "Targeted code search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "pattern": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
-    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "direction": {"type": "string"}, "project": {"type": "string"}}, "required": ["function_name"]}},
+    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "index_repository", "description": "Index repository", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path", "name"]}},
@@ -491,13 +552,21 @@ for line in sys.stdin:
         elif name == "search_code":
             result(request["id"], {"results": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
         elif name == "trace_path":
-            assert arguments.get("function_name") == IMPLEMENTATION
+            selected = arguments.get("function_name")
             assert arguments.get("direction") == "inbound"
-            result(request["id"], {"function": {"qualified_name": IMPLEMENTATION, "name": "select_worker"}, "direction": "inbound", "complete": True, "callers": []})
+            if selected == IMPLEMENTATION:
+                assert not arguments.get("include_tests", False)
+                result(request["id"], {"function": {"qualified_name": IMPLEMENTATION, "name": "select_worker"}, "direction": "inbound", "complete": True, "callers": []})
+            elif selected == CALLER:
+                assert arguments.get("mode") == "calls"
+                assert arguments.get("include_tests") is True
+                result(request["id"], {"function": {"qualified_name": CALLER, "name": "dispatch"}, "mode": "calls", "direction": "inbound", "include_tests": True, "complete": True, "callers": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "is_test": True}]})
+            else:
+                raise AssertionError("unexpected trace selector " + str(selected))
         elif name == "get_code_snippet":
             selected = arguments.get("qualified_name")
             if selected == IMPLEMENTATION:
-                result(request["id"], {"qualified_name": IMPLEMENTATION, "name": "select_worker", "source": "implementation source", "callers": [{"qualified_name": CALLER, "name": "dispatch"}], "related_source_references": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity"}]})
+                result(request["id"], {"qualified_name": IMPLEMENTATION, "name": "select_worker", "source": "implementation source", "callers": [{"qualified_name": CALLER, "name": "dispatch"}]})
             elif selected == CALLER:
                 result(request["id"], {"qualified_name": CALLER, "name": "dispatch", "source": "caller source", "callees": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
             elif selected == FOCUSED_TEST:

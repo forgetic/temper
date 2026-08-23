@@ -149,9 +149,16 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          Provider-returned caller/callee identities from targeted and exact-source results are preferred\n\
          later-turn caller/model selectors when the typed relationship satisfies the evidence gap. A\n\
          complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
-         manufacture caller evidence by rereading the traced symbol as its own caller. After a local\n\
+         manufacture caller evidence by rereading the traced symbol as its own caller. Independent test\n\
+         roots never satisfy the active implementation root. Once implementation and caller source evidence\n\
+         are complete, a listed focused-test traversal uses the provider-returned caller in a later\n\
+         `trace_path` call with relationship `calls`, direction `inbound`, and test inclusion enabled.\n\
+         Read the exact provider-returned test with `get_code_snippet` / `qualified_name` /\n\
+         `focused_test` in another later turn; traversal discovers a selector but is not source evidence.\n\
+         After a local\n\
          decision-evidence denial, follow only the compatible recovery menu and never repeat the denied\n\
-         tool/selector/evidence-kind tuple. Failures and unavailable tools retain conventional\n\
+         tool/selector/evidence-kind tuple. Do not batch speculative snippets with a traversal, and do not\n\
+         issue the test source read until a later turn has received that traversal's typed result. Failures and unavailable tools retain conventional\n\
          discovery as the fallback. Keep genuinely independent discovery parallel. A call that\n\
          consumes the current result must be in a later model turn; later evidence calls whose\n\
          selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
@@ -344,8 +351,17 @@ for line in sys.stdin:
             "later-turn caller/model selectors",
             "complete empty inbound trace settles that selected symbol's graph-caller relationship",
             "manufacture caller evidence by rereading the traced symbol as its own caller",
+            "Independent test",
+            "roots never satisfy the active implementation root",
+            "focused-test traversal uses the provider-returned caller",
+            "`trace_path` call with relationship `calls`, direction `inbound`, and test inclusion enabled",
+            "Read the exact provider-returned test with `get_code_snippet` / `qualified_name` /",
+            "`focused_test` in another later turn",
+            "traversal discovers a selector but is not source evidence",
             "follow only the compatible recovery menu",
             "tool/selector/evidence-kind tuple",
+            "Do not batch speculative snippets with a traversal",
+            "issue the test source read until a later turn has received that traversal's typed result",
             "Do not mutate until consumed",
             "selected current-root implementation, its caller/model",
             "focused behavioral tests",

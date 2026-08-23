@@ -39,9 +39,20 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "preferred later-turn caller/model selectors",
         "complete empty inbound trace settles that selected symbol's graph-caller relationship",
         "do not manufacture caller evidence by rereading the traced symbol as its own caller",
+        "Independent test roots never satisfy the active implementation root",
+        "if focused-test evidence is still missing and the recovery menu lists it",
+        "provider-returned caller in a later turn with `trace_path` / `function_name`",
+        "relationship `calls`, direction",
+        "`inbound`, and test inclusion enabled",
+        "Read the exact test identity returned by that traversal",
+        "`get_code_snippet` / `qualified_name` / `focused_test` in another later turn",
+        "selector discovery, not focused-test source evidence",
         "After a local decision-evidence denial",
         "follow only this compatible menu",
         "never repeat the denied tool/selector/evidence-kind tuple",
+        "Do not batch speculative snippet reads with a traversal",
+        "never issue the test source read until a later",
+        "turn after the traversal has returned its exact provider-typed test identity",
         "Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused behavioral tests",
         "smallest semantic diff",
         "closed decision-evidence recovery guidance lists compatible actions",
@@ -182,6 +193,11 @@ fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
     assert!(selection < trace && trace < relationships && relationships < empty);
     assert!(empty < denial);
     assert!(engineer.contains("do not manufacture caller evidence by rereading the traced symbol"));
+    assert!(
+        engineer.contains("Independent test roots never satisfy the active implementation root")
+    );
+    assert!(engineer.contains("Read the exact test identity returned by that traversal"));
+    assert!(engineer.contains("another later turn"));
 }
 
 #[test]

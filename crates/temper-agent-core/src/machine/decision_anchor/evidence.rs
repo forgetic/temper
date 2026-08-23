@@ -56,6 +56,15 @@ impl DecisionAnchorState {
             })
             .map(|(call, _)| call.turn)
             .min();
+        let focused_test_traversal_turn = compatible
+            .iter()
+            .filter(|(call, output)| {
+                call.recovery_gap
+                    == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
+                    && output.tool == GraphCorrelationToolV1::TracePath
+            })
+            .map(|(call, _)| call.turn)
+            .min();
         let had_trace = active.evidence.has_trace();
         let decision_kinds = if had_trace {
             compatible
@@ -80,6 +89,9 @@ impl DecisionAnchorState {
         if let Some(turn) = batch_trace_turn {
             active.evidence.record_trace(turn);
         }
+        if let Some(turn) = focused_test_traversal_turn {
+            active.evidence.record_focused_test_traversal(turn);
+        }
         active.evidence.record_decision_kinds(decision_kinds);
 
         if active.evidence.is_complete() {
@@ -102,7 +114,7 @@ impl DecisionAnchorState {
         }
 
         let evidence = active.evidence.clone();
-        let has_path = !active.evidence.compatible_gaps(active).is_empty();
+        let has_path = !active.evidence.compatible_actions(active).is_empty();
         if !has_path || remaining == 0 {
             self.phase = Some(AnchorPhase::Exhausted(evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
@@ -131,9 +143,19 @@ impl SourceEvidence {
         self.decision_kinds.extend(kinds);
     }
 
+    pub(super) fn record_focused_test_traversal(&mut self, turn: usize) {
+        self.focused_test_traversal_turn = Some(
+            self.focused_test_traversal_turn
+                .map_or(turn, |current| current.min(turn)),
+        );
+    }
+
     pub(super) fn merge(&mut self, other: Self) {
         if let Some(turn) = other.trace_turn {
             self.record_trace(turn);
+        }
+        if let Some(turn) = other.focused_test_traversal_turn {
+            self.record_focused_test_traversal(turn);
         }
         self.record_decision_kinds(other.decision_kinds);
     }
@@ -145,7 +167,12 @@ impl SourceEvidence {
     ) -> bool {
         match tool {
             Some(GraphCorrelationToolV1::SearchCode) => true,
-            Some(GraphCorrelationToolV1::TracePath) => !self.has_trace(),
+            Some(GraphCorrelationToolV1::TracePath) => match gap {
+                Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)) => {
+                    self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
+                }
+                _ => !self.has_trace(),
+            },
             Some(GraphCorrelationToolV1::GetCodeSnippet) => matches!(
                 gap,
                 Some(DecisionGap::Evidence(kind))
@@ -167,7 +194,9 @@ impl SourceEvidence {
     }
 
     pub(super) fn progress_count(&self) -> usize {
-        usize::from(self.has_trace()) + self.decision_kinds.len()
+        usize::from(self.has_trace())
+            + self.decision_kinds.len()
+            + usize::from(self.focused_test_traversal_turn.is_some())
     }
 
     pub(super) fn missing_gaps(&self) -> BTreeSet<DecisionGap> {
@@ -187,20 +216,41 @@ impl SourceEvidence {
         missing
     }
 
-    /// Recovery snippets require a trace in the pre-batch snapshot. A trace
-    /// sibling therefore cannot make snippets from its own batch eligible.
-    pub(super) fn compatible_gaps(&self, anchor: &Anchor) -> BTreeSet<DecisionGap> {
+    /// Recovery source reads require a trace in the pre-batch snapshot. A
+    /// caller-to-test traversal is offered only after caller source evidence,
+    /// and its returned test identity must be consumed in a later turn.
+    pub(super) fn compatible_actions(&self, anchor: &Anchor) -> BTreeSet<GraphRecoveryActionV1> {
         if !self.has_trace() {
+            let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Trace);
             return anchor
-                .supports(DecisionGap::Trace)
-                .then_some(DecisionGap::Trace)
+                .supports(action)
+                .then_some(action)
                 .into_iter()
                 .collect();
         }
-        self.missing_gaps()
+        let mut actions = self
+            .missing_gaps()
             .into_iter()
-            .filter(|gap| anchor.supports(*gap))
-            .collect()
+            .filter_map(|gap| {
+                let action = GraphRecoveryActionV1::for_evidence(gap.recovery_kind());
+                anchor.supports(action).then_some(action)
+            })
+            .collect::<BTreeSet<_>>();
+        if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
+            && self
+                .decision_kinds
+                .contains(&DecisionEvidenceKindV1::Implementation)
+            && self
+                .decision_kinds
+                .contains(&DecisionEvidenceKindV1::Caller)
+            && self.focused_test_traversal_turn.is_none()
+        {
+            let traversal = GraphRecoveryActionV1::focused_test_traversal();
+            if anchor.supports(traversal) {
+                actions.insert(traversal);
+            }
+        }
+        actions
     }
 
     pub(super) fn missing_kinds(&self) -> Vec<GraphRecoveryEvidenceKindV1> {
@@ -224,6 +274,9 @@ impl SourceEvidence {
 
 impl DecisionGap {
     pub(super) fn from_admission(admission: &EligibleLineageAdmission) -> Option<Self> {
+        if let Some(kind) = admission.recovery_purpose() {
+            return Some(Self::Evidence(kind));
+        }
         match admission.tool_kind() {
             GraphCorrelationToolV1::TracePath => Some(Self::Trace),
             GraphCorrelationToolV1::GetCodeSnippet => {
@@ -237,6 +290,25 @@ impl DecisionGap {
     /// production run always supplies a wrapper-owned admission result.
     pub(super) fn from_call(call: &ToolCall) -> Option<Self> {
         match call.name.as_str() {
+            "codebase_memory_trace_path"
+                if call
+                    .arguments
+                    .get("include_tests")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                    && call
+                        .arguments
+                        .get("direction")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("inbound")
+                    && call
+                        .arguments
+                        .get("mode")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("calls") =>
+            {
+                Some(Self::Evidence(DecisionEvidenceKindV1::FocusedTest))
+            }
             "codebase_memory_trace_path" => Some(Self::Trace),
             "codebase_memory_get_code_snippet" => call
                 .arguments
