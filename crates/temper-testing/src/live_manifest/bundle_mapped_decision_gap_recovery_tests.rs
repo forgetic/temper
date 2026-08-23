@@ -9,7 +9,7 @@ use temper_protocol_activity::{
 };
 
 #[test]
-fn decision_gap_recovery_bundle_maps_feature_1069_without_rewriting_history() {
+fn decision_gap_recovery_bundle_maps_feature_1091_and_retains_1069_audit() {
     let scenario_path = scenarios_root().join("mapped-live-decision-gap-recovery");
     let bundle = ScenarioBundle::load(&scenario_path).expect("decision-gap recovery bundle");
     let mcp = bundle
@@ -41,12 +41,24 @@ fn decision_gap_recovery_bundle_maps_feature_1069_without_rewriting_history() {
 
     let manifest = fs::read_to_string(scenario_path.join("scenario.toml")).expect("manifest");
     let readme = fs::read_to_string(scenario_path.join("README.md")).expect("README");
+    let corpus_readme = fs::read_to_string(scenarios_root().join("README.md")).expect("README");
     let jig = fs::read_to_string(bundle.jig_script_path()).expect("Jig");
+    let checked = temper_scenario_core::check_scenario(&scenario_path);
+    assert!(checked.is_valid(), "{:#?}", checked.diagnostics);
+    let mapping = checked
+        .manifest
+        .as_ref()
+        .and_then(|scenario| scenario.feature_mapping.as_ref())
+        .expect("feature mapping");
+    assert_eq!(mapping.feature.to_string(), "ai/temper#1091");
+    assert_eq!(
+        mapping.plan.as_ref().map(ToString::to_string).as_deref(),
+        Some("ai/temper#1092")
+    );
+    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1091");
+    assert_eq!(mapping.change.as_str(), "updated");
     for expected in [
-        "feature = \"ai/temper#1069\"",
-        "plan = \"ai/temper#1070\"",
-        "source_branch = \"agent/pr-for-feature-1069\"",
-        "#1091",
+        "introduced_by = \"#1075\"",
         "immutable-cross-root-recovery-diagnostic",
         "trace-progress-reports-actual-remaining-kinds",
         "two-cross-root-local-denials-share-pre-batch-snapshot",
@@ -59,6 +71,24 @@ fn decision_gap_recovery_bundle_maps_feature_1069_without_rewriting_history() {
     ] {
         assert!(manifest.contains(expected), "manifest omitted {expected}");
     }
+    for historical in [
+        "ai/temper#1069",
+        "ai/temper#1070",
+        "agent/pr-for-feature-1069",
+    ] {
+        assert!(
+            manifest.contains(historical),
+            "manifest omitted historical {historical}"
+        );
+        assert!(
+            readme.contains(historical),
+            "README omitted historical {historical}"
+        );
+        assert!(
+            corpus_readme.contains(historical),
+            "corpus README omitted historical {historical}"
+        );
+    }
     assert!(readme.contains("historical"));
     assert!(readme.contains("`mapped-live-graph-consumption`"));
     assert!(readme.contains("`mapped-live-graph-convergence`"));
@@ -66,6 +96,9 @@ fn decision_gap_recovery_bundle_maps_feature_1069_without_rewriting_history() {
     assert!(readme.contains("Privacy-safe evidence"));
     assert!(jig.contains("mapped-live-decision-gap-recovery-runtime"));
     assert!(readme.contains("one wholly fresh enabled smoke"));
+    assert!(readme.contains("--feature ai/temper#1091"));
+    assert!(readme.contains("--source-branch agent/pr-for-feature-1091"));
+    assert!(corpus_readme.contains("`ai/temper#1091` and plan `ai/temper#1092`"));
     assert!(readme.contains("forced-unavailable repetitions"));
     assert!(readme.contains("at least 50% typed relevance"));
     assert!(readme.contains("at least 20% enabled median discovery improvement"));
