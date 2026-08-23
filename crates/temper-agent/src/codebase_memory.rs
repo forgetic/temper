@@ -8,14 +8,14 @@
 //! on the actual provider tool definitions and are not copied into prompts.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use temper_agent_core::{
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory,
-    ToolFailureDiagnostic,
+    LineageAdmissionHandle, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+    ToolFailureCategory, ToolFailureDiagnostic,
 };
 use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionEvidenceKindV1,
@@ -51,7 +51,7 @@ use indexing::prepare_indexes;
 use lifecycle_observability::{
     DiscoveryEvidence, DiscoveryOutcome, FailureCategory, emit_discovery, emit_identity_selected,
 };
-use lineage::DecisionAnchorLineages;
+use lineage::DecisionAnchorLineageRegistry;
 use provider::validate_provider_contract;
 use scope::{WorkspaceScope, discover_workspace_projects};
 #[cfg(test)]
@@ -99,6 +99,7 @@ pub struct CodebaseMemoryToolset {
     registered_tool_metadata: Vec<CodebaseMemoryToolMetadata>,
     prompt_status: Option<String>,
     tools: Vec<Box<dyn Tool>>,
+    lineage_admission: Option<LineageAdmissionHandle>,
 }
 
 /// Registration metadata for one safe codebase-memory tool.
@@ -120,6 +121,7 @@ impl CodebaseMemoryToolset {
             registered_tool_metadata: Vec::new(),
             prompt_status: None,
             tools: Vec::new(),
+            lineage_admission: None,
         }
     }
 
@@ -127,6 +129,7 @@ impl CodebaseMemoryToolset {
         tools: Vec<Box<dyn Tool>>,
         registered_tool_metadata: Vec<CodebaseMemoryToolMetadata>,
         prompt_status: String,
+        lineage_admission: LineageAdmissionHandle,
     ) -> Self {
         let registered_tool_names = registered_tool_metadata
             .iter()
@@ -138,6 +141,7 @@ impl CodebaseMemoryToolset {
             registered_tool_metadata,
             prompt_status: Some(prompt_status),
             tools,
+            lineage_admission: Some(lineage_admission),
         }
     }
 
@@ -162,6 +166,11 @@ impl CodebaseMemoryToolset {
     /// are registered.
     pub fn prompt_status(&self) -> Option<&str> {
         self.prompt_status.as_deref()
+    }
+
+    /// Shared run-local pre-provider lineage resolver, when graph tools exist.
+    pub fn lineage_admission(&self) -> Option<LineageAdmissionHandle> {
+        self.lineage_admission.clone()
     }
 
     /// Consumes the toolset and returns the wrapped tongs tools.
@@ -447,7 +456,8 @@ async fn start_toolset(
     let health = Arc::new(CodebaseMemoryHealth::new(client.cancellation_handle()));
     // Provider-shaped target values remain in this wrapper-local registry. The
     // core receives only an opaque root and typed aggregate lineage record.
-    let decision_anchor_lineages = Arc::new(Mutex::new(DecisionAnchorLineages::default()));
+    let decision_anchor_lineages = Arc::new(DecisionAnchorLineageRegistry::default());
+    let lineage_admission: LineageAdmissionHandle = decision_anchor_lineages.clone();
 
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
     let mut registered_tool_metadata = Vec::new();
@@ -499,6 +509,7 @@ async fn start_toolset(
         tools,
         registered_tool_metadata,
         prompt_status,
+        lineage_admission,
     ))
 }
 
@@ -758,7 +769,7 @@ struct CodebaseMemoryTool {
     default_project_key: Option<&'static str>,
     call_timeout: Duration,
     scope: Arc<WorkspaceScope>,
-    decision_anchor_lineages: Arc<Mutex<DecisionAnchorLineages>>,
+    decision_anchor_lineages: Arc<DecisionAnchorLineageRegistry>,
 }
 
 impl CodebaseMemoryTool {
@@ -774,7 +785,7 @@ impl CodebaseMemoryTool {
         default_project_key: Option<&'static str>,
         call_timeout: Duration,
         scope: Arc<WorkspaceScope>,
-        decision_anchor_lineages: Arc<Mutex<DecisionAnchorLineages>>,
+        decision_anchor_lineages: Arc<DecisionAnchorLineageRegistry>,
     ) -> Self {
         debug_assert_eq!(public_name, allowed.public_name);
         Self {

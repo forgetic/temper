@@ -18,7 +18,7 @@ mod tests {
         DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
         DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
         GraphCorrelationV1, GraphExplorationClosedReasonV1, GraphExplorationClosedV1,
-        GraphRecoveryEvidenceKindV1,
+        GraphRecoveryActionV1, GraphRecoveryEvidenceKindV1,
     };
     use tongs::{
         model::{ContentBlock, Message, ToolCall, UserContent},

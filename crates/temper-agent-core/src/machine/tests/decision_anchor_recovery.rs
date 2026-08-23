@@ -285,7 +285,15 @@ fn recovery_denies_unsupported_gap_and_stops_when_last_path_depletes() {
             &source_call("unsupported-source", DecisionEvidenceKindV1::Implementation),
             3,
         ),
-        recovery_graph_denial(all_missing(), 4),
+        Some(ToolCallDenial::GraphExplorationClosed(
+            GraphExplorationClosedV1::recoverable_with_actions(
+                all_missing(),
+                4,
+                [GraphRecoveryActionV1::for_evidence(
+                    GraphRecoveryEvidenceKindV1::Trace,
+                )],
+            ),
+        )),
         "a source selector absent from the current root cannot consume recovery allowance",
     );
     assert_eq!(

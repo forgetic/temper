@@ -210,6 +210,19 @@ impl SourceEvidence {
 }
 
 impl DecisionGap {
+    pub(super) fn from_admission(admission: &EligibleLineageAdmission) -> Option<Self> {
+        match admission.tool_kind() {
+            GraphCorrelationToolV1::TracePath => Some(Self::Trace),
+            GraphCorrelationToolV1::GetCodeSnippet => {
+                admission.evidence_purpose().map(Self::Evidence)
+            }
+            GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => None,
+        }
+    }
+
+    /// Compatibility path for machines composed without codebase-memory. The
+    /// production codebase-memory run supplies a wrapper-owned admission result
+    /// and never interprets this declaration in core.
     pub(super) fn from_call(call: &ToolCall) -> Option<Self> {
         match call.name.as_str() {
             "codebase_memory_trace_path" => Some(Self::Trace),

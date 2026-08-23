@@ -9,10 +9,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
     DecisionEvidenceKindV1, GraphCorrelationToolV1, GraphCorrelationV1, GraphExplorationClosedV1,
-    GraphRecoveryEvidenceKindV1, MAX_GRAPH_RECOVERY_ALLOWANCE_V1,
+    GraphRecoveryActionV1, GraphRecoveryEvidenceKindV1, MAX_GRAPH_RECOVERY_ALLOWANCE_V1,
 };
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
+
+use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
 
 use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, ToolCallDenial};
 
@@ -173,19 +175,36 @@ impl DecisionAnchorState {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn on_tool_dispatched(
         &mut self,
         call: &ToolCall,
         turn: usize,
     ) -> Option<ToolCallDenial> {
+        self.on_tool_dispatched_with_admission(call, turn, None)
+    }
+
+    pub(super) fn on_tool_dispatched_with_admission(
+        &mut self,
+        call: &ToolCall,
+        turn: usize,
+        admission: Option<&LineageAdmissionOutcome>,
+    ) -> Option<ToolCallDenial> {
         if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+            let recovery_gap = match admission {
+                Some(LineageAdmissionOutcome::Eligible(admission)) => {
+                    DecisionGap::from_admission(admission)
+                }
+                Some(LineageAdmissionOutcome::Ineligible(_)) => None,
+                None => DecisionGap::from_call(call),
+            };
             let call_key = GraphCorrelationV1::target_digest(&call.id);
             if self.exploration != ExplorationStatus::Open {
                 let denial = self.graph_exploration_denial();
                 if self.exploration != ExplorationStatus::GapRecovery || call_key.is_none() {
                     return Some(denial);
                 }
-                let Some(gap) = DecisionGap::from_call(call) else {
+                let Some(gap) = recovery_gap else {
                     return Some(denial);
                 };
                 let already_pending = self
@@ -205,13 +224,8 @@ impl DecisionAnchorState {
                 recovery.remaining = recovery.remaining.saturating_sub(1);
             }
             if let Some(call_key) = call_key {
-                self.calls.insert(
-                    call_key,
-                    PendingCodebaseCall {
-                        turn,
-                        recovery_gap: DecisionGap::from_call(call),
-                    },
-                );
+                self.calls
+                    .insert(call_key, PendingCodebaseCall { turn, recovery_gap });
             }
         }
         if self.blocks_mutation(&call.name) {
@@ -530,7 +544,34 @@ impl DecisionAnchorState {
         let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
             return None;
         };
-        GraphExplorationClosedV1::recoverable(recovery.evidence.missing_kinds(), recovery.remaining)
+        let missing = recovery.evidence.missing_kinds();
+        let compatible_actions = missing
+            .iter()
+            .copied()
+            .filter_map(|kind| {
+                let gap = match kind {
+                    GraphRecoveryEvidenceKindV1::Trace => DecisionGap::Trace,
+                    GraphRecoveryEvidenceKindV1::Implementation => {
+                        DecisionGap::Evidence(DecisionEvidenceKindV1::Implementation)
+                    }
+                    GraphRecoveryEvidenceKindV1::Caller => {
+                        DecisionGap::Evidence(DecisionEvidenceKindV1::Caller)
+                    }
+                    GraphRecoveryEvidenceKindV1::FocusedTest => {
+                        DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)
+                    }
+                };
+                recovery
+                    .anchors
+                    .supports(gap)
+                    .then(|| GraphRecoveryActionV1::for_evidence(kind))
+            })
+            .collect::<Vec<_>>();
+        GraphExplorationClosedV1::recoverable_with_actions(
+            missing,
+            recovery.remaining,
+            compatible_actions,
+        )
     }
 
     fn graph_exploration_denial(&self) -> ToolCallDenial {

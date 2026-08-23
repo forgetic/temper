@@ -2,10 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ToolFailureReasonV1;
+use super::{DecisionAnchorTargetKindV1, GraphCorrelationToolV1, ToolFailureReasonV1};
 
 pub const MAX_GRAPH_RECOVERY_ALLOWANCE_V1: u8 = 4;
+pub const MAX_GRAPH_RECOVERY_ACTIONS_V1: usize = 4;
 
+/// A kind of evidence which a bounded current-root action may still supply.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphRecoveryEvidenceKindV1 {
@@ -23,6 +25,70 @@ impl GraphRecoveryEvidenceKindV1 {
             Self::Caller => "caller",
             Self::FocusedTest => "focused_test",
         }
+    }
+}
+
+/// One provider-neutral, current-root-compatible recovery action.
+///
+/// It deliberately contains no root binding, selector, query, path, source,
+/// provider value, or call identity. The trusted run-local registry retains
+/// those values and resolves a concrete call before provider dispatch.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphRecoveryActionV1 {
+    pub tool: GraphCorrelationToolV1,
+    pub selector_kind: DecisionAnchorTargetKindV1,
+    pub evidence_kind: GraphRecoveryEvidenceKindV1,
+}
+
+impl GraphRecoveryActionV1 {
+    /// Returns the single canonical action for a missing recovery kind.
+    pub const fn for_evidence(evidence_kind: GraphRecoveryEvidenceKindV1) -> Self {
+        match evidence_kind {
+            GraphRecoveryEvidenceKindV1::Trace => Self {
+                tool: GraphCorrelationToolV1::TracePath,
+                selector_kind: DecisionAnchorTargetKindV1::FunctionName,
+                evidence_kind,
+            },
+            GraphRecoveryEvidenceKindV1::Implementation
+            | GraphRecoveryEvidenceKindV1::Caller
+            | GraphRecoveryEvidenceKindV1::FocusedTest => Self {
+                tool: GraphCorrelationToolV1::GetCodeSnippet,
+                selector_kind: DecisionAnchorTargetKindV1::QualifiedName,
+                evidence_kind,
+            },
+        }
+    }
+
+    pub const fn is_valid(self) -> bool {
+        matches!(
+            (self.tool, self.selector_kind, self.evidence_kind),
+            (
+                GraphCorrelationToolV1::TracePath,
+                DecisionAnchorTargetKindV1::FunctionName,
+                GraphRecoveryEvidenceKindV1::Trace,
+            ) | (
+                GraphCorrelationToolV1::GetCodeSnippet,
+                DecisionAnchorTargetKindV1::QualifiedName,
+                GraphRecoveryEvidenceKindV1::Implementation
+                    | GraphRecoveryEvidenceKindV1::Caller
+                    | GraphRecoveryEvidenceKindV1::FocusedTest,
+            )
+        )
+    }
+
+    fn label(self) -> String {
+        format!(
+            "{}/{}/{}",
+            match self.tool {
+                GraphCorrelationToolV1::SearchGraph => "search_graph",
+                GraphCorrelationToolV1::SearchCode => "search_code",
+                GraphCorrelationToolV1::TracePath => "trace_path",
+                GraphCorrelationToolV1::GetCodeSnippet => "get_code_snippet",
+            },
+            selector_label(self.selector_kind),
+            self.evidence_kind.as_str(),
+        )
     }
 }
 
@@ -53,8 +119,8 @@ impl GraphRecoveryPermittedActionV1 {
 }
 
 /// Closed, privacy-safe graph lifecycle state. Missing kinds are sorted and
-/// deduplicated; no provider output, selector, path, source, or call identity
-/// can enter this representation.
+/// deduplicated, as are compatible actions. No provider output, selector,
+/// root binding, path, source, or call identity can enter this representation.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphExplorationClosedV1 {
@@ -62,6 +128,8 @@ pub struct GraphExplorationClosedV1 {
     pub missing_evidence: Vec<GraphRecoveryEvidenceKindV1>,
     pub permitted_action: GraphRecoveryPermittedActionV1,
     pub remaining_allowance: u8,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compatible_actions: Vec<GraphRecoveryActionV1>,
 }
 
 impl GraphExplorationClosedV1 {
@@ -71,6 +139,7 @@ impl GraphExplorationClosedV1 {
             missing_evidence: Vec::new(),
             permitted_action: GraphRecoveryPermittedActionV1::ConventionalDiscovery,
             remaining_allowance: 0,
+            compatible_actions: Vec::new(),
         }
     }
 
@@ -79,13 +148,34 @@ impl GraphExplorationClosedV1 {
         remaining_allowance: u8,
     ) -> Option<Self> {
         let missing_evidence = sorted_missing(missing_evidence);
+        let compatible_actions = missing_evidence
+            .iter()
+            .copied()
+            .map(GraphRecoveryActionV1::for_evidence)
+            .collect::<Vec<_>>();
+        Self::recoverable_with_actions(missing_evidence, remaining_allowance, compatible_actions)
+    }
+
+    pub fn recoverable_with_actions(
+        missing_evidence: impl IntoIterator<Item = GraphRecoveryEvidenceKindV1>,
+        remaining_allowance: u8,
+        compatible_actions: impl IntoIterator<Item = GraphRecoveryActionV1>,
+    ) -> Option<Self> {
+        let missing_evidence = sorted_missing(missing_evidence);
+        let compatible_actions = sorted_actions(compatible_actions);
         (!missing_evidence.is_empty()
-            && (1..=MAX_GRAPH_RECOVERY_ALLOWANCE_V1).contains(&remaining_allowance))
+            && (1..=MAX_GRAPH_RECOVERY_ALLOWANCE_V1).contains(&remaining_allowance)
+            && !compatible_actions.is_empty()
+            && compatible_actions.len() <= MAX_GRAPH_RECOVERY_ACTIONS_V1
+            && compatible_actions.iter().all(|action| {
+                action.is_valid() && missing_evidence.contains(&action.evidence_kind)
+            }))
         .then_some(Self {
             reason: GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence,
             missing_evidence,
             permitted_action: GraphRecoveryPermittedActionV1::TargetedCurrentRootGraphCall,
             remaining_allowance,
+            compatible_actions,
         })
     }
 
@@ -98,6 +188,7 @@ impl GraphExplorationClosedV1 {
             missing_evidence,
             permitted_action: GraphRecoveryPermittedActionV1::StopWithoutProduct,
             remaining_allowance: 0,
+            compatible_actions: Vec::new(),
         })
     }
 
@@ -105,24 +196,36 @@ impl GraphExplorationClosedV1 {
         self.missing_evidence
             .windows(2)
             .all(|pair| pair[0] < pair[1])
+            && self
+                .compatible_actions
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+            && self.compatible_actions.len() <= MAX_GRAPH_RECOVERY_ACTIONS_V1
             && match self.reason {
                 GraphExplorationClosedReasonV1::Completed => {
                     self.missing_evidence.is_empty()
                         && self.permitted_action
                             == GraphRecoveryPermittedActionV1::ConventionalDiscovery
                         && self.remaining_allowance == 0
+                        && self.compatible_actions.is_empty()
                 }
                 GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => {
                     !self.missing_evidence.is_empty()
                         && self.permitted_action
                             == GraphRecoveryPermittedActionV1::TargetedCurrentRootGraphCall
                         && (1..=MAX_GRAPH_RECOVERY_ALLOWANCE_V1).contains(&self.remaining_allowance)
+                        && !self.compatible_actions.is_empty()
+                        && self.compatible_actions.iter().all(|action| {
+                            action.is_valid()
+                                && self.missing_evidence.contains(&action.evidence_kind)
+                        })
                 }
                 GraphExplorationClosedReasonV1::RecoveryExhausted => {
                     !self.missing_evidence.is_empty()
                         && self.permitted_action
                             == GraphRecoveryPermittedActionV1::StopWithoutProduct
                         && self.remaining_allowance == 0
+                        && self.compatible_actions.is_empty()
                 }
             }
     }
@@ -145,10 +248,11 @@ impl GraphExplorationClosedV1 {
                 .safe_message()
                 .to_string(),
             GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => format!(
-                "decision-evidence recovery required; missing evidence: [{}]; permitted action: {}; remaining allowance: {}",
+                "decision-evidence recovery required; missing evidence: [{}]; permitted action: {}; remaining allowance: {}; compatible actions: [{}]",
                 missing_labels(&self.missing_evidence),
                 self.permitted_action.as_str(),
                 self.remaining_allowance,
+                action_labels(&self.compatible_actions),
             ),
             GraphExplorationClosedReasonV1::RecoveryExhausted => format!(
                 "decision-evidence recovery exhausted; missing evidence: [{}]; permitted action: {}; remaining allowance: 0",
@@ -168,10 +272,39 @@ fn sorted_missing(
     missing_evidence
 }
 
+fn sorted_actions(
+    compatible_actions: impl IntoIterator<Item = GraphRecoveryActionV1>,
+) -> Vec<GraphRecoveryActionV1> {
+    let mut compatible_actions = compatible_actions.into_iter().collect::<Vec<_>>();
+    compatible_actions.sort();
+    compatible_actions.dedup();
+    compatible_actions
+}
+
 fn missing_labels(missing: &[GraphRecoveryEvidenceKindV1]) -> String {
     missing
         .iter()
         .map(|kind| kind.as_str())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn action_labels(actions: &[GraphRecoveryActionV1]) -> String {
+    actions
+        .iter()
+        .copied()
+        .map(GraphRecoveryActionV1::label)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+const fn selector_label(kind: DecisionAnchorTargetKindV1) -> &'static str {
+    match kind {
+        DecisionAnchorTargetKindV1::GraphQuery => "graph_query",
+        DecisionAnchorTargetKindV1::Pattern => "pattern",
+        DecisionAnchorTargetKindV1::NamePattern => "name_pattern",
+        DecisionAnchorTargetKindV1::QualifiedNamePattern => "qualified_name_pattern",
+        DecisionAnchorTargetKindV1::FunctionName => "function_name",
+        DecisionAnchorTargetKindV1::QualifiedName => "qualified_name",
+    }
 }

@@ -412,6 +412,7 @@ mod tests {
             tools: ToolRegistry::new(),
             max_iterations: 1,
             operation_limits: crate::run::AgentOperationLimits::default(),
+            lineage_admission: None,
             provider: Arc::new(HungProvider {
                 started: Arc::clone(&started),
                 dropped: Arc::clone(&dropped),

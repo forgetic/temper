@@ -25,8 +25,8 @@ pub type ToolStartPresentationFn =
 /// Compatibility name retained for the existing run-builder parameter.
 pub type ArgPreviewFn = ToolStartPresentationFn;
 
-use crate::ToolInvocationCatalog;
 use crate::model_failure::ModelFailureDiagnostic;
+use crate::{LineageAdmissionHandle, ToolInvocationCatalog};
 
 use super::batching::{PendingTool, plan_batches};
 use super::decision_anchor::{
@@ -36,8 +36,8 @@ use super::decision_anchor::{
 use super::messages::{error_assistant, tool_result_message};
 use super::ordinary_failure::OrdinaryFailureCircuit;
 use super::protocol::{
-    AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
-    ToolCallDenial, ToolStartPresentation,
+    AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,
+    CODEBASE_MEMORY_TOOL_PREFIX, OperationGeneration, ToolCallDenial, ToolStartPresentation,
 };
 use super::tool_failure::ToolFailureDiagnostic;
 
@@ -86,6 +86,9 @@ pub struct AgentMachine {
     /// Per-run graph guard enabled whenever codebase-memory tools are present,
     /// including read-only roles with no mutation authorization.
     decision_anchors: Option<DecisionAnchorState>,
+    /// Optional wrapper-owned run-local selector resolver. Its results are
+    /// closed process-local policy values and never enter events or messages.
+    lineage_admission: Option<LineageAdmissionHandle>,
     /// Fixed convergence instruction queued once complete current-root evidence
     /// closes graph exploration.
     decision_anchor_convergence: bool,
@@ -164,6 +167,7 @@ impl AgentMachine {
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             decision_anchors,
+            lineage_admission: None,
             decision_anchor_convergence: false,
             decision_anchor_recovery: false,
             decision_anchor_gap_recovery: None,
@@ -184,6 +188,12 @@ impl AgentMachine {
     /// separate human and diagnostic `ToolStart` presentations.
     pub fn with_arg_preview(mut self, arg_preview: ArgPreviewFn) -> Self {
         self.tool_start_presentation = Some(arg_preview);
+        self
+    }
+
+    /// Installs the trusted run-local pre-provider lineage resolver.
+    pub fn with_lineage_admission(mut self, admission: LineageAdmissionHandle) -> Self {
+        self.lineage_admission = Some(admission);
         self
     }
 
@@ -378,10 +388,21 @@ impl AgentMachine {
         let model_turn = self.turn.saturating_sub(1);
         for call in calls {
             let rejection = self.invocation_rejections.get(&call.id).cloned();
-            let denial = self
-                .decision_anchors
-                .as_mut()
-                .and_then(|state| state.on_tool_dispatched(&call, model_turn));
+            let closed_admission = (rejection.is_none()
+                && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX))
+            .then(|| {
+                self.lineage_admission
+                    .as_ref()
+                    .map(|admission| admission.resolve(&call.name, &call.arguments))
+            })
+            .flatten();
+            let denial = self.decision_anchors.as_mut().and_then(|state| {
+                state.on_tool_dispatched_with_admission(
+                    &call,
+                    model_turn,
+                    closed_admission.as_ref(),
+                )
+            });
             let shell_discovery_disposition = (rejection.is_none()
                 && call.name == "bash"
                 && matches!(&denial, Some(ToolCallDenial::DecisionAnchorMutation)))
