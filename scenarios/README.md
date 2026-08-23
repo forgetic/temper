@@ -257,19 +257,24 @@ benchmark are unchanged.
 
 `mapped-live-decision-gap-recovery` is the sole active mapping for
 `ai/temper#1069` and `ai/temper#1070` on `agent/pr-for-feature-1069`. Its live
-agent completes implementation, trace, and focused-test evidence, then exhausts
-normal exploration with two non-progressing duplicate refinements while caller
-evidence remains missing. Broad and duplicate recovery calls retain the exact
-closed missing-kind, permitted-action, and allowance fields and are denied
-locally. One typed current-root caller source reaches the provider, completes
-the chain, and permits the exact repair, host submission, Actions, merge, and
-source closure. The temporary validator also requires recovery exhaustion to
-retain `stop_without_product` with zero allowance. Aggregate evidence is limited
-to closed counts, types, lifecycle fields, binding facts, checkpoint categories,
-and gate outcomes; provider output, selectors, source, prompts, commands,
-credentials, paths, host-gate output, and diagnostic traces remain ephemeral.
-The historical graph-consumption, graph-convergence, and ordinary-tool-
-convergence mappings retain their original identities and contracts.
+agent now records feature `#1091`'s in-place strengthening without changing
+those historical mapping fields. Distinct routing and behavioral roots exhaust
+normal exploration through two sibling focused-test reads. In one immutable
+recovery batch, cross-root caller and focused-test reads remain local while only
+the compatible active-root trace reaches the provider. Trace progress reports
+the actual remaining implementation, caller, and focused-test kinds with
+allowance three; a later completion-order-independent active-root source batch
+finishes the chain while a satisfied trace stays local. The scenario also
+retains one #1082 classified shell denial, three post-completion local denials,
+one exact repair, host submission, Actions, merge, and source closure. Its
+no-compatible-action variant requires one terminal `stop_without_product` state
+with no landable result or denial loop. Aggregate evidence is limited to closed
+counts, types, lifecycle fields, binding facts, shell disposition, approved
+checkpoint categories, and gate outcomes; provider output, selectors, roots,
+source, prompts, commands, arguments, credentials, paths, host-gate output, and
+diagnostic traces remain ephemeral. The historical graph-consumption,
+graph-convergence, ordinary-tool-convergence, and decision-gap metadata retain
+their original identities and contracts.
 
 ### Mapped live denied-shell classification mapping
 

@@ -51,3 +51,55 @@ pub(super) fn write_privacy_safe_mcp_log(
     })?;
     Ok(path)
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn decision_gap_aggregate_omits_private_recovery_data() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mcp = super::super::write_fake_mcp(
+            workspace.path(),
+            "private-provider-project",
+            Some("mapped-live-decision-gap-recovery"),
+            &["search_graph".to_string()],
+            &["index_repository".to_string()],
+            750,
+            None,
+        )
+        .expect("fake MCP");
+        let calls = vec![McpToolCallEvidence {
+            name: "get_code_snippet".to_string(),
+            arguments: json!({
+                "qualified_name": "private::selector",
+                "project": "private-provider-project",
+                "credential": "MCP-FIXTURE-SECRET",
+            }),
+            delay_ms: None,
+            is_error: false,
+            fixture_event: Some("served_gap_active_source".to_string()),
+        }];
+
+        let path = write_privacy_safe_mcp_log(&mcp, &calls).expect("privacy-safe log");
+        let retained = fs::read_to_string(path).expect("retained aggregate");
+        assert_eq!(
+            retained,
+            concat!(
+                "{\"checkpoint\":\"served_gap_active_source\",",
+                "\"is_error\":false,\"sequence\":1,",
+                "\"tool\":\"get_code_snippet\"}\n"
+            )
+        );
+        for private in [
+            "private::selector",
+            "private-provider-project",
+            "credential",
+            "MCP-FIXTURE-SECRET",
+        ] {
+            assert!(!retained.contains(private), "aggregate retained {private}");
+        }
+    }
+}

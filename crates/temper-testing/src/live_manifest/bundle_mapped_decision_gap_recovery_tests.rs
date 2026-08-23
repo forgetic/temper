@@ -46,11 +46,16 @@ fn decision_gap_recovery_bundle_maps_feature_1069_without_rewriting_history() {
         "feature = \"ai/temper#1069\"",
         "plan = \"ai/temper#1070\"",
         "source_branch = \"agent/pr-for-feature-1069\"",
-        "recoverable-incomplete-caller-diagnostic",
-        "targeted-caller-recovery-reaches-provider-once",
+        "#1091",
+        "immutable-cross-root-recovery-diagnostic",
+        "trace-progress-reports-actual-remaining-kinds",
+        "two-cross-root-local-denials-share-pre-batch-snapshot",
+        "one-satisfied-trace-local-denial-after-progress",
+        "one-minimal-mutation",
+        "excluded_never_executed_local_policy_denial",
         "tool.failure.graph.missing_evidence",
         "graph.lineage.decision_evidence_kind",
-        "safe stop_without_product",
+        "no-compatible-action stop_without_product",
     ] {
         assert!(manifest.contains(expected), "manifest omitted {expected}");
     }
@@ -60,9 +65,47 @@ fn decision_gap_recovery_bundle_maps_feature_1069_without_rewriting_history() {
     assert!(readme.contains("`mapped-live-ordinary-tool-convergence`"));
     assert!(readme.contains("Privacy-safe evidence"));
     assert!(jig.contains("mapped-live-decision-gap-recovery-runtime"));
+    assert!(readme.contains("one wholly fresh enabled smoke"));
+    assert!(readme.contains("forced-unavailable repetitions"));
+    assert!(readme.contains("at least 50% typed relevance"));
+    assert!(readme.contains("at least 20% enabled median discovery improvement"));
+    assert!(readme.contains("byte-exact patch"));
+    assert!(readme.contains("exact-commit gates"));
     for forbidden in ["crate::", "opaque-", "provider output", "diagnostic trace"] {
         assert!(!jig.contains(forbidden), "Jig retained {forbidden}");
     }
+
+    let benchmark_root = scenarios_root()
+        .parent()
+        .expect("scenarios has repository root")
+        .join("benchmarks/agent-sessions/codebase-memory-routing-repair");
+    let benchmark = fs::read_to_string(benchmark_root.join("benchmark.toml"))
+        .expect("routing-repair benchmark manifest");
+    let unavailable = fs::read_to_string(benchmark_root.join("jig-unavailable.json"))
+        .expect("unavailable benchmark Jig");
+    let expected_patch = fs::read_to_string(benchmark_root.join("expected.patch"))
+        .expect("byte-exact benchmark patch");
+    for acceptance in [
+        "minimum_relevance_percent = 50",
+        "minimum_improvement_percent = 20",
+        "expected_patch = \"expected.patch\"",
+        "post_run_commands",
+        "aggregate_privacy_forbidden_fragments",
+    ] {
+        assert!(
+            benchmark.contains(acceptance),
+            "benchmark omitted {acceptance}"
+        );
+    }
+    let unavailable_graph = unavailable
+        .find("graph_find_affinity_unavailable")
+        .expect("one unavailable graph attempt");
+    let unavailable_shell = unavailable
+        .find("compound_shell_fallback_after_unavailable")
+        .expect("conventional fallback after unavailability");
+    assert!(unavailable_graph < unavailable_shell);
+    assert_eq!(unavailable.matches("codebase_memory_").count(), 1);
+    assert!(expected_patch.contains("+    let routing_topic = attempt.affinity_topic();"));
     assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
     assert!(
         fs::read_to_string(bundle.repo.seed_path.join(".gitignore"))
@@ -74,23 +117,37 @@ fn decision_gap_recovery_bundle_maps_feature_1069_without_rewriting_history() {
 }
 
 #[test]
-fn decision_gap_recovery_bundle_retains_closed_safe_stop_contract() {
-    let details = GraphExplorationClosedV1::exhausted([GraphRecoveryEvidenceKindV1::Caller])
-        .expect("safe stop details");
+fn decision_gap_recovery_bundle_retains_closed_no_compatible_action_contract() {
+    let details = GraphExplorationClosedV1::exhausted([
+        GraphRecoveryEvidenceKindV1::Implementation,
+        GraphRecoveryEvidenceKindV1::Caller,
+        GraphRecoveryEvidenceKindV1::FocusedTest,
+    ])
+    .expect("safe stop details");
     assert_eq!(
         details.reason,
         GraphExplorationClosedReasonV1::RecoveryExhausted
     );
     assert_eq!(
         details.missing_evidence,
-        [GraphRecoveryEvidenceKindV1::Caller]
+        [
+            GraphRecoveryEvidenceKindV1::Implementation,
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ]
     );
     assert_eq!(
         details.permitted_action,
         GraphRecoveryPermittedActionV1::StopWithoutProduct
     );
     assert_eq!(details.remaining_allowance, 0);
+    assert!(details.compatible_actions.is_empty());
     assert!(details.model_message().contains("stop_without_product"));
+    assert!(
+        temper_agent::CodingAgentError::DecisionAnchorRecoveryExhausted
+            .to_string()
+            .contains("nothing to land")
+    );
 }
 
 fn scenarios_root() -> PathBuf {

@@ -1,7 +1,7 @@
 schema = "temper.scenario.v1"
 name = "mapped-live-decision-gap-recovery"
 status = "active"
-intent = "Validate feature #1069's bounded decision-gap recovery, actionable diagnostics, provider-free local denials, minimal live repair, and safe no-product exhaustion contract."
+intent = "Validate feature #1069's bounded decision-gap recovery and feature #1091's root-coherent, progress-based strengthening through provider-free local denials, one minimal live repair, and safe no-product exhaustion."
 introduced_by = "#1075"
 owner_area = "agent-tools"
 stability = "provisional"
@@ -20,10 +20,10 @@ source_branch = "agent/pr-for-feature-1069"
 change = "new"
 
 [feature_contract]
-claim = "Exhausting broad or duplicate graph exploration cannot deadlock required typed evidence: exact missing kinds retain one bounded current-root recovery path, while impossible recovery stops safely without a product."
-stimulus = "Run one engineer repair through real Forgejo, a host Actions runner, standalone Temper, Jig, and a deterministic current-root provider; establish implementation/trace/focused-test evidence, exhaust two duplicate refinements, deny broad and duplicate recovery calls locally, and admit one typed caller recovery."
-observable = "Closed missing-caller, permitted-action, and allowance fields; typed evidence kinds; bounded provider and denial counts; one exact repair; host validation; Actions success; merge; issue closure; and the closed safe stop_without_product exhaustion contract."
-assertion = "Two non-progressing provider refinements exhaust normal exploration with only caller missing; broad and duplicate recovery attempts expose the exact actionable diagnostic without provider invocation; one current-root caller source reaches MCP and completes the chain; three post-completion calls stay local; the repair converges; and exhausted recovery has no landable product path."
+claim = "Bounded decision-gap recovery is root-local and progress-based: only calls admitted for the immutable active-root snapshot can reach the provider or spend allowance, while an impossible remaining gap terminates safely without a product."
+stimulus = "Run one engineer repair through real Forgejo, a host Actions runner, standalone Temper, Jig, and a deterministic current-root provider; establish distinct routing and behavioral roots, exhaust normal exploration on the sibling root, submit a mixed cross-root recovery batch around one compatible active-root trace, then complete the active root with three typed sources."
+observable = "Distinct typed roots; one #1082-compatible locally denied shell lifecycle; immutable mixed-batch denials; exact four-kind then three-kind diagnostics with allowance four then three; eight provider reads in completion-order-independent batches; one exact repair; host validation; Actions success; merge; issue closure; and a closed no-compatible-action stop_without_product variant."
+assertion = "Two sibling focused-test reads exhaust normal exploration without advancing the active routing root; both cross-root recovery calls stay local and spend nothing while the active trace reaches MCP; trace progress leaves implementation, caller, and focused_test with allowance three; three active-root sources complete the chain regardless of completion order; one satisfied trace and three post-completion calls stay local; exactly one mutation lands; and impossible recovery has no denial loop or landable product."
 runtime_budget_seconds = 600
 jig_script_path = "jig/mapped-live-decision-gap-recovery.json"
 
@@ -62,7 +62,7 @@ ci_target = ".forgejo/workflows/ci.yml"
 id = "source"
 repo = "service"
 kind = "code"
-title = "Recover missing caller evidence after graph budget exhaustion"
+title = "Recover active-root evidence after graph budget exhaustion"
 body = "config/source-issue.md"
 author = "site_admin"
 labels = ["code", "ready"]
@@ -127,10 +127,10 @@ after = "temper.launch_standalone"
 id = "wait-for-convergence"
 action = "workflow.wait_convergence"
 strategy = "codebase-memory"
-until = "the engineer observes exact missing-caller recovery guidance, completes one bounded current-root caller read, applies the minimal repair, passes host validation and Actions, merges the PR, and closes the source issue"
+until = "the engineer observes immutable cross-root denials and exact trace-progress guidance, completes the active-root source chain, observes local graph closure, applies one exact repair, passes host validation and Actions, merges the PR, and closes the source issue"
 
 [expect]
-outcome = "The live agent exhausts only non-progress exploration, receives exact actionable caller recovery, completes the typed chain with one additional provider call, and converges through one minimal repair while impossible exhaustion remains a safe no-product terminal."
+outcome = "The live agent spends recovery allowance only on four active-root calls, updates the actual missing set after trace progress, completes one exact repair, and converges while cross-root, satisfied, and post-completion calls remain provider-free and impossible recovery remains a safe no-product terminal."
 merged_pull_requests = 1
 closed_parent_issues = 1
 
@@ -151,7 +151,7 @@ ci = "passed"
 
 [[expect.checks]]
 required = true
-id = "default-branch-has-minimal-repair"
+id = "default-branch-has-exact-engineer-diff"
 artifact = "repo:service"
 branch = "main"
 contains_engineer_diff = true
@@ -165,23 +165,71 @@ fields."index.outcome" = "completed"
 
 [[expect.events]]
 required = true
-id = "recoverable-incomplete-caller-diagnostic"
+id = "denied-shell-start-retains-closed-exclusion"
+event = "tool.start"
+fields.tool = "bash"
+fields.id = "denied-shell-process-canary"
+fields."tool.arguments.present" = false
+fields."tool.shell_discovery_disposition.version" = 1
+fields."tool.shell_discovery_disposition.status" = "excluded_never_executed_local_policy_denial"
+fields."tool.shell_discovery_disposition.matching_discovery_segments" = 0
+
+[[expect.events]]
+required = true
+id = "denied-shell-completion-is-policy-precondition"
 event = "tool.error"
-fields.tool = "codebase_memory_search_graph"
-fields.id = "recovery-broad-search-denied"
+fields.tool = "bash"
+fields.id = "denied-shell-process-canary"
+fields.duration_ms = 0
+fields."tool.failure.category" = "policy_denial"
+fields."tool.failure.reason" = "policy_precondition"
+fields."tool.failure.retryable" = false
+fields."tool.failure.conventional_fallback" = false
+
+[[expect.events]]
+required = true
+id = "immutable-cross-root-recovery-diagnostic"
+event = "tool.error"
+fields.tool = "codebase_memory_get_code_snippet"
+fields.id = "recovery-cross-root-caller-denied"
 fields."tool.failure.category" = "graph_lifecycle_denial"
 fields."tool.failure.reason" = "decision_evidence_incomplete"
 fields."tool.failure.retry_disposition" = "correct_invocation"
 fields."tool.failure.retryable" = false
 fields."tool.failure.conventional_fallback" = false
 fields."tool.failure.graph.reason" = "recoverable_incomplete_evidence"
-fields."tool.failure.graph.missing_evidence" = "caller"
+fields."tool.failure.graph.missing_evidence" = "trace,implementation,caller,focused_test"
 fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
 fields."tool.failure.graph.remaining_allowance" = 4
 
 [[expect.events]]
 required = true
-id = "targeted-caller-recovery-reaches-provider-once"
+id = "trace-progress-reports-actual-remaining-kinds"
+event = "tool.error"
+fields.tool = "codebase_memory_trace_path"
+fields.id = "recovery-satisfied-trace-denied"
+fields."tool.failure.category" = "graph_lifecycle_denial"
+fields."tool.failure.reason" = "decision_evidence_incomplete"
+fields."tool.failure.retry_disposition" = "correct_invocation"
+fields."tool.failure.retryable" = false
+fields."tool.failure.conventional_fallback" = false
+fields."tool.failure.graph.reason" = "recoverable_incomplete_evidence"
+fields."tool.failure.graph.missing_evidence" = "implementation,caller,focused_test"
+fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
+fields."tool.failure.graph.remaining_allowance" = 3
+
+[[expect.events]]
+required = true
+id = "active-root-implementation-source-is-typed"
+event = "mcp.tool.result"
+fields."mcp.tool" = "get_code_snippet"
+fields.is_error = false
+fields."graph.lineage.stage" = "carry_forward"
+fields."graph.lineage.decision_evidence_kind" = "implementation"
+
+[[expect.events]]
+required = true
+id = "active-root-caller-source-is-typed"
 event = "mcp.tool.result"
 fields."mcp.tool" = "get_code_snippet"
 fields.is_error = false
@@ -198,21 +246,23 @@ fields."graph.lineage.decision_evidence_kind" = "focused_test"
 
 [[expect.sequence]]
 required = true
-id = "decision-gap-recovery-before-minimal-repair"
+id = "root-coherent-progress-before-one-exact-repair"
 scope = "source_artifact"
 events = [
   { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
+  { event = "tool.start", fields = { tool = "bash", id = "denied-shell-process-canary", "tool.arguments.present" = false, "tool.shell_discovery_disposition.status" = "excluded_never_executed_local_policy_denial", "tool.shell_discovery_disposition.matching_discovery_segments" = 0 } },
+  { event = "tool.error", fields = { tool = "bash", id = "denied-shell-process-canary", "tool.failure.category" = "policy_denial", "tool.failure.reason" = "policy_precondition" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.lineage.stage" = "carry_forward" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.stage" = "carry_forward" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "focused_test" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false } },
-  { event = "tool.error", fields = { id = "recovery-broad-search-denied", "tool.failure.reason" = "decision_evidence_incomplete" } },
-  { event = "tool.error", fields = { id = "recovery-duplicate-refinement-denied", "tool.failure.reason" = "decision_evidence_incomplete" } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "caller" } },
-  { event = "tool.error", fields = { id = "post-completion-broad-search-denied", "tool.failure.reason" = "exploration_closed" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "tool.error", fields = { id = "recovery-satisfied-trace-denied", "tool.failure.graph.missing_evidence" = "implementation,caller,focused_test", "tool.failure.graph.remaining_allowance" = 3 } },
+  { event = "tool.error", fields = { id = "post-completion-broad-search-denied", "tool.failure.reason" = "exploration_closed", "tool.failure.graph.reason" = "completed" } },
+  { event = "tool.start", fields = { tool = "bash", id = "classify-compound-shell-discovery", "tool.arguments.present" = true } },
   { event = "tool.start", fields = { tool = "read", id = "read-route-after-recovery" } },
+  { event = "tool.end", fields = { tool = "apply_patch", id = "patch-retry-affinity-after-recovery" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-exact-recovered-repair" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-recovered-minimal-repair" } },
   { event = "workspace.diff.produced", fields = { changed_count = 1 } },
 ]
 
@@ -229,6 +279,14 @@ exactly = 8
 
 [[expect.count]]
 required = true
+id = "two-independent-roots"
+event = "mcp.tool.result"
+fields.is_error = false
+fields."graph.lineage.stage" = "root"
+exactly = 2
+
+[[expect.count]]
+required = true
 id = "two-provider-roots-not-three"
 event = "mcp.tool.called"
 fields."mcp.tool" = "search_graph"
@@ -236,10 +294,10 @@ exactly = 2
 
 [[expect.count]]
 required = true
-id = "three-provider-refinements-not-four"
+id = "no-provider-refinement"
 event = "mcp.tool.called"
 fields."mcp.tool" = "search_code"
-exactly = 3
+exactly = 0
 
 [[expect.count]]
 required = true
@@ -250,20 +308,30 @@ exactly = 1
 
 [[expect.count]]
 required = true
-id = "two-provider-sources-including-one-recovery"
+id = "five-provider-sources-with-no-cross-root-recovery-invocation"
 event = "mcp.tool.called"
 fields."mcp.tool" = "get_code_snippet"
+exactly = 5
+
+[[expect.count]]
+required = true
+id = "two-cross-root-local-denials-share-pre-batch-snapshot"
+event = "tool.error"
+fields."tool.failure.reason" = "decision_evidence_incomplete"
+fields."tool.failure.graph.missing_evidence" = "trace,implementation,caller,focused_test"
+fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
+fields."tool.failure.graph.remaining_allowance" = 4
 exactly = 2
 
 [[expect.count]]
 required = true
-id = "two-recoverable-local-denials"
+id = "one-satisfied-trace-local-denial-after-progress"
 event = "tool.error"
 fields."tool.failure.reason" = "decision_evidence_incomplete"
-fields."tool.failure.graph.missing_evidence" = "caller"
+fields."tool.failure.graph.missing_evidence" = "implementation,caller,focused_test"
 fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
-fields."tool.failure.graph.remaining_allowance" = 4
-exactly = 2
+fields."tool.failure.graph.remaining_allowance" = 3
+exactly = 1
 
 [[expect.count]]
 required = true
@@ -272,6 +340,29 @@ event = "tool.error"
 fields."tool.failure.reason" = "exploration_closed"
 fields."tool.failure.graph.reason" = "completed"
 exactly = 3
+
+[[expect.count]]
+required = true
+id = "one-excluded-denied-shell-start"
+event = "tool.start"
+fields.tool = "bash"
+fields."tool.shell_discovery_disposition.status" = "excluded_never_executed_local_policy_denial"
+fields."tool.shell_discovery_disposition.matching_discovery_segments" = 0
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-minimal-mutation"
+event = "tool.end"
+fields.tool = "apply_patch"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-host-submission"
+event = "tool.end"
+fields.tool = "submit_for_pr"
+exactly = 1
 
 [expect.effective_configuration]
 id = "rapid-decision-gap-recovery-harness-cadence"
@@ -288,7 +379,7 @@ model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_se
 model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
 default_project = "acme/demo"
 actual_project = "normalized-temper-v1-<stable-provider-key>"
-graph_consumption_profile = "two independent roots; implementation refinement, caller trace, typed focused-test source, two non-progressing duplicate refinements; exact missing-caller recovery guidance; local broad and duplicate denials; one admitted typed caller source; completion closure; safe stop_without_product exhaustion; privacy-safe aggregate checkpoints only"
+graph_consumption_profile = "historical #1069/#1070 mapping strengthened by #1091; ordered active routing root plus independent behavioral root; two sibling focused-test reads; immutable mixed recovery batch with two cross-root local denials and one admitted trace; actual implementation/caller/focused_test gaps with allowance three; completion-order-independent active-root source batch; one satisfied trace denial; three local completion denials; one #1082 shell exclusion; exact repair and host gate; no-compatible-action stop_without_product; privacy-safe aggregate checkpoints only"
 global_inventory_forbidden = true
 
 [change_policy]
@@ -297,12 +388,12 @@ promotion_artifact = "checked-in"
 examples_changed = false
 fixture_paths_must_exist = true
 compatible_changes = [
-  "Tighten closed missing-kind, permitted-action, allowance, provider-count, typed-evidence, or convergence assertions.",
+  "Tighten closed root-coherence, missing-kind, permitted-action, allowance, provider-count, typed-evidence, shell-classification, or convergence assertions.",
   "Update generic privacy-safe lifecycle observability without retaining provider values or diagnostic traces.",
 ]
 requires_new_scenario_or_major_update = [
-  "Allowing broad or duplicate recovery attempts to reach the provider.",
+  "Allowing cross-root, satisfied, broad, duplicate, or post-completion recovery attempts to reach the provider or spend active-root allowance.",
   "Allowing recovery exhaustion to produce mutation or a landable-looking product.",
-  "Retaining raw tool inputs, provider output, source, prompts, commands, credentials, host-gate output, paths, or diagnostic traces.",
+  "Retaining raw tool inputs, selectors, roots, provider output, source, prompts, commands, credentials, host-gate output, paths, or diagnostic traces.",
   "Replacing the mandatory live Forgejo/Actions/standalone-Temper/Jig topology with a lower-level test.",
 ]
