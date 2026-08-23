@@ -38,7 +38,9 @@ pub(super) fn has_incompatible_targeted_result(
         let output = anchor_output(finished.name, finished.output);
         match output {
             Some(output) if output.lineage.stage == DecisionAnchorLineageStageV1::CarryForward => {
-                !active.accepts(&finished.call, &output.lineage)
+                active
+                    .accepted_root(&finished.call, &output.lineage)
+                    .is_none()
             }
             Some(_) => false,
             None => valid_graph_correlation(finished.name, finished.output),

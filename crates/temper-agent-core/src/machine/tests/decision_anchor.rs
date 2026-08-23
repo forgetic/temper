@@ -21,7 +21,7 @@ mod tests {
         GraphRecoveryActionV1, GraphRecoveryEvidenceKindV1,
     };
     use tongs::{
-        model::{ContentBlock, Message, ToolCall, UserContent},
+        model::{Message, ToolCall, UserContent},
         tools::{ToolEffects, ToolOutput},
     };
 

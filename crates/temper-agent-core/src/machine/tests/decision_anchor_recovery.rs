@@ -3,6 +3,10 @@
 use super::*;
 use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
 
+mod batch {
+    include!("decision_anchor_recovery_batch.rs");
+}
+
 fn enter_budget_recovery(state: &mut DecisionAnchorState, first_turn: usize) {
     for (offset, id, expected) in [
         (0, "broad-one", DecisionAnchorTransition::Unchanged),
@@ -87,101 +91,6 @@ fn failed_or_malformed_graph_results_create_no_anchor_or_mutation_block() {
         DecisionAnchorTransition::Unchanged
     );
     assert!(!state.blocks_mutation("write"));
-}
-
-#[test]
-fn exhausted_broad_search_admits_only_parallel_calls_for_named_missing_gaps() {
-    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-    install_consumable_root(&mut state);
-    enter_budget_recovery(&mut state, 1);
-
-    assert!(state.blocks_mutation("write"));
-    assert_eq!(
-        state.on_tool_dispatched(&call("blocked-write", "write"), 3),
-        Some(ToolCallDenial::DecisionAnchorMutation),
-    );
-    for (id, name) in [
-        ("broad", "codebase_memory_search_graph"),
-        ("refinement", "codebase_memory_search_code"),
-        ("undeclared", "codebase_memory_get_code_snippet"),
-    ] {
-        assert_eq!(
-            state.on_tool_dispatched(&call(id, name), 3),
-            recovery_graph_denial(all_missing(), 4),
-        );
-    }
-    assert_eq!(state.on_tool_dispatched(&call("ordinary", "read"), 3), None);
-
-    assert_eq!(
-        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 3),
-        None,
-    );
-    assert_eq!(
-        state.on_tool_dispatched(
-            &source_call("implementation", DecisionEvidenceKindV1::Implementation),
-            3,
-        ),
-        None,
-    );
-    assert_eq!(
-        state.on_tool_dispatched(
-            &source_call("duplicate", DecisionEvidenceKindV1::Implementation),
-            3,
-        ),
-        recovery_graph_denial(all_missing(), 2),
-        "a pending purpose cannot consume a second recovery slot",
-    );
-    assert_eq!(
-        state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 3),
-        None,
-    );
-    assert_eq!(
-        state.on_tool_dispatched(
-            &source_call("test", DecisionEvidenceKindV1::FocusedTest),
-            3,
-        ),
-        None,
-    );
-    assert_eq!(
-        state.on_tool_dispatched(&call("allowance-depleted", "codebase_memory_search_graph"), 3),
-        exhausted_graph_denial(all_missing()),
-        "zero remaining allowance permits only a mandatory safe stop",
-    );
-
-    let trace = output(
-        "codebase_memory_trace_path",
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-    );
-    let implementation = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::Implementation,
-    );
-    let caller = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::Caller,
-    );
-    let test = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::FocusedTest,
-    );
-    assert_eq!(
-        state.on_tool_batch_finished(&[
-            ("implementation", "codebase_memory_get_code_snippet", &implementation),
-            ("trace", "codebase_memory_trace_path", &trace),
-            ("caller", "codebase_memory_get_code_snippet", &caller),
-            ("test", "codebase_memory_get_code_snippet", &test),
-        ]),
-        DecisionAnchorTransition::Converged,
-    );
-    assert!(!state.blocks_mutation("write"));
-    assert_eq!(
-        state.on_tool_dispatched(&call("closed", "codebase_memory_trace_path"), 4),
-        completed_graph_denial(),
-    );
 }
 
 #[test]
@@ -437,22 +346,29 @@ fn read_only_roles_retain_the_same_bounded_gap_path() {
         state.on_tool_dispatched(&call("broad", "codebase_memory_search_graph"), 3),
         recovery_graph_denial(all_missing(), 4),
     );
+    assert_eq!(
+        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 3),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "trace",
+            "codebase_memory_trace_path",
+            &output(
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+            ),
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
     for (id, kind) in [
         ("implementation", DecisionEvidenceKindV1::Implementation),
         ("caller", DecisionEvidenceKindV1::Caller),
         ("test", DecisionEvidenceKindV1::FocusedTest),
     ] {
-        assert_eq!(state.on_tool_dispatched(&source_call(id, kind), 3), None);
+        assert_eq!(state.on_tool_dispatched(&source_call(id, kind), 4), None);
     }
-    assert_eq!(
-        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 3),
-        None,
-    );
-    let trace = output(
-        "codebase_memory_trace_path",
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-    );
     let implementation = output_with_evidence(
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
@@ -471,7 +387,6 @@ fn read_only_roles_retain_the_same_bounded_gap_path() {
     assert_eq!(
         state.on_tool_batch_finished(&[
             ("test", "codebase_memory_get_code_snippet", &test),
-            ("trace", "codebase_memory_trace_path", &trace),
             ("caller", "codebase_memory_get_code_snippet", &caller),
             (
                 "implementation",
@@ -612,6 +527,10 @@ fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
         &recovery_requests,
         "permitted action: targeted_current_root_graph_call; remaining allowance: 4"
     ));
+    assert!(message_containing(
+        &recovery_requests,
+        "compatible actions: [trace_path/function_name/trace]"
+    ));
     assert!(!message_containing(
         &recovery_requests,
         DECISION_ANCHOR_RECOVERY_MESSAGE
@@ -619,7 +538,7 @@ fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
 }
 
 #[test]
-fn depleted_gap_recovery_stops_the_machine_after_cross_root_malformed_and_later_roots() {
+fn no_compatible_action_stops_before_another_recovery_loop() {
     let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects());
     let _ = machine.on_start(EngineTime::ZERO);
 
@@ -631,10 +550,11 @@ fn depleted_gap_recovery_stops_the_machine_after_cross_root_malformed_and_later_
         &mut machine,
         tool_finished(
             "root",
-            output(
+            output_with_kinds(
                 "codebase_memory_search_graph",
                 ROOT,
                 DecisionAnchorLineageStageV1::Root,
+                &[DecisionAnchorTargetKindV1::FunctionName],
             ),
         ),
     );
@@ -649,63 +569,28 @@ fn depleted_gap_recovery_stops_the_machine_after_cross_root_malformed_and_later_
         let _ = complete(&mut machine, tool_finished(id, plain_success()));
     }
 
-    let mut recovery_calls = assistant_tool_calls(&[
-        ("trace", "codebase_memory_trace_path"),
-        ("implementation", "codebase_memory_get_code_snippet"),
-        ("caller", "codebase_memory_get_code_snippet"),
-        ("test", "codebase_memory_get_code_snippet"),
-    ]);
-    for block in &mut recovery_calls.content {
-        let ContentBlock::ToolCall(call) = block else {
-            continue;
-        };
-        call.arguments = match call.id.as_str() {
-            "implementation" => serde_json::json!({"decision_evidence_kind": "implementation"}),
-            "caller" => serde_json::json!({"decision_evidence_kind": "caller"}),
-            "test" => serde_json::json!({"decision_evidence_kind": "focused_test"}),
-            _ => serde_json::json!({}),
-        };
-    }
-    let requests = complete(&mut machine, llm_responded(recovery_calls));
-    assert_eq!(run_tools(&requests), ["trace", "implementation", "caller", "test"]);
-
-    assert!(
-        complete(
-            &mut machine,
-            tool_finished(
-                "trace",
-                output(
-                    "codebase_memory_trace_path",
-                    OTHER_ROOT,
-                    DecisionAnchorLineageStageV1::CarryForward,
-                ),
-            ),
-        )
-        .is_empty()
+    let requests = complete(
+        &mut machine,
+        llm_responded(assistant_tool_calls(&[("trace", "codebase_memory_trace_path")])),
     );
-    assert!(
-        complete(
-            &mut machine,
-            tool_finished(
-                "implementation",
-                output_with_evidence(
-                    ROOT,
-                    DecisionAnchorLineageStageV1::Root,
-                    DecisionEvidenceKindV1::Implementation,
-                ),
-            ),
+    assert!(requests.iter().any(|request| {
+        matches!(
+            request,
+            AgentRequest::RunTool {
+                call,
+                denial: None,
+                ..
+            } if call.id == "trace"
         )
-        .is_empty()
-    );
-    assert!(complete(&mut machine, tool_finished("caller", plain_success())).is_empty());
+    }));
     let stopped = complete(
         &mut machine,
         tool_finished(
-            "test",
-            output_with_evidence(
-                OTHER_ROOT,
+            "trace",
+            output(
+                "codebase_memory_trace_path",
+                ROOT,
                 DecisionAnchorLineageStageV1::CarryForward,
-                DecisionEvidenceKindV1::FocusedTest,
             ),
         ),
     );

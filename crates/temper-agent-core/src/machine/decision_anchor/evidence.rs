@@ -1,22 +1,20 @@
 //! Typed evidence completion and bounded gap-recovery lifecycle.
 
+use crate::EligibleLineageAdmission;
+
 use super::*;
 
 impl DecisionAnchorState {
-    pub(super) fn enter_gap_recovery(
-        &mut self,
-        anchors: AnchorForest,
-        evidence: SourceEvidence,
-    ) -> DecisionAnchorTransition {
-        debug_assert!(!evidence.is_complete());
-        if !evidence.has_recovery_path(&anchors) {
-            self.phase = Some(AnchorPhase::Exhausted(evidence));
+    pub(super) fn enter_gap_recovery(&mut self, anchors: AnchorForest) -> DecisionAnchorTransition {
+        debug_assert!(!anchors.has_complete_evidence());
+        let Some(active_root) = anchors.recovery_root_binding() else {
+            self.phase = Some(AnchorPhase::Exhausted(anchors.active_evidence()));
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
-        }
+        };
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
-            evidence,
+            active_root,
             remaining: MAX_DECISION_GAP_RECOVERY_CALLS,
         }));
         self.exploration = ExplorationStatus::GapRecovery;
@@ -29,17 +27,25 @@ impl DecisionAnchorState {
         finished: &[FinishedCodebaseCall<'_>],
     ) -> DecisionAnchorTransition {
         let GapRecovery {
-            anchors,
-            mut evidence,
+            mut anchors,
+            active_root,
             remaining,
         } = recovery;
+        let Some(active) = anchors.roots.get(&active_root) else {
+            self.phase = Some(AnchorPhase::Exhausted(SourceEvidence::default()));
+            self.exploration = ExplorationStatus::BudgetExhausted;
+            return DecisionAnchorTransition::RecoveryExhausted;
+        };
         let compatible = finished
             .iter()
             .filter_map(|finished| {
+                if finished.call.admitted_root.as_deref() != Some(active_root.as_str()) {
+                    return None;
+                }
                 let output = anchor_output(finished.name, finished.output)?;
-                anchors
-                    .accepts(&finished.call, &output.lineage)
-                    .then_some((finished.call, output))
+                (output.lineage.root_binding == active_root
+                    && active.accepts(&finished.call, &output.lineage))
+                .then_some((finished.call.clone(), output))
             })
             .collect::<Vec<_>>();
         let batch_trace_turn = compatible
@@ -50,52 +56,54 @@ impl DecisionAnchorState {
             })
             .map(|(call, _)| call.turn)
             .min();
-        let trace_turn = evidence.trace_turn.or(batch_trace_turn);
-        let decision_kinds = trace_turn.map_or_else(BTreeSet::new, |trace_turn| {
+        let had_trace = active.evidence.has_trace();
+        let decision_kinds = if had_trace {
             compatible
                 .iter()
                 .filter_map(|(call, output)| match call.recovery_gap {
                     Some(DecisionGap::Evidence(expected))
                         if output.tool == GraphCorrelationToolV1::GetCodeSnippet
-                            && output.lineage.decision_evidence_kind == Some(expected)
-                            && call.turn >= trace_turn =>
+                            && output.lineage.decision_evidence_kind == Some(expected) =>
                     {
                         Some(expected)
                     }
                     _ => None,
                 })
-                .collect()
-        });
+                .collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
+        let active = anchors
+            .roots
+            .get_mut(&active_root)
+            .expect("the active recovery root remains installed");
         if let Some(turn) = batch_trace_turn {
-            evidence.record_trace(turn);
+            active.evidence.record_trace(turn);
         }
-        evidence.record_decision_kinds(decision_kinds);
+        active.evidence.record_decision_kinds(decision_kinds);
 
-        if evidence.is_complete() {
-            self.phase = Some(AnchorPhase::Trail(Trail { anchors, evidence }));
+        if active.evidence.is_complete() {
+            self.phase = Some(AnchorPhase::Trail(anchors));
             self.exploration = ExplorationStatus::Complete;
             return DecisionAnchorTransition::Converged;
         }
 
         if finished.iter().any(|finished| {
             trusted_unavailable_provider_output(finished.name, finished.output)
+                && finished.call.admitted_root.as_deref() == Some(active_root.as_str())
                 && finished
                     .call
                     .recovery_gap
-                    .is_some_and(|gap| evidence.needs(gap))
+                    .is_some_and(|gap| active.evidence.needs(gap))
         }) {
             self.phase = None;
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::Unchanged;
         }
 
-        if !evidence.has_recovery_path(&anchors) {
-            self.phase = Some(AnchorPhase::Exhausted(evidence));
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::RecoveryExhausted;
-        }
-
-        if remaining == 0 {
+        let evidence = active.evidence.clone();
+        let has_path = !active.evidence.compatible_gaps(active).is_empty();
+        if !has_path || remaining == 0 {
             self.phase = Some(AnchorPhase::Exhausted(evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
@@ -103,7 +111,7 @@ impl DecisionAnchorState {
 
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
-            evidence,
+            active_root,
             remaining,
         }));
         self.exploration = ExplorationStatus::GapRecovery;
@@ -123,13 +131,17 @@ impl SourceEvidence {
         self.decision_kinds.extend(kinds);
     }
 
-    /// Search-code is an optional refinement. A direct current-root trace is
-    /// equally valid, and snippets may share that trace's read-only batch.
+    pub(super) fn merge(&mut self, other: Self) {
+        if let Some(turn) = other.trace_turn {
+            self.record_trace(turn);
+        }
+        self.record_decision_kinds(other.decision_kinds);
+    }
+
     pub(super) fn expects(
         &self,
         gap: Option<DecisionGap>,
         tool: Option<GraphCorrelationToolV1>,
-        batch_trace_turn: Option<usize>,
     ) -> bool {
         match tool {
             Some(GraphCorrelationToolV1::SearchCode) => true,
@@ -137,8 +149,7 @@ impl SourceEvidence {
             Some(GraphCorrelationToolV1::GetCodeSnippet) => matches!(
                 gap,
                 Some(DecisionGap::Evidence(kind))
-                    if self.needs(DecisionGap::Evidence(kind))
-                        && (self.has_trace() || batch_trace_turn.is_some())
+                    if self.needs(DecisionGap::Evidence(kind)) && self.has_trace()
             ),
             Some(GraphCorrelationToolV1::SearchGraph) | None => false,
         }
@@ -155,46 +166,48 @@ impl SourceEvidence {
         self.trace_turn.is_some()
     }
 
-    fn has_recovery_path(&self, anchors: &AnchorForest) -> bool {
+    pub(super) fn progress_count(&self) -> usize {
+        usize::from(self.has_trace()) + self.decision_kinds.len()
+    }
+
+    pub(super) fn missing_gaps(&self) -> BTreeSet<DecisionGap> {
+        let mut missing = BTreeSet::new();
         if !self.has_trace() {
-            return anchors.supports(DecisionGap::Trace);
+            missing.insert(DecisionGap::Trace);
         }
-        [
+        for kind in [
             DecisionEvidenceKindV1::Implementation,
             DecisionEvidenceKindV1::Caller,
             DecisionEvidenceKindV1::FocusedTest,
-        ]
-        .into_iter()
-        .any(|kind| {
-            let gap = DecisionGap::Evidence(kind);
-            self.needs(gap) && anchors.supports(gap)
-        })
-    }
-
-    pub(super) fn missing_kinds(&self) -> Vec<GraphRecoveryEvidenceKindV1> {
-        let mut missing = Vec::new();
-        if !self.has_trace() {
-            missing.push(GraphRecoveryEvidenceKindV1::Trace);
-        }
-        for (evidence_kind, recovery_kind) in [
-            (
-                DecisionEvidenceKindV1::Implementation,
-                GraphRecoveryEvidenceKindV1::Implementation,
-            ),
-            (
-                DecisionEvidenceKindV1::Caller,
-                GraphRecoveryEvidenceKindV1::Caller,
-            ),
-            (
-                DecisionEvidenceKindV1::FocusedTest,
-                GraphRecoveryEvidenceKindV1::FocusedTest,
-            ),
         ] {
-            if !self.decision_kinds.contains(&evidence_kind) {
-                missing.push(recovery_kind);
+            if self.needs(DecisionGap::Evidence(kind)) {
+                missing.insert(DecisionGap::Evidence(kind));
             }
         }
         missing
+    }
+
+    /// Recovery snippets require a trace in the pre-batch snapshot. A trace
+    /// sibling therefore cannot make snippets from its own batch eligible.
+    pub(super) fn compatible_gaps(&self, anchor: &Anchor) -> BTreeSet<DecisionGap> {
+        if !self.has_trace() {
+            return anchor
+                .supports(DecisionGap::Trace)
+                .then_some(DecisionGap::Trace)
+                .into_iter()
+                .collect();
+        }
+        self.missing_gaps()
+            .into_iter()
+            .filter(|gap| anchor.supports(*gap))
+            .collect()
+    }
+
+    pub(super) fn missing_kinds(&self) -> Vec<GraphRecoveryEvidenceKindV1> {
+        self.missing_gaps()
+            .into_iter()
+            .map(DecisionGap::recovery_kind)
+            .collect()
     }
 
     pub(super) fn is_complete(&self) -> bool {
@@ -221,8 +234,7 @@ impl DecisionGap {
     }
 
     /// Compatibility path for machines composed without codebase-memory. The
-    /// production codebase-memory run supplies a wrapper-owned admission result
-    /// and never interprets this declaration in core.
+    /// production run always supplies a wrapper-owned admission result.
     pub(super) fn from_call(call: &ToolCall) -> Option<Self> {
         match call.name.as_str() {
             "codebase_memory_trace_path" => Some(Self::Trace),
