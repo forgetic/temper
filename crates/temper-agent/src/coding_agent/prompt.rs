@@ -146,6 +146,14 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              independent discovery parallel; do not issue producer and consumer calls in the same turn \
              or batch. Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused \
              behavioral tests, sufficient to justify the smallest semantic diff.\n\
+             - Once closed decision-evidence recovery guidance lists compatible actions, treat that \
+             list as the complete next-step menu for the selected active root. On the next model turn, \
+             use only those tool/selector/evidence combinations, up to the remaining allowance, and \
+             fill selectors only from matching values already visible in that root's typed results. \
+             Do not issue discovery searches, start or switch to an unrelated root, repeat a locally \
+             denied graph call, or mutate. Independent root creation remains available during ordinary \
+             discovery, but it is not recovery progress once this menu exists. If recovery is exhausted \
+             with no compatible action, stop without a product.\n\
              - Read the complete likely source, test, configuration, and \
              documentation set together before editing. Form the implementation \
              contract internally, but do not spend a standalone response \

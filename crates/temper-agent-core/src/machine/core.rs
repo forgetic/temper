@@ -304,10 +304,7 @@ impl AgentMachine {
         }
         if let Some(details) = self.decision_anchor_gap_recovery.take() {
             self.messages.push(Message::User(UserMessage {
-                content: UserContent::Text(format!(
-                    "{}. Do not mutate until every missing evidence kind is complete.",
-                    details.model_message()
-                )),
+                content: UserContent::Text(details.model_message()),
                 timestamp: 0,
             }));
         }
