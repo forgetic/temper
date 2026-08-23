@@ -1,6 +1,7 @@
 // Decision-anchor recovery and malformed-result regressions.
 
 use super::*;
+use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
 
 fn enter_budget_recovery(state: &mut DecisionAnchorState, first_turn: usize) {
     for (offset, id, expected) in [
@@ -285,15 +286,7 @@ fn recovery_denies_unsupported_gap_and_stops_when_last_path_depletes() {
             &source_call("unsupported-source", DecisionEvidenceKindV1::Implementation),
             3,
         ),
-        Some(ToolCallDenial::GraphExplorationClosed(
-            GraphExplorationClosedV1::recoverable_with_actions(
-                all_missing(),
-                4,
-                [GraphRecoveryActionV1::for_evidence(
-                    GraphRecoveryEvidenceKindV1::Trace,
-                )],
-            ),
-        )),
+        recovery_graph_denial(all_missing(), 4),
         "a source selector absent from the current root cannot consume recovery allowance",
     );
     assert_eq!(
@@ -489,6 +482,94 @@ fn read_only_roles_retain_the_same_bounded_gap_path() {
         DecisionAnchorTransition::Converged,
     );
     assert_eq!(state.on_tool_dispatched(&call("ordinary", "read"), 4), None);
+}
+
+#[test]
+fn broad_recovery_denial_retains_exact_missing_caller_evidence() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    install_consumable_root(&mut state);
+    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
+    finish(
+        &mut state,
+        "trace",
+        "codebase_memory_trace_path",
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+    );
+    for (turn, id, kind) in [
+        (2, "implementation", DecisionEvidenceKindV1::Implementation),
+        (3, "test", DecisionEvidenceKindV1::FocusedTest),
+    ] {
+        state.on_tool_dispatched(&source_call(id, kind), turn);
+        finish_with_evidence(&mut state, id, ROOT, kind);
+    }
+    enter_budget_recovery(&mut state, 4);
+
+    let guidance = state.recovery_details().expect("recovery guidance");
+    assert_eq!(
+        guidance.compatible_actions,
+        [GraphRecoveryActionV1::for_evidence(
+            GraphRecoveryEvidenceKindV1::Caller,
+        )]
+    );
+
+    let denial = state.on_tool_dispatched_with_admission(
+        &call(
+            "recovery-broad-architecture-denied",
+            "codebase_memory_get_architecture",
+        ),
+        6,
+        Some(&LineageAdmissionOutcome::Ineligible(
+            crate::LineageAdmissionStatus::UnsupportedTool,
+        )),
+    );
+    let exact = GraphExplorationClosedV1::recoverable_without_actions(
+        [GraphRecoveryEvidenceKindV1::Caller],
+        4,
+    )
+    .expect("exact local denial");
+    assert_eq!(
+        exact.model_message(),
+        "decision-evidence recovery required; missing evidence: [caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 4"
+    );
+    assert_eq!(
+        serde_json::to_value(&exact).unwrap(),
+        serde_json::json!({
+            "reason": "recoverable_incomplete_evidence",
+            "missing_evidence": ["caller"],
+            "permitted_action": "targeted_current_root_graph_call",
+            "remaining_allowance": 4,
+        })
+    );
+    assert_eq!(
+        denial,
+        Some(ToolCallDenial::GraphExplorationClosed(Some(exact)))
+    );
+
+    let caller_admission = EligibleLineageAdmission::new(
+        ROOT.to_string(),
+        DecisionAnchorTargetKindV1::QualifiedName,
+        GraphCorrelationToolV1::GetCodeSnippet,
+        Some(DecisionEvidenceKindV1::Caller),
+    )
+    .expect("closed caller admission");
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &source_call("caller", DecisionEvidenceKindV1::Caller),
+            7,
+            Some(&LineageAdmissionOutcome::Eligible(caller_admission)),
+        ),
+        None,
+    );
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
+            "caller",
+            ROOT,
+            DecisionEvidenceKindV1::Caller,
+        ),
+        DecisionAnchorTransition::Converged,
+    );
 }
 
 #[test]

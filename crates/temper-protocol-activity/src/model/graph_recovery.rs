@@ -156,6 +156,25 @@ impl GraphExplorationClosedV1 {
         Self::recoverable_with_actions(missing_evidence, remaining_allowance, compatible_actions)
     }
 
+    /// Builds the compact denial emitted for an incompatible local recovery
+    /// attempt. Compatible actions remain available in the separately queued
+    /// recovery guidance, while this form preserves the stable denial wire.
+    pub fn recoverable_without_actions(
+        missing_evidence: impl IntoIterator<Item = GraphRecoveryEvidenceKindV1>,
+        remaining_allowance: u8,
+    ) -> Option<Self> {
+        let missing_evidence = sorted_missing(missing_evidence);
+        (!missing_evidence.is_empty()
+            && (1..=MAX_GRAPH_RECOVERY_ALLOWANCE_V1).contains(&remaining_allowance))
+        .then_some(Self {
+            reason: GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence,
+            missing_evidence,
+            permitted_action: GraphRecoveryPermittedActionV1::TargetedCurrentRootGraphCall,
+            remaining_allowance,
+            compatible_actions: Vec::new(),
+        })
+    }
+
     pub fn recoverable_with_actions(
         missing_evidence: impl IntoIterator<Item = GraphRecoveryEvidenceKindV1>,
         remaining_allowance: u8,
@@ -214,7 +233,6 @@ impl GraphExplorationClosedV1 {
                         && self.permitted_action
                             == GraphRecoveryPermittedActionV1::TargetedCurrentRootGraphCall
                         && (1..=MAX_GRAPH_RECOVERY_ALLOWANCE_V1).contains(&self.remaining_allowance)
-                        && !self.compatible_actions.is_empty()
                         && self.compatible_actions.iter().all(|action| {
                             action.is_valid()
                                 && self.missing_evidence.contains(&action.evidence_kind)
@@ -247,13 +265,22 @@ impl GraphExplorationClosedV1 {
             GraphExplorationClosedReasonV1::Completed => ToolFailureReasonV1::ExplorationClosed
                 .safe_message()
                 .to_string(),
-            GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => format!(
-                "decision-evidence recovery required; missing evidence: [{}]; permitted action: {}; remaining allowance: {}; compatible actions: [{}]",
-                missing_labels(&self.missing_evidence),
-                self.permitted_action.as_str(),
-                self.remaining_allowance,
-                action_labels(&self.compatible_actions),
-            ),
+            GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => {
+                let message = format!(
+                    "decision-evidence recovery required; missing evidence: [{}]; permitted action: {}; remaining allowance: {}",
+                    missing_labels(&self.missing_evidence),
+                    self.permitted_action.as_str(),
+                    self.remaining_allowance,
+                );
+                if self.compatible_actions.is_empty() {
+                    message
+                } else {
+                    format!(
+                        "{message}; compatible actions: [{}]",
+                        action_labels(&self.compatible_actions)
+                    )
+                }
+            }
             GraphExplorationClosedReasonV1::RecoveryExhausted => format!(
                 "decision-evidence recovery exhausted; missing evidence: [{}]; permitted action: {}; remaining allowance: 0",
                 missing_labels(&self.missing_evidence),
@@ -306,5 +333,33 @@ const fn selector_label(kind: DecisionAnchorTargetKindV1) -> &'static str {
         DecisionAnchorTargetKindV1::QualifiedNamePattern => "qualified_name_pattern",
         DecisionAnchorTargetKindV1::FunctionName => "function_name",
         DecisionAnchorTargetKindV1::QualifiedName => "qualified_name",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_denial_preserves_the_stable_missing_evidence_wire() {
+        let details = GraphExplorationClosedV1::recoverable_without_actions(
+            [GraphRecoveryEvidenceKindV1::Caller],
+            4,
+        )
+        .expect("compact recovery denial");
+        assert!(details.is_valid());
+        assert_eq!(
+            details.model_message(),
+            "decision-evidence recovery required; missing evidence: [caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 4"
+        );
+        assert_eq!(
+            serde_json::to_value(details).unwrap(),
+            serde_json::json!({
+                "reason": "recoverable_incomplete_evidence",
+                "missing_evidence": ["caller"],
+                "permitted_action": "targeted_current_root_graph_call",
+                "remaining_allowance": 4,
+            })
+        );
     }
 }

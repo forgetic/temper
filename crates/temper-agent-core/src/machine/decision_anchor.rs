@@ -574,10 +574,20 @@ impl DecisionAnchorState {
         )
     }
 
+    fn recovery_denial_details(&self) -> Option<GraphExplorationClosedV1> {
+        let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
+            return None;
+        };
+        GraphExplorationClosedV1::recoverable_without_actions(
+            recovery.evidence.missing_kinds(),
+            recovery.remaining,
+        )
+    }
+
     fn graph_exploration_denial(&self) -> ToolCallDenial {
         let details = match self.exploration {
             ExplorationStatus::Complete => Some(GraphExplorationClosedV1::completed()),
-            ExplorationStatus::GapRecovery => self.recovery_details().or_else(|| {
+            ExplorationStatus::GapRecovery => self.recovery_denial_details().or_else(|| {
                 let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
                     return None;
                 };
