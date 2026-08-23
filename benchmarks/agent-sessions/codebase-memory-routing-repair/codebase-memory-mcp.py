@@ -192,6 +192,10 @@ def current_root_source(project, qualified_name):
             "tests/alias_retry.rs",
             "repo/tests/alias_retry.rs",
         ),
+        "public_facade_keeps_operational_helpers_cohesive": (
+            "tests/public_api.rs",
+            "repo/tests/public_api.rs",
+        ),
     }.get(qualified_name)
     graph_read = confirmed_graph_read(project, "get_code_snippet")
     if graph_read is None or snippet is None:
@@ -337,6 +341,10 @@ for line in sys.stdin:
                         {
                             "qualified_name": "DeliveryRouter::worker_for",
                             "file_path": "src/delivery.rs",
+                        },
+                        {
+                            "qualified_name": "public_facade_keeps_operational_helpers_cohesive",
+                            "file_path": "tests/public_api.rs",
                         },
                     ]
                 tool_result(

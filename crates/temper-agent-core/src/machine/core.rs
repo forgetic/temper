@@ -386,23 +386,31 @@ impl AgentMachine {
         let mut operations = BTreeMap::new();
         let mut requests = Vec::new();
         let model_turn = self.turn.saturating_sub(1);
-        for call in calls {
-            let rejection = self.invocation_rejections.get(&call.id).cloned();
-            let closed_admission = (rejection.is_none()
-                && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX))
-            .then(|| {
-                self.lineage_admission
-                    .as_ref()
-                    .map(|admission| admission.resolve(&call.name, &call.arguments))
+        let closed_admissions = calls
+            .iter()
+            .map(|call| {
+                (!self.invocation_rejections.contains_key(&call.id)
+                    && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX))
+                .then(|| {
+                    self.lineage_admission
+                        .as_ref()
+                        .map(|admission| admission.resolve(&call.name, &call.arguments))
+                })
+                .flatten()
             })
-            .flatten();
-            let denial = self.decision_anchors.as_mut().and_then(|state| {
-                state.on_tool_dispatched_with_admission(
-                    &call,
+            .collect::<Vec<_>>();
+        let denials = self.decision_anchors.as_mut().map_or_else(
+            || vec![None; calls.len()],
+            |state| {
+                state.on_tool_batch_dispatched_with_admissions(
+                    &calls,
                     model_turn,
-                    closed_admission.as_ref(),
+                    &closed_admissions,
                 )
-            });
+            },
+        );
+        for (call, denial) in calls.into_iter().zip(denials) {
+            let rejection = self.invocation_rejections.get(&call.id).cloned();
             let shell_discovery_disposition = (rejection.is_none()
                 && call.name == "bash"
                 && matches!(&denial, Some(ToolCallDenial::DecisionAnchorMutation)))

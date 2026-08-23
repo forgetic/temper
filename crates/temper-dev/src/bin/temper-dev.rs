@@ -364,26 +364,26 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
 
     match cli_condition {
         "codebase-memory-enabled" => {
-            expect_exact(&run, "/metrics/turns", 16)?;
-            expect_exact(&run, "/metrics/graph/calls", 13)?;
-            expect_exact(&run, "/metrics/graph/succeeded", 8)?;
+            expect_exact(&run, "/metrics/turns", 17)?;
+            expect_exact(&run, "/metrics/graph/calls", 14)?;
+            expect_exact(&run, "/metrics/graph/succeeded", 9)?;
             expect_exact(&run, "/metrics/graph/failed", 5)?;
-            expect_exact(&run, "/metrics/graph/relevant_results", 8)?;
+            expect_exact(&run, "/metrics/graph/relevant_results", 9)?;
             expect_exact(&run, "/metrics/graph/irrelevant_successes", 0)?;
-            expect_exact(&run, "/metrics/graph/relevance_coverage/observed", 8)?;
-            expect_exact(&run, "/metrics/graph/relevance_coverage/expected", 8)?;
+            expect_exact(&run, "/metrics/graph/relevance_coverage/observed", 9)?;
+            expect_exact(&run, "/metrics/graph/relevance_coverage/expected", 9)?;
             expect_exact(
                 &run,
                 "/metrics/graph/typed_correlation_coverage/observed",
-                8,
+                9,
             )?;
             expect_exact(
                 &run,
                 "/metrics/graph/typed_correlation_coverage/expected",
-                8,
+                9,
             )?;
-            expect_exact(&run, "/metrics/graph/typed_lineage_coverage/observed", 8)?;
-            expect_exact(&run, "/metrics/graph/typed_lineage_coverage/expected", 8)?;
+            expect_exact(&run, "/metrics/graph/typed_lineage_coverage/observed", 9)?;
+            expect_exact(&run, "/metrics/graph/typed_lineage_coverage/expected", 9)?;
             expect_exact(
                 &run,
                 "/metrics/graph/failures_by_category/graph_lifecycle_denial",
@@ -417,7 +417,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             expect_exact(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_get_code_snippet/calls",
-                3,
+                4,
             )?;
             expect_exact(
                 &run,
@@ -447,6 +447,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             for symbol in [
                 "alias_retries_stay_on_the_original_ordered_worker",
                 "DeliveryRouter::worker_for",
+                "public_facade_keeps_operational_helpers_cohesive",
             ] {
                 if !benchmark::trace_has_confirmed_current_root_source(&trace, symbol) {
                     return Err(format!(

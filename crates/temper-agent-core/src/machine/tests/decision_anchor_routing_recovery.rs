@@ -3,7 +3,7 @@
 use super::*;
 
 #[test]
-fn caller_source_after_duplicate_refinement_completes_parallel_root_evidence() {
+fn caller_source_after_cross_root_focused_test_keeps_active_root_incomplete() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("routing-root", "codebase_memory_search_graph"), 0);
     state.on_tool_dispatched(&call("test-root", "codebase_memory_search_graph"), 0);
@@ -86,12 +86,30 @@ fn caller_source_after_duplicate_refinement_completes_parallel_root_evidence() {
     state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 3);
     assert_eq!(
         finish_with_evidence(&mut state, "caller", ROOT, DecisionEvidenceKindV1::Caller),
+        DecisionAnchorTransition::Unchanged,
+    );
+    assert!(
+        state.blocks_mutation("write"),
+        "the sibling root's focused-test result cannot complete routing-root evidence"
+    );
+
+    state.on_tool_dispatched(
+        &source_call("routing-test", DecisionEvidenceKindV1::FocusedTest),
+        4,
+    );
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
+            "routing-test",
+            ROOT,
+            DecisionEvidenceKindV1::FocusedTest,
+        ),
         DecisionAnchorTransition::Converged,
     );
     assert!(!state.blocks_mutation("write"));
     assert_eq!(
-        state.on_tool_dispatched(&call("closed", "codebase_memory_search_graph"), 4),
+        state.on_tool_dispatched(&call("closed", "codebase_memory_search_graph"), 5),
         completed_graph_denial(),
     );
-    assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 4), None);
+    assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 5), None);
 }

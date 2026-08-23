@@ -14,10 +14,9 @@ use temper_protocol_activity::{
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
 
-use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
-
 use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, ToolCallDenial};
 
+mod admission;
 mod anchors;
 mod evidence;
 mod output;
@@ -45,7 +44,6 @@ pub const DECISION_ANCHOR_RECOVERY_MESSAGE: &str = "decision-anchor recovery req
 const MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS: u8 = 2;
 /// One discovery turn may return several independent evidence roots. Bound the
 /// retained opaque forest so provider output cannot grow policy state without limit.
-/// Sixteen covers the largest legal parallel read batch while remaining fixed.
 const MAX_DECISION_ANCHOR_ROOTS: usize = 16;
 /// Later turns may add only a small fixed number of independent roots.
 pub(super) const MAX_LATER_DECISION_ANCHOR_ROOTS: usize = 4;
@@ -60,13 +58,14 @@ pub(super) struct DecisionAnchorState {
     phase: Option<AnchorPhase>,
     calls: BTreeMap<String, PendingCodebaseCall>,
     exploration: ExplorationStatus,
+    next_call_order: u64,
     later_roots: usize,
     non_progressing_batches: u8,
 }
 
 enum AnchorPhase {
     Root(AnchorForest),
-    Trail(Trail),
+    Trail(AnchorForest),
     Recovery(Recovery),
     GapRecovery(GapRecovery),
     Exhausted(SourceEvidence),
@@ -84,47 +83,44 @@ struct AnchorForest {
     roots: BTreeMap<String, Anchor>,
     valid: bool,
     latest_produced_turn: usize,
-    trace_root_turn: Option<usize>,
 }
 
 struct Anchor {
     produced_turn: usize,
+    produced_order: u64,
     result_target_kinds: BTreeSet<DecisionAnchorTargetKindV1>,
-}
-
-struct Trail {
-    anchors: AnchorForest,
     evidence: SourceEvidence,
 }
 
 struct Recovery {
     anchors: AnchorForest,
-    evidence: SourceEvidence,
     attempts: u8,
 }
 
 struct GapRecovery {
     anchors: AnchorForest,
-    evidence: SourceEvidence,
+    active_root: String,
     remaining: u8,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct SourceEvidence {
     trace_turn: Option<usize>,
     decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum DecisionGap {
     Trace,
     Evidence(DecisionEvidenceKindV1),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PendingCodebaseCall {
     turn: usize,
+    order: u64,
     recovery_gap: Option<DecisionGap>,
+    admitted_root: Option<String>,
 }
 
 struct FinishedCodebaseCall<'a> {
@@ -170,68 +166,10 @@ impl DecisionAnchorState {
             phase: None,
             calls: BTreeMap::new(),
             exploration: ExplorationStatus::Open,
+            next_call_order: 0,
             later_roots: 0,
             non_progressing_batches: 0,
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn on_tool_dispatched(
-        &mut self,
-        call: &ToolCall,
-        turn: usize,
-    ) -> Option<ToolCallDenial> {
-        self.on_tool_dispatched_with_admission(call, turn, None)
-    }
-
-    pub(super) fn on_tool_dispatched_with_admission(
-        &mut self,
-        call: &ToolCall,
-        turn: usize,
-        admission: Option<&LineageAdmissionOutcome>,
-    ) -> Option<ToolCallDenial> {
-        if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
-            let recovery_gap = match admission {
-                Some(LineageAdmissionOutcome::Eligible(admission)) => {
-                    DecisionGap::from_admission(admission)
-                }
-                Some(LineageAdmissionOutcome::Ineligible(_)) => None,
-                None => DecisionGap::from_call(call),
-            };
-            let call_key = GraphCorrelationV1::target_digest(&call.id);
-            if self.exploration != ExplorationStatus::Open {
-                let denial = self.graph_exploration_denial();
-                if self.exploration != ExplorationStatus::GapRecovery || call_key.is_none() {
-                    return Some(denial);
-                }
-                let Some(gap) = recovery_gap else {
-                    return Some(denial);
-                };
-                let already_pending = self
-                    .calls
-                    .values()
-                    .any(|pending| pending.recovery_gap == Some(gap));
-                let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.as_mut() else {
-                    return Some(denial);
-                };
-                if recovery.remaining == 0
-                    || already_pending
-                    || !recovery.evidence.needs(gap)
-                    || !recovery.anchors.supports(gap)
-                {
-                    return Some(denial);
-                }
-                recovery.remaining = recovery.remaining.saturating_sub(1);
-            }
-            if let Some(call_key) = call_key {
-                self.calls
-                    .insert(call_key, PendingCodebaseCall { turn, recovery_gap });
-            }
-        }
-        if self.blocks_mutation(&call.name) {
-            return Some(ToolCallDenial::DecisionAnchorMutation);
-        }
-        None
     }
 
     #[cfg(test)]
@@ -245,10 +183,8 @@ impl DecisionAnchorState {
     }
 
     /// Evaluates one completed read-only batch from its pre-batch root state.
-    /// The executor collects every sibling before this policy runs, so neither
-    /// transport completion timing nor the model's sibling call order can make
-    /// a valid later trace/source evidence set ineligible. Root producers still
-    /// cannot be consumed by a sibling from their own model turn.
+    /// The executor collects every sibling before this policy runs, so result
+    /// settlement is independent of transport completion timing.
     pub(super) fn on_tool_batch_finished(
         &mut self,
         completed: &[(&str, &str, &ToolOutput)],
@@ -268,8 +204,6 @@ impl DecisionAnchorState {
 
         let prior_phase = self.phase.take();
         if prior_phase.is_none() {
-            // Initial independent roots are collected from the complete batch;
-            // their same-turn siblings can never consume them.
             return match AnchorForest::from_finished(&finished, None) {
                 Some(anchors) => self.install_roots(anchors, 0, false),
                 None if successful_graph_batch(&finished) => self.record_non_progress(None),
@@ -279,24 +213,20 @@ impl DecisionAnchorState {
 
         match prior_phase {
             None => unreachable!("the empty phase returned above"),
-            Some(AnchorPhase::Root(root)) => {
-                self.advance_batch_or_recover(root, SourceEvidence::default(), &finished, 1)
-            }
-            Some(AnchorPhase::Trail(trail)) if trail.evidence.is_complete() => {
-                self.phase = Some(AnchorPhase::Trail(trail));
-                if self.exploration == ExplorationStatus::Open {
-                    self.exploration = ExplorationStatus::Complete;
-                    return DecisionAnchorTransition::Converged;
+            Some(AnchorPhase::Root(anchors)) | Some(AnchorPhase::Trail(anchors)) => {
+                if anchors.has_complete_evidence() {
+                    self.phase = Some(AnchorPhase::Trail(anchors));
+                    if self.exploration == ExplorationStatus::Open {
+                        self.exploration = ExplorationStatus::Complete;
+                        DecisionAnchorTransition::Converged
+                    } else {
+                        DecisionAnchorTransition::Unchanged
+                    }
+                } else {
+                    self.advance_batch_or_recover(anchors, &finished, 1)
                 }
-                DecisionAnchorTransition::Unchanged
-            }
-            Some(AnchorPhase::Trail(trail)) => {
-                self.advance_batch_or_recover(trail.anchors, trail.evidence, &finished, 1)
             }
             Some(AnchorPhase::Recovery(recovery)) => {
-                // Only a forest with no usable typed selections may be
-                // replaced by fresh later roots. A cross-root result cannot
-                // substitute for an otherwise consumable current forest.
                 let replacement_roots = if recovery.anchors.is_consumable() {
                     None
                 } else {
@@ -310,7 +240,6 @@ impl DecisionAnchorState {
                 } else {
                     self.advance_batch_or_recover(
                         recovery.anchors,
-                        recovery.evidence,
                         &finished,
                         recovery.attempts.saturating_add(1),
                     )
@@ -336,138 +265,121 @@ impl DecisionAnchorState {
         if later {
             let next_count = anchors.roots.len();
             if next_count > MAX_LATER_DECISION_ANCHOR_ROOTS.saturating_sub(self.later_roots) {
-                return self.enter_gap_recovery(anchors, SourceEvidence::default());
+                return self.enter_gap_recovery(anchors);
             }
             self.later_roots = self.later_roots.saturating_add(next_count);
         }
         if anchors.is_consumable() {
             self.non_progressing_batches = 0;
-            if let Some(trace_turn) = anchors.trace_root_turn {
-                let mut evidence = SourceEvidence::default();
-                evidence.record_trace(trace_turn);
-                self.phase = Some(AnchorPhase::Trail(Trail { anchors, evidence }));
+            self.phase = Some(if anchors.has_any_evidence() {
+                AnchorPhase::Trail(anchors)
             } else {
-                self.phase = Some(AnchorPhase::Root(anchors));
-            }
+                AnchorPhase::Root(anchors)
+            });
             DecisionAnchorTransition::Unchanged
         } else {
-            self.enter_recovery(anchors, SourceEvidence::default(), attempts)
+            self.enter_recovery(anchors, attempts)
         }
     }
 
     fn advance_batch_or_recover(
         &mut self,
-        mut active: AnchorForest,
-        evidence: SourceEvidence,
+        mut anchors: AnchorForest,
         finished: &[FinishedCodebaseCall<'_>],
         recovery_attempts: u8,
     ) -> DecisionAnchorTransition {
-        // Every selection must be a later, root-bound typed descendant. Keep
-        // the root anchor active throughout the evidence set: a valid trace or
-        // source read need not manufacture a new provider result for its
-        // siblings to remain eligible.
         let compatible = finished
             .iter()
             .filter_map(|finished| {
                 let output = anchor_output(finished.name, finished.output)?;
-                active
-                    .accepts(&finished.call, &output.lineage)
-                    .then_some((finished.call, output))
+                anchors
+                    .accepted_root(&finished.call, &output.lineage)
+                    .map(|root| (root, finished.call.clone(), output))
             })
             .collect::<Vec<_>>();
-        // Capture roots produced by this batch only after descendants have
-        // been evaluated against the pre-batch forest. They can be consumed by
-        // later model turns, never by their own siblings. This also preserves
-        // independent implementation/caller/test chains discovered over more
-        // than one bounded batch.
-        let next_roots = AnchorForest::from_finished(finished, Some(active.latest_produced_turn));
-        let candidate_root_trace_turn = next_roots.as_ref().and_then(|roots| roots.trace_root_turn);
+        let batch_trace_turns = compatible
+            .iter()
+            .filter(|(_, _, output)| output.tool == GraphCorrelationToolV1::TracePath)
+            .fold(BTreeMap::new(), |mut turns, (root, call, _)| {
+                turns
+                    .entry(root.clone())
+                    .and_modify(|turn: &mut usize| *turn = (*turn).min(call.turn))
+                    .or_insert(call.turn);
+                turns
+            });
+        let mut evidence_progressed = false;
+        for (root, call, output) in &compatible {
+            let Some(anchor) = anchors.roots.get_mut(root) else {
+                continue;
+            };
+            let before = anchor.evidence.progress_count();
+            match output.tool {
+                GraphCorrelationToolV1::TracePath => anchor.evidence.record_trace(call.turn),
+                GraphCorrelationToolV1::SearchCode => anchor
+                    .evidence
+                    .record_decision_kinds([DecisionEvidenceKindV1::Implementation]),
+                GraphCorrelationToolV1::GetCodeSnippet
+                    if anchor.evidence.has_trace()
+                        || batch_trace_turns
+                            .get(root)
+                            .is_some_and(|trace_turn| call.turn >= *trace_turn) =>
+                {
+                    anchor
+                        .evidence
+                        .record_decision_kinds(output.lineage.decision_evidence_kind)
+                }
+                GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::GetCodeSnippet => {}
+            }
+            evidence_progressed |= anchor.evidence.progress_count() > before;
+        }
+
+        // New roots are retained only after descendants were checked against
+        // the pre-batch forest, so siblings can never consume a new root.
+        let next_roots = AnchorForest::from_finished(finished, Some(anchors.latest_produced_turn));
         let root_merge = next_roots.map_or(RootMerge::NoProgress, |next| {
-            active.merge_limited(
+            anchors.merge_limited(
                 next,
                 MAX_LATER_DECISION_ANCHOR_ROOTS.saturating_sub(self.later_roots),
             )
         });
-        let batch_root_trace_turn = (root_merge != RootMerge::LimitExceeded)
-            .then_some(candidate_root_trace_turn)
-            .flatten();
         if let RootMerge::Progress(added) = root_merge {
             self.later_roots = self.later_roots.saturating_add(added);
         }
         let roots_progressed = matches!(root_merge, RootMerge::Progress(_));
-        if !active.valid {
-            return self.enter_recovery(active, evidence, recovery_attempts);
+        if !anchors.valid {
+            return self.enter_recovery(anchors, recovery_attempts);
         }
 
-        let batch_trace_turn = compatible
-            .iter()
-            .filter(|(_, output)| output.tool == GraphCorrelationToolV1::TracePath)
-            .map(|(call, _)| call.turn)
-            .chain(batch_root_trace_turn)
-            .min();
-        let trace_turn = evidence.trace_turn.or(batch_trace_turn);
-        let decision_kinds = compatible
-            .iter()
-            .filter_map(|(call, output)| match output.tool {
-                // A successful current-root code refinement is itself typed
-                // implementation evidence. Semantic caller and test purposes
-                // remain explicit wrapper-validated source declarations.
-                GraphCorrelationToolV1::SearchCode => Some(DecisionEvidenceKindV1::Implementation),
-                GraphCorrelationToolV1::GetCodeSnippet
-                    if trace_turn.is_some_and(|trace_turn| call.turn >= trace_turn) =>
-                {
-                    output.lineage.decision_evidence_kind
-                }
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        let trace_progressed = !evidence.has_trace() && batch_trace_turn.is_some();
-        let evidence_progressed = decision_kinds
-            .iter()
-            .any(|kind| !evidence.decision_kinds.contains(kind));
-        let progressed = trace_progressed || evidence_progressed || roots_progressed;
-
-        if progressed {
+        if evidence_progressed || roots_progressed {
             self.non_progressing_batches = 0;
-            let mut evidence = evidence;
-            if let Some(trace_turn) = batch_trace_turn {
-                evidence.record_trace(trace_turn);
-            }
-            evidence.record_decision_kinds(decision_kinds);
-            let complete = evidence.is_complete();
-            self.phase = Some(AnchorPhase::Trail(Trail {
-                anchors: active,
-                evidence,
-            }));
+            let complete = anchors.has_complete_evidence();
+            self.phase = Some(AnchorPhase::Trail(anchors));
             if complete {
                 self.exploration = ExplorationStatus::Complete;
                 return DecisionAnchorTransition::Converged;
             }
             if root_merge == RootMerge::LimitExceeded {
-                let Some(AnchorPhase::Trail(trail)) = self.phase.take() else {
+                let Some(AnchorPhase::Trail(anchors)) = self.phase.take() else {
                     unreachable!("the incomplete trail was installed above")
                 };
-                return self.enter_gap_recovery(trail.anchors, trail.evidence);
+                return self.enter_gap_recovery(anchors);
             }
             return DecisionAnchorTransition::Unchanged;
         }
 
         if root_merge == RootMerge::LimitExceeded {
-            return self.enter_gap_recovery(active, evidence);
+            return self.enter_gap_recovery(anchors);
         }
 
         if finished.iter().any(|finished| {
             trusted_unavailable_provider_output(finished.name, finished.output)
-                && !active.contains_producer_turn(&finished.call)
-                && evidence.expects(
+                && !anchors.contains_producer_turn(&finished.call)
+                && anchors.expected_for_call(
+                    &finished.call,
                     finished.call.recovery_gap,
                     graph_tool_for_name(finished.name),
-                    batch_trace_turn,
                 )
         }) {
-            // The trusted wrapper has already supplied fixed, bounded fallback
-            // guidance. Release only an unavailable viable evidence step; an
-            // unrelated failed graph discovery call cannot bypass this root.
             self.phase = None;
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::Unchanged;
@@ -475,39 +387,26 @@ impl DecisionAnchorState {
 
         if finished
             .iter()
-            .any(|finished| active.contains_producer_turn(&finished.call))
+            .any(|finished| anchors.contains_producer_turn(&finished.call))
         {
-            self.phase = Some(AnchorPhase::Trail(Trail {
-                anchors: active,
-                evidence,
-            }));
+            self.phase = Some(AnchorPhase::Trail(anchors));
             return DecisionAnchorTransition::Unchanged;
         }
 
-        // Valid repeated roots and broad successful discovery consume the
-        // fixed non-progress budget. Typed but incompatible descendants (and
-        // targeted results whose lineage is malformed or ambiguous) retain the
-        // established bounded recovery behavior.
-        if successful_graph_batch(finished) && !has_incompatible_targeted_result(finished, &active)
+        if successful_graph_batch(finished) && !has_incompatible_targeted_result(finished, &anchors)
         {
-            return self.record_non_progress(Some(AnchorPhase::Trail(Trail {
-                anchors: active,
-                evidence,
-            })));
+            return self.record_non_progress(Some(AnchorPhase::Trail(anchors)));
         }
 
-        self.enter_recovery(active, evidence, recovery_attempts)
+        self.enter_recovery(anchors, recovery_attempts)
     }
 
     fn record_non_progress(&mut self, phase: Option<AnchorPhase>) -> DecisionAnchorTransition {
         self.non_progressing_batches = self.non_progressing_batches.saturating_add(1);
         if self.non_progressing_batches >= MAX_NON_PROGRESSING_GRAPH_BATCHES {
             return match phase {
-                Some(AnchorPhase::Trail(trail)) => {
-                    self.enter_gap_recovery(trail.anchors, trail.evidence)
-                }
-                Some(AnchorPhase::Root(anchors)) => {
-                    self.enter_gap_recovery(anchors, SourceEvidence::default())
+                Some(AnchorPhase::Trail(anchors)) | Some(AnchorPhase::Root(anchors)) => {
+                    self.enter_gap_recovery(anchors)
                 }
                 phase => {
                     self.phase = phase;
@@ -520,22 +419,13 @@ impl DecisionAnchorState {
         DecisionAnchorTransition::Unchanged
     }
 
-    fn enter_recovery(
-        &mut self,
-        anchors: AnchorForest,
-        evidence: SourceEvidence,
-        attempts: u8,
-    ) -> DecisionAnchorTransition {
+    fn enter_recovery(&mut self, anchors: AnchorForest, attempts: u8) -> DecisionAnchorTransition {
         if attempts >= MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS {
-            self.phase = Some(AnchorPhase::Exhausted(evidence));
+            self.phase = Some(AnchorPhase::Exhausted(anchors.active_evidence()));
             self.exploration = ExplorationStatus::BudgetExhausted;
             DecisionAnchorTransition::RecoveryExhausted
         } else {
-            self.phase = Some(AnchorPhase::Recovery(Recovery {
-                anchors,
-                evidence,
-                attempts,
-            }));
+            self.phase = Some(AnchorPhase::Recovery(Recovery { anchors, attempts }));
             DecisionAnchorTransition::RecoveryNeeded
         }
     }
@@ -544,31 +434,15 @@ impl DecisionAnchorState {
         let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
             return None;
         };
-        let missing = recovery.evidence.missing_kinds();
-        let compatible_actions = missing
-            .iter()
-            .copied()
-            .filter_map(|kind| {
-                let gap = match kind {
-                    GraphRecoveryEvidenceKindV1::Trace => DecisionGap::Trace,
-                    GraphRecoveryEvidenceKindV1::Implementation => {
-                        DecisionGap::Evidence(DecisionEvidenceKindV1::Implementation)
-                    }
-                    GraphRecoveryEvidenceKindV1::Caller => {
-                        DecisionGap::Evidence(DecisionEvidenceKindV1::Caller)
-                    }
-                    GraphRecoveryEvidenceKindV1::FocusedTest => {
-                        DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)
-                    }
-                };
-                recovery
-                    .anchors
-                    .supports(gap)
-                    .then(|| GraphRecoveryActionV1::for_evidence(kind))
-            })
+        let active = recovery.anchors.roots.get(&recovery.active_root)?;
+        let compatible_actions = active
+            .evidence
+            .compatible_gaps(active)
+            .into_iter()
+            .map(|gap| GraphRecoveryActionV1::for_evidence(gap.recovery_kind()))
             .collect::<Vec<_>>();
         GraphExplorationClosedV1::recoverable_with_actions(
-            missing,
+            active.evidence.missing_kinds(),
             recovery.remaining,
             compatible_actions,
         )
@@ -578,8 +452,9 @@ impl DecisionAnchorState {
         let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
             return None;
         };
+        let active = recovery.anchors.roots.get(&recovery.active_root)?;
         GraphExplorationClosedV1::recoverable_without_actions(
-            recovery.evidence.missing_kinds(),
+            active.evidence.missing_kinds(),
             recovery.remaining,
         )
     }
@@ -591,7 +466,8 @@ impl DecisionAnchorState {
                 let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
                     return None;
                 };
-                GraphExplorationClosedV1::exhausted(recovery.evidence.missing_kinds())
+                let active = recovery.anchors.roots.get(&recovery.active_root)?;
+                GraphExplorationClosedV1::exhausted(active.evidence.missing_kinds())
             }),
             ExplorationStatus::BudgetExhausted => match self.phase.as_ref() {
                 Some(AnchorPhase::Exhausted(evidence)) => {
@@ -608,7 +484,7 @@ impl DecisionAnchorState {
         self.mutation_tools.contains(name)
             && self.phase.as_ref().is_some_and(|phase| match phase {
                 AnchorPhase::Root(_) => true,
-                AnchorPhase::Trail(trail) => !trail.evidence.is_complete(),
+                AnchorPhase::Trail(anchors) => !anchors.has_complete_evidence(),
                 AnchorPhase::Recovery(_)
                 | AnchorPhase::GapRecovery(_)
                 | AnchorPhase::Exhausted(_) => true,
