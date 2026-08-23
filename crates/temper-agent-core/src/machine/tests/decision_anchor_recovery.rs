@@ -531,10 +531,24 @@ fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
         &recovery_requests,
         "compatible actions: [trace_path/function_name/trace]"
     ));
+    assert!(message_containing(
+        &recovery_requests,
+        "next: use only these active-root actions (max 4)"
+    ));
+    assert!(message_containing(
+        &recovery_requests,
+        "with matching typed-result selectors"
+    ));
+    assert!(message_containing(
+        &recovery_requests,
+        "do not search, switch roots, retry denials, or mutate"
+    ));
     assert!(!message_containing(
         &recovery_requests,
         DECISION_ANCHOR_RECOVERY_MESSAGE
     ));
+    assert!(!message_containing(&recovery_requests, ROOT));
+    assert!(!message_containing(&recovery_requests, OTHER_ROOT));
 }
 
 #[test]

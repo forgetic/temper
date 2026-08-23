@@ -276,8 +276,9 @@ impl GraphExplorationClosedV1 {
                     message
                 } else {
                     format!(
-                        "{message}; compatible actions: [{}]",
-                        action_labels(&self.compatible_actions)
+                        "{message}; compatible actions: [{}]; next: use only these active-root actions (max {}) with matching typed-result selectors; do not search, switch roots, retry denials, or mutate",
+                        action_labels(&self.compatible_actions),
+                        self.remaining_allowance,
                     )
                 }
             }
@@ -361,5 +362,28 @@ mod tests {
                 "remaining_allowance": 4,
             })
         );
+    }
+
+    #[test]
+    fn recoverable_message_is_an_exact_bounded_current_root_instruction() {
+        const PRIVATE_SELECTOR: &str = "private::selector::must_not_escape";
+        let details = GraphExplorationClosedV1::recoverable(
+            [
+                GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::Trace,
+            ],
+            2,
+        )
+        .expect("actionable recovery guidance");
+
+        let message = details.model_message();
+        assert_eq!(
+            message,
+            "decision-evidence recovery required; missing evidence: [trace, caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 2; compatible actions: [trace_path/function_name/trace, get_code_snippet/qualified_name/caller]; next: use only these active-root actions (max 2) with matching typed-result selectors; do not search, switch roots, retry denials, or mutate"
+        );
+        assert!(!message.contains(PRIVATE_SELECTOR));
+        assert!(!message.contains("root_binding"));
+        assert!(!message.contains("qualified_name="));
+        assert!(details.is_valid());
     }
 }
