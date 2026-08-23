@@ -21,6 +21,8 @@ use coding_agent_workspace::{REPO_DIR, TempCheckout};
 const IMPLEMENTATION: &str = "crate::routing::select_worker";
 const CALLER: &str = "crate::delivery::dispatch";
 const FOCUSED_TEST: &str = "crate::tests::keeps_affinity";
+#[path = "jig_caller_trace_routing/semantic_routing.rs"]
+mod semantic_routing;
 static JIG_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
@@ -513,9 +515,15 @@ import sys
 IMPLEMENTATION = "crate::routing::select_worker"
 CALLER = "crate::delivery::dispatch"
 FOCUSED_TEST = "crate::tests::keeps_affinity"
+SEMANTIC_IMPLEMENTATION = "crate::scheduler::choose_lane"
+SEMANTIC_CALLER = "crate::replay::route_renamed_job"
+SEMANTIC_FOCUSED_TEST = "crate::tests::renamed_replay_preserves_shard_ownership"
+ACTIVE_ROOT_TEST = "crate::tests::replay_uses_selected_lane"
+INCIDENTAL_IMPLEMENTATION = "crate::routing::legacy_dispatch_key"
 CALL_LOG = os.path.join(os.path.dirname(__file__), "calls.jsonl")
 
 TOOLS = [
+    {"name": "search_graph", "description": "Targeted graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "name_pattern": {"type": "string"}, "project": {"type": "string"}}}},
     {"name": "search_code", "description": "Targeted code search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "pattern": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
     {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
@@ -549,8 +557,21 @@ for line in sys.stdin:
             log.write(json.dumps({"name": name, "arguments": arguments}, sort_keys=True) + "\n")
         if name == "index_status":
             result(request["id"], {"project": arguments.get("project", ""), "status": "fresh"})
+        elif name == "search_graph":
+            if arguments.get("query") == "renamed job replay shard ownership":
+                result(request["id"], {"results": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}, {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "is_test": True}]})
+            elif arguments.get("query") == "renamed replay shard ownership regression":
+                result(request["id"], {"results": [{"qualified_name": SEMANTIC_FOCUSED_TEST, "name": "renamed_replay_preserves_shard_ownership", "is_test": True}]})
+            elif arguments.get("name_pattern") == "dispatch_key":
+                result(request["id"], {"results": [{"qualified_name": INCIDENTAL_IMPLEMENTATION, "name": "legacy_dispatch_key"}]})
+            else:
+                raise AssertionError("unexpected graph search " + str(arguments))
         elif name == "search_code":
-            result(request["id"], {"results": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
+            selected = arguments.get("pattern")
+            if selected == SEMANTIC_IMPLEMENTATION:
+                result(request["id"], {"results": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}]})
+            else:
+                result(request["id"], {"results": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
         elif name == "trace_path":
             selected = arguments.get("function_name")
             assert arguments.get("direction") == "inbound"
@@ -561,6 +582,8 @@ for line in sys.stdin:
                 assert arguments.get("mode") == "calls"
                 assert arguments.get("include_tests") is True
                 result(request["id"], {"function": {"qualified_name": CALLER, "name": "dispatch"}, "mode": "calls", "direction": "inbound", "include_tests": True, "complete": True, "callers": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "is_test": True}]})
+            elif selected == SEMANTIC_IMPLEMENTATION:
+                result(request["id"], {"function": {"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}, "direction": "inbound", "complete": True, "callers": [{"qualified_name": SEMANTIC_CALLER, "name": "route_renamed_job"}]})
             else:
                 raise AssertionError("unexpected trace selector " + str(selected))
         elif name == "get_code_snippet":
@@ -571,6 +594,16 @@ for line in sys.stdin:
                 result(request["id"], {"qualified_name": CALLER, "name": "dispatch", "source": "caller source", "callees": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
             elif selected == FOCUSED_TEST:
                 result(request["id"], {"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "source": "focused test source"})
+            elif selected == SEMANTIC_IMPLEMENTATION:
+                result(request["id"], {"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane", "source": "semantic implementation source"})
+            elif selected == SEMANTIC_CALLER:
+                result(request["id"], {"qualified_name": SEMANTIC_CALLER, "name": "route_renamed_job", "source": "semantic caller source", "callees": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}]})
+            elif selected == SEMANTIC_FOCUSED_TEST:
+                result(request["id"], {"qualified_name": SEMANTIC_FOCUSED_TEST, "name": "renamed_replay_preserves_shard_ownership", "source": "semantic focused test source", "is_test": True})
+            elif selected == ACTIVE_ROOT_TEST:
+                result(request["id"], {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "source": "active-root focused test source", "is_test": True})
+            elif selected == INCIDENTAL_IMPLEMENTATION:
+                result(request["id"], {"qualified_name": INCIDENTAL_IMPLEMENTATION, "name": "legacy_dispatch_key", "source": "incidental implementation source"})
             else:
                 raise AssertionError("unexpected source selector " + str(selected))
     else:
