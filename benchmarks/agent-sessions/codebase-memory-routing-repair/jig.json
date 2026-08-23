@@ -135,6 +135,22 @@
       "turns": [
         {
           "tool_call": {
+            "id": "graph_source_public_api_focused_test",
+            "name": "codebase_memory_get_code_snippet",
+            "args": {
+              "repo": "temper-benchmark/codebase-memory-routing-repair",
+              "qualified_name": "public_facade_keeps_operational_helpers_cohesive",
+              "decision_evidence_kind": "focused_test"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
             "id": "post_decision_broad_architecture",
             "name": "codebase_memory_get_architecture",
             "args": {
