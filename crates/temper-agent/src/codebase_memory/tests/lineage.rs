@@ -801,6 +801,10 @@ mod tests {
         );
     }
 
+    mod focused_test_recovery {
+        include!("lineage_focused_test_recovery.rs");
+    }
+
     #[test]
     fn duplicate_cross_root_candidates_become_ineligible() {
         let mut lineages = DecisionAnchorLineages::default();

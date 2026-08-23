@@ -46,6 +46,7 @@ pub struct EligibleLineageAdmission {
     selector_kind: DecisionAnchorTargetKindV1,
     tool_kind: GraphCorrelationToolV1,
     evidence_purpose: Option<DecisionEvidenceKindV1>,
+    recovery_purpose: Option<DecisionEvidenceKindV1>,
 }
 
 impl EligibleLineageAdmission {
@@ -76,6 +77,21 @@ impl EligibleLineageAdmission {
             selector_kind,
             tool_kind,
             evidence_purpose,
+            recovery_purpose: None,
+        })
+    }
+
+    pub fn focused_test_traversal(
+        root_binding: String,
+        selector_kind: DecisionAnchorTargetKindV1,
+    ) -> Option<Self> {
+        (selector_kind == DecisionAnchorTargetKindV1::FunctionName).then_some(())?;
+        Some(Self {
+            root_binding: OpaqueLineageRootBinding::new(root_binding)?,
+            selector_kind,
+            tool_kind: GraphCorrelationToolV1::TracePath,
+            evidence_purpose: None,
+            recovery_purpose: Some(DecisionEvidenceKindV1::FocusedTest),
         })
     }
 
@@ -89,6 +105,10 @@ impl EligibleLineageAdmission {
 
     pub const fn evidence_purpose(&self) -> Option<DecisionEvidenceKindV1> {
         self.evidence_purpose
+    }
+
+    pub const fn recovery_purpose(&self) -> Option<DecisionEvidenceKindV1> {
+        self.recovery_purpose
     }
 
     /// Compares a trusted lineage root without exposing this process-local
@@ -106,6 +126,7 @@ impl fmt::Debug for EligibleLineageAdmission {
             .field("selector_kind", &self.selector_kind)
             .field("tool_kind", &self.tool_kind)
             .field("evidence_purpose", &self.evidence_purpose)
+            .field("recovery_purpose", &self.recovery_purpose)
             .finish()
     }
 }

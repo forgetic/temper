@@ -533,15 +533,15 @@ fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
     ));
     assert!(message_containing(
         &recovery_requests,
-        "next: use only these active-root actions (max 4)"
+        "next: exact later-turn typed-result selectors only"
     ));
     assert!(message_containing(
         &recovery_requests,
-        "with matching typed-result selectors"
+        "listed traversal fields mandatory"
     ));
     assert!(message_containing(
         &recovery_requests,
-        "do not search, switch roots, retry denials, or mutate"
+        "no search, root switch, speculative snippet batch, denied retry, or mutation"
     ));
     assert!(!message_containing(
         &recovery_requests,

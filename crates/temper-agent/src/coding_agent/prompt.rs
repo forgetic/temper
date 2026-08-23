@@ -159,8 +159,7 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              dependent caller work. For inbound caller understanding, trace from that implementation identity \
              rather than an outer caller or wrapper returned beside it. Provider-returned caller/callee identities \
              from targeted and exact-source results are preferred later-turn caller/model selectors when the typed \
-             relationship satisfies the evidence gap. A complete empty inbound trace settles that selected symbol's \
-             graph-caller relationship; do not manufacture caller evidence by rereading the traced symbol as its own caller. \
+             relationship satisfies the evidence gap. A complete empty inbound trace settles that selected symbol's graph-caller relationship; do not manufacture caller evidence by rereading the traced symbol as its own caller. Independent test roots never satisfy the active implementation root. After implementation and caller source evidence are complete, if focused-test evidence is still missing and the recovery menu lists it, trace from the provider-returned caller in a later turn with `trace_path` / `function_name`, relationship `calls`, direction `inbound`, and test inclusion enabled. Read the exact test identity returned by that traversal with `get_code_snippet` / `qualified_name` / `focused_test` in another later turn; the traversal itself is selector discovery, not focused-test source evidence. \
              Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused \
              behavioral tests, sufficient to justify the smallest semantic diff.\n\
              - Once closed decision-evidence recovery guidance lists compatible actions, treat that \
@@ -168,6 +167,7 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              use only those tool/selector/evidence combinations, up to the remaining allowance, and \
              fill selectors only from matching values already visible in that root's typed results. After a local \
              decision-evidence denial, follow only this compatible menu and never repeat the denied tool/selector/evidence-kind tuple. \
+             Do not batch speculative snippet reads with a traversal, and never issue the test source read until a later turn after the traversal has returned its exact provider-typed test identity. \
              Do not issue discovery searches, start or switch to an unrelated root, repeat a locally \
              denied graph call, or mutate. Independent root creation remains available during ordinary \
              discovery, but it is not recovery progress once this menu exists. If recovery is exhausted \

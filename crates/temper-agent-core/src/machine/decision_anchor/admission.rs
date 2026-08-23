@@ -7,7 +7,7 @@ use super::*;
 struct RecoveryAdmissionSnapshot {
     active_root: String,
     missing: BTreeSet<DecisionGap>,
-    compatible: BTreeSet<DecisionGap>,
+    compatible: BTreeSet<GraphRecoveryActionV1>,
     pending: BTreeSet<DecisionGap>,
     remaining: u8,
     denial: ToolCallDenial,
@@ -69,6 +69,14 @@ impl DecisionAnchorState {
                         .then(|| DecisionGap::from_call(call))
                         .flatten()
                 });
+                let recovery_action = eligible
+                    .and_then(DecisionGap::recovery_action_for_admission)
+                    .or_else(|| {
+                        admission
+                            .is_none()
+                            .then(|| DecisionGap::recovery_action_for_call(call))
+                            .flatten()
+                    });
                 let admitted_root = eligible
                     .and_then(|admission| self.root_matching_admission(admission))
                     // Tests and non-codebase-memory compositions retain the
@@ -89,14 +97,16 @@ impl DecisionAnchorState {
                         call_key.is_some()
                             && recovery_gap.is_some_and(|gap| {
                                 snapshot.missing.contains(&gap)
-                                    && snapshot.compatible.contains(&gap)
+                                    && recovery_action
+                                        .is_some_and(|action| snapshot.compatible.contains(&action))
                                     && !snapshot.pending.contains(&gap)
                                     && !selected.contains(&gap)
                                     && admitted_count < snapshot.remaining
                             })
                             && admitted_root.as_deref() == Some(snapshot.active_root.as_str())
                             && eligible.is_none_or(|admission| {
-                                recovery_gap.is_some_and(|gap| gap.matches_admission(admission))
+                                DecisionGap::recovery_action_for_admission(admission)
+                                    .is_some_and(|action| snapshot.compatible.contains(&action))
                                     && admission.matches_root(&snapshot.active_root)
                             })
                     });
@@ -165,7 +175,7 @@ impl DecisionAnchorState {
         Some(RecoveryAdmissionSnapshot {
             active_root: recovery.active_root.clone(),
             missing: active.evidence.missing_gaps(),
-            compatible: active.evidence.compatible_gaps(active),
+            compatible: active.evidence.compatible_actions(active),
             pending: self
                 .calls
                 .values()
@@ -191,14 +201,24 @@ impl DecisionGap {
         }
     }
 
-    fn matches_admission(self, admission: &EligibleLineageAdmission) -> bool {
-        let action = GraphRecoveryActionV1::for_evidence(self.recovery_kind());
-        admission.tool_kind() == action.tool
-            && admission.selector_kind() == action.selector_kind
-            && admission.evidence_purpose()
-                == match self {
-                    Self::Trace => None,
-                    Self::Evidence(kind) => Some(kind),
-                }
+    fn recovery_action_for_admission(
+        admission: &EligibleLineageAdmission,
+    ) -> Option<GraphRecoveryActionV1> {
+        if admission.recovery_purpose() == Some(DecisionEvidenceKindV1::FocusedTest) {
+            return Some(GraphRecoveryActionV1::focused_test_traversal());
+        }
+        DecisionGap::from_admission(admission)
+            .map(|gap| GraphRecoveryActionV1::for_evidence(gap.recovery_kind()))
+    }
+
+    fn recovery_action_for_call(call: &ToolCall) -> Option<GraphRecoveryActionV1> {
+        let gap = DecisionGap::from_call(call)?;
+        if call.name == GraphCorrelationToolV1::TracePath.public_name()
+            && gap == DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)
+        {
+            Some(GraphRecoveryActionV1::focused_test_traversal())
+        } else {
+            Some(GraphRecoveryActionV1::for_evidence(gap.recovery_kind()))
+        }
     }
 }

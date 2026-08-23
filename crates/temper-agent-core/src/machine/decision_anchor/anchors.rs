@@ -20,8 +20,8 @@ impl Anchor {
         !self.result_target_kinds.is_empty()
     }
 
-    pub(super) fn supports(&self, gap: DecisionGap) -> bool {
-        self.result_target_kinds.contains(&gap.target_kind())
+    pub(super) fn supports(&self, action: GraphRecoveryActionV1) -> bool {
+        self.result_target_kinds.contains(&action.selector_kind)
     }
 
     pub(super) fn accepts(
@@ -168,7 +168,7 @@ impl AnchorForest {
     /// wrapper-independent stable call order which first produced that root.
     pub(super) fn recovery_root_binding(&self) -> Option<String> {
         self.ranked_roots()
-            .find(|(_, root)| !root.evidence.compatible_gaps(root).is_empty())
+            .find(|(_, root)| !root.evidence.compatible_actions(root).is_empty())
             .map(|(binding, _)| binding.clone())
     }
 
@@ -201,14 +201,5 @@ impl AnchorForest {
                 .then_with(|| left_binding.cmp(right_binding))
         });
         roots.into_iter()
-    }
-}
-
-impl DecisionGap {
-    fn target_kind(self) -> DecisionAnchorTargetKindV1 {
-        match self {
-            Self::Trace => DecisionAnchorTargetKindV1::FunctionName,
-            Self::Evidence(_) => DecisionAnchorTargetKindV1::QualifiedName,
-        }
     }
 }

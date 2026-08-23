@@ -100,6 +100,23 @@ impl DecisionAnchorLineages {
         if present[0] != expected_field {
             return Ineligible(IncapableSelection);
         }
+        let recovery_purpose = if tool_kind == GraphCorrelationToolV1::TracePath {
+            match object.get("include_tests") {
+                Some(value) if value.as_bool() == Some(true) => {
+                    if object.get("mode").and_then(Value::as_str) != Some("calls")
+                        || object.get("direction").and_then(Value::as_str) != Some("inbound")
+                    {
+                        return Ineligible(IncapableSelection);
+                    }
+                    Some(DecisionEvidenceKindV1::FocusedTest)
+                }
+                Some(value) if value.as_bool() == Some(false) => None,
+                Some(_) => return Ineligible(MalformedSelector),
+                None => None,
+            }
+        } else {
+            None
+        };
         let evidence_purpose = match object.get("decision_evidence_kind") {
             Some(value) if tool_kind == GraphCorrelationToolV1::GetCodeSnippet => {
                 match serde_json::from_value::<DecisionEvidenceKindV1>(value.clone()) {
@@ -121,6 +138,24 @@ impl DecisionAnchorLineages {
             Some(None) => return Ineligible(AmbiguousSelector),
             None => return Ineligible(UnknownSelector),
         };
+        if recovery_purpose == Some(DecisionEvidenceKindV1::FocusedTest)
+            && !binding.caller_evidence_result
+        {
+            return Ineligible(IncapableSelection);
+        }
+        if evidence_purpose == Some(DecisionEvidenceKindV1::FocusedTest)
+            && !binding.focused_test_result
+        {
+            return Ineligible(IncapableSelection);
+        }
+        if recovery_purpose == Some(DecisionEvidenceKindV1::FocusedTest) {
+            return EligibleLineageAdmission::focused_test_traversal(
+                binding.root_binding.clone(),
+                selector.kind,
+            )
+            .map(Eligible)
+            .unwrap_or(Ineligible(IncapableSelection));
+        }
         EligibleLineageAdmission::new(
             binding.root_binding.clone(),
             selector.kind,
