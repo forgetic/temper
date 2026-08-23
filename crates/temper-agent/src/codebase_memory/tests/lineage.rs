@@ -530,6 +530,18 @@ mod tests {
             )
             .unwrap();
         assert!(!trace.result_target_kinds.is_empty());
+
+        let callee = lineages
+            .record(
+                &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+                &serde_json::json!({
+                    "qualified_name": "temper-v1-hash.src.model.DeliveryAttempt.affinity_topic"
+                }),
+                Some(&structured_parts(serde_json::json!({}))),
+            )
+            .unwrap();
+        assert_eq!(callee.stage, DecisionAnchorLineageStageV1::CarryForward);
+        assert_eq!(callee.root_binding, trace.root_binding);
     }
 
     #[test]
