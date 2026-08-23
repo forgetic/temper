@@ -68,7 +68,7 @@ mod tests {
         remaining: u8,
     ) -> Option<ToolCallDenial> {
         Some(ToolCallDenial::GraphExplorationClosed(
-            GraphExplorationClosedV1::recoverable(missing, remaining),
+            GraphExplorationClosedV1::recoverable_without_actions(missing, remaining),
         ))
     }
 
