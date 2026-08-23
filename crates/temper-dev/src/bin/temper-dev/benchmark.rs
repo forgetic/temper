@@ -179,7 +179,7 @@ pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(),
 }
 
 pub(super) fn verify_decision_gap_recovery(trace: &str) -> Result<(), String> {
-    const RECOVERY_GUIDANCE: &str = "decision-evidence recovery required; missing evidence: [caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 4";
+    const RECOVERY_GUIDANCE: &str = "decision-evidence recovery required; missing evidence: [caller, focused_test]; permitted action: targeted_current_root_graph_call; remaining allowance: 4";
     let events = trace
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -195,6 +195,7 @@ pub(super) fn verify_decision_gap_recovery(trace: &str) -> Result<(), String> {
         ("recovery_broad_architecture_denied", "failed"),
         ("recovery_duplicate_worker_refinement_denied", "failed"),
         ("graph_source_delivery_caller", "succeeded"),
+        ("graph_source_public_api_focused_test", "succeeded"),
         ("post_decision_broad_architecture", "failed"),
         ("post_decision_graph_search", "failed"),
         ("post_decision_source_read", "failed"),
@@ -216,7 +217,7 @@ pub(super) fn verify_decision_gap_recovery(trace: &str) -> Result<(), String> {
 
     let recoverable = serde_json::json!({
         "reason": "recoverable_incomplete_evidence",
-        "missing_evidence": ["caller"],
+        "missing_evidence": ["caller", "focused_test"],
         "permitted_action": "targeted_current_root_graph_call",
         "remaining_allowance": 4,
     });
@@ -281,7 +282,18 @@ pub(super) fn verify_decision_gap_recovery(trace: &str) -> Result<(), String> {
         Some("get_code_snippet"),
     ) {
         return Err(
-            "targeted current-root caller recovery did not reach the provider last".to_string(),
+            "targeted current-root caller recovery did not reach provider invocation 8".to_string(),
+        );
+    }
+    if !call_has_provider_invocation(
+        trace,
+        "graph_source_public_api_focused_test",
+        Some(9),
+        Some("get_code_snippet"),
+    ) {
+        return Err(
+            "targeted current-root focused-test recovery did not reach the provider last"
+                .to_string(),
         );
     }
     Ok(())
@@ -292,7 +304,7 @@ pub(super) fn verify_typed_graph_correlation_records(trace: &str) -> Result<(), 
         (("search_graph", "graph_query"), 2_u64),
         (("search_code", "pattern"), 3),
         (("trace_path", "function_name"), 1),
-        (("get_code_snippet", "qualified_name"), 2),
+        (("get_code_snippet", "qualified_name"), 3),
     ]);
     let observed = trace
         .lines()
@@ -303,9 +315,9 @@ pub(super) fn verify_typed_graph_correlation_records(trace: &str) -> Result<(), 
                 .cloned()
         })
         .collect::<Vec<_>>();
-    if observed.len() != 8 {
+    if observed.len() != 9 {
         return Err(format!(
-            "enabled trace retained {} typed graph correlations; expected 8",
+            "enabled trace retained {} typed graph correlations; expected 9",
             observed.len()
         ));
     }
@@ -359,7 +371,7 @@ pub(super) fn verify_provider_invocations(trace: &str) -> Result<(), String> {
     {
         collect_provider_invocations(&event, &mut invocations);
     }
-    let expected_keys = (1..=8).collect::<BTreeSet<_>>();
+    let expected_keys = (1..=9).collect::<BTreeSet<_>>();
     if invocations.keys().copied().collect::<BTreeSet<_>>() != expected_keys {
         return Err(format!(
             "provider invocation sequence was {:?}; expected {expected_keys:?}",
@@ -372,6 +384,7 @@ pub(super) fn verify_provider_invocations(trace: &str) -> Result<(), String> {
         (6, "search_code"),
         (7, "search_code"),
         (8, "get_code_snippet"),
+        (9, "get_code_snippet"),
     ] {
         if invocations.get(&invocation) != Some(&BTreeSet::from([expected_tool.to_string()])) {
             return Err(format!(
@@ -548,6 +561,7 @@ mod tests {
             ("get_code_snippet", "qualified_name"),
             ("search_code", "pattern"),
             ("search_code", "pattern"),
+            ("get_code_snippet", "qualified_name"),
         ]
         .map(|(tool, target_kind)| correlation_event(tool, target_kind))
         .join("\n");
