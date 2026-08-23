@@ -101,6 +101,12 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "A `Decision anchor` explicitly marks a bounded successful targeted",
         "select from that provider result, not unrelated discovery",
         "truncated or ambiguous output",
+        "Select the likely implementation identity returned by targeted search",
+        "trace from that implementation identity rather than an outer caller or wrapper",
+        "Provider-returned caller/callee identities from targeted and exact-source results",
+        "complete empty inbound trace settles that selected symbol's graph-caller relationship",
+        "do not manufacture caller evidence by rereading the traced symbol as its own caller",
+        "never repeat the denied tool/selector/evidence-kind tuple",
         "smallest semantic diff",
     ] {
         assert!(

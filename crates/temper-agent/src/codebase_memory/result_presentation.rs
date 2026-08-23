@@ -2,7 +2,7 @@ use super::MAX_CODEBASE_MEMORY_OUTPUT_BYTES;
 
 /// Model-visible guidance that is deliberately generic: it follows only a
 /// complete, bounded result and never carries provider arguments or fields.
-pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: This complete typed graph result is eligible for later-turn evidence. In a later model turn, select provider-returned symbols or source identities exactly for dependent refinement, trace, or source reads. Independent evidence reads may remain parallel.]";
+pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: This complete typed graph result is eligible for later-turn evidence. In a later model turn, select provider-returned symbols or source identities exactly for dependent refinement, trace, or source reads. For caller understanding, trace inbound from the likely implementation returned by targeted search, not from an outer caller or wrapper. Preserve typed caller/callee identities for later source reads. A complete empty inbound trace settles the selected symbol's graph-caller relationship; do not manufacture a caller by rereading that same symbol. Independent evidence reads may remain parallel.]";
 
 pub(super) struct PresentedResult {
     pub(super) text: String,

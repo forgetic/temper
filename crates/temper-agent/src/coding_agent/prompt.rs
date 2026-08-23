@@ -155,12 +155,19 @@ fn render_efficiency(prompt: &mut String, capability: Capability) {
              current-root result; select from that provider result, not unrelated discovery. It is \
              absent for failures, unavailable tools, and truncated or ambiguous output. Keep genuinely \
              independent discovery parallel; do not issue producer and consumer calls in the same turn \
-             or batch. Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused \
+             or batch. Select the likely implementation identity returned by targeted search before choosing \
+             dependent caller work. For inbound caller understanding, trace from that implementation identity \
+             rather than an outer caller or wrapper returned beside it. Provider-returned caller/callee identities \
+             from targeted and exact-source results are preferred later-turn caller/model selectors when the typed \
+             relationship satisfies the evidence gap. A complete empty inbound trace settles that selected symbol's \
+             graph-caller relationship; do not manufacture caller evidence by rereading the traced symbol as its own caller. \
+             Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused \
              behavioral tests, sufficient to justify the smallest semantic diff.\n\
              - Once closed decision-evidence recovery guidance lists compatible actions, treat that \
              list as the complete next-step menu for the selected active root. On the next model turn, \
              use only those tool/selector/evidence combinations, up to the remaining allowance, and \
-             fill selectors only from matching values already visible in that root's typed results. \
+             fill selectors only from matching values already visible in that root's typed results. After a local \
+             decision-evidence denial, follow only this compatible menu and never repeat the denied tool/selector/evidence-kind tuple. \
              Do not issue discovery searches, start or switch to an unrelated root, repeat a locally \
              denied graph call, or mutate. Independent root creation remains available during ordinary \
              discovery, but it is not recovery progress once this menu exists. If recovery is exhausted \

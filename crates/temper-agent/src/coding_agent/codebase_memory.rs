@@ -143,7 +143,15 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          current-root result; select from that provider result, not unrelated discovery. It is\n\
          absent for failures, unavailable tools, and truncated or ambiguous output. A generic decision-anchor\n\
          recovery message means a successful result was unconsumable: make a bounded later targeted\n\
-         correction or stop without a product. Failures and unavailable tools retain conventional\n\
+         correction or stop without a product. Select the likely implementation identity returned by\n\
+         targeted search before choosing dependent caller work. For inbound caller understanding, trace\n\
+         from that implementation identity rather than an outer caller or wrapper returned beside it.\n\
+         Provider-returned caller/callee identities from targeted and exact-source results are preferred\n\
+         later-turn caller/model selectors when the typed relationship satisfies the evidence gap. A\n\
+         complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
+         manufacture caller evidence by rereading the traced symbol as its own caller. After a local\n\
+         decision-evidence denial, follow only the compatible recovery menu and never repeat the denied\n\
+         tool/selector/evidence-kind tuple. Failures and unavailable tools retain conventional\n\
          discovery as the fallback. Keep genuinely independent discovery parallel. A call that\n\
          consumes the current result must be in a later model turn; later evidence calls whose\n\
          selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
@@ -329,6 +337,15 @@ for line in sys.stdin:
             "current-root result; select from that provider result, not unrelated discovery.",
             "absent for failures, unavailable tools, and truncated or ambiguous output.",
             "Keep genuinely independent discovery parallel",
+            "Select the likely implementation identity returned by",
+            "before choosing dependent caller work",
+            "from that implementation identity rather than an outer caller or wrapper",
+            "Provider-returned caller/callee identities from targeted and exact-source results",
+            "later-turn caller/model selectors",
+            "complete empty inbound trace settles that selected symbol's graph-caller relationship",
+            "manufacture caller evidence by rereading the traced symbol as its own caller",
+            "follow only the compatible recovery menu",
+            "tool/selector/evidence-kind tuple",
             "Do not mutate until consumed",
             "selected current-root implementation, its caller/model",
             "focused behavioral tests",

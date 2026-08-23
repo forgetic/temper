@@ -176,7 +176,7 @@ impl DecisionAnchorLineages {
 
 /// Extracts candidates only from the provider-neutral result representations
 /// exercised by the benchmark. Arbitrary nested JSON is deliberately ignored:
-/// only nested `results`, short symbols, caller lists, related-source
+/// only nested `results`, short symbols, caller/callee lists, related-source
 /// references, and source metadata may contribute selectors.
 fn provider_candidates(typed_parts: Option<&[McpToolResultPart]>) -> Option<BTreeSet<Candidate>> {
     let typed_parts = typed_parts?;
@@ -269,6 +269,7 @@ fn collect_result_record(
         match field.as_str() {
             "results" => collect_result(value, candidates)?,
             "callers" | "caller_list" | "callerList" | "caller_functions" | "callerFunctions"
+            | "callees" | "callee_list" | "calleeList" | "callee_functions" | "calleeFunctions"
             | "symbols" | "short_symbols" | "shortSymbols" => {
                 collect_reference_list_or_count(value, candidates)?
             }

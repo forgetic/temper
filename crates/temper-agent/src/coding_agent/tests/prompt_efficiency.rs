@@ -33,6 +33,15 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "select from that provider result, not unrelated discovery",
         "absent for failures, unavailable tools, and truncated or ambiguous output",
         "do not issue producer and consumer calls in the same turn or batch",
+        "Select the likely implementation identity returned by targeted search before choosing dependent caller work",
+        "trace from that implementation identity rather than an outer caller or wrapper",
+        "Provider-returned caller/callee identities from targeted and exact-source results",
+        "preferred later-turn caller/model selectors",
+        "complete empty inbound trace settles that selected symbol's graph-caller relationship",
+        "do not manufacture caller evidence by rereading the traced symbol as its own caller",
+        "After a local decision-evidence denial",
+        "follow only this compatible menu",
+        "never repeat the denied tool/selector/evidence-kind tuple",
         "Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused behavioral tests",
         "smallest semantic diff",
         "closed decision-evidence recovery guidance lists compatible actions",
@@ -147,6 +156,32 @@ fn coding_prompt_orders_graph_discovery_before_classifiable_shell_fallback() {
     assert!(graph_first < fallback);
     assert!(engineer.contains("make every command-list segment fully classifiable"));
     assert!(engineer.contains("after source selection; run them as separate calls"));
+}
+
+#[test]
+fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
+    let engineer = system_prompt(Capability::CodingWorkspace, &[]);
+    let selection = engineer
+        .find("Select the likely implementation identity returned by targeted search")
+        .expect("coding prompt selects the implementation root");
+    let trace = engineer
+        .find("trace from that implementation identity rather than an outer caller or wrapper")
+        .expect("coding prompt traces inbound from the implementation root");
+    let relationships = engineer
+        .find("Provider-returned caller/callee identities from targeted and exact-source results")
+        .expect("coding prompt consumes typed relationships");
+    let empty = engineer
+        .find(
+            "complete empty inbound trace settles that selected symbol's graph-caller relationship",
+        )
+        .expect("coding prompt treats an empty trace as complete evidence");
+    let denial = engineer
+        .find("never repeat the denied tool/selector/evidence-kind tuple")
+        .expect("coding prompt closes denied selector/evidence pairs");
+
+    assert!(selection < trace && trace < relationships && relationships < empty);
+    assert!(empty < denial);
+    assert!(engineer.contains("do not manufacture caller evidence by rereading the traced symbol"));
 }
 
 #[test]
