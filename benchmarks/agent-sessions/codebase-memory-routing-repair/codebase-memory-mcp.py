@@ -332,7 +332,7 @@ for line in sys.stdin:
                             "file_path": "tests/alias_retry.rs",
                         }
                     ]
-                else:
+                elif query == "aliased delivery retry worker affinity":
                     results = [
                         {
                             "qualified_name": "worker_slot",
@@ -347,6 +347,8 @@ for line in sys.stdin:
                             "file_path": "tests/public_api.rs",
                         },
                     ]
+                else:
+                    results = []
                 tool_result(
                     request_id,
                     json.dumps(
