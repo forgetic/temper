@@ -164,6 +164,12 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          `trace_path` call with relationship `calls`, direction `inbound`, and test inclusion enabled.\n\
          Read the exact provider-returned test with `get_code_snippet` / `qualified_name` /\n\
          `focused_test` in another later turn; traversal discovers a selector but is not source evidence.\n\
+         If that complete traversal returns no eligible test identity, and only then, the closed menu may\n\
+         list one same-root `search_graph` / `graph_query` fallback. Derive that query from the task's\n\
+         behavioral regression intent; never copy a fixture or test name from task text, source,\n\
+         diagnostics, or an independent root. Consume only the exact test returned by that fallback in\n\
+         one still-later focused-test source read. If traversal and fallback both return no eligible test,\n\
+         stop without a product instead of retrying either route.\n\
          After a local\n\
          decision-evidence denial, follow only the compatible recovery menu and never repeat the denied\n\
          tool/selector/evidence-kind tuple. Do not batch speculative snippets with a traversal, and do not\n\
@@ -382,6 +388,12 @@ for line in sys.stdin:
             "Read the exact provider-returned test with `get_code_snippet` / `qualified_name` /",
             "`focused_test` in another later turn",
             "traversal discovers a selector but is not source evidence",
+            "complete traversal returns no eligible test identity",
+            "one same-root `search_graph` / `graph_query` fallback",
+            "behavioral regression intent",
+            "never copy a fixture or test name from task text, source",
+            "exact test returned by that fallback",
+            "stop without a product instead of retrying either route",
             "follow only the compatible recovery menu",
             "tool/selector/evidence-kind tuple",
             "Do not batch speculative snippets with a traversal",

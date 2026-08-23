@@ -39,15 +39,16 @@ impl DecisionAnchorLineageRegistry {
 
 impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
     fn resolve(&self, tool_name: &str, arguments: &Value) -> LineageAdmissionOutcome {
-        self.lineages
+        let mut lineages = self
+            .lineages
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .resolve(tool_name, arguments)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        lineages.resolve(tool_name, arguments)
     }
 }
 
 impl DecisionAnchorLineages {
-    pub(crate) fn resolve(&self, tool_name: &str, input: &Value) -> LineageAdmissionOutcome {
+    pub(crate) fn resolve(&mut self, tool_name: &str, input: &Value) -> LineageAdmissionOutcome {
         use LineageAdmissionOutcome::{Eligible, Ineligible};
         use LineageAdmissionStatus::{
             AmbiguousSelector, BroadSelector, IncapableSelection, MalformedSelector,
@@ -78,13 +79,50 @@ impl DecisionAnchorLineages {
         }
         let (expected_field, target_kind) = match tool_kind {
             GraphCorrelationToolV1::SearchGraph => {
-                return Ineligible(
-                    if matches!(present[0], "query" | "name_pattern" | "qn_pattern") {
+                if present[0] != "query" {
+                    return Ineligible(if matches!(present[0], "name_pattern" | "qn_pattern") {
                         BroadSelector
                     } else {
                         IncapableSelection
-                    },
-                );
+                    });
+                }
+                let Some(query) = object.get("query").and_then(Value::as_str) else {
+                    return Ineligible(MalformedSelector);
+                };
+                let Some(query_digest) = GraphCorrelationV1::target_digest(query) else {
+                    return Ineligible(MalformedSelector);
+                };
+                let mut roots = self
+                    .focused_test_recovery
+                    .iter()
+                    .filter_map(|(root, state)| {
+                        (*state == super::FocusedTestRecoveryState::TraversalReturnedEmpty)
+                            .then_some(root.clone())
+                    });
+                let Some(root_binding) = roots.next() else {
+                    return Ineligible(BroadSelector);
+                };
+                if roots.next().is_some() {
+                    return Ineligible(AmbiguousSelector);
+                }
+                match self.semantic_fallback_queries.get(&query_digest) {
+                    Some(Some(existing)) if existing != &root_binding => {
+                        self.semantic_fallback_queries.insert(query_digest, None);
+                        return Ineligible(AmbiguousSelector);
+                    }
+                    Some(None) => return Ineligible(AmbiguousSelector),
+                    Some(Some(_)) => {}
+                    None => {
+                        self.semantic_fallback_queries
+                            .insert(query_digest, Some(root_binding.clone()));
+                    }
+                }
+                return EligibleLineageAdmission::focused_test_semantic_fallback(
+                    root_binding,
+                    temper_protocol_activity::DecisionAnchorTargetKindV1::GraphQuery,
+                )
+                .map(Eligible)
+                .unwrap_or(Ineligible(IncapableSelection));
             }
             GraphCorrelationToolV1::SearchCode => {
                 ("pattern", GraphCorrelationTargetKindV1::Pattern)

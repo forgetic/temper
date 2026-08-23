@@ -533,7 +533,7 @@ fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
     ));
     assert!(message_containing(
         &recovery_requests,
-        "next: exact later-turn typed-result selectors only"
+        "next: typed-result selectors except one listed task-semantic query"
     ));
     assert!(message_containing(
         &recovery_requests,
@@ -541,7 +541,7 @@ fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
     ));
     assert!(message_containing(
         &recovery_requests,
-        "no search, root switch, speculative snippet batch, denied retry, or mutation"
+        "no other search, root switch, retry, or mutation"
     ));
     assert!(!message_containing(
         &recovery_requests,

@@ -491,6 +491,7 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
         result_target_kinds: vec![DecisionAnchorTargetKindV1::Pattern],
         canonical_target_digests: vec![GraphCorrelationV1::target_digest("forged-root").unwrap()],
         decision_evidence_kind: None,
+        focused_test_discovery: None,
     });
     assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
     event.event.sanitize_graph_correlation();

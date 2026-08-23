@@ -8,6 +8,7 @@ impl Anchor {
         if output.tool == GraphCorrelationToolV1::TracePath {
             evidence.record_trace(call.turn);
         }
+        evidence.record_focused_test_discovery(output.tool, output.lineage.focused_test_discovery);
         Self {
             produced_turn: call.turn,
             produced_order: call.order,
@@ -21,7 +22,8 @@ impl Anchor {
     }
 
     pub(super) fn supports(&self, action: GraphRecoveryActionV1) -> bool {
-        self.result_target_kinds.contains(&action.selector_kind)
+        action == GraphRecoveryActionV1::focused_test_semantic_fallback()
+            || self.result_target_kinds.contains(&action.selector_kind)
     }
 
     pub(super) fn accepts(
@@ -29,7 +31,11 @@ impl Anchor {
         call: &PendingCodebaseCall,
         lineage: &DecisionAnchorLineageV1,
     ) -> bool {
-        call.turn > self.produced_turn && self.result_target_kinds.contains(&lineage.target_kind)
+        call.turn > self.produced_turn
+            && (self.result_target_kinds.contains(&lineage.target_kind)
+                || (call.recovery_gap
+                    == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
+                    && lineage.target_kind == DecisionAnchorTargetKindV1::GraphQuery))
     }
 }
 

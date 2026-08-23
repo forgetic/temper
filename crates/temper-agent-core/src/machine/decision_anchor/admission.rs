@@ -51,6 +51,7 @@ impl DecisionAnchorState {
         debug_assert_eq!(calls.len(), admissions.len());
         let snapshot = self.recovery_admission_snapshot();
         let mut selected = BTreeSet::new();
+        let mut admitted_actions = Vec::new();
         let mut admitted_count = 0u8;
         let mut denials = Vec::with_capacity(calls.len());
 
@@ -113,6 +114,9 @@ impl DecisionAnchorState {
                     if admissible {
                         let gap = recovery_gap.expect("admissible recovery has a purpose");
                         selected.insert(gap);
+                        admitted_actions.push(
+                            recovery_action.expect("admissible recovery has a closed action"),
+                        );
                         admitted_count = admitted_count.saturating_add(1);
                     } else {
                         denial = Some(snapshot.as_ref().map_or_else(
@@ -145,6 +149,16 @@ impl DecisionAnchorState {
         if admitted_count > 0 {
             if let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.as_mut() {
                 recovery.remaining = recovery.remaining.saturating_sub(admitted_count);
+                if let Some(active) = recovery.anchors.roots.get_mut(&recovery.active_root) {
+                    for action in admitted_actions {
+                        if action == GraphRecoveryActionV1::focused_test_traversal() {
+                            active.evidence.record_focused_test_traversal(turn);
+                        } else if action == GraphRecoveryActionV1::focused_test_semantic_fallback()
+                        {
+                            active.evidence.record_focused_test_fallback(turn);
+                        }
+                    }
+                }
             }
         }
         denials
@@ -205,7 +219,15 @@ impl DecisionGap {
         admission: &EligibleLineageAdmission,
     ) -> Option<GraphRecoveryActionV1> {
         if admission.recovery_purpose() == Some(DecisionEvidenceKindV1::FocusedTest) {
-            return Some(GraphRecoveryActionV1::focused_test_traversal());
+            return match admission.tool_kind() {
+                GraphCorrelationToolV1::TracePath => {
+                    Some(GraphRecoveryActionV1::focused_test_traversal())
+                }
+                GraphCorrelationToolV1::SearchGraph => {
+                    Some(GraphRecoveryActionV1::focused_test_semantic_fallback())
+                }
+                GraphCorrelationToolV1::SearchCode | GraphCorrelationToolV1::GetCodeSnippet => None,
+            };
         }
         DecisionGap::from_admission(admission)
             .map(|gap| GraphRecoveryActionV1::for_evidence(gap.recovery_kind()))
