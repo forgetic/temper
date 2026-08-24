@@ -5,8 +5,11 @@ use super::*;
 impl Anchor {
     fn from_output(call: &PendingCodebaseCall, output: &AnchorOutput) -> Self {
         let mut evidence = SourceEvidence::default();
-        if output.tool == GraphCorrelationToolV1::TracePath {
+        if output.tool == GraphCorrelationToolV1::TracePath
+            && output.lineage.caller_discovery.is_some()
+        {
             evidence.record_trace(call.turn);
+            evidence.record_caller_discovery(output.lineage.caller_discovery);
         }
         evidence.record_focused_test_discovery(output.tool, output.lineage.focused_test_discovery);
         Self {
@@ -174,8 +177,14 @@ impl AnchorForest {
     /// wrapper-independent stable call order which first produced that root.
     pub(super) fn recovery_root_binding(&self) -> Option<String> {
         self.ranked_roots()
-            .find(|(_, root)| !root.evidence.compatible_actions(root).is_empty())
+            .next()
+            .filter(|(_, root)| !root.evidence.compatible_actions(root).is_empty())
             .map(|(binding, _)| binding.clone())
+    }
+
+    pub(super) fn active_has_compatible_actions(&self) -> bool {
+        self.active_root()
+            .is_some_and(|(_, root)| !root.evidence.compatible_actions(root).is_empty())
     }
 
     pub(super) fn expected_for_call(

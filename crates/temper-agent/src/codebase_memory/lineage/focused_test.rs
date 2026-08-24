@@ -7,11 +7,14 @@ use temper_protocol_activity::FocusedTestDiscoveryOutcomeV1;
 pub(super) enum FocusedTestRecoveryState {
     TraversalReturnedEligible,
     TraversalReturnedEmpty,
+    FallbackPending,
     FallbackCompleted,
 }
 
 #[derive(Clone, Copy)]
 pub(super) enum SelectorOrigin {
+    ImplementationEvidenceResult,
+    CallerTraversalResult,
     CallerEvidenceResult,
     FocusedTestResult,
 }
@@ -29,12 +32,15 @@ pub(super) fn focused_test_discovery(
     is_fallback: bool,
     typed_parts: Option<&[McpToolResultPart]>,
 ) -> FocusedTestDiscovery {
-    let candidates = provider_focused_test_candidates(typed_parts);
+    let focused_candidates = provider_focused_test_candidates(typed_parts);
     let is_traversal = correlation.tool == GraphCorrelationToolV1::TracePath
         && input.get("mode").and_then(Value::as_str) == Some("calls")
         && input.get("direction").and_then(Value::as_str) == Some("inbound")
         && input.get("include_tests").and_then(Value::as_bool) == Some(true)
         && caller_evidence_result;
+    let candidates = (is_traversal || is_fallback)
+        .then_some(focused_candidates)
+        .flatten();
     let outcome = if correlation.tool == GraphCorrelationToolV1::SearchGraph && !is_fallback {
         provider_candidates(typed_parts).map(|candidates| {
             if candidates.is_empty() {
@@ -80,6 +86,10 @@ impl DecisionAnchorLineages {
                 continue;
             }
             match origin {
+                SelectorOrigin::ImplementationEvidenceResult => {
+                    binding.implementation_evidence_result = true
+                }
+                SelectorOrigin::CallerTraversalResult => binding.caller_traversal_result = true,
                 SelectorOrigin::CallerEvidenceResult => binding.caller_evidence_result = true,
                 SelectorOrigin::FocusedTestResult => binding.focused_test_result = true,
             }

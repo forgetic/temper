@@ -147,13 +147,17 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          terms from the requested behavior and intended repair. If the work item also names an incidental\n\
          field, accessor, or symbol, begin with a task-semantic graph query that describes the behavior;\n\
          do not lead with a name pattern or identifier token. Narrow with identifiers returned by that\n\
-         semantic result only afterward. Among returned implementation candidates, favor the one whose\n\
-         result context matches the requested behavior, then use the shortest provider-derived refinement\n\
-         and implementation-to-caller chain needed for the decision. Consume the exact behaviorally relevant\n\
-         caller source; do not choose an outer wrapper or incidental caller merely because it can carry a\n\
-         caller evidence label.\n\
-         Provider-returned caller/callee identities from targeted and exact-source results are preferred\n\
-         later-turn caller/model selectors when the typed relationship satisfies the evidence gap. A\n\
+         semantic result only afterward. An implementation-purpose result may over-return caller- or\n\
+         test-shaped candidates. Reuse its exact implementation candidate, but never credit those later\n\
+         evidence kinds through direct source reads. Consume the selected implementation source first;\n\
+         only then traverse inbound calls from that exact implementation in a later turn. Admit caller\n\
+         source only from an exact identity returned by that traversal. Among returned implementation\n\
+         candidates, favor the one whose result context matches the requested behavior, then use the\n\
+         shortest provider-derived refinement needed for the decision. Consume the exact behaviorally\n\
+         relevant caller source; do not choose an outer wrapper or incidental caller merely because it can\n\
+         carry a caller evidence label.\n\
+         Only the selected-implementation traversal's provider-returned caller identities are eligible\n\
+         later-turn caller/model selectors. A\n\
          complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
          manufacture caller evidence by rereading the traced symbol as its own caller. During ordinary\n\
          discovery, search the graph for the requested behavioral regression before broad or\n\
@@ -370,12 +374,17 @@ for line in sys.stdin:
             "do not lead with a name pattern or identifier token",
             "Narrow with identifiers returned by that",
             "semantic result only afterward",
+            "implementation-purpose result may over-return caller- or",
+            "never credit those later",
+            "Consume the selected implementation source first",
+            "traverse inbound calls from that exact implementation in a later turn",
+            "Admit caller",
+            "source only from an exact identity returned by that traversal",
             "shortest provider-derived refinement",
-            "implementation-to-caller chain",
-            "exact behaviorally relevant",
-            "incidental caller merely because it can carry a",
-            "caller evidence label",
-            "Provider-returned caller/callee identities from targeted and exact-source results",
+            "relevant caller source",
+            "outer wrapper or incidental caller merely because it can",
+            "carry a caller evidence label",
+            "Only the selected-implementation traversal's provider-returned caller identities",
             "later-turn caller/model selectors",
             "complete empty inbound trace settles that selected symbol's graph-caller relationship",
             "manufacture caller evidence by rereading the traced symbol as its own caller",

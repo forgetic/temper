@@ -91,6 +91,14 @@ pub enum DecisionEvidenceKindV1 {
     FocusedTest,
 }
 
+/// Typed outcome of the implementation-to-caller traversal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallerDiscoveryOutcomeV1 {
+    EligibleSelectorReturned,
+    NoEligibleSelector,
+}
+
 /// Typed outcome of a provider call intended to discover a focused test.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,6 +131,9 @@ pub struct DecisionAnchorLineageV1 {
     /// Explicit semantic purpose supplied to an eligible trusted source wrapper.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_evidence_kind: Option<DecisionEvidenceKindV1>,
+    /// Closed aggregate result of the selected implementation's caller traversal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_discovery: Option<CallerDiscoveryOutcomeV1>,
     /// Closed aggregate result of focused-test selector discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_test_discovery: Option<FocusedTestDiscoveryOutcomeV1>,
@@ -213,6 +224,29 @@ impl DecisionAnchorLineageV1 {
         decision_evidence_kind: Option<DecisionEvidenceKindV1>,
         focused_test_discovery: Option<FocusedTestDiscoveryOutcomeV1>,
     ) -> Option<Self> {
+        Self::new_with_route_metadata(
+            root_binding,
+            stage,
+            target_kind,
+            result_target_kinds,
+            canonical_target_digests,
+            decision_evidence_kind,
+            None,
+            focused_test_discovery,
+        )
+    }
+
+    /// Builds canonical lineage with closed staged-route metadata.
+    pub fn new_with_route_metadata(
+        root_binding: String,
+        stage: DecisionAnchorLineageStageV1,
+        target_kind: DecisionAnchorTargetKindV1,
+        result_target_kinds: impl IntoIterator<Item = DecisionAnchorTargetKindV1>,
+        canonical_target_digests: impl IntoIterator<Item = String>,
+        decision_evidence_kind: Option<DecisionEvidenceKindV1>,
+        caller_discovery: Option<CallerDiscoveryOutcomeV1>,
+        focused_test_discovery: Option<FocusedTestDiscoveryOutcomeV1>,
+    ) -> Option<Self> {
         let mut result_target_kinds = result_target_kinds.into_iter().collect::<Vec<_>>();
         result_target_kinds.sort();
         result_target_kinds.dedup();
@@ -231,6 +265,8 @@ impl DecisionAnchorLineageV1 {
                 .all(|digest| GraphCorrelationV1::is_valid_target_digest(digest))
             && (decision_evidence_kind.is_none()
                 || target_kind == DecisionAnchorTargetKindV1::QualifiedName)
+            && (caller_discovery.is_none()
+                || target_kind == DecisionAnchorTargetKindV1::FunctionName)
             && (focused_test_discovery.is_none()
                 || matches!(
                     target_kind,
@@ -245,6 +281,7 @@ impl DecisionAnchorLineageV1 {
             result_target_kinds,
             canonical_target_digests,
             decision_evidence_kind,
+            caller_discovery,
             focused_test_discovery,
         })
     }
@@ -276,6 +313,8 @@ impl DecisionAnchorLineageV1 {
                 .all(|pair| pair[0] < pair[1])
             && (self.decision_evidence_kind.is_none()
                 || self.target_kind == DecisionAnchorTargetKindV1::QualifiedName)
+            && (self.caller_discovery.is_none()
+                || self.target_kind == DecisionAnchorTargetKindV1::FunctionName)
             && (self.focused_test_discovery.is_none()
                 || matches!(
                     self.target_kind,

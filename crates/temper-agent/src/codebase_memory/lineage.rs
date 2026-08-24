@@ -8,9 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 use temper_protocol_activity::{
-    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
-    GraphCorrelationV1,
+    CallerDiscoveryOutcomeV1, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
+    DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphCorrelationTargetKindV1,
+    GraphCorrelationToolV1, GraphCorrelationV1,
 };
 use uuid::Uuid;
 
@@ -20,11 +20,13 @@ const MAX_RESULT_TARGETS: usize = 64;
 
 mod admission;
 mod focused_test;
+mod selection;
 
 pub(super) use admission::DecisionAnchorLineageRegistry;
 use focused_test::{
     FocusedTestDiscovery, FocusedTestRecoveryState, SelectorOrigin, focused_test_discovery,
 };
+use selection::provider_caller_candidates;
 
 #[derive(Default)]
 pub(super) struct DecisionAnchorLineages {
@@ -51,6 +53,8 @@ struct Candidate {
 struct SelectorBinding {
     root_binding: String,
     canonical_target_digests: BTreeSet<String>,
+    implementation_evidence_result: bool,
+    caller_traversal_result: bool,
     caller_evidence_result: bool,
     focused_test_result: bool,
 }
@@ -85,6 +89,19 @@ impl DecisionAnchorLineages {
         let selector_binding = self
             .selector_for_input(correlation.target_kind, input)
             .and_then(|selector| self.selectors.get(&selector).cloned().flatten());
+        let admitted_evidence_kind = decision_evidence_kind.filter(|kind| {
+            selector_binding.as_ref().is_some_and(|binding| match kind {
+                DecisionEvidenceKindV1::Implementation => {
+                    binding.implementation_evidence_result
+                        || !self.selectors.values().flatten().any(|candidate| {
+                            candidate.root_binding == binding.root_binding
+                                && candidate.implementation_evidence_result
+                        })
+                }
+                DecisionEvidenceKindV1::Caller => binding.caller_traversal_result,
+                DecisionEvidenceKindV1::FocusedTest => binding.focused_test_result,
+            })
+        });
         let fallback_root = (correlation.tool == GraphCorrelationToolV1::SearchGraph
             && correlation.target_kind == GraphCorrelationTargetKindV1::GraphQuery)
             .then(|| {
@@ -113,6 +130,31 @@ impl DecisionAnchorLineages {
             ),
         };
 
+        let is_caller_traversal = correlation.tool == GraphCorrelationToolV1::TracePath
+            && input
+                .get("direction")
+                .and_then(Value::as_str)
+                .is_none_or(|direction| direction == "inbound")
+            && input
+                .get("mode")
+                .and_then(Value::as_str)
+                .is_none_or(|mode| mode == "calls")
+            && input
+                .get("include_tests")
+                .and_then(Value::as_bool)
+                .is_none_or(|include| !include)
+            && selector_binding.is_some();
+        let caller_candidates = is_caller_traversal
+            .then(|| provider_caller_candidates(typed_parts))
+            .flatten();
+        let caller_discovery = caller_candidates.as_ref().map(|candidates| {
+            if candidates.is_empty() {
+                CallerDiscoveryOutcomeV1::NoEligibleSelector
+            } else {
+                CallerDiscoveryOutcomeV1::EligibleSelectorReturned
+            }
+        });
+
         let FocusedTestDiscovery {
             candidates: focused_tests,
             outcome: focused_test_discovery,
@@ -130,21 +172,37 @@ impl DecisionAnchorLineages {
         let result_target_kinds = match provider_candidates(typed_parts) {
             Some(candidates) => {
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
-                self.register(&root_binding, candidates.clone())?;
+                self.register(&root_binding, candidates)?;
                 if correlation.tool == GraphCorrelationToolV1::SearchGraph
                     && fallback_root.is_none()
                 {
                     self.mark_candidates(
                         &root_binding,
-                        candidates.clone(),
+                        provider_candidates(typed_parts)?,
                         SelectorOrigin::FocusedTestResult,
                     )?;
                 }
-                if decision_evidence_kind == Some(DecisionEvidenceKindV1::Caller) {
+                if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Implementation) {
+                    self.mark_input_selector(
+                        correlation.target_kind,
+                        input,
+                        &root_binding,
+                        SelectorOrigin::ImplementationEvidenceResult,
+                    )?;
+                }
+                if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Caller) {
+                    self.mark_input_selector(
+                        correlation.target_kind,
+                        input,
+                        &root_binding,
+                        SelectorOrigin::CallerEvidenceResult,
+                    )?;
+                }
+                if let Some(callers) = caller_candidates {
                     self.mark_candidates(
                         &root_binding,
-                        candidates,
-                        SelectorOrigin::CallerEvidenceResult,
+                        callers,
+                        SelectorOrigin::CallerTraversalResult,
                     )?;
                 }
                 if let Some(focused_tests) = focused_tests {
@@ -164,79 +222,16 @@ impl DecisionAnchorLineages {
             fallback_root.is_some(),
             focused_test_discovery,
         );
-        DecisionAnchorLineageV1::new_with_metadata(
+        DecisionAnchorLineageV1::new_with_route_metadata(
             root_binding,
             stage,
             target_kind,
             result_target_kinds,
             canonical_target_digests,
-            decision_evidence_kind,
+            admitted_evidence_kind,
+            caller_discovery,
             focused_test_discovery,
         )
-    }
-
-    fn selector_for_input(
-        &self,
-        target_kind: GraphCorrelationTargetKindV1,
-        input: &Value,
-    ) -> Option<Selector> {
-        let selector_kind = DecisionAnchorTargetKindV1::from_graph_correlation(target_kind);
-        let value = match target_kind {
-            GraphCorrelationTargetKindV1::FunctionName => input
-                .get("function_name")
-                .and_then(Value::as_str)
-                .and_then(canonical_function_name),
-            GraphCorrelationTargetKindV1::QualifiedName => input
-                .get("qualified_name")
-                .and_then(Value::as_str)
-                .and_then(|value| {
-                    canonical_qualified_name(value).or_else(|| canonical_function_name(value))
-                }),
-            GraphCorrelationTargetKindV1::Pattern => input
-                .get("pattern")
-                .and_then(Value::as_str)
-                .and_then(|value| {
-                    canonical_qualified_name(value).or_else(|| canonical_function_name(value))
-                }),
-            GraphCorrelationTargetKindV1::GraphQuery
-            | GraphCorrelationTargetKindV1::NamePattern
-            | GraphCorrelationTargetKindV1::QualifiedNamePattern => None,
-        }?;
-        Some(Selector {
-            kind: selector_kind,
-            value,
-        })
-    }
-
-    fn register(&mut self, root: &str, candidates: BTreeSet<Candidate>) -> Option<()> {
-        for candidate in candidates {
-            let canonical_target_digests = canonical_target_digests(&candidate.value)?;
-            let selector = Selector {
-                kind: candidate.kind,
-                value: candidate.value,
-            };
-            match self.selectors.get(&selector) {
-                None => {
-                    self.selectors.insert(
-                        selector,
-                        Some(SelectorBinding {
-                            root_binding: root.to_string(),
-                            canonical_target_digests,
-                            caller_evidence_result: false,
-                            focused_test_result: false,
-                        }),
-                    );
-                }
-                Some(Some(existing))
-                    if existing.root_binding == root
-                        && existing.canonical_target_digests == canonical_target_digests => {}
-                Some(Some(_)) => {
-                    self.selectors.insert(selector, None);
-                }
-                Some(None) => {}
-            }
-        }
-        Some(())
     }
 }
 

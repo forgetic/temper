@@ -65,16 +65,16 @@ fn jig_routes_empty_inbound_trace_and_exact_source_relationships() {
         tool_names(&calls),
         [
             "search_code",
-            "trace_path",
             "get_code_snippet",
+            "trace_path",
             "get_code_snippet",
             "trace_path",
             "get_code_snippet",
         ]
     );
-    assert_eq!(calls[1]["arguments"]["function_name"], IMPLEMENTATION);
-    assert_eq!(calls[1]["arguments"]["direction"], "inbound");
-    assert_eq!(calls[2]["arguments"]["qualified_name"], IMPLEMENTATION);
+    assert_eq!(calls[1]["arguments"]["qualified_name"], IMPLEMENTATION);
+    assert_eq!(calls[2]["arguments"]["function_name"], IMPLEMENTATION);
+    assert_eq!(calls[2]["arguments"]["direction"], "inbound");
     assert_eq!(calls[3]["arguments"]["qualified_name"], CALLER);
     assert_eq!(calls[4]["arguments"]["function_name"], CALLER);
     assert_eq!(calls[4]["arguments"]["mode"], "calls");
@@ -160,15 +160,12 @@ fn jig_does_not_repeat_a_locally_denied_selector_evidence_pair() {
 fn minimal_routing_reply(view: &RequestView) -> Reply {
     match view.prior_tool_results {
         0 => search_reply("discover-likely-implementation"),
-        1 => trace_reply("trace-likely-implementation", implementation_target(view)),
-        2 => {
-            assert_empty_inbound_trace(view);
-            source_reply(
-                "read-selected-implementation",
-                implementation_target(view),
-                "implementation",
-            )
-        }
+        1 => source_reply(
+            "read-selected-implementation",
+            implementation_target(view),
+            "implementation",
+        ),
+        2 => trace_reply("trace-selected-implementation", implementation_target(view)),
         3 => source_reply("read-returned-caller", caller_relationship(view), "caller"),
         4 => test_trace_reply("find-focused-test-from-caller", caller_relationship(view)),
         5 => source_reply(
@@ -194,15 +191,12 @@ fn minimal_routing_reply(view: &RequestView) -> Reply {
 fn recovery_routing_reply(view: &RequestView) -> Reply {
     match view.prior_tool_results {
         0 => search_reply("discover-recovery-implementation"),
-        1 => trace_reply("trace-recovery-implementation", implementation_target(view)),
-        2 => {
-            assert_empty_inbound_trace(view);
-            source_reply(
-                "read-recovery-implementation",
-                implementation_target(view),
-                "implementation",
-            )
-        }
+        1 => source_reply(
+            "read-recovery-implementation",
+            implementation_target(view),
+            "implementation",
+        ),
+        2 => trace_reply("trace-recovery-implementation", implementation_target(view)),
         3 => refinement_reply(
             "non-progressing-refinement-one",
             implementation_target(view),
@@ -373,7 +367,12 @@ fn implementation_target(view: &RequestView) -> String {
 fn caller_relationship(view: &RequestView) -> String {
     provider_results(view)
         .into_iter()
-        .find(|result| result.get("source").is_some() && result.get("callers").is_some())
+        .find(|result| {
+            result
+                .pointer("/function/qualified_name")
+                .and_then(JsonValue::as_str)
+                == Some(IMPLEMENTATION)
+        })
         .and_then(|result| {
             result
                 .pointer("/callers/0/qualified_name")
@@ -394,16 +393,6 @@ fn focused_test_relationship(view: &RequestView) -> String {
                 .map(str::to_string)
         })
         .expect("test-inclusive caller traversal returned a focused test")
-}
-
-fn assert_empty_inbound_trace(view: &RequestView) {
-    let trace = provider_results(view)
-        .into_iter()
-        .find(|result| result.get("direction").is_some())
-        .expect("inbound trace result");
-    assert_eq!(trace["direction"], "inbound");
-    assert_eq!(trace["complete"], true);
-    assert_eq!(trace["callers"], serde_json::json!([]));
 }
 
 fn provider_results(view: &RequestView) -> Vec<JsonValue> {
@@ -561,7 +550,7 @@ for line in sys.stdin:
             result(request["id"], {"project": arguments.get("project", ""), "status": "fresh"})
         elif name == "search_graph":
             if arguments.get("query") == "renamed job replay shard ownership":
-                result(request["id"], {"results": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}, {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "is_test": True}]})
+                result(request["id"], {"results": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}, {"qualified_name": SEMANTIC_CALLER, "name": "route_renamed_job"}, {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "is_test": True}]})
             elif arguments.get("query") == "renamed replay shard ownership regression":
                 result(request["id"], {"results": [{"qualified_name": SEMANTIC_FOCUSED_TEST, "name": "renamed_replay_preserves_shard_ownership", "is_test": True}]})
             elif arguments.get("query") == "request affinity remains stable across worker selection":
@@ -583,7 +572,7 @@ for line in sys.stdin:
             assert arguments.get("direction") == "inbound"
             if selected == IMPLEMENTATION:
                 assert not arguments.get("include_tests", False)
-                result(request["id"], {"function": {"qualified_name": IMPLEMENTATION, "name": "select_worker"}, "direction": "inbound", "complete": True, "callers": []})
+                result(request["id"], {"function": {"qualified_name": IMPLEMENTATION, "name": "select_worker"}, "direction": "inbound", "complete": True, "callers": [{"qualified_name": CALLER, "name": "dispatch"}]})
             elif selected == CALLER:
                 assert arguments.get("mode") == "calls"
                 assert arguments.get("include_tests") is True
@@ -592,7 +581,12 @@ for line in sys.stdin:
                 else:
                     result(request["id"], {"function": {"qualified_name": CALLER, "name": "dispatch"}, "mode": "calls", "direction": "inbound", "include_tests": True, "complete": True, "callers": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "is_test": True}]})
             elif selected == SEMANTIC_IMPLEMENTATION:
+                assert not arguments.get("include_tests", False)
                 result(request["id"], {"function": {"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}, "direction": "inbound", "complete": True, "callers": [{"qualified_name": SEMANTIC_CALLER, "name": "route_renamed_job"}]})
+            elif selected == SEMANTIC_CALLER:
+                assert arguments.get("mode") == "calls"
+                assert arguments.get("include_tests") is True
+                result(request["id"], {"function": {"qualified_name": SEMANTIC_CALLER, "name": "route_renamed_job"}, "mode": "calls", "direction": "inbound", "include_tests": True, "complete": True, "callers": []})
             else:
                 raise AssertionError("unexpected trace selector " + str(selected))
         elif name == "get_code_snippet":

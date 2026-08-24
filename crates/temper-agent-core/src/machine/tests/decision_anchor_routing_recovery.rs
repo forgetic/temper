@@ -4,99 +4,56 @@ use super::*;
 use crate::{EligibleLineageAdmission, LineageAdmissionOutcome, LineageAdmissionStatus};
 
 #[test]
-fn caller_source_after_cross_root_focused_test_keeps_active_root_incomplete() {
+fn cross_root_focused_test_cannot_complete_the_staged_implementation_root() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-    state.on_tool_dispatched(&call("routing-root", "codebase_memory_search_graph"), 0);
-    state.on_tool_dispatched(&call("test-root", "codebase_memory_search_graph"), 0);
-    let routing_root = output(
-        "codebase_memory_search_graph",
-        ROOT,
-        DecisionAnchorLineageStageV1::Root,
-    );
-    let test_root = output(
-        "codebase_memory_search_graph",
-        OTHER_ROOT,
-        DecisionAnchorLineageStageV1::Root,
-    );
-    assert_eq!(
-        state.on_tool_batch_finished(&[
-            (
-                "routing-root",
-                "codebase_memory_search_graph",
-                &routing_root,
-            ),
-            ("test-root", "codebase_memory_search_graph", &test_root),
-        ]),
-        DecisionAnchorTransition::Unchanged,
-    );
-
-    state.on_tool_dispatched(&call("implementation", "codebase_memory_search_code"), 1);
-    state.on_tool_dispatched(&call("caller-trace", "codebase_memory_trace_path"), 1);
+    for (id, root) in [("routing-root", ROOT), ("test-root", OTHER_ROOT)] {
+        state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), 0);
+        finish(
+            &mut state,
+            id,
+            "codebase_memory_search_graph",
+            root,
+            DecisionAnchorLineageStageV1::Root,
+        );
+    }
     state.on_tool_dispatched(
-        &source_call("focused-test", DecisionEvidenceKindV1::FocusedTest),
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
         1,
     );
-    let implementation = output(
-        "codebase_memory_search_code",
+    finish_with_evidence(
+        &mut state,
+        "implementation",
         ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Implementation,
     );
-    let caller_trace = output(
+    state.on_tool_dispatched(&call("caller-trace", "codebase_memory_trace_path"), 2);
+    finish(
+        &mut state,
+        "caller-trace",
         "codebase_memory_trace_path",
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
     );
-    let focused_test = output_with_evidence(
+    state.on_tool_dispatched(
+        &source_call("cross-test", DecisionEvidenceKindV1::FocusedTest),
+        3,
+    );
+    finish_with_evidence(
+        &mut state,
+        "cross-test",
         OTHER_ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
         DecisionEvidenceKindV1::FocusedTest,
     );
-    assert_eq!(
-        state.on_tool_batch_finished(&[
-            (
-                "implementation",
-                "codebase_memory_search_code",
-                &implementation,
-            ),
-            (
-                "caller-trace",
-                "codebase_memory_trace_path",
-                &caller_trace,
-            ),
-            (
-                "focused-test",
-                "codebase_memory_get_code_snippet",
-                &focused_test,
-            ),
-        ]),
-        DecisionAnchorTransition::Unchanged,
-    );
-    assert!(state.blocks_mutation("write"));
-
-    state.on_tool_dispatched(&call("duplicate", "codebase_memory_search_code"), 2);
-    assert_eq!(
-        state.on_tool_finished(
-            "duplicate",
-            "codebase_memory_search_code",
-            &implementation,
-        ),
-        DecisionAnchorTransition::Unchanged,
-    );
-    assert!(state.blocks_mutation("write"));
-
-    state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 3);
+    state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 4);
     assert_eq!(
         finish_with_evidence(&mut state, "caller", ROOT, DecisionEvidenceKindV1::Caller),
         DecisionAnchorTransition::Unchanged,
     );
-    assert!(
-        state.blocks_mutation("write"),
-        "the sibling root's focused-test result cannot complete routing-root evidence"
-    );
+    assert!(state.blocks_mutation("write"));
 
     state.on_tool_dispatched(
         &source_call("routing-test", DecisionEvidenceKindV1::FocusedTest),
-        4,
+        5,
     );
     assert_eq!(
         finish_with_evidence(
@@ -107,12 +64,7 @@ fn caller_source_after_cross_root_focused_test_keeps_active_root_incomplete() {
         ),
         DecisionAnchorTransition::Converged,
     );
-    assert!(!state.blocks_mutation("write"));
-    assert_eq!(
-        state.on_tool_dispatched(&call("closed", "codebase_memory_search_graph"), 5),
-        completed_graph_denial(),
-    );
-    assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 5), None);
+    assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 6), None);
 }
 
 #[test]
@@ -334,6 +286,120 @@ fn empty_traversal_and_empty_fallback_exhaust_without_retry_path() {
     );
 }
 
+#[test]
+fn multi_root_over_returned_candidates_recover_on_the_selected_root() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("routing-root", "codebase_memory_search_graph"), 0);
+    state.on_tool_dispatched(&call("behavior-root", "codebase_memory_search_graph"), 0);
+    let routing = output_with_focused_test_discovery(
+        "codebase_memory_search_graph",
+        ROOT,
+        DecisionAnchorLineageStageV1::Root,
+        FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
+    );
+    let behavior = output_with_focused_test_discovery(
+        "codebase_memory_search_graph",
+        OTHER_ROOT,
+        DecisionAnchorLineageStageV1::Root,
+        FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
+    );
+    assert_eq!(
+        state.on_tool_batch_finished(&[
+            ("routing-root", "codebase_memory_search_graph", &routing),
+            ("behavior-root", "codebase_memory_search_graph", &behavior),
+        ]),
+        DecisionAnchorTransition::Unchanged,
+    );
+
+    for (turn, id, expected) in [
+        (1, "sibling-source-one", DecisionAnchorTransition::Unchanged),
+        (
+            2,
+            "sibling-source-two",
+            DecisionAnchorTransition::GapRecoveryNeeded,
+        ),
+    ] {
+        state.on_tool_dispatched(
+            &source_call(id, DecisionEvidenceKindV1::FocusedTest),
+            turn,
+        );
+        assert_eq!(
+            finish_with_evidence(
+                &mut state,
+                id,
+                OTHER_ROOT,
+                DecisionEvidenceKindV1::FocusedTest,
+            ),
+            expected,
+        );
+    }
+    assert!(state.blocks_mutation("write"));
+    assert_eq!(
+        state.recovery_details().unwrap().compatible_actions,
+        [GraphRecoveryActionV1::for_evidence(
+            GraphRecoveryEvidenceKindV1::Trace,
+        )],
+    );
+
+    state.on_tool_dispatched(&call("selected-trace", "codebase_memory_trace_path"), 3);
+    assert_eq!(
+        state.on_tool_finished(
+            "selected-trace",
+            "codebase_memory_trace_path",
+            &output_with_caller_discovery(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
+            ),
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+
+    for (id, kind) in [
+        ("implementation", DecisionEvidenceKindV1::Implementation),
+        ("caller", DecisionEvidenceKindV1::Caller),
+        ("focused-test", DecisionEvidenceKindV1::FocusedTest),
+    ] {
+        assert_eq!(
+            state.on_tool_dispatched(&source_call(id, kind), 4),
+            None,
+            "{id} must be admitted from the immutable post-trace snapshot",
+        );
+    }
+    let implementation = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    let caller = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Caller,
+    );
+    let focused_test = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::FocusedTest,
+    );
+    assert_eq!(
+        state.on_tool_batch_finished(&[
+            (
+                "implementation",
+                "codebase_memory_get_code_snippet",
+                &implementation,
+            ),
+            ("caller", "codebase_memory_get_code_snippet", &caller),
+            (
+                "focused-test",
+                "codebase_memory_get_code_snippet",
+                &focused_test,
+            ),
+        ]),
+        DecisionAnchorTransition::Converged,
+    );
+    assert!(!state.blocks_mutation("write"));
+}
+
 fn focused_test_recovery_state() -> DecisionAnchorState {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
@@ -347,7 +413,17 @@ fn focused_test_recovery_state() -> DecisionAnchorState {
             FocusedTestDiscoveryOutcomeV1::NoEligibleSelector,
         ),
     );
-    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    finish_with_evidence(
+        &mut state,
+        "implementation",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 2);
     finish(
         &mut state,
         "trace",
@@ -355,13 +431,13 @@ fn focused_test_recovery_state() -> DecisionAnchorState {
         ROOT,
         DecisionAnchorLineageStageV1::CarryForward,
     );
-    for (turn, id, kind) in [
-        (2, "implementation", DecisionEvidenceKindV1::Implementation),
-        (3, "caller", DecisionEvidenceKindV1::Caller),
-    ] {
-        state.on_tool_dispatched(&source_call(id, kind), turn);
-        finish_with_evidence(&mut state, id, ROOT, kind);
-    }
+    state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 3);
+    finish_with_evidence(
+        &mut state,
+        "caller",
+        ROOT,
+        DecisionEvidenceKindV1::Caller,
+    );
     for (turn, id, expected) in [
         (4, "broad-one", DecisionAnchorTransition::Unchanged),
         (5, "broad-two", DecisionAnchorTransition::GapRecoveryNeeded),

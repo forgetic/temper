@@ -5,7 +5,7 @@ import uuid
 TOOLS = [
     {"name": "search_graph", "description": "Targeted graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
     {"name": "search_code", "description": "Targeted code search", "inputSchema": {"type": "object", "properties": {"pattern": {"type": "string"}, "project": {"type": "string"}, "force_unavailable": {"type": "boolean"}}, "required": ["pattern"]}},
-    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["function_name"]}},
+    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path", "name"]}},
@@ -14,7 +14,7 @@ TOOLS = [
 def opaque():
     return "crate::opaque_" + uuid.uuid4().hex
 
-targets = {name: opaque() for name in ["root", "refinement", "trace", "implementation", "behavior"]}
+targets = {name: opaque() for name in ["root", "refinement", "implementation", "caller", "behavior"]}
 
 def send(value):
     sys.stdout.write(json.dumps(value) + "\n")
@@ -41,20 +41,33 @@ def response(name, args):
             qualified_name=targets["refinement"],
         )
     if name == "search_code":
-        next = targets["trace"] if args.get("pattern") == targets["refinement"] else opaque()
+        next = targets["implementation"] if args.get("pattern") == targets["refinement"] else opaque()
         return result(next=next, qualified_name=next)
+    if name == "trace_path" and args.get("function_name") == targets["implementation"]:
+        return {
+            "function": {"qualified_name": targets["implementation"]},
+            "callers": [{"qualified_name": targets["caller"]}],
+            "results": [{"next": targets["caller"], "qualified_name": targets["caller"]}],
+        }
+    if name == "trace_path" and args.get("function_name") == targets["caller"] and args.get("include_tests") is True:
+        return {
+            "function": {"qualified_name": targets["caller"]},
+            "callers": [{"qualified_name": targets["behavior"], "is_test": True}],
+            "results": [{"next": targets["behavior"], "qualified_name": targets["behavior"], "is_test": True}],
+        }
     if name == "trace_path":
-        next = targets["implementation"] if args.get("function_name") == targets["trace"] else opaque()
-        return result(
-            next=next,
-            qualified_name=next,
-            caller_model=opaque() if args.get("function_name") == targets["trace"] else None,
-        )
+        return result(next=opaque(), qualified_name=opaque())
     if name == "get_code_snippet" and args.get("qualified_name") == targets["implementation"]:
         return result(
-            next=targets["behavior"],
-            qualified_name=targets["behavior"],
+            next=targets["implementation"],
+            qualified_name=targets["implementation"],
             implementation_source=opaque(),
+        )
+    if name == "get_code_snippet" and args.get("qualified_name") == targets["caller"]:
+        return result(
+            next=targets["caller"],
+            qualified_name=targets["caller"],
+            caller_model=opaque(),
         )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["behavior"]:
         return result(qualified_name=targets["behavior"], behavioral_test=opaque())

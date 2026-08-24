@@ -7,9 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_protocol_activity::{
-    DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-    DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1, GraphCorrelationToolV1,
-    GraphCorrelationV1, GraphExplorationClosedV1, GraphRecoveryActionV1,
+    CallerDiscoveryOutcomeV1, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
+    DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1,
+    GraphCorrelationToolV1, GraphCorrelationV1, GraphExplorationClosedV1, GraphRecoveryActionV1,
     GraphRecoveryEvidenceKindV1, MAX_GRAPH_RECOVERY_ALLOWANCE_V1,
 };
 use tongs::model::ToolCall;
@@ -108,6 +108,9 @@ struct GapRecovery {
 struct SourceEvidence {
     trace_turn: Option<usize>,
     decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
+    caller_selector_available: bool,
+    trace_before_implementation: bool,
+    caller_traversal_outcome: Option<CallerDiscoveryOutcomeV1>,
     focused_test_selector_available: bool,
     focused_test_traversal_turn: Option<usize>,
     focused_test_traversal_outcome: Option<FocusedTestDiscoveryOutcomeV1>,
@@ -127,6 +130,7 @@ struct PendingCodebaseCall {
     order: u64,
     recovery_gap: Option<DecisionGap>,
     admitted_root: Option<String>,
+    admission_checked: bool,
 }
 
 struct FinishedCodebaseCall<'a> {
@@ -297,28 +301,32 @@ impl DecisionAnchorState {
         let compatible = finished
             .iter()
             .filter_map(|finished| {
+                if finished.call.admission_checked && finished.call.admitted_root.is_none() {
+                    return None;
+                }
                 let output = anchor_output(finished.name, finished.output)?;
                 anchors
                     .accepted_root(&finished.call, &output.lineage)
                     .map(|root| (root, finished.call.clone(), output))
             })
             .collect::<Vec<_>>();
-        let batch_trace_turns = compatible
+        let batch_caller_routes = compatible
             .iter()
-            .filter(|(_, _, output)| output.tool == GraphCorrelationToolV1::TracePath)
-            .fold(BTreeMap::new(), |mut turns, (root, call, _)| {
-                turns
-                    .entry(root.clone())
-                    .and_modify(|turn: &mut usize| *turn = (*turn).min(call.turn))
-                    .or_insert(call.turn);
-                turns
-            });
+            .filter(|(_, _, output)| {
+                output.tool == GraphCorrelationToolV1::TracePath
+                    && output.lineage.caller_discovery.is_some()
+            })
+            .map(|(root, _, _)| root.clone())
+            .collect::<BTreeSet<_>>();
         let mut evidence_progressed = false;
         for (root, call, output) in &compatible {
             let Some(anchor) = anchors.roots.get_mut(root) else {
                 continue;
             };
             let before = anchor.evidence.progress_count();
+            let had_trace = anchor.evidence.has_trace();
+            let had_caller_selector = anchor.evidence.caller_selector_available;
+            let had_focused_test_selector = anchor.evidence.focused_test_selector_available;
             match output.tool {
                 GraphCorrelationToolV1::TracePath
                     if call.recovery_gap
@@ -330,10 +338,39 @@ impl DecisionAnchorState {
                         output.lineage.focused_test_discovery,
                     );
                 }
-                GraphCorrelationToolV1::TracePath => anchor.evidence.record_trace(call.turn),
-                GraphCorrelationToolV1::SearchCode => anchor
-                    .evidence
-                    .record_decision_kinds([DecisionEvidenceKindV1::Implementation]),
+                GraphCorrelationToolV1::TracePath if output.lineage.caller_discovery.is_some() => {
+                    anchor.evidence.record_trace(call.turn);
+                    anchor
+                        .evidence
+                        .record_caller_discovery(output.lineage.caller_discovery);
+                }
+                GraphCorrelationToolV1::GetCodeSnippet => {
+                    match output.lineage.decision_evidence_kind {
+                        Some(DecisionEvidenceKindV1::Implementation) => anchor
+                            .evidence
+                            .record_decision_kinds([DecisionEvidenceKindV1::Implementation]),
+                        Some(DecisionEvidenceKindV1::Caller)
+                            if had_trace && (had_caller_selector || !call.admission_checked)
+                                || !call.admission_checked
+                                    && batch_caller_routes.contains(root) =>
+                        {
+                            anchor
+                                .evidence
+                                .record_decision_kinds([DecisionEvidenceKindV1::Caller])
+                        }
+                        Some(DecisionEvidenceKindV1::FocusedTest)
+                            if had_trace
+                                && (had_focused_test_selector || !call.admission_checked)
+                                || !call.admission_checked
+                                    && batch_caller_routes.contains(root) =>
+                        {
+                            anchor
+                                .evidence
+                                .record_decision_kinds([DecisionEvidenceKindV1::FocusedTest])
+                        }
+                        Some(_) | None => {}
+                    }
+                }
                 GraphCorrelationToolV1::SearchGraph
                     if call.recovery_gap
                         == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)) =>
@@ -344,17 +381,8 @@ impl DecisionAnchorState {
                         output.lineage.focused_test_discovery,
                     );
                 }
-                GraphCorrelationToolV1::GetCodeSnippet
-                    if anchor.evidence.has_trace()
-                        || batch_trace_turns
-                            .get(root)
-                            .is_some_and(|trace_turn| call.turn >= *trace_turn) =>
-                {
-                    anchor
-                        .evidence
-                        .record_decision_kinds(output.lineage.decision_evidence_kind)
-                }
-                GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::GetCodeSnippet => {}
+                GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => {}
+                GraphCorrelationToolV1::TracePath => {}
             }
             evidence_progressed |= anchor.evidence.progress_count() > before;
         }
@@ -378,12 +406,15 @@ impl DecisionAnchorState {
 
         if evidence_progressed || roots_progressed {
             self.non_progressing_batches = 0;
-            let complete = anchors.has_complete_evidence();
-            self.phase = Some(AnchorPhase::Trail(anchors));
-            if complete {
+            if anchors.has_complete_evidence() {
+                self.phase = Some(AnchorPhase::Trail(anchors));
                 self.exploration = ExplorationStatus::Complete;
                 return DecisionAnchorTransition::Converged;
             }
+            if !anchors.active_has_compatible_actions() {
+                return self.enter_gap_recovery(anchors);
+            }
+            self.phase = Some(AnchorPhase::Trail(anchors));
             if root_merge == RootMerge::LimitExceeded {
                 let Some(AnchorPhase::Trail(anchors)) = self.phase.take() else {
                     unreachable!("the incomplete trail was installed above")
@@ -415,6 +446,15 @@ impl DecisionAnchorState {
             .iter()
             .any(|finished| anchors.contains_producer_turn(&finished.call))
         {
+            self.phase = Some(AnchorPhase::Trail(anchors));
+            return DecisionAnchorTransition::Unchanged;
+        }
+
+        if finished.iter().all(|finished| {
+            finished.name == GraphCorrelationToolV1::GetCodeSnippet.public_name()
+                && finished.call.admission_checked
+                && finished.call.admitted_root.is_none()
+        }) {
             self.phase = Some(AnchorPhase::Trail(anchors));
             return DecisionAnchorTransition::Unchanged;
         }
