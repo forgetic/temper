@@ -4,6 +4,80 @@
       "turns": [
         {
           "tool_call": {
+            "id": "compound_shell_discovery",
+            "name": "bash",
+            "args": {
+              "command": "cd repo && rg worker_slot src",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "read_route_before_source_chain",
+            "name": "read",
+            "args": {
+              "path": "repo/src/route.rs"
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "ordinary_failure_initial",
+            "name": "bash",
+            "args": {
+              "command": "false",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "ordinary_failure_repeated",
+            "name": "bash",
+            "args": {
+              "command": "false",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
+            "id": "ordinary_failure_recovery",
+            "name": "bash",
+            "args": {
+              "command": "true",
+              "timeout": 60
+            }
+          }
+        }
+      ],
+      "stop": "tool_calls"
+    },
+    {
+      "turns": [
+        {
+          "tool_call": {
             "id": "graph_identify_routing_evidence",
             "name": "codebase_memory_search_graph",
             "args": {
@@ -102,7 +176,7 @@
             "name": "codebase_memory_get_code_snippet",
             "args": {
               "repo": "temper-benchmark/codebase-memory-routing-repair",
-              "qualified_name": "DeliveryRouter::worker_for",
+              "qualified_name": "worker_slot",
               "decision_evidence_kind": "implementation"
             }
           }
@@ -180,11 +254,10 @@
       "turns": [
         {
           "tool_call": {
-            "id": "compound_shell_discovery",
-            "name": "bash",
+            "id": "patch_retry_affinity_before_exact_read",
+            "name": "apply_patch",
             "args": {
-              "command": "cd repo && rg worker_slot src",
-              "timeout": 60
+              "patch": "diff --git a/repo/src/route.rs b/repo/src/route.rs\n--- a/repo/src/route.rs\n+++ b/repo/src/route.rs\n@@ -5,11 +5,7 @@ use crate::DeliveryAttempt;\n pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {\n     assert!(workers > 0, \"at least one delivery worker is required\");\n \n-    let routing_topic = if attempt.attempt == 0 {\n-        attempt.affinity_topic()\n-    } else {\n-        attempt.topic\n-    };\n+    let routing_topic = attempt.affinity_topic();\n     let mut hash = 0xcbf29ce484222325_u64;\n     for byte in attempt\n         .tenant\n"
             }
           }
         }
@@ -199,51 +272,6 @@
             "name": "read",
             "args": {
               "path": "repo/src/route.rs"
-            }
-          }
-        }
-      ],
-      "stop": "tool_calls"
-    },
-    {
-      "turns": [
-        {
-          "tool_call": {
-            "id": "ordinary_failure_initial",
-            "name": "bash",
-            "args": {
-              "command": "false",
-              "timeout": 60
-            }
-          }
-        }
-      ],
-      "stop": "tool_calls"
-    },
-    {
-      "turns": [
-        {
-          "tool_call": {
-            "id": "ordinary_failure_repeated",
-            "name": "bash",
-            "args": {
-              "command": "false",
-              "timeout": 60
-            }
-          }
-        }
-      ],
-      "stop": "tool_calls"
-    },
-    {
-      "turns": [
-        {
-          "tool_call": {
-            "id": "ordinary_failure_recovery",
-            "name": "bash",
-            "args": {
-              "command": "true",
-              "timeout": 60
             }
           }
         }

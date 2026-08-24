@@ -84,6 +84,82 @@ pub(super) fn verify_ordinary_failure_recovery(trace: &str) -> Result<(), String
     Ok(())
 }
 
+pub(super) fn verify_post_source_exact_read_recovery(trace: &str) -> Result<(), String> {
+    let events = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|event| {
+            let data = event.pointer("/event/event/data")?;
+            data.get("status")?;
+            Some((event.pointer("/event/seq")?.as_u64()?, data.clone()))
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        ("read_route_before_source_chain", "succeeded"),
+        ("recovery_active_root_implementation", "succeeded"),
+        ("patch_retry_affinity_before_exact_read", "failed"),
+        ("read_route_after_source_chain", "succeeded"),
+        ("patch_retry_affinity", "succeeded"),
+    ];
+    let mut previous_seq = None;
+    for (call_id, status) in expected {
+        let (seq, data) = events
+            .iter()
+            .find(|(_, data)| data.get("call_id").and_then(Value::as_str) == Some(call_id))
+            .ok_or_else(|| format!("enabled trace omitted {call_id}"))?;
+        if previous_seq.is_some_and(|previous| *seq <= previous) {
+            return Err("post-source exact-read recovery events were out of order".to_string());
+        }
+        previous_seq = Some(*seq);
+        if data.get("status").and_then(Value::as_str) != Some(status) {
+            return Err(format!("{call_id} did not finish as {status}"));
+        }
+    }
+
+    let denial = events
+        .iter()
+        .find_map(|(_, data)| {
+            (data.get("call_id").and_then(Value::as_str)
+                == Some("patch_retry_affinity_before_exact_read"))
+            .then_some(data)
+        })
+        .expect("denied mutation was checked above")
+        .get("failure")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "denied mutation omitted its typed diagnostic".to_string())?;
+    let denial_fields = denial.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if denial_fields
+        != BTreeSet::from([
+            "category",
+            "fallback_to_conventional_discovery",
+            "message",
+            "reason",
+            "retry_disposition",
+            "retryable",
+        ])
+        || denial.get("category").and_then(Value::as_str) != Some("policy_denial")
+        || denial.get("reason").and_then(Value::as_str) != Some("policy_precondition")
+    {
+        return Err("denied mutation retained a non-canonical diagnostic".to_string());
+    }
+
+    let denied_start = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find_map(|event| {
+            let data = event.pointer("/event/event/data")?;
+            (event.pointer("/event/event/type").and_then(Value::as_str) == Some("tool.started")
+                && data.get("call_id").and_then(Value::as_str)
+                    == Some("patch_retry_affinity_before_exact_read"))
+            .then_some(data.clone())
+        })
+        .ok_or_else(|| "denied mutation omitted its start event".to_string())?;
+    if denied_start.get("arguments").is_some() {
+        return Err("denied mutation retained private arguments".to_string());
+    }
+    Ok(())
+}
+
 pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(), String> {
     let public_summary = serde_json::to_string(run)
         .map_err(|error| format!("serialize controlled run summary: {error}"))?;
@@ -105,7 +181,7 @@ pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(),
         (("search_graph", "trace_path", "graph"), 1_u64),
         (("search_graph", "get_code_snippet", "source"), 1),
         (("trace_path", "get_code_snippet", "source"), 1),
-        (("get_code_snippet", "read", "selection"), 2),
+        (("get_code_snippet", "read", "selection"), 1),
     ]);
     let expected_count = expected.values().sum::<u64>() as usize;
     if evidence.len() != expected_count {
