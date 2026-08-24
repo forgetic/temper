@@ -95,14 +95,22 @@ pub(super) fn verify_post_source_exact_read_recovery(trace: &str) -> Result<(), 
         })
         .collect::<Vec<_>>();
     let expected = [
-        ("read_route_before_source_chain", "succeeded"),
-        ("recovery_active_root_implementation", "succeeded"),
-        ("patch_retry_affinity_before_exact_read", "failed"),
-        ("read_route_after_source_chain", "succeeded"),
-        ("patch_retry_affinity", "succeeded"),
+        ("read_route_before_source_chain", "read", "succeeded"),
+        (
+            "recovery_active_root_implementation",
+            "codebase_memory_get_code_snippet",
+            "succeeded",
+        ),
+        (
+            "patch_retry_affinity_before_exact_read",
+            "apply_patch",
+            "failed",
+        ),
+        ("read_route_after_source_chain", "read", "succeeded"),
+        ("patch_retry_affinity", "apply_patch", "succeeded"),
     ];
     let mut previous_seq = None;
-    for (call_id, status) in expected {
+    for (call_id, tool, status) in expected {
         let (seq, data) = events
             .iter()
             .find(|(_, data)| data.get("call_id").and_then(Value::as_str) == Some(call_id))
@@ -111,6 +119,9 @@ pub(super) fn verify_post_source_exact_read_recovery(trace: &str) -> Result<(), 
             return Err("post-source exact-read recovery events were out of order".to_string());
         }
         previous_seq = Some(*seq);
+        if data.get("name").and_then(Value::as_str) != Some(tool) {
+            return Err(format!("{call_id} did not finish as {tool}"));
+        }
         if data.get("status").and_then(Value::as_str) != Some(status) {
             return Err(format!("{call_id} did not finish as {status}"));
         }
@@ -202,7 +213,9 @@ pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(),
         "kind",
         "target",
     ]);
-    let denied = [
+    let excluded_consumers = [
+        "read_route_before_source_chain",
+        "patch_retry_affinity_before_exact_read",
         "recovery_cross_root_caller_denied",
         "recovery_cross_root_focused_test_denied",
         "recovery_satisfied_trace_denied",
@@ -223,11 +236,12 @@ pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(),
                 object
                     .get(field)
                     .and_then(Value::as_str)
-                    .is_some_and(|call_id| denied.contains(&call_id))
+                    .is_some_and(|call_id| excluded_consumers.contains(&call_id))
             })
         {
             return Err(
-                "locally denied recovery attempts received decision relevance credit".to_string(),
+                "pre-source or locally denied actions received decision relevance credit"
+                    .to_string(),
             );
         }
         let tuple = (
@@ -251,17 +265,26 @@ pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(),
             "enabled decision evidence did not preserve the converged root forest".to_string(),
         );
     }
-    if !evidence.iter().any(|entry| {
-        entry.get("graph_call_id").and_then(Value::as_str)
-            == Some("recovery_active_root_implementation")
-            && entry.get("graph_tool").and_then(Value::as_str) == Some("get_code_snippet")
-            && entry.get("consumer_call_id").and_then(Value::as_str)
-                == Some("read_route_after_source_chain")
-            && entry.get("consumer_tool").and_then(Value::as_str) == Some("read")
-            && entry.get("consumption_mode").and_then(Value::as_str) == Some("selection")
-            && entry.get("target").and_then(Value::as_str) == Some("repo/src/route.rs")
-            && entry.get("kind").and_then(Value::as_str) == Some("implementation")
-    }) {
+    let selection = evidence
+        .iter()
+        .filter(|entry| entry.get("consumption_mode").and_then(Value::as_str) == Some("selection"))
+        .collect::<Vec<_>>();
+    if selection.len() != 1 {
+        return Err(format!(
+            "enabled decision evidence retained {} exact source selections; expected 1",
+            selection.len()
+        ));
+    }
+    let selection = selection[0];
+    if selection.get("graph_call_id").and_then(Value::as_str)
+        != Some("recovery_active_root_implementation")
+        || selection.get("graph_tool").and_then(Value::as_str) != Some("get_code_snippet")
+        || selection.get("consumer_call_id").and_then(Value::as_str)
+            != Some("read_route_after_source_chain")
+        || selection.get("consumer_tool").and_then(Value::as_str) != Some("read")
+        || selection.get("target").and_then(Value::as_str) != Some("repo/src/route.rs")
+        || selection.get("kind").and_then(Value::as_str) != Some("implementation")
+    {
         return Err("enabled decision evidence omitted the exact source selection".to_string());
     }
     Ok(())

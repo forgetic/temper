@@ -339,6 +339,10 @@ fn target_consumption(
         .iter()
         .filter(|action| {
             action.scope_id == call.scope_id
+                && action.status == Some(ToolStatusV1::Succeeded)
+                && action
+                    .finish_seq
+                    .is_some_and(|finish_seq| finish_seq > action.start_seq)
                 && action.start_seq > finish_seq
                 && GraphEvidenceToolV1::from_tool_name(&action.name).is_some()
         })

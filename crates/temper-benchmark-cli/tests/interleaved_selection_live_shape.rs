@@ -6,6 +6,7 @@ use temper_benchmark_cli::{
     GraphConsumptionModeV1, GraphDecisionKindV1, GraphEvidenceToolV1, MetricCoverageV1,
     analyze_trace, render_run_summary_json, render_run_summary_markdown,
 };
+use temper_protocol_activity::AgentActivityEventV1;
 
 #[path = "support/interleaved_selection.rs"]
 mod interleaved_selection;
@@ -16,8 +17,14 @@ fn serialized_interleaved_exact_read_wins_over_generic_and_forest_consumers() {
     let trace = ingest_serialized(SerializedVariant::Live);
     let summary = analyze_trace(&trace, &options());
     let graph = summary.metrics.graph.as_ref().unwrap();
+    let tools = summary.metrics.tools.as_ref().unwrap();
 
     assert_eq!((graph.calls, graph.succeeded), (10, 10));
+    assert_eq!((tools.calls, tools.succeeded, tools.failed), (14, 13, 1));
+    assert_eq!(
+        summary.metrics.structure.as_ref().unwrap().mutations,
+        Some(1)
+    );
     assert_eq!(
         (graph.relevant_results, graph.irrelevant_successes),
         (Some(9), Some(1))
@@ -94,7 +101,48 @@ fn serialized_interleaved_exact_read_wins_over_generic_and_forest_consumers() {
     );
     let producer = producer_row(&summary);
     assert_eq!(producer.kind, GraphDecisionKindV1::Implementation);
-    assert_eq!(producer.consumer_start_seq, 19);
+    assert_eq!(
+        (producer.graph_finish_seq, producer.consumer_start_seq),
+        (13, 23)
+    );
+    assert_eq!(producer.target, EXACT_TARGET);
+    assert!(graph.decision_evidence.iter().all(|evidence| {
+        ![EARLY_READ_ROUTE, DENIED_MUTATION, FINAL_MUTATION]
+            .contains(&evidence.consumer_call_id.as_str())
+            && evidence.consumption_mode != GraphConsumptionModeV1::Mutation
+    }));
+    assert_eq!(
+        graph
+            .decision_evidence
+            .iter()
+            .filter(|evidence| {
+                evidence.target == EXACT_TARGET
+                    && evidence.consumption_mode == GraphConsumptionModeV1::Selection
+            })
+            .count(),
+        1,
+    );
+
+    let producer_finish = trace
+        .events
+        .iter()
+        .find_map(|event| match &event.event {
+            AgentActivityEventV1::ToolFinished(finished)
+                if finished.call_id == IMPLEMENTATION_SOURCE =>
+            {
+                Some(finished)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let correlation = producer_finish.graph_correlation.as_ref().unwrap();
+    assert!(correlation.is_valid());
+    assert!(
+        producer_finish
+            .decision_anchor_lineage
+            .as_ref()
+            .is_some_and(|lineage| lineage.is_valid_for(correlation))
+    );
     assert_eq!(
         graph
             .decision_evidence
@@ -173,6 +221,16 @@ fn serialized_incomplete_or_malformed_routes_cannot_manufacture_exact_selection(
     let generic = producer_row(&incomplete);
     assert_eq!(generic.consumer_call_id, GENERIC_CONSUMER);
     assert_eq!(generic.consumption_mode, GraphConsumptionModeV1::Graph);
+    assert!(
+        incomplete
+            .metrics
+            .graph
+            .as_ref()
+            .unwrap()
+            .decision_evidence
+            .iter()
+            .all(|evidence| evidence.consumer_call_id != DENIED_MUTATION)
+    );
 
     let mut forest_options = options();
     forest_options

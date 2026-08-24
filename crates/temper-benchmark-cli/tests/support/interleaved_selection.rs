@@ -12,7 +12,8 @@ use temper_protocol_activity::{
     AgentActivityEventV1, AgentRunEventV1, CallerDiscoveryOutcomeV1, CapturedContentV1,
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
     DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1, GraphCorrelationTargetKindV1,
-    GraphCorrelationToolV1, GraphCorrelationV1,
+    GraphCorrelationToolV1, GraphCorrelationV1, ToolFailureCategoryV1, ToolFailureDiagnosticV1,
+    ToolFailureReasonV1, ToolStatusV1,
 };
 
 pub(crate) const ROOT: &str = "00000000-0000-4000-8000-000000000061";
@@ -27,7 +28,10 @@ pub(crate) const FOREST_CONSUMER: &str = "graph-forest-route";
 pub(crate) const PARALLEL_SEARCH: &str = "graph-parallel-search";
 pub(crate) const PARALLEL_CODE: &str = "graph-parallel-code";
 pub(crate) const IRRELEVANT_GRAPH: &str = "graph-unrelated";
-pub(crate) const READ_ROUTE: &str = "read-route";
+pub(crate) const EARLY_READ_ROUTE: &str = "read-route-before-source";
+pub(crate) const DENIED_MUTATION: &str = "patch-route-before-exact-read";
+pub(crate) const READ_ROUTE: &str = "read-route-after-source";
+pub(crate) const FINAL_MUTATION: &str = "patch-route-after-exact-read";
 
 pub(crate) const FOCUSED_QUERY: &str = "private focused route regression query";
 pub(crate) const TEST_SELECTOR: &str = "route_regression_updates_existing_worker";
@@ -225,6 +229,8 @@ fn live_shape_events() -> Vec<AgentRunEventV1> {
     let mut events = ingest_trace(fixture("graph-consumption-events.jsonl"))
         .unwrap()
         .events;
+    let mutation_start_template = events[11].clone();
+    let mutation_finish_template = events[12].clone();
     for event in &mut events {
         match &mut event.event {
             AgentActivityEventV1::ToolStarted(started) => match started.call_id.as_str() {
@@ -349,6 +355,47 @@ fn live_shape_events() -> Vec<AgentRunEventV1> {
     let terminal = events[13].clone();
     events.truncate(11);
 
+    let mut early_read_start = read_start.clone();
+    let AgentActivityEventV1::ToolStarted(started) = &mut early_read_start.event else {
+        unreachable!();
+    };
+    started.call_id = EARLY_READ_ROUTE.to_string();
+    let mut early_read_finish = read_finish.clone();
+    let AgentActivityEventV1::ToolFinished(finished) = &mut early_read_finish.event else {
+        unreachable!();
+    };
+    finished.call_id = EARLY_READ_ROUTE.to_string();
+
+    let mut denied_mutation_start = mutation_start_template.clone();
+    let AgentActivityEventV1::ToolStarted(started) = &mut denied_mutation_start.event else {
+        unreachable!();
+    };
+    started.call_id = DENIED_MUTATION.to_string();
+    started.arguments = None;
+    let mut denied_mutation_finish = mutation_finish_template.clone();
+    let AgentActivityEventV1::ToolFinished(finished) = &mut denied_mutation_finish.event else {
+        unreachable!();
+    };
+    finished.call_id = DENIED_MUTATION.to_string();
+    finished.duration_ms = 0;
+    finished.status = ToolStatusV1::Failed;
+    finished.result = None;
+    finished.failure = Some(ToolFailureDiagnosticV1::with_reason(
+        ToolFailureCategoryV1::PolicyDenial,
+        ToolFailureReasonV1::PolicyPrecondition,
+    ));
+
+    let mut final_mutation_start = mutation_start_template;
+    let AgentActivityEventV1::ToolStarted(started) = &mut final_mutation_start.event else {
+        unreachable!();
+    };
+    started.call_id = FINAL_MUTATION.to_string();
+    let mut final_mutation_finish = mutation_finish_template;
+    let AgentActivityEventV1::ToolFinished(finished) = &mut final_mutation_finish.event else {
+        unreachable!();
+    };
+    finished.call_id = FINAL_MUTATION.to_string();
+
     let pair = |call_id, argument, tool, target_kind, target, route_lineage| {
         graph_pair(
             &start_template,
@@ -445,6 +492,7 @@ fn live_shape_events() -> Vec<AgentRunEventV1> {
         ),
     );
 
+    events.splice(1..1, [early_read_start, early_read_finish]);
     events.extend([
         generic_start,
         generic_finish,
@@ -453,11 +501,15 @@ fn live_shape_events() -> Vec<AgentRunEventV1> {
         irrelevant_start,
         irrelevant_finish,
         parallel_search_start,
+        denied_mutation_start,
+        denied_mutation_finish,
         read_start,
         parallel_code_start,
         parallel_search_finish,
         read_finish,
         parallel_code_finish,
+        final_mutation_start,
+        final_mutation_finish,
         terminal,
     ]);
     for (index, event) in events.iter_mut().enumerate() {
@@ -484,8 +536,9 @@ pub(crate) fn ingest_serialized(variant: SerializedVariant) -> NormalizedTrace {
     match variant {
         SerializedVariant::Live => {}
         SerializedVariant::IncompleteRead => records.retain(|record| {
-            record["event"]["type"] != "tool.finished"
-                || record["event"]["data"]["call_id"] != READ_ROUTE
+            let call_id = &record["event"]["data"]["call_id"];
+            call_id != FINAL_MUTATION
+                && (record["event"]["type"] != "tool.finished" || call_id != READ_ROUTE)
         }),
         SerializedVariant::MalformedProducerRoute => {
             let record = records
