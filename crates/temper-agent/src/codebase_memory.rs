@@ -675,6 +675,11 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
             )
         })
         .unwrap_or((0, "", ""));
+    let focused_test_discovery = ev
+        .decision_anchor_lineage
+        .and_then(|lineage| lineage.focused_test_discovery)
+        .map(focused_test_discovery_outcome)
+        .unwrap_or("");
     let lineage_evidence_kind = ev
         .decision_anchor_lineage
         .and_then(|lineage| lineage.decision_evidence_kind)
@@ -712,6 +717,7 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         graph.lineage.stage = lineage_stage,
         graph.lineage.result_target_kind_count = lineage_result_target_kind_count,
         graph.lineage.decision_evidence_kind = lineage_evidence_kind,
+        graph.lineage.focused_test_discovery = focused_test_discovery,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,
@@ -741,6 +747,19 @@ fn decision_evidence_kind(kind: DecisionEvidenceKindV1) -> &'static str {
         DecisionEvidenceKindV1::Implementation => "implementation",
         DecisionEvidenceKindV1::Caller => "caller",
         DecisionEvidenceKindV1::FocusedTest => "focused_test",
+    }
+}
+
+fn focused_test_discovery_outcome(
+    outcome: temper_protocol_activity::FocusedTestDiscoveryOutcomeV1,
+) -> &'static str {
+    match outcome {
+        temper_protocol_activity::FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned => {
+            "eligible_selector_returned"
+        }
+        temper_protocol_activity::FocusedTestDiscoveryOutcomeV1::NoEligibleSelector => {
+            "no_eligible_selector"
+        }
     }
 }
 

@@ -66,6 +66,7 @@ impl LiveExecutionContext<'_> {
                             | "mapped-live-ordinary-tool-convergence"
                             | "mapped-live-graph-convergence"
                             | "mapped-live-decision-gap-recovery"
+                            | "mapped-live-focused-test-source-relevance"
                     )
                 ),
             "unknown fake codebase-memory fixture",
@@ -196,6 +197,7 @@ impl LiveExecutionContext<'_> {
                                 | "mapped-live-ordinary-tool-convergence"
                                 | "mapped-live-graph-convergence"
                                 | "mapped-live-decision-gap-recovery"
+                                | "mapped-live-focused-test-source-relevance"
                         )
                     )
                 }),

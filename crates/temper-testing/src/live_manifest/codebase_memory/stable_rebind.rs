@@ -39,6 +39,9 @@ pub(super) fn validate_mcp_contract(
         Some("mapped-live-decision-gap-recovery") => {
             return super::mapped_decision_gap_recovery::validate(mcp, calls);
         }
+        Some("mapped-live-focused-test-source-relevance") => {
+            return super::mapped_focused_test_relevance::validate(mcp, calls);
+        }
         _ => {}
     }
 
@@ -283,17 +286,8 @@ pub(super) fn stable_rebind_evidence(
             }),
         source_served_from_current_root: calls.iter().any(|call| {
             call.name == "get_code_snippet"
-                && matches!(
+                && super::aggregate::is_current_root_source_checkpoint(
                     call.fixture_event.as_deref(),
-                    Some(
-                        "served_current_root_source"
-                            | "served_result_derived_consumer"
-                            | "served_typed_lineage_consumer"
-                            | "served_mapped_current_root_source"
-                            | "served_convergence_source"
-                            | "served_gap_sibling_source"
-                            | "served_gap_active_source"
-                    )
                 )
         }),
         global_inventory_avoided: calls.iter().all(|call| call.name != "list_projects"),
@@ -392,6 +386,7 @@ fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
                 | "mapped-live-decision-gap-recovery"
+                | "mapped-live-focused-test-source-relevance"
         )
     )
 }

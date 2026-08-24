@@ -19,6 +19,7 @@ pub(super) fn is_privacy_safe_profile(profile: Option<&str>) -> bool {
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
                 | "mapped-live-decision-gap-recovery"
+                | "mapped-live-focused-test-source-relevance"
         )
     )
 }
@@ -57,6 +58,52 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn focused_relevance_aggregate_omits_selectors_source_and_credentials() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mcp = super::super::write_fake_mcp(
+            workspace.path(),
+            "private-provider-project",
+            Some("mapped-live-focused-test-source-relevance"),
+            &["search_graph".to_string()],
+            &["index_repository".to_string()],
+            750,
+            None,
+        )
+        .expect("fake MCP");
+        let calls = vec![McpToolCallEvidence {
+            name: "search_graph".to_string(),
+            arguments: json!({
+                "query": "private semantic query",
+                "selector": "private::focused_test",
+                "credential": "MCP-FIXTURE-SECRET",
+            }),
+            delay_ms: None,
+            is_error: false,
+            fixture_event: Some("served_focus_fallback".to_string()),
+        }];
+
+        let path = write_privacy_safe_mcp_log(&mcp, &calls).expect("privacy-safe log");
+        let retained = fs::read_to_string(path).expect("retained aggregate");
+        assert_eq!(
+            retained,
+            concat!(
+                "{\"checkpoint\":\"served_focus_fallback\",",
+                "\"is_error\":false,\"sequence\":1,",
+                "\"tool\":\"search_graph\"}\n"
+            )
+        );
+        for private in [
+            "private semantic query",
+            "private::focused_test",
+            "selector",
+            "credential",
+            "MCP-FIXTURE-SECRET",
+        ] {
+            assert!(!retained.contains(private), "aggregate retained {private}");
+        }
+    }
 
     #[test]
     fn decision_gap_aggregate_omits_private_recovery_data() {

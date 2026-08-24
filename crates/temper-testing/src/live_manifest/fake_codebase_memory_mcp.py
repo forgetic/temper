@@ -20,6 +20,7 @@ TYPED_LINEAGE_STAGE = 0
 MAPPED_GRAPH_STAGE = 0
 GRAPH_CONVERGENCE_STAGE = 0
 DECISION_GAP_RECOVERY_STAGE = 0
+FOCUSED_RELEVANCE_STAGE = 0
 RESULT_DRIVEN_TOKENS = {
     name: "opaque-" + uuid.uuid4().hex
     for name in ["root", "refinement", "trace", "implementation", "behavioral_test"]
@@ -50,6 +51,11 @@ GRAPH_CONVERGENCE_TOKENS = {
     "caller": "crate::fixture::delivery_" + uuid.uuid4().hex + "::worker_for",
     "behavioral_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::alias_retry_stays_on_worker",
     "active_behavioral_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::ordinary_retry_keeps_topic_affinity",
+}
+FOCUSED_RELEVANCE_TOKENS = {
+    "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
+    "caller": "crate::fixture::delivery_" + uuid.uuid4().hex + "::worker_for",
+    "focused_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::alias_retry_stays_on_worker",
 }
 GRAPH_CALLS = 0
 
@@ -85,6 +91,10 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "function_name": {"type": "string"},
+                "mode": {"type": "string"},
+                "direction": {"type": "string"},
+                "include_tests": {"type": "boolean"},
+                "depth": {"type": "integer"},
                 "project": {"type": "string"},
             },
             "required": ["function_name"],
@@ -284,6 +294,7 @@ def has_current_root_profile():
         "mapped-live-ordinary-tool-convergence",
         "mapped-live-graph-convergence",
         "mapped-live-decision-gap-recovery",
+        "mapped-live-focused-test-source-relevance",
     )
 
 
@@ -315,11 +326,23 @@ def is_decision_gap_recovery_profile():
     return LIFECYCLE_PROFILE == "mapped-live-decision-gap-recovery"
 
 
+def is_focused_relevance_profile():
+    return LIFECYCLE_PROFILE == "mapped-live-focused-test-source-relevance"
+
+
 def ensure_graph_convergence_tokens():
     if not (is_graph_convergence_profile() or is_decision_gap_recovery_profile()):
         return
     state = load_state()
     state["graph_convergence_tokens"] = GRAPH_CONVERGENCE_TOKENS
+    save_state(state)
+
+
+def ensure_focused_relevance_tokens():
+    if not is_focused_relevance_profile():
+        return
+    state = load_state()
+    state["focused_relevance_tokens"] = FOCUSED_RELEVANCE_TOKENS
     save_state(state)
 
 
@@ -340,6 +363,16 @@ def decision_gap_recovery_step(expected_stage, expected_value, actual_value):
     if DECISION_GAP_RECOVERY_STAGE != expected_stage or actual_value != expected_value:
         return False
     DECISION_GAP_RECOVERY_STAGE += 1
+    return True
+
+
+def focused_relevance_step(expected_stage, expected_value, actual_value):
+    global FOCUSED_RELEVANCE_STAGE
+    if not is_focused_relevance_profile():
+        return True
+    if FOCUSED_RELEVANCE_STAGE != expected_stage or actual_value != expected_value:
+        return False
+    FOCUSED_RELEVANCE_STAGE += 1
     return True
 
 
@@ -399,6 +432,7 @@ for line in sys.stdin:
         ensure_typed_lineage_tokens()
         ensure_mapped_graph_tokens()
         ensure_graph_convergence_tokens()
+        ensure_focused_relevance_tokens()
         params = request.get("params") or {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -441,6 +475,49 @@ for line in sys.stdin:
         elif name == "get_code_snippet":
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
+            if is_focused_relevance_profile():
+                source_stage = {
+                    FOCUSED_RELEVANCE_TOKENS["implementation"]: (
+                        1, "src/route.rs", "served_focus_implementation_source", False
+                    ),
+                    FOCUSED_RELEVANCE_TOKENS["caller"]: (
+                        3, "src/route.rs", "served_focus_caller_source", False
+                    ),
+                    FOCUSED_RELEVANCE_TOKENS["focused_test"]: (
+                        8, "tests/alias_retry.rs", "served_focus_test_source", True
+                    ),
+                }.get(qualified_name)
+                stage_valid = (
+                    source_stage is not None
+                    and focused_relevance_step(
+                        source_stage[0], qualified_name, qualified_name
+                    )
+                )
+                source = (
+                    current_root_source(project, source_stage[1])
+                    if stage_valid
+                    else None
+                )
+                if source is None:
+                    log_tool(name, arguments, is_error=True)
+                    result = text_result("bound source unavailable", True)
+                else:
+                    payload = {
+                        "name": terminal_function_name(qualified_name),
+                        "qualified_name": qualified_name,
+                        "source": source,
+                        "binding": "current_prepared_checkout",
+                    }
+                    if source_stage[3]:
+                        payload["is_test"] = True
+                    if source_stage[0] == 3:
+                        payload["callees"] = [{
+                            "qualified_name": FOCUSED_RELEVANCE_TOKENS["implementation"]
+                        }]
+                    log_tool(name, arguments, fixture_event=source_stage[2])
+                    result = text_result(json.dumps(payload), structured=payload)
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_decision_gap_recovery_profile():
                 stage = DECISION_GAP_RECOVERY_STAGE
                 if stage in (2, 3) and qualified_name == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]:
@@ -701,6 +778,44 @@ for line in sys.stdin:
                     }
                 result = text_result(json.dumps(payload))
         elif name == "search_code":
+            if is_focused_relevance_profile():
+                project = arguments.get("project", "")
+                stage = FOCUSED_RELEVANCE_STAGE
+                expected = (
+                    "route affinity"
+                    if stage == 0
+                    else FOCUSED_RELEVANCE_TOKENS["implementation"]
+                )
+                successful = (
+                    stage in (0, 4, 5)
+                    and current_root_source(project, "src/route.rs") is not None
+                    and focused_relevance_step(
+                        stage, expected, arguments.get("pattern", "")
+                    )
+                )
+                payload = {"results": [{
+                    "name": terminal_function_name(
+                        FOCUSED_RELEVANCE_TOKENS["implementation"]
+                    ),
+                    "qualified_name": FOCUSED_RELEVANCE_TOKENS["implementation"],
+                    "file_path": "src/route.rs",
+                }]}
+                event = (
+                    "served_focus_root" if stage == 0 else "served_focus_non_progress"
+                )
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event=event if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_decision_gap_recovery_profile():
                 log_tool(name, arguments, is_error=True)
                 result = text_result("decision-gap refinement must stay local", True)
@@ -818,6 +933,60 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "trace_path":
+            if is_focused_relevance_profile():
+                project = arguments.get("project", "")
+                stage = FOCUSED_RELEVANCE_STAGE
+                if stage == 2:
+                    expected = FOCUSED_RELEVANCE_TOKENS["implementation"]
+                    callers = [{
+                        "name": terminal_function_name(
+                            FOCUSED_RELEVANCE_TOKENS["caller"]
+                        ),
+                        "qualified_name": FOCUSED_RELEVANCE_TOKENS["caller"],
+                    }]
+                    event = "served_focus_caller_trace"
+                else:
+                    expected = FOCUSED_RELEVANCE_TOKENS["caller"]
+                    callers = []
+                    event = "served_focus_empty_traversal"
+                successful = (
+                    stage in (2, 6)
+                    and current_root_source(project, "src/route.rs") is not None
+                    and focused_relevance_step(
+                        stage, expected, arguments.get("function_name", "")
+                    )
+                )
+                if stage == 6:
+                    successful = (
+                        successful
+                        and arguments.get("mode") == "calls"
+                        and arguments.get("direction") == "inbound"
+                        and arguments.get("include_tests") is True
+                    )
+                payload = {
+                    "function": {
+                        "name": terminal_function_name(expected),
+                        "qualified_name": expected,
+                    },
+                    "mode": arguments.get("mode"),
+                    "direction": arguments.get("direction"),
+                    "include_tests": arguments.get("include_tests", False),
+                    "complete": True,
+                    "callers": callers,
+                }
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event=event if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_decision_gap_recovery_profile():
                 project = arguments.get("project", "")
                 expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
@@ -1002,6 +1171,37 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "search_graph":
+            if is_focused_relevance_profile():
+                project = arguments.get("project", "")
+                successful = (
+                    current_root_source(project, "tests/alias_retry.rs") is not None
+                    and focused_relevance_step(
+                        7,
+                        "focused alias retry behavior",
+                        arguments.get("query", ""),
+                    )
+                )
+                target = FOCUSED_RELEVANCE_TOKENS["focused_test"]
+                payload = {"results": [{
+                    "name": terminal_function_name(target),
+                    "qualified_name": target,
+                    "label": "Function",
+                    "file_path": "tests/alias_retry.rs",
+                    "is_test": True,
+                }], "total": 1, "has_more": False}
+                log_tool(
+                    name,
+                    arguments,
+                    is_error=not successful,
+                    fixture_event="served_focus_fallback" if successful else None,
+                )
+                result = (
+                    text_result(json.dumps(payload), structured=payload)
+                    if successful
+                    else text_result("bound source unavailable", True)
+                )
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_decision_gap_recovery_profile():
                 project = arguments.get("project", "")
                 stage = DECISION_GAP_RECOVERY_STAGE
