@@ -16,6 +16,9 @@ pub(super) fn is_current_root_source_checkpoint(checkpoint: Option<&str>) -> boo
                 | "served_focus_implementation_source"
                 | "served_focus_caller_source"
                 | "served_focus_test_source"
+                | "served_selection_implementation_source"
+                | "served_selection_caller_source"
+                | "served_selection_focused_source"
         )
     )
 }
@@ -49,6 +52,16 @@ pub(super) fn privacy_safe_checkpoints(
             "served_gap_sibling_source",
             "served_gap_active_trace",
             "served_gap_active_source",
+        ],
+        Some("mapped-live-exact-source-selection") => &[
+            "served_selection_root",
+            "served_selection_implementation_source",
+            "served_selection_caller_trace",
+            "served_selection_caller_source",
+            "served_selection_generic",
+            "served_selection_forest",
+            "served_selection_focused_fallback",
+            "served_selection_focused_source",
         ],
         Some("mapped-live-focused-test-source-relevance") => &[
             "served_focus_root",

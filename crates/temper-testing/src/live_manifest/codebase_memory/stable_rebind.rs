@@ -39,6 +39,9 @@ pub(super) fn validate_mcp_contract(
         Some("mapped-live-decision-gap-recovery") => {
             return super::mapped_decision_gap_recovery::validate(mcp, calls);
         }
+        Some("mapped-live-exact-source-selection") => {
+            return super::mapped_exact_source_selection::validate(mcp, calls);
+        }
         Some("mapped-live-focused-test-source-relevance") => {
             return super::mapped_focused_test_relevance::validate(mcp, calls);
         }
@@ -386,6 +389,7 @@ fn uses_stable_rebind(mcp: &FakeMcpServer) -> bool {
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
                 | "mapped-live-decision-gap-recovery"
+                | "mapped-live-exact-source-selection"
                 | "mapped-live-focused-test-source-relevance"
         )
     )

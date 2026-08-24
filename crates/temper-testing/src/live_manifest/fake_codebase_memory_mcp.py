@@ -294,6 +294,7 @@ def has_current_root_profile():
         "mapped-live-ordinary-tool-convergence",
         "mapped-live-graph-convergence",
         "mapped-live-decision-gap-recovery",
+        "mapped-live-exact-source-selection",
         "mapped-live-focused-test-source-relevance",
     )
 
@@ -327,7 +328,18 @@ def is_decision_gap_recovery_profile():
 
 
 def is_focused_relevance_profile():
-    return LIFECYCLE_PROFILE == "mapped-live-focused-test-source-relevance"
+    return LIFECYCLE_PROFILE in (
+        "mapped-live-exact-source-selection",
+        "mapped-live-focused-test-source-relevance",
+    )
+
+
+def is_exact_source_selection_profile():
+    return LIFECYCLE_PROFILE == "mapped-live-exact-source-selection"
+
+
+def selection_checkpoint(focused, selection):
+    return selection if is_exact_source_selection_profile() else focused
 
 
 def ensure_graph_convergence_tokens():
@@ -476,15 +488,32 @@ for line in sys.stdin:
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
             if is_focused_relevance_profile():
+                focused_test_stage = 9 if is_exact_source_selection_profile() else 8
                 source_stage = {
                     FOCUSED_RELEVANCE_TOKENS["implementation"]: (
-                        1, "src/route.rs", "served_focus_implementation_source", False
+                        1,
+                        "src/route.rs",
+                        selection_checkpoint(
+                            "served_focus_implementation_source",
+                            "served_selection_implementation_source",
+                        ),
+                        False,
                     ),
                     FOCUSED_RELEVANCE_TOKENS["caller"]: (
-                        3, "src/route.rs", "served_focus_caller_source", False
+                        3,
+                        "src/route.rs",
+                        selection_checkpoint(
+                            "served_focus_caller_source", "served_selection_caller_source"
+                        ),
+                        False,
                     ),
                     FOCUSED_RELEVANCE_TOKENS["focused_test"]: (
-                        8, "tests/alias_retry.rs", "served_focus_test_source", True
+                        focused_test_stage,
+                        "tests/alias_retry.rs",
+                        selection_checkpoint(
+                            "served_focus_test_source", "served_selection_focused_source"
+                        ),
+                        True,
                     ),
                 }.get(qualified_name)
                 stage_valid = (
@@ -781,13 +810,16 @@ for line in sys.stdin:
             if is_focused_relevance_profile():
                 project = arguments.get("project", "")
                 stage = FOCUSED_RELEVANCE_STAGE
+                non_progress_stages = (
+                    (4, 5, 6) if is_exact_source_selection_profile() else (4, 5)
+                )
                 expected = (
                     "route affinity"
                     if stage == 0
                     else FOCUSED_RELEVANCE_TOKENS["implementation"]
                 )
                 successful = (
-                    stage in (0, 4, 5)
+                    (stage == 0 or stage in non_progress_stages)
                     and current_root_source(project, "src/route.rs") is not None
                     and focused_relevance_step(
                         stage, expected, arguments.get("pattern", "")
@@ -801,7 +833,11 @@ for line in sys.stdin:
                     "file_path": "src/route.rs",
                 }]}
                 event = (
-                    "served_focus_root" if stage == 0 else "served_focus_non_progress"
+                    selection_checkpoint("served_focus_root", "served_selection_root")
+                    if stage == 0
+                    else selection_checkpoint(
+                        "served_focus_non_progress", "served_selection_generic"
+                    )
                 )
                 log_tool(
                     name,
@@ -936,6 +972,7 @@ for line in sys.stdin:
             if is_focused_relevance_profile():
                 project = arguments.get("project", "")
                 stage = FOCUSED_RELEVANCE_STAGE
+                empty_stage = 7 if is_exact_source_selection_profile() else 6
                 if stage == 2:
                     expected = FOCUSED_RELEVANCE_TOKENS["implementation"]
                     callers = [{
@@ -944,19 +981,23 @@ for line in sys.stdin:
                         ),
                         "qualified_name": FOCUSED_RELEVANCE_TOKENS["caller"],
                     }]
-                    event = "served_focus_caller_trace"
+                    event = selection_checkpoint(
+                        "served_focus_caller_trace", "served_selection_caller_trace"
+                    )
                 else:
                     expected = FOCUSED_RELEVANCE_TOKENS["caller"]
                     callers = []
-                    event = "served_focus_empty_traversal"
+                    event = selection_checkpoint(
+                        "served_focus_empty_traversal", "served_selection_forest"
+                    )
                 successful = (
-                    stage in (2, 6)
+                    stage in (2, empty_stage)
                     and current_root_source(project, "src/route.rs") is not None
                     and focused_relevance_step(
                         stage, expected, arguments.get("function_name", "")
                     )
                 )
-                if stage == 6:
+                if stage == empty_stage:
                     successful = (
                         successful
                         and arguments.get("mode") == "calls"
@@ -1173,10 +1214,11 @@ for line in sys.stdin:
         elif name == "search_graph":
             if is_focused_relevance_profile():
                 project = arguments.get("project", "")
+                fallback_stage = 8 if is_exact_source_selection_profile() else 7
                 successful = (
                     current_root_source(project, "tests/alias_retry.rs") is not None
                     and focused_relevance_step(
-                        7,
+                        fallback_stage,
                         "focused alias retry behavior",
                         arguments.get("query", ""),
                     )
@@ -1193,7 +1235,13 @@ for line in sys.stdin:
                     name,
                     arguments,
                     is_error=not successful,
-                    fixture_event="served_focus_fallback" if successful else None,
+                    fixture_event=(
+                        selection_checkpoint(
+                            "served_focus_fallback", "served_selection_focused_fallback"
+                        )
+                        if successful
+                        else None
+                    ),
                 )
                 result = (
                     text_result(json.dumps(payload), structured=payload)

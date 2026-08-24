@@ -33,7 +33,8 @@ runner:
   `mapped-live-denied-shell-classification`,
   `mapped-live-ordinary-tool-convergence`, `mapped-live-graph-convergence`,
   `mapped-live-decision-gap-recovery`,
-  `mapped-live-focused-test-source-relevance`, `model-failure-recovery`,
+  `mapped-live-focused-test-source-relevance`,
+  `mapped-live-exact-source-selection`, `model-failure-recovery`,
   `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
@@ -296,6 +297,23 @@ forward stage, discovery outcome, decision kind, ordering, binding, and gate
 facts. Runtime prompts, selectors, roots, source, paths, provider output,
 credentials, arguments, host output, and diagnostic traces remain ephemeral.
 The routing-repair benchmark corpus and all historical scenario mappings remain
+unchanged.
+
+### Mapped live exact source-selection mapping
+
+`mapped-live-exact-source-selection` is the dedicated active mapping for feature
+`ai/temper#1139` and plan `ai/temper#1140` on
+`agent/pr-for-feature-1139`. It extends the #1130 focused-test source topology
+without changing that historical mapping. Typed implementation, caller, and
+focused-test sources coexist with bounded generic and forest competitors; a
+later wider conventional batch interleaves a wrong-target read with the exact
+route read. The mapped reduction must retain exactly one privacy-safe
+`selection` / `read` row for `repo/src/route.rs`, while the malformed variant
+fails closed. Aggregate evidence contains only closed counts, checkpoint
+categories, typed coverage, ordering, declared target, mode, binding, and gate
+facts. Runtime prompts, selectors, provider output, source, roots, credentials,
+arguments, host output, and generated traces remain ephemeral. The frozen
+routing-repair benchmark and every historical scenario mapping remain
 unchanged.
 
 ### Mapped live denied-shell classification mapping

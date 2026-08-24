@@ -624,6 +624,9 @@ mod mapped_decision_gap_recovery_tests;
 #[path = "bundle_mapped_denied_shell_classification_tests.rs"]
 mod mapped_denied_shell_classification_tests;
 #[cfg(test)]
+#[path = "bundle_mapped_exact_source_selection_tests.rs"]
+mod mapped_exact_source_selection_tests;
+#[cfg(test)]
 #[path = "bundle_mapped_focused_test_relevance_tests.rs"]
 mod mapped_focused_test_relevance_tests;
 #[cfg(test)]

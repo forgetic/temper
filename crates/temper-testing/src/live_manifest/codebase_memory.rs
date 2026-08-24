@@ -31,6 +31,8 @@ mod mapped_decision_gap_recovery;
 mod mapped_decision_gap_recovery_fake;
 mod mapped_denied_shell_classification;
 mod mapped_denied_shell_classification_fake;
+mod mapped_exact_source_selection;
+mod mapped_exact_source_selection_fake;
 mod mapped_focused_test_relevance;
 mod mapped_focused_test_relevance_fake;
 mod mapped_graph_consumption;
@@ -38,6 +40,7 @@ mod mapped_graph_consumption_fake;
 mod mapped_graph_convergence;
 mod mapped_graph_convergence_fake;
 mod mapped_ordinary_convergence_fake;
+mod model_observations;
 mod privacy;
 mod provider_result_anchor;
 mod result_driven_fake;
@@ -48,6 +51,7 @@ mod typed_lineage_anchor;
 mod typed_lineage_fake;
 use aggregate::privacy_safe_checkpoints;
 pub(super) use configuration::{ToolConfiguration, tune_codebase_memory_config};
+use model_observations::ModelObservations;
 use privacy::write_privacy_safe_mcp_log;
 use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
@@ -123,6 +127,7 @@ pub(super) fn converge(
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
                 | "mapped-live-decision-gap-recovery"
+                | "mapped-live-exact-source-selection"
                 | "mapped-live-focused-test-source-relevance"
         )
     ) {
@@ -473,20 +478,6 @@ pub(super) struct CodebaseMemoryFake {
     privacy_safe_log: bool,
 }
 
-#[derive(Default)]
-struct ModelObservations {
-    prompt_guidance_seen: bool,
-    memory_result_seen: bool,
-    current_root_source_seen: bool,
-    code_refinement_seen: bool,
-    graph_trace_seen: bool,
-    current_root_source_results: usize,
-    safe_failure_seen: bool,
-    raw_provider_text_seen: bool,
-    bounded_graph_result_seen: bool,
-    oversized_message_seen: bool,
-}
-
 impl CodebaseMemoryFake {
     pub(super) fn start(
         script_path: &Path,
@@ -522,6 +513,8 @@ impl CodebaseMemoryFake {
             mapped_graph_convergence_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-decision-gap-recovery") {
             mapped_decision_gap_recovery_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-exact-source-selection") {
+            mapped_exact_source_selection_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-focused-test-source-relevance") {
             mapped_focused_test_relevance_fake::start(request_count, observations_for_rule)?
         } else {
@@ -656,6 +649,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
+                        | "mapped-live-exact-source-selection"
                         | "mapped-live-focused-test-source-relevance"
                 )
             )
@@ -684,6 +678,7 @@ impl CodebaseMemoryFake {
                     | "mapped-live-ordinary-tool-convergence"
                     | "mapped-live-graph-convergence"
                     | "mapped-live-decision-gap-recovery"
+                    | "mapped-live-exact-source-selection"
                     | "mapped-live-focused-test-source-relevance"
             )
         ) && !(graph_trace_seen
@@ -697,6 +692,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
+                        | "mapped-live-exact-source-selection"
                         | "mapped-live-focused-test-source-relevance"
                 )
             ) || code_refinement_seen))
@@ -717,6 +713,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-denied-shell-classification"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
+                        | "mapped-live-exact-source-selection"
                         | "mapped-live-focused-test-source-relevance"
                 )
             ) {
