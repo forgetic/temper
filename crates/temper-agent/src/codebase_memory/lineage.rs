@@ -1,7 +1,6 @@
 //! Process-local provider-result matching for typed decision-anchor lineage.
 //!
-//! Only bounded, typed MCP result parts are inspected here. Their values never
-//! leave the wrapper; the policy receives only the opaque root and canonical
+//! Bounded, typed MCP result parts stay here; policy receives only the opaque root and canonical
 //! target-kind aggregate in `DecisionAnchorLineageV1`.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +20,7 @@ const MAX_RESULT_TARGETS: usize = 64;
 mod admission;
 mod focused_test;
 mod selection;
+mod target;
 
 pub(super) use admission::DecisionAnchorLineageRegistry;
 use focused_test::{

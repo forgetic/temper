@@ -9,8 +9,9 @@ use super::super::lineage::*;
 use crate::mcp::McpToolResultPart;
 use serde_json::Value;
 use temper_agent_core::{
-    DecisionAnchorLineageStageV1, DecisionAnchorTargetKindV1, LineageAdmissionOutcome,
-    LineageAdmissionStatus,
+    DecisionAnchorLineageStageV1, DecisionAnchorTargetKindV1, InvocationTargetAdmission,
+    LineageAdmissionOutcome, LineageAdmissionResolver, LineageAdmissionStatus,
+    TargetAdmissionOutcome, TargetAdmissionStatus,
 };
 use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
@@ -759,5 +760,10 @@ mod tests {
         assert_eq!(later.stage, DecisionAnchorLineageStageV1::Root);
         assert_ne!(later.root_binding, first.root_binding);
         assert_ne!(later.root_binding, second.root_binding);
+    }
+
+    mod target_admission {
+        use super::*;
+        include!("lineage_targets.rs");
     }
 }

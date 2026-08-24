@@ -33,8 +33,9 @@ pub use invocation::{
     InvocationCatalogError, REJECTED_TOOL_NAME, ToolInvocationCatalog, arguments_match,
 };
 pub use lineage_admission::{
-    EligibleLineageAdmission, LineageAdmissionHandle, LineageAdmissionOutcome,
-    LineageAdmissionResolver, LineageAdmissionStatus,
+    EligibleLineageAdmission, EligibleWorkspaceTarget, InvocationTargetAdmission,
+    LineageAdmissionHandle, LineageAdmissionOutcome, LineageAdmissionResolver,
+    LineageAdmissionStatus, TargetAdmissionOutcome, TargetAdmissionStatus,
 };
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,

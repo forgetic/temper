@@ -9,7 +9,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use temper_protocol_activity::{GraphExplorationClosedV1, ShellDiscoveryDispositionV1};
+use temper_protocol_activity::{
+    DecisionAnchorLineageV1, GraphCorrelationToolV1, GraphCorrelationV1, GraphExplorationClosedV1,
+    ShellDiscoveryDispositionV1,
+};
 use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, ToolCall, UserContent, UserMessage,
 };
@@ -31,13 +34,14 @@ use crate::{LineageAdmissionHandle, ToolInvocationCatalog};
 use super::batching::{PendingTool, plan_batches};
 use super::decision_anchor::{
     DECISION_ANCHOR_CONVERGENCE_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState,
-    DecisionAnchorTransition,
+    DecisionAnchorTransition, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 use super::messages::{error_assistant, tool_result_message};
 use super::ordinary_failure::OrdinaryFailureCircuit;
 use super::protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,
-    CODEBASE_MEMORY_TOOL_PREFIX, OperationGeneration, ToolCallDenial, ToolStartPresentation,
+    CODEBASE_MEMORY_TOOL_PREFIX, OperationGeneration, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
+    ToolCallDenial, ToolStartPresentation,
 };
 use super::tool_failure::ToolFailureDiagnostic;
 
@@ -396,6 +400,23 @@ impl AgentMachine {
                 .flatten()
             })
             .collect::<Vec<_>>();
+        let invocation_targets = calls
+            .iter()
+            .map(|call| {
+                (!self.invocation_rejections.contains_key(&call.id))
+                    .then(|| {
+                        self.lineage_admission.as_ref().map(|admission| {
+                            admission.resolve_invocation_targets(&call.name, &call.arguments)
+                        })
+                    })
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        if let Some(batch) = self.pending_batches.front_mut() {
+            for (pending, admission) in batch.iter_mut().zip(invocation_targets) {
+                pending.invocation_targets = admission;
+            }
+        }
         let denials = self.decision_anchors.as_mut().map_or_else(
             || vec![None; calls.len()],
             |state| {
@@ -487,6 +508,42 @@ impl AgentMachine {
         // conversation, avoiding a second parallel instrumentation path.
         let mut requests = Vec::new();
 
+        // Resolve a typed source target only after the trusted wrapper has
+        // returned its valid lineage. The opaque outcome remains attached to
+        // this in-memory pending call and is never projected into protocol.
+        let is_typed_source_call = self.pending_batches.front().is_some_and(|batch| {
+            batch.iter().any(|pending| {
+                pending.call.id == id
+                    && pending.call.name == GraphCorrelationToolV1::GetCodeSnippet.public_name()
+            })
+        });
+        let source_target = (is_typed_source_call
+            && !output.is_error
+            && !self.invocation_rejections.contains_key(&id))
+        .then(|| {
+            let details = output.details.as_ref()?;
+            let correlation = serde_json::from_value::<GraphCorrelationV1>(
+                details.get(SAFE_GRAPH_CORRELATION_DETAIL_KEY)?.clone(),
+            )
+            .ok()?;
+            let lineage = serde_json::from_value::<DecisionAnchorLineageV1>(
+                details
+                    .get(SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY)?
+                    .clone(),
+            )
+            .ok()?;
+            (correlation.is_valid()
+                && correlation.tool == GraphCorrelationToolV1::GetCodeSnippet
+                && lineage.is_valid_for(&correlation))
+            .then(|| {
+                self.lineage_admission
+                    .as_ref()
+                    .map(|admission| admission.resolve_source_target(&lineage))
+            })
+            .flatten()
+        })
+        .flatten();
+
         // Record the result into the in-flight (front) batch.
         let mut completed_call = None;
         if let Some(batch) = self.pending_batches.front_mut() {
@@ -494,6 +551,7 @@ impl AgentMachine {
                 if !self.invocation_rejections.contains_key(&id) {
                     completed_call = Some(pending.call.clone());
                 }
+                pending.source_target = source_target;
                 pending.output = Some(output);
                 pending.failure = failure.clone();
             }

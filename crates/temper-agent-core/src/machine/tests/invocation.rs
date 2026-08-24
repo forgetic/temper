@@ -7,6 +7,7 @@
 //! native filesystem keys.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
@@ -21,16 +22,44 @@ use crate::machine::{
     AgentEvent, AgentMachine, AgentRequest, ToolFailureDiagnostic, ToolFailureReason,
 };
 use crate::{
-    LineageAdmissionOutcome, LineageAdmissionResolver, LineageAdmissionStatus, REJECTED_TOOL_NAME,
+    InvocationTargetAdmission, LineageAdmissionOutcome, LineageAdmissionResolver,
+    LineageAdmissionStatus, REJECTED_TOOL_NAME, TargetAdmissionOutcome, TargetAdmissionStatus,
     ToolInvocationCatalog,
 };
 
-struct CountingAdmission(AtomicUsize);
+#[derive(Default)]
+struct CountingAdmission {
+    graph: AtomicUsize,
+    targets: AtomicUsize,
+    sources: AtomicUsize,
+    canonical_targets: Mutex<Vec<(String, serde_json::Value)>>,
+}
 
 impl LineageAdmissionResolver for CountingAdmission {
     fn resolve(&self, _tool_name: &str, _arguments: &serde_json::Value) -> LineageAdmissionOutcome {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.graph.fetch_add(1, Ordering::SeqCst);
         LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
+    }
+
+    fn resolve_source_target(
+        &self,
+        _lineage: &temper_protocol_activity::DecisionAnchorLineageV1,
+    ) -> TargetAdmissionOutcome {
+        self.sources.fetch_add(1, Ordering::SeqCst);
+        TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
+    }
+
+    fn resolve_invocation_targets(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> InvocationTargetAdmission {
+        self.targets.fetch_add(1, Ordering::SeqCst);
+        self.canonical_targets
+            .lock()
+            .unwrap()
+            .push((tool_name.to_string(), arguments.clone()));
+        InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnknownTarget)
     }
 }
 
@@ -111,6 +140,20 @@ fn catalog(names: &[&'static str]) -> Arc<ToolInvocationCatalog> {
                     }),
                     ToolEffects::read(),
                 ),
+                "codebase_memory_get_code_snippet" => (
+                    serde_json::json!({
+                        "type":"object",
+                        "properties":{
+                            "qualified_name":{"type":"string"},
+                            "decision_evidence_kind":{
+                                "type":"string",
+                                "enum":["implementation", "caller", "focused_test"]
+                            }
+                        },
+                        "required":["qualified_name", "decision_evidence_kind"]
+                    }),
+                    ToolEffects::read(),
+                ),
                 other => panic!("unsupported fixture tool {other}"),
             };
             Box::new(ContractTool {
@@ -166,7 +209,7 @@ fn dispatched(requests: &[AgentRequest]) -> (&ToolCall, Option<&crate::ToolFailu
 
 #[test]
 fn canonical_graph_call_queries_run_local_admission_before_dispatch() {
-    let admission = Arc::new(CountingAdmission(AtomicUsize::new(0)));
+    let admission = Arc::new(CountingAdmission::default());
     let mut machine = machine(catalog(&["codebase_memory_search_graph"]))
         .with_lineage_admission(admission.clone());
     let _ = machine.on_start(EngineTime::ZERO);
@@ -181,12 +224,17 @@ fn canonical_graph_call_queries_run_local_admission_before_dispatch() {
             )],
         )),
     );
-    assert_eq!(admission.0.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.graph.load(Ordering::SeqCst), 1);
     assert!(
         requests
             .iter()
             .any(|request| matches!(request, AgentRequest::RunTool { .. }))
     );
+}
+
+mod target_admission {
+    use super::*;
+    include!("invocation_target_admission.rs");
 }
 
 #[test]
