@@ -33,7 +33,10 @@ fn successful_read() -> ToolOutput {
 
 #[test]
 fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
-    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    let mut effects = effects();
+    effects.insert("bash".to_string(), ToolEffects::process());
+    effects.insert("submit_for_pr".to_string(), ToolEffects::process());
+    let mut state = DecisionAnchorState::from_effects(&effects).unwrap();
     let target_a = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
 
     let early = call("early-bulk-read", "read");
@@ -201,6 +204,33 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
         ),
         None,
     );
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("source-mutating-shell", "bash"),
+            15,
+            Some(&InvocationTargetAdmission::Ineligible(
+                TargetAdmissionStatus::UnsupportedTool,
+            )),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+        "an unclassified shell cannot bypass exact target admission",
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("validation", "bash"),
+            16,
+            Some(&InvocationTargetAdmission::SourceNeutralProcess),
+        ),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("submit", "submit_for_pr"),
+            17,
+            Some(&InvocationTargetAdmission::ControlPlane),
+        ),
+        None,
+    );
 
     let debug = format!("{:?} {:?}", read_target(TARGET_A), read_target(TARGET_B));
     assert!(!debug.contains(TARGET_A));
@@ -250,20 +280,26 @@ impl LineageAdmissionResolver for ExactTargetResolver {
             "read" => InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(
                 self.target.clone(),
             )),
-            "write" => InvocationTargetAdmission::Mutation(vec![
+            "write" | "apply_patch" => InvocationTargetAdmission::Mutation(vec![
                 TargetAdmissionOutcome::Eligible(self.target.clone()),
             ]),
+            "bash" => InvocationTargetAdmission::SourceNeutralProcess,
+            "submit_for_pr" => InvocationTargetAdmission::ControlPlane,
             _ => InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool),
         }
     }
 }
 
 #[test]
-fn read_batch_settles_before_later_matching_mutation_in_one_model_response() {
+fn exact_read_matching_patch_validation_and_submission_serialize_successfully() {
     let resolver = Arc::new(ExactTargetResolver {
         target: exact_target(TARGET_A),
     });
-    let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects())
+    let mut effects = effects();
+    effects.insert("apply_patch".to_string(), ToolEffects::write());
+    effects.insert("bash".to_string(), ToolEffects::process());
+    effects.insert("submit_for_pr".to_string(), ToolEffects::process());
+    let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects)
         .with_lineage_admission(resolver);
     let _ = machine.on_start(EngineTime::ZERO);
 
@@ -326,7 +362,7 @@ fn read_batch_settles_before_later_matching_mutation_in_one_model_response() {
         &mut machine,
         llm_responded(assistant_tool_calls(&[
             ("post-source-read", "read"),
-            ("later-mutation", "write"),
+            ("matching-patch", "apply_patch"),
         ])),
     );
     assert_eq!(run_tools(&read_batch), ["post-source-read"]);
@@ -341,7 +377,31 @@ fn read_batch_settles_before_later_matching_mutation_in_one_model_response() {
                 call,
                 denial: None,
                 ..
-            } if call.id == "later-mutation"
+            } if call.id == "matching-patch"
         )
     }));
+
+    let after_patch = complete(
+        &mut machine,
+        tool_finished("matching-patch", successful_read()),
+    );
+    assert_eq!(calls_llm(&after_patch), 1);
+    let validation = complete(
+        &mut machine,
+        llm_responded(assistant_tool_calls(&[
+            ("validation", "bash"),
+            ("submission", "submit_for_pr"),
+        ])),
+    );
+    assert_eq!(run_tools(&validation), ["validation"]);
+    let submission = complete(
+        &mut machine,
+        tool_finished("validation", successful_read()),
+    );
+    assert_eq!(run_tools(&submission), ["submission"]);
+    let after_submission = complete(
+        &mut machine,
+        tool_finished("submission", successful_read()),
+    );
+    assert_eq!(calls_llm(&after_submission), 1);
 }

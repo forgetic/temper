@@ -14,6 +14,8 @@ use uuid::Uuid;
 use super::super::scope::WorkspaceScope;
 use crate::mcp::McpToolResultPart;
 
+mod process;
+
 #[derive(Default)]
 pub(super) struct WorkspaceTargetRegistry {
     identities: BTreeMap<PathBuf, EligibleWorkspaceTarget>,
@@ -114,6 +116,8 @@ impl WorkspaceTargetRegistry {
                     Err(status) => InvocationTargetAdmission::Ineligible(status),
                 }
             }
+            "bash" => process::classify_bash(object),
+            "submit_for_pr" => InvocationTargetAdmission::ControlPlane,
             _ => InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool),
         }
     }

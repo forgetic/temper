@@ -91,6 +91,11 @@ pub enum InvocationTargetAdmission {
     /// Every explicit mutation target has its own entry. An ineligible entry
     /// cannot piggyback on an eligible sibling in a multi-target operation.
     Mutation(Vec<TargetAdmissionOutcome>),
+    /// A process invocation classified by the trusted wrapper as having no
+    /// direct source-mutation operation.
+    SourceNeutralProcess,
+    /// A named control-plane operation that does not mutate workspace source.
+    ControlPlane,
     Ineligible(TargetAdmissionStatus),
 }
 

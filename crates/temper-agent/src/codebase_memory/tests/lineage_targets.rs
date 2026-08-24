@@ -133,9 +133,44 @@
             InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::CompetingTargets)
         );
         assert_eq!(
-            registry.resolve_invocation_targets("bash", &serde_json::json!({"command": "true"})),
-            InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool)
+            registry.resolve_invocation_targets(
+                "bash",
+                &serde_json::json!({
+                    "command": "cd demo && cargo fmt --check && cargo test --quiet && git diff --check && test \"$(git diff --name-only)\" = src/lib.rs && test \"$(git diff --numstat -- src/lib.rs)\" = \"$(printf '1\\t1\\tsrc/lib.rs')\""
+                })
+            ),
+            InvocationTargetAdmission::SourceNeutralProcess
         );
+        assert_eq!(
+            registry.resolve_invocation_targets(
+                "bash",
+                &serde_json::json!({"command": "cd demo && rg worker_slot src"})
+            ),
+            InvocationTargetAdmission::SourceNeutralProcess
+        );
+        assert_eq!(
+            registry.resolve_invocation_targets(
+                "submit_for_pr",
+                &serde_json::json!({"summary": "validated"})
+            ),
+            InvocationTargetAdmission::ControlPlane
+        );
+        for source_mutation in [
+            "printf changed > demo/src/lib.rs",
+            "sed -i s/run/work/ demo/src/lib.rs",
+            "cargo fmt",
+            "git checkout -- demo/src/lib.rs",
+            "test \"$(touch demo/src/lib.rs)\" = changed",
+        ] {
+            assert_eq!(
+                registry.resolve_invocation_targets(
+                    "bash",
+                    &serde_json::json!({"command": source_mutation})
+                ),
+                InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool),
+                "source-mutating shell command must remain fail-closed",
+            );
+        }
 
         let private = serde_json::to_string(&source).unwrap();
         let debug = format!("{source_target:?} {targets:?}");

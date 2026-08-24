@@ -148,17 +148,29 @@ impl DecisionAnchorState {
         name: &str,
         admission: Option<&InvocationTargetAdmission>,
     ) -> bool {
-        self.mutation_tools.contains(name)
-            && self.phase.as_ref().is_some_and(|phase| match phase {
-                AnchorPhase::AwaitingExactRead(anchors) => {
-                    !self.mutation_targets_authorized(anchors, admission)
-                }
-                AnchorPhase::Root(_)
-                | AnchorPhase::Trail(_)
-                | AnchorPhase::Recovery(_)
-                | AnchorPhase::GapRecovery(_)
-                | AnchorPhase::Exhausted(_) => true,
-            })
+        if !self.mutation_tools.contains(name) {
+            return false;
+        }
+        match admission {
+            Some(
+                InvocationTargetAdmission::SourceNeutralProcess
+                | InvocationTargetAdmission::ControlPlane,
+            ) => false,
+            Some(InvocationTargetAdmission::Mutation(_)) => {
+                self.phase.as_ref().is_some_and(|phase| match phase {
+                    AnchorPhase::AwaitingExactRead(anchors) => {
+                        !self.mutation_targets_authorized(anchors, admission)
+                    }
+                    AnchorPhase::Root(_)
+                    | AnchorPhase::Trail(_)
+                    | AnchorPhase::Recovery(_)
+                    | AnchorPhase::GapRecovery(_)
+                    | AnchorPhase::Exhausted(_) => true,
+                })
+            }
+            Some(InvocationTargetAdmission::Read(_) | InvocationTargetAdmission::Ineligible(_))
+            | None => self.phase.is_some(),
+        }
     }
 
     #[cfg(test)]
