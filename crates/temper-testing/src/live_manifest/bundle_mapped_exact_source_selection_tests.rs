@@ -59,6 +59,8 @@ fn exact_source_selection_bundle_maps_feature_1151_without_rewriting_history() {
         "typed-sources-denial-exact-read-and-matching-repair",
         "early-read-precedes-typed-evidence-and-cannot-authorize-mutation",
         "patch-route-before-post-source-read",
+        "validate-post-source-read-repair",
+        "submit-post-source-read-repair",
         "read-route-after-source-evidence",
         "policy_precondition",
         "satisfy_policy",
