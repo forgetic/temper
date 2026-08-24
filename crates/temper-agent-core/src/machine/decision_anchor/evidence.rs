@@ -7,11 +7,19 @@ use super::*;
 impl DecisionAnchorState {
     pub(super) fn enter_gap_recovery(&mut self, anchors: AnchorForest) -> DecisionAnchorTransition {
         debug_assert!(!anchors.has_complete_evidence());
+        let mut anchors = anchors;
         let Some(active_root) = anchors.recovery_root_binding() else {
             self.phase = Some(AnchorPhase::Exhausted(anchors.active_evidence()));
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
         };
+        if anchors.roots.len() > 1 {
+            let active = anchors
+                .roots
+                .get_mut(&active_root)
+                .expect("the selected recovery root remains installed");
+            active.evidence.trace_before_implementation = true;
+        }
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
             active_root,
@@ -212,6 +220,7 @@ impl SourceEvidence {
         if let Some(turn) = other.trace_turn {
             self.record_trace(turn);
         }
+        self.trace_before_implementation |= other.trace_before_implementation;
         self.caller_selector_available |= other.caller_selector_available;
         if self.caller_traversal_outcome.is_none() {
             self.caller_traversal_outcome = other.caller_traversal_outcome;
@@ -296,16 +305,26 @@ impl SourceEvidence {
     /// Recovery advances through exact implementation source, its typed caller
     /// traversal, the exact returned caller source, and then focused-test routes.
     pub(super) fn compatible_actions(&self, anchor: &Anchor) -> BTreeSet<GraphRecoveryActionV1> {
-        if self.needs(DecisionGap::Evidence(
-            DecisionEvidenceKindV1::Implementation,
-        )) {
-            let action =
-                GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
+        if !self.has_trace() && self.trace_before_implementation {
+            let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Trace);
             return anchor
                 .supports(action)
                 .then_some(action)
                 .into_iter()
                 .collect();
+        }
+        let mut actions = BTreeSet::new();
+        if self.needs(DecisionGap::Evidence(
+            DecisionEvidenceKindV1::Implementation,
+        )) {
+            let action =
+                GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
+            if anchor.supports(action) {
+                actions.insert(action);
+            }
+            if !self.trace_before_implementation {
+                return actions;
+            }
         }
         if !self.has_trace() {
             let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Trace);
@@ -316,7 +335,6 @@ impl SourceEvidence {
                 .collect();
         }
 
-        let mut actions = BTreeSet::new();
         if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::Caller))
             && self.caller_selector_available
         {

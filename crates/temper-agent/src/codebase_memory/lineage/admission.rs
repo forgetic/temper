@@ -213,12 +213,14 @@ impl DecisionAnchorLineages {
             .unwrap_or(Ineligible(IncapableSelection));
         }
         if tool_kind == GraphCorrelationToolV1::TracePath {
-            if object.get("direction").and_then(Value::as_str) != Some("inbound")
+            if object
+                .get("direction")
+                .and_then(Value::as_str)
+                .is_some_and(|direction| direction != "inbound")
                 || object
                     .get("mode")
                     .and_then(Value::as_str)
                     .is_some_and(|mode| mode != "calls")
-                || !binding.implementation_evidence_result
             {
                 return Ineligible(IncapableSelection);
             }

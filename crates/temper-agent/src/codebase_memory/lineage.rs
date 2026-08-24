@@ -131,7 +131,10 @@ impl DecisionAnchorLineages {
         };
 
         let is_caller_traversal = correlation.tool == GraphCorrelationToolV1::TracePath
-            && input.get("direction").and_then(Value::as_str) == Some("inbound")
+            && input
+                .get("direction")
+                .and_then(Value::as_str)
+                .is_none_or(|direction| direction == "inbound")
             && input
                 .get("mode")
                 .and_then(Value::as_str)
@@ -140,9 +143,7 @@ impl DecisionAnchorLineages {
                 .get("include_tests")
                 .and_then(Value::as_bool)
                 .is_none_or(|include| !include)
-            && selector_binding
-                .as_ref()
-                .is_some_and(|binding| binding.implementation_evidence_result);
+            && selector_binding.is_some();
         let caller_candidates = is_caller_traversal
             .then(|| provider_caller_candidates(typed_parts))
             .flatten();
@@ -172,6 +173,15 @@ impl DecisionAnchorLineages {
             Some(candidates) => {
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
                 self.register(&root_binding, candidates)?;
+                if correlation.tool == GraphCorrelationToolV1::SearchGraph
+                    && fallback_root.is_none()
+                {
+                    self.mark_candidates(
+                        &root_binding,
+                        provider_candidates(typed_parts)?,
+                        SelectorOrigin::FocusedTestResult,
+                    )?;
+                }
                 if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Implementation) {
                     self.mark_input_selector(
                         correlation.target_kind,
