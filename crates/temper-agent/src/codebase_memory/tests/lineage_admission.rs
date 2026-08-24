@@ -37,7 +37,7 @@ fn exact_selectors_resolve_before_provider_with_only_closed_values() {
         .unwrap();
     let admission = lineages.resolve(
         GraphCorrelationToolV1::TracePath.public_name(),
-        &serde_json::json!({"function_name": "run", "direction": "inbound"}),
+        &serde_json::json!({"function_name": "run"}),
     );
     let LineageAdmissionOutcome::Eligible(admission) = admission else {
         panic!("exact registered selector must be eligible");

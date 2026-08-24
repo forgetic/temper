@@ -109,6 +109,7 @@ struct SourceEvidence {
     trace_turn: Option<usize>,
     decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
     caller_selector_available: bool,
+    trace_before_implementation: bool,
     caller_traversal_outcome: Option<CallerDiscoveryOutcomeV1>,
     focused_test_selector_available: bool,
     focused_test_traversal_turn: Option<usize>,
