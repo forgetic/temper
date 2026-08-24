@@ -1,5 +1,3 @@
-//! Deterministic decision-anchor policy regressions.
-
 mod tests {
     use super::super::super::decision_anchor::*;
     use crate::machine::tests::common::{
@@ -36,6 +34,7 @@ mod tests {
     mod convergence {
         include!("decision_anchor_convergence.rs");
         include!("decision_anchor_exact_read.rs");
+        include!("decision_anchor_progress.rs");
     }
 
     mod recovery {

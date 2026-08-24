@@ -207,7 +207,7 @@ impl AnchorForest {
         root.is_some_and(|root| root.evidence.expects(gap, tool))
     }
 
-    fn active_root(&self) -> Option<(&String, &Anchor)> {
+    pub(super) fn active_root(&self) -> Option<(&String, &Anchor)> {
         self.ranked_roots().next()
     }
 

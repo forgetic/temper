@@ -239,6 +239,10 @@ crates/temper-agent/src/activity/normalizer.rs
 # bounded fallback, and mutation gating against the same state-machine fixture.
 crates/temper-agent-core/src/machine/tests/decision_anchor.rs
 
+# Opaque decision-chain integration coverage keeps every bypass and the successful
+# exact-read route on one scripted provider/model fixture for comparable ordering.
+crates/temper-agent/tests/support/opaque_decision_chain.rs
+
 # Typed lineage extraction cases share provider-shape fixtures across canonical
 # aliases, ambiguity rejection, mirrored parts, and privacy-safe digest evidence.
 crates/temper-agent/src/codebase_memory/tests/lineage.rs

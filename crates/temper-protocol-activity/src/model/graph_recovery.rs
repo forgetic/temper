@@ -189,7 +189,9 @@ impl GraphRecoveryActionV1 {
         }
     }
 
-    fn label(self) -> String {
+    /// Canonical model-visible label containing only closed tool, selector,
+    /// evidence, and traversal kinds.
+    pub fn model_label(self) -> String {
         let mut label = format!(
             "{}/{}/{}",
             match self.tool {
@@ -458,7 +460,7 @@ fn action_labels(actions: &[GraphRecoveryActionV1]) -> String {
     actions
         .iter()
         .copied()
-        .map(GraphRecoveryActionV1::label)
+        .map(GraphRecoveryActionV1::model_label)
         .collect::<Vec<_>>()
         .join(", ")
 }

@@ -101,6 +101,8 @@ pub struct AgentMachine {
     decision_anchor_recovery: bool,
     /// Actionable, privacy-safe guidance for bounded missing-evidence recovery.
     decision_anchor_gap_recovery: Option<GraphExplorationClosedV1>,
+    /// Per-result closed active-root classifications queued after tool results.
+    decision_anchor_guidance: Vec<String>,
     /// Stops the run after the active batch drains once bounded recovery fails.
     decision_anchor_exhausted: bool,
     /// The most recent assistant message (the run's product on completion).
@@ -175,6 +177,7 @@ impl AgentMachine {
             decision_anchor_convergence: false,
             decision_anchor_recovery: false,
             decision_anchor_gap_recovery: None,
+            decision_anchor_guidance: Vec::new(),
             decision_anchor_exhausted: false,
             last_assistant: None,
             model_failure: None,
@@ -215,6 +218,7 @@ impl AgentMachine {
         self.decision_anchor_convergence = false;
         self.decision_anchor_recovery = false;
         self.decision_anchor_gap_recovery = None;
+        self.decision_anchor_guidance.clear();
         self.decision_anchor_exhausted = false;
         let final_message = self
             .last_assistant
@@ -291,6 +295,12 @@ impl AgentMachine {
                 count: steering.len(),
             }));
             self.messages.extend(steering);
+        }
+        for guidance in std::mem::take(&mut self.decision_anchor_guidance) {
+            self.messages.push(Message::User(UserMessage {
+                content: UserContent::Text(guidance),
+                timestamp: 0,
+            }));
         }
         if self.decision_anchor_convergence {
             self.decision_anchor_convergence = false;
@@ -417,17 +427,19 @@ impl AgentMachine {
                 pending.invocation_targets = admission;
             }
         }
-        let denials = self.decision_anchors.as_mut().map_or_else(
-            || vec![None; calls.len()],
-            |state| {
-                state.on_tool_batch_dispatched_with_admissions_and_targets(
-                    &calls,
-                    model_turn,
-                    &closed_admissions,
-                    &invocation_targets,
-                )
-            },
-        );
+        let denials = if let Some(state) = self.decision_anchors.as_mut() {
+            let denials = state.on_tool_batch_dispatched_with_admissions_and_targets(
+                &calls,
+                model_turn,
+                &closed_admissions,
+                &invocation_targets,
+            );
+            self.decision_anchor_guidance
+                .extend(state.take_model_guidance());
+            denials
+        } else {
+            vec![None; calls.len()]
+        };
         for (call, denial) in calls.into_iter().zip(denials) {
             let rejection = self.invocation_rejections.get(&call.id).cloned();
             let shell_discovery_disposition = (rejection.is_none()
@@ -590,7 +602,8 @@ impl AgentMachine {
                         })
                     })
                     .collect::<Vec<_>>();
-                match state.on_tool_batch_finished_with_targets(&completed) {
+                let transition = state.on_tool_batch_finished_with_targets(&completed);
+                match transition {
                     DecisionAnchorTransition::Unchanged => {}
                     DecisionAnchorTransition::RecoveryNeeded => {
                         self.decision_anchor_recovery = true;
@@ -606,6 +619,8 @@ impl AgentMachine {
                     }
                     DecisionAnchorTransition::ExplorationExhausted => {}
                 }
+                self.decision_anchor_guidance
+                    .extend(state.take_model_guidance());
             }
             for pending in &batch {
                 self.invocation_rejections.remove(&pending.call.id);

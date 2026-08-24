@@ -1,8 +1,8 @@
 use super::MAX_CODEBASE_MEMORY_OUTPUT_BYTES;
 
-/// Model-visible guidance that is deliberately generic: it follows only a
-/// complete, bounded result and never carries provider arguments or fields.
-pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: This complete typed graph result is eligible for later-turn evidence. In a later model turn, select provider-returned symbols or source identities exactly for dependent refinement, trace, or source reads. For caller understanding, trace inbound from the likely implementation returned by targeted search, not from an outer caller or wrapper. Preserve typed caller/callee identities for later source reads. A complete empty inbound trace settles the selected symbol's graph-caller relationship; do not manufacture a caller by rereading that same symbol. If implementation and caller source are complete but focused-test source is missing, a compatible menu may direct a later inbound calls traversal from the returned caller with tests included; read an exact test identity returned by that traversal only in another later turn. Independent evidence reads may remain parallel.]";
+/// Neutral marker for one complete typed wrapper result. The pure machine
+/// appends the authoritative active-root classification after settlement.
+pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: complete typed graph result; active-root eligibility is pending the stateful Decision guidance appended after this result. Do not choose a dependent graph call until that guidance classifies this result.]";
 
 pub(super) struct PresentedResult {
     pub(super) text: String,
