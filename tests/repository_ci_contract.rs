@@ -47,8 +47,8 @@ fn repository_ci_uses_a_serialized_persistent_workspace() {
         "the persistent workspace must be serialized across Rust CI jobs"
     );
     assert!(
-        validate_job.contains("rsync -rlp --checksum --delete --exclude target/"),
-        "CI should refresh sources without deleting the persistent Cargo target"
+        validate_job.contains("rsync -rlp --checksum --delete --exclude /target/"),
+        "CI should preserve only the root Cargo target, not source directories with that name"
     );
 }
 
