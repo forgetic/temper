@@ -261,6 +261,26 @@ fn empty_traversal_opens_one_same_root_semantic_fallback_and_only_its_exact_test
         );
     }
 
+    let foreign_root = lineages
+        .record(
+            &GraphCorrelationV1::new(
+                GraphCorrelationToolV1::SearchGraph,
+                GraphCorrelationTargetKindV1::GraphQuery,
+                "independent behavior root",
+            )
+            .unwrap(),
+            &serde_json::json!({"query": "independent behavior root"}),
+            Some(&structured_parts(serde_json::json!({
+                "results": [{
+                    "qualified_name": "temper-v1-hash.tests.cross_root.same_test",
+                    "name": "same_test",
+                    "label": "Function"
+                }]
+            }))),
+        )
+        .unwrap();
+    assert_ne!(foreign_root.root_binding, root.root_binding);
+
     let query_input = serde_json::json!({"query": "request affinity behavioral regression"});
     let fallback = lineages.resolve(
         GraphCorrelationToolV1::SearchGraph.public_name(),
@@ -293,14 +313,39 @@ fn empty_traversal_opens_one_same_root_semantic_fallback_and_only_its_exact_test
             .unwrap(),
             &query_input,
             Some(&structured_parts(serde_json::json!({
-                "results": [{
-                    "name": "request_affinity_is_stable",
-                    "qualified_name": "temper-v1-hash.tests.request_affinity.request_affinity_is_stable",
-                    "label": "Function",
-                    "file_path": "tests/request_affinity.rs",
-                    "degree": 1
-                }],
-                "total": 1,
+                "results": [
+                    {
+                        "name": "request_affinity_is_stable",
+                        "qualified_name": "temper-v1-hash.tests.request_affinity.request_affinity_is_stable",
+                        "label": "Function",
+                        "file_path": "tests/request_affinity.rs",
+                        "degree": 1
+                    },
+                    {
+                        "functionName": "request_affinity_survives_retry",
+                        "qualifiedName": "temper-v1-hash.tests.request_affinity.request_affinity_survives_retry",
+                        "label": "Function"
+                    },
+                    {
+                        "name": "request_affinity_helper",
+                        "qualified_name": "temper-v1-hash.src.request_affinity_helper",
+                        "label": "Function"
+                    },
+                    {
+                        "qualified_name": "temper-v1-hash.tests.first.shared_selector",
+                        "label": "Function"
+                    },
+                    {
+                        "qualified_name": "temper-v1-hash.tests.second.shared_selector",
+                        "label": "Function"
+                    },
+                    {
+                        "name": "same_test",
+                        "qualified_name": "temper-v1-hash.tests.cross_root.same_test",
+                        "label": "Function"
+                    }
+                ],
+                "total": 6,
                 "has_more": false
             }))),
         )
@@ -319,15 +364,98 @@ fn empty_traversal_opens_one_same_root_semantic_fallback_and_only_its_exact_test
         "a completed fallback cannot reopen",
     );
 
+    for (selector, status) in [
+        (
+            "temper-v1-hash.tests.cross_root.same_test",
+            LineageAdmissionStatus::AmbiguousSelector,
+        ),
+        (
+            "shared_selector",
+            LineageAdmissionStatus::IncapableSelection,
+        ),
+        (
+            "tests::request_affinity::request_affinity_is_stable",
+            LineageAdmissionStatus::UnknownSelector,
+        ),
+        (
+            "temper-v1-hash.tests.invented_test",
+            LineageAdmissionStatus::UnknownSelector,
+        ),
+    ] {
+        assert_eq!(
+            lineages.resolve(
+                GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+                &serde_json::json!({
+                    "qualified_name": selector,
+                    "decision_evidence_kind": "focused_test"
+                }),
+            ),
+            LineageAdmissionOutcome::Ineligible(status),
+        );
+    }
+
+    let non_test_input = serde_json::json!({
+        "qualified_name": "temper-v1-hash.src.request_affinity_helper",
+        "decision_evidence_kind": "focused_test"
+    });
+    assert!(matches!(
+        lineages.resolve(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &non_test_input,
+        ),
+        LineageAdmissionOutcome::Eligible(_)
+    ));
+    let non_test = lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &non_test_input,
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "temper-v1-hash.src.request_affinity_helper",
+                "name": "request_affinity_helper",
+                "source": "helper source",
+                "is_test": false
+            }))),
+            Some(DecisionEvidenceKindV1::FocusedTest),
+        )
+        .unwrap();
+    assert_eq!(non_test.root_binding, root.root_binding);
+    assert_eq!(non_test.decision_evidence_kind, None);
+
+    let exact_input = serde_json::json!({
+        "qualified_name": "temper-v1-hash.tests.request_affinity.request_affinity_is_stable",
+        "decision_evidence_kind": "focused_test"
+    });
     let exact = lineages.resolve(
         GraphCorrelationToolV1::GetCodeSnippet.public_name(),
-        &serde_json::json!({
-            "qualified_name": "temper-v1-hash.tests.request_affinity.request_affinity_is_stable",
-            "decision_evidence_kind": "focused_test"
-        }),
+        &exact_input,
     );
     let LineageAdmissionOutcome::Eligible(exact) = exact else {
         panic!("fallback-returned exact provider identity must be eligible");
     };
     assert!(exact.matches_root(&root.root_binding));
+
+    let test_source = lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &exact_input,
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "temper-v1-hash.tests.request_affinity.request_affinity_is_stable",
+                "name": "request_affinity_is_stable",
+                "source": "typed test source",
+                "is_test": true
+            }))),
+            Some(DecisionEvidenceKindV1::FocusedTest),
+        )
+        .unwrap();
+    assert_eq!(test_source.root_binding, root.root_binding);
+    assert_eq!(
+        test_source.decision_evidence_kind,
+        Some(DecisionEvidenceKindV1::FocusedTest)
+    );
+    assert!(test_source.canonical_target_digests.contains(
+        &GraphCorrelationV1::target_digest(
+            "tests::request_affinity::request_affinity_is_stable"
+        )
+        .unwrap()
+    ));
 }

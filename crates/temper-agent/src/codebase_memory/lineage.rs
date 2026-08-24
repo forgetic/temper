@@ -57,6 +57,7 @@ struct SelectorBinding {
     caller_traversal_result: bool,
     caller_evidence_result: bool,
     focused_test_result: bool,
+    focused_test_confirmation_required: bool,
 }
 
 impl DecisionAnchorLineages {
@@ -86,22 +87,16 @@ impl DecisionAnchorLineages {
         }
         let target_kind =
             DecisionAnchorTargetKindV1::from_graph_correlation(correlation.target_kind);
-        let selector_binding = self
-            .selector_for_input(correlation.target_kind, input)
-            .and_then(|selector| self.selectors.get(&selector).cloned().flatten());
-        let admitted_evidence_kind = decision_evidence_kind.filter(|kind| {
-            selector_binding.as_ref().is_some_and(|binding| match kind {
-                DecisionEvidenceKindV1::Implementation => {
-                    binding.implementation_evidence_result
-                        || !self.selectors.values().flatten().any(|candidate| {
-                            candidate.root_binding == binding.root_binding
-                                && candidate.implementation_evidence_result
-                        })
-                }
-                DecisionEvidenceKindV1::Caller => binding.caller_traversal_result,
-                DecisionEvidenceKindV1::FocusedTest => binding.focused_test_result,
-            })
-        });
+        let input_selector = self.selector_for_input(correlation.target_kind, input);
+        let selector_binding = input_selector
+            .as_ref()
+            .and_then(|selector| self.selectors.get(selector).cloned().flatten());
+        let admitted_evidence_kind = self.admitted_evidence_kind(
+            decision_evidence_kind,
+            input_selector.as_ref(),
+            selector_binding.as_ref(),
+            typed_parts,
+        );
         let fallback_root = (correlation.tool == GraphCorrelationToolV1::SearchGraph
             && correlation.target_kind == GraphCorrelationTargetKindV1::GraphQuery)
             .then(|| {
@@ -157,7 +152,7 @@ impl DecisionAnchorLineages {
 
         let FocusedTestDiscovery {
             candidates: focused_tests,
-            outcome: focused_test_discovery,
+            outcome: mut focused_test_discovery,
             is_traversal: is_focused_test_traversal,
         } = focused_test_discovery(
             correlation,
@@ -169,6 +164,7 @@ impl DecisionAnchorLineages {
             typed_parts,
         );
 
+        let mut marked_focused_tests = None;
         let result_target_kinds = match provider_candidates(typed_parts) {
             Some(candidates) => {
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
@@ -205,21 +201,27 @@ impl DecisionAnchorLineages {
                         SelectorOrigin::CallerTraversalResult,
                     )?;
                 }
-                if let Some(focused_tests) = focused_tests {
-                    self.mark_candidates(
+                if let Some(focused_tests) = focused_tests.as_ref() {
+                    marked_focused_tests = Some(self.mark_candidates(
                         &root_binding,
-                        focused_tests,
-                        SelectorOrigin::FocusedTestResult,
-                    )?;
+                        focused_tests.clone(),
+                        if fallback_root.is_some() {
+                            SelectorOrigin::FocusedTestFallbackResult
+                        } else {
+                            SelectorOrigin::FocusedTestResult
+                        },
+                    )?);
                 }
                 kinds
             }
             None => BTreeSet::new(),
         };
-        self.record_focused_test_recovery(
+        focused_test_discovery = self.record_registered_focused_test_recovery(
             &root_binding,
             is_focused_test_traversal,
             fallback_root.is_some(),
+            focused_tests.is_some(),
+            marked_focused_tests,
             focused_test_discovery,
         );
         DecisionAnchorLineageV1::new_with_route_metadata(
@@ -328,7 +330,9 @@ fn collect_result_record(
 
     for (field, value) in values {
         match field.as_str() {
-            "results" => collect_result(value, candidates)?,
+            "results" | "semantic_results" | "semanticResults" => {
+                collect_result(value, candidates)?
+            }
             "callers" | "caller_list" | "callerList" | "caller_functions" | "callerFunctions"
             | "callees" | "callee_list" | "calleeList" | "callee_functions" | "calleeFunctions"
             | "symbols" | "short_symbols" | "shortSymbols" => {

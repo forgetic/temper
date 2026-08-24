@@ -4,6 +4,7 @@ const FALLBACK_QUERY: &str = "request affinity remains stable across worker sele
 const EMPTY_FALLBACK_QUERY: &str = "request affinity regression without a matching test";
 const AMBIGUOUS_FALLBACK_QUERY: &str = "request affinity regression with ambiguous coverage";
 const MALFORMED_FALLBACK_QUERY: &str = "request affinity regression with malformed coverage";
+const NON_TEST_FALLBACK_QUERY: &str = "request affinity regression returning a non-test helper";
 
 #[test]
 fn jig_empty_traversal_uses_one_semantic_fallback_before_mutation() {
@@ -76,6 +77,7 @@ fn jig_inexact_fallbacks_stop_without_retry_or_product() {
         ),
         ("ambiguous", fallback_ambiguous_reply),
         ("malformed", fallback_malformed_reply),
+        ("non-test", fallback_non_test_reply),
     ] {
         assert_fallback_exhaustion(case, reply);
     }
@@ -95,6 +97,10 @@ fn fallback_ambiguous_reply(view: &RequestView) -> Reply {
 
 fn fallback_malformed_reply(view: &RequestView) -> Reply {
     fallback_reply(view, MALFORMED_FALLBACK_QUERY, false)
+}
+
+fn fallback_non_test_reply(view: &RequestView) -> Reply {
+    fallback_reply(view, NON_TEST_FALLBACK_QUERY, true)
 }
 
 fn assert_fallback_exhaustion(case: &str, reply: fn(&RequestView) -> Reply) {

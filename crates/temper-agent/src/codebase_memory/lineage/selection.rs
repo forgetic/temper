@@ -36,6 +36,34 @@ impl DecisionAnchorLineages {
         })
     }
 
+    pub(super) fn admitted_evidence_kind(
+        &self,
+        requested: Option<DecisionEvidenceKindV1>,
+        selector: Option<&Selector>,
+        binding: Option<&SelectorBinding>,
+        typed_parts: Option<&[McpToolResultPart]>,
+    ) -> Option<DecisionEvidenceKindV1> {
+        requested.filter(|kind| {
+            binding.is_some_and(|binding| match kind {
+                DecisionEvidenceKindV1::Implementation => {
+                    binding.implementation_evidence_result
+                        || !self.selectors.values().flatten().any(|candidate| {
+                            candidate.root_binding == binding.root_binding
+                                && candidate.implementation_evidence_result
+                        })
+                }
+                DecisionEvidenceKindV1::Caller => binding.caller_traversal_result,
+                DecisionEvidenceKindV1::FocusedTest => {
+                    binding.focused_test_result
+                        && (!binding.focused_test_confirmation_required
+                            || selector.is_some_and(|selector| {
+                                focused_test::source_confirms_exact_test(selector, typed_parts)
+                            }))
+                }
+            })
+        })
+    }
+
     pub(super) fn register(&mut self, root: &str, candidates: BTreeSet<Candidate>) -> Option<()> {
         for candidate in candidates {
             let canonical_target_digests = canonical_target_digests(&candidate.value)?;
@@ -54,6 +82,7 @@ impl DecisionAnchorLineages {
                             caller_traversal_result: false,
                             caller_evidence_result: false,
                             focused_test_result: false,
+                            focused_test_confirmation_required: false,
                         }),
                     );
                 }
@@ -96,7 +125,7 @@ impl DecisionAnchorLineages {
                 })
             })
             .collect();
-        self.mark_candidates(root, equivalents, origin)
+        self.mark_candidates(root, equivalents, origin).map(|_| ())
     }
 }
 
