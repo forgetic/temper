@@ -554,9 +554,13 @@ for line in sys.stdin:
             elif arguments.get("query") == "renamed replay shard ownership regression":
                 result(request["id"], {"results": [{"qualified_name": SEMANTIC_FOCUSED_TEST, "name": "renamed_replay_preserves_shard_ownership", "is_test": True}]})
             elif arguments.get("query") == "request affinity remains stable across worker selection":
-                result(request["id"], {"results": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "is_test": True}]})
+                result(request["id"], {"results": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "label": "Function", "file_path": "tests/request_affinity.rs", "degree": 1}], "total": 1, "has_more": False})
             elif arguments.get("query") == "request affinity regression without a matching test":
                 result(request["id"], {"results": []})
+            elif arguments.get("query") == "request affinity regression with ambiguous coverage":
+                result(request["id"], {"results": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "label": "Function"}, {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "label": "Function"}]})
+            elif arguments.get("query") == "request affinity regression with malformed coverage":
+                result(request["id"], {"results": [{"qualified_name": ["not", "an", "identity"]}]})
             elif arguments.get("name_pattern") == "dispatch_key":
                 result(request["id"], {"results": [{"qualified_name": INCIDENTAL_IMPLEMENTATION, "name": "legacy_dispatch_key"}]})
             else:

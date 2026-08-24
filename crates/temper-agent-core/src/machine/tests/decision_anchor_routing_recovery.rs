@@ -287,6 +287,62 @@ fn empty_traversal_and_empty_fallback_exhaust_without_retry_path() {
 }
 
 #[test]
+fn fallback_with_typed_targets_but_no_exact_selector_exhausts_without_escape() {
+    let mut state = focused_test_recovery_state();
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &focused_test_traversal_call("empty-traversal"),
+            6,
+            Some(&LineageAdmissionOutcome::Eligible(traversal_admission())),
+        ),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "empty-traversal",
+            "codebase_memory_trace_path",
+            &output_with_focused_test_discovery(
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                FocusedTestDiscoveryOutcomeV1::NoEligibleSelector,
+            ),
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &semantic_fallback_call("malformed-fallback"),
+            7,
+            Some(&LineageAdmissionOutcome::Eligible(fallback_admission())),
+        ),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "malformed-fallback",
+            "codebase_memory_search_graph",
+            &output_with_kinds(
+                "codebase_memory_search_graph",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                &[
+                    DecisionAnchorTargetKindV1::Pattern,
+                    DecisionAnchorTargetKindV1::FunctionName,
+                    DecisionAnchorTargetKindV1::QualifiedName,
+                ],
+            ),
+        ),
+        DecisionAnchorTransition::RecoveryExhausted,
+    );
+    assert!(state.blocks_mutation("write"));
+    assert_eq!(
+        state.on_tool_dispatched(&semantic_fallback_call("independent-retry"), 8),
+        exhausted_graph_denial([GraphRecoveryEvidenceKindV1::FocusedTest]),
+    );
+}
+
+#[test]
 fn multi_root_over_returned_candidates_recover_on_the_selected_root() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("routing-root", "codebase_memory_search_graph"), 0);
