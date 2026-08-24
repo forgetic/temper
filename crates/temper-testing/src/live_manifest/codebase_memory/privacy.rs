@@ -19,6 +19,7 @@ pub(super) fn is_privacy_safe_profile(profile: Option<&str>) -> bool {
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
                 | "mapped-live-decision-gap-recovery"
+                | "mapped-live-exact-source-selection"
                 | "mapped-live-focused-test-source-relevance"
         )
     )
@@ -58,6 +59,55 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn exact_selection_aggregate_retains_only_closed_checkpoint_facts() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let mcp = super::super::write_fake_mcp(
+            workspace.path(),
+            "private-provider-project",
+            Some("mapped-live-exact-source-selection"),
+            &["get_code_snippet".to_string()],
+            &["index_repository".to_string()],
+            750,
+            None,
+        )
+        .expect("fake MCP");
+        let calls = vec![McpToolCallEvidence {
+            name: "get_code_snippet".to_string(),
+            arguments: json!({
+                "qualified_name": "private::implementation",
+                "project": "private-provider-project",
+                "source": "private source",
+                "root": "/private/root",
+                "credential": "MCP-FIXTURE-SECRET",
+            }),
+            delay_ms: None,
+            is_error: false,
+            fixture_event: Some("served_selection_implementation_source".to_string()),
+        }];
+
+        let path = write_privacy_safe_mcp_log(&mcp, &calls).expect("privacy-safe log");
+        let retained = fs::read_to_string(path).expect("retained aggregate");
+        assert_eq!(
+            retained,
+            concat!(
+                "{\"checkpoint\":\"served_selection_implementation_source\",",
+                "\"is_error\":false,\"sequence\":1,",
+                "\"tool\":\"get_code_snippet\"}\n"
+            )
+        );
+        for private in [
+            "private::implementation",
+            "private-provider-project",
+            "private source",
+            "/private/root",
+            "credential",
+            "MCP-FIXTURE-SECRET",
+        ] {
+            assert!(!retained.contains(private), "aggregate retained {private}");
+        }
+    }
 
     #[test]
     fn focused_relevance_aggregate_omits_selectors_source_and_credentials() {

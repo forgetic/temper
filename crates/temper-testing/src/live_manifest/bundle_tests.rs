@@ -106,6 +106,10 @@ fn all_live_bundles_resolve_typed_actions_and_owned_jig_scripts() {
             ConvergenceStrategy::CodebaseMemory,
         ),
         (
+            "mapped-live-exact-source-selection",
+            ConvergenceStrategy::CodebaseMemory,
+        ),
+        (
             "mapped-live-focused-test-source-relevance",
             ConvergenceStrategy::CodebaseMemory,
         ),

@@ -66,6 +66,7 @@ impl LiveExecutionContext<'_> {
                             | "mapped-live-ordinary-tool-convergence"
                             | "mapped-live-graph-convergence"
                             | "mapped-live-decision-gap-recovery"
+                            | "mapped-live-exact-source-selection"
                             | "mapped-live-focused-test-source-relevance"
                     )
                 ),
@@ -197,6 +198,7 @@ impl LiveExecutionContext<'_> {
                                 | "mapped-live-ordinary-tool-convergence"
                                 | "mapped-live-graph-convergence"
                                 | "mapped-live-decision-gap-recovery"
+                                | "mapped-live-exact-source-selection"
                                 | "mapped-live-focused-test-source-relevance"
                         )
                     )
