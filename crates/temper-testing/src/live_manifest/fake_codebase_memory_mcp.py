@@ -534,6 +534,7 @@ for line in sys.stdin:
                     payload = {
                         "name": terminal_function_name(qualified_name),
                         "qualified_name": qualified_name,
+                        "file_path": source_stage[1],
                         "source": source,
                         "binding": "current_prepared_checkout",
                     }

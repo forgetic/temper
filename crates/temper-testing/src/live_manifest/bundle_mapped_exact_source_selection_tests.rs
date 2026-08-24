@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::*;
 
 #[test]
-fn exact_source_selection_bundle_maps_feature_1139_without_rewriting_history() {
+fn exact_source_selection_bundle_maps_feature_1151_without_rewriting_history() {
     let scenario_path = scenarios_root().join("mapped-live-exact-source-selection");
     let bundle = ScenarioBundle::load(&scenario_path).expect("exact source-selection bundle");
     let mcp = bundle
@@ -42,13 +42,13 @@ fn exact_source_selection_bundle_maps_feature_1139_without_rewriting_history() {
         .as_ref()
         .and_then(|scenario| scenario.feature_mapping.as_ref())
         .expect("feature mapping");
-    assert_eq!(mapping.feature.to_string(), "ai/temper#1139");
+    assert_eq!(mapping.feature.to_string(), "ai/temper#1151");
     assert_eq!(
         mapping.plan.as_ref().map(ToString::to_string).as_deref(),
-        Some("ai/temper#1140")
+        Some("ai/temper#1152")
     );
-    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1139");
-    assert_eq!(mapping.change.as_str(), "new");
+    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1151");
+    assert_eq!(mapping.change.as_str(), "updated");
 
     let manifest = fs::read_to_string(scenario_path.join("scenario.toml")).expect("manifest");
     let readme = fs::read_to_string(scenario_path.join("README.md")).expect("README");
@@ -56,12 +56,16 @@ fn exact_source_selection_bundle_maps_feature_1139_without_rewriting_history() {
     let jig = fs::read_to_string(bundle.jig_script_path()).expect("Jig");
     for expected in [
         "ten-successful-complete-v1-graph-results",
-        "typed-sources-precede-interleaved-selection-and-repair",
-        "malformed-selection-read-precedes-exact-selection",
-        "exact-route-selection-read",
+        "typed-sources-denial-exact-read-and-matching-repair",
+        "early-read-precedes-typed-evidence-and-cannot-authorize-mutation",
+        "patch-route-before-post-source-read",
+        "read-route-after-source-evidence",
+        "policy_precondition",
+        "satisfy_policy",
         "three-competing-generic-results",
         "selection-competing-forest-traversal",
         "graph.lineage.decision_evidence_kind",
+        "one-workspace-diff-only-after-successful-mutation",
     ] {
         assert!(manifest.contains(expected), "manifest omitted {expected}");
     }
@@ -69,9 +73,13 @@ fn exact_source_selection_bundle_maps_feature_1139_without_rewriting_history() {
         "Privacy boundary",
         "10/10",
         "nine relevant",
+        "9/9",
+        "8/9 relevant",
         "selection` / `read",
         "repo/src/route.rs",
-        "remain frozen",
+        "non-reusable",
+        "6c27457897c0a08a255b427ccc797781060cc1f7",
+        "422d6748d8fb4683cea6a9afab5980f438ea8bcde1f852ec8a8c6dcdb38fdaab",
         "mapped-live-focused-test-source-relevance",
     ] {
         assert!(readme.contains(expected), "README omitted {expected}");
@@ -86,8 +94,9 @@ fn exact_source_selection_bundle_maps_feature_1139_without_rewriting_history() {
         "opaque-",
         "qualified_name",
         "source\"",
-        "credential",
+        "mutation arguments",
         "diagnostic trace",
+        "6c27457897c0a08a255b427ccc797781060cc1f7",
     ] {
         assert!(!jig.contains(forbidden), "Jig retained {forbidden}");
     }

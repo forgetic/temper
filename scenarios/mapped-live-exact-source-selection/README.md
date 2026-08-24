@@ -1,68 +1,90 @@
-# Mapped live exact source selection
+# Mapped live post-source exact read
 
-This checked-in scenario is the dedicated mapping for feature `ai/temper#1139`
-and plan `ai/temper#1140` on `agent/pr-for-feature-1139`. It extends the
-focused-test source-relevance topology while preserving the historical
-`mapped-live-focused-test-source-relevance` mapping for #1130.
+This checked-in scenario is the dedicated mapping for feature `ai/temper#1151`
+and plan `ai/temper#1152` on `agent/pr-for-feature-1151`. It evolves the
+scenario in place while retaining `introduced_by = "#1144"` as the provenance
+of the original #1139/#1140 mapping. The historical
+`mapped-live-focused-test-source-relevance` mapping for #1130 remains unchanged.
 
 ## Live contract
 
 A real Forgejo instance, host Actions runner, standalone Temper process, Jig
 engineer, and deterministic current-root provider perform one minimal repair.
-The engineer consumes typed implementation and caller sources, keeps two
-same-root generic competitors in one immutable parallel batch followed by one
-bounded non-progress competitor, completes the focused-test forest traversal
-and semantic fallback, and consumes the exact typed focused-test source. This
-produces 10/10 successful graph calls while the mapped reduction contract keeps
-nine relevant results.
+After targeted root discovery, the engineer issues one same-turn read-only batch
+containing `repo/src/route.rs`, its caller, and its focused test. The route read
+is intentionally too early to create source-selection or mutation authority.
 
-Only after implementation, caller, and focused-test evidence complete does one
-wider conventional batch start. A successful wrong-target read is the malformed
-selection variant. It is interleaved with file discovery, generic search, and
-the successful exact route read. The mapped analyzer must retain exactly one
-`selection` / `read` row for `repo/src/route.rs`; the wrong target and earlier
-generic or forest evidence cannot replace or duplicate it.
+Later turns consume complete V1-correlated and V1-lineaged implementation,
+caller, and focused-test sources. Two same-root generic competitors in one
+parallel batch, one bounded non-progress competitor, one forest traversal, and
+one semantic fallback preserve the mapped topology while the fixture produces
+10/10 successful graph results and nine relevant results. A mismatched typed
+confirmation remains local and fail-closed.
 
-The ephemeral provider validator checks exact inventory, stable binding, source
-purpose, and checkpoint order. Manifest assertions require the wrong-target and
-exact reads in the same post-evidence batch before one exact patch, host
-submission, Actions, merge, and source closure.
+After the typed source chain completes, the engineer attempts the exact route
+patch directly. Temper denies it locally with the closed `policy_denial` /
+`policy_precondition` outcome and fixed actionable guidance to perform the
+ordinary exact read. The denial does not execute or change the workspace. One
+successful ordinary read of `repo/src/route.rs` then confirms that the route is
+unchanged and authorizes the matching one-file patch. Focused host validation,
+the submission gate, real Actions success, merge, and source closure complete
+the run.
+
+The mapped analyzer must retain exactly one `selection` / `read` row for the
+declared `repo/src/route.rs` target. The early read and denied patch receive no
+selection or mutation authority, and the eventual successful patch cannot
+replace the later exact-read row.
+
+## Corrected candidate context
+
+The validation record retains the smoke that exposed this ordering gap only as
+non-reusable historical context:
+
+- held source: `6c27457897c0a08a255b427ccc797781060cc1f7`;
+- agent SHA-256: `422d6748d8fb4683cea6a9afab5980f438ea8bcde1f852ec8a8c6dcdb38fdaab`;
+- provider/model: `openai-codex` / `gpt-5.6-sol`;
+- host correctness: 3/3;
+- graph results: 9/9 successful and 8/9 relevant, with complete typed
+  correlation and lineage.
+
+That smoke stopped before matrix repetitions and must not be reused for the
+corrected candidate.
 
 ## Privacy boundary
 
 Checked-in declarations and retained aggregate evidence contain only safe tool
-counts, closed checkpoint categories, correlation and lineage completeness,
-decision kind, ordering, declared target, consumption mode, current-root binding
-facts, local-denial category, and gate outcomes. Runtime prompts, provider
-selectors and output, source content, roots, credentials, arguments, host
-output, and generated traces remain ephemeral. Generated runtime evidence must
-not be committed.
+counts, closed checkpoint and policy categories, correlation and lineage
+completeness, source-evidence kind, ordering, the declared selection target,
+consumption mode, current-root binding facts, and gate outcomes. Runtime
+prompts, provider selectors and output, source content, roots, credentials,
+mutation arguments, host output, and generated traces remain ephemeral.
+Generated runtime evidence must not be committed.
 
 ## Validation
 
-From the exact assembled #1139 feature head, run:
+From the exact assembled #1151 feature head, run:
 
 ```sh
+cargo test -p temper-agent-core decision_anchor_exact_read
+cargo test -p temper-agent --test jig_codebase_memory_agent
 cargo test -p temper-benchmark-cli --test interleaved_selection_live_shape
 cargo test -p temper-testing exact_source_selection
+cargo dev-benchmark-harness
 cargo dev-scenario-check
 cargo dev-scenario-run scenarios/mapped-live-exact-source-selection
-cargo dev-benchmark-harness
 ./.temper/pre-pr
 cargo dev-scenario-validate-feature \
-  --feature ai/temper#1139 \
+  --feature ai/temper#1151 \
   --landing-base origin/main \
-  --source-branch agent/pr-for-feature-1139 \
-  --pr <scenario-pr-number> \
+  --source-branch agent/pr-for-feature-1151 \
+  --pr <aggregate-pr> \
   --sha "$(git rev-parse HEAD)" \
   --output-dir target/focused-validation
 ```
 
-After mapped exact-head validation, require a wholly fresh enabled smoke with
-terminal success, 10/10 graph calls, nine relevant results, complete typed
-correlation and lineage, all three source-evidence kinds, and exactly one
-privacy-safe `selection` / `read` row for `repo/src/route.rs`. The routing-repair
-benchmark fixture, manifest, provider, task, expected patch, verifier, privacy
-policy, thresholds, evidence requirements, smoke/matrix protocol, and production
-configuration remain frozen. Keep PR #1138 held and do not begin the 5×3 matrix
-until that smoke passes.
+Keep production landing held. External acceptance must use the exact final
+aggregate head and immutable artifacts in this order: one fresh enabled smoke,
+five fresh enabled runs, five fresh disabled runs, five fresh
+forced-unavailable runs, and one verifier invocation. Do not reuse, reorder, or
+selectively rerun any smoke or matrix result. The routing-repair effectiveness
+criterion and acceptance thresholds remain frozen.
