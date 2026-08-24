@@ -31,6 +31,8 @@ mod mapped_decision_gap_recovery;
 mod mapped_decision_gap_recovery_fake;
 mod mapped_denied_shell_classification;
 mod mapped_denied_shell_classification_fake;
+mod mapped_focused_test_relevance;
+mod mapped_focused_test_relevance_fake;
 mod mapped_graph_consumption;
 mod mapped_graph_consumption_fake;
 mod mapped_graph_convergence;
@@ -121,6 +123,7 @@ pub(super) fn converge(
                 | "mapped-live-ordinary-tool-convergence"
                 | "mapped-live-graph-convergence"
                 | "mapped-live-decision-gap-recovery"
+                | "mapped-live-focused-test-source-relevance"
         )
     ) {
         "one successful provider-shaped graph result".to_string()
@@ -519,6 +522,8 @@ impl CodebaseMemoryFake {
             mapped_graph_convergence_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-decision-gap-recovery") {
             mapped_decision_gap_recovery_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-focused-test-source-relevance") {
+            mapped_focused_test_relevance_fake::start(request_count, observations_for_rule)?
         } else {
             FakeLlm::start(Script::rule(move |view| {
                 if !messages_contain(view, "ROLE: engineer") {
@@ -651,6 +656,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
+                        | "mapped-live-focused-test-source-relevance"
                 )
             )
         {
@@ -678,6 +684,7 @@ impl CodebaseMemoryFake {
                     | "mapped-live-ordinary-tool-convergence"
                     | "mapped-live-graph-convergence"
                     | "mapped-live-decision-gap-recovery"
+                    | "mapped-live-focused-test-source-relevance"
             )
         ) && !(graph_trace_seen
             && current_root_source_results >= 2
@@ -690,6 +697,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-ordinary-tool-convergence"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
+                        | "mapped-live-focused-test-source-relevance"
                 )
             ) || code_refinement_seen))
         {
@@ -709,6 +717,7 @@ impl CodebaseMemoryFake {
                         | "mapped-live-denied-shell-classification"
                         | "mapped-live-graph-convergence"
                         | "mapped-live-decision-gap-recovery"
+                        | "mapped-live-focused-test-source-relevance"
                 )
             ) {
                 8

@@ -32,7 +32,8 @@ runner:
   `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`,
   `mapped-live-denied-shell-classification`,
   `mapped-live-ordinary-tool-convergence`, `mapped-live-graph-convergence`,
-  `mapped-live-decision-gap-recovery`, `model-failure-recovery`,
+  `mapped-live-decision-gap-recovery`,
+  `mapped-live-focused-test-source-relevance`, `model-failure-recovery`,
   `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
@@ -278,6 +279,24 @@ source, prompts, commands, arguments, credentials, paths, host-gate output, and
 diagnostic traces remain ephemeral. The historical graph-consumption,
 graph-convergence, and ordinary-tool-convergence mappings retain their original
 identities and contracts.
+
+### Mapped live focused-test source relevance mapping
+
+`mapped-live-focused-test-source-relevance` is the dedicated active mapping for
+feature `ai/temper#1130` and plan `ai/temper#1131` on
+`agent/pr-for-feature-1130`. It inherits the #1091 retry-affinity topology while
+preserving that historical mapping. One current-root implementation/caller chain
+reaches a complete empty focused-test traversal, then one semantic fallback on
+the same root reports the closed eligible-selector outcome. A mismatched typed
+source attempt remains local; the later exact source consumer carries the
+`focused_test` kind and precedes one exact repair, host validation, Actions,
+merge, and source closure. Aggregate evidence retains only safe counts, closed
+checkpoint and denial categories, correlation/lineage completeness, carry-
+forward stage, discovery outcome, decision kind, ordering, binding, and gate
+facts. Runtime prompts, selectors, roots, source, paths, provider output,
+credentials, arguments, host output, and diagnostic traces remain ephemeral.
+The routing-repair benchmark corpus and all historical scenario mappings remain
+unchanged.
 
 ### Mapped live denied-shell classification mapping
 
