@@ -110,7 +110,8 @@ fn source_neutral_segment(segment: &str, substitution: bool) -> bool {
 }
 
 fn safe_git_diff_word(word: &str) -> bool {
-    !matches!(word, "--ext-diff" | "--textconv") && safe_word(word)
+    matches!(word, "--check" | "--name-only" | "--numstat" | "--")
+        || (!word.starts_with('-') && safe_word(word))
 }
 
 fn safe_test_word(word: &str) -> bool {

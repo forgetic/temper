@@ -160,6 +160,8 @@
             "sed -i s/run/work/ demo/src/lib.rs",
             "cargo fmt",
             "git checkout -- demo/src/lib.rs",
+            "git diff --output=demo/src/lib.rs",
+            "git diff --output demo/src/lib.rs",
             "test \"$(touch demo/src/lib.rs)\" = changed",
         ] {
             assert_eq!(
