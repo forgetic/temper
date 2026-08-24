@@ -302,19 +302,22 @@ unchanged.
 ### Mapped live exact source-selection mapping
 
 `mapped-live-exact-source-selection` is the dedicated active mapping for feature
-`ai/temper#1139` and plan `ai/temper#1140` on
-`agent/pr-for-feature-1139`. It extends the #1130 focused-test source topology
-without changing that historical mapping. Typed implementation, caller, and
-focused-test sources coexist with bounded generic and forest competitors; a
-later wider conventional batch interleaves a wrong-target read with the exact
-route read. The mapped reduction must retain exactly one privacy-safe
-`selection` / `read` row for `repo/src/route.rs`, while the malformed variant
-fails closed. Aggregate evidence contains only closed counts, checkpoint
+`ai/temper#1151` and plan `ai/temper#1152` on
+`agent/pr-for-feature-1151`. Its `introduced_by = "#1144"` provenance preserves
+the original #1139/#1140 mapping while the #1130 focused-test source mapping
+remains unchanged. An early same-turn read batch includes `repo/src/route.rs`
+before complete typed implementation, caller, and focused-test source evidence.
+A direct matching patch is then denied locally with the closed
+`policy_denial` / `policy_precondition` outcome and no workspace diff. Only one
+later successful exact ordinary read authorizes the matching minimal patch. The
+mapped reduction retains exactly one privacy-safe `selection` / `read` row for
+the declared route target and no authority for the early read or denied patch.
+Aggregate evidence contains only closed counts, checkpoint and policy
 categories, typed coverage, ordering, declared target, mode, binding, and gate
 facts. Runtime prompts, selectors, provider output, source, roots, credentials,
-arguments, host output, and generated traces remain ephemeral. The frozen
-routing-repair benchmark and every historical scenario mapping remain
-unchanged.
+mutation arguments, host output, and generated traces remain ephemeral. The
+routing-repair effectiveness criterion and acceptance thresholds remain frozen;
+every historical scenario mapping remains unchanged.
 
 ### Mapped live denied-shell classification mapping
 

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use jig_core::{Reply, RequestView, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use serde_json::Value as JsonValue;
-use temper_agent_core::DECISION_ANCHOR_CONVERGENCE_MESSAGE;
+use temper_agent_core::DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE;
 
 use super::{ModelObservations, is_current_root_source_result, messages_contain};
 
@@ -49,12 +49,29 @@ fn reply(view: &RequestView) -> Reply {
             "codebase_memory_search_code",
             serde_json::json!({"pattern": "route affinity"}),
         ),
-        1 => source_reply(
+        1 => tool_batch(&[
+            (
+                "early-route-read-before-source",
+                "read",
+                serde_json::json!({"path": "repo/src/route.rs"}),
+            ),
+            (
+                "early-caller-read-before-source",
+                "read",
+                serde_json::json!({"path": "repo/src/lib.rs"}),
+            ),
+            (
+                "early-focused-test-read-before-source",
+                "read",
+                serde_json::json!({"path": "repo/tests/alias_retry.rs"}),
+            ),
+        ]),
+        4 => source_reply(
             "read-selection-implementation",
             implementation_target(view),
             "implementation",
         ),
-        2 => tool_reply(
+        5 => tool_reply(
             "trace-selection-caller",
             "codebase_memory_trace_path",
             serde_json::json!({
@@ -62,8 +79,8 @@ fn reply(view: &RequestView) -> Reply {
                 "direction": "inbound",
             }),
         ),
-        3 => source_reply("read-selection-caller", caller_target(view), "caller"),
-        4 => tool_batch(&[
+        6 => source_reply("read-selection-caller", caller_target(view), "caller"),
+        7 => tool_batch(&[
             (
                 "selection-competing-generic-one",
                 "codebase_memory_search_code",
@@ -75,12 +92,12 @@ fn reply(view: &RequestView) -> Reply {
                 serde_json::json!({"pattern": implementation_target(view)}),
             ),
         ]),
-        6 => tool_reply(
+        9 => tool_reply(
             "selection-competing-generic-irrelevant",
             "codebase_memory_search_code",
             serde_json::json!({"pattern": implementation_target(view)}),
         ),
-        7 => tool_reply(
+        10 => tool_reply(
             "selection-competing-forest-traversal",
             "codebase_memory_trace_path",
             serde_json::json!({
@@ -91,86 +108,84 @@ fn reply(view: &RequestView) -> Reply {
                 "depth": 1,
             }),
         ),
-        8 => tool_reply(
+        11 => tool_reply(
             "selection-focused-test-fallback",
             "codebase_memory_search_graph",
             serde_json::json!({"query": "focused alias retry behavior"}),
         ),
-        9 => source_reply(
+        12 => source_reply(
             "selection-mismatched-confirmation-denied",
             implementation_target(view),
             "focused_test",
         ),
-        10 => {
+        13 => source_reply(
+            "selection-exact-focused-test-source",
+            focused_test_target(view),
+            "focused_test",
+        ),
+        14 => patch_reply("patch-route-before-post-source-read"),
+        15 => {
+            let denial = latest_tool_result(view);
             assert!(
-                messages_contain(view, "missing evidence: [focused_test]"),
-                "mismatched typed confirmation must remain fail closed"
+                denial.contains(DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE),
+                "direct mutation must return actionable exact-read guidance"
             );
-            source_reply(
-                "selection-exact-focused-test-source",
-                focused_test_target(view),
-                "focused_test",
+            assert!(
+                !denial.contains("let routing_topic = attempt.affinity_topic();"),
+                "local denial must not retain mutation content"
+            );
+            tool_reply(
+                "read-route-after-source-evidence",
+                "read",
+                serde_json::json!({"path": "repo/src/route.rs"}),
             )
         }
-        11 => {
+        16 => {
             assert!(
-                messages_contain(view, DECISION_ANCHOR_CONVERGENCE_MESSAGE),
-                "typed implementation, caller, and focused-test sources must complete first"
+                latest_tool_result(view).contains("let routing_topic = if attempt.attempt == 0"),
+                "the denied direct mutation must leave the route source unchanged"
             );
-            tool_batch(&[
-                (
-                    "malformed-selection-read",
-                    "read",
-                    serde_json::json!({"path": "repo/src/lib.rs"}),
-                ),
-                (
-                    "interleaved-selection-file-discovery",
-                    "find",
-                    serde_json::json!({"path": "repo", "pattern": "*route.rs"}),
-                ),
-                (
-                    "exact-route-selection-read",
-                    "read",
-                    serde_json::json!({"path": "repo/src/route.rs"}),
-                ),
-                (
-                    "interleaved-selection-generic-search",
-                    "grep",
-                    serde_json::json!({
-                        "path": "repo/src",
-                        "pattern": "worker_slot",
-                        "context": 2,
-                    }),
-                ),
-            ])
+            patch_reply("patch-route-after-post-source-read")
         }
-        15 => tool_reply(
-            "patch-route-after-exact-selection",
-            "apply_patch",
-            serde_json::json!({
-                "patch": "diff --git a/repo/src/route.rs b/repo/src/route.rs\n--- a/repo/src/route.rs\n+++ b/repo/src/route.rs\n@@ -3,11 +3,7 @@ use crate::DeliveryAttempt;\n pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {\n     assert!(workers > 0, \"at least one delivery worker is required\");\n \n-    let routing_topic = if attempt.attempt == 0 {\n-        attempt.affinity_topic()\n-    } else {\n-        attempt.topic\n-    };\n+    let routing_topic = attempt.affinity_topic();\n     let mut hash = 0xcbf29ce484222325_u64;\n     for byte in attempt\n         .tenant\n"
-            }),
-        ),
-        16 => tool_reply(
-            "validate-exact-selection-repair",
+        17 => tool_reply(
+            "validate-post-source-read-repair",
             "bash",
             serde_json::json!({
                 "command": "cd repo && cargo fmt --check && cargo test --quiet && git diff --check && test \"$(git diff --name-only)\" = src/route.rs && test \"$(git diff --numstat -- src/route.rs)\" = \"$(printf '1\\t5\\tsrc/route.rs')\"",
                 "timeout": 60,
             }),
         ),
-        17 => tool_reply(
-            "submit-exact-selection-repair",
+        18 => tool_reply(
+            "submit-post-source-read-repair",
             "submit_for_pr",
             serde_json::json!({
-                "summary": "Validated interleaved exact source selection and the minimal repair."
+                "summary": "Validated denied-then-recovered post-source exact selection and the minimal repair."
             }),
         ),
-        18 => Reply::text(
-            r##"{"title":"Keep alias retries on the selected worker","body":"# Implementation report\nValidated typed source evidence, interleaved exact selection, one repair, and host submission.","summary":"Applied and validated the retry-affinity repair after exact source selection."}"##,
+        19 => Reply::text(
+            r##"{"title":"Keep alias retries on the selected worker","body":"# Implementation report\nValidated typed source evidence, local precondition denial, post-source exact selection, one repair, and host submission.","summary":"Applied and validated the retry-affinity repair only after the required post-source exact read."}"##,
         ),
         turn => panic!("unexpected mapped exact source-selection model turn {turn}"),
     }
+}
+
+fn patch_reply(id: &str) -> Reply {
+    tool_reply(id, "apply_patch", patch_args())
+}
+
+fn patch_args() -> JsonValue {
+    serde_json::json!({
+        "patch": "diff --git a/repo/src/route.rs b/repo/src/route.rs\n--- a/repo/src/route.rs\n+++ b/repo/src/route.rs\n@@ -3,11 +3,7 @@ use crate::DeliveryAttempt;\n pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {\n     assert!(workers > 0, \"at least one delivery worker is required\");\n \n-    let routing_topic = if attempt.attempt == 0 {\n-        attempt.affinity_topic()\n-    } else {\n-        attempt.topic\n-    };\n+    let routing_topic = attempt.affinity_topic();\n     let mut hash = 0xcbf29ce484222325_u64;\n     for byte in attempt\n         .tenant\n"
+    })
+}
+
+fn latest_tool_result(view: &RequestView) -> &str {
+    view.messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "tool")
+        .map(|message| message.content.as_str())
+        .expect("expected a prior tool result")
 }
 
 fn source_reply(id: &str, qualified_name: String, kind: &str) -> Reply {
