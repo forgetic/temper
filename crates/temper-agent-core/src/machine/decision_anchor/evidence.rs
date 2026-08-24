@@ -125,6 +125,17 @@ impl DecisionAnchorState {
             return DecisionAnchorTransition::Converged;
         }
 
+        if compatible.iter().any(|(call, output)| {
+            call.recovery_gap == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
+                && output.tool == GraphCorrelationToolV1::GetCodeSnippet
+                && output.lineage.decision_evidence_kind
+                    != Some(DecisionEvidenceKindV1::FocusedTest)
+        }) {
+            self.phase = Some(AnchorPhase::Exhausted(active.evidence.clone()));
+            self.exploration = ExplorationStatus::BudgetExhausted;
+            return DecisionAnchorTransition::RecoveryExhausted;
+        }
+
         if finished.iter().any(|finished| {
             trusted_unavailable_provider_output(finished.name, finished.output)
                 && finished.call.admitted_root.as_deref() == Some(active_root.as_str())

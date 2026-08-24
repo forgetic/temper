@@ -506,6 +506,8 @@ import sys
 IMPLEMENTATION = "crate::routing::select_worker"
 CALLER = "crate::delivery::dispatch"
 FOCUSED_TEST = "crate::tests::keeps_affinity"
+SECOND_FOCUSED_TEST = "crate::tests::keeps_affinity_after_retry"
+NON_TEST_HELPER = "crate::routing::request_affinity_helper"
 SEMANTIC_IMPLEMENTATION = "crate::scheduler::choose_lane"
 SEMANTIC_CALLER = "crate::replay::route_renamed_job"
 SEMANTIC_FOCUSED_TEST = "crate::tests::renamed_replay_preserves_shard_ownership"
@@ -554,13 +556,15 @@ for line in sys.stdin:
             elif arguments.get("query") == "renamed replay shard ownership regression":
                 result(request["id"], {"results": [{"qualified_name": SEMANTIC_FOCUSED_TEST, "name": "renamed_replay_preserves_shard_ownership", "is_test": True}]})
             elif arguments.get("query") == "request affinity remains stable across worker selection":
-                result(request["id"], {"results": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "label": "Function", "file_path": "tests/request_affinity.rs", "degree": 1}], "total": 1, "has_more": False})
+                result(request["id"], {"results": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "label": "Function", "file_path": "tests/request_affinity.rs", "degree": 1}, {"qualified_name": SECOND_FOCUSED_TEST, "name": "keeps_affinity_after_retry", "label": "Function", "file_path": "tests/request_affinity.rs", "degree": 1}, {"qualified_name": NON_TEST_HELPER, "name": "request_affinity_helper", "label": "Function", "file_path": "src/route.rs", "degree": 2}], "total": 3, "has_more": False})
             elif arguments.get("query") == "request affinity regression without a matching test":
                 result(request["id"], {"results": []})
             elif arguments.get("query") == "request affinity regression with ambiguous coverage":
-                result(request["id"], {"results": [{"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "label": "Function"}, {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "label": "Function"}]})
+                result(request["id"], {"results": [{"qualified_name": FOCUSED_TEST, "function_name": "different_test_identity", "label": "Function"}]})
             elif arguments.get("query") == "request affinity regression with malformed coverage":
                 result(request["id"], {"results": [{"qualified_name": ["not", "an", "identity"]}]})
+            elif arguments.get("query") == "request affinity regression returning a non-test helper":
+                result(request["id"], {"results": [{"qualified_name": NON_TEST_HELPER, "name": "request_affinity_helper", "label": "Function"}]})
             elif arguments.get("name_pattern") == "dispatch_key":
                 result(request["id"], {"results": [{"qualified_name": INCIDENTAL_IMPLEMENTATION, "name": "legacy_dispatch_key"}]})
             else:
@@ -600,7 +604,11 @@ for line in sys.stdin:
             elif selected == CALLER:
                 result(request["id"], {"qualified_name": CALLER, "name": "dispatch", "source": "caller source", "callees": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
             elif selected == FOCUSED_TEST:
-                result(request["id"], {"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "source": "focused test source"})
+                result(request["id"], {"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "source": "focused test source", "is_test": True})
+            elif selected == SECOND_FOCUSED_TEST:
+                result(request["id"], {"qualified_name": SECOND_FOCUSED_TEST, "name": "keeps_affinity_after_retry", "source": "second focused test source", "is_test": True})
+            elif selected == NON_TEST_HELPER:
+                result(request["id"], {"qualified_name": NON_TEST_HELPER, "name": "request_affinity_helper", "source": "non-test helper source", "is_test": False})
             elif selected == SEMANTIC_IMPLEMENTATION:
                 result(request["id"], {"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane", "source": "semantic implementation source"})
             elif selected == SEMANTIC_CALLER:

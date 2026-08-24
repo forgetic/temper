@@ -3,6 +3,10 @@
 use super::*;
 use crate::{EligibleLineageAdmission, LineageAdmissionOutcome, LineageAdmissionStatus};
 
+mod focused_test_source {
+    include!("decision_anchor_focused_test_source.rs");
+}
+
 #[test]
 fn cross_root_focused_test_cannot_complete_the_staged_implementation_root() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
