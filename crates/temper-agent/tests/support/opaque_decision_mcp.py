@@ -61,16 +61,25 @@ def response(name, args):
         return result(
             next=targets["implementation"],
             qualified_name=targets["implementation"],
+            file_path="EVIDENCE.md",
+            source=opaque(),
             implementation_source=opaque(),
         )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["caller"]:
         return result(
             next=targets["caller"],
             qualified_name=targets["caller"],
+            file_path="EVIDENCE.md",
+            source=opaque(),
             caller_model=opaque(),
         )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["behavior"]:
-        return result(qualified_name=targets["behavior"], behavioral_test=opaque())
+        return result(
+            qualified_name=targets["behavior"],
+            file_path="EVIDENCE.md",
+            source=opaque(),
+            behavioral_test=opaque(),
+        )
     return result(qualified_name=opaque(), evidence=opaque())
 
 for line in sys.stdin:

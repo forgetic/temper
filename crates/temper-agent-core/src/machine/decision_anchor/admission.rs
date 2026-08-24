@@ -42,20 +42,41 @@ impl DecisionAnchorState {
     /// Evaluates every sibling against one immutable recovery snapshot. Only
     /// admitted calls are retained for settlement, so every other call stops
     /// before registry or provider execution without consuming allowance.
+    #[cfg(test)]
     pub(in crate::machine) fn on_tool_batch_dispatched_with_admissions(
         &mut self,
         calls: &[ToolCall],
         turn: usize,
         admissions: &[Option<LineageAdmissionOutcome>],
     ) -> Vec<Option<ToolCallDenial>> {
+        self.on_tool_batch_dispatched_with_admissions_and_targets(
+            calls,
+            turn,
+            admissions,
+            &vec![None; calls.len()],
+        )
+    }
+
+    /// Adds canonical ordinary target facts to the immutable graph-recovery
+    /// snapshot. Both admission vectors are wrapper-owned and content-free.
+    pub(in crate::machine) fn on_tool_batch_dispatched_with_admissions_and_targets(
+        &mut self,
+        calls: &[ToolCall],
+        turn: usize,
+        admissions: &[Option<LineageAdmissionOutcome>],
+        invocation_targets: &[Option<InvocationTargetAdmission>],
+    ) -> Vec<Option<ToolCallDenial>> {
         debug_assert_eq!(calls.len(), admissions.len());
+        debug_assert_eq!(calls.len(), invocation_targets.len());
         let snapshot = self.recovery_admission_snapshot();
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
         let mut admitted_count = 0u8;
         let mut denials = Vec::with_capacity(calls.len());
 
-        for (call, admission) in calls.iter().zip(admissions) {
+        for ((call, admission), invocation_target) in
+            calls.iter().zip(admissions).zip(invocation_targets)
+        {
             let order = self.next_call_order;
             self.next_call_order = self.next_call_order.saturating_add(1);
             let mut denial = None;
@@ -141,7 +162,12 @@ impl DecisionAnchorState {
                     }
                 }
             }
-            if denial.is_none() && self.blocks_mutation(&call.name) {
+            if denial.is_none() && call.name == "read" {
+                self.register_exact_read(call, turn, order, invocation_target.as_ref());
+            }
+            if denial.is_none()
+                && self.blocks_invocation_mutation(&call.name, invocation_target.as_ref())
+            {
                 denial = Some(ToolCallDenial::DecisionAnchorMutation);
             }
             denials.push(denial);
@@ -165,9 +191,28 @@ impl DecisionAnchorState {
         denials
     }
 
+    #[cfg(test)]
+    pub(in crate::machine) fn on_tool_dispatched_with_targets(
+        &mut self,
+        call: &ToolCall,
+        turn: usize,
+        admission: Option<&InvocationTargetAdmission>,
+    ) -> Option<ToolCallDenial> {
+        self.on_tool_batch_dispatched_with_admissions_and_targets(
+            std::slice::from_ref(call),
+            turn,
+            &[None],
+            &[admission.cloned()],
+        )
+        .pop()
+        .flatten()
+    }
+
     fn root_matching_admission(&self, admission: &EligibleLineageAdmission) -> Option<String> {
         let anchors = match self.phase.as_ref()? {
-            AnchorPhase::Root(anchors) | AnchorPhase::Trail(anchors) => anchors,
+            AnchorPhase::Root(anchors)
+            | AnchorPhase::Trail(anchors)
+            | AnchorPhase::AwaitingExactRead(anchors) => anchors,
             AnchorPhase::Recovery(recovery) => &recovery.anchors,
             AnchorPhase::GapRecovery(recovery) => &recovery.anchors,
             AnchorPhase::Exhausted(_) => return None,

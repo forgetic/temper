@@ -14,6 +14,7 @@ fn jig_stages_over_returned_candidates_through_caller_and_test_routes() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let checkout = TempCheckout::new("jig-staged-over-returned-evidence");
     checkout.init_git();
+    seed_route_target(&checkout);
     let mcp = fake_mcp();
     let fake = FakeLlm::start(Script::rule(semantic_routing_reply))
         .expect("start staged routing fake LLM");
@@ -38,7 +39,7 @@ fn jig_stages_over_returned_candidates_through_caller_and_test_routes() {
 
     assert_eq!(result.verdict, None);
     assert_eq!(
-        fs::read_to_string(checkout.repo_path().join("SEMANTIC_ROUTE.md"))
+        fs::read_to_string(checkout.repo_path().join("ROUTE.md"))
             .expect("semantic routing product"),
         "task-semantic route retained\n"
     );
@@ -126,7 +127,10 @@ fn semantic_routing_reply(view: &RequestView) -> Reply {
             }),
         ),
         5 => {
-            assert!(messages_contain(view, "workspace mutation blocked until"));
+            assert!(messages_contain(
+                view,
+                "workspace mutation blocked: use the ordinary read tool"
+            ));
             trace_reply(
                 "trace-selected-implementation",
                 returned_target(view, SEMANTIC_IMPLEMENTATION),
@@ -149,14 +153,19 @@ fn semantic_routing_reply(view: &RequestView) -> Reply {
             "focused_test",
         ),
         10 => tool_reply(
+            "read-semantic-target-after-evidence",
+            "read",
+            serde_json::json!({"path": "demo/ROUTE.md"}),
+        ),
+        11 => tool_reply(
             "write-after-staged-evidence",
             "write",
             serde_json::json!({
-                "path": "demo/SEMANTIC_ROUTE.md",
+                "path": "demo/ROUTE.md",
                 "content": "task-semantic route retained\n"
             }),
         ),
-        11 => Reply::text(
+        12 => Reply::text(
             r#"{"summary":"Staged over-returned candidates through exact caller and focused-test routes."}"#,
         ),
         count => panic!("unexpected staged routing tool-result count {count}"),

@@ -364,7 +364,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
 
     match cli_condition {
         "codebase-memory-enabled" => {
-            expect_exact(&run, "/metrics/turns", 15)?;
+            expect_exact(&run, "/metrics/turns", 17)?;
             expect_exact(&run, "/metrics/graph/calls", 14)?;
             expect_exact(&run, "/metrics/graph/succeeded", 8)?;
             expect_exact(&run, "/metrics/graph/failed", 6)?;
@@ -420,9 +420,20 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
                 "/metrics/tools/by_name/codebase_memory_get_architecture/calls",
                 1,
             )?;
+            expect_exact(&run, "/metrics/tools/by_name/read/calls", 2)?;
+            expect_exact(&run, "/metrics/tools/by_name/apply_patch/calls", 2)?;
+            expect_exact(&run, "/metrics/tools/by_name/apply_patch/succeeded", 1)?;
+            expect_exact(&run, "/metrics/tools/by_name/apply_patch/failed", 1)?;
+            expect_exact(
+                &run,
+                "/metrics/tools/ordinary/failures_by_category/policy_denial",
+                3,
+            )?;
+            expect_exact(&run, "/metrics/structure/mutations", 1)?;
             benchmark::verify_safe_converged_decision_evidence(&run)?;
             let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
                 .map_err(|error| format!("read controlled trace: {error}"))?;
+            benchmark::verify_post_source_exact_read_recovery(&trace)?;
             benchmark::verify_typed_graph_correlation_records(&trace)?;
             benchmark::verify_decision_gap_recovery(&trace)?;
             benchmark::verify_provider_invocations(&trace)?;
@@ -444,6 +455,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
                 "alias_retries_stay_on_the_original_ordered_worker",
                 "DeliveryRouter::worker_for",
                 "public_facade_keeps_operational_helpers_cohesive",
+                "worker_slot",
             ] {
                 if !benchmark::trace_has_confirmed_current_root_source(&trace, symbol) {
                     return Err(format!(

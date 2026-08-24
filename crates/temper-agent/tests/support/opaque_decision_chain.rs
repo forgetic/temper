@@ -16,6 +16,9 @@ use temper_protocol_agent::{
 #[path = "coding_agent_workspace.rs"]
 mod coding_agent_workspace;
 use coding_agent_workspace::{REPO_DIR, TempCheckout};
+#[path = "opaque_decision_chain/context.rs"]
+mod context;
+use context::workspace_context;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DecisionCase {
@@ -70,6 +73,15 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         .expect("decision-chain run lock");
     let checkout = TempCheckout::new("jig-opaque-decision-chain");
     checkout.init_git();
+    if case == DecisionCase::Consumed {
+        fs::write(
+            checkout.repo_path().join("EVIDENCE.md"),
+            "pending exact read\n",
+        )
+        .expect("seed exact-read evidence target");
+        checkout.git(&["add", "EVIDENCE.md"]);
+        checkout.git(&["commit", "-m", "seed exact-read evidence target"]);
+    }
 
     let observed_steps = Arc::new(Mutex::new(Vec::new()));
     let fake = decision_chain_fake(case, Arc::clone(&observed_steps));
@@ -161,7 +173,7 @@ fn decision_chain_fake(
                 message.role == "tool"
                     && message
                         .content
-                        .contains("workspace mutation blocked until the successful decision anchor")
+                        .contains("workspace mutation blocked: use the ordinary read tool")
             })
         };
 
@@ -251,6 +263,13 @@ fn decision_chain_fake(
                         && provider_values("behavioral_test").len() == 1,
                     "mutation requires consumed current-root, caller/model, and focused behavioral-test evidence"
                 );
+                tool_reply(
+                    "read-exact-target-after-evidence",
+                    "read",
+                    serde_json::json!({"path": "demo/EVIDENCE.md"}),
+                )
+            }
+            (DecisionCase::Consumed, 8) => {
                 record(DecisionStep::Mutation);
                 tool_reply(
                     "mutate-after-evidence",
@@ -261,7 +280,7 @@ fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::Consumed, 8) => {
+            (DecisionCase::Consumed, 9) => {
                 record(DecisionStep::Complete);
                 Reply::text(r#"{"summary":"Mutated after consumed result-derived evidence."}"#)
             }
@@ -580,38 +599,5 @@ fn codebase_memory_tool_config(dir: &tempfile::TempDir) -> AgentToolConfig {
             index_timeout_secs: 2,
             retention: Default::default(),
         }),
-    }
-}
-
-fn workspace_context() -> WorkspaceContext {
-    WorkspaceContext {
-        trace_context: None,
-        artifact_context: None,
-        repos: vec![WorkspaceRepository {
-            id: "repo-1".to_string(),
-            owner: "acme".to_string(),
-            name: "demo".to_string(),
-            default_branch: "main".to_string(),
-            dir: REPO_DIR.to_string(),
-            access: "writable".to_string(),
-            base_branch: "main".to_string(),
-            branch_hint: Some("agent/pr-for-code-985".to_string()),
-        }],
-        work_item: WorkspaceWorkItem {
-            role: "engineer".to_string(),
-            queue: "code_ready".to_string(),
-            kind: "code".to_string(),
-            target: "Issue { number: ItemNumber(985) }".to_string(),
-            context: "{}".to_string(),
-        },
-        action: "open_pr".to_string(),
-        correlation_key: "pr-for-code-985".to_string(),
-        checkout: Some("writable".to_string()),
-        allowed_verdicts: vec!["needs_architect".to_string()],
-        verdict_contracts: Default::default(),
-        source_metadata: Default::default(),
-        guidance: WorkspaceGuidance::default(),
-        pull_request_freshness: None,
-        agent_session: None,
     }
 }

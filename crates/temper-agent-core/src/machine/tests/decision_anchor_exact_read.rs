@@ -1,0 +1,347 @@
+// Post-source exact-read admission and batching regressions.
+
+use std::sync::Arc;
+
+use crate::{
+    EligibleLineageAdmission, EligibleWorkspaceTarget, InvocationTargetAdmission,
+    LineageAdmissionOutcome, LineageAdmissionResolver, LineageAdmissionStatus,
+    TargetAdmissionOutcome, TargetAdmissionStatus,
+};
+
+const TARGET_A: &str = "00000000-0000-4000-8000-000000000011";
+const TARGET_B: &str = "00000000-0000-4000-8000-000000000012";
+
+fn exact_target(value: &str) -> EligibleWorkspaceTarget {
+    EligibleWorkspaceTarget::new(value.to_string()).expect("opaque workspace target")
+}
+
+fn read_target(value: &str) -> InvocationTargetAdmission {
+    InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(exact_target(value)))
+}
+
+fn mutation_targets(targets: Vec<TargetAdmissionOutcome>) -> InvocationTargetAdmission {
+    InvocationTargetAdmission::Mutation(targets)
+}
+
+fn successful_read() -> ToolOutput {
+    ToolOutput {
+        content: Vec::new(),
+        details: None,
+        is_error: false,
+    }
+}
+
+#[test]
+fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    let target_a = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
+
+    let early = call("early-bulk-read", "read");
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(&early, 0, Some(&read_target(TARGET_A))),
+        None
+    );
+    state.on_tool_finished("early-bulk-read", "read", &successful_read());
+
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 1);
+    finish(
+        &mut state,
+        "root",
+        "codebase_memory_search_graph",
+        ROOT,
+        DecisionAnchorLineageStageV1::Root,
+    );
+
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        2,
+    );
+    state.on_tool_finished_with_source_target(
+        "implementation",
+        "codebase_memory_get_code_snippet",
+        &output_with_evidence(
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+            DecisionEvidenceKindV1::Implementation,
+        ),
+        Some(&target_a),
+    );
+
+    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 3);
+    finish(
+        &mut state,
+        "trace",
+        "codebase_memory_trace_path",
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+    );
+    state.on_tool_dispatched(
+        &source_call("caller", DecisionEvidenceKindV1::Caller),
+        4,
+    );
+    finish_with_evidence(
+        &mut state,
+        "caller",
+        ROOT,
+        DecisionEvidenceKindV1::Caller,
+    );
+
+    let final_source = source_call("focused", DecisionEvidenceKindV1::FocusedTest);
+    let sibling_read = call("source-sibling-read", "read");
+    assert_eq!(
+        state.on_tool_batch_dispatched_with_admissions_and_targets(
+            &[final_source, sibling_read],
+            5,
+            &[None, None],
+            &[None, Some(read_target(TARGET_A))],
+        ),
+        [None, None],
+    );
+    let final_output = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::FocusedTest,
+    );
+    let sibling_output = successful_read();
+    assert_eq!(
+        state.on_tool_batch_finished_with_targets(&[
+            (
+                "focused",
+                "codebase_memory_get_code_snippet",
+                &final_output,
+                Some(&target_a),
+                true,
+            ),
+            (
+                "source-sibling-read",
+                "read",
+                &sibling_output,
+                None,
+                true,
+            ),
+        ]),
+        DecisionAnchorTransition::Converged,
+    );
+    assert_eq!(
+        state.on_tool_dispatched(&call("closed-graph", "codebase_memory_search_graph"), 6),
+        completed_graph_denial(),
+        "graph exploration stays closed while an exact read is awaited",
+    );
+
+    let mutation = call("direct-mutation", "write");
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &mutation,
+            6,
+            Some(&mutation_targets(vec![target_a.clone()])),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+        "early and graph-source-sibling reads cannot gain retroactive authority",
+    );
+
+    let failed = call("failed-exact-read", "read");
+    state.on_tool_dispatched_with_targets(&failed, 7, Some(&read_target(TARGET_A)));
+    let failed_output = successful_read();
+    state.on_tool_batch_finished_with_targets(&[(
+        "failed-exact-read",
+        "read",
+        &failed_output,
+        None,
+        false,
+    )]);
+
+    let wrong = call("wrong-target-read", "read");
+    state.on_tool_dispatched_with_targets(&wrong, 8, Some(&read_target(TARGET_B)));
+    state.on_tool_finished("wrong-target-read", "read", &successful_read());
+
+    let malformed = call("malformed-read", "read");
+    state.on_tool_dispatched_with_targets(
+        &malformed,
+        9,
+        Some(&InvocationTargetAdmission::Ineligible(
+            TargetAdmissionStatus::MalformedTarget,
+        )),
+    );
+    state.on_tool_finished("malformed-read", "read", &successful_read());
+
+    let non_read = call("non-read", "grep");
+    state.on_tool_dispatched_with_targets(&non_read, 10, Some(&read_target(TARGET_A)));
+    state.on_tool_finished("non-read", "grep", &successful_read());
+
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("still-blocked", "write"),
+            11,
+            Some(&mutation_targets(vec![target_a.clone()])),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+    );
+
+    let matching = call("matching-read", "read");
+    state.on_tool_dispatched_with_targets(&matching, 12, Some(&read_target(TARGET_A)));
+    state.on_tool_finished("matching-read", "read", &successful_read());
+
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("multi-target", "write"),
+            13,
+            Some(&mutation_targets(vec![
+                target_a.clone(),
+                TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget),
+            ])),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+        "an unmatched explicit target cannot piggyback on exact-read authority",
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("matching-mutation", "write"),
+            14,
+            Some(&mutation_targets(vec![target_a])),
+        ),
+        None,
+    );
+
+    let debug = format!("{:?} {:?}", read_target(TARGET_A), read_target(TARGET_B));
+    assert!(!debug.contains(TARGET_A));
+    assert!(!debug.contains(TARGET_B));
+}
+
+struct ExactTargetResolver {
+    target: EligibleWorkspaceTarget,
+}
+
+impl LineageAdmissionResolver for ExactTargetResolver {
+    fn resolve(&self, tool_name: &str, _: &serde_json::Value) -> LineageAdmissionOutcome {
+        match GraphCorrelationToolV1::from_public_name(tool_name) {
+            Some(GraphCorrelationToolV1::SearchGraph) => {
+                LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::BroadSelector)
+            }
+            Some(GraphCorrelationToolV1::TracePath) => LineageAdmissionOutcome::Eligible(
+                EligibleLineageAdmission::implementation_caller_traversal(
+                    ROOT.to_string(),
+                    DecisionAnchorTargetKindV1::FunctionName,
+                )
+                .unwrap(),
+            ),
+            Some(GraphCorrelationToolV1::GetCodeSnippet) => LineageAdmissionOutcome::Eligible(
+                EligibleLineageAdmission::new(
+                    ROOT.to_string(),
+                    DecisionAnchorTargetKindV1::QualifiedName,
+                    GraphCorrelationToolV1::GetCodeSnippet,
+                    Some(DecisionEvidenceKindV1::Implementation),
+                )
+                .unwrap(),
+            ),
+            _ => LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnsupportedTool),
+        }
+    }
+
+    fn resolve_source_target(&self, _: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
+        TargetAdmissionOutcome::Eligible(self.target.clone())
+    }
+
+    fn resolve_invocation_targets(
+        &self,
+        tool_name: &str,
+        _: &serde_json::Value,
+    ) -> InvocationTargetAdmission {
+        match tool_name {
+            "read" => InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(
+                self.target.clone(),
+            )),
+            "write" => InvocationTargetAdmission::Mutation(vec![
+                TargetAdmissionOutcome::Eligible(self.target.clone()),
+            ]),
+            _ => InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool),
+        }
+    }
+}
+
+#[test]
+fn read_batch_settles_before_later_matching_mutation_in_one_model_response() {
+    let resolver = Arc::new(ExactTargetResolver {
+        target: exact_target(TARGET_A),
+    });
+    let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects())
+        .with_lineage_admission(resolver);
+    let _ = machine.on_start(EngineTime::ZERO);
+
+    for (id, name, output) in [
+        (
+            "root",
+            "codebase_memory_search_graph",
+            output(
+                "codebase_memory_search_graph",
+                ROOT,
+                DecisionAnchorLineageStageV1::Root,
+            ),
+        ),
+        (
+            "implementation",
+            "codebase_memory_get_code_snippet",
+            output_with_evidence(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                DecisionEvidenceKindV1::Implementation,
+            ),
+        ),
+        (
+            "trace",
+            "codebase_memory_trace_path",
+            output(
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+            ),
+        ),
+        (
+            "caller",
+            "codebase_memory_get_code_snippet",
+            output_with_evidence(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                DecisionEvidenceKindV1::Caller,
+            ),
+        ),
+        (
+            "focused",
+            "codebase_memory_get_code_snippet",
+            output_with_evidence(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                DecisionEvidenceKindV1::FocusedTest,
+            ),
+        ),
+    ] {
+        let dispatched = complete(
+            &mut machine,
+            llm_responded(assistant_tool_calls(&[(id, name)])),
+        );
+        assert_eq!(run_tools(&dispatched), [id]);
+        let _ = complete(&mut machine, tool_finished(id, output));
+    }
+
+    let read_batch = complete(
+        &mut machine,
+        llm_responded(assistant_tool_calls(&[
+            ("post-source-read", "read"),
+            ("later-mutation", "write"),
+        ])),
+    );
+    assert_eq!(run_tools(&read_batch), ["post-source-read"]);
+    let mutation_batch = complete(
+        &mut machine,
+        tool_finished("post-source-read", successful_read()),
+    );
+    assert!(mutation_batch.iter().any(|request| {
+        matches!(
+            request,
+            AgentRequest::RunTool {
+                call,
+                denial: None,
+                ..
+            } if call.id == "later-mutation"
+        )
+    }));
+}

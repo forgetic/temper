@@ -153,7 +153,7 @@ impl ToolFailureReasonV1 {
                 "tool arguments did not match the canonical schema; correct the call and try again"
             }
             Self::PolicyPrecondition => {
-                "workspace mutation blocked until the successful decision anchor is consumed through later result-derived codebase-memory evidence for the implementation, caller/model, and focused behavioral tests"
+                "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after its qualifying graph source result has completed, then retry the mutation"
             }
             Self::AccessDenied => {
                 "tool execution was denied by policy; use only authorized resources or satisfy the required precondition"

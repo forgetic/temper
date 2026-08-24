@@ -167,6 +167,12 @@ impl AnchorForest {
         self.roots.values().any(|root| root.evidence.is_complete())
     }
 
+    pub(super) fn root_has_complete_evidence(&self, root_binding: &str) -> bool {
+        self.roots
+            .get(root_binding)
+            .is_some_and(|root| root.evidence.is_complete())
+    }
+
     pub(super) fn active_evidence(&self) -> SourceEvidence {
         self.active_root()
             .map(|(_, root)| root.evidence.clone())

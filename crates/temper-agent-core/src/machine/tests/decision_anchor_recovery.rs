@@ -161,7 +161,7 @@ fn recovery_stages_implementation_before_its_caller_traversal() {
         assert_eq!(state.on_tool_dispatched(&source_call(id, kind), turn), None);
         assert_eq!(finish_with_evidence(&mut state, id, ROOT, kind), expected);
     }
-    assert!(!state.blocks_mutation("write"));
+    assert!(state.blocks_mutation("write"));
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn each_missing_typed_purpose_can_complete_after_budget_exhaustion() {
             finish_with_evidence(&mut state, "missing", ROOT, missing),
             DecisionAnchorTransition::Converged,
         );
-        assert!(!state.blocks_mutation("write"));
+        assert!(state.blocks_mutation("write"));
     }
 }
 

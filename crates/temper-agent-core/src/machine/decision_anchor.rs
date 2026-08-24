@@ -15,11 +15,14 @@ use temper_protocol_activity::{
 use tongs::model::ToolCall;
 use tongs::tools::{ToolEffects, ToolOutput};
 
+use crate::{EligibleWorkspaceTarget, InvocationTargetAdmission, TargetAdmissionOutcome};
+
 use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, ToolCallDenial};
 
 mod admission;
 mod anchors;
 mod evidence;
+mod exact_read;
 mod output;
 
 use output::{
@@ -31,9 +34,9 @@ use output::{
 /// It is deliberately excluded from durable activity metadata.
 pub const SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: &str = "temper_decision_anchor_lineage_v1";
 /// Fixed, model-visible explanation for a locally denied mutation.
-pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked until the successful decision anchor is consumed through later result-derived codebase-memory evidence for the implementation, caller/model, and focused behavioral tests";
+pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after its qualifying graph source result has completed, then retry the mutation";
 /// Fixed, privacy-safe instruction queued exactly once when graph evidence is complete.
-pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration and produce the smallest role-appropriate product supported by the verified current-root evidence.";
+pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration, use the ordinary read tool to read the exact workspace target selected by the qualifying graph source result, and only then mutate that matching target.";
 /// Fixed, privacy-safe result for graph calls denied after convergence or exhaustion.
 pub const CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE: &str = "codebase-memory exploration is closed for this run; continue with conventional tools; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
 
@@ -53,6 +56,8 @@ const MAX_NON_PROGRESSING_GRAPH_BATCHES: u8 = 2;
 /// Budget exhaustion preserves exactly enough attempts to fill every possible
 /// trace/evidence gap once, without reopening broad graph exploration.
 const MAX_DECISION_GAP_RECOVERY_CALLS: u8 = MAX_GRAPH_RECOVERY_ALLOWANCE_V1;
+/// Bounds opaque source, pending-read, and successful-read authority.
+const MAX_EXACT_TARGET_AUTHORITIES: usize = 64;
 
 pub(super) struct DecisionAnchorState {
     mutation_tools: BTreeSet<String>,
@@ -62,11 +67,16 @@ pub(super) struct DecisionAnchorState {
     next_call_order: u64,
     later_roots: usize,
     non_progressing_batches: u8,
+    source_authorities: Vec<SourceTargetAuthority>,
+    pending_exact_reads: BTreeMap<String, PendingExactRead>,
+    exact_read_authorities: Vec<ExactReadAuthority>,
+    settled_batches: u64,
 }
 
 enum AnchorPhase {
     Root(AnchorForest),
     Trail(AnchorForest),
+    AwaitingExactRead(AnchorForest),
     Recovery(Recovery),
     GapRecovery(GapRecovery),
     Exhausted(SourceEvidence),
@@ -104,6 +114,33 @@ struct GapRecovery {
     remaining: u8,
 }
 
+#[derive(Clone)]
+struct SourceTargetAuthority {
+    target: EligibleWorkspaceTarget,
+    root_binding: String,
+    completed_turn: usize,
+    completed_order: u64,
+    completed_batch: u64,
+}
+
+struct PendingExactRead {
+    sources: Vec<SourceTargetAuthority>,
+    dispatched_turn: usize,
+    dispatched_order: u64,
+    dispatched_after_batch: u64,
+}
+
+struct ExactReadAuthority {
+    target: EligibleWorkspaceTarget,
+    root_binding: String,
+    source_completed_turn: usize,
+    source_completed_order: u64,
+    source_completed_batch: u64,
+    read_dispatched_turn: usize,
+    read_dispatched_order: u64,
+    read_dispatched_after_batch: u64,
+}
+
 #[derive(Clone, Default)]
 struct SourceEvidence {
     trace_turn: Option<usize>,
@@ -133,10 +170,19 @@ struct PendingCodebaseCall {
     admission_checked: bool,
 }
 
+type SettledToolCall<'a> = (
+    &'a str,
+    &'a str,
+    &'a ToolOutput,
+    Option<&'a TargetAdmissionOutcome>,
+    bool,
+);
+
 struct FinishedCodebaseCall<'a> {
     call: PendingCodebaseCall,
     name: &'a str,
     output: &'a ToolOutput,
+    source_target: Option<&'a TargetAdmissionOutcome>,
 }
 
 struct AnchorOutput {
@@ -179,6 +225,10 @@ impl DecisionAnchorState {
             next_call_order: 0,
             later_roots: 0,
             non_progressing_batches: 0,
+            source_authorities: Vec::new(),
+            pending_exact_reads: BTreeMap::new(),
+            exact_read_authorities: Vec::new(),
+            settled_batches: 0,
         })
     }
 
@@ -189,23 +239,61 @@ impl DecisionAnchorState {
         name: &str,
         output: &ToolOutput,
     ) -> DecisionAnchorTransition {
-        self.on_tool_batch_finished(&[(id, name, output)])
+        self.on_tool_batch_finished_with_targets(&[(id, name, output, None, !output.is_error)])
+    }
+
+    #[cfg(test)]
+    pub(super) fn on_tool_finished_with_source_target(
+        &mut self,
+        id: &str,
+        name: &str,
+        output: &ToolOutput,
+        source_target: Option<&TargetAdmissionOutcome>,
+    ) -> DecisionAnchorTransition {
+        self.on_tool_batch_finished_with_targets(&[(
+            id,
+            name,
+            output,
+            source_target,
+            !output.is_error,
+        )])
     }
 
     /// Evaluates one completed read-only batch from its pre-batch root state.
     /// The executor collects every sibling before this policy runs, so result
     /// settlement is independent of transport completion timing.
+    #[cfg(test)]
     pub(super) fn on_tool_batch_finished(
         &mut self,
         completed: &[(&str, &str, &ToolOutput)],
     ) -> DecisionAnchorTransition {
+        let completed = completed
+            .iter()
+            .map(|(id, name, output)| (*id, *name, *output, None, !output.is_error))
+            .collect::<Vec<_>>();
+        self.on_tool_batch_finished_with_targets(&completed)
+    }
+
+    pub(in crate::machine) fn on_tool_batch_finished_with_targets(
+        &mut self,
+        completed: &[SettledToolCall<'_>],
+    ) -> DecisionAnchorTransition {
+        if !completed.is_empty() {
+            self.settled_batches = self.settled_batches.saturating_add(1);
+        }
+        self.settle_exact_reads(completed);
         let finished = completed
             .iter()
-            .filter_map(|(id, name, output)| {
+            .filter_map(|(id, name, output, source_target, _)| {
                 let call_key = GraphCorrelationV1::target_digest(id)?;
                 self.calls
                     .remove(&call_key)
-                    .map(|call| FinishedCodebaseCall { call, name, output })
+                    .map(|call| FinishedCodebaseCall {
+                        call,
+                        name,
+                        output,
+                        source_target: *source_target,
+                    })
             })
             .collect::<Vec<_>>();
         if finished.is_empty() {
@@ -225,7 +313,7 @@ impl DecisionAnchorState {
             None => unreachable!("the empty phase returned above"),
             Some(AnchorPhase::Root(anchors)) | Some(AnchorPhase::Trail(anchors)) => {
                 if anchors.has_complete_evidence() {
-                    self.phase = Some(AnchorPhase::Trail(anchors));
+                    self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
                     if self.exploration == ExplorationStatus::Open {
                         self.exploration = ExplorationStatus::Complete;
                         DecisionAnchorTransition::Converged
@@ -257,6 +345,10 @@ impl DecisionAnchorState {
             }
             Some(AnchorPhase::GapRecovery(recovery)) => {
                 self.advance_gap_recovery(recovery, &finished)
+            }
+            Some(AnchorPhase::AwaitingExactRead(anchors)) => {
+                self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
+                DecisionAnchorTransition::Unchanged
             }
             Some(AnchorPhase::Exhausted(evidence)) => {
                 self.phase = Some(AnchorPhase::Exhausted(evidence));
@@ -307,19 +399,19 @@ impl DecisionAnchorState {
                 let output = anchor_output(finished.name, finished.output)?;
                 anchors
                     .accepted_root(&finished.call, &output.lineage)
-                    .map(|root| (root, finished.call.clone(), output))
+                    .map(|root| (root, finished.call.clone(), output, finished.source_target))
             })
             .collect::<Vec<_>>();
         let batch_caller_routes = compatible
             .iter()
-            .filter(|(_, _, output)| {
+            .filter(|(_, _, output, _)| {
                 output.tool == GraphCorrelationToolV1::TracePath
                     && output.lineage.caller_discovery.is_some()
             })
-            .map(|(root, _, _)| root.clone())
+            .map(|(root, _, _, _)| root.clone())
             .collect::<BTreeSet<_>>();
         let mut evidence_progressed = false;
-        for (root, call, output) in &compatible {
+        for (root, call, output, source_target) in &compatible {
             let Some(anchor) = anchors.roots.get_mut(root) else {
                 continue;
             };
@@ -327,6 +419,7 @@ impl DecisionAnchorState {
             let had_trace = anchor.evidence.has_trace();
             let had_caller_selector = anchor.evidence.caller_selector_available;
             let had_focused_test_selector = anchor.evidence.focused_test_selector_available;
+            let mut accepted_source = false;
             match output.tool {
                 GraphCorrelationToolV1::TracePath
                     if call.recovery_gap
@@ -346,9 +439,12 @@ impl DecisionAnchorState {
                 }
                 GraphCorrelationToolV1::GetCodeSnippet => {
                     match output.lineage.decision_evidence_kind {
-                        Some(DecisionEvidenceKindV1::Implementation) => anchor
-                            .evidence
-                            .record_decision_kinds([DecisionEvidenceKindV1::Implementation]),
+                        Some(DecisionEvidenceKindV1::Implementation) => {
+                            anchor
+                                .evidence
+                                .record_decision_kinds([DecisionEvidenceKindV1::Implementation]);
+                            accepted_source = true;
+                        }
                         Some(DecisionEvidenceKindV1::Caller)
                             if had_trace && (had_caller_selector || !call.admission_checked)
                                 || !call.admission_checked
@@ -356,7 +452,8 @@ impl DecisionAnchorState {
                         {
                             anchor
                                 .evidence
-                                .record_decision_kinds([DecisionEvidenceKindV1::Caller])
+                                .record_decision_kinds([DecisionEvidenceKindV1::Caller]);
+                            accepted_source = true;
                         }
                         Some(DecisionEvidenceKindV1::FocusedTest)
                             if had_trace
@@ -366,7 +463,8 @@ impl DecisionAnchorState {
                         {
                             anchor
                                 .evidence
-                                .record_decision_kinds([DecisionEvidenceKindV1::FocusedTest])
+                                .record_decision_kinds([DecisionEvidenceKindV1::FocusedTest]);
+                            accepted_source = true;
                         }
                         Some(_) | None => {}
                     }
@@ -383,6 +481,9 @@ impl DecisionAnchorState {
                 }
                 GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => {}
                 GraphCorrelationToolV1::TracePath => {}
+            }
+            if accepted_source {
+                self.record_source_authority(root, call, *source_target);
             }
             evidence_progressed |= anchor.evidence.progress_count() > before;
         }
@@ -407,7 +508,7 @@ impl DecisionAnchorState {
         if evidence_progressed || roots_progressed {
             self.non_progressing_batches = 0;
             if anchors.has_complete_evidence() {
-                self.phase = Some(AnchorPhase::Trail(anchors));
+                self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
                 self.exploration = ExplorationStatus::Complete;
                 return DecisionAnchorTransition::Converged;
             }
@@ -538,16 +639,5 @@ impl DecisionAnchorState {
             ExplorationStatus::Open => None,
         };
         ToolCallDenial::GraphExplorationClosed(details)
-    }
-
-    pub(super) fn blocks_mutation(&self, name: &str) -> bool {
-        self.mutation_tools.contains(name)
-            && self.phase.as_ref().is_some_and(|phase| match phase {
-                AnchorPhase::Root(_) => true,
-                AnchorPhase::Trail(anchors) => !anchors.has_complete_evidence(),
-                AnchorPhase::Recovery(_)
-                | AnchorPhase::GapRecovery(_)
-                | AnchorPhase::Exhausted(_) => true,
-            })
     }
 }

@@ -24,9 +24,13 @@ const FAKE_MCP_DESCRIPTION_SENTINEL: &str = "FAKE-MCP-DESCRIPTION-SENTINEL-384";
 fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     let checkout = TempCheckout::new("jig-codebase-memory-tool-call");
     checkout.init_git();
+    let notes_path = checkout.repo_path().join("MEMORY_NOTES.md");
+    fs::write(&notes_path, "pending exact read\n").expect("seed exact-read target");
+    checkout.git(&["add", "MEMORY_NOTES.md"]);
+    checkout.git(&["commit", "-m", "seed exact-read target"]);
 
     let observed_memory_result = Arc::new(AtomicUsize::new(0));
-    let fake = codebase_memory_agent_fake(Arc::clone(&observed_memory_result));
+    let fake = codebase_memory_agent_fake(Arc::clone(&observed_memory_result), notes_path);
     let provider = ProviderConfig::new(
         "jig-openai-compatible",
         "jig-codebase-memory-tool-call",
@@ -45,7 +49,7 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
             &provider,
             &context,
             &cwd,
-            8,
+            10,
             None,
             Some(&tool_config),
         )
@@ -247,7 +251,10 @@ fn jig_agent_uses_conventional_discovery_when_codebase_memory_is_unavailable() {
     );
 }
 
-fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeLlm {
+fn codebase_memory_agent_fake(
+    observed_memory_result: Arc<AtomicUsize>,
+    notes_path: PathBuf,
+) -> FakeLlm {
     FakeLlm::start(Script::rule(move |view| match view.prior_tool_results {
         0 => Reply {
             turns: vec![Turn::ToolCall {
@@ -336,6 +343,40 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
         },
         6 => Reply {
             turns: vec![Turn::ToolCall {
+                id: "call_premature_write_memory_notes".to_string(),
+                name: "write".to_string(),
+                args: serde_json::json!({
+                    "path": "demo/MEMORY_NOTES.md",
+                    "content": "must remain blocked\n"
+                }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        7 => {
+            assert_eq!(
+                fs::read_to_string(&notes_path).expect("premature mutation target"),
+                "pending exact read\n",
+                "the denied direct mutation must not change the workspace",
+            );
+            assert!(view.messages.iter().any(|message| {
+                message.role == "tool"
+                    && message.content.contains(
+                        "use the ordinary read tool to read the exact target named by this mutation",
+                    )
+            }));
+            Reply {
+                turns: vec![Turn::ToolCall {
+                    id: "call_read_memory_notes".to_string(),
+                    name: "read".to_string(),
+                    args: serde_json::json!({"path": "demo/MEMORY_NOTES.md"}),
+                }],
+                usage: Default::default(),
+                stop: StopReason::ToolCalls,
+            }
+        }
+        8 => Reply {
+            turns: vec![Turn::ToolCall {
                 id: "call_write_memory_notes".to_string(),
                 name: "write".to_string(),
                 args: serde_json::json!({
@@ -347,7 +388,7 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
             stop: StopReason::ToolCalls,
         },
         _ => Reply::text(
-            r#"{"summary":"Consumed codebase memory source evidence before writing MEMORY_NOTES.md."}"#,
+            r#"{"summary":"Consumed codebase memory source evidence and a post-source exact read before writing MEMORY_NOTES.md."}"#,
         ),
     }))
     .expect("start codebase-memory fake LLM")
@@ -397,7 +438,7 @@ for line in sys.stdin:
         elif name == "trace_path" and args.get("function_name") == "crate::WidgetCaller":
             text = json.dumps({"function": {"qualified_name": "crate::WidgetCaller"}, "callers": [{"qualified_name": "crate::WidgetTest", "is_test": True}]})
         elif name == "get_code_snippet":
-            text = json.dumps({"qualified_name": args.get("qualified_name"), "source": "typed source"})
+            text = json.dumps({"qualified_name": args.get("qualified_name"), "file_path": "MEMORY_NOTES.md", "source": "typed source"})
         else:
             raise AssertionError("unexpected tool call " + str(params))
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}})
