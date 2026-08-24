@@ -427,7 +427,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             expect_exact(
                 &run,
                 "/metrics/tools/ordinary/failures_by_category/policy_denial",
-                3,
+                1,
             )?;
             expect_exact(&run, "/metrics/structure/mutations", 1)?;
             benchmark::verify_safe_converged_decision_evidence(&run)?;
