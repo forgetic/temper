@@ -416,7 +416,7 @@ const GRAPH_CORRELATION_DIGEST_BYTES: usize = 32;
 ///
 /// This is intentionally closed: broad graph tools and arbitrary prefixed tool
 /// names cannot gain relevance evidence by constructing an extension value.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphCorrelationToolV1 {
     SearchGraph,
@@ -467,7 +467,7 @@ impl GraphCorrelationToolV1 {
 }
 
 /// The allowlisted structured field that declared a correlation target.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphCorrelationTargetKindV1 {
     GraphQuery,

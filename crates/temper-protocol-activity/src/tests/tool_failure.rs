@@ -67,8 +67,7 @@ fn tool_failure_wire_redacts_forged_and_oversized_messages_deterministically() {
         parsed.message,
         ToolFailureCategoryV1::ProcessExit.safe_message()
     );
-    assert!(!parsed.retryable);
-    assert!(parsed.fallback_to_conventional_discovery);
+    assert!(!parsed.retryable && parsed.fallback_to_conventional_discovery);
     assert!(parsed.message.len() <= MAX_TOOL_FAILURE_MESSAGE_BYTES);
     assert!(!format!("{forged:?} {parsed:?}").contains(SECRET));
 }
@@ -94,6 +93,14 @@ fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
             GraphRecoveryEvidenceKindV1::FocusedTest,
         ]
     );
+    assert_eq!(
+        details.compatible_actions,
+        [
+            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Trace),
+            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Caller),
+            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::FocusedTest),
+        ]
+    );
     let diagnostic = ToolFailureDiagnosticV1::with_graph_exploration(details.clone());
     assert_eq!(
         diagnostic.reason,
@@ -109,6 +116,9 @@ fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
 
     let encoded = serde_json::to_string(&diagnostic).unwrap();
     assert!(encoded.contains(r#""permitted_action":"targeted_current_root_graph_call""#));
+    assert!(encoded.contains(r#""selector_kind":"function_name""#));
+    assert!(encoded.contains(r#""selector_kind":"qualified_name""#));
+    assert!(!encoded.contains("root_binding"));
     assert!(!encoded.contains(SECRET));
     assert_eq!(
         serde_json::from_str::<ToolFailureDiagnosticV1>(&encoded).unwrap(),
@@ -118,6 +128,11 @@ fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
     malformed["graph_exploration"]["missing_evidence"] =
         serde_json::json!(["focused_test", "trace"]);
     assert!(serde_json::from_value::<ToolFailureDiagnosticV1>(malformed).is_err());
+
+    let mut forged_action: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    forged_action["graph_exploration"]["compatible_actions"][0]["selector_kind"] =
+        serde_json::json!(SECRET);
+    assert!(serde_json::from_value::<ToolFailureDiagnosticV1>(forged_action).is_err());
 
     let mut event = usage_event(1);
     event.event = AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
@@ -475,6 +490,8 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
         result_target_kinds: vec![DecisionAnchorTargetKindV1::Pattern],
         canonical_target_digests: vec![GraphCorrelationV1::target_digest("forged-root").unwrap()],
         decision_evidence_kind: None,
+        caller_discovery: None,
+        focused_test_discovery: None,
     });
     assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
     event.event.sanitize_graph_correlation();

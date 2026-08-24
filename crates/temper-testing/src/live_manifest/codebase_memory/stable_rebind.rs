@@ -291,8 +291,8 @@ pub(super) fn stable_rebind_evidence(
                             | "served_typed_lineage_consumer"
                             | "served_mapped_current_root_source"
                             | "served_convergence_source"
-                            | "served_gap_source"
-                            | "served_gap_recovery_source"
+                            | "served_gap_sibling_source"
+                            | "served_gap_active_source"
                     )
                 )
         }),

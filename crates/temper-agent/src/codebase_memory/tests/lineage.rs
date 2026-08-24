@@ -8,7 +8,10 @@
 use super::super::lineage::*;
 use crate::mcp::McpToolResultPart;
 use serde_json::Value;
-use temper_agent_core::{DecisionAnchorLineageStageV1, DecisionAnchorTargetKindV1};
+use temper_agent_core::{
+    DecisionAnchorLineageStageV1, DecisionAnchorTargetKindV1, LineageAdmissionOutcome,
+    LineageAdmissionStatus,
+};
 use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
 };
@@ -527,6 +530,18 @@ mod tests {
             )
             .unwrap();
         assert!(!trace.result_target_kinds.is_empty());
+
+        let callee = lineages
+            .record(
+                &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+                &serde_json::json!({
+                    "qualified_name": "temper-v1-hash.src.model.DeliveryAttempt.affinity_topic"
+                }),
+                Some(&structured_parts(serde_json::json!({}))),
+            )
+            .unwrap();
+        assert_eq!(callee.stage, DecisionAnchorLineageStageV1::CarryForward);
+        assert_eq!(callee.root_binding, trace.root_binding);
     }
 
     #[test]
@@ -659,6 +674,57 @@ mod tests {
             .unwrap();
         assert_eq!(later.stage, DecisionAnchorLineageStageV1::Root);
         assert_ne!(later.root_binding, first_root);
+    }
+
+    #[test]
+    fn ambiguous_malformed_broad_and_unsupported_calls_are_closed_ineligible() {
+        let mut lineages = DecisionAnchorLineages::default();
+        for query in ["first", "second"] {
+            lineages
+                .record(
+                    &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+                    &serde_json::json!({"query": query}),
+                    Some(&structured_parts(serde_json::json!({"symbol": "shared"}))),
+                )
+                .unwrap();
+        }
+
+        let cases = [
+            (
+                "codebase_memory_trace_path",
+                serde_json::json!({"function_name": "shared"}),
+                LineageAdmissionStatus::AmbiguousSelector,
+            ),
+            (
+                "codebase_memory_trace_path",
+                serde_json::json!({"function_name": "src/private.rs::shared()"}),
+                LineageAdmissionStatus::MalformedSelector,
+            ),
+            (
+                "codebase_memory_search_graph",
+                serde_json::json!({"query": "shared"}),
+                LineageAdmissionStatus::BroadSelector,
+            ),
+            (
+                "codebase_memory_get_architecture",
+                serde_json::json!({}),
+                LineageAdmissionStatus::UnsupportedTool,
+            ),
+        ];
+        for (tool, arguments, expected) in cases {
+            assert_eq!(
+                lineages.resolve(tool, &arguments),
+                LineageAdmissionOutcome::Ineligible(expected)
+            );
+        }
+    }
+
+    mod admission {
+        include!("lineage_admission.rs");
+    }
+
+    mod focused_test_recovery {
+        include!("lineage_focused_test_recovery.rs");
     }
 
     #[test]

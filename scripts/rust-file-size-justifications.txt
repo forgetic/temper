@@ -262,3 +262,7 @@ crates/temper-testing/src/live_manifest/bundle_tests.rs
 # Live bundle loading keeps resolved fixture validation, cadence policy, and
 # typed scenario assembly together while provider and action parsing stay split.
 crates/temper-testing/src/live_manifest/bundle.rs
+
+# Sub-agent integration coverage shares one provider/runtime harness across tool-loop,
+# event forwarding, cancellation, steering, and budget-exhaustion composition cases.
+crates/temper-agent-core/tests/jig_sub_agent.rs

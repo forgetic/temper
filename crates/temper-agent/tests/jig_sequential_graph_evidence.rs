@@ -17,9 +17,10 @@ fn jig_agent_consumes_opaque_result_driven_evidence_before_mutation() {
         vec![
             DecisionStep::Discovery,
             DecisionStep::Refinement,
-            DecisionStep::Trace,
             DecisionStep::ImplementationSource,
+            DecisionStep::Trace,
             DecisionStep::CallerSource,
+            DecisionStep::FocusedTestTraversal,
             DecisionStep::BehavioralTestSource,
             DecisionStep::Mutation,
             DecisionStep::Complete,

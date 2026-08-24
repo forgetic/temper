@@ -245,7 +245,7 @@ fn ordinary_failures_keep_only_shell_owned_diagnostics_in_every_capture_mode() {
 }
 
 #[test]
-fn actionable_graph_recovery_activity_retains_only_closed_missing_kinds_and_allowance() {
+fn actionable_graph_recovery_activity_retains_only_closed_missing_kinds_allowance_and_actions() {
     const SECRET: &str = "Authorization: Bearer CLOSED-RECOVERY/src/private.rs --selector secret";
     let recorder = Arc::new(Recorder::default());
     let factory = ScopeFactory::with_parts(
@@ -299,7 +299,10 @@ fn actionable_graph_recovery_activity_retains_only_closed_missing_kinds_and_allo
     assert_eq!(failure.graph_exploration.as_ref(), Some(&details));
     let rendered = format!("{frames:?} {}", serde_json::to_string(&*frames).unwrap());
     assert!(!rendered.contains(SECRET));
-    assert!(!rendered.contains("selector"));
+    assert!(rendered.contains("selector_kind"));
+    assert!(rendered.contains("FunctionName"));
+    assert!(rendered.contains("QualifiedName"));
+    assert!(!rendered.contains("root_binding"));
 }
 
 #[test]

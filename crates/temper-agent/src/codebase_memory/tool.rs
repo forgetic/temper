@@ -247,15 +247,12 @@ impl Tool for CodebaseMemoryTool {
             .as_ref()
             .and_then(|correlation| {
                 presented.decision_anchor.then(|| {
-                    self.decision_anchor_lineages
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .record_with_evidence_kind(
-                            correlation,
-                            &lineage_input,
-                            result.typed_parts.as_deref(),
-                            decision_evidence_kind,
-                        )
+                    self.decision_anchor_lineages.record_with_evidence_kind(
+                        correlation,
+                        &lineage_input,
+                        result.typed_parts.as_deref(),
+                        decision_evidence_kind,
+                    )
                 })
             })
             .flatten();
