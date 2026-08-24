@@ -21,11 +21,11 @@ use tongs::model::{Message, UserContent, UserMessage};
 use tongs::provider::{Provider, StreamOptions};
 use tongs::tools::ToolRegistry;
 
-use crate::ToolInvocationCatalog;
 use crate::machine::{AgentCompletion, AgentEvent, AgentMachine, ArgPreviewFn};
 use crate::shell::{
     AgentOutcome, AgentShell, EventSink, ModelIdentity, NullEventSink, RunObservability, TurnHook,
 };
+use crate::{LineageAdmissionHandle, ToolInvocationCatalog};
 
 /// Contains observer panics at the core boundary. Observability is best effort:
 /// neither prompt capture nor a later lifecycle callback may change a run.
@@ -129,6 +129,9 @@ pub struct SubAgent {
     pub max_iterations: usize,
     /// Complete model/tool operation deadlines inherited by nested runs.
     pub operation_limits: AgentOperationLimits,
+    /// Optional run-local codebase-memory selector resolver. Runs without
+    /// codebase-memory leave this unset and preserve existing behavior.
+    pub lineage_admission: Option<LineageAdmissionHandle>,
     /// The model provider.
     pub provider: Arc<dyn Provider>,
     /// Per-request stream options (api key/bearer, headers, temperature,
@@ -353,6 +356,9 @@ pub fn run_sub_agent_controllable_with_observability(
         sub_agent.max_iterations,
         invocation_catalog,
     );
+    if let Some(admission) = sub_agent.lineage_admission {
+        machine = machine.with_lineage_admission(admission);
+    }
     if let Some(arg_preview) = arg_preview {
         machine = machine.with_arg_preview(arg_preview);
     }

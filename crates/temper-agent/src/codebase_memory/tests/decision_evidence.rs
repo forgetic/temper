@@ -93,7 +93,7 @@ fn source_evidence_schema_and_lineage_are_closed_and_provider_private() {
                 "declared",
                 json!({
                     "qualified_name": "crate::engine::run",
-                    "decision_evidence_kind": "caller",
+                    "decision_evidence_kind": "implementation",
                     "path": PRIVATE_ARGUMENT,
                     "purpose": "focused_test"
                 }),
@@ -108,7 +108,7 @@ fn source_evidence_schema_and_lineage_are_closed_and_provider_private() {
         );
         assert_eq!(
             declared_lineage.decision_evidence_kind,
-            Some(DecisionEvidenceKindV1::Caller)
+            Some(DecisionEvidenceKindV1::Implementation)
         );
         let calls = calls_named(&log_path, "get_code_snippet");
         assert_eq!(calls.len(), 1);

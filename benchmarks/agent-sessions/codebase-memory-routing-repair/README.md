@@ -40,30 +40,41 @@ normalized identity returns `ready` plus the canonical `root_path`. The
 requested opaque stable key remains in fixture state for comparison, but cannot
 serve status or graph reads.
 
-The enabled Jig begins with two useful independent roots for routing and focused
-behavioral evidence. A later parallel batch refines and traces `worker_slot`
-while reading the root-bound regression test from the confirmed current root.
-Before the final caller source completes the decision chain, two duplicate
-refinements reach the provider as consecutive non-progressing batches and
-exhaust normal exploration. The machine then reports exactly `caller` as
-missing, reserves the four-call targeted current-root recovery allowance, and
-denies a broad architecture request and another duplicate refinement locally
-without consuming that allowance. One targeted current-root caller source read
-reaches the provider and completes the chain. Completion then freezes graph
-exploration: a broad architecture call and two targeted post-decision attempts
-are denied locally while conventional shell and source reads remain available
-for the exact patch.
+The enabled Jig begins with distinct routing and behavioral roots. Stable call
+ordering makes the first, implementation-capable routing root the deterministic
+recovery root. Two source reads from the behavioral sibling reach the provider
+on consecutive turns. They preserve the frozen focused-test relevance edge but,
+without a trace on that sibling, cannot satisfy or outrank the active routing
+root. Their two non-progressing batches exhaust normal exploration with the
+active root still missing `trace`, `implementation`, `caller`, and
+`focused_test`.
+
+The next model turn submits one immutable parallel recovery batch: caller and
+focused-test reads bound to the behavioral sibling surround a compatible
+`worker_slot` trace bound to the active root. Both cross-root reads are denied
+locally from the same pre-batch snapshot. Only the trace reaches MCP and spends
+one recovery slot. The following diagnostic reports the actual remaining kinds
+`implementation`, `caller`, and `focused_test`, an allowance of three, and only
+the closed `get_code_snippet` / `qualified_name` action for each kind. A later
+parallel active-root source batch spends those three remaining slots while an
+already-satisfied trace sibling is denied locally from the same snapshot, and
+completes the decision chain. Completion then freezes graph exploration: a
+broad architecture call and two targeted post-decision attempts are denied
+locally while conventional shell and source reads remain available for the
+exact patch.
 
 The fixture numbers actual provider invocations in its private responses. The
-harness therefore bounds the enabled run to sixteen model turns, distinguishes
-thirteen model graph attempts from eight provider invocations, proves the two
-useful roots, their descendants, both admitted duplicates, and the targeted
-recovery reached the provider, and checks that the two recovery denials and all
-three post-completion denials did not. Both recovery denials retain the exact
-missing-kind guidance and the unchanged allowance of four. All eight successful
-results retain complete typed relevance and current-root lineage, so
-deterministic relevance remains above the frozen 50% aggregate gate without
-treating any denied attempt as useful.
+harness therefore bounds the enabled run to fifteen model turns, distinguishes
+fourteen model graph attempts from eight provider invocations, proves the two
+typed roots and their root-local descendants, and verifies the provider order:
+two root searches, two sibling source reads, the one admitted recovery trace,
+and three active-root source reads. The two cross-root recovery calls, the
+already-satisfied trace, and all three post-completion calls have no provider
+invocation. Private provider counters and opaque roots are inspected only in the
+local diagnostic trace; neither appears in the run summary. All eight
+successful results retain complete typed correlation and lineage, so deterministic relevance remains above the frozen
+50% aggregate gate without treating any denied attempt as useful or allowing
+sibling evidence to authorize mutation.
 
 The manifest permits only declared provider-shaped typed producer and consumer
 targets, followed by graph-to-graph, graph-to-source, and final exact

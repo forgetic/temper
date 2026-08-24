@@ -12,6 +12,9 @@ use crate::{
     TraceDiagnosticV1,
 };
 
+mod focused_test;
+mod selection;
+
 pub(super) struct RelevanceAnalysis {
     pub(super) relevant: Option<u64>,
     pub(super) irrelevant: Option<u64>,
@@ -84,10 +87,22 @@ pub(super) fn classify_relevance(
             ));
             continue;
         };
+        let focused_test_evidence = focused_test::producer_to_source_evidence(
+            call,
+            graph_tool,
+            producer_correlation,
+            calls,
+            &options.graph_decision_targets,
+        );
         let lineage_evidence =
             forest_lineage_evidence(call, graph_tool, calls, &options.graph_decision_targets);
         lineage_relevant_calls.extend(
             lineage_evidence
+                .iter()
+                .map(|item| item.consumer_call_id.clone()),
+        );
+        lineage_relevant_calls.extend(
+            focused_test_evidence
                 .iter()
                 .map(|item| item.consumer_call_id.clone()),
         );
@@ -108,6 +123,13 @@ pub(super) fn classify_relevance(
                     })
             })
             .collect::<Vec<_>>();
+        let exact_selection_evidence = selection::producer_to_exact_read_evidence(
+            call,
+            graph_tool,
+            producer_correlation,
+            &matching_targets,
+            actions,
+        );
         let mut call_evidence = lineage_evidence;
         let mut correlation_unknown = false;
         for target in matching_targets {
@@ -124,23 +146,37 @@ pub(super) fn classify_relevance(
             call_evidence.append(&mut target_evidence);
             correlation_unknown |= target_unknown;
         }
-        // One graph call contributes one deterministic proof row. Several
-        // declared targets may validly match a typed root forest, but retaining
-        // all of them duplicates relevance and leaks aggregate shape. Prefer
-        // the earliest consumer, then stable call/target identity.
-        call_evidence.sort_by(|left, right| {
-            (
-                left.consumer_start_seq,
-                &left.consumer_call_id,
-                &left.target,
-            )
-                .cmp(&(
-                    right.consumer_start_seq,
-                    &right.consumer_call_id,
-                    &right.target,
-                ))
-        });
-        call_evidence.truncate(1);
+        if let Some(focused_test_evidence) = focused_test_evidence {
+            // Closed typed focused-test evidence is more specific than an
+            // ordinary manifest or forest edge. Keeping only it also
+            // deduplicates the equivalent ordinary declaration proof.
+            call_evidence.clear();
+            call_evidence.push(focused_test_evidence);
+        } else if let Some(exact_selection_evidence) = exact_selection_evidence {
+            // A closed exact read is more specific than ordinary manifest or
+            // forest consumption, regardless of when those fallback edges
+            // occurred.
+            call_evidence.clear();
+            call_evidence.push(exact_selection_evidence);
+        } else {
+            // One graph call contributes one deterministic proof row. Several
+            // declared targets may validly match a typed root forest, but retaining
+            // all of them duplicates relevance and leaks aggregate shape. Prefer
+            // the earliest consumer, then stable call/target identity.
+            call_evidence.sort_by(|left, right| {
+                (
+                    left.consumer_start_seq,
+                    &left.consumer_call_id,
+                    &left.target,
+                )
+                    .cmp(&(
+                        right.consumer_start_seq,
+                        &right.consumer_call_id,
+                        &right.target,
+                    ))
+            });
+            call_evidence.truncate(1);
+        }
         if !call_evidence.is_empty()
             || lineage_relevant_calls.contains(&call.call_id)
             || ordered_carry_forward
@@ -234,6 +270,9 @@ fn forest_lineage_evidence(
                 consumer.scope_id == call.scope_id
                     && consumer.status == Some(ToolStatusV1::Succeeded)
                     && consumer.start_seq.is_some_and(|start| start > finish_seq)
+                    && !(target.kind == crate::GraphDecisionKindV1::FocusedTest
+                        && GraphEvidenceToolV1::from_tool_name(&consumer.name)
+                            == Some(GraphEvidenceToolV1::GetCodeSnippet))
                     && consumer
                         .decision_anchor_lineage
                         .as_ref()
@@ -292,6 +331,10 @@ fn target_consumption(
     let mut evidence = Vec::new();
     let mut unknown = false;
 
+    // Exact reads in typed runs are reduced by `selection` before ordinary
+    // evidence. Historical all-untyped traces retain their legacy action
+    // classification; once any typed lineage is present, rejected reads cannot
+    // re-enter through this fallback.
     let mut matching_actions = actions
         .iter()
         .filter(|action| {
@@ -304,7 +347,11 @@ fn target_consumption(
             let mode = match tool {
                 GraphEvidenceToolV1::Read
                 | GraphEvidenceToolV1::Edit
-                | GraphEvidenceToolV1::Write => GraphConsumptionModeV1::Selection,
+                | GraphEvidenceToolV1::Write
+                    if !has_typed_lineage =>
+                {
+                    GraphConsumptionModeV1::Selection
+                }
                 GraphEvidenceToolV1::ApplyPatch => GraphConsumptionModeV1::Mutation,
                 _ => return None,
             };
@@ -324,7 +371,8 @@ fn target_consumption(
             matches.then_some((action, tool, mode))
         })
         .collect::<Vec<_>>();
-    matching_actions.sort_by_key(|(action, _, _)| (action.start_seq, action.finish_seq));
+    matching_actions
+        .sort_by_key(|(action, _, _)| (action.start_seq, action.finish_seq, &action.call_id));
     if let Some((action, tool, mode)) = matching_actions.into_iter().next() {
         evidence.push(decision_evidence(
             call,
@@ -339,6 +387,11 @@ fn target_consumption(
     }
 
     for consumption in &target.consumption {
+        if target.kind == crate::GraphDecisionKindV1::FocusedTest
+            && consumption.tool == temper_protocol_activity::GraphCorrelationToolV1::GetCodeSnippet
+        {
+            continue;
+        }
         let Some(expected_correlation) = consumption.correlation() else {
             unknown = true;
             continue;

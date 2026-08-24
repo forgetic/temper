@@ -84,6 +84,11 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "first request should include prompt guidance only because tools registered"
     );
     for expected in [
+        "use a targeted repository-index",
+        "query before any shell inventory",
+        "Do not precede graph-based source selection with a compound",
+        "keep repository status, validation, and other operational checks as separate",
+        "calls after selection",
         "Use them early for non-trivial tasks, but choose the narrowest useful query",
         "- concrete defects: begin with a targeted symbol or code search tied to the reported",
         "then use call/path tracing and read exact source snippets as",
@@ -96,6 +101,22 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "A `Decision anchor` explicitly marks a bounded successful targeted",
         "select from that provider result, not unrelated discovery",
         "truncated or ambiguous output",
+        "derive query",
+        "requested behavior and intended repair",
+        "task-semantic graph query that describes the behavior",
+        "do not lead with a name pattern or identifier token",
+        "shortest provider-derived refinement",
+        "selected implementation source first",
+        "exact identity returned by that traversal",
+        "selected-implementation traversal's provider-returned caller identities",
+        "complete empty inbound trace settles that selected symbol's graph-caller relationship",
+        "do not manufacture caller evidence by rereading the traced symbol as its own caller",
+        "search the graph for the requested behavioral regression",
+        "consume the exact test returned by that semantic",
+        "multiple typed routes could fill a decision gap",
+        "semantically connected to the requested behavior",
+        "selector provider-derived and on the active root",
+        "never repeat the denied tool/selector/evidence-kind tuple",
         "smallest semantic diff",
     ] {
         assert!(
@@ -252,9 +273,12 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
             observed_memory_result.fetch_add(1, Ordering::SeqCst);
             Reply {
                 turns: vec![Turn::ToolCall {
-                    id: "call_trace_memory_caller".to_string(),
-                    name: "codebase_memory_trace_path".to_string(),
-                    args: serde_json::json!({ "function_name": "crate::WidgetService" }),
+                    id: "call_read_memory_implementation".to_string(),
+                    name: "codebase_memory_get_code_snippet".to_string(),
+                    args: serde_json::json!({
+                        "qualified_name": "crate::WidgetService",
+                        "decision_evidence_kind": "implementation"
+                    }),
                 }],
                 usage: Default::default(),
                 stop: StopReason::ToolCalls,
@@ -262,11 +286,11 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
         }
         2 => Reply {
             turns: vec![Turn::ToolCall {
-                id: "call_read_memory_implementation".to_string(),
-                name: "codebase_memory_get_code_snippet".to_string(),
+                id: "call_trace_memory_caller".to_string(),
+                name: "codebase_memory_trace_path".to_string(),
                 args: serde_json::json!({
-                    "qualified_name": "crate::WidgetService",
-                    "decision_evidence_kind": "implementation"
+                    "function_name": "crate::WidgetService",
+                    "direction": "inbound"
                 }),
             }],
             usage: Default::default(),
@@ -277,7 +301,7 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
                 id: "call_read_memory_caller".to_string(),
                 name: "codebase_memory_get_code_snippet".to_string(),
                 args: serde_json::json!({
-                    "qualified_name": "crate::WidgetService",
+                    "qualified_name": "crate::WidgetCaller",
                     "decision_evidence_kind": "caller"
                 }),
             }],
@@ -286,17 +310,31 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
         },
         4 => Reply {
             turns: vec![Turn::ToolCall {
-                id: "call_read_memory_behavior".to_string(),
-                name: "codebase_memory_get_code_snippet".to_string(),
+                id: "call_trace_memory_test".to_string(),
+                name: "codebase_memory_trace_path".to_string(),
                 args: serde_json::json!({
-                    "qualified_name": "crate::WidgetService",
-                    "decision_evidence_kind": "focused_test"
+                    "function_name": "crate::WidgetCaller",
+                    "mode": "calls",
+                    "direction": "inbound",
+                    "include_tests": true
                 }),
             }],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
         },
         5 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_read_memory_behavior".to_string(),
+                name: "codebase_memory_get_code_snippet".to_string(),
+                args: serde_json::json!({
+                    "qualified_name": "crate::WidgetTest",
+                    "decision_evidence_kind": "focused_test"
+                }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        6 => Reply {
             turns: vec![Turn::ToolCall {
                 id: "call_write_memory_notes".to_string(),
                 name: "write".to_string(),
@@ -325,7 +363,7 @@ import sys
 
 TOOLS = [
     {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "pattern": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
-    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["function_name"]}},
+    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path"]}},
@@ -352,8 +390,16 @@ for line in sys.stdin:
         args = params.get("arguments") or {}
         if name == "index_status":
             text = json.dumps({"project": args.get("project", ""), "status": "fresh"})
-        else:
+        elif name == "search_code":
             text = json.dumps({"results": [{"qualified_name": "crate::WidgetService", "summary": "FAKE_MCP_SEARCH_RESULT"}]})
+        elif name == "trace_path" and args.get("function_name") == "crate::WidgetService":
+            text = json.dumps({"function": {"qualified_name": "crate::WidgetService"}, "callers": [{"qualified_name": "crate::WidgetCaller"}]})
+        elif name == "trace_path" and args.get("function_name") == "crate::WidgetCaller":
+            text = json.dumps({"function": {"qualified_name": "crate::WidgetCaller"}, "callers": [{"qualified_name": "crate::WidgetTest", "is_test": True}]})
+        elif name == "get_code_snippet":
+            text = json.dumps({"qualified_name": args.get("qualified_name"), "source": "typed source"})
+        else:
+            raise AssertionError("unexpected tool call " + str(params))
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})

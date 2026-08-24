@@ -69,6 +69,21 @@ fn successful_targeted_results_present_only_a_bounded_provider_neutral_decision_
         assert!(!targeted.is_error);
         assert!(targeted_text.ends_with(DECISION_ANCHOR));
         assert!(targeted_text.contains("PROVIDER-RESULT-SENTINEL"));
+        for guidance in [
+            "trace inbound from the likely implementation returned by targeted search",
+            "not from an outer caller or wrapper",
+            "Preserve typed caller/callee identities for later source reads",
+            "complete empty inbound trace settles the selected symbol's graph-caller relationship",
+            "do not manufacture a caller by rereading that same symbol",
+            "implementation and caller source are complete but focused-test source is missing",
+            "later inbound calls traversal from the returned caller with tests included",
+            "read an exact test identity returned by that traversal only in another later turn",
+        ] {
+            assert!(
+                DECISION_ANCHOR.contains(guidance),
+                "anchor omitted {guidance:?}"
+            );
+        }
         assert!(
             !DECISION_ANCHOR.contains(FIXTURE_TARGET),
             "the anchor must not retain a model target"

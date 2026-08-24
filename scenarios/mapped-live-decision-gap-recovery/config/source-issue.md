@@ -1,17 +1,22 @@
 Repair alias retry worker affinity with the smallest semantic change.
 
-Establish independent current-root implementation and focused-test roots. In
-later turns consume the implementation refinement, caller trace, and typed
-focused-test source, but leave caller source evidence incomplete. Exercise two
-non-progressing duplicate refinements before requesting any mutation.
+Establish independent current-root routing and focused-behavior roots, with the
+routing root active by stable call order. Preserve the locally denied shell
+barrier's closed classification. Exercise two sibling focused-test source reads
+on separate turns so normal exploration is exhausted without advancing the
+active root.
 
-After the normal exploration budget is exhausted, observe the exact missing
-kind, permitted targeted action, and remaining allowance. Attempt one broad
-search and one duplicate refinement so their local denial is observable, then
-use only the admitted typed current-root caller source. Once the chain is
-complete, exercise the requested post-completion graph calls without bypassing
-the local boundary.
+After exhaustion, submit one mixed batch containing cross-root caller and
+focused-test reads around the compatible active-root trace. Both incompatible
+reads must stay local and spend no allowance. Observe that trace progress leaves
+exactly implementation, caller, and focused_test with allowance three. In a
+later batch, request those three typed active-root sources plus a duplicate
+trace; the sources may complete in any order, while the satisfied trace remains
+local. Once the chain is complete, exercise the requested post-completion graph
+calls without bypassing the local boundary.
 
-Use conventional source reading for the selected one-file repair and validate
-with `cargo fmt --check && cargo test --quiet`. If bounded recovery cannot make
-progress, stop without mutation or a product.
+Use one conventional classified shell discovery and source reading for the
+selected one-file repair. Validate formatting, tests, the exact one-file diff,
+and the denied-shell process canary before host submission. If no compatible
+action remains, stop once without further lifecycle or mutation denials and
+without a product.
