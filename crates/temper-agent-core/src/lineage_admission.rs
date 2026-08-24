@@ -9,16 +9,104 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use temper_protocol_activity::{
-    DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphCorrelationToolV1,
+    DecisionAnchorLineageV1, DecisionAnchorTargetKindV1, DecisionEvidenceKindV1,
+    GraphCorrelationToolV1,
 };
 
 /// Shared process-local resolver installed for one agent run.
 pub type LineageAdmissionHandle = Arc<dyn LineageAdmissionResolver>;
 
-/// Wrapper-owned resolver queried synchronously before a graph request is
-/// handed to the provider-bound shell.
+/// Wrapper-owned resolver queried synchronously at the trusted tool boundary.
+///
+/// Graph selectors are resolved before provider dispatch. Source targets are
+/// resolved only after a successful typed wrapper result, while ordinary
+/// filesystem targets are resolved only after invocation canonicalization.
+/// Every returned target is an opaque run-local identity.
 pub trait LineageAdmissionResolver: Send + Sync {
     fn resolve(&self, tool_name: &str, arguments: &Value) -> LineageAdmissionOutcome;
+
+    fn resolve_source_target(&self, _lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
+        TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
+    }
+
+    fn resolve_invocation_targets(
+        &self,
+        _tool_name: &str,
+        _arguments: &Value,
+    ) -> InvocationTargetAdmission {
+        InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool)
+    }
+}
+
+/// Closed reasons why a source, read, or mutation target is not eligible.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TargetAdmissionStatus {
+    UnknownTarget,
+    AmbiguousTarget,
+    MalformedTarget,
+    OutsideWorkspace,
+    UnsupportedTool,
+    CompetingTargets,
+}
+
+/// One target represented only by an unguessable identity scoped to this run.
+#[derive(Clone, Eq, PartialEq)]
+pub struct EligibleWorkspaceTarget {
+    identity: OpaqueWorkspaceTargetIdentity,
+}
+
+impl EligibleWorkspaceTarget {
+    pub fn new(identity: String) -> Option<Self> {
+        Some(Self {
+            identity: OpaqueWorkspaceTargetIdentity::new(identity)?,
+        })
+    }
+
+    /// Policy comparison without exposing the underlying process-local value.
+    pub fn matches(&self, other: &Self) -> bool {
+        self.identity == other.identity
+    }
+}
+
+impl fmt::Debug for EligibleWorkspaceTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EligibleWorkspaceTarget")
+            .field("identity", &self.identity)
+            .finish()
+    }
+}
+
+/// Closed resolution for one independently exposed filesystem target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TargetAdmissionOutcome {
+    Eligible(EligibleWorkspaceTarget),
+    Ineligible(TargetAdmissionStatus),
+}
+
+/// Target shape of one canonical ordinary invocation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InvocationTargetAdmission {
+    Read(TargetAdmissionOutcome),
+    /// Every explicit mutation target has its own entry. An ineligible entry
+    /// cannot piggyback on an eligible sibling in a multi-target operation.
+    Mutation(Vec<TargetAdmissionOutcome>),
+    Ineligible(TargetAdmissionStatus),
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct OpaqueWorkspaceTargetIdentity(String);
+
+impl OpaqueWorkspaceTargetIdentity {
+    fn new(value: String) -> Option<Self> {
+        valid_run_local_identity(&value).then_some(Self(value))
+    }
+}
+
+impl fmt::Debug for OpaqueWorkspaceTargetIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<opaque-workspace-target>")
+    }
 }
 
 /// Bounded reasons why a call cannot be tied to one exact registered root.
@@ -175,6 +263,10 @@ impl fmt::Debug for OpaqueLineageRootBinding {
 }
 
 fn valid_root_binding(value: &str) -> bool {
+    valid_run_local_identity(value)
+}
+
+fn valid_run_local_identity(value: &str) -> bool {
     value.len() == 36
         && value.as_bytes().get(14) == Some(&b'4')
         && matches!(value.as_bytes().get(19), Some(b'8' | b'9' | b'a' | b'b'))
@@ -204,5 +296,21 @@ mod tests {
         let debug = format!("{admission:?}");
         assert!(debug.contains("FocusedTest"));
         assert!(!debug.contains(ROOT));
+    }
+
+    #[test]
+    fn workspace_target_identity_is_comparable_but_never_debug_visible() {
+        const FIRST: &str = "00000000-0000-4000-8000-000000000011";
+        const SECOND: &str = "00000000-0000-4000-8000-000000000012";
+        let first = EligibleWorkspaceTarget::new(FIRST.to_string()).unwrap();
+        let same = EligibleWorkspaceTarget::new(FIRST.to_string()).unwrap();
+        let second = EligibleWorkspaceTarget::new(SECOND.to_string()).unwrap();
+
+        assert!(first.matches(&same));
+        assert!(!first.matches(&second));
+        let debug = format!("{first:?}");
+        assert!(debug.contains("opaque-workspace-target"));
+        assert!(!debug.contains(FIRST));
+        assert!(EligibleWorkspaceTarget::new("raw/path.rs".to_string()).is_none());
     }
 }

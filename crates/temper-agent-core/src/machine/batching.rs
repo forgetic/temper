@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use crate::{InvocationTargetAdmission, TargetAdmissionOutcome};
 use tongs::model::ToolCall;
 use tongs::tools::ToolEffects;
 
@@ -19,6 +20,10 @@ pub(super) struct PendingTool {
     pub(super) call: ToolCall,
     pub(super) output: Option<tongs::tools::ToolOutput>,
     pub(super) failure: Option<super::tool_failure::ToolFailureDiagnostic>,
+    /// Trusted run-local admissions. They are never projected into messages,
+    /// events, diagnostics, or durable activity metadata.
+    pub(super) invocation_targets: Option<InvocationTargetAdmission>,
+    pub(super) source_target: Option<TargetAdmissionOutcome>,
 }
 
 /// The effect declaration for a tool name, defaulting to write (serialize) for
@@ -56,6 +61,8 @@ pub(super) fn plan_batches(
                 call: call.clone(),
                 output: None,
                 failure: None,
+                invocation_targets: None,
+                source_target: None,
             });
         } else {
             if !current.is_empty() {
@@ -66,6 +73,8 @@ pub(super) fn plan_batches(
                 call: call.clone(),
                 output: None,
                 failure: None,
+                invocation_targets: None,
+                source_target: None,
             });
         }
     }

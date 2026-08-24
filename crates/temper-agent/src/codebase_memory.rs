@@ -456,7 +456,7 @@ async fn start_toolset(
     let health = Arc::new(CodebaseMemoryHealth::new(client.cancellation_handle()));
     // Provider-shaped target values remain in this wrapper-local registry. The
     // core receives only an opaque root and typed aggregate lineage record.
-    let decision_anchor_lineages = Arc::new(DecisionAnchorLineageRegistry::default());
+    let decision_anchor_lineages = Arc::new(DecisionAnchorLineageRegistry::new(Arc::clone(&scope)));
     let lineage_admission: LineageAdmissionHandle = decision_anchor_lineages.clone();
 
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();

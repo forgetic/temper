@@ -23,6 +23,7 @@ use discovery::{
 
 #[derive(Clone, Debug)]
 pub(super) struct WorkspaceScope {
+    pub(super) workspace_root: PathBuf,
     pub(super) projects: Vec<ScopedProject>,
     alias_to_index: BTreeMap<String, usize>,
     ambiguous_aliases: BTreeSet<String>,
@@ -50,6 +51,7 @@ impl WorkspaceScope {
             )?);
         }
         let mut scope = Self {
+            workspace_root,
             projects,
             alias_to_index: BTreeMap::new(),
             ambiguous_aliases: BTreeSet::new(),
@@ -383,7 +385,7 @@ impl ScopedProject {
         aliases
     }
 
-    fn actual_project(&self) -> String {
+    pub(super) fn actual_project(&self) -> String {
         self.background_index
             .as_ref()
             .and_then(BackgroundIndex::actual_project)
