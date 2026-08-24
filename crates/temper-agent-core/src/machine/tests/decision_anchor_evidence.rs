@@ -113,8 +113,11 @@ fn over_returned_later_kinds_require_their_staged_provider_routes() {
         ),
         DecisionAnchorTransition::Converged,
     );
-    assert!(!state.blocks_mutation("write"));
-    assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 8), None);
+    assert!(state.blocks_mutation("write"));
+    assert_eq!(
+        state.on_tool_dispatched(&call("mutation", "write"), 8),
+        Some(ToolCallDenial::DecisionAnchorMutation)
+    );
 }
 
 #[test]

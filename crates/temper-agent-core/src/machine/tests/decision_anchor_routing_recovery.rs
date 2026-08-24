@@ -68,7 +68,10 @@ fn cross_root_focused_test_cannot_complete_the_staged_implementation_root() {
         ),
         DecisionAnchorTransition::Converged,
     );
-    assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 6), None);
+    assert_eq!(
+        state.on_tool_dispatched(&call("mutation", "write"), 6),
+        Some(ToolCallDenial::DecisionAnchorMutation)
+    );
 }
 
 #[test]
@@ -143,7 +146,7 @@ fn focused_test_recovery_traverses_from_consumed_caller_then_reads_returned_test
         ),
         DecisionAnchorTransition::Converged,
     );
-    assert!(!state.blocks_mutation("write"));
+    assert!(state.blocks_mutation("write"));
 }
 
 #[test]
@@ -235,7 +238,10 @@ fn empty_traversal_enables_one_semantic_fallback_then_one_exact_test_source() {
         ),
         DecisionAnchorTransition::Converged,
     );
-    assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 9), None);
+    assert_eq!(
+        state.on_tool_dispatched(&call("mutation", "write"), 9),
+        Some(ToolCallDenial::DecisionAnchorMutation)
+    );
 }
 
 #[test]
@@ -457,7 +463,7 @@ fn multi_root_over_returned_candidates_recover_on_the_selected_root() {
         ]),
         DecisionAnchorTransition::Converged,
     );
-    assert!(!state.blocks_mutation("write"));
+    assert!(state.blocks_mutation("write"));
 }
 
 fn focused_test_recovery_state() -> DecisionAnchorState {

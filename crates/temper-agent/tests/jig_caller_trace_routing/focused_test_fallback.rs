@@ -13,6 +13,7 @@ fn jig_empty_traversal_uses_one_semantic_fallback_before_mutation() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let checkout = TempCheckout::new("jig-focused-test-semantic-fallback");
     checkout.init_git();
+    seed_route_target(&checkout);
     let mcp = fake_mcp();
     let fake = FakeLlm::start(Script::rule(fallback_success_reply))
         .expect("start focused-test fallback fake LLM");
@@ -37,8 +38,7 @@ fn jig_empty_traversal_uses_one_semantic_fallback_before_mutation() {
 
     assert_eq!(result.verdict, None);
     assert_eq!(
-        fs::read_to_string(checkout.repo_path().join("FOCUSED_TEST_FALLBACK.md"))
-            .expect("fallback product"),
+        fs::read_to_string(checkout.repo_path().join("ROUTE.md")).expect("fallback product"),
         "semantic fallback verified\n"
     );
     let calls = graph_calls(mcp.path());
@@ -221,14 +221,19 @@ fn fallback_reply(view: &RequestView, query: &str, succeeds: bool) -> Reply {
             "focused_test",
         ),
         9 if succeeds => tool_reply(
+            "read-fallback-target-after-evidence",
+            "read",
+            serde_json::json!({"path": "demo/ROUTE.md"}),
+        ),
+        10 if succeeds => tool_reply(
             "write-after-fallback-evidence",
             "write",
             serde_json::json!({
-                "path": "demo/FOCUSED_TEST_FALLBACK.md",
+                "path": "demo/ROUTE.md",
                 "content": "semantic fallback verified\n"
             }),
         ),
-        10 if succeeds => Reply::text(
+        11 if succeeds => Reply::text(
             r#"{"summary":"Used one same-root semantic fallback and its exact returned test."}"#,
         ),
         count => panic!("unexpected focused-test fallback tool-result count {count}"),

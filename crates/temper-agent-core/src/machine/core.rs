@@ -413,17 +413,18 @@ impl AgentMachine {
             })
             .collect::<Vec<_>>();
         if let Some(batch) = self.pending_batches.front_mut() {
-            for (pending, admission) in batch.iter_mut().zip(invocation_targets) {
+            for (pending, admission) in batch.iter_mut().zip(invocation_targets.iter().cloned()) {
                 pending.invocation_targets = admission;
             }
         }
         let denials = self.decision_anchors.as_mut().map_or_else(
             || vec![None; calls.len()],
             |state| {
-                state.on_tool_batch_dispatched_with_admissions(
+                state.on_tool_batch_dispatched_with_admissions_and_targets(
                     &calls,
                     model_turn,
                     &closed_admissions,
+                    &invocation_targets,
                 )
             },
         );
@@ -519,6 +520,7 @@ impl AgentMachine {
         });
         let source_target = (is_typed_source_call
             && !output.is_error
+            && failure.is_none()
             && !self.invocation_rejections.contains_key(&id))
         .then(|| {
             let details = output.details.as_ref()?;
@@ -578,11 +580,17 @@ impl AgentMachine {
                     .iter()
                     .filter_map(|pending| {
                         pending.output.as_ref().map(|output| {
-                            (pending.call.id.as_str(), pending.call.name.as_str(), output)
+                            (
+                                pending.call.id.as_str(),
+                                pending.call.name.as_str(),
+                                output,
+                                pending.source_target.as_ref(),
+                                !output.is_error && pending.failure.is_none(),
+                            )
                         })
                     })
                     .collect::<Vec<_>>();
-                match state.on_tool_batch_finished(&completed) {
+                match state.on_tool_batch_finished_with_targets(&completed) {
                     DecisionAnchorTransition::Unchanged => {}
                     DecisionAnchorTransition::RecoveryNeeded => {
                         self.decision_anchor_recovery = true;

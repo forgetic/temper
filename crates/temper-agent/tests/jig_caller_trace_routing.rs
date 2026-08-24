@@ -21,6 +21,9 @@ use coding_agent_workspace::{REPO_DIR, TempCheckout};
 const IMPLEMENTATION: &str = "crate::routing::select_worker";
 const CALLER: &str = "crate::delivery::dispatch";
 const FOCUSED_TEST: &str = "crate::tests::keeps_affinity";
+#[path = "jig_caller_trace_routing/context.rs"]
+mod context;
+use context::workspace_context;
 #[path = "jig_caller_trace_routing/focused_test_fallback.rs"]
 mod focused_test_fallback;
 #[path = "jig_caller_trace_routing/semantic_routing.rs"]
@@ -34,6 +37,7 @@ fn jig_routes_empty_inbound_trace_and_exact_source_relationships() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let checkout = TempCheckout::new("jig-caller-trace-implementation-root");
     checkout.init_git();
+    seed_route_target(&checkout);
     let mcp = fake_mcp();
     let fake = FakeLlm::start(Script::rule(minimal_routing_reply)).expect("start routing fake LLM");
     let provider = provider(&fake, "jig-caller-trace-implementation-root");
@@ -57,7 +61,7 @@ fn jig_routes_empty_inbound_trace_and_exact_source_relationships() {
 
     assert_eq!(result.verdict, None);
     assert_eq!(
-        fs::read_to_string(checkout.repo_path().join("CALLER_ROUTE.md")).expect("routing product"),
+        fs::read_to_string(checkout.repo_path().join("ROUTE.md")).expect("routing product"),
         "caller route verified\n"
     );
     let calls = graph_calls(mcp.path());
@@ -99,6 +103,7 @@ fn jig_does_not_repeat_a_locally_denied_selector_evidence_pair() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let checkout = TempCheckout::new("jig-caller-trace-denial-recovery");
     checkout.init_git();
+    seed_route_target(&checkout);
     let mcp = fake_mcp();
     let fake = FakeLlm::start(Script::rule(recovery_routing_reply))
         .expect("start recovery routing fake LLM");
@@ -123,8 +128,7 @@ fn jig_does_not_repeat_a_locally_denied_selector_evidence_pair() {
 
     assert_eq!(result.verdict, None);
     assert_eq!(
-        fs::read_to_string(checkout.repo_path().join("RECOVERY_ROUTE.md"))
-            .expect("recovery product"),
+        fs::read_to_string(checkout.repo_path().join("ROUTE.md")).expect("recovery product"),
         "denied trace was not repeated\n"
     );
     let calls = graph_calls(mcp.path());
@@ -157,6 +161,16 @@ fn jig_does_not_repeat_a_locally_denied_selector_evidence_pair() {
     );
 }
 
+fn seed_route_target(checkout: &TempCheckout) {
+    fs::write(
+        checkout.repo_path().join("ROUTE.md"),
+        "pending exact read\n",
+    )
+    .expect("seed route target");
+    checkout.git(&["add", "ROUTE.md"]);
+    checkout.git(&["commit", "-m", "seed route target"]);
+}
+
 fn minimal_routing_reply(view: &RequestView) -> Reply {
     match view.prior_tool_results {
         0 => search_reply("discover-likely-implementation"),
@@ -174,14 +188,19 @@ fn minimal_routing_reply(view: &RequestView) -> Reply {
             "focused_test",
         ),
         6 => tool_reply(
+            "read-routed-target-after-evidence",
+            "read",
+            serde_json::json!({"path": "demo/ROUTE.md"}),
+        ),
+        7 => tool_reply(
             "write-after-routed-evidence",
             "write",
             serde_json::json!({
-                "path": "demo/CALLER_ROUTE.md",
+                "path": "demo/ROUTE.md",
                 "content": "caller route verified\n"
             }),
         ),
-        7 => Reply::text(
+        8 => Reply::text(
             r#"{"summary":"Selected the implementation root and consumed returned caller evidence."}"#,
         ),
         count => panic!("unexpected minimal routing tool-result count {count}"),
@@ -266,14 +285,19 @@ fn recovery_routing_reply(view: &RequestView) -> Reply {
             ),
         ]),
         10 => tool_reply(
+            "read-recovered-target-after-evidence",
+            "read",
+            serde_json::json!({"path": "demo/ROUTE.md"}),
+        ),
+        11 => tool_reply(
             "write-after-compatible-recovery",
             "write",
             serde_json::json!({
-                "path": "demo/RECOVERY_ROUTE.md",
+                "path": "demo/ROUTE.md",
                 "content": "denied trace was not repeated\n"
             }),
         ),
-        11 => Reply::text(
+        12 => Reply::text(
             r#"{"summary":"Followed the compatible menu without repeating the denied trace."}"#,
         ),
         count => panic!("unexpected recovery routing tool-result count {count}"),
@@ -465,39 +489,6 @@ fn tool_config(dir: &tempfile::TempDir) -> AgentToolConfig {
     }
 }
 
-fn workspace_context() -> WorkspaceContext {
-    WorkspaceContext {
-        trace_context: None,
-        artifact_context: None,
-        repos: vec![WorkspaceRepository {
-            id: "repo-1".to_string(),
-            owner: "acme".to_string(),
-            name: "demo".to_string(),
-            default_branch: "main".to_string(),
-            dir: REPO_DIR.to_string(),
-            access: "writable".to_string(),
-            base_branch: "main".to_string(),
-            branch_hint: Some("agent/pr-for-code-25".to_string()),
-        }],
-        work_item: WorkspaceWorkItem {
-            role: "engineer".to_string(),
-            queue: "code_ready".to_string(),
-            kind: "code".to_string(),
-            target: "Issue { number: ItemNumber(25) }".to_string(),
-            context: "{}".to_string(),
-        },
-        action: "open_pr".to_string(),
-        correlation_key: "pr-for-code-25".to_string(),
-        checkout: Some("writable".to_string()),
-        allowed_verdicts: vec!["needs_architect".to_string()],
-        verdict_contracts: Default::default(),
-        source_metadata: Default::default(),
-        guidance: WorkspaceGuidance::default(),
-        pull_request_freshness: None,
-        agent_session: None,
-    }
-}
-
 const FAKE_MCP: &str = r#"
 import json
 import os
@@ -600,25 +591,25 @@ for line in sys.stdin:
         elif name == "get_code_snippet":
             selected = arguments.get("qualified_name")
             if selected == IMPLEMENTATION:
-                result(request["id"], {"qualified_name": IMPLEMENTATION, "name": "select_worker", "source": "implementation source", "callers": [{"qualified_name": CALLER, "name": "dispatch"}]})
+                result(request["id"], {"qualified_name": IMPLEMENTATION, "name": "select_worker", "file_path": "ROUTE.md", "source": "implementation source", "callers": [{"qualified_name": CALLER, "name": "dispatch"}]})
             elif selected == CALLER:
-                result(request["id"], {"qualified_name": CALLER, "name": "dispatch", "source": "caller source", "callees": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
+                result(request["id"], {"qualified_name": CALLER, "name": "dispatch", "file_path": "ROUTE.md", "source": "caller source", "callees": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
             elif selected == FOCUSED_TEST:
-                result(request["id"], {"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "source": "focused test source", "is_test": True})
+                result(request["id"], {"qualified_name": FOCUSED_TEST, "name": "keeps_affinity", "file_path": "ROUTE.md", "source": "focused test source", "is_test": True})
             elif selected == SECOND_FOCUSED_TEST:
-                result(request["id"], {"qualified_name": SECOND_FOCUSED_TEST, "name": "keeps_affinity_after_retry", "source": "second focused test source", "is_test": True})
+                result(request["id"], {"qualified_name": SECOND_FOCUSED_TEST, "name": "keeps_affinity_after_retry", "file_path": "ROUTE.md", "source": "second focused test source", "is_test": True})
             elif selected == NON_TEST_HELPER:
-                result(request["id"], {"qualified_name": NON_TEST_HELPER, "name": "request_affinity_helper", "source": "non-test helper source", "is_test": False})
+                result(request["id"], {"qualified_name": NON_TEST_HELPER, "name": "request_affinity_helper", "file_path": "ROUTE.md", "source": "non-test helper source", "is_test": False})
             elif selected == SEMANTIC_IMPLEMENTATION:
-                result(request["id"], {"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane", "source": "semantic implementation source"})
+                result(request["id"], {"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane", "file_path": "ROUTE.md", "source": "semantic implementation source"})
             elif selected == SEMANTIC_CALLER:
-                result(request["id"], {"qualified_name": SEMANTIC_CALLER, "name": "route_renamed_job", "source": "semantic caller source", "callees": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}]})
+                result(request["id"], {"qualified_name": SEMANTIC_CALLER, "name": "route_renamed_job", "file_path": "ROUTE.md", "source": "semantic caller source", "callees": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}]})
             elif selected == SEMANTIC_FOCUSED_TEST:
-                result(request["id"], {"qualified_name": SEMANTIC_FOCUSED_TEST, "name": "renamed_replay_preserves_shard_ownership", "source": "semantic focused test source", "is_test": True})
+                result(request["id"], {"qualified_name": SEMANTIC_FOCUSED_TEST, "name": "renamed_replay_preserves_shard_ownership", "file_path": "ROUTE.md", "source": "semantic focused test source", "is_test": True})
             elif selected == ACTIVE_ROOT_TEST:
-                result(request["id"], {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "source": "active-root focused test source", "is_test": True})
+                result(request["id"], {"qualified_name": ACTIVE_ROOT_TEST, "name": "replay_uses_selected_lane", "file_path": "ROUTE.md", "source": "active-root focused test source", "is_test": True})
             elif selected == INCIDENTAL_IMPLEMENTATION:
-                result(request["id"], {"qualified_name": INCIDENTAL_IMPLEMENTATION, "name": "legacy_dispatch_key", "source": "incidental implementation source"})
+                result(request["id"], {"qualified_name": INCIDENTAL_IMPLEMENTATION, "name": "legacy_dispatch_key", "file_path": "ROUTE.md", "source": "incidental implementation source"})
             else:
                 raise AssertionError("unexpected source selector " + str(selected))
     else:

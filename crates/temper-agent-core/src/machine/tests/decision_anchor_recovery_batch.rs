@@ -190,7 +190,10 @@ fn immutable_recovery_batch_admits_only_the_next_staged_root_action() {
         );
         assert_eq!(finish_with_evidence(&mut state, id, ROOT, kind), expected);
     }
-    assert_eq!(state.on_tool_dispatched(&call("mutation", "write"), 7), None);
+    assert_eq!(
+        state.on_tool_dispatched(&call("mutation", "write"), 7),
+        Some(ToolCallDenial::DecisionAnchorMutation)
+    );
 }
 
 #[test]
