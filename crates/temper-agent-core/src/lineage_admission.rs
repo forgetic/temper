@@ -81,6 +81,20 @@ impl EligibleLineageAdmission {
         })
     }
 
+    pub fn implementation_caller_traversal(
+        root_binding: String,
+        selector_kind: DecisionAnchorTargetKindV1,
+    ) -> Option<Self> {
+        (selector_kind == DecisionAnchorTargetKindV1::FunctionName).then_some(())?;
+        Some(Self {
+            root_binding: OpaqueLineageRootBinding::new(root_binding)?,
+            selector_kind,
+            tool_kind: GraphCorrelationToolV1::TracePath,
+            evidence_purpose: None,
+            recovery_purpose: None,
+        })
+    }
+
     pub fn focused_test_traversal(
         root_binding: String,
         selector_kind: DecisionAnchorTargetKindV1,

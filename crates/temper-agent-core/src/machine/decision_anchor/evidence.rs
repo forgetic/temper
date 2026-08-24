@@ -48,37 +48,46 @@ impl DecisionAnchorState {
                 .then_some((finished.call.clone(), output))
             })
             .collect::<Vec<_>>();
-        let batch_trace_turn = compatible
+        let had_trace = active.evidence.has_trace();
+        let had_caller_selector = active.evidence.caller_selector_available;
+        let had_focused_test_selector = active.evidence.focused_test_selector_available;
+        let batch_trace = compatible
             .iter()
             .filter(|(call, output)| {
                 call.recovery_gap == Some(DecisionGap::Trace)
                     && output.tool == GraphCorrelationToolV1::TracePath
+                    && output.lineage.caller_discovery.is_some()
             })
-            .map(|(call, _)| call.turn)
-            .min();
-        let had_trace = active.evidence.has_trace();
-        let decision_kinds = if had_trace {
-            compatible
-                .iter()
-                .filter_map(|(call, output)| match call.recovery_gap {
-                    Some(DecisionGap::Evidence(expected))
-                        if output.tool == GraphCorrelationToolV1::GetCodeSnippet
-                            && output.lineage.decision_evidence_kind == Some(expected) =>
-                    {
-                        Some(expected)
-                    }
-                    _ => None,
-                })
-                .collect::<BTreeSet<_>>()
-        } else {
-            BTreeSet::new()
-        };
+            .min_by_key(|(call, _)| call.turn)
+            .map(|(call, output)| (call.turn, output.lineage.caller_discovery));
+        let decision_kinds = compatible
+            .iter()
+            .filter_map(|(call, output)| match call.recovery_gap {
+                Some(DecisionGap::Evidence(expected))
+                    if output.tool == GraphCorrelationToolV1::GetCodeSnippet
+                        && output.lineage.decision_evidence_kind == Some(expected)
+                        && match expected {
+                            DecisionEvidenceKindV1::Implementation => true,
+                            DecisionEvidenceKindV1::Caller => {
+                                had_trace && (had_caller_selector || !call.admission_checked)
+                            }
+                            DecisionEvidenceKindV1::FocusedTest => {
+                                had_trace && (had_focused_test_selector || !call.admission_checked)
+                            }
+                        } =>
+                {
+                    Some(expected)
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         let active = anchors
             .roots
             .get_mut(&active_root)
             .expect("the active recovery root remains installed");
-        if let Some(turn) = batch_trace_turn {
+        if let Some((turn, outcome)) = batch_trace {
             active.evidence.record_trace(turn);
+            active.evidence.record_caller_discovery(outcome);
         }
         for (call, output) in &compatible {
             if call.recovery_gap != Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
@@ -144,6 +153,16 @@ impl SourceEvidence {
         self.trace_turn = Some(self.trace_turn.map_or(turn, |current| current.min(turn)));
     }
 
+    pub(super) fn record_caller_discovery(&mut self, outcome: Option<CallerDiscoveryOutcomeV1>) {
+        let Some(outcome) = outcome else {
+            return;
+        };
+        if outcome == CallerDiscoveryOutcomeV1::EligibleSelectorReturned {
+            self.caller_selector_available = true;
+        }
+        self.caller_traversal_outcome.get_or_insert(outcome);
+    }
+
     pub(super) fn record_decision_kinds(
         &mut self,
         kinds: impl IntoIterator<Item = DecisionEvidenceKindV1>,
@@ -192,6 +211,10 @@ impl SourceEvidence {
     pub(super) fn merge(&mut self, other: Self) {
         if let Some(turn) = other.trace_turn {
             self.record_trace(turn);
+        }
+        self.caller_selector_available |= other.caller_selector_available;
+        if self.caller_traversal_outcome.is_none() {
+            self.caller_traversal_outcome = other.caller_traversal_outcome;
         }
         if let Some(turn) = other.focused_test_traversal_turn {
             self.record_focused_test_traversal(turn);
@@ -270,11 +293,20 @@ impl SourceEvidence {
         missing
     }
 
-    /// Recovery source reads require a trace in the pre-batch snapshot. A
-    /// caller-to-test traversal is offered only after caller source evidence.
-    /// Its exact test is preferred; one semantic fallback opens only after a
-    /// typed empty traversal settles.
+    /// Recovery advances through exact implementation source, its typed caller
+    /// traversal, the exact returned caller source, and then focused-test routes.
     pub(super) fn compatible_actions(&self, anchor: &Anchor) -> BTreeSet<GraphRecoveryActionV1> {
+        if self.needs(DecisionGap::Evidence(
+            DecisionEvidenceKindV1::Implementation,
+        )) {
+            let action =
+                GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
+            return anchor
+                .supports(action)
+                .then_some(action)
+                .into_iter()
+                .collect();
+        }
         if !self.has_trace() {
             let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Trace);
             return anchor
@@ -283,23 +315,26 @@ impl SourceEvidence {
                 .into_iter()
                 .collect();
         }
-        let mut actions = self
-            .missing_gaps()
-            .into_iter()
-            .filter_map(|gap| {
-                let action = GraphRecoveryActionV1::for_evidence(gap.recovery_kind());
-                if gap == DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)
-                    && !self.focused_test_selector_available
-                {
-                    return None;
-                }
-                anchor.supports(action).then_some(action)
-            })
-            .collect::<BTreeSet<_>>();
+
+        let mut actions = BTreeSet::new();
+        if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::Caller))
+            && self.caller_selector_available
+        {
+            let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Caller);
+            if anchor.supports(action) {
+                actions.insert(action);
+            }
+        }
         if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
-            && self
-                .decision_kinds
-                .contains(&DecisionEvidenceKindV1::Implementation)
+            && self.focused_test_selector_available
+        {
+            let action =
+                GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::FocusedTest);
+            if anchor.supports(action) {
+                actions.insert(action);
+            }
+        }
+        if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
             && self
                 .decision_kinds
                 .contains(&DecisionEvidenceKindV1::Caller)

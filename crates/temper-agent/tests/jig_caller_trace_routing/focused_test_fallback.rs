@@ -147,12 +147,12 @@ fn fallback_reply(view: &RequestView, query: &str, succeeds: bool) -> Reply {
             }
             search_reply("discover-fallback-implementation")
         }
-        1 => trace_reply("trace-fallback-implementation", implementation_target(view)),
-        2 => source_reply(
+        1 => source_reply(
             "read-fallback-implementation",
             implementation_target(view),
             "implementation",
         ),
+        2 => trace_reply("trace-fallback-implementation", implementation_target(view)),
         3 => source_reply("read-fallback-caller", caller_relationship(view), "caller"),
         4 => refinement_reply("non-progressing-fallback-one", implementation_target(view)),
         5 => refinement_reply("non-progressing-fallback-two", implementation_target(view)),
@@ -174,7 +174,7 @@ fn fallback_reply(view: &RequestView, query: &str, succeeds: bool) -> Reply {
             for expected in [
                 "search_graph/graph_query/focused_test",
                 "selector=task_semantic_query",
-                "except one listed task-semantic query",
+                "use only these current-root actions",
             ] {
                 assert!(
                     messages_contain(view, expected),

@@ -135,6 +135,7 @@ impl DecisionAnchorState {
                                 order,
                                 recovery_gap,
                                 admitted_root,
+                                admission_checked: admission.is_some(),
                             },
                         );
                     }

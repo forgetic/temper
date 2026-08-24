@@ -1,5 +1,7 @@
 use super::*;
-use temper_protocol_activity::{DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1};
+use temper_protocol_activity::{
+    CallerDiscoveryOutcomeV1, DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1,
+};
 
 #[test]
 fn caller_to_test_traversal_requires_typed_origins_and_unlocks_exact_test_source() {
@@ -9,7 +11,14 @@ fn caller_to_test_traversal_requires_typed_origins_and_unlocks_exact_test_source
             &correlation(GraphCorrelationTargetKindV1::Pattern),
             &serde_json::json!({"pattern": "select_worker"}),
             Some(&structured_parts(serde_json::json!({
-                "qualified_name": "crate::route::select_worker"
+                "results": [
+                    {"qualified_name": "crate::route::select_worker"},
+                    {"qualified_name": "crate::delivery::dispatch"},
+                    {
+                        "qualified_name": "crate::tests::keeps_affinity",
+                        "is_test": true
+                    }
+                ]
             }))),
         )
         .unwrap();
@@ -25,6 +34,43 @@ fn caller_to_test_traversal_requires_typed_origins_and_unlocks_exact_test_source
         )
         .unwrap();
     assert_eq!(implementation.root_binding, root.root_binding);
+    assert_eq!(
+        lineages.resolve(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &serde_json::json!({
+                "qualified_name": "crate::delivery::dispatch",
+                "decision_evidence_kind": "caller"
+            }),
+        ),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection),
+        "an implementation result's caller-shaped candidate must await traversal",
+    );
+    let caller_trace_input = serde_json::json!({
+        "function_name": "crate::route::select_worker",
+        "mode": "calls",
+        "direction": "inbound",
+    });
+    assert!(matches!(
+        lineages.resolve(
+            GraphCorrelationToolV1::TracePath.public_name(),
+            &caller_trace_input,
+        ),
+        LineageAdmissionOutcome::Eligible(_)
+    ));
+    let caller_trace = lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::FunctionName),
+            &caller_trace_input,
+            Some(&structured_parts(serde_json::json!({
+                "function": {"qualified_name": "crate::route::select_worker"},
+                "callers": [{"qualified_name": "crate::delivery::dispatch"}]
+            }))),
+        )
+        .unwrap();
+    assert_eq!(
+        caller_trace.caller_discovery,
+        Some(CallerDiscoveryOutcomeV1::EligibleSelectorReturned)
+    );
     let caller = lineages
         .record_with_evidence_kind(
             &correlation(GraphCorrelationTargetKindV1::QualifiedName),
@@ -48,6 +94,17 @@ fn caller_to_test_traversal_requires_typed_origins_and_unlocks_exact_test_source
         ),
         LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection),
         "an implementation identity is not a focused-test selector",
+    );
+    assert_eq!(
+        lineages.resolve(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &serde_json::json!({
+                "qualified_name": "crate::tests::keeps_affinity",
+                "decision_evidence_kind": "focused_test"
+            }),
+        ),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection),
+        "an over-returned test-shaped candidate must await a typed test route",
     );
     let traversal_input = serde_json::json!({
         "function_name": "crate::delivery::dispatch",
@@ -126,6 +183,27 @@ fn empty_traversal_opens_one_same_root_semantic_fallback_and_only_its_exact_test
             Some(DecisionEvidenceKindV1::Implementation),
         )
         .unwrap();
+    let caller_trace_input = serde_json::json!({
+        "function_name": "crate::route::select_worker",
+        "direction": "inbound",
+    });
+    assert!(matches!(
+        lineages.resolve(
+            GraphCorrelationToolV1::TracePath.public_name(),
+            &caller_trace_input,
+        ),
+        LineageAdmissionOutcome::Eligible(_)
+    ));
+    lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::FunctionName),
+            &caller_trace_input,
+            Some(&structured_parts(serde_json::json!({
+                "function": {"qualified_name": "crate::route::select_worker"},
+                "callers": [{"qualified_name": "crate::delivery::dispatch"}]
+            }))),
+        )
+        .unwrap();
     lineages
         .record_with_evidence_kind(
             &correlation(GraphCorrelationTargetKindV1::QualifiedName),
@@ -195,6 +273,14 @@ fn empty_traversal_opens_one_same_root_semantic_fallback_and_only_its_exact_test
     assert_eq!(
         fallback.tool_kind(),
         GraphCorrelationToolV1::SearchGraph
+    );
+    assert_eq!(
+        lineages.resolve(
+            GraphCorrelationToolV1::SearchGraph.public_name(),
+            &serde_json::json!({"query": "duplicate behavioral fallback"}),
+        ),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::BroadSelector),
+        "one pending fallback closes the same-root fallback route",
     );
 
     let fallback_result = lineages

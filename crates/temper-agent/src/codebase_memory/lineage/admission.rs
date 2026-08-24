@@ -117,6 +117,10 @@ impl DecisionAnchorLineages {
                             .insert(query_digest, Some(root_binding.clone()));
                     }
                 }
+                self.focused_test_recovery.insert(
+                    root_binding.clone(),
+                    super::FocusedTestRecoveryState::FallbackPending,
+                );
                 return EligibleLineageAdmission::focused_test_semantic_fallback(
                     root_binding,
                     temper_protocol_activity::DecisionAnchorTargetKindV1::GraphQuery,
@@ -176,6 +180,20 @@ impl DecisionAnchorLineages {
             Some(None) => return Ineligible(AmbiguousSelector),
             None => return Ineligible(UnknownSelector),
         };
+        if evidence_purpose == Some(DecisionEvidenceKindV1::Implementation)
+            && !binding.implementation_evidence_result
+            && self.selectors.values().flatten().any(|candidate| {
+                candidate.root_binding == binding.root_binding
+                    && candidate.implementation_evidence_result
+            })
+        {
+            return Ineligible(IncapableSelection);
+        }
+        if evidence_purpose == Some(DecisionEvidenceKindV1::Caller)
+            && !binding.caller_traversal_result
+        {
+            return Ineligible(IncapableSelection);
+        }
         if recovery_purpose == Some(DecisionEvidenceKindV1::FocusedTest)
             && !binding.caller_evidence_result
         {
@@ -188,6 +206,23 @@ impl DecisionAnchorLineages {
         }
         if recovery_purpose == Some(DecisionEvidenceKindV1::FocusedTest) {
             return EligibleLineageAdmission::focused_test_traversal(
+                binding.root_binding.clone(),
+                selector.kind,
+            )
+            .map(Eligible)
+            .unwrap_or(Ineligible(IncapableSelection));
+        }
+        if tool_kind == GraphCorrelationToolV1::TracePath {
+            if object.get("direction").and_then(Value::as_str) != Some("inbound")
+                || object
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .is_some_and(|mode| mode != "calls")
+                || !binding.implementation_evidence_result
+            {
+                return Ineligible(IncapableSelection);
+            }
+            return EligibleLineageAdmission::implementation_caller_traversal(
                 binding.root_binding.clone(),
                 selector.kind,
             )

@@ -39,11 +39,17 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "rather than a name pattern or identifier token",
         "narrow only with identifiers returned by that result",
         "behaviorally relevant implementation candidate",
-        "shortest provider-derived refinement and implementation-to-caller chain",
-        "exact relevant caller source instead of an outer wrapper or incidental caller",
+        "consume its exact source first",
+        "implementation-purpose result may over-return caller- or test-shaped candidates",
+        "direct source reads of those shapes cannot complete later evidence kinds",
+        "Only after implementation source evidence",
+        "traverse inbound calls from that exact selected implementation in a later turn",
+        "shortest provider-derived refinement needed for that staged route",
+        "Consume caller source only from an exact identity returned by the selected-implementation traversal",
+        "outer wrapper or incidental caller",
         "merely accepts a caller evidence label",
-        "Provider-returned caller/callee identities from targeted and exact-source results",
-        "preferred later-turn caller/model selectors",
+        "Only the selected-implementation traversal's provider-returned caller identities",
+        "eligible later-turn caller/model selectors",
         "complete empty inbound trace settles that selected symbol's graph-caller relationship",
         "do not manufacture caller evidence by rereading the traced symbol as its own caller",
         "search the graph for the requested behavioral regression",
@@ -197,12 +203,15 @@ fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
     let selection = engineer
         .find("Choose the behaviorally relevant implementation candidate")
         .expect("coding prompt selects the implementation root");
+    let implementation = engineer
+        .find("consume its exact source first")
+        .expect("coding prompt consumes selected implementation source");
     let trace = engineer
-        .find("shortest provider-derived refinement and implementation-to-caller chain")
+        .find("traverse inbound calls from that exact selected implementation in a later turn")
         .expect("coding prompt traces inbound from the implementation root");
     let relationships = engineer
-        .find("Provider-returned caller/callee identities from targeted and exact-source results")
-        .expect("coding prompt consumes typed relationships");
+        .find("Only the selected-implementation traversal's provider-returned caller identities")
+        .expect("coding prompt consumes typed traversal relationships");
     let empty = engineer
         .find(
             "complete empty inbound trace settles that selected symbol's graph-caller relationship",
@@ -212,7 +221,8 @@ fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
         .find("never repeat the denied tool/selector/evidence-kind tuple")
         .expect("coding prompt closes denied selector/evidence pairs");
 
-    assert!(selection < trace && trace < relationships && relationships < empty);
+    assert!(selection < implementation);
+    assert!(implementation < trace && trace < relationships && relationships < empty);
     assert!(empty < denial);
     assert!(engineer.contains("do not manufacture caller evidence by rereading the traced symbol"));
     assert!(engineer.contains(

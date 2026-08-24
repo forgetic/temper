@@ -677,39 +677,6 @@ mod tests {
     }
 
     #[test]
-    fn exact_selectors_resolve_before_provider_with_only_closed_values() {
-        const PRIVATE_SELECTOR: &str = "crate::private::engine::run";
-        let mut lineages = DecisionAnchorLineages::default();
-        let root = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::GraphQuery),
-                &serde_json::json!({"query": "private discovery query"}),
-                Some(&structured_parts(serde_json::json!({
-                    "qualified_name": PRIVATE_SELECTOR
-                }))),
-            )
-            .unwrap();
-
-        let admission = lineages.resolve(
-            GraphCorrelationToolV1::TracePath.public_name(),
-            &serde_json::json!({"function_name": "run"}),
-        );
-        let LineageAdmissionOutcome::Eligible(admission) = admission else {
-            panic!("exact registered selector must be eligible");
-        };
-        assert!(admission.matches_root(&root.root_binding));
-        assert_eq!(
-            admission.selector_kind(),
-            DecisionAnchorTargetKindV1::FunctionName
-        );
-        assert_eq!(admission.tool_kind(), GraphCorrelationToolV1::TracePath);
-        assert_eq!(admission.evidence_purpose(), None);
-        let rendered = format!("{admission:?}");
-        assert!(!rendered.contains(PRIVATE_SELECTOR));
-        assert!(!rendered.contains(&root.root_binding));
-    }
-
-    #[test]
     fn ambiguous_malformed_broad_and_unsupported_calls_are_closed_ineligible() {
         let mut lineages = DecisionAnchorLineages::default();
         for query in ["first", "second"] {
@@ -752,53 +719,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn source_admission_requires_one_validated_wrapper_evidence_purpose() {
-        let mut lineages = DecisionAnchorLineages::default();
-        let root = lineages
-            .record(
-                &correlation(GraphCorrelationTargetKindV1::GraphQuery),
-                &serde_json::json!({"query": "root"}),
-                Some(&structured_parts(serde_json::json!({
-                    "qualified_name": "crate::engine::run"
-                }))),
-            )
-            .unwrap();
-        let source = GraphCorrelationToolV1::GetCodeSnippet.public_name();
-
-        assert_eq!(
-            lineages.resolve(
-                source,
-                &serde_json::json!({"qualified_name": "crate::engine::run"})
-            ),
-            LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection)
-        );
-        assert_eq!(
-            lineages.resolve(
-                source,
-                &serde_json::json!({
-                    "qualified_name": "crate::engine::run",
-                    "decision_evidence_kind": "provider prose"
-                })
-            ),
-            LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector)
-        );
-
-        let admitted = lineages.resolve(
-            source,
-            &serde_json::json!({
-                "qualified_name": "crate::engine::run",
-                "decision_evidence_kind": "caller"
-            }),
-        );
-        let LineageAdmissionOutcome::Eligible(admitted) = admitted else {
-            panic!("validated source purpose must be eligible");
-        };
-        assert!(admitted.matches_root(&root.root_binding));
-        assert_eq!(
-            admitted.evidence_purpose(),
-            Some(temper_protocol_activity::DecisionEvidenceKindV1::Caller)
-        );
+    mod admission {
+        include!("lineage_admission.rs");
     }
 
     mod focused_test_recovery {

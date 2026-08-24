@@ -67,8 +67,7 @@ fn tool_failure_wire_redacts_forged_and_oversized_messages_deterministically() {
         parsed.message,
         ToolFailureCategoryV1::ProcessExit.safe_message()
     );
-    assert!(!parsed.retryable);
-    assert!(parsed.fallback_to_conventional_discovery);
+    assert!(!parsed.retryable && parsed.fallback_to_conventional_discovery);
     assert!(parsed.message.len() <= MAX_TOOL_FAILURE_MESSAGE_BYTES);
     assert!(!format!("{forged:?} {parsed:?}").contains(SECRET));
 }
@@ -491,6 +490,7 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
         result_target_kinds: vec![DecisionAnchorTargetKindV1::Pattern],
         canonical_target_digests: vec![GraphCorrelationV1::target_digest("forged-root").unwrap()],
         decision_evidence_kind: None,
+        caller_discovery: None,
         focused_test_discovery: None,
     });
     assert_code(event.validate(), ActivityValidationCode::InvalidEvent);

@@ -1,8 +1,4 @@
-//! Native-Jig coverage for result-derived graph decision chains.
-//!
-//! The MCP fixture mints opaque values at runtime. The fake can use a dependent
-//! value only after it appears in a prior tool message, so a fixed successful
-//! sequence cannot accidentally stand in for evidence consumption.
+//! Native-Jig coverage for opaque result-derived graph decision chains.
 
 use std::fs;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -38,6 +34,7 @@ pub enum DecisionStep {
     Refinement,
     Trace,
     ImplementationSource,
+    FocusedTestTraversal,
     CallerSource,
     BehavioralTestSource,
     Mutation,
@@ -94,7 +91,7 @@ pub fn run(case: DecisionCase) -> DecisionRun {
             &provider,
             &context,
             &cwd,
-            8,
+            10,
             None,
             Some(&tool_config),
         )
@@ -190,14 +187,6 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::Consumed, 2) => {
-                record(DecisionStep::Trace);
-                tool_reply(
-                    "trace-caller-or-model",
-                    "codebase_memory_trace_path",
-                    serde_json::json!({"function_name": next_target()}),
-                )
-            }
-            (DecisionCase::Consumed, 3) => {
                 record(DecisionStep::ImplementationSource);
                 tool_reply(
                     "read-implementation",
@@ -208,10 +197,21 @@ fn decision_chain_fake(
                     }),
                 )
             }
+            (DecisionCase::Consumed, 3) => {
+                record(DecisionStep::Trace);
+                tool_reply(
+                    "trace-selected-implementation",
+                    "codebase_memory_trace_path",
+                    serde_json::json!({
+                        "function_name": next_target(),
+                        "direction": "inbound",
+                    }),
+                )
+            }
             (DecisionCase::Consumed, 4) => {
                 record(DecisionStep::CallerSource);
                 tool_reply(
-                    "read-caller",
+                    "read-traversal-caller",
                     "codebase_memory_get_code_snippet",
                     serde_json::json!({
                         "qualified_name": next_target(),
@@ -220,6 +220,19 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::Consumed, 5) => {
+                record(DecisionStep::FocusedTestTraversal);
+                tool_reply(
+                    "trace-caller-tests",
+                    "codebase_memory_trace_path",
+                    serde_json::json!({
+                        "function_name": next_target(),
+                        "mode": "calls",
+                        "direction": "inbound",
+                        "include_tests": true,
+                    }),
+                )
+            }
+            (DecisionCase::Consumed, 6) => {
                 record(DecisionStep::BehavioralTestSource);
                 tool_reply(
                     "read-behavioral-test",
@@ -230,12 +243,12 @@ fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::Consumed, 6) => {
+            (DecisionCase::Consumed, 7) => {
                 assert!(
                     !provider_values("current_root").is_empty()
                         && provider_values("caller_model").len() == 1
                         && provider_values("implementation_source").len() == 1
-                        && provider_values("behavioral_test").len() == 2,
+                        && provider_values("behavioral_test").len() == 1,
                     "mutation requires consumed current-root, caller/model, and focused behavioral-test evidence"
                 );
                 record(DecisionStep::Mutation);
@@ -248,7 +261,7 @@ fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::Consumed, 7) => {
+            (DecisionCase::Consumed, 8) => {
                 record(DecisionStep::Complete);
                 Reply::text(r#"{"summary":"Mutated after consumed result-derived evidence."}"#)
             }
@@ -385,14 +398,6 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::IncompleteSourceEvidence, 2) => {
-                record(DecisionStep::Trace);
-                tool_reply(
-                    "trace-caller-or-model",
-                    "codebase_memory_trace_path",
-                    serde_json::json!({"function_name": next_target()}),
-                )
-            }
-            (DecisionCase::IncompleteSourceEvidence, 3) => {
                 record(DecisionStep::ImplementationSource);
                 tool_reply(
                     "read-implementation",
@@ -400,6 +405,17 @@ fn decision_chain_fake(
                     serde_json::json!({
                         "qualified_name": next_target(),
                         "decision_evidence_kind": "implementation",
+                    }),
+                )
+            }
+            (DecisionCase::IncompleteSourceEvidence, 3) => {
+                record(DecisionStep::Trace);
+                tool_reply(
+                    "trace-caller-or-model",
+                    "codebase_memory_trace_path",
+                    serde_json::json!({
+                        "function_name": next_target(),
+                        "direction": "inbound",
                     }),
                 )
             }
