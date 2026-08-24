@@ -2,6 +2,8 @@ use super::*;
 
 const FALLBACK_QUERY: &str = "request affinity remains stable across worker selection";
 const EMPTY_FALLBACK_QUERY: &str = "request affinity regression without a matching test";
+const AMBIGUOUS_FALLBACK_QUERY: &str = "request affinity regression with ambiguous coverage";
+const MALFORMED_FALLBACK_QUERY: &str = "request affinity regression with malformed coverage";
 
 #[test]
 fn jig_empty_traversal_uses_one_semantic_fallback_before_mutation() {
@@ -63,16 +65,44 @@ fn jig_empty_traversal_uses_one_semantic_fallback_before_mutation() {
 }
 
 #[test]
-fn jig_empty_traversal_and_fallback_stop_without_retry_or_product() {
+fn jig_inexact_fallbacks_stop_without_retry_or_product() {
     let _serial = JIG_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let checkout = TempCheckout::new("jig-focused-test-fallback-exhaustion");
+    for (case, reply) in [
+        (
+            "empty",
+            fallback_exhaustion_reply as fn(&RequestView) -> Reply,
+        ),
+        ("ambiguous", fallback_ambiguous_reply),
+        ("malformed", fallback_malformed_reply),
+    ] {
+        assert_fallback_exhaustion(case, reply);
+    }
+}
+
+fn fallback_success_reply(view: &RequestView) -> Reply {
+    fallback_reply(view, FALLBACK_QUERY, true)
+}
+
+fn fallback_exhaustion_reply(view: &RequestView) -> Reply {
+    fallback_reply(view, EMPTY_FALLBACK_QUERY, false)
+}
+
+fn fallback_ambiguous_reply(view: &RequestView) -> Reply {
+    fallback_reply(view, AMBIGUOUS_FALLBACK_QUERY, false)
+}
+
+fn fallback_malformed_reply(view: &RequestView) -> Reply {
+    fallback_reply(view, MALFORMED_FALLBACK_QUERY, false)
+}
+
+fn assert_fallback_exhaustion(case: &str, reply: fn(&RequestView) -> Reply) {
+    let checkout = TempCheckout::new(&format!("jig-focused-test-fallback-{case}"));
     checkout.init_git();
     let mcp = fake_mcp();
-    let fake = FakeLlm::start(Script::rule(fallback_exhaustion_reply))
-        .expect("start focused-test exhaustion fake LLM");
-    let provider = provider(&fake, "jig-focused-test-fallback-exhaustion");
+    let fake = FakeLlm::start(Script::rule(reply)).expect("start focused-test exhaustion fake LLM");
+    let provider = provider(&fake, &format!("jig-focused-test-fallback-{case}"));
     let config = tool_config(&mcp);
     let context = fallback_workspace_context();
     let cwd = checkout.path().to_path_buf();
@@ -89,7 +119,7 @@ fn jig_empty_traversal_and_fallback_stop_without_retry_or_product() {
         )
         .await
     })
-    .expect_err("empty traversal and fallback must stop without a product");
+    .expect_err("inexact fallback must stop without a product");
     assert!(matches!(
         error,
         CodingAgentError::DecisionAnchorRecoveryExhausted
@@ -121,14 +151,6 @@ fn jig_empty_traversal_and_fallback_stop_without_retry_or_product() {
         1,
         "exhaustion must not retry the traversal"
     );
-}
-
-fn fallback_success_reply(view: &RequestView) -> Reply {
-    fallback_reply(view, FALLBACK_QUERY, true)
-}
-
-fn fallback_exhaustion_reply(view: &RequestView) -> Reply {
-    fallback_reply(view, EMPTY_FALLBACK_QUERY, false)
 }
 
 fn fallback_reply(view: &RequestView, query: &str, succeeds: bool) -> Reply {
@@ -210,14 +232,11 @@ fn fallback_reply(view: &RequestView, query: &str, succeeds: bool) -> Reply {
 fn fallback_test_target(view: &RequestView) -> String {
     provider_results(view)
         .iter()
+        .rev()
         .filter_map(|result| result.get("results").and_then(JsonValue::as_array))
         .flatten()
-        .find_map(|result| {
-            (result.get("is_test").and_then(JsonValue::as_bool) == Some(true))
-                .then(|| result.get("qualified_name").and_then(JsonValue::as_str))
-                .flatten()
-                .map(str::to_string)
-        })
+        .find_map(|result| result.get("qualified_name").and_then(JsonValue::as_str))
+        .map(str::to_string)
         .expect("semantic fallback returned one exact test")
 }
 

@@ -293,15 +293,15 @@ fn empty_traversal_opens_one_same_root_semantic_fallback_and_only_its_exact_test
             .unwrap(),
             &query_input,
             Some(&structured_parts(serde_json::json!({
-                "results": [
-                    {
-                        "qualified_name": "crate::tests::request_affinity_is_stable",
-                        "is_test": true
-                    },
-                    {
-                        "qualified_name": "crate::route::unrelated_helper"
-                    }
-                ]
+                "results": [{
+                    "name": "request_affinity_is_stable",
+                    "qualified_name": "temper-v1-hash.tests.request_affinity.request_affinity_is_stable",
+                    "label": "Function",
+                    "file_path": "tests/request_affinity.rs",
+                    "degree": 1
+                }],
+                "total": 1,
+                "has_more": false
             }))),
         )
         .unwrap();
@@ -319,26 +319,15 @@ fn empty_traversal_opens_one_same_root_semantic_fallback_and_only_its_exact_test
         "a completed fallback cannot reopen",
     );
 
-    assert_eq!(
-        lineages.resolve(
-            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
-            &serde_json::json!({
-                "qualified_name": "crate::route::unrelated_helper",
-                "decision_evidence_kind": "focused_test"
-            }),
-        ),
-        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection),
-        "a non-test identity returned beside the fallback test remains ineligible",
-    );
     let exact = lineages.resolve(
         GraphCorrelationToolV1::GetCodeSnippet.public_name(),
         &serde_json::json!({
-            "qualified_name": "crate::tests::request_affinity_is_stable",
+            "qualified_name": "temper-v1-hash.tests.request_affinity.request_affinity_is_stable",
             "decision_evidence_kind": "focused_test"
         }),
     );
     let LineageAdmissionOutcome::Eligible(exact) = exact else {
-        panic!("fallback-returned exact test must be eligible");
+        panic!("fallback-returned exact provider identity must be eligible");
     };
     assert!(exact.matches_root(&root.root_binding));
 }
