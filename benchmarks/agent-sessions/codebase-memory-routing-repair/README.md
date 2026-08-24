@@ -80,9 +80,11 @@ invocation. Private provider counters and opaque roots are inspected only in the
 local diagnostic trace; neither appears in the run summary. All eight
 successful results retain complete typed correlation and lineage. The reducer
 retains exactly one later `selection` / `read` row for the route target and no
-mutation credit for the denied patch, so deterministic relevance remains above
-the frozen 50% aggregate gate without treating any denied attempt as useful or
-allowing sibling evidence to authorize mutation.
+selection credit for the early read or mutation credit for the denied patch.
+The eventual successful patch cannot replace that exact-read row. Deterministic
+relevance therefore remains above the frozen 50% aggregate gate without
+treating any denied attempt as useful or allowing sibling evidence to authorize
+mutation.
 
 The manifest permits only declared provider-shaped typed producer and consumer
 targets, followed by graph-to-graph, graph-to-source, and final exact

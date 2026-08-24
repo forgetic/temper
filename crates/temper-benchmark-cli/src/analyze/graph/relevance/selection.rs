@@ -73,6 +73,10 @@ mod tests {
     const PRODUCER: &str = "typed-source";
     const GENERIC_CONSUMER: &str = "generic-consumer";
     const TARGET: &str = "repo/src/route.rs";
+    const EARLY_READ: &str = "read-before-source";
+    const DENIED_MUTATION: &str = "patch-before-exact-read";
+    const EXACT_READ: &str = "read-after-source";
+    const FINAL_MUTATION: &str = "patch-after-exact-read";
 
     struct Fixture {
         options: AnalyzeOptions,
@@ -85,8 +89,11 @@ mod tests {
             self.calls.get_mut(&call_key(PRODUCER)).unwrap()
         }
 
-        fn read_mut(&mut self) -> &mut Action {
-            self.actions.first_mut().unwrap()
+        fn exact_read_mut(&mut self) -> &mut Action {
+            self.actions
+                .iter_mut()
+                .find(|action| action.call_id == EXACT_READ)
+                .unwrap()
         }
 
         fn analyze(&self) -> super::super::RelevanceAnalysis {
@@ -159,15 +166,22 @@ mod tests {
         }
     }
 
-    fn read(call_id: &str, start_seq: u64, finish_seq: u64) -> Action {
+    fn action(
+        call_id: &str,
+        name: &str,
+        start_seq: u64,
+        finish_seq: u64,
+        arguments: &str,
+        status: ToolStatusV1,
+    ) -> Action {
         Action {
             call_id: call_id.to_string(),
             scope_id: SCOPE.to_string(),
-            name: "read".to_string(),
+            name: name.to_string(),
             start_seq,
             finish_seq: Some(finish_seq),
-            arguments: Some(TARGET.to_string()),
-            status: Some(ToolStatusV1::Succeeded),
+            arguments: Some(arguments.to_string()),
+            status: Some(status),
         }
     }
 
@@ -207,8 +221,8 @@ mod tests {
             graph_call(
                 PRODUCER,
                 GraphCorrelationToolV1::GetCodeSnippet.public_name(),
-                3,
-                4,
+                5,
+                6,
                 producer_correlation,
                 lineage(
                     DecisionAnchorLineageStageV1::CarryForward,
@@ -221,8 +235,8 @@ mod tests {
             graph_call(
                 GENERIC_CONSUMER,
                 GraphCorrelationToolV1::SearchGraph.public_name(),
-                5,
-                6,
+                7,
+                8,
                 consumer_correlation,
                 lineage(
                     DecisionAnchorLineageStageV1::CarryForward,
@@ -246,7 +260,26 @@ mod tests {
                 ..AnalyzeOptions::default()
             },
             calls,
-            actions: vec![read("later-read", 7, 8)],
+            actions: vec![
+                action(EARLY_READ, "read", 3, 4, TARGET, ToolStatusV1::Succeeded),
+                action(
+                    DENIED_MUTATION,
+                    "apply_patch",
+                    9,
+                    10,
+                    &format!(r#"{{"patch":"diff --git a/{TARGET} b/{TARGET}"}}"#),
+                    ToolStatusV1::Failed,
+                ),
+                action(EXACT_READ, "read", 11, 12, TARGET, ToolStatusV1::Succeeded),
+                action(
+                    FINAL_MUTATION,
+                    "apply_patch",
+                    13,
+                    14,
+                    &format!(r#"{{"patch":"diff --git a/{TARGET} b/{TARGET}"}}"#),
+                    ToolStatusV1::Succeeded,
+                ),
+            ],
         }
     }
 
@@ -265,7 +298,14 @@ mod tests {
             GraphConsumptionModeV1::Graph
         );
 
-        fixture.actions.push(read("latest-read", 9, 10));
+        fixture.actions.push(action(
+            "latest-read",
+            "read",
+            15,
+            16,
+            TARGET,
+            ToolStatusV1::Succeeded,
+        ));
         let analysis = fixture.analyze();
         assert_eq!(counts(&analysis), counts(&baseline));
         assert_eq!(
@@ -284,14 +324,19 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(
                 PRODUCER,
-                "later-read",
-                4,
-                7,
+                EXACT_READ,
+                6,
+                11,
                 GraphEvidenceToolV1::Read,
                 GraphConsumptionModeV1::Selection,
                 TARGET,
             )]
         );
+        assert!(analysis.evidence.iter().all(|evidence| {
+            ![EARLY_READ, DENIED_MUTATION, FINAL_MUTATION]
+                .contains(&evidence.consumer_call_id.as_str())
+                && evidence.consumption_mode != GraphConsumptionModeV1::Mutation
+        }));
         assert_eq!(
             fixture.analyze().evidence,
             analysis.evidence,
@@ -330,6 +375,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn early_read_and_denied_mutation_cannot_authorize_the_typed_producer() {
+        let mut fixture = fixture();
+        fixture.options.graph_decision_targets[0]
+            .consumption
+            .clear();
+        fixture
+            .actions
+            .retain(|action| [EARLY_READ, DENIED_MUTATION].contains(&action.call_id.as_str()));
+
+        let analysis = fixture.analyze();
+        assert!(analysis.evidence.iter().all(|evidence| {
+            evidence.graph_call_id != PRODUCER
+                && evidence.consumer_call_id != EARLY_READ
+                && evidence.consumer_call_id != DENIED_MUTATION
+                && evidence.consumption_mode != GraphConsumptionModeV1::Mutation
+        }));
+    }
+
     type Mutation = Box<dyn Fn(&mut Fixture)>;
 
     #[test]
@@ -337,27 +401,29 @@ mod tests {
         let cases: Vec<(&str, Mutation)> = vec![
             (
                 "wrong target",
-                Box::new(|fixture| fixture.read_mut().arguments = Some("repo/src/other.rs".into())),
+                Box::new(|fixture| {
+                    fixture.exact_read_mut().arguments = Some("repo/src/other.rs".into())
+                }),
             ),
             (
                 "wrong scope",
-                Box::new(|fixture| fixture.read_mut().scope_id = "child".into()),
+                Box::new(|fixture| fixture.exact_read_mut().scope_id = "child".into()),
             ),
             (
                 "reversed ordering",
-                Box::new(|fixture| fixture.read_mut().start_seq = 4),
+                Box::new(|fixture| fixture.exact_read_mut().start_seq = 6),
             ),
             (
                 "failed read",
-                Box::new(|fixture| fixture.read_mut().status = Some(ToolStatusV1::Failed)),
+                Box::new(|fixture| fixture.exact_read_mut().status = Some(ToolStatusV1::Failed)),
             ),
             (
                 "incomplete read",
-                Box::new(|fixture| fixture.read_mut().finish_seq = None),
+                Box::new(|fixture| fixture.exact_read_mut().finish_seq = None),
             ),
             (
                 "invalid read completion ordering",
-                Box::new(|fixture| fixture.read_mut().finish_seq = Some(6)),
+                Box::new(|fixture| fixture.exact_read_mut().finish_seq = Some(10)),
             ),
             (
                 "missing producer correlation",
@@ -417,7 +483,7 @@ mod tests {
             ),
             (
                 "non-exact arguments",
-                Box::new(|fixture| fixture.read_mut().arguments = Some(format!(" {TARGET}"))),
+                Box::new(|fixture| fixture.exact_read_mut().arguments = Some(format!(" {TARGET}"))),
             ),
             (
                 "failed producer",
@@ -431,7 +497,7 @@ mod tests {
             ),
             (
                 "non-read selection",
-                Box::new(|fixture| fixture.read_mut().name = "edit".to_string()),
+                Box::new(|fixture| fixture.exact_read_mut().name = "edit".to_string()),
             ),
         ];
 
