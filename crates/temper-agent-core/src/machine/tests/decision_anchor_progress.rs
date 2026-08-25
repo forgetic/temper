@@ -228,4 +228,20 @@ mod progress {
         );
         assert!(!one_guidance(&mut state).contains(DISTINCT_SELECTOR));
     }
+
+    #[test]
+    fn rejected_recovery_tuple_identity_is_bound_to_the_active_root() {
+        let call = source_call("same-selector", DecisionEvidenceKindV1::Implementation);
+        let action = GraphRecoveryActionV1::for_evidence(
+            GraphRecoveryEvidenceKindV1::Implementation,
+        );
+
+        let root_identity = RecoveryTupleIdentity::for_call(&call, action, ROOT).unwrap();
+        let same_root_retry = RecoveryTupleIdentity::for_call(&call, action, ROOT).unwrap();
+        let independent_root =
+            RecoveryTupleIdentity::for_call(&call, action, OTHER_ROOT).unwrap();
+
+        assert!(root_identity == same_root_retry);
+        assert!(root_identity != independent_root);
+    }
 }

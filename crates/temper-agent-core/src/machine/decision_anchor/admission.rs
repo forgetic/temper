@@ -110,8 +110,11 @@ impl DecisionAnchorState {
                             .flatten()
                     });
                 let call_key = GraphCorrelationV1::target_digest(&call.id);
-                let tuple_identity = requested_action
-                    .and_then(|action| RecoveryTupleIdentity::for_call(call, action));
+                let tuple_identity = snapshot.as_ref().and_then(|snapshot| {
+                    requested_action.and_then(|action| {
+                        RecoveryTupleIdentity::for_call(call, action, &snapshot.active_root)
+                    })
+                });
                 let already_rejected = tuple_identity
                     .is_some_and(|identity| self.rejected_recovery_tuples.contains(&identity));
 

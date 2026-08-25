@@ -178,7 +178,7 @@ struct PendingCodebaseCall {
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
-struct RecoveryTupleIdentity([u8; 32]);
+pub(in crate::machine) struct RecoveryTupleIdentity([u8; 32]);
 
 type SettledToolCall<'a> = (
     &'a str,
@@ -600,7 +600,11 @@ impl DecisionAnchorState {
 impl RecoveryTupleIdentity {
     /// Retains only a fixed-width, process-local identity for the closed
     /// action/selector tuple. Raw selector values never enter policy state.
-    fn for_call(call: &ToolCall, action: GraphRecoveryActionV1) -> Option<Self> {
+    pub(in crate::machine) fn for_call(
+        call: &ToolCall,
+        action: GraphRecoveryActionV1,
+        active_root: &str,
+    ) -> Option<Self> {
         let selector_field = match action.selector_kind {
             DecisionAnchorTargetKindV1::GraphQuery => "query",
             DecisionAnchorTargetKindV1::Pattern => "pattern",
@@ -614,7 +618,8 @@ impl RecoveryTupleIdentity {
             .get(selector_field)
             .and_then(serde_json::Value::as_str)?;
         let mut digest = Sha256::new();
-        digest.update(b"temper-rejected-recovery-tuple-v1\0");
+        digest.update(b"temper-rejected-recovery-tuple-v2\0");
+        hash_recovery_identity_part(&mut digest, active_root.as_bytes());
         hash_recovery_identity_part(&mut digest, action.model_label().as_bytes());
         hash_recovery_identity_part(&mut digest, selector.as_bytes());
         Some(Self(digest.finalize().into()))
