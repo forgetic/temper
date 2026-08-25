@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
+use temper_protocol_activity::MAX_GRAPH_RECOVERY_ALLOWANCE_V1;
 
 mod batch {
     include!("decision_anchor_recovery_batch.rs");
@@ -162,6 +163,67 @@ fn recovery_stages_implementation_before_its_caller_traversal() {
         assert_eq!(finish_with_evidence(&mut state, id, ROOT, kind), expected);
     }
     assert!(state.blocks_mutation("write"));
+}
+
+#[test]
+fn allowance_floor_keeps_a_distinct_provider_selector_actionable() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    install_consumable_root(&mut state);
+    enter_budget_recovery(&mut state, 1);
+    let admission = EligibleLineageAdmission::new(
+        ROOT.to_string(),
+        DecisionAnchorTargetKindV1::QualifiedName,
+        GraphCorrelationToolV1::GetCodeSnippet,
+        Some(DecisionEvidenceKindV1::Implementation),
+    )
+    .unwrap();
+
+    for index in 0..MAX_GRAPH_RECOVERY_ALLOWANCE_V1 {
+        let id = format!("non-progress-{index}");
+        let mut attempted = source_call(&id, DecisionEvidenceKindV1::Implementation);
+        attempted.arguments["qualified_name"] =
+            serde_json::json!(format!("alternative-{index}"));
+        assert_eq!(
+            state.on_tool_dispatched_with_admission(
+                &attempted,
+                usize::from(index) + 3,
+                Some(&LineageAdmissionOutcome::Eligible(admission.clone())),
+            ),
+            None,
+        );
+        assert_eq!(
+            state.on_tool_finished(
+                &id,
+                "codebase_memory_get_code_snippet",
+                &output_with_evidence(
+                    ROOT,
+                    DecisionAnchorLineageStageV1::CarryForward,
+                    DecisionEvidenceKindV1::Caller,
+                ),
+            ),
+            DecisionAnchorTransition::GapRecoveryNeeded,
+        );
+    }
+
+    let details = state.recovery_details().expect("alternative remains actionable");
+    assert_eq!(details.remaining_allowance, 1);
+    assert_eq!(
+        details.compatible_actions,
+        [GraphRecoveryActionV1::for_evidence(
+            GraphRecoveryEvidenceKindV1::Implementation,
+        )]
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &source_call(
+                "eligible-alternative",
+                DecisionEvidenceKindV1::Implementation,
+            ),
+            7,
+            Some(&LineageAdmissionOutcome::Eligible(admission)),
+        ),
+        None,
+    );
 }
 
 #[test]

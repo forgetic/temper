@@ -175,16 +175,18 @@ impl DecisionAnchorState {
 
         let evidence = active.evidence.clone();
         let has_path = !active.evidence.compatible_actions(active).is_empty();
-        if !has_path || remaining == 0 {
+        if !has_path {
             self.phase = Some(AnchorPhase::Exhausted(evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
         }
 
+        // The allowance bounds each recovery snapshot, but cannot erase a
+        // provider-derived alternative or turn its presence into exhaustion.
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
             active_root,
-            remaining,
+            remaining: remaining.max(1),
         }));
         self.exploration = ExplorationStatus::GapRecovery;
         DecisionAnchorTransition::GapRecoveryNeeded

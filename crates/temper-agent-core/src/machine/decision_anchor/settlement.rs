@@ -28,20 +28,6 @@ impl DecisionAnchorState {
             })
             .collect::<Vec<_>>();
         if finished.is_empty() {
-            if self.denied_recovery_exhausted {
-                self.denied_recovery_exhausted = false;
-                if let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.take() {
-                    let evidence = recovery
-                        .anchors
-                        .roots
-                        .get(&recovery.active_root)
-                        .map(|active| active.evidence.clone())
-                        .unwrap_or_default();
-                    self.phase = Some(AnchorPhase::Exhausted(evidence));
-                    self.exploration = ExplorationStatus::BudgetExhausted;
-                    return DecisionAnchorTransition::RecoveryExhausted;
-                }
-            }
             return DecisionAnchorTransition::Unchanged;
         }
 
