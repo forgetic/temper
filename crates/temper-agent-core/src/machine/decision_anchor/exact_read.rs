@@ -41,6 +41,18 @@ impl DecisionAnchorState {
         order: u64,
         admission: Option<&InvocationTargetAdmission>,
     ) {
+        if matches!(self.phase, Some(AnchorPhase::ConventionalFallback(_))) {
+            let Some(InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(target))) =
+                admission
+            else {
+                return;
+            };
+            if let Some(call_key) = GraphCorrelationV1::target_digest(&call.id) {
+                self.pending_conventional_reads
+                    .insert(call_key, target.clone());
+            }
+            return;
+        }
         let Some(InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(target))) =
             admission
         else {
@@ -74,6 +86,25 @@ impl DecisionAnchorState {
     }
 
     pub(super) fn settle_exact_reads(&mut self, completed: &[SettledToolCall<'_>]) {
+        for (id, name, output, _, succeeded) in completed {
+            let Some(call_key) = GraphCorrelationV1::target_digest(id) else {
+                continue;
+            };
+            let Some(target) = self.pending_conventional_reads.remove(&call_key) else {
+                continue;
+            };
+            if *name == "read"
+                && *succeeded
+                && !output.is_error
+                && !self
+                    .conventional_read_authorities
+                    .iter()
+                    .any(|current| current.matches(&target))
+                && self.conventional_read_authorities.len() < MAX_EXACT_TARGET_AUTHORITIES
+            {
+                self.conventional_read_authorities.push(target);
+            }
+        }
         for (id, name, output, _, succeeded) in completed {
             let Some(call_key) = GraphCorrelationV1::target_digest(id) else {
                 continue;
@@ -143,6 +174,24 @@ impl DecisionAnchorState {
             })
     }
 
+    fn conventional_mutation_targets_authorized(
+        &self,
+        admission: Option<&InvocationTargetAdmission>,
+    ) -> bool {
+        let Some(InvocationTargetAdmission::Mutation(targets)) = admission else {
+            return false;
+        };
+        !targets.is_empty()
+            && targets.iter().all(|outcome| {
+                let TargetAdmissionOutcome::Eligible(target) = outcome else {
+                    return false;
+                };
+                self.conventional_read_authorities
+                    .iter()
+                    .any(|authority| authority.matches(target))
+            })
+    }
+
     pub(super) fn blocks_invocation_mutation(
         &self,
         name: &str,
@@ -166,6 +215,9 @@ impl DecisionAnchorState {
                     | AnchorPhase::Recovery(_)
                     | AnchorPhase::GapRecovery(_)
                     | AnchorPhase::Exhausted(_) => true,
+                    AnchorPhase::ConventionalFallback(_) => {
+                        !self.conventional_mutation_targets_authorized(admission)
+                    }
                 })
             }
             Some(InvocationTargetAdmission::Read(_) | InvocationTargetAdmission::Ineligible(_))

@@ -1,7 +1,6 @@
 use super::*;
 
 const FALLBACK_QUERY: &str = "request affinity remains stable across worker selection";
-const EMPTY_FALLBACK_QUERY: &str = "request affinity regression without a matching test";
 const AMBIGUOUS_FALLBACK_QUERY: &str = "request affinity regression with ambiguous coverage";
 const MALFORMED_FALLBACK_QUERY: &str = "request affinity regression with malformed coverage";
 const NON_TEST_FALLBACK_QUERY: &str = "request affinity regression returning a non-test helper";
@@ -66,16 +65,15 @@ fn jig_empty_traversal_uses_one_semantic_fallback_before_mutation() {
 }
 
 #[test]
-fn jig_inexact_fallbacks_stop_without_retry_or_product() {
+fn jig_ambiguous_malformed_and_non_test_fallbacks_stop_without_retry_or_product() {
     let _serial = JIG_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     for (case, reply) in [
         (
-            "empty",
-            fallback_exhaustion_reply as fn(&RequestView) -> Reply,
+            "ambiguous",
+            fallback_ambiguous_reply as fn(&RequestView) -> Reply,
         ),
-        ("ambiguous", fallback_ambiguous_reply),
         ("malformed", fallback_malformed_reply),
         ("non-test", fallback_non_test_reply),
     ] {
@@ -85,10 +83,6 @@ fn jig_inexact_fallbacks_stop_without_retry_or_product() {
 
 fn fallback_success_reply(view: &RequestView) -> Reply {
     fallback_reply(view, FALLBACK_QUERY, true)
-}
-
-fn fallback_exhaustion_reply(view: &RequestView) -> Reply {
-    fallback_reply(view, EMPTY_FALLBACK_QUERY, false)
 }
 
 fn fallback_ambiguous_reply(view: &RequestView) -> Reply {

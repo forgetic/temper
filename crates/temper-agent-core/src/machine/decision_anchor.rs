@@ -43,6 +43,8 @@ pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation b
 pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration, use the ordinary read tool to read the exact workspace target selected by the qualifying graph source result, and only then mutate that matching target.";
 /// Fixed, privacy-safe result for graph calls denied after convergence or exhaustion.
 pub const CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE: &str = "codebase-memory exploration is closed for this run; continue with conventional tools; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
+/// Fixed bounded fallback released only after every valid retained root lacks an action.
+pub const DECISION_ANCHOR_CONVENTIONAL_FALLBACK_MESSAGE: &str = "codebase-memory exploration is closed for this run because no retained root has a compatible provider-derived recovery action. Do not retry codebase-memory. Perform only the existing minimal conventional fallback: one simple discovery command plus a necessary directory change, if any; then use the ordinary read tool to read the exact source target before making only the matching minimal mutation. Continue through the normal validation and submission gates.";
 
 /// Generic, privacy-safe correction injected after a successful result cannot
 /// be consumed as the active anchor's typed descendant.
@@ -78,6 +80,8 @@ pub(super) struct DecisionAnchorState {
     batch_progress: BTreeMap<String, ResultProgress>,
     model_guidance: Vec<String>,
     rejected_recovery_tuples: BTreeSet<RecoveryTupleIdentity>,
+    pending_conventional_reads: BTreeMap<String, EligibleWorkspaceTarget>,
+    conventional_read_authorities: Vec<EligibleWorkspaceTarget>,
 }
 
 enum AnchorPhase {
@@ -87,6 +91,7 @@ enum AnchorPhase {
     Recovery(Recovery),
     GapRecovery(GapRecovery),
     Exhausted(SourceEvidence),
+    ConventionalFallback(AnchorForest),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,6 +221,7 @@ pub(super) enum DecisionAnchorTransition {
     RecoveryNeeded,
     GapRecoveryNeeded,
     RecoveryExhausted,
+    ConventionalFallbackReleased,
     Converged,
     ExplorationExhausted,
 }
@@ -245,6 +251,8 @@ impl DecisionAnchorState {
             batch_progress: BTreeMap::new(),
             model_guidance: Vec::new(),
             rejected_recovery_tuples: BTreeSet::new(),
+            pending_conventional_reads: BTreeMap::new(),
+            conventional_read_authorities: Vec::new(),
         })
     }
 
@@ -590,6 +598,9 @@ impl DecisionAnchorState {
             ExplorationStatus::BudgetExhausted => match self.phase.as_ref() {
                 Some(AnchorPhase::Exhausted(evidence)) => {
                     GraphExplorationClosedV1::exhausted(evidence.missing_kinds())
+                }
+                Some(AnchorPhase::ConventionalFallback(_)) => {
+                    Some(GraphExplorationClosedV1::conventional_fallback())
                 }
                 _ => None,
             },

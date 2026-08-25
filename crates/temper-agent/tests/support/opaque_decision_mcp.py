@@ -7,6 +7,7 @@ TOOLS = [
     {"name": "search_code", "description": "Targeted code search", "inputSchema": {"type": "object", "properties": {"pattern": {"type": "string"}, "project": {"type": "string"}, "force_unavailable": {"type": "boolean"}}, "required": ["pattern"]}},
     {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
+    {"name": "get_architecture", "description": "Bounded architecture query", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path", "name"]}},
 ]
@@ -15,6 +16,7 @@ def opaque():
     return "crate::opaque_" + uuid.uuid4().hex
 
 targets = {name: opaque() for name in ["root", "refinement", "implementation", "caller", "behavior"]}
+fallback_targets = [f"crate.fallback.nonviable_{index}" for index in range(3)]
 
 def send(value):
     sys.stdout.write(json.dumps(value) + "\n")
@@ -32,8 +34,14 @@ def result(**values):
 def response(name, args):
     if name == "index_status":
         return {"status": "fresh"}
+    if name == "get_architecture":
+        return {"architecture": "bounded non-progress"}
     if name == "search_graph":
-        if args.get("query") == "unconsumable":
+        query = args.get("query")
+        if query in {"nonviable-one", "nonviable-two", "nonviable-three"}:
+            index = ["nonviable-one", "nonviable-two", "nonviable-three"].index(query)
+            return result(qualified_name=fallback_targets[index])
+        if query == "unconsumable":
             return result(opaque="PRIVATE-UNCONSUMABLE-SENTINEL")
         return result(
             current_root=targets["root"],
@@ -41,8 +49,18 @@ def response(name, args):
             qualified_name=targets["refinement"],
         )
     if name == "search_code":
-        next = targets["implementation"] if args.get("pattern") == targets["refinement"] else opaque()
+        pattern = args.get("pattern")
+        if pattern in {"nonviable-one", "nonviable-two", "nonviable-three"}:
+            index = ["nonviable-one", "nonviable-two", "nonviable-three"].index(pattern)
+            return result(qualified_name=fallback_targets[index])
+        next = targets["implementation"] if pattern == targets["refinement"] else opaque()
         return result(next=next, qualified_name=next)
+    if name == "trace_path" and args.get("function_name") in fallback_targets:
+        return {
+            "function": {"qualified_name": args.get("function_name")},
+            "callers": [],
+            "results": [{"qualified_name": args.get("function_name")}],
+        }
     if name == "trace_path" and args.get("function_name") == targets["implementation"]:
         return {
             "function": {"qualified_name": targets["implementation"]},
@@ -57,6 +75,13 @@ def response(name, args):
         }
     if name == "trace_path":
         return result(next=opaque(), qualified_name=opaque())
+    if name == "get_code_snippet" and args.get("qualified_name") in fallback_targets:
+        return result(
+            qualified_name=args.get("qualified_name"),
+            file_path="EVIDENCE.md",
+            source=opaque(),
+            implementation_source=opaque(),
+        )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["implementation"]:
         return result(
             next=targets["implementation"],

@@ -233,7 +233,7 @@ impl DecisionAnchorState {
             | AnchorPhase::AwaitingExactRead(anchors) => anchors,
             AnchorPhase::Recovery(recovery) => &recovery.anchors,
             AnchorPhase::GapRecovery(recovery) => &recovery.anchors,
-            AnchorPhase::Exhausted(_) => return None,
+            AnchorPhase::Exhausted(_) | AnchorPhase::ConventionalFallback(_) => return None,
         };
         anchors
             .roots

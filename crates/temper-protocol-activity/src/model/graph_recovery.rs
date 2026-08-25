@@ -236,6 +236,7 @@ const fn is_false(value: &bool) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum GraphExplorationClosedReasonV1 {
     Completed,
+    NoCompatibleRecoveryAction,
     RecoverableIncompleteEvidence,
     RecoveryExhausted,
 }
@@ -276,6 +277,16 @@ impl GraphExplorationClosedV1 {
     pub fn completed() -> Self {
         Self {
             reason: GraphExplorationClosedReasonV1::Completed,
+            missing_evidence: Vec::new(),
+            permitted_action: GraphRecoveryPermittedActionV1::ConventionalDiscovery,
+            remaining_allowance: 0,
+            compatible_actions: Vec::new(),
+        }
+    }
+
+    pub fn conventional_fallback() -> Self {
+        Self {
+            reason: GraphExplorationClosedReasonV1::NoCompatibleRecoveryAction,
             missing_evidence: Vec::new(),
             permitted_action: GraphRecoveryPermittedActionV1::ConventionalDiscovery,
             remaining_allowance: 0,
@@ -368,6 +379,13 @@ impl GraphExplorationClosedV1 {
                         && self.remaining_allowance == 0
                         && self.compatible_actions.is_empty()
                 }
+                GraphExplorationClosedReasonV1::NoCompatibleRecoveryAction => {
+                    self.missing_evidence.is_empty()
+                        && self.permitted_action
+                            == GraphRecoveryPermittedActionV1::ConventionalDiscovery
+                        && self.remaining_allowance == 0
+                        && self.compatible_actions.is_empty()
+                }
                 GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => {
                     !self.missing_evidence.is_empty()
                         && self.permitted_action
@@ -390,7 +408,10 @@ impl GraphExplorationClosedV1 {
 
     pub fn failure_reason(&self) -> ToolFailureReasonV1 {
         match self.reason {
-            GraphExplorationClosedReasonV1::Completed => ToolFailureReasonV1::ExplorationClosed,
+            GraphExplorationClosedReasonV1::Completed
+            | GraphExplorationClosedReasonV1::NoCompatibleRecoveryAction => {
+                ToolFailureReasonV1::ExplorationClosed
+            }
             GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => {
                 ToolFailureReasonV1::DecisionEvidenceIncomplete
             }
@@ -405,6 +426,10 @@ impl GraphExplorationClosedV1 {
             GraphExplorationClosedReasonV1::Completed => ToolFailureReasonV1::ExplorationClosed
                 .safe_message()
                 .to_string(),
+            GraphExplorationClosedReasonV1::NoCompatibleRecoveryAction => {
+                "graph exploration closed: no compatible provider-derived recovery action remains; permitted action: conventional_discovery; remaining allowance: 0"
+                    .to_string()
+            }
             GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => {
                 let message = format!(
                     "decision-evidence recovery required; missing evidence: [{}]; permitted action: {}; remaining allowance: {}",
@@ -524,5 +549,29 @@ mod tests {
         assert!(!message.contains("root_binding"));
         assert!(!message.contains("qualified_name="));
         assert!(details.is_valid());
+    }
+
+    #[test]
+    fn no_compatible_action_fallback_is_closed_actionable_and_private() {
+        const PRIVATE: [&str; 6] = [
+            "private-root",
+            "private::selector",
+            "/private/path.rs",
+            "provider payload",
+            "source text",
+            "target digest",
+        ];
+        let details = GraphExplorationClosedV1::conventional_fallback();
+        assert!(details.is_valid());
+        assert_eq!(
+            details.model_message(),
+            "graph exploration closed: no compatible provider-derived recovery action remains; permitted action: conventional_discovery; remaining allowance: 0"
+        );
+        let serialized = serde_json::to_string(&details).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"reason":"no_compatible_recovery_action","missing_evidence":[],"permitted_action":"conventional_discovery","remaining_allowance":0}"#
+        );
+        assert!(PRIVATE.iter().all(|private| !serialized.contains(private)));
     }
 }

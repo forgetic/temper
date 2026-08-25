@@ -9,9 +9,7 @@ impl DecisionAnchorState {
         debug_assert!(!anchors.has_complete_evidence());
         let mut anchors = anchors;
         let Some(active_root) = anchors.recovery_root_binding() else {
-            self.phase = Some(AnchorPhase::Exhausted(anchors.active_evidence()));
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::RecoveryExhausted;
+            return self.release_conventional_fallback(anchors);
         };
         if anchors.roots.len() > 1 {
             let active = anchors
@@ -38,6 +36,7 @@ impl DecisionAnchorState {
         exhausted_root: String,
         mut exhausted_roots: BTreeSet<String>,
         remaining_pivots: usize,
+        conventional_fallback_authorized: bool,
     ) -> DecisionAnchorTransition {
         let exhausted_evidence = anchors
             .roots
@@ -49,6 +48,9 @@ impl DecisionAnchorState {
             .then(|| anchors.recovery_root_binding_excluding(&exhausted_roots))
             .flatten();
         let Some(active_root) = next_root else {
+            if conventional_fallback_authorized {
+                return self.release_conventional_fallback(anchors);
+            }
             self.phase = Some(AnchorPhase::Exhausted(exhausted_evidence));
             self.exploration = ExplorationStatus::BudgetExhausted;
             return DecisionAnchorTransition::RecoveryExhausted;
@@ -72,6 +74,12 @@ impl DecisionAnchorState {
         DecisionAnchorTransition::GapRecoveryNeeded
     }
 
+    fn release_conventional_fallback(&mut self, anchors: AnchorForest) -> DecisionAnchorTransition {
+        self.phase = Some(AnchorPhase::ConventionalFallback(anchors));
+        self.exploration = ExplorationStatus::BudgetExhausted;
+        DecisionAnchorTransition::ConventionalFallbackReleased
+    }
+
     pub(super) fn advance_gap_recovery(
         &mut self,
         recovery: GapRecovery,
@@ -90,6 +98,7 @@ impl DecisionAnchorState {
                 active_root,
                 exhausted_roots,
                 remaining_pivots,
+                false,
             );
         };
         let compatible = finished
@@ -208,6 +217,7 @@ impl DecisionAnchorState {
                 active_root,
                 exhausted_roots,
                 remaining_pivots,
+                false,
             );
         }
 
@@ -226,11 +236,13 @@ impl DecisionAnchorState {
 
         let has_path = !active.evidence.compatible_actions(active).is_empty();
         if !has_path {
+            let fallback_authorized = active.evidence.proves_no_compatible_action();
             return self.pivot_gap_recovery_or_exhaust(
                 anchors,
                 active_root,
                 exhausted_roots,
                 remaining_pivots,
+                fallback_authorized,
             );
         }
 
@@ -473,6 +485,16 @@ impl SourceEvidence {
             .into_iter()
             .map(DecisionGap::recovery_kind)
             .collect()
+    }
+
+    fn proves_no_compatible_action(&self) -> bool {
+        self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::Caller))
+            && !self.caller_selector_available
+            && self.caller_traversal_outcome == Some(CallerDiscoveryOutcomeV1::NoEligibleSelector)
+            || self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
+                && !self.focused_test_selector_available
+                && self.focused_test_fallback_outcome
+                    == Some(FocusedTestDiscoveryOutcomeV1::NoEligibleSelector)
     }
 
     pub(super) fn is_complete(&self) -> bool {

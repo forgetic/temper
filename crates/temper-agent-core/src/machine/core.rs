@@ -33,8 +33,9 @@ use crate::{LineageAdmissionHandle, ToolInvocationCatalog};
 
 use super::batching::{PendingTool, plan_batches};
 use super::decision_anchor::{
-    DECISION_ANCHOR_CONVERGENCE_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState,
-    DecisionAnchorTransition, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    DECISION_ANCHOR_CONVENTIONAL_FALLBACK_MESSAGE, DECISION_ANCHOR_CONVERGENCE_MESSAGE,
+    DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState, DecisionAnchorTransition,
+    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 use super::messages::{error_assistant, tool_result_message};
 use super::ordinary_failure::OrdinaryFailureCircuit;
@@ -613,6 +614,10 @@ impl AgentMachine {
                     }
                     DecisionAnchorTransition::RecoveryExhausted => {
                         self.decision_anchor_exhausted = true;
+                    }
+                    DecisionAnchorTransition::ConventionalFallbackReleased => {
+                        self.decision_anchor_guidance
+                            .push(DECISION_ANCHOR_CONVENTIONAL_FALLBACK_MESSAGE.to_string());
                     }
                     DecisionAnchorTransition::Converged => {
                         self.decision_anchor_convergence = true;

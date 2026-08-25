@@ -1,7 +1,96 @@
 // Authoritative root-pivot recovery regressions.
 
 #[test]
-fn nonviable_roots_pivot_once_each_then_exhaust_without_oscillation() {
+fn three_nonviable_roots_release_fallback_without_graph_or_cross_root_authority() {
+    let mut effects = effects();
+    effects.insert("bash".to_string(), ToolEffects::process());
+    effects.insert("submit_for_pr".to_string(), ToolEffects::process());
+    let mut state = DecisionAnchorState::from_effects(&effects).unwrap();
+    let third_root = "00000000-0000-4000-8000-000000000003";
+    for id in ["first-root", "second-root", "third-root"] {
+        state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), 0);
+    }
+    let roots = [ROOT, OTHER_ROOT, third_root]
+        .map(|root| {
+            output_with_kinds(
+                "codebase_memory_search_graph",
+                root,
+                DecisionAnchorLineageStageV1::Root,
+                &[DecisionAnchorTargetKindV1::FunctionName],
+            )
+        });
+    assert_eq!(
+        state.on_tool_batch_finished(&[
+            ("first-root", "codebase_memory_search_graph", &roots[0]),
+            ("second-root", "codebase_memory_search_graph", &roots[1]),
+            ("third-root", "codebase_memory_search_graph", &roots[2]),
+        ]),
+        DecisionAnchorTransition::Unchanged,
+    );
+    for (turn, id, expected) in [
+        (1, "broad-one", DecisionAnchorTransition::Unchanged),
+        (
+            2,
+            "broad-two",
+            DecisionAnchorTransition::ConventionalFallbackReleased,
+        ),
+    ] {
+        state.on_tool_dispatched(&call(id, "codebase_memory_get_architecture"), turn);
+        assert_eq!(
+            state.on_tool_finished(id, "codebase_memory_get_architecture", &plain_success()),
+            expected,
+        );
+    }
+
+    assert_eq!(state.recovery_details(), None);
+    assert_eq!(
+        state.on_tool_dispatched(&call("closed-graph", "codebase_memory_search_graph"), 3),
+        conventional_fallback_graph_denial(),
+    );
+    let target = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
+    let mutation = call("fallback-mutation", "write");
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &mutation,
+            4,
+            Some(&mutation_targets(vec![target.clone()])),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+    );
+    let read = call("fallback-source-read", "read");
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(&read, 5, Some(&read_target(TARGET_A))),
+        None,
+    );
+    state.on_tool_finished("fallback-source-read", "read", &successful_read());
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &mutation,
+            6,
+            Some(&mutation_targets(vec![target])),
+        ),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("validation", "bash"),
+            7,
+            Some(&InvocationTargetAdmission::SourceNeutralProcess),
+        ),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("submission", "submit_for_pr"),
+            8,
+            Some(&InvocationTargetAdmission::ControlPlane),
+        ),
+        None,
+    );
+}
+
+#[test]
+fn nonviable_roots_pivot_once_each_then_release_fallback_without_oscillation() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     let root_kinds = [
         DecisionAnchorTargetKindV1::FunctionName,
@@ -110,14 +199,11 @@ fn nonviable_roots_pivot_once_each_then_exhaust_without_oscillation() {
             OTHER_ROOT,
             DecisionEvidenceKindV1::Implementation,
         ),
-        DecisionAnchorTransition::RecoveryExhausted,
+        DecisionAnchorTransition::ConventionalFallbackReleased,
     );
     assert_eq!(
         state.on_tool_dispatched(&call("no-root-retry", "codebase_memory_trace_path"), 7),
-        exhausted_graph_denial([
-            GraphRecoveryEvidenceKindV1::Caller,
-            GraphRecoveryEvidenceKindV1::FocusedTest,
-        ]),
+        conventional_fallback_graph_denial(),
     );
 }
 
