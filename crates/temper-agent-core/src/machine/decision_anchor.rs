@@ -119,6 +119,8 @@ struct GapRecovery {
     anchors: AnchorForest,
     active_root: String,
     remaining: u8,
+    exhausted_roots: BTreeSet<String>,
+    remaining_pivots: usize,
 }
 
 #[derive(Clone)]

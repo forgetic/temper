@@ -182,9 +182,18 @@ impl AnchorForest {
     /// Selects one recoverable root by actual typed progress, then by the
     /// wrapper-independent stable call order which first produced that root.
     pub(super) fn recovery_root_binding(&self) -> Option<String> {
+        self.recovery_root_binding_excluding(&BTreeSet::new())
+    }
+
+    pub(super) fn recovery_root_binding_excluding(
+        &self,
+        exhausted_roots: &BTreeSet<String>,
+    ) -> Option<String> {
         self.ranked_roots()
-            .next()
-            .filter(|(_, root)| !root.evidence.compatible_actions(root).is_empty())
+            .find(|(binding, root)| {
+                !exhausted_roots.contains(binding.as_str())
+                    && !root.evidence.compatible_actions(root).is_empty()
+            })
             .map(|(binding, _)| binding.clone())
     }
 
