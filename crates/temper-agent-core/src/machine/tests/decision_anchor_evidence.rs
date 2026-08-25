@@ -121,7 +121,7 @@ fn over_returned_later_kinds_require_their_staged_provider_routes() {
 }
 
 #[test]
-fn empty_selected_implementation_caller_traversal_exhausts_without_retries() {
+fn empty_selected_implementation_caller_traversal_releases_bounded_fallback() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
     state.on_tool_finished(
@@ -158,15 +158,12 @@ fn empty_selected_implementation_caller_traversal_exhausts_without_retries() {
                 CallerDiscoveryOutcomeV1::NoEligibleSelector,
             ),
         ),
-        DecisionAnchorTransition::RecoveryExhausted,
+        DecisionAnchorTransition::ConventionalFallbackReleased,
     );
     assert!(state.blocks_mutation("write"));
     assert_eq!(
         state.on_tool_dispatched(&call("retry", "codebase_memory_trace_path"), 3),
-        exhausted_graph_denial([
-            GraphRecoveryEvidenceKindV1::Caller,
-            GraphRecoveryEvidenceKindV1::FocusedTest,
-        ]),
+        conventional_fallback_graph_denial(),
     );
 }
 

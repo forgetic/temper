@@ -247,7 +247,7 @@ fn empty_traversal_enables_one_semantic_fallback_then_one_exact_test_source() {
 }
 
 #[test]
-fn empty_traversal_and_empty_fallback_exhaust_without_retry_path() {
+fn empty_traversal_and_empty_fallback_release_bounded_conventional_route() {
     let mut state = focused_test_recovery_state();
     assert_eq!(
         state.on_tool_dispatched_with_admission(
@@ -289,12 +289,12 @@ fn empty_traversal_and_empty_fallback_exhaust_without_retry_path() {
                 FocusedTestDiscoveryOutcomeV1::NoEligibleSelector,
             ),
         ),
-        DecisionAnchorTransition::RecoveryExhausted,
+        DecisionAnchorTransition::ConventionalFallbackReleased,
     );
     assert!(state.blocks_mutation("write"));
     assert_eq!(
         state.on_tool_dispatched(&semantic_fallback_call("retry"), 8),
-        exhausted_graph_denial([GraphRecoveryEvidenceKindV1::FocusedTest]),
+        conventional_fallback_graph_denial(),
     );
 }
 

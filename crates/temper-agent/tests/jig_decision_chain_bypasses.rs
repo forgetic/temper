@@ -83,6 +83,37 @@ fn jig_agent_uses_conventional_fallback_after_an_unavailable_expected_descendant
 }
 
 #[test]
+fn jig_agent_releases_bounded_fallback_after_every_graph_root_becomes_nonviable() {
+    let run = run(DecisionCase::AllRootsNonViableFallback);
+
+    assert_eq!(
+        run.mutation,
+        Some("bounded fallback completed\n".to_string()),
+    );
+    assert_eq!(
+        run.steps,
+        vec![
+            DecisionStep::Discovery,
+            DecisionStep::Recovery,
+            DecisionStep::Recovery,
+            DecisionStep::Trace,
+            DecisionStep::ImplementationSource,
+            DecisionStep::Trace,
+            DecisionStep::ImplementationSource,
+            DecisionStep::Trace,
+            DecisionStep::ImplementationSource,
+            DecisionStep::GraphRetry,
+            DecisionStep::ConventionalDiscovery,
+            DecisionStep::SourceRead,
+            DecisionStep::Mutation,
+            DecisionStep::Validation,
+            DecisionStep::Submission,
+            DecisionStep::Complete,
+        ],
+    );
+}
+
+#[test]
 fn jig_agent_bounds_unconsumable_anchor_recovery_without_a_product() {
     let run = run(DecisionCase::UnconsumableRecoveryExhausted);
 

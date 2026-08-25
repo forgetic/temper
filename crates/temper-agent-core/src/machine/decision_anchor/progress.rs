@@ -61,6 +61,9 @@ impl DecisionAnchorState {
     }
 
     pub(super) fn queue_finished_guidance(&mut self, finished: &[FinishedCodebaseCall<'_>]) {
+        if matches!(self.phase, Some(AnchorPhase::ConventionalFallback(_))) {
+            return;
+        }
         let snapshot = self.guidance_snapshot();
         for finished in finished {
             if finished.output.is_error || !finished.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
@@ -161,6 +164,7 @@ impl DecisionAnchorState {
                 remaining: Some(0),
                 complete: false,
             },
+            Some(AnchorPhase::ConventionalFallback(_)) => GuidanceSnapshot::empty(),
             None => GuidanceSnapshot::empty(),
         }
     }

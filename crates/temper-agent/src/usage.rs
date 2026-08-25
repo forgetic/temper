@@ -411,6 +411,9 @@ impl ActivityProjection for TracingProjection {
                             temper_protocol_activity::GraphExplorationClosedReasonV1::Completed => {
                                 "completed"
                             }
+                            temper_protocol_activity::GraphExplorationClosedReasonV1::NoCompatibleRecoveryAction => {
+                                "no_compatible_recovery_action"
+                            }
                             temper_protocol_activity::GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => {
                                 "recoverable_incomplete_evidence"
                             }

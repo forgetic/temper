@@ -4,6 +4,12 @@ use super::*;
 use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
 use temper_protocol_activity::MAX_GRAPH_RECOVERY_ALLOWANCE_V1;
 
+pub(super) fn conventional_fallback_graph_denial() -> Option<ToolCallDenial> {
+    Some(ToolCallDenial::GraphExplorationClosed(Some(
+        GraphExplorationClosedV1::conventional_fallback(),
+    )))
+}
+
 mod batch {
     include!("decision_anchor_recovery_batch.rs");
 }
@@ -227,7 +233,7 @@ fn allowance_floor_keeps_a_distinct_provider_selector_actionable() {
 }
 
 #[test]
-fn recovery_exhausts_when_the_root_has_no_implementation_source_selector() {
+fn recovery_without_an_implementation_source_releases_exact_read_bounded_fallback() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
     assert_eq!(
@@ -257,7 +263,7 @@ fn recovery_exhausts_when_the_root_has_no_implementation_source_selector() {
             "codebase_memory_get_architecture",
             &plain_success(),
         ),
-        DecisionAnchorTransition::RecoveryExhausted,
+        DecisionAnchorTransition::ConventionalFallbackReleased,
     );
     assert!(state.blocks_mutation("write"));
     assert_eq!(
@@ -265,11 +271,11 @@ fn recovery_exhausts_when_the_root_has_no_implementation_source_selector() {
             &source_call("unsupported-source", DecisionEvidenceKindV1::Implementation),
             3,
         ),
-        exhausted_graph_denial(all_missing()),
+        conventional_fallback_graph_denial(),
     );
     assert_eq!(
-        state.on_tool_dispatched(&call("unsupported-trace", "codebase_memory_trace_path"), 3),
-        exhausted_graph_denial(all_missing()),
+        state.on_tool_dispatched(&call("unsupported-trace", "codebase_memory_trace_path"), 4),
+        conventional_fallback_graph_denial(),
     );
 }
 
@@ -585,7 +591,7 @@ fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
 }
 
 #[test]
-fn no_compatible_implementation_source_stops_before_another_recovery_loop() {
+fn no_compatible_implementation_source_releases_fallback_before_another_graph_loop() {
     let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects());
     let _ = machine.on_start(EngineTime::ZERO);
     let _ = complete(
@@ -604,7 +610,7 @@ fn no_compatible_implementation_source_stops_before_another_recovery_loop() {
             ),
         ),
     );
-    let mut stopped = Vec::new();
+    let mut fallback = Vec::new();
     for id in ["broad-one", "broad-two"] {
         let _ = complete(
             &mut machine,
@@ -613,11 +619,12 @@ fn no_compatible_implementation_source_stops_before_another_recovery_loop() {
                 "codebase_memory_get_architecture",
             )])),
         );
-        stopped = complete(&mut machine, tool_finished(id, plain_success()));
+        fallback = complete(&mut machine, tool_finished(id, plain_success()));
     }
-    assert_eq!(
-        final_stop(&stopped),
-        Some(crate::machine::AgentStop::DecisionAnchorRecoveryExhausted),
-    );
-    assert!(machine.is_stopped());
+    assert_eq!(calls_llm(&fallback), 1);
+    assert!(message_containing(
+        &fallback,
+        DECISION_ANCHOR_CONVENTIONAL_FALLBACK_MESSAGE,
+    ));
+    assert!(!machine.is_stopped());
 }

@@ -85,6 +85,11 @@ impl DecisionAnchorState {
                     self.exploration = ExplorationStatus::BudgetExhausted;
                     DecisionAnchorTransition::Unchanged
                 }
+                Some(AnchorPhase::ConventionalFallback(anchors)) => {
+                    self.phase = Some(AnchorPhase::ConventionalFallback(anchors));
+                    self.exploration = ExplorationStatus::BudgetExhausted;
+                    DecisionAnchorTransition::Unchanged
+                }
             }
         };
         self.queue_finished_guidance(&finished);

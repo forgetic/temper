@@ -32,6 +32,7 @@ pub enum DecisionCase {
     IncompleteSourceEvidence,
     UnavailableAfterRoot,
     UnconsumableRecoveryExhausted,
+    AllRootsNonViableFallback,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -50,7 +51,11 @@ pub enum DecisionStep {
     ProducerTurnDependents,
     UnavailableFallback,
     Recovery,
-    BypassStopped,
+    GraphRetry,
+    ConventionalDiscovery,
+    SourceRead,
+    Validation,
+    Submission,
     Complete,
 }
 
@@ -76,7 +81,10 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         .expect("decision-chain run lock");
     let checkout = TempCheckout::new("jig-opaque-decision-chain");
     checkout.init_git();
-    if case == DecisionCase::Consumed {
+    if matches!(
+        case,
+        DecisionCase::Consumed | DecisionCase::AllRootsNonViableFallback
+    ) {
         fs::write(
             checkout.repo_path().join("EVIDENCE.md"),
             "pending exact read\n",
@@ -106,17 +114,27 @@ pub fn run(case: DecisionCase) -> DecisionRun {
             &provider,
             &context,
             &cwd,
-            10,
+            20,
             None,
             Some(&tool_config),
         )
         .await
     });
     match (case, result) {
-        (DecisionCase::Consumed | DecisionCase::UnavailableAfterRoot, Ok(result)) => {
+        (
+            DecisionCase::Consumed
+            | DecisionCase::UnavailableAfterRoot
+            | DecisionCase::AllRootsNonViableFallback,
+            Ok(result),
+        ) => {
             assert_eq!(result.verdict, None)
         }
-        (DecisionCase::Consumed | DecisionCase::UnavailableAfterRoot, Err(error)) => {
+        (
+            DecisionCase::Consumed
+            | DecisionCase::UnavailableAfterRoot
+            | DecisionCase::AllRootsNonViableFallback,
+            Err(error),
+        ) => {
             panic!("native Jig agent completes the consumed decision chain: {error}")
         }
         (
@@ -592,6 +610,155 @@ fn decision_chain_fake(
                     &format!("recover-unconsumable-{turn}"),
                     "codebase_memory_search_graph",
                     serde_json::json!({"query": "unconsumable"}),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, 0) => {
+                record(DecisionStep::Discovery);
+                tool_replies(&[
+                    (
+                        "nonviable-root-one",
+                        "codebase_memory_search_code",
+                        serde_json::json!({"pattern": "nonviable-one"}),
+                    ),
+                    (
+                        "nonviable-root-two",
+                        "codebase_memory_search_code",
+                        serde_json::json!({"pattern": "nonviable-two"}),
+                    ),
+                    (
+                        "nonviable-root-three",
+                        "codebase_memory_search_code",
+                        serde_json::json!({"pattern": "nonviable-three"}),
+                    ),
+                ])
+            }
+            (DecisionCase::AllRootsNonViableFallback, count @ 3..=4) => {
+                record(DecisionStep::Recovery);
+                tool_reply(
+                    &format!("bounded-non-progress-{count}"),
+                    "codebase_memory_get_architecture",
+                    serde_json::json!({}),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, count @ 5 | count @ 7 | count @ 9) => {
+                let root_index = (count - 5) / 2;
+                let target = provider_values("qualified_name")
+                    .get(root_index)
+                    .cloned()
+                    .expect("the retained root exposes its trace selector");
+                record(DecisionStep::Trace);
+                tool_reply(
+                    &format!("nonviable-trace-{root_index}"),
+                    "codebase_memory_trace_path",
+                    serde_json::json!({
+                        "function_name": target,
+                        "mode": "calls",
+                        "direction": "inbound",
+                    }),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, count @ 6 | count @ 8 | count @ 10) => {
+                let root_index = (count - 6) / 2;
+                let target = provider_values("qualified_name")
+                    .get(root_index)
+                    .cloned()
+                    .expect("the retained root exposes its implementation selector");
+                record(DecisionStep::ImplementationSource);
+                tool_reply(
+                    &format!("nonviable-implementation-{root_index}"),
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": target,
+                        "decision_evidence_kind": "implementation",
+                    }),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, 11) => {
+                let guidance = view
+                    .messages
+                    .iter()
+                    .filter(|message| {
+                        message.role == "user"
+                            && message.content.contains("minimal conventional fallback")
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(guidance.len(), 1, "fallback guidance is released exactly once");
+                assert!(guidance[0].content.contains("one simple discovery command"));
+                assert!(guidance[0].content.contains("ordinary read tool"));
+                for private in provider_values("qualified_name") {
+                    assert!(!guidance[0].content.contains(&private));
+                }
+                record(DecisionStep::GraphRetry);
+                tool_reply(
+                    "closed-graph-retry",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query": "must-remain-closed"}),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, 12) => {
+                assert_eq!(
+                    result_count(),
+                    9,
+                    "the denied graph retry never reached the provider"
+                );
+                assert!(view.messages.iter().any(|message| {
+                    message.role == "tool"
+                        && message
+                            .content
+                            .contains("no compatible provider-derived recovery action remains")
+                }));
+                record(DecisionStep::ConventionalDiscovery);
+                tool_reply(
+                    "bounded-conventional-discovery",
+                    "bash",
+                    serde_json::json!({"command": "rg pending demo/EVIDENCE.md"}),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, 13) => {
+                record(DecisionStep::SourceRead);
+                tool_reply(
+                    "ordinary-fallback-source-read",
+                    "read",
+                    serde_json::json!({"path": "demo/EVIDENCE.md"}),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, 14) => {
+                record(DecisionStep::Mutation);
+                tool_reply(
+                    "bounded-fallback-mutation",
+                    "write",
+                    serde_json::json!({
+                        "path": "demo/EVIDENCE.md",
+                        "content": "bounded fallback completed\n",
+                    }),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, 15) => {
+                record(DecisionStep::Validation);
+                tool_reply(
+                    "validate-bounded-fallback",
+                    "bash",
+                    serde_json::json!({
+                        "command": "test \"$(cat demo/EVIDENCE.md)\" = 'bounded fallback completed'",
+                    }),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, 16) => {
+                record(DecisionStep::Submission);
+                tool_reply(
+                    "submit-bounded-fallback",
+                    "submit_for_pr",
+                    serde_json::json!({"summary": "bounded fallback validated"}),
+                )
+            }
+            (DecisionCase::AllRootsNonViableFallback, 17) => {
+                assert!(view.messages.iter().any(|message| {
+                    message.role == "tool"
+                        && message.content.contains("submit_for_pr accepted by host")
+                }));
+                record(DecisionStep::Complete);
+                Reply::text(
+                    r#"{"title":"Complete bounded fallback","body":"Validated and submitted.","summary":"Bounded fallback completed."}"#,
                 )
             }
             (_, turn) => panic!("unexpected model turn {turn} for {case:?}"),

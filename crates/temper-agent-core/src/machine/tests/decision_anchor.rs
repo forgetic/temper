@@ -1,8 +1,7 @@
 mod tests {
     use super::super::super::decision_anchor::*;
     use crate::machine::tests::common::{
-        assistant_tool_calls, calls_llm, complete, final_stop, llm_responded, run_tools,
-        tool_finished, user,
+        assistant_tool_calls, calls_llm, complete, llm_responded, run_tools, tool_finished, user,
     };
     use crate::machine::{
         AgentMachine, AgentRequest, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
@@ -40,6 +39,7 @@ mod tests {
     mod recovery {
         include!("decision_anchor_recovery.rs");
     }
+    use recovery::conventional_fallback_graph_denial;
 
     mod routing_recovery {
         include!("decision_anchor_routing_recovery.rs");
