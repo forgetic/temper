@@ -405,3 +405,5 @@ fn exact_read_matching_patch_validation_and_submission_serialize_successfully() 
     );
     assert_eq!(calls_llm(&after_submission), 1);
 }
+
+include!("decision_anchor_root_pivot.rs");

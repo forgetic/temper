@@ -20,10 +20,53 @@ impl DecisionAnchorState {
                 .expect("the selected recovery root remains installed");
             active.evidence.trace_before_implementation = true;
         }
+        let remaining_pivots = anchors.roots.len().saturating_sub(1);
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
             active_root,
             remaining: MAX_DECISION_GAP_RECOVERY_CALLS,
+            exhausted_roots: BTreeSet::new(),
+            remaining_pivots,
+        }));
+        self.exploration = ExplorationStatus::GapRecovery;
+        DecisionAnchorTransition::GapRecoveryNeeded
+    }
+
+    fn pivot_gap_recovery_or_exhaust(
+        &mut self,
+        mut anchors: AnchorForest,
+        exhausted_root: String,
+        mut exhausted_roots: BTreeSet<String>,
+        remaining_pivots: usize,
+    ) -> DecisionAnchorTransition {
+        let exhausted_evidence = anchors
+            .roots
+            .get(&exhausted_root)
+            .map(|root| root.evidence.clone())
+            .unwrap_or_default();
+        exhausted_roots.insert(exhausted_root);
+        let next_root = (remaining_pivots > 0)
+            .then(|| anchors.recovery_root_binding_excluding(&exhausted_roots))
+            .flatten();
+        let Some(active_root) = next_root else {
+            self.phase = Some(AnchorPhase::Exhausted(exhausted_evidence));
+            self.exploration = ExplorationStatus::BudgetExhausted;
+            return DecisionAnchorTransition::RecoveryExhausted;
+        };
+
+        if anchors.roots.len() > 1 {
+            let active = anchors
+                .roots
+                .get_mut(&active_root)
+                .expect("the pivoted recovery root remains installed");
+            active.evidence.trace_before_implementation = true;
+        }
+        self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
+            anchors,
+            active_root,
+            remaining: MAX_DECISION_GAP_RECOVERY_CALLS,
+            exhausted_roots,
+            remaining_pivots: remaining_pivots.saturating_sub(1),
         }));
         self.exploration = ExplorationStatus::GapRecovery;
         DecisionAnchorTransition::GapRecoveryNeeded
@@ -38,11 +81,16 @@ impl DecisionAnchorState {
             mut anchors,
             active_root,
             remaining,
+            exhausted_roots,
+            remaining_pivots,
         } = recovery;
         let Some(active) = anchors.roots.get(&active_root) else {
-            self.phase = Some(AnchorPhase::Exhausted(SourceEvidence::default()));
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::RecoveryExhausted;
+            return self.pivot_gap_recovery_or_exhaust(
+                anchors,
+                active_root,
+                exhausted_roots,
+                remaining_pivots,
+            );
         };
         let compatible = finished
             .iter()
@@ -155,9 +203,12 @@ impl DecisionAnchorState {
                 && output.lineage.decision_evidence_kind
                     != Some(DecisionEvidenceKindV1::FocusedTest)
         }) {
-            self.phase = Some(AnchorPhase::Exhausted(active.evidence.clone()));
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::RecoveryExhausted;
+            return self.pivot_gap_recovery_or_exhaust(
+                anchors,
+                active_root,
+                exhausted_roots,
+                remaining_pivots,
+            );
         }
 
         if finished.iter().any(|finished| {
@@ -173,12 +224,14 @@ impl DecisionAnchorState {
             return DecisionAnchorTransition::Unchanged;
         }
 
-        let evidence = active.evidence.clone();
         let has_path = !active.evidence.compatible_actions(active).is_empty();
         if !has_path {
-            self.phase = Some(AnchorPhase::Exhausted(evidence));
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::RecoveryExhausted;
+            return self.pivot_gap_recovery_or_exhaust(
+                anchors,
+                active_root,
+                exhausted_roots,
+                remaining_pivots,
+            );
         }
 
         // The allowance bounds each recovery snapshot, but cannot erase a
@@ -187,6 +240,8 @@ impl DecisionAnchorState {
             anchors,
             active_root,
             remaining: remaining.max(1),
+            exhausted_roots,
+            remaining_pivots,
         }));
         self.exploration = ExplorationStatus::GapRecovery;
         DecisionAnchorTransition::GapRecoveryNeeded
