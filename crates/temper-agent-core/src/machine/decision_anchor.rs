@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use sha2::{Digest as _, Sha256};
 use temper_protocol_activity::{
     CallerDiscoveryOutcomeV1, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
     DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1,
@@ -76,7 +77,7 @@ pub(super) struct DecisionAnchorState {
     settled_batches: u64,
     batch_progress: BTreeMap<String, ResultProgress>,
     model_guidance: Vec<String>,
-    denied_recovery_exhausted: bool,
+    rejected_recovery_tuples: BTreeSet<RecoveryTupleIdentity>,
 }
 
 enum AnchorPhase {
@@ -176,6 +177,9 @@ struct PendingCodebaseCall {
     admission_checked: bool,
 }
 
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub(in crate::machine) struct RecoveryTupleIdentity([u8; 32]);
+
 type SettledToolCall<'a> = (
     &'a str,
     &'a str,
@@ -238,7 +242,7 @@ impl DecisionAnchorState {
             settled_batches: 0,
             batch_progress: BTreeMap::new(),
             model_guidance: Vec::new(),
-            denied_recovery_exhausted: false,
+            rejected_recovery_tuples: BTreeSet::new(),
         })
     }
 
@@ -591,4 +595,38 @@ impl DecisionAnchorState {
         };
         ToolCallDenial::GraphExplorationClosed(details)
     }
+}
+
+impl RecoveryTupleIdentity {
+    /// Retains only a fixed-width, process-local identity for the closed
+    /// action/selector tuple. Raw selector values never enter policy state.
+    pub(in crate::machine) fn for_call(
+        call: &ToolCall,
+        action: GraphRecoveryActionV1,
+        active_root: &str,
+    ) -> Option<Self> {
+        let selector_field = match action.selector_kind {
+            DecisionAnchorTargetKindV1::GraphQuery => "query",
+            DecisionAnchorTargetKindV1::Pattern => "pattern",
+            DecisionAnchorTargetKindV1::NamePattern => "name_pattern",
+            DecisionAnchorTargetKindV1::QualifiedNamePattern => "qn_pattern",
+            DecisionAnchorTargetKindV1::FunctionName => "function_name",
+            DecisionAnchorTargetKindV1::QualifiedName => "qualified_name",
+        };
+        let selector = call
+            .arguments
+            .get(selector_field)
+            .and_then(serde_json::Value::as_str)?;
+        let mut digest = Sha256::new();
+        digest.update(b"temper-rejected-recovery-tuple-v2\0");
+        hash_recovery_identity_part(&mut digest, active_root.as_bytes());
+        hash_recovery_identity_part(&mut digest, action.model_label().as_bytes());
+        hash_recovery_identity_part(&mut digest, selector.as_bytes());
+        Some(Self(digest.finalize().into()))
+    }
+}
+
+fn hash_recovery_identity_part(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
 }

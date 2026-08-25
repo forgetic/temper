@@ -129,9 +129,11 @@ fn focused_test_recovery_traverses_from_consumed_caller_then_reads_returned_test
         )]
     );
 
+    let mut exact_test = source_call("exact-test", DecisionEvidenceKindV1::FocusedTest);
+    exact_test.arguments["qualified_name"] = serde_json::json!("provider-returned-test");
     assert_eq!(
         state.on_tool_dispatched_with_admission(
-            &source_call("exact-test", DecisionEvidenceKindV1::FocusedTest),
+            &exact_test,
             8,
             Some(&LineageAdmissionOutcome::Eligible(exact_test_admission())),
         ),

@@ -110,10 +110,18 @@ impl DecisionAnchorState {
                             .flatten()
                     });
                 let call_key = GraphCorrelationV1::target_digest(&call.id);
+                let tuple_identity = snapshot.as_ref().and_then(|snapshot| {
+                    requested_action.and_then(|action| {
+                        RecoveryTupleIdentity::for_call(call, action, &snapshot.active_root)
+                    })
+                });
+                let already_rejected = tuple_identity
+                    .is_some_and(|identity| self.rejected_recovery_tuples.contains(&identity));
 
                 if self.exploration != ExplorationStatus::Open {
                     let admissible = snapshot.as_ref().is_some_and(|snapshot| {
-                        call_key.is_some()
+                        !already_rejected
+                            && call_key.is_some()
                             && recovery_gap.is_some_and(|gap| {
                                 snapshot.missing.contains(&gap)
                                     && recovery_action
@@ -141,8 +149,14 @@ impl DecisionAnchorState {
                             || self.graph_exploration_denial(),
                             |snapshot| snapshot.denial.clone(),
                         ));
-                        if matches!(admission, Some(LineageAdmissionOutcome::Ineligible(_))) {
-                            local_rejections.push((requested_gap, requested_action));
+                        if already_rejected
+                            || matches!(admission, Some(LineageAdmissionOutcome::Ineligible(_)))
+                        {
+                            let excluded = already_rejected
+                                || tuple_identity.is_some_and(|identity| {
+                                    self.rejected_recovery_tuples.insert(identity)
+                                });
+                            local_rejections.push((requested_action, excluded));
                         }
                     }
                 }
@@ -189,31 +203,8 @@ impl DecisionAnchorState {
             }
         }
 
-        let rejected_gaps = snapshot.as_ref().map_or_else(BTreeSet::new, |snapshot| {
-            local_rejections
-                .iter()
-                .filter_map(|(gap, action)| {
-                    gap.filter(|gap| {
-                        snapshot.missing.contains(gap)
-                            && !selected.contains(gap)
-                            && action.is_some_and(|action| snapshot.compatible.contains(&action))
-                    })
-                })
-                .collect::<BTreeSet<_>>()
-        });
-        if !rejected_gaps.is_empty() {
-            if let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.as_mut() {
-                recovery.remaining = recovery
-                    .remaining
-                    .saturating_sub(u8::try_from(rejected_gaps.len()).unwrap_or(u8::MAX));
-                self.denied_recovery_exhausted = recovery.remaining == 0;
-            }
-        }
-        for (gap, action) in local_rejections {
-            self.queue_local_denial_guidance(
-                action,
-                gap.is_some_and(|gap| rejected_gaps.contains(&gap)),
-            );
+        for (action, excluded) in local_rejections {
+            self.queue_local_denial_guidance(action, excluded);
         }
         denials
     }
@@ -307,6 +298,11 @@ impl DecisionGap {
     }
 
     fn recovery_action_for_call(call: &ToolCall) -> Option<GraphRecoveryActionV1> {
+        if call.name == GraphCorrelationToolV1::SearchGraph.public_name()
+            && call.arguments.get("query").is_some()
+        {
+            return Some(GraphRecoveryActionV1::focused_test_semantic_fallback());
+        }
         let gap = DecisionGap::from_call(call)?;
         if call.name == GraphCorrelationToolV1::TracePath.public_name()
             && gap == DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)
