@@ -53,7 +53,12 @@ impl DecisionAnchorState {
                 let output = anchor_output(finished.name, finished.output)?;
                 (output.lineage.root_binding == active_root
                     && active.accepts(&finished.call, &output.lineage))
-                .then_some((finished.call.clone(), output, finished.source_target))
+                .then_some((
+                    finished.id,
+                    finished.call.clone(),
+                    output,
+                    finished.source_target,
+                ))
             })
             .collect::<Vec<_>>();
         let had_trace = active.evidence.has_trace();
@@ -61,16 +66,16 @@ impl DecisionAnchorState {
         let had_focused_test_selector = active.evidence.focused_test_selector_available;
         let batch_trace = compatible
             .iter()
-            .filter(|(call, output, _)| {
+            .filter(|(_, call, output, _)| {
                 call.recovery_gap == Some(DecisionGap::Trace)
                     && output.tool == GraphCorrelationToolV1::TracePath
                     && output.lineage.caller_discovery.is_some()
             })
-            .min_by_key(|(call, _, _)| call.turn)
-            .map(|(call, output, _)| (call.turn, output.lineage.caller_discovery));
+            .min_by_key(|(_, call, _, _)| call.turn)
+            .map(|(id, call, output, _)| (*id, call.turn, output.lineage.caller_discovery));
         let decision_kinds = compatible
             .iter()
-            .filter_map(|(call, output, _)| match call.recovery_gap {
+            .filter_map(|(id, call, output, _)| match call.recovery_gap {
                 Some(DecisionGap::Evidence(expected))
                     if output.tool == GraphCorrelationToolV1::GetCodeSnippet
                         && output.lineage.decision_evidence_kind == Some(expected)
@@ -84,32 +89,38 @@ impl DecisionAnchorState {
                             }
                         } =>
                 {
-                    Some(expected)
+                    Some((*id, expected))
                 }
                 _ => None,
             })
+            .collect::<Vec<_>>();
+        let accepted_kinds = decision_kinds
+            .iter()
+            .map(|(_, kind)| *kind)
             .collect::<BTreeSet<_>>();
         let accepted_sources = compatible
             .iter()
-            .filter_map(|(call, output, source_target)| {
+            .filter_map(|(id, call, output, source_target)| {
                 let expected = output.lineage.decision_evidence_kind?;
                 (output.tool == GraphCorrelationToolV1::GetCodeSnippet
-                    && decision_kinds.contains(&expected))
-                .then_some((call, *source_target))
+                    && decision_kinds.contains(&(*id, expected)))
+                .then_some((*id, call, expected, *source_target))
             })
             .collect::<Vec<_>>();
-        for (call, source_target) in accepted_sources {
+        for (id, call, expected, source_target) in accepted_sources {
             self.record_source_authority(&active_root, call, source_target);
+            self.mark_accepted(id, AcceptedEvidence::from(expected));
         }
         let active = anchors
             .roots
             .get_mut(&active_root)
             .expect("the active recovery root remains installed");
-        if let Some((turn, outcome)) = batch_trace {
+        if let Some((id, turn, outcome)) = batch_trace {
             active.evidence.record_trace(turn);
             active.evidence.record_caller_discovery(outcome);
+            self.mark_accepted(id, AcceptedEvidence::Trace);
         }
-        for (call, output, _) in &compatible {
+        for (id, call, output, _) in &compatible {
             if call.recovery_gap != Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
             {
                 continue;
@@ -125,11 +136,12 @@ impl DecisionAnchorState {
                     continue;
                 }
             }
+            self.mark_accepted(id, AcceptedEvidence::FocusedTestRoute);
             active
                 .evidence
                 .record_focused_test_discovery(output.tool, output.lineage.focused_test_discovery);
         }
-        active.evidence.record_decision_kinds(decision_kinds);
+        active.evidence.record_decision_kinds(accepted_kinds);
 
         if active.evidence.is_complete() {
             self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
@@ -137,7 +149,7 @@ impl DecisionAnchorState {
             return DecisionAnchorTransition::Converged;
         }
 
-        if compatible.iter().any(|(call, output, _)| {
+        if compatible.iter().any(|(_, call, output, _)| {
             call.recovery_gap == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
                 && output.tool == GraphCorrelationToolV1::GetCodeSnippet
                 && output.lineage.decision_evidence_kind

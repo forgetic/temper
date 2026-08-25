@@ -24,11 +24,14 @@ mod anchors;
 mod evidence;
 mod exact_read;
 mod output;
+mod progress;
+mod settlement;
 
 use output::{
     anchor_output, graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
     trusted_unavailable_provider_output,
 };
+use progress::{AcceptedEvidence, ResultProgress};
 
 /// Reserved wrapper detail carrying a process-local-root-bound lineage record.
 /// It is deliberately excluded from durable activity metadata.
@@ -71,6 +74,9 @@ pub(super) struct DecisionAnchorState {
     pending_exact_reads: BTreeMap<String, PendingExactRead>,
     exact_read_authorities: Vec<ExactReadAuthority>,
     settled_batches: u64,
+    batch_progress: BTreeMap<String, ResultProgress>,
+    model_guidance: Vec<String>,
+    denied_recovery_exhausted: bool,
 }
 
 enum AnchorPhase {
@@ -179,6 +185,7 @@ type SettledToolCall<'a> = (
 );
 
 struct FinishedCodebaseCall<'a> {
+    id: &'a str,
     call: PendingCodebaseCall,
     name: &'a str,
     output: &'a ToolOutput,
@@ -229,6 +236,9 @@ impl DecisionAnchorState {
             pending_exact_reads: BTreeMap::new(),
             exact_read_authorities: Vec::new(),
             settled_batches: 0,
+            batch_progress: BTreeMap::new(),
+            model_guidance: Vec::new(),
+            denied_recovery_exhausted: false,
         })
     }
 
@@ -274,90 +284,6 @@ impl DecisionAnchorState {
         self.on_tool_batch_finished_with_targets(&completed)
     }
 
-    pub(in crate::machine) fn on_tool_batch_finished_with_targets(
-        &mut self,
-        completed: &[SettledToolCall<'_>],
-    ) -> DecisionAnchorTransition {
-        if !completed.is_empty() {
-            self.settled_batches = self.settled_batches.saturating_add(1);
-        }
-        self.settle_exact_reads(completed);
-        let finished = completed
-            .iter()
-            .filter_map(|(id, name, output, source_target, _)| {
-                let call_key = GraphCorrelationV1::target_digest(id)?;
-                self.calls
-                    .remove(&call_key)
-                    .map(|call| FinishedCodebaseCall {
-                        call,
-                        name,
-                        output,
-                        source_target: *source_target,
-                    })
-            })
-            .collect::<Vec<_>>();
-        if finished.is_empty() {
-            return DecisionAnchorTransition::Unchanged;
-        }
-
-        let prior_phase = self.phase.take();
-        if prior_phase.is_none() {
-            return match AnchorForest::from_finished(&finished, None) {
-                Some(anchors) => self.install_roots(anchors, 0, false),
-                None if successful_graph_batch(&finished) => self.record_non_progress(None),
-                None => DecisionAnchorTransition::Unchanged,
-            };
-        }
-
-        match prior_phase {
-            None => unreachable!("the empty phase returned above"),
-            Some(AnchorPhase::Root(anchors)) | Some(AnchorPhase::Trail(anchors)) => {
-                if anchors.has_complete_evidence() {
-                    self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
-                    if self.exploration == ExplorationStatus::Open {
-                        self.exploration = ExplorationStatus::Complete;
-                        DecisionAnchorTransition::Converged
-                    } else {
-                        DecisionAnchorTransition::Unchanged
-                    }
-                } else {
-                    self.advance_batch_or_recover(anchors, &finished, 1)
-                }
-            }
-            Some(AnchorPhase::Recovery(recovery)) => {
-                let replacement_roots = if recovery.anchors.is_consumable() {
-                    None
-                } else {
-                    AnchorForest::from_finished(
-                        &finished,
-                        Some(recovery.anchors.latest_produced_turn),
-                    )
-                };
-                if let Some(anchors) = replacement_roots {
-                    self.install_roots(anchors, recovery.attempts.saturating_add(1), true)
-                } else {
-                    self.advance_batch_or_recover(
-                        recovery.anchors,
-                        &finished,
-                        recovery.attempts.saturating_add(1),
-                    )
-                }
-            }
-            Some(AnchorPhase::GapRecovery(recovery)) => {
-                self.advance_gap_recovery(recovery, &finished)
-            }
-            Some(AnchorPhase::AwaitingExactRead(anchors)) => {
-                self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
-                DecisionAnchorTransition::Unchanged
-            }
-            Some(AnchorPhase::Exhausted(evidence)) => {
-                self.phase = Some(AnchorPhase::Exhausted(evidence));
-                self.exploration = ExplorationStatus::BudgetExhausted;
-                DecisionAnchorTransition::Unchanged
-            }
-        }
-    }
-
     fn install_roots(
         &mut self,
         anchors: AnchorForest,
@@ -399,26 +325,45 @@ impl DecisionAnchorState {
                 let output = anchor_output(finished.name, finished.output)?;
                 anchors
                     .accepted_root(&finished.call, &output.lineage)
-                    .map(|root| (root, finished.call.clone(), output, finished.source_target))
+                    .map(|root| {
+                        (
+                            root,
+                            finished.id,
+                            finished.call.clone(),
+                            output,
+                            finished.source_target,
+                        )
+                    })
             })
             .collect::<Vec<_>>();
         let batch_caller_routes = compatible
             .iter()
-            .filter(|(_, _, output, _)| {
+            .filter(|(_, _, call, output, _)| {
                 output.tool == GraphCorrelationToolV1::TracePath
                     && output.lineage.caller_discovery.is_some()
+                    && call.recovery_gap
+                        != Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
             })
-            .map(|(root, _, _, _)| root.clone())
+            .map(|(root, _, _, _, _)| root.clone())
             .collect::<BTreeSet<_>>();
         let mut evidence_progressed = false;
-        for (root, call, output, source_target) in &compatible {
+        let mut route_progressed = false;
+        for (root, id, call, output, source_target) in &compatible {
             let Some(anchor) = anchors.roots.get_mut(root) else {
                 continue;
             };
             let before = anchor.evidence.progress_count();
+            let target_kinds_before = anchor.result_target_kinds.len();
             let had_trace = anchor.evidence.has_trace();
             let had_caller_selector = anchor.evidence.caller_selector_available;
             let had_focused_test_selector = anchor.evidence.focused_test_selector_available;
+            anchor
+                .result_target_kinds
+                .extend(output.lineage.result_target_kinds.iter().copied());
+            if anchor.result_target_kinds.len() > target_kinds_before {
+                route_progressed = true;
+                self.mark_route_progress(id);
+            }
             let mut accepted_source = false;
             match output.tool {
                 GraphCorrelationToolV1::TracePath
@@ -430,12 +375,14 @@ impl DecisionAnchorState {
                         output.tool,
                         output.lineage.focused_test_discovery,
                     );
+                    self.mark_accepted(id, AcceptedEvidence::FocusedTestRoute);
                 }
                 GraphCorrelationToolV1::TracePath if output.lineage.caller_discovery.is_some() => {
                     anchor.evidence.record_trace(call.turn);
                     anchor
                         .evidence
                         .record_caller_discovery(output.lineage.caller_discovery);
+                    self.mark_accepted(id, AcceptedEvidence::Trace);
                 }
                 GraphCorrelationToolV1::GetCodeSnippet => {
                     match output.lineage.decision_evidence_kind {
@@ -444,6 +391,7 @@ impl DecisionAnchorState {
                                 .evidence
                                 .record_decision_kinds([DecisionEvidenceKindV1::Implementation]);
                             accepted_source = true;
+                            self.mark_accepted(id, AcceptedEvidence::Implementation);
                         }
                         Some(DecisionEvidenceKindV1::Caller)
                             if had_trace && (had_caller_selector || !call.admission_checked)
@@ -454,6 +402,7 @@ impl DecisionAnchorState {
                                 .evidence
                                 .record_decision_kinds([DecisionEvidenceKindV1::Caller]);
                             accepted_source = true;
+                            self.mark_accepted(id, AcceptedEvidence::Caller);
                         }
                         Some(DecisionEvidenceKindV1::FocusedTest)
                             if had_trace
@@ -465,6 +414,7 @@ impl DecisionAnchorState {
                                 .evidence
                                 .record_decision_kinds([DecisionEvidenceKindV1::FocusedTest]);
                             accepted_source = true;
+                            self.mark_accepted(id, AcceptedEvidence::FocusedTest);
                         }
                         Some(_) | None => {}
                     }
@@ -478,6 +428,7 @@ impl DecisionAnchorState {
                         output.tool,
                         output.lineage.focused_test_discovery,
                     );
+                    self.mark_accepted(id, AcceptedEvidence::FocusedTestRoute);
                 }
                 GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => {}
                 GraphCorrelationToolV1::TracePath => {}
@@ -505,7 +456,7 @@ impl DecisionAnchorState {
             return self.enter_recovery(anchors, recovery_attempts);
         }
 
-        if evidence_progressed || roots_progressed {
+        if evidence_progressed || route_progressed || roots_progressed {
             self.non_progressing_batches = 0;
             if anchors.has_complete_evidence() {
                 self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));

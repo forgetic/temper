@@ -40,8 +40,10 @@ impl DecisionAnchorState {
     }
 
     /// Evaluates every sibling against one immutable recovery snapshot. Only
-    /// admitted calls are retained for settlement, so every other call stops
-    /// before registry or provider execution without consuming allowance.
+    /// admitted calls are retained for settlement. An ineligible call-shaped
+    /// attempt at the current compatible action is recorded as non-progress
+    /// and consumes one bounded recovery slot instead of returning an
+    /// unchanged menu indefinitely.
     #[cfg(test)]
     pub(in crate::machine) fn on_tool_batch_dispatched_with_admissions(
         &mut self,
@@ -72,6 +74,7 @@ impl DecisionAnchorState {
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
         let mut admitted_count = 0u8;
+        let mut local_rejections = Vec::new();
         let mut denials = Vec::with_capacity(calls.len());
 
         for ((call, admission), invocation_target) in
@@ -85,20 +88,14 @@ impl DecisionAnchorState {
                     Some(LineageAdmissionOutcome::Eligible(admission)) => Some(admission),
                     Some(LineageAdmissionOutcome::Ineligible(_)) | None => None,
                 };
-                let recovery_gap = eligible.and_then(DecisionGap::from_admission).or_else(|| {
-                    admission
-                        .is_none()
-                        .then(|| DecisionGap::from_call(call))
-                        .flatten()
-                });
+                let requested_gap = DecisionGap::from_call(call);
+                let requested_action = DecisionGap::recovery_action_for_call(call);
+                let recovery_gap = eligible
+                    .and_then(DecisionGap::from_admission)
+                    .or_else(|| admission.is_none().then_some(requested_gap).flatten());
                 let recovery_action = eligible
                     .and_then(DecisionGap::recovery_action_for_admission)
-                    .or_else(|| {
-                        admission
-                            .is_none()
-                            .then(|| DecisionGap::recovery_action_for_call(call))
-                            .flatten()
-                    });
+                    .or_else(|| admission.is_none().then_some(requested_action).flatten());
                 let admitted_root = eligible
                     .and_then(|admission| self.root_matching_admission(admission))
                     // Tests and non-codebase-memory compositions retain the
@@ -144,6 +141,9 @@ impl DecisionAnchorState {
                             || self.graph_exploration_denial(),
                             |snapshot| snapshot.denial.clone(),
                         ));
+                        if matches!(admission, Some(LineageAdmissionOutcome::Ineligible(_))) {
+                            local_rejections.push((requested_gap, requested_action));
+                        }
                     }
                 }
 
@@ -187,6 +187,33 @@ impl DecisionAnchorState {
                     }
                 }
             }
+        }
+
+        let rejected_gaps = snapshot.as_ref().map_or_else(BTreeSet::new, |snapshot| {
+            local_rejections
+                .iter()
+                .filter_map(|(gap, action)| {
+                    gap.filter(|gap| {
+                        snapshot.missing.contains(gap)
+                            && !selected.contains(gap)
+                            && action.is_some_and(|action| snapshot.compatible.contains(&action))
+                    })
+                })
+                .collect::<BTreeSet<_>>()
+        });
+        if !rejected_gaps.is_empty() {
+            if let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.as_mut() {
+                recovery.remaining = recovery
+                    .remaining
+                    .saturating_sub(u8::try_from(rejected_gaps.len()).unwrap_or(u8::MAX));
+                self.denied_recovery_exhausted = recovery.remaining == 0;
+            }
+        }
+        for (gap, action) in local_rejections {
+            self.queue_local_denial_guidance(
+                action,
+                gap.is_some_and(|gap| rejected_gaps.contains(&gap)),
+            );
         }
         denials
     }

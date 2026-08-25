@@ -19,6 +19,9 @@ use coding_agent_workspace::{REPO_DIR, TempCheckout};
 #[path = "opaque_decision_chain/context.rs"]
 mod context;
 use context::workspace_context;
+#[path = "opaque_decision_chain/guidance.rs"]
+mod guidance;
+use guidance::assert_guidance;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DecisionCase {
@@ -187,6 +190,14 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::Consumed, 1) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "result=active_root_progress",
+                        "accepted evidence=[root]",
+                        "active-root missing evidence=[trace, implementation, caller, focused_test]",
+                    ],
+                );
                 assert!(
                     !provider_values("current_root").is_empty(),
                     "refinement requires a consumed current-root implementation result"
@@ -210,6 +221,13 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::Consumed, 3) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "accepted evidence=[implementation]",
+                        "active-root missing evidence=[trace, caller, focused_test]",
+                    ],
+                );
                 record(DecisionStep::Trace);
                 tool_reply(
                     "trace-selected-implementation",
@@ -221,6 +239,13 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::Consumed, 4) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "accepted evidence=[trace]",
+                        "active-root missing evidence=[caller, focused_test]",
+                    ],
+                );
                 record(DecisionStep::CallerSource);
                 tool_reply(
                     "read-traversal-caller",
@@ -232,6 +257,13 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::Consumed, 5) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "accepted evidence=[caller]",
+                        "active-root missing evidence=[focused_test]",
+                    ],
+                );
                 record(DecisionStep::FocusedTestTraversal);
                 tool_reply(
                     "trace-caller-tests",
@@ -245,6 +277,13 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::Consumed, 6) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "accepted evidence=[focused_test_route]",
+                        "active-root missing evidence=[focused_test]",
+                    ],
+                );
                 record(DecisionStep::BehavioralTestSource);
                 tool_reply(
                     "read-behavioral-test",
@@ -256,6 +295,15 @@ fn decision_chain_fake(
                 )
             }
             (DecisionCase::Consumed, 7) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "accepted evidence=[focused_test]",
+                        "active-root missing evidence=[]",
+                        "read/workspace_target/exact_post_source",
+                        "matching minimal mutation",
+                    ],
+                );
                 assert!(
                     !provider_values("current_root").is_empty()
                         && provider_values("caller_model").len() == 1
