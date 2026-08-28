@@ -237,6 +237,170 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
     assert!(!debug.contains(TARGET_B));
 }
 
+#[test]
+fn partial_evidence_and_provider_failure_revoke_graph_derived_read_authority() {
+    for focused_test_already_retained in [false, true] {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        let target = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
+
+        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut state,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        state.on_tool_dispatched(
+            &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+            1,
+        );
+        state.on_tool_finished_with_source_target(
+            "implementation",
+            "codebase_memory_get_code_snippet",
+            &output_with_evidence(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                DecisionEvidenceKindV1::Implementation,
+            ),
+            Some(&target),
+        );
+
+        if focused_test_already_retained {
+            state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 2);
+            finish(
+                &mut state,
+                "trace",
+                "codebase_memory_trace_path",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+            );
+            state.on_tool_dispatched(
+                &source_call("focused", DecisionEvidenceKindV1::FocusedTest),
+                3,
+            );
+            state.on_tool_finished_with_source_target(
+                "focused",
+                "codebase_memory_get_code_snippet",
+                &output_with_evidence(
+                    ROOT,
+                    DecisionAnchorLineageStageV1::CarryForward,
+                    DecisionEvidenceKindV1::FocusedTest,
+                ),
+                Some(&target),
+            );
+        }
+
+        let graph_read = call("partial-graph-read", "read");
+        assert_eq!(
+            state.on_tool_dispatched_with_targets(
+                &graph_read,
+                4,
+                Some(&read_target(TARGET_A)),
+            ),
+            None,
+        );
+        state.on_tool_finished("partial-graph-read", "read", &successful_read());
+
+        let (failed_call, failed_name) = if focused_test_already_retained {
+            (
+                source_call("missing-caller", DecisionEvidenceKindV1::Caller),
+                "codebase_memory_get_code_snippet",
+            )
+        } else {
+            (
+                call("missing-trace", "codebase_memory_trace_path"),
+                "codebase_memory_trace_path",
+            )
+        };
+        state.on_tool_dispatched(&failed_call, 5);
+        assert_eq!(
+            state.on_tool_finished(
+                &failed_call.id,
+                failed_name,
+                &failure_output("provider_protocol"),
+            ),
+            DecisionAnchorTransition::ConventionalFallbackReleased,
+        );
+
+        let mutation = call("partial-mutation", "write");
+        assert_eq!(
+            state.on_tool_dispatched_with_targets(
+                &mutation,
+                6,
+                Some(&mutation_targets(vec![target.clone()])),
+            ),
+            Some(ToolCallDenial::DecisionAnchorMutation),
+            "an earlier graph-bound read cannot cross the provider-fallback boundary",
+        );
+
+        let fallback_read = call("fallback-read", "read");
+        state.on_tool_dispatched_with_targets(
+            &fallback_read,
+            7,
+            Some(&read_target(TARGET_A)),
+        );
+        state.on_tool_finished("fallback-read", "read", &successful_read());
+        assert_eq!(
+            state.on_tool_dispatched_with_targets(
+                &mutation,
+                8,
+                Some(&mutation_targets(vec![target.clone()])),
+            ),
+            None,
+            "the explicit conventional fallback retains its ordinary exact-read route",
+        );
+    }
+}
+
+#[test]
+fn successful_targeted_result_without_lineage_cannot_authorize_mutation() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        "oversized provider result",
+    )
+    .unwrap();
+    let output_without_lineage = ToolOutput {
+        content: Vec::new(),
+        details: Some(serde_json::json!({
+            SAFE_GRAPH_CORRELATION_DETAIL_KEY: correlation,
+        })),
+        is_error: false,
+    };
+    let target = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
+
+    state.on_tool_dispatched(&call("unretained-root", "codebase_memory_search_graph"), 0);
+    assert_eq!(
+        state.on_tool_finished(
+            "unretained-root",
+            "codebase_memory_search_graph",
+            &output_without_lineage,
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("unretained-mutation", "write"),
+            1,
+            Some(&mutation_targets(vec![target.clone()])),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+    );
+
+    state.on_tool_dispatched(&call("second-unretained", "codebase_memory_search_graph"), 2);
+    assert_eq!(
+        state.on_tool_finished(
+            "second-unretained",
+            "codebase_memory_search_graph",
+            &output_without_lineage,
+        ),
+        DecisionAnchorTransition::RecoveryExhausted,
+        "bounded unretained targeted results stop without a product",
+    );
+}
+
 struct ExactTargetResolver {
     target: EligibleWorkspaceTarget,
 }

@@ -28,6 +28,9 @@ pub enum DecisionCase {
     Consumed,
     UnrelatedLaterTarget,
     ProducerTurnDependents,
+    ImplementationOnlyProviderFallback,
+    ImplementationFocusedProviderFallback,
+    NoRetainedDecisionEvidence,
     ConventionalReadSubstitution,
     IncompleteSourceEvidence,
     UnavailableAfterRoot,
@@ -51,6 +54,7 @@ pub enum DecisionStep {
     UnrelatedLaterTarget,
     ProducerTurnDependents,
     UnavailableFallback,
+    ProviderFailure,
     Recovery,
     GraphRetry,
     ConventionalDiscovery,
@@ -79,13 +83,16 @@ pub fn run(case: DecisionCase) -> DecisionRun {
     let _serial = DECISION_CHAIN_RUN_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("decision-chain run lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let checkout = TempCheckout::new("jig-opaque-decision-chain");
     checkout.init_git();
     if matches!(
         case,
         DecisionCase::Consumed
+            | DecisionCase::UnavailableAfterRoot
             | DecisionCase::AllRootsNonViableFallback
+            | DecisionCase::ImplementationOnlyProviderFallback
+            | DecisionCase::ImplementationFocusedProviderFallback
             | DecisionCase::SelectorlessViableRootFallback
     ) {
         fs::write(
@@ -127,6 +134,8 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         (
             DecisionCase::Consumed
             | DecisionCase::UnavailableAfterRoot
+            | DecisionCase::ImplementationOnlyProviderFallback
+            | DecisionCase::ImplementationFocusedProviderFallback
             | DecisionCase::AllRootsNonViableFallback
             | DecisionCase::SelectorlessViableRootFallback,
             Ok(result),
@@ -136,6 +145,8 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         (
             DecisionCase::Consumed
             | DecisionCase::UnavailableAfterRoot
+            | DecisionCase::ImplementationOnlyProviderFallback
+            | DecisionCase::ImplementationFocusedProviderFallback
             | DecisionCase::AllRootsNonViableFallback
             | DecisionCase::SelectorlessViableRootFallback,
             Err(error),

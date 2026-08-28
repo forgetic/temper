@@ -18,7 +18,7 @@ pub(super) fn successful_graph_batch(finished: &[FinishedCodebaseCall<'_>]) -> b
     finished.iter().any(|finished| !finished.output.is_error)
 }
 
-fn valid_graph_correlation(name: &str, output: &ToolOutput) -> bool {
+pub(super) fn valid_graph_correlation(name: &str, output: &ToolOutput) -> bool {
     if output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
         return false;
     }

@@ -376,12 +376,12 @@ fn expected_unavailable_gap_releases_fallback_without_reopening_graph() {
             "codebase_memory_get_code_snippet",
             &failure_output("transport"),
         ),
-        DecisionAnchorTransition::Unchanged,
+        DecisionAnchorTransition::ConventionalFallbackReleased,
     );
-    assert!(!state.blocks_mutation("write"));
+    assert!(state.blocks_mutation("write"));
     assert_eq!(
         state.on_tool_dispatched(&source_call("retry", DecisionEvidenceKindV1::Caller), 7),
-        legacy_graph_denial(),
+        conventional_fallback_graph_denial(),
     );
 }
 

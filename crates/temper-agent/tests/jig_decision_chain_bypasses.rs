@@ -62,6 +62,71 @@ fn jig_agent_blocks_conventional_read_substitution_and_incomplete_source_evidenc
 }
 
 #[test]
+fn jig_agent_requires_complete_evidence_or_an_exact_conventional_fallback() {
+    for (case, expected) in [
+        (
+            DecisionCase::ImplementationOnlyProviderFallback,
+            "implementation-only fallback completed\n",
+        ),
+        (
+            DecisionCase::ImplementationFocusedProviderFallback,
+            "implementation-focused fallback completed\n",
+        ),
+    ] {
+        let run = run(case);
+        assert_eq!(run.mutation.as_deref(), Some(expected));
+        assert_eq!(
+            run.steps,
+            if case == DecisionCase::ImplementationOnlyProviderFallback {
+                vec![
+                    DecisionStep::Discovery,
+                    DecisionStep::Refinement,
+                    DecisionStep::ImplementationSource,
+                    DecisionStep::SourceRead,
+                    DecisionStep::ProviderFailure,
+                    DecisionStep::MutationAttempt,
+                    DecisionStep::MutationBlocked,
+                    DecisionStep::SourceRead,
+                    DecisionStep::Mutation,
+                    DecisionStep::Complete,
+                ]
+            } else {
+                vec![
+                    DecisionStep::Discovery,
+                    DecisionStep::Refinement,
+                    DecisionStep::ImplementationSource,
+                    DecisionStep::Trace,
+                    DecisionStep::BehavioralTestSource,
+                    DecisionStep::SourceRead,
+                    DecisionStep::ProviderFailure,
+                    DecisionStep::MutationAttempt,
+                    DecisionStep::MutationBlocked,
+                    DecisionStep::SourceRead,
+                    DecisionStep::Mutation,
+                    DecisionStep::Complete,
+                ]
+            },
+        );
+    }
+}
+
+#[test]
+fn jig_agent_stops_when_successful_targeted_results_retain_no_decision_evidence() {
+    let run = run(DecisionCase::NoRetainedDecisionEvidence);
+
+    assert_eq!(run.mutation, None);
+    assert_eq!(
+        run.steps,
+        vec![
+            DecisionStep::Discovery,
+            DecisionStep::MutationAttempt,
+            DecisionStep::MutationBlocked,
+            DecisionStep::Complete,
+        ],
+    );
+}
+
+#[test]
 fn jig_agent_uses_conventional_fallback_after_an_unavailable_expected_descendant() {
     let run = run(DecisionCase::UnavailableAfterRoot);
 

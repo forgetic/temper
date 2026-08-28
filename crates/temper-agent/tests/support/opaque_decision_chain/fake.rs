@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod partial_evidence;
+
 pub(super) fn decision_chain_fake(
     case: DecisionCase,
     observed_steps: Arc<Mutex<Vec<DecisionStep>>>,
@@ -61,6 +63,18 @@ pub(super) fn decision_chain_fake(
                         .contains("workspace mutation blocked: use the ordinary read tool")
             })
         };
+
+        if let Some(reply) = partial_evidence::reply(
+            case,
+            view.prior_tool_results,
+            view,
+            &record,
+            &next_target,
+            &recovery_selector,
+            &mutation_was_blocked,
+        ) {
+            return reply;
+        }
 
         match (case, view.prior_tool_results) {
             (DecisionCase::Consumed, 0) => {
@@ -418,7 +432,7 @@ pub(super) fn decision_chain_fake(
                 tool_reply(
                     "conventional-fallback-read",
                     "read",
-                    serde_json::json!({"path": "demo/README.md"}),
+                    serde_json::json!({"path": "demo/EVIDENCE.md"}),
                 )
             }
             (DecisionCase::UnavailableAfterRoot, 3) => {

@@ -74,7 +74,26 @@ impl DecisionAnchorState {
         DecisionAnchorTransition::GapRecoveryNeeded
     }
 
-    fn release_conventional_fallback(&mut self, anchors: AnchorForest) -> DecisionAnchorTransition {
+    pub(super) fn release_provider_fallback(
+        &mut self,
+        anchors: AnchorForest,
+    ) -> DecisionAnchorTransition {
+        if !anchors.has_any_evidence() {
+            self.phase = None;
+            self.exploration = ExplorationStatus::BudgetExhausted;
+            self.targeted_graph_authority_seen = false;
+            return DecisionAnchorTransition::Unchanged;
+        }
+        self.release_conventional_fallback(anchors)
+    }
+
+    pub(super) fn release_conventional_fallback(
+        &mut self,
+        anchors: AnchorForest,
+    ) -> DecisionAnchorTransition {
+        self.source_authorities.clear();
+        self.pending_exact_reads.clear();
+        self.exact_read_authorities.clear();
         self.phase = Some(AnchorPhase::ConventionalFallback(anchors));
         self.exploration = ExplorationStatus::BudgetExhausted;
         DecisionAnchorTransition::ConventionalFallbackReleased
@@ -229,9 +248,7 @@ impl DecisionAnchorState {
                     .recovery_gap
                     .is_some_and(|gap| active.evidence.needs(gap))
         }) {
-            self.phase = None;
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::Unchanged;
+            return self.release_provider_fallback(anchors);
         }
 
         let has_path = !active.evidence.compatible_actions(active).is_empty();
