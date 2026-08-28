@@ -85,6 +85,61 @@ fn duplicate_trials_and_execution_identity_drift_are_rejected() {
 }
 
 #[test]
+fn missing_and_reused_agent_session_identities_are_rejected() {
+    let missing = EvidenceFixture::new(MatrixConfig {
+        missing_session: true,
+        ..MatrixConfig::default()
+    })
+    .verify();
+    assert!(!gate(&missing, AcceptanceGateV1::UniqueTrials));
+
+    let duplicate = EvidenceFixture::new(MatrixConfig {
+        duplicate_session: true,
+        ..MatrixConfig::default()
+    })
+    .verify();
+    assert!(!gate(&duplicate, AcceptanceGateV1::UniqueTrials));
+}
+
+#[test]
+fn context_integrity_canonicalizes_defaults_but_rejects_material_changes() {
+    let fixture = EvidenceFixture::new(MatrixConfig::default());
+    let expanded_path = fixture
+        .options
+        .smoke
+        .join("repetitions/001/workspace-context.json");
+    let mut expanded: serde_json::Value =
+        serde_json::from_slice(&fs::read(&expanded_path).unwrap()).unwrap();
+    assert_eq!(expanded["allowed_verdicts"], serde_json::json!([]));
+    assert!(expanded["guidance"].is_object());
+    assert!(gate(&fixture.verify(), AcceptanceGateV1::ArtifactIntegrity));
+
+    let original = expanded.clone();
+    expanded["correlation_key"] = serde_json::json!("materially-different");
+    fs::write(
+        &expanded_path,
+        serde_json::to_vec_pretty(&expanded).unwrap(),
+    )
+    .unwrap();
+    assert!(!gate(
+        &fixture.verify(),
+        AcceptanceGateV1::ArtifactIntegrity
+    ));
+
+    expanded = original;
+    expanded["unexpected_material_field"] = serde_json::json!(true);
+    fs::write(
+        &expanded_path,
+        serde_json::to_vec_pretty(&expanded).unwrap(),
+    )
+    .unwrap();
+    assert!(!gate(
+        &fixture.verify(),
+        AcceptanceGateV1::ArtifactIntegrity
+    ));
+}
+
+#[test]
 fn unavailable_retries_and_incomplete_control_classification_fail() {
     let retry = EvidenceFixture::new(MatrixConfig {
         unavailable_retry: true,

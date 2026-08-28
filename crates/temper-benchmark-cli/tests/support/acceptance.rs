@@ -10,7 +10,7 @@ use temper_benchmark_cli::{
     ValidationArtifactV1, ValidationCommandEvidenceV1, ValidationEvidenceV1,
     aggregate_run_summaries, ingest_trace, verify_benchmark_acceptance,
 };
-use temper_protocol_agent::WorkspaceResult;
+use temper_protocol_agent::{AgentSessionState, WorkspaceContext, WorkspaceResult};
 
 const CANDIDATE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BENCHMARK: &str = "codebase-memory-routing-repair";
@@ -30,6 +30,8 @@ pub(super) struct MatrixConfig {
     pub(super) incomplete_relevance: bool,
     pub(super) incorrect_enabled: bool,
     pub(super) duplicate_trial: bool,
+    pub(super) duplicate_session: bool,
+    pub(super) missing_session: bool,
     pub(super) identity_drift: bool,
     pub(super) unavailable_retry: bool,
     pub(super) incomplete_classification: bool,
@@ -46,6 +48,8 @@ impl Default for MatrixConfig {
             incomplete_relevance: false,
             incorrect_enabled: false,
             duplicate_trial: false,
+            duplicate_session: false,
+            missing_session: false,
             identity_drift: false,
             unavailable_retry: false,
             incomplete_classification: false,
@@ -115,6 +119,12 @@ impl EvidenceFixture {
                 if index == 1 && config.identity_drift {
                     run.summary.host.as_mut().unwrap().observed_models[0].model =
                         "different-model".to_string();
+                }
+                if index == 1 && config.duplicate_session {
+                    run.summary.identity.agent_session_id = Some("smoke-session-001".to_string());
+                }
+                if index == 1 && config.missing_session {
+                    run.summary.identity.agent_session_id = None;
                 }
                 run
             },
@@ -478,11 +488,17 @@ fn write_set(
         let directory = root.join("repetitions").join(format!("{repetition:03}"));
         fs::create_dir(&directory).unwrap();
         fs::copy(manifest, directory.join("manifest.toml")).unwrap();
-        fs::copy(
-            manifest_root.join("workspace-context.json"),
-            directory.join("workspace-context.json"),
+        let mut context: WorkspaceContext = serde_json::from_slice(
+            &fs::read(manifest_root.join("workspace-context.json")).unwrap(),
         )
         .unwrap();
+        context.agent_session = run
+            .summary
+            .identity
+            .agent_session_id
+            .as_ref()
+            .map(AgentSessionState::new);
+        write_json(&directory.join("workspace-context.json"), &context);
         fs::copy(
             manifest_root.join("expected.patch"),
             directory.join("expected.patch"),

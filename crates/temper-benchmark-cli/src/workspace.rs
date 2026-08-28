@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
-use temper_protocol_agent::WorkspaceContext;
+use temper_protocol_agent::{AgentSessionState, WorkspaceContext};
 use tempfile::{Builder, TempDir};
 
 use crate::manifest::{
@@ -47,6 +47,10 @@ impl PreparedBenchmarkWorkspace {
 
     pub fn context(&self) -> &WorkspaceContext {
         &self.context
+    }
+
+    pub(crate) fn set_agent_session(&mut self, session: AgentSessionState) {
+        self.context.agent_session = Some(session);
     }
 
     pub fn baselines(&self) -> &[RepositoryBaselineV1] {
