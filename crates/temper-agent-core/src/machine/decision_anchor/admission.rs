@@ -1,6 +1,7 @@
 //! Immutable, root-local pre-provider recovery admission.
 
 use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
+use sha2::{Digest as _, Sha256};
 
 use super::*;
 
@@ -70,7 +71,7 @@ impl DecisionAnchorState {
     ) -> Vec<Option<ToolCallDenial>> {
         debug_assert_eq!(calls.len(), admissions.len());
         debug_assert_eq!(calls.len(), invocation_targets.len());
-        let snapshot = self.recovery_admission_snapshot();
+        let snapshot = self.staged_admission_snapshot();
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
         let mut admitted_count = 0u8;
@@ -118,7 +119,14 @@ impl DecisionAnchorState {
                 let already_rejected = tuple_identity
                     .is_some_and(|identity| self.rejected_recovery_tuples.contains(&identity));
 
-                if self.exploration != ExplorationStatus::Open {
+                let staged_call = admission.is_some()
+                    && snapshot.as_ref().is_some_and(|snapshot| {
+                        requested_action.is_some()
+                            && admitted_root
+                                .as_deref()
+                                .is_none_or(|root| root == snapshot.active_root)
+                    });
+                if self.exploration != ExplorationStatus::Open || staged_call {
                     let admissible = snapshot.as_ref().is_some_and(|snapshot| {
                         !already_rejected
                             && call_key.is_some()
@@ -149,9 +157,7 @@ impl DecisionAnchorState {
                             || self.graph_exploration_denial(),
                             |snapshot| snapshot.denial.clone(),
                         ));
-                        if already_rejected
-                            || matches!(admission, Some(LineageAdmissionOutcome::Ineligible(_)))
-                        {
+                        if requested_action.is_some() {
                             let excluded = already_rejected
                                 || tuple_identity.is_some_and(|identity| {
                                     self.rejected_recovery_tuples.insert(identity)
@@ -242,16 +248,36 @@ impl DecisionAnchorState {
             .cloned()
     }
 
-    fn recovery_admission_snapshot(&self) -> Option<RecoveryAdmissionSnapshot> {
-        if self.exploration != ExplorationStatus::GapRecovery {
-            return None;
-        }
-        let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
-            return None;
+    fn staged_admission_snapshot(&self) -> Option<RecoveryAdmissionSnapshot> {
+        let (active_root, active, remaining, denial) = match self.phase.as_ref()? {
+            AnchorPhase::Root(anchors) | AnchorPhase::Trail(anchors)
+                if self.exploration == ExplorationStatus::Open =>
+            {
+                let (active_root, active) = anchors.active_root()?;
+                let details = GraphExplorationClosedV1::recoverable_without_actions(
+                    active.evidence.missing_kinds(),
+                    MAX_DECISION_GAP_RECOVERY_CALLS,
+                );
+                (
+                    active_root.clone(),
+                    active,
+                    MAX_DECISION_GAP_RECOVERY_CALLS,
+                    ToolCallDenial::GraphExplorationClosed(details),
+                )
+            }
+            AnchorPhase::GapRecovery(recovery) => {
+                let active = recovery.anchors.roots.get(&recovery.active_root)?;
+                (
+                    recovery.active_root.clone(),
+                    active,
+                    recovery.remaining,
+                    self.graph_exploration_denial(),
+                )
+            }
+            _ => return None,
         };
-        let active = recovery.anchors.roots.get(&recovery.active_root)?;
         Some(RecoveryAdmissionSnapshot {
-            active_root: recovery.active_root.clone(),
+            active_root,
             missing: active.evidence.missing_gaps(),
             compatible: active.evidence.compatible_actions(active),
             pending: self
@@ -259,8 +285,8 @@ impl DecisionAnchorState {
                 .values()
                 .filter_map(|call| call.recovery_gap)
                 .collect(),
-            remaining: recovery.remaining,
-            denial: self.graph_exploration_denial(),
+            remaining,
+            denial,
         })
     }
 }
@@ -268,6 +294,35 @@ impl DecisionAnchorState {
 pub(super) fn hash_recovery_identity_part(digest: &mut Sha256, value: &[u8]) {
     digest.update((value.len() as u64).to_be_bytes());
     digest.update(value);
+}
+
+impl RecoveryTupleIdentity {
+    /// Retains only a fixed-width, process-local identity for the closed
+    /// action/selector tuple. Raw selector values never enter policy state.
+    pub(in crate::machine) fn for_call(
+        call: &ToolCall,
+        action: GraphRecoveryActionV1,
+        active_root: &str,
+    ) -> Option<Self> {
+        let selector_field = match action.selector_kind {
+            DecisionAnchorTargetKindV1::GraphQuery => "query",
+            DecisionAnchorTargetKindV1::Pattern => "pattern",
+            DecisionAnchorTargetKindV1::NamePattern => "name_pattern",
+            DecisionAnchorTargetKindV1::QualifiedNamePattern => "qn_pattern",
+            DecisionAnchorTargetKindV1::FunctionName => "function_name",
+            DecisionAnchorTargetKindV1::QualifiedName => "qualified_name",
+        };
+        let selector = call
+            .arguments
+            .get(selector_field)
+            .and_then(serde_json::Value::as_str)?;
+        let mut digest = Sha256::new();
+        digest.update(b"temper-rejected-recovery-tuple-v2\0");
+        hash_recovery_identity_part(&mut digest, active_root.as_bytes());
+        hash_recovery_identity_part(&mut digest, action.model_label().as_bytes());
+        hash_recovery_identity_part(&mut digest, selector.as_bytes());
+        Some(Self(digest.finalize().into()))
+    }
 }
 
 impl DecisionGap {

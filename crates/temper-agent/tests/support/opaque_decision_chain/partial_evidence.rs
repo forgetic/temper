@@ -8,6 +8,7 @@ pub(super) fn reply(
     view: &RequestView,
     record: &impl Fn(DecisionStep),
     next_target: &impl Fn() -> String,
+    focused_test_target: &impl Fn() -> String,
     recovery_selector: &impl Fn(&str) -> String,
     mutation_was_blocked: &impl Fn() -> bool,
 ) -> Option<Reply> {
@@ -121,13 +122,13 @@ pub(super) fn reply(
             )
         }
         (DecisionCase::ImplementationFocusedProviderFallback, 4) => {
-            record(DecisionStep::BehavioralTestSource);
+            record(DecisionStep::CallerSource);
             tool_reply(
-                "implementation-focused-test",
+                "implementation-focused-caller",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "qualified_name": recovery_selector("focused_test_result"),
-                    "decision_evidence_kind": "focused_test",
+                    "qualified_name": recovery_selector("caller_traversal_result"),
+                    "decision_evidence_kind": "caller",
                 }),
             )
         }
@@ -145,8 +146,8 @@ pub(super) fn reply(
                 "implementation-focused-provider-failure",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "qualified_name": recovery_selector("caller_traversal_result"),
-                    "decision_evidence_kind": "caller",
+                    "qualified_name": focused_test_target(),
+                    "decision_evidence_kind": "focused_test",
                     "force_unavailable": true,
                 }),
             )

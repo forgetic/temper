@@ -95,7 +95,7 @@ fn jig_agent_requires_complete_evidence_or_an_exact_conventional_fallback() {
                     DecisionStep::Refinement,
                     DecisionStep::ImplementationSource,
                     DecisionStep::Trace,
-                    DecisionStep::BehavioralTestSource,
+                    DecisionStep::CallerSource,
                     DecisionStep::SourceRead,
                     DecisionStep::ProviderFailure,
                     DecisionStep::MutationAttempt,

@@ -26,6 +26,7 @@ use guidance::assert_guidance;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DecisionCase {
     Consumed,
+    StagedDetourRecovery,
     UnrelatedLaterTarget,
     ProducerTurnDependents,
     ImplementationOnlyProviderFallback,
@@ -47,7 +48,9 @@ pub enum DecisionStep {
     ImplementationSource,
     FocusedTestTraversal,
     CallerSource,
+    CallerSourceDetour,
     BehavioralTestSource,
+    FocusedTestDetour,
     Mutation,
     MutationAttempt,
     MutationBlocked,
@@ -89,6 +92,7 @@ pub fn run(case: DecisionCase) -> DecisionRun {
     if matches!(
         case,
         DecisionCase::Consumed
+            | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
             | DecisionCase::AllRootsNonViableFallback
             | DecisionCase::ImplementationOnlyProviderFallback
@@ -142,6 +146,7 @@ pub fn run(case: DecisionCase) -> DecisionRun {
     match (case, result) {
         (
             DecisionCase::Consumed
+            | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
             | DecisionCase::ImplementationOnlyProviderFallback
             | DecisionCase::ImplementationFocusedProviderFallback
@@ -153,6 +158,7 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         }
         (
             DecisionCase::Consumed
+            | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
             | DecisionCase::ImplementationOnlyProviderFallback
             | DecisionCase::ImplementationFocusedProviderFallback

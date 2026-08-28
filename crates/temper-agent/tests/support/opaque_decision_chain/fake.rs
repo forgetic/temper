@@ -3,6 +3,7 @@
 use super::*;
 
 mod partial_evidence;
+mod staged_detours;
 
 pub(super) fn decision_chain_fake(
     case: DecisionCase,
@@ -39,6 +40,40 @@ pub(super) fn decision_chain_fake(
                 .pop()
                 .expect("the prior provider-shaped result selected a next target")
         };
+        let focused_test_target = || {
+            view.messages
+                .iter()
+                .filter_map(|message| provider_result(&message.content))
+                .find_map(|result| {
+                    result
+                        .get("results")
+                        .and_then(serde_json::Value::as_array)?
+                        .iter()
+                        .find(|result| {
+                            result
+                                .get("is_test")
+                                .and_then(serde_json::Value::as_bool)
+                                == Some(true)
+                        })
+                        .and_then(|result| result.get("qualified_name"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .expect("semantic discovery omitted its exact focused test")
+        };
+        let source_target = |marker: &str| {
+            view.messages
+                .iter()
+                .filter_map(|message| provider_result(&message.content))
+                .find_map(|result| {
+                    let source = result.pointer(&format!("/results/0/{marker}"))?;
+                    source.as_str()?;
+                    result.pointer("/results/0/qualified_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| panic!("missing source target for {marker}"))
+        };
         let recovery_selector = |label: &str| {
             let marker = format!("{label}=temper-recovery-selector:");
             view.messages
@@ -70,8 +105,21 @@ pub(super) fn decision_chain_fake(
             view,
             &record,
             &next_target,
+            &focused_test_target,
             &recovery_selector,
             &mutation_was_blocked,
+        ) {
+            return reply;
+        }
+        if let Some(reply) = staged_detours::reply(
+            case,
+            view.prior_tool_results,
+            view,
+            &record,
+            &next_target,
+            &focused_test_target,
+            &source_target,
+            &recovery_selector,
         ) {
             return reply;
         }
@@ -158,39 +206,20 @@ pub(super) fn decision_chain_fake(
                     &[
                         "accepted evidence=[caller]",
                         "active-root missing evidence=[focused_test]",
-                    ],
-                );
-                record(DecisionStep::FocusedTestTraversal);
-                tool_reply(
-                    "trace-caller-tests",
-                    "codebase_memory_trace_path",
-                    serde_json::json!({
-                        "function_name": recovery_selector("caller_evidence_result"),
-                        "mode": "calls",
-                        "direction": "inbound",
-                        "include_tests": true,
-                    }),
-                )
-            }
-            (DecisionCase::Consumed, 6) => {
-                assert_guidance(
-                    view,
-                    &[
-                        "accepted evidence=[focused_test_route]",
-                        "active-root missing evidence=[focused_test]",
+                        "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]",
                     ],
                 );
                 record(DecisionStep::BehavioralTestSource);
                 tool_reply(
-                    "read-behavioral-test",
+                    "read-semantic-behavioral-test",
                     "codebase_memory_get_code_snippet",
                     serde_json::json!({
-                        "qualified_name": recovery_selector("focused_test_result"),
+                        "qualified_name": focused_test_target(),
                         "decision_evidence_kind": "focused_test",
                     }),
                 )
             }
-            (DecisionCase::Consumed, 7) => {
+            (DecisionCase::Consumed, 6) => {
                 assert_guidance(
                     view,
                     &[
@@ -213,7 +242,7 @@ pub(super) fn decision_chain_fake(
                     serde_json::json!({"path": "demo/EVIDENCE.md"}),
                 )
             }
-            (DecisionCase::Consumed, 8) => {
+            (DecisionCase::Consumed, 7) => {
                 record(DecisionStep::Mutation);
                 tool_reply(
                     "mutate-after-evidence",
@@ -224,7 +253,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::Consumed, 9) => {
+            (DecisionCase::Consumed, 8) => {
                 record(DecisionStep::Complete);
                 Reply::text(r#"{"summary":"Mutated after consumed result-derived evidence."}"#)
             }

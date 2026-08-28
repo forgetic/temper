@@ -213,7 +213,12 @@ fn one_batch_cannot_collapse_implementation_traversal_and_later_sources() {
                 )),
             ],
         ),
-        [None, None, None, None],
+        [
+            None,
+            recovery_graph_denial(all_missing(), 4),
+            recovery_graph_denial(all_missing(), 4),
+            recovery_graph_denial(all_missing(), 4),
+        ],
     );
     assert_eq!(
         state.on_tool_batch_finished(&[
@@ -258,6 +263,8 @@ fn one_batch_cannot_collapse_implementation_traversal_and_later_sources() {
     );
     assert!(state.blocks_mutation("write"));
 }
+
+include!("decision_anchor_staged_guidance.rs");
 
 #[test]
 fn root_producer_and_same_turn_dependents_stay_ineligible() {

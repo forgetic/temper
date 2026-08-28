@@ -258,6 +258,17 @@ impl GuidanceSnapshot {
         let remaining = self
             .remaining
             .map_or_else(|| "n/a".to_string(), |remaining| remaining.to_string());
+        let required_next_stage = if self.next_actions.len() == 1 && !self.complete {
+            format!(
+                "; required next stage=[{}]; issue exactly this one action in the next model turn",
+                self.next_actions[0],
+            )
+        } else if self.next_actions.len() > 1 {
+            "; required next stage=[parallel typed recovery]; use only the listed actions from this immutable snapshot"
+                .to_string()
+        } else {
+            String::new()
+        };
         let rejected = rejected.map_or_else(String::new, |(action, excluded)| {
             format!(
                 "; rejected action=[{}]; rejected selector tuple excluded={excluded}; do not repeat that selector value",
@@ -277,7 +288,7 @@ impl GuidanceSnapshot {
             "; selector values must come from provider results accepted for this active root"
         };
         format!(
-            "[Decision guidance: result={disposition}; accepted evidence=[{accepted}]; active-root missing evidence=[{missing}]; recovery={}; remaining allowance={remaining}; next compatible actions=[{actions}]{rejected}{root_note}{completion}.]",
+            "[Decision guidance: result={disposition}; accepted evidence=[{accepted}]; active-root missing evidence=[{missing}]; recovery={}; remaining allowance={remaining}; next compatible actions=[{actions}]{required_next_stage}{rejected}{root_note}{completion}.]",
             self.lifecycle,
         )
     }

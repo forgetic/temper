@@ -140,6 +140,15 @@ impl DecisionAnchorState {
         let had_trace = active.evidence.has_trace();
         let had_caller_selector = active.evidence.caller_selector_available;
         let had_focused_test_selector = active.evidence.focused_test_selector_available;
+        let had_implementation = active
+            .evidence
+            .decision_kinds
+            .contains(&DecisionEvidenceKindV1::Implementation);
+        let had_caller = active
+            .evidence
+            .decision_kinds
+            .contains(&DecisionEvidenceKindV1::Caller);
+        let parallel_recovery = active.evidence.trace_before_implementation;
         let batch_trace = compatible
             .iter()
             .filter(|(_, call, output, _)| {
@@ -158,10 +167,18 @@ impl DecisionAnchorState {
                         && match expected {
                             DecisionEvidenceKindV1::Implementation => true,
                             DecisionEvidenceKindV1::Caller => {
-                                had_trace && (had_caller_selector || !call.admission_checked)
+                                had_trace
+                                    && (had_caller_selector || !call.admission_checked)
+                                    && (had_implementation
+                                        || parallel_recovery
+                                        || !call.admission_checked)
                             }
                             DecisionEvidenceKindV1::FocusedTest => {
-                                had_trace && (had_focused_test_selector || !call.admission_checked)
+                                had_trace
+                                    && (had_focused_test_selector || !call.admission_checked)
+                                    && (had_implementation && had_caller
+                                        || parallel_recovery
+                                        || !call.admission_checked)
                             }
                         } =>
                 {
@@ -456,29 +473,33 @@ impl SourceEvidence {
                 .collect();
         }
 
-        if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::Caller))
-            && self.caller_selector_available
-        {
-            let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Caller);
-            if anchor.supports(action) {
-                actions.insert(action);
+        if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::Caller)) {
+            if self.caller_selector_available {
+                let action =
+                    GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Caller);
+                if anchor.supports(action) {
+                    actions.insert(action);
+                }
+            }
+            if !self.trace_before_implementation {
+                return actions;
             }
         }
-        if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
-            && self.focused_test_selector_available
-        {
-            let action =
-                GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::FocusedTest);
-            if anchor.supports(action) {
-                actions.insert(action);
+
+        if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)) {
+            if self.focused_test_selector_available {
+                let action =
+                    GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::FocusedTest);
+                if anchor.supports(action) {
+                    actions.insert(action);
+                    return actions;
+                }
             }
-        }
-        if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
-            && self
+            if self
                 .decision_kinds
                 .contains(&DecisionEvidenceKindV1::Caller)
-        {
-            if self.focused_test_traversal_turn.is_none() {
+                && self.focused_test_traversal_turn.is_none()
+            {
                 let traversal = GraphRecoveryActionV1::focused_test_traversal();
                 if anchor.supports(traversal) {
                     actions.insert(traversal);
@@ -486,6 +507,9 @@ impl SourceEvidence {
             } else if self.focused_test_traversal_outcome
                 == Some(FocusedTestDiscoveryOutcomeV1::NoEligibleSelector)
                 && !self.focused_test_selector_available
+                && self
+                    .decision_kinds
+                    .contains(&DecisionEvidenceKindV1::Caller)
                 && self.focused_test_fallback_turn.is_none()
             {
                 let fallback = GraphRecoveryActionV1::focused_test_semantic_fallback();

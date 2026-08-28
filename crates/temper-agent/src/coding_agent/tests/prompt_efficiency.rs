@@ -52,12 +52,16 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "eligible later-turn caller/model selectors",
         "complete empty inbound trace settles that selected symbol's graph-caller relationship",
         "do not manufacture caller evidence by rereading the traced symbol as its own caller",
-        "search the graph for the requested behavioral regression",
-        "before broad or identifier-derived focused-test search",
-        "consume the exact test returned by that semantic search",
-        "independent test root remains discovery evidence but never satisfies the active implementation root",
-        "if focused-test evidence is still missing and the recovery menu lists it",
-        "provider-returned caller in a later turn with `trace_path` / `function_name`",
+        "Use the initial task-semantic graph search as focused-test discovery",
+        "behaviorally relevant test identity",
+        "reserve that exact provider-returned test",
+        "never read it early or substitute an implementation/caller-shaped selector",
+        "follow the single focused-test action named by Decision guidance",
+        "`selector=focused_test_result`",
+        "without another trace or speculative snippet",
+        "Only when no eligible semantic test selector exists",
+        "focused-test traversal from the provider-returned caller",
+        "later turn with `trace_path` / `function_name`",
         "relationship `calls`, direction",
         "`inbound`, and test inclusion enabled",
         "Read the exact test identity returned by that traversal",
@@ -225,9 +229,9 @@ fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
     assert!(implementation < trace && trace < relationships && relationships < empty);
     assert!(empty < denial);
     assert!(engineer.contains("do not manufacture caller evidence by rereading the traced symbol"));
-    assert!(engineer.contains(
-        "independent test root remains discovery evidence but never satisfies the active implementation root"
-    ));
+    assert!(engineer.contains("Use the initial task-semantic graph search"));
+    assert!(engineer.contains("single focused-test action named by Decision guidance"));
+    assert!(engineer.contains("without another trace or speculative snippet"));
     assert!(engineer.contains("Read the exact test identity returned by that traversal"));
     assert!(engineer.contains("another later turn"));
 }

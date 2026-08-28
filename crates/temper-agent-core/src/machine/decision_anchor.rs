@@ -6,7 +6,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use sha2::{Digest as _, Sha256};
 use temper_protocol_activity::{
     CallerDiscoveryOutcomeV1, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
     DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1,
@@ -373,6 +372,15 @@ impl DecisionAnchorState {
             let had_trace = anchor.evidence.has_trace();
             let had_caller_selector = anchor.evidence.caller_selector_available;
             let had_focused_test_selector = anchor.evidence.focused_test_selector_available;
+            let had_implementation = anchor
+                .evidence
+                .decision_kinds
+                .contains(&DecisionEvidenceKindV1::Implementation);
+            let had_caller = anchor
+                .evidence
+                .decision_kinds
+                .contains(&DecisionEvidenceKindV1::Caller);
+            let parallel_recovery = anchor.evidence.trace_before_implementation;
             anchor
                 .result_target_kinds
                 .extend(output.lineage.result_target_kinds.iter().copied());
@@ -410,7 +418,11 @@ impl DecisionAnchorState {
                             self.mark_accepted(id, AcceptedEvidence::Implementation);
                         }
                         Some(DecisionEvidenceKindV1::Caller)
-                            if had_trace && (had_caller_selector || !call.admission_checked)
+                            if had_trace
+                                && (had_caller_selector || !call.admission_checked)
+                                && (had_implementation
+                                    || parallel_recovery
+                                    || !call.admission_checked)
                                 || !call.admission_checked
                                     && batch_caller_routes.contains(root) =>
                         {
@@ -423,6 +435,9 @@ impl DecisionAnchorState {
                         Some(DecisionEvidenceKindV1::FocusedTest)
                             if had_trace
                                 && (had_focused_test_selector || !call.admission_checked)
+                                && (had_implementation && had_caller
+                                    || parallel_recovery
+                                    || !call.admission_checked)
                                 || !call.admission_checked
                                     && batch_caller_routes.contains(root) =>
                         {
@@ -612,34 +627,5 @@ impl DecisionAnchorState {
             ExplorationStatus::Open => None,
         };
         ToolCallDenial::GraphExplorationClosed(details)
-    }
-}
-
-impl RecoveryTupleIdentity {
-    /// Retains only a fixed-width, process-local identity for the closed
-    /// action/selector tuple. Raw selector values never enter policy state.
-    pub(in crate::machine) fn for_call(
-        call: &ToolCall,
-        action: GraphRecoveryActionV1,
-        active_root: &str,
-    ) -> Option<Self> {
-        let selector_field = match action.selector_kind {
-            DecisionAnchorTargetKindV1::GraphQuery => "query",
-            DecisionAnchorTargetKindV1::Pattern => "pattern",
-            DecisionAnchorTargetKindV1::NamePattern => "name_pattern",
-            DecisionAnchorTargetKindV1::QualifiedNamePattern => "qn_pattern",
-            DecisionAnchorTargetKindV1::FunctionName => "function_name",
-            DecisionAnchorTargetKindV1::QualifiedName => "qualified_name",
-        };
-        let selector = call
-            .arguments
-            .get(selector_field)
-            .and_then(serde_json::Value::as_str)?;
-        let mut digest = Sha256::new();
-        digest.update(b"temper-rejected-recovery-tuple-v2\0");
-        admission::hash_recovery_identity_part(&mut digest, active_root.as_bytes());
-        admission::hash_recovery_identity_part(&mut digest, action.model_label().as_bytes());
-        admission::hash_recovery_identity_part(&mut digest, selector.as_bytes());
-        Some(Self(digest.finalize().into()))
     }
 }
