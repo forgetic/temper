@@ -70,12 +70,23 @@ fn immutable_recovery_batch_admits_only_the_next_staged_root_action() {
     install_consumable_root(&mut state);
     enter_budget_recovery(&mut state, 1);
 
-    let calls = [
+    let mut calls = [
         source_call("cross-caller", DecisionEvidenceKindV1::Caller),
         source_call("implementation", DecisionEvidenceKindV1::Implementation),
-        source_call("duplicate-implementation", DecisionEvidenceKindV1::Implementation),
+        source_call(
+            "duplicate-implementation",
+            DecisionEvidenceKindV1::Implementation,
+        ),
         source_call("cross-test", DecisionEvidenceKindV1::FocusedTest),
     ];
+    for (call, selector) in calls.iter_mut().zip([
+        "cross-root-caller",
+        "selected-implementation",
+        "duplicate-implementation",
+        "cross-root-test",
+    ]) {
+        call.arguments["qualified_name"] = serde_json::json!(selector);
+    }
     let admissions = [
         eligible_admission(
             OTHER_ROOT,
@@ -122,7 +133,9 @@ fn immutable_recovery_batch_admits_only_the_next_staged_root_action() {
     );
 
     let trace = call("trace", "codebase_memory_trace_path");
-    let speculative_caller = source_call("speculative-caller", DecisionEvidenceKindV1::Caller);
+    let mut speculative_caller =
+        source_call("speculative-caller", DecisionEvidenceKindV1::Caller);
+    speculative_caller.arguments["qualified_name"] = serde_json::json!("speculative-caller");
     let missing_after_implementation = [
         GraphRecoveryEvidenceKindV1::Trace,
         GraphRecoveryEvidenceKindV1::Caller,
@@ -180,12 +193,10 @@ fn immutable_recovery_batch_admits_only_the_next_staged_root_action() {
             GraphCorrelationToolV1::GetCodeSnippet,
             Some(kind),
         );
+        let mut source = source_call(id, kind);
+        source.arguments["qualified_name"] = serde_json::json!(format!("returned-{id}"));
         assert_eq!(
-            state.on_tool_dispatched_with_admission(
-                &source_call(id, kind),
-                turn,
-                admission.as_ref(),
-            ),
+            state.on_tool_dispatched_with_admission(&source, turn, admission.as_ref()),
             None,
         );
         assert_eq!(finish_with_evidence(&mut state, id, ROOT, kind), expected);

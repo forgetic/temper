@@ -2,10 +2,8 @@ use super::*;
 
 const SEMANTIC_IMPLEMENTATION: &str = "crate::scheduler::choose_lane";
 const SEMANTIC_CALLER: &str = "crate::replay::route_renamed_job";
-const SEMANTIC_FOCUSED_TEST: &str = "crate::tests::renamed_replay_preserves_shard_ownership";
 const ACTIVE_ROOT_TEST: &str = "crate::tests::replay_uses_selected_lane";
 const BEHAVIOR_QUERY: &str = "renamed job replay shard ownership";
-const REGRESSION_QUERY: &str = "renamed replay shard ownership regression";
 
 #[test]
 fn jig_stages_over_returned_candidates_through_caller_and_test_routes() {
@@ -54,12 +52,8 @@ fn jig_stages_over_returned_candidates_through_caller_and_test_routes() {
         [
             "search_graph",
             "get_code_snippet",
-            "get_code_snippet",
-            "get_code_snippet",
             "trace_path",
             "get_code_snippet",
-            "trace_path",
-            "search_graph",
             "get_code_snippet",
         ]
     );
@@ -68,20 +62,12 @@ fn jig_stages_over_returned_candidates_through_caller_and_test_routes() {
         calls[1]["arguments"]["qualified_name"],
         SEMANTIC_IMPLEMENTATION
     );
-    assert_eq!(calls[2]["arguments"]["qualified_name"], SEMANTIC_CALLER);
-    assert_eq!(calls[3]["arguments"]["qualified_name"], ACTIVE_ROOT_TEST);
     assert_eq!(
-        calls[4]["arguments"]["function_name"],
+        calls[2]["arguments"]["function_name"],
         SEMANTIC_IMPLEMENTATION
     );
-    assert_eq!(calls[5]["arguments"]["qualified_name"], SEMANTIC_CALLER);
-    assert_eq!(calls[6]["arguments"]["function_name"], SEMANTIC_CALLER);
-    assert_eq!(calls[6]["arguments"]["include_tests"], true);
-    assert_eq!(calls[7]["arguments"]["query"], REGRESSION_QUERY);
-    assert_eq!(
-        calls[8]["arguments"]["qualified_name"],
-        SEMANTIC_FOCUSED_TEST
-    );
+    assert_eq!(calls[3]["arguments"]["qualified_name"], SEMANTIC_CALLER);
+    assert_eq!(calls[4]["arguments"]["qualified_name"], ACTIVE_ROOT_TEST);
 }
 
 fn semantic_routing_reply(view: &RequestView) -> Reply {
@@ -110,12 +96,12 @@ fn semantic_routing_reply(view: &RequestView) -> Reply {
         ),
         2 => source_reply(
             "direct-over-returned-caller",
-            returned_target(view, SEMANTIC_CALLER),
+            returned_target(view, SEMANTIC_IMPLEMENTATION),
             "caller",
         ),
         3 => source_reply(
             "direct-over-returned-test",
-            returned_target(view, ACTIVE_ROOT_TEST),
+            returned_target(view, SEMANTIC_IMPLEMENTATION),
             "focused_test",
         ),
         4 => tool_reply(
@@ -141,23 +127,17 @@ fn semantic_routing_reply(view: &RequestView) -> Reply {
             traced_caller_target(view),
             "caller",
         ),
-        7 => test_trace_reply("traverse-caller-for-tests", traced_caller_target(view)),
-        8 => tool_reply(
-            "one-task-semantic-test-fallback",
-            "codebase_memory_search_graph",
-            serde_json::json!({"query": REGRESSION_QUERY}),
-        ),
-        9 => source_reply(
-            "read-fallback-returned-test",
-            returned_target(view, SEMANTIC_FOCUSED_TEST),
+        7 => source_reply(
+            "read-semantic-search-returned-test",
+            returned_target(view, ACTIVE_ROOT_TEST),
             "focused_test",
         ),
-        10 => tool_reply(
+        8 => tool_reply(
             "read-semantic-target-after-evidence",
             "read",
             serde_json::json!({"path": "demo/ROUTE.md"}),
         ),
-        11 => tool_reply(
+        9 => tool_reply(
             "write-after-staged-evidence",
             "write",
             serde_json::json!({
@@ -165,7 +145,7 @@ fn semantic_routing_reply(view: &RequestView) -> Reply {
                 "content": "task-semantic route retained\n"
             }),
         ),
-        12 => Reply::text(
+        10 => Reply::text(
             r#"{"summary":"Staged over-returned candidates through exact caller and focused-test routes."}"#,
         ),
         count => panic!("unexpected staged routing tool-result count {count}"),

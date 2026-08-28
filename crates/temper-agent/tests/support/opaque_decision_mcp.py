@@ -45,11 +45,19 @@ def response(name, args):
             return result(qualified_name=fallback_targets[index])
         if query == "unconsumable":
             return result(opaque="PRIVATE-UNCONSUMABLE-SENTINEL")
-        return result(
-            current_root=targets["root"],
-            next=targets["refinement"],
-            qualified_name=targets["refinement"],
-        )
+        return {
+            "results": [
+                {
+                    "current_root": targets["root"],
+                    "next": targets["refinement"],
+                    "qualified_name": targets["refinement"],
+                },
+                {
+                    "qualified_name": targets["behavior"],
+                    "is_test": True,
+                },
+            ]
+        }
     if name == "search_code":
         pattern = args.get("pattern")
         if pattern == "selectorless-viable-root":

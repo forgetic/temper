@@ -174,6 +174,21 @@ fields."graph.lineage.complete" = true
 fields."graph.lineage.stage" = "carry_forward"
 fields."graph.lineage.decision_evidence_kind" = "focused_test"
 
+[[expect.sequence]]
+required = true
+id = "complete-three-kind-chain-precedes-exact-selection"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.lineage.complete" = true, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "implementation" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "caller" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.focused_test_discovery" = "no_eligible_selector" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.focused_test_discovery" = "eligible_selector_returned" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-route-after-source-evidence" } },
+]
+
 [[expect.events]]
 required = true
 id = "mismatched-typed-confirmation-fails-closed"
@@ -292,6 +307,13 @@ id = "three-typed-source-consumers"
 event = "mcp.tool.called"
 fields."mcp.tool" = "get_code_snippet"
 exactly = 3
+
+[[expect.count]]
+required = true
+id = "no-provider-or-protocol-detours"
+event = "mcp.tool.result"
+fields.is_error = true
+exactly = 0
 
 [[expect.count]]
 required = true
