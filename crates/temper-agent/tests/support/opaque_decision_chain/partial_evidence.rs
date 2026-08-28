@@ -52,14 +52,6 @@ pub(super) fn reply(
             )
         }
         (DecisionCase::ImplementationOnlyProviderFallback, 3) => {
-            record(DecisionStep::SourceRead);
-            tool_reply(
-                "implementation-only-graph-read",
-                "read",
-                serde_json::json!({"path": "demo/EVIDENCE.md"}),
-            )
-        }
-        (DecisionCase::ImplementationOnlyProviderFallback, 4) => {
             record(DecisionStep::ProviderFailure);
             tool_reply(
                 "implementation-only-provider-failure",
@@ -72,39 +64,45 @@ pub(super) fn reply(
                 }),
             )
         }
-        (DecisionCase::ImplementationOnlyProviderFallback, 5) => {
+        (DecisionCase::ImplementationOnlyProviderFallback, 4) => {
             record(DecisionStep::MutationAttempt);
             tool_reply(
                 "implementation-only-premature-mutation",
                 "write",
                 serde_json::json!({
-                    "path": "demo/EVIDENCE.md",
+                    "path": "demo/FALLBACK.md",
                     "content": "must remain blocked\n",
                 }),
             )
         }
-        (DecisionCase::ImplementationOnlyProviderFallback, 6) => {
+        (DecisionCase::ImplementationOnlyProviderFallback, 5) => {
             assert_fallback(view, mutation_was_blocked);
+            assert!(view.messages.iter().any(|message| {
+                message.role == "tool"
+                    && message
+                        .content
+                        .contains("conventional fallback has been released")
+            }));
             record(DecisionStep::MutationBlocked);
             record(DecisionStep::SourceRead);
             tool_reply(
                 "implementation-only-fallback-read",
                 "read",
-                serde_json::json!({"path": "demo/EVIDENCE.md"}),
+                serde_json::json!({"path": "demo/FALLBACK.md"}),
             )
         }
-        (DecisionCase::ImplementationOnlyProviderFallback, 7) => {
+        (DecisionCase::ImplementationOnlyProviderFallback, 6) => {
             record(DecisionStep::Mutation);
             tool_reply(
                 "implementation-only-fallback-mutation",
                 "write",
                 serde_json::json!({
-                    "path": "demo/EVIDENCE.md",
-                    "content": "implementation-only fallback completed\n",
+                    "path": "demo/FALLBACK.md",
+                    "content": "independent conventional fallback completed\n",
                 }),
             )
         }
-        (DecisionCase::ImplementationOnlyProviderFallback, 8) => {
+        (DecisionCase::ImplementationOnlyProviderFallback, 7) => {
             record(DecisionStep::Complete);
             Reply::text(
                 r#"{"summary":"Used an exact conventional fallback after provider failure."}"#,

@@ -38,7 +38,7 @@ use progress::{AcceptedEvidence, ResultProgress};
 /// It is deliberately excluded from durable activity metadata.
 pub const SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: &str = "temper_decision_anchor_lineage_v1";
 /// Fixed, model-visible explanation for a locally denied mutation.
-pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after its qualifying graph source result has completed, then retry the mutation";
+pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after either its qualifying graph source result has completed or conventional fallback has been released, then retry the mutation";
 /// Fixed, privacy-safe instruction queued exactly once when graph evidence is complete.
 pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration, use the ordinary read tool to read the exact workspace target selected by the qualifying graph source result, and only then mutate that matching target.";
 /// Fixed, privacy-safe result for graph calls denied after convergence or exhaustion.

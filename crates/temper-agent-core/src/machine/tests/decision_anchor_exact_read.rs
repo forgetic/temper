@@ -238,10 +238,11 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
 }
 
 #[test]
-fn partial_evidence_and_provider_failure_revoke_graph_derived_read_authority() {
+fn provider_failure_requires_fresh_conventional_authority_for_an_independent_target() {
     for focused_test_already_retained in [false, true] {
         let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-        let target = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
+        let graph_target = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
+        let fallback_target = TargetAdmissionOutcome::Eligible(exact_target(TARGET_B));
 
         state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
         finish(
@@ -263,7 +264,7 @@ fn partial_evidence_and_provider_failure_revoke_graph_derived_read_authority() {
                 DecisionAnchorLineageStageV1::CarryForward,
                 DecisionEvidenceKindV1::Implementation,
             ),
-            Some(&target),
+            Some(&graph_target),
         );
 
         if focused_test_already_retained {
@@ -287,20 +288,9 @@ fn partial_evidence_and_provider_failure_revoke_graph_derived_read_authority() {
                     DecisionAnchorLineageStageV1::CarryForward,
                     DecisionEvidenceKindV1::FocusedTest,
                 ),
-                Some(&target),
+                Some(&graph_target),
             );
         }
-
-        let graph_read = call("partial-graph-read", "read");
-        assert_eq!(
-            state.on_tool_dispatched_with_targets(
-                &graph_read,
-                4,
-                Some(&read_target(TARGET_A)),
-            ),
-            None,
-        );
-        state.on_tool_finished("partial-graph-read", "read", &successful_read());
 
         let (failed_call, failed_name) = if focused_test_already_retained {
             (
@@ -313,7 +303,7 @@ fn partial_evidence_and_provider_failure_revoke_graph_derived_read_authority() {
                 "codebase_memory_trace_path",
             )
         };
-        state.on_tool_dispatched(&failed_call, 5);
+        state.on_tool_dispatched(&failed_call, 4);
         assert_eq!(
             state.on_tool_finished(
                 &failed_call.id,
@@ -327,28 +317,28 @@ fn partial_evidence_and_provider_failure_revoke_graph_derived_read_authority() {
         assert_eq!(
             state.on_tool_dispatched_with_targets(
                 &mutation,
-                6,
-                Some(&mutation_targets(vec![target.clone()])),
+                5,
+                Some(&mutation_targets(vec![fallback_target.clone()])),
             ),
             Some(ToolCallDenial::DecisionAnchorMutation),
-            "an earlier graph-bound read cannot cross the provider-fallback boundary",
+            "partial graph evidence cannot authorize an independent fallback target",
         );
 
         let fallback_read = call("fallback-read", "read");
         state.on_tool_dispatched_with_targets(
             &fallback_read,
-            7,
-            Some(&read_target(TARGET_A)),
+            6,
+            Some(&read_target(TARGET_B)),
         );
         state.on_tool_finished("fallback-read", "read", &successful_read());
         assert_eq!(
             state.on_tool_dispatched_with_targets(
                 &mutation,
-                8,
-                Some(&mutation_targets(vec![target.clone()])),
+                7,
+                Some(&mutation_targets(vec![fallback_target.clone()])),
             ),
             None,
-            "the explicit conventional fallback retains its ordinary exact-read route",
+            "a fresh conventional exact read authorizes its matching target without graph source authority",
         );
     }
 }

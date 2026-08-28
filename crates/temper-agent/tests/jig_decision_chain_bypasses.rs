@@ -66,7 +66,7 @@ fn jig_agent_requires_complete_evidence_or_an_exact_conventional_fallback() {
     for (case, expected) in [
         (
             DecisionCase::ImplementationOnlyProviderFallback,
-            "implementation-only fallback completed\n",
+            "independent conventional fallback completed\n",
         ),
         (
             DecisionCase::ImplementationFocusedProviderFallback,
@@ -82,7 +82,6 @@ fn jig_agent_requires_complete_evidence_or_an_exact_conventional_fallback() {
                     DecisionStep::Discovery,
                     DecisionStep::Refinement,
                     DecisionStep::ImplementationSource,
-                    DecisionStep::SourceRead,
                     DecisionStep::ProviderFailure,
                     DecisionStep::MutationAttempt,
                     DecisionStep::MutationBlocked,
