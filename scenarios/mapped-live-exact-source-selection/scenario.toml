@@ -206,7 +206,7 @@ fields."tool.failure.reason" = "policy_precondition"
 fields."tool.failure.retry_disposition" = "satisfy_policy"
 fields."tool.failure.retryable" = false
 fields."tool.failure.conventional_fallback" = false
-fields."tool.failure.message" = "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after its qualifying graph source result has completed, then retry the mutation"
+fields."tool.failure.message" = "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after either its qualifying graph source result has completed or conventional fallback has been released, then retry the mutation"
 
 [[expect.events]]
 required = true

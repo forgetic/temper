@@ -103,6 +103,15 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         checkout.git(&["add", "EVIDENCE.md"]);
         checkout.git(&["commit", "-m", "seed exact-read evidence target"]);
     }
+    if case == DecisionCase::ImplementationOnlyProviderFallback {
+        fs::write(
+            checkout.repo_path().join("FALLBACK.md"),
+            "pending independent fallback\n",
+        )
+        .expect("seed independent conventional fallback target");
+        checkout.git(&["add", "FALLBACK.md"]);
+        checkout.git(&["commit", "-m", "seed independent fallback target"]);
+    }
 
     let observed_steps = Arc::new(Mutex::new(Vec::new()));
     let fake = decision_chain_fake(case, Arc::clone(&observed_steps));
@@ -165,7 +174,14 @@ pub fn run(case: DecisionCase) -> DecisionRun {
 
     DecisionRun {
         steps: observed_steps.lock().expect("decision steps lock").clone(),
-        mutation: fs::read_to_string(checkout.repo_path().join("EVIDENCE.md")).ok(),
+        mutation: fs::read_to_string(checkout.repo_path().join(
+            if case == DecisionCase::ImplementationOnlyProviderFallback {
+                "FALLBACK.md"
+            } else {
+                "EVIDENCE.md"
+            },
+        ))
+        .ok(),
     }
 }
 

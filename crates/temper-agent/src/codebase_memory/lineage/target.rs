@@ -16,6 +16,8 @@ use crate::mcp::McpToolResultPart;
 
 mod process;
 
+const MAX_WORKSPACE_TARGET_IDENTITIES: usize = 64;
+
 #[derive(Default)]
 pub(super) struct WorkspaceTargetRegistry {
     identities: BTreeMap<PathBuf, EligibleWorkspaceTarget>,
@@ -82,7 +84,7 @@ impl WorkspaceTargetRegistry {
     }
 
     pub(super) fn resolve_invocation(
-        &self,
+        &mut self,
         scope: &WorkspaceScope,
         tool_name: &str,
         arguments: &Value,
@@ -96,7 +98,9 @@ impl WorkspaceTargetRegistry {
             }
         };
         match tool_name {
-            "read" => InvocationTargetAdmission::Read(self.resolve_path_argument(scope, object)),
+            "read" => {
+                InvocationTargetAdmission::Read(self.resolve_read_path_argument(scope, object))
+            }
             "write" | "edit" => {
                 InvocationTargetAdmission::Mutation(vec![self.resolve_path_argument(scope, object)])
             }
@@ -123,11 +127,30 @@ impl WorkspaceTargetRegistry {
     }
 
     fn identity_for_source(&mut self, path: PathBuf) -> TargetAdmissionOutcome {
-        let identity = self.identities.entry(path).or_insert_with(|| {
-            EligibleWorkspaceTarget::new(Uuid::new_v4().to_string())
-                .expect("v4 UUID is a valid opaque workspace target")
-        });
-        TargetAdmissionOutcome::Eligible(identity.clone())
+        if let Some(identity) = self.identities.get(&path) {
+            return TargetAdmissionOutcome::Eligible(identity.clone());
+        }
+        if self.identities.len() >= MAX_WORKSPACE_TARGET_IDENTITIES {
+            return TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget);
+        }
+        let identity = EligibleWorkspaceTarget::new(Uuid::new_v4().to_string())
+            .expect("v4 UUID is a valid opaque workspace target");
+        self.identities.insert(path, identity.clone());
+        TargetAdmissionOutcome::Eligible(identity)
+    }
+
+    fn resolve_read_path_argument(
+        &mut self,
+        scope: &WorkspaceScope,
+        object: &serde_json::Map<String, Value>,
+    ) -> TargetAdmissionOutcome {
+        let Some(path) = object.get("path").and_then(Value::as_str) else {
+            return TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::MalformedTarget);
+        };
+        match canonical_existing_path(&scope.workspace_root, &scope.workspace_root, path) {
+            Ok(path) => self.identity_for_source(path),
+            Err(status) => TargetAdmissionOutcome::Ineligible(status),
+        }
     }
 
     fn resolve_path_argument(

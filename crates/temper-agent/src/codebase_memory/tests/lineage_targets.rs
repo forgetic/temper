@@ -101,6 +101,31 @@
             "an unmatched sibling must not piggyback on the admitted source target"
         );
 
+        let InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(fallback_target)) =
+            registry.resolve_invocation_targets(
+                "read",
+                &serde_json::json!({"path": "demo/src/other.rs"}),
+            )
+        else {
+            panic!("a canonical ordinary read must establish run-local target identity");
+        };
+        let InvocationTargetAdmission::Mutation(fallback_mutation) = registry
+            .resolve_invocation_targets(
+                "write",
+                &serde_json::json!({"path": "demo/src/other.rs", "content": "replacement"}),
+            )
+        else {
+            panic!("the matching conventional mutation must resolve");
+        };
+        assert!(
+            matches!(fallback_mutation.as_slice(), [TargetAdmissionOutcome::Eligible(target)] if fallback_target.matches(target)),
+            "ordinary exact-read identity must not depend on graph source authority",
+        );
+        assert!(
+            !source_target.matches(&fallback_target),
+            "independent conventional and graph targets must remain isolated",
+        );
+
         let outside = tempfile::NamedTempFile::new().unwrap();
         assert_eq!(
             registry
