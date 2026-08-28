@@ -19,6 +19,7 @@ const MAX_RESULT_TARGETS: usize = 64;
 
 mod admission;
 mod focused_test;
+mod recovery_selector;
 mod selection;
 mod target;
 
@@ -26,7 +27,14 @@ pub(super) use admission::DecisionAnchorLineageRegistry;
 use focused_test::{
     FocusedTestDiscovery, FocusedTestRecoveryState, SelectorOrigin, focused_test_discovery,
 };
-use selection::provider_caller_candidates;
+use recovery_selector::{
+    RECOVERY_SELECTOR_REFERENCE_PREFIX, RecoverySelectorKey, RecoverySelectorPurpose,
+    RecoverySelectorReference,
+};
+use selection::{
+    canonical_function_name, canonical_qualified_name, provider_caller_candidates,
+    terminal_function_name,
+};
 
 #[derive(Default)]
 pub(super) struct DecisionAnchorLineages {
@@ -35,6 +43,8 @@ pub(super) struct DecisionAnchorLineages {
     selectors: BTreeMap<Selector, Option<SelectorBinding>>,
     focused_test_recovery: BTreeMap<String, FocusedTestRecoveryState>,
     semantic_fallback_queries: BTreeMap<String, Option<String>>,
+    recovery_references: BTreeMap<RecoverySelectorKey, String>,
+    recovery_reference_selectors: BTreeMap<String, RecoverySelectorReference>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -142,7 +152,7 @@ impl DecisionAnchorLineages {
         let caller_candidates = is_caller_traversal
             .then(|| provider_caller_candidates(typed_parts))
             .flatten();
-        let caller_discovery = caller_candidates.as_ref().map(|candidates| {
+        let mut caller_discovery = caller_candidates.as_ref().map(|candidates| {
             if candidates.is_empty() {
                 CallerDiscoveryOutcomeV1::NoEligibleSelector
             } else {
@@ -195,11 +205,14 @@ impl DecisionAnchorLineages {
                     )?;
                 }
                 if let Some(callers) = caller_candidates {
-                    self.mark_candidates(
+                    let marked = self.mark_candidates(
                         &root_binding,
                         callers,
                         SelectorOrigin::CallerTraversalResult,
                     )?;
+                    if marked == 0 {
+                        caller_discovery = Some(CallerDiscoveryOutcomeV1::NoEligibleSelector);
+                    }
                 }
                 if let Some(focused_tests) = focused_tests.as_ref() {
                     marked_focused_tests = Some(self.mark_candidates(
@@ -571,68 +584,4 @@ fn insert(
         })
         .or_insert(0);
     Some(())
-}
-
-fn canonical_target_digests(value: &str) -> Option<BTreeSet<String>> {
-    let qualified = canonical_qualified_name(value);
-    let components = qualified
-        .as_deref()
-        .unwrap_or(value)
-        .split("::")
-        .collect::<Vec<_>>();
-    let start = components.len().saturating_sub(3);
-    components[start..]
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            GraphCorrelationV1::target_digest(&components[start + index..].join("::"))
-        })
-        .collect()
-}
-
-fn canonical_qualified_name(value: &str) -> Option<String> {
-    let normalized = GraphCorrelationV1::normalize_target(value)?;
-    // The production provider uses dotted graph identities while other MCP
-    // adapters use Rust-style `::` paths. Normalize both approved qualified
-    // representations to one opaque registry key; paths, prose, and mixed
-    // punctuation still fail the identifier check below.
-    let normalized = normalized.replace("::", ".");
-    let components = normalized.split('.').collect::<Vec<_>>();
-    (components.len() >= 2
-        && components.iter().all(|component| {
-            // Provider project identities may be dashed at any namespace
-            // level. They are transport/local identity segments, not Rust
-            // symbols; accept their bounded ASCII form while retaining strict
-            // identifier validation for every other component.
-            valid_provider_package_component(component)
-        }))
-    .then(|| components.join("::"))
-}
-
-fn valid_provider_package_component(value: &str) -> bool {
-    valid_identifier(value)
-        || (value.len() > 2
-            && !value.starts_with('-')
-            && !value.ends_with('-')
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
-}
-
-fn canonical_function_name(value: &str) -> Option<String> {
-    let normalized = GraphCorrelationV1::normalize_target(value)?;
-    let normalized = normalized.replace("::", ".");
-    let terminal = normalized.rsplit('.').next()?;
-    valid_identifier(terminal).then(|| terminal.to_string())
-}
-
-fn terminal_function_name(qualified_name: &str) -> Option<String> {
-    canonical_function_name(qualified_name)
-}
-
-fn valid_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }

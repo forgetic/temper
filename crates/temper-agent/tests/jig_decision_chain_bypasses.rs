@@ -114,6 +114,30 @@ fn jig_agent_releases_bounded_fallback_after_every_graph_root_becomes_nonviable(
 }
 
 #[test]
+fn jig_agent_releases_fallback_when_a_viable_root_has_no_actionable_descendants() {
+    let run = run(DecisionCase::SelectorlessViableRootFallback);
+
+    assert_eq!(
+        run.mutation,
+        Some("selectorless fallback completed\n".to_string()),
+    );
+    assert_eq!(
+        run.steps,
+        vec![
+            DecisionStep::Discovery,
+            DecisionStep::ImplementationSource,
+            DecisionStep::Trace,
+            DecisionStep::ConventionalDiscovery,
+            DecisionStep::SourceRead,
+            DecisionStep::Mutation,
+            DecisionStep::Validation,
+            DecisionStep::Submission,
+            DecisionStep::Complete,
+        ],
+    );
+}
+
+#[test]
 fn jig_agent_bounds_unconsumable_anchor_recovery_without_a_product() {
     let run = run(DecisionCase::UnconsumableRecoveryExhausted);
 

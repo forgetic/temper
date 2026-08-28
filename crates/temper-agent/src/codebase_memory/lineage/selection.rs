@@ -9,26 +9,31 @@ impl DecisionAnchorLineages {
         input: &Value,
     ) -> Option<Selector> {
         let selector_kind = DecisionAnchorTargetKindV1::from_graph_correlation(target_kind);
-        let value = match target_kind {
-            GraphCorrelationTargetKindV1::FunctionName => input
-                .get("function_name")
-                .and_then(Value::as_str)
-                .and_then(canonical_function_name),
-            GraphCorrelationTargetKindV1::QualifiedName => input
-                .get("qualified_name")
-                .and_then(Value::as_str)
-                .and_then(|value| {
-                    canonical_qualified_name(value).or_else(|| canonical_function_name(value))
-                }),
-            GraphCorrelationTargetKindV1::Pattern => input
-                .get("pattern")
-                .and_then(Value::as_str)
-                .and_then(|value| {
-                    canonical_qualified_name(value).or_else(|| canonical_function_name(value))
-                }),
+        let raw_value = match target_kind {
+            GraphCorrelationTargetKindV1::FunctionName => input.get("function_name"),
+            GraphCorrelationTargetKindV1::QualifiedName => input.get("qualified_name"),
+            GraphCorrelationTargetKindV1::Pattern => input.get("pattern"),
             GraphCorrelationTargetKindV1::GraphQuery
             | GraphCorrelationTargetKindV1::NamePattern
             | GraphCorrelationTargetKindV1::QualifiedNamePattern => None,
+        }
+        .and_then(Value::as_str)?;
+        if raw_value.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX) {
+            return self
+                .recovery_reference_selectors
+                .get(raw_value)
+                .map(|reference| &reference.selector)
+                .filter(|selector| selector.kind == selector_kind)
+                .cloned();
+        }
+        let value = match target_kind {
+            GraphCorrelationTargetKindV1::FunctionName => canonical_function_name(raw_value),
+            GraphCorrelationTargetKindV1::QualifiedName | GraphCorrelationTargetKindV1::Pattern => {
+                canonical_qualified_name(raw_value).or_else(|| canonical_function_name(raw_value))
+            }
+            GraphCorrelationTargetKindV1::GraphQuery
+            | GraphCorrelationTargetKindV1::NamePattern
+            | GraphCorrelationTargetKindV1::QualifiedNamePattern => unreachable!(),
         }?;
         Some(Selector {
             kind: selector_kind,
@@ -170,4 +175,68 @@ fn collect_caller_result(value: &Value, candidates: &mut BTreeMap<Candidate, u8>
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => return None,
     }
     (candidates.len() <= MAX_RESULT_TARGETS).then_some(())
+}
+
+fn canonical_target_digests(value: &str) -> Option<BTreeSet<String>> {
+    let qualified = canonical_qualified_name(value);
+    let components = qualified
+        .as_deref()
+        .unwrap_or(value)
+        .split("::")
+        .collect::<Vec<_>>();
+    let start = components.len().saturating_sub(3);
+    components[start..]
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            GraphCorrelationV1::target_digest(&components[start + index..].join("::"))
+        })
+        .collect()
+}
+
+pub(super) fn canonical_qualified_name(value: &str) -> Option<String> {
+    let normalized = GraphCorrelationV1::normalize_target(value)?;
+    // The production provider uses dotted graph identities while other MCP
+    // adapters use Rust-style `::` paths. Normalize both approved qualified
+    // representations to one opaque registry key; paths, prose, and mixed
+    // punctuation still fail the identifier check below.
+    let normalized = normalized.replace("::", ".");
+    let components = normalized.split('.').collect::<Vec<_>>();
+    (components.len() >= 2
+        && components.iter().all(|component| {
+            // Provider project identities may be dashed at any namespace
+            // level. They are transport/local identity segments, not Rust
+            // symbols; accept their bounded ASCII form while retaining strict
+            // identifier validation for every other component.
+            valid_provider_package_component(component)
+        }))
+    .then(|| components.join("::"))
+}
+
+fn valid_provider_package_component(value: &str) -> bool {
+    valid_identifier(value)
+        || (value.len() > 2
+            && !value.starts_with('-')
+            && !value.ends_with('-')
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')))
+}
+
+pub(super) fn canonical_function_name(value: &str) -> Option<String> {
+    let normalized = GraphCorrelationV1::normalize_target(value)?;
+    let normalized = normalized.replace("::", ".");
+    let terminal = normalized.rsplit('.').next()?;
+    valid_identifier(terminal).then(|| terminal.to_string())
+}
+
+pub(super) fn terminal_function_name(qualified_name: &str) -> Option<String> {
+    canonical_function_name(qualified_name)
+}
+
+fn valid_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }

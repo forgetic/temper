@@ -32,6 +32,7 @@ impl GraphRecoveryEvidenceKindV1 {
 #[serde(rename_all = "snake_case")]
 pub enum GraphRecoverySelectorOriginV1 {
     ImplementationEvidenceResult,
+    CallerTraversalResult,
     CallerEvidenceResult,
     FocusedTestResult,
     TaskSemanticQuery,
@@ -83,17 +84,24 @@ impl GraphRecoveryActionV1 {
                 direction: Some(GraphRecoveryDirectionV1::Inbound),
                 include_tests: false,
             },
-            GraphRecoveryEvidenceKindV1::Implementation | GraphRecoveryEvidenceKindV1::Caller => {
-                Self {
-                    tool: GraphCorrelationToolV1::GetCodeSnippet,
-                    selector_kind: DecisionAnchorTargetKindV1::QualifiedName,
-                    evidence_kind,
-                    selector_origin: None,
-                    relationship: None,
-                    direction: None,
-                    include_tests: false,
-                }
-            }
+            GraphRecoveryEvidenceKindV1::Implementation => Self {
+                tool: GraphCorrelationToolV1::GetCodeSnippet,
+                selector_kind: DecisionAnchorTargetKindV1::QualifiedName,
+                evidence_kind,
+                selector_origin: None,
+                relationship: None,
+                direction: None,
+                include_tests: false,
+            },
+            GraphRecoveryEvidenceKindV1::Caller => Self {
+                tool: GraphCorrelationToolV1::GetCodeSnippet,
+                selector_kind: DecisionAnchorTargetKindV1::QualifiedName,
+                evidence_kind,
+                selector_origin: Some(GraphRecoverySelectorOriginV1::CallerTraversalResult),
+                relationship: None,
+                direction: None,
+                include_tests: false,
+            },
             GraphRecoveryEvidenceKindV1::FocusedTest => Self {
                 tool: GraphCorrelationToolV1::GetCodeSnippet,
                 selector_kind: DecisionAnchorTargetKindV1::QualifiedName,
@@ -148,9 +156,19 @@ impl GraphRecoveryActionV1 {
             (
                 GraphCorrelationToolV1::GetCodeSnippet,
                 DecisionAnchorTargetKindV1::QualifiedName,
-                GraphRecoveryEvidenceKindV1::Implementation | GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::Implementation,
             ) => {
                 self.selector_origin.is_none()
+                    && self.relationship.is_none()
+                    && self.direction.is_none()
+                    && !self.include_tests
+            }
+            (
+                GraphCorrelationToolV1::GetCodeSnippet,
+                DecisionAnchorTargetKindV1::QualifiedName,
+                GraphRecoveryEvidenceKindV1::Caller,
+            ) => {
+                self.selector_origin == Some(GraphRecoverySelectorOriginV1::CallerTraversalResult)
                     && self.relationship.is_none()
                     && self.direction.is_none()
                     && !self.include_tests
@@ -207,6 +225,9 @@ impl GraphRecoveryActionV1 {
             label.push_str(match origin {
                 GraphRecoverySelectorOriginV1::ImplementationEvidenceResult => {
                     "/selector=implementation_evidence_result"
+                }
+                GraphRecoverySelectorOriginV1::CallerTraversalResult => {
+                    "/selector=caller_traversal_result"
                 }
                 GraphRecoverySelectorOriginV1::CallerEvidenceResult => {
                     "/selector=caller_evidence_result"
@@ -543,7 +564,7 @@ mod tests {
         let message = details.model_message();
         assert_eq!(
             message,
-            "decision-evidence recovery required; missing evidence: [trace, caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 2; compatible actions: [trace_path/function_name/trace/selector=implementation_evidence_result/relationship=calls/direction=inbound, get_code_snippet/qualified_name/caller]; use only these current-root actions; no retry, root switch, or mutation"
+            "decision-evidence recovery required; missing evidence: [trace, caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 2; compatible actions: [trace_path/function_name/trace/selector=implementation_evidence_result/relationship=calls/direction=inbound, get_code_snippet/qualified_name/caller/selector=caller_traversal_result]; use only these current-root actions; no retry, root switch, or mutation"
         );
         assert!(!message.contains(PRIVATE_SELECTOR));
         assert!(!message.contains("root_binding"));

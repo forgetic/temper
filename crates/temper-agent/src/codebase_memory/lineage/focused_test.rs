@@ -11,7 +11,7 @@ pub(super) enum FocusedTestRecoveryState {
     FallbackCompleted,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SelectorOrigin {
     ImplementationEvidenceResult,
     CallerTraversalResult,
@@ -95,6 +95,28 @@ impl DecisionAnchorLineages {
         candidates: BTreeSet<Candidate>,
         origin: SelectorOrigin,
     ) -> Option<usize> {
+        let purpose = match origin {
+            SelectorOrigin::ImplementationEvidenceResult => {
+                RecoverySelectorPurpose::ImplementationTrace
+            }
+            SelectorOrigin::CallerTraversalResult => RecoverySelectorPurpose::CallerSource,
+            SelectorOrigin::CallerEvidenceResult => RecoverySelectorPurpose::CallerTestTraversal,
+            SelectorOrigin::FocusedTestResult | SelectorOrigin::FocusedTestFallbackResult => {
+                RecoverySelectorPurpose::FocusedTestSource
+            }
+        };
+        let mut reference_candidates = candidates.iter().cloned().collect::<Vec<_>>();
+        reference_candidates.sort_by_key(|candidate| {
+            if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName
+                && candidate.value.contains("::")
+            {
+                0
+            } else if candidate.kind == purpose.selector_kind() {
+                1
+            } else {
+                2
+            }
+        });
         let mut marked = 0;
         for candidate in candidates {
             let selector = Selector {
@@ -120,6 +142,50 @@ impl DecisionAnchorLineages {
                 }
             }
             marked += 1;
+        }
+        let reference_candidate = reference_candidates.into_iter().find_map(|candidate| {
+            let selector_kind = purpose.selector_kind();
+            let selector_value = match selector_kind {
+                DecisionAnchorTargetKindV1::FunctionName => {
+                    canonical_function_name(&candidate.value)?
+                }
+                DecisionAnchorTargetKindV1::QualifiedName => {
+                    canonical_qualified_name(&candidate.value)
+                        .or_else(|| canonical_function_name(&candidate.value))?
+                }
+                DecisionAnchorTargetKindV1::GraphQuery
+                | DecisionAnchorTargetKindV1::Pattern
+                | DecisionAnchorTargetKindV1::NamePattern
+                | DecisionAnchorTargetKindV1::QualifiedNamePattern => return None,
+            };
+            let selector = Selector {
+                kind: selector_kind,
+                value: selector_value,
+            };
+            self.selectors
+                .get(&selector)
+                .and_then(Option::as_ref)
+                .is_some_and(|binding| binding.root_binding == root)
+                .then_some((candidate, selector))
+        });
+        if let Some((candidate, selector)) = reference_candidate {
+            let key = RecoverySelectorKey {
+                root_binding: root.to_string(),
+                purpose,
+            };
+            let reference = format!(
+                "{RECOVERY_SELECTOR_REFERENCE_PREFIX}{}",
+                uuid::Uuid::new_v4()
+            );
+            self.recovery_reference_selectors.insert(
+                reference.clone(),
+                RecoverySelectorReference {
+                    purpose,
+                    selector,
+                    provider_value: candidate.value,
+                },
+            );
+            self.recovery_references.insert(key, reference);
         }
         Some(marked)
     }
