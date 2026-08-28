@@ -265,6 +265,11 @@ impl DecisionAnchorState {
     }
 }
 
+pub(super) fn hash_recovery_identity_part(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
+}
+
 impl DecisionGap {
     pub(super) fn recovery_kind(self) -> GraphRecoveryEvidenceKindV1 {
         match self {

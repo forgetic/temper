@@ -597,18 +597,18 @@ mod tests {
                 "codebase_memory_get_code_snippet",
                 &failure_output("transport"),
             ),
-            DecisionAnchorTransition::Unchanged
+            DecisionAnchorTransition::ConventionalFallbackReleased
         );
         assert!(
-            !fallback.blocks_mutation("write"),
-            "the unavailable expected source read must permit conventional fallback"
+            fallback.blocks_mutation("write"),
+            "provider fallback still requires its own exact conventional read"
         );
         assert_eq!(
             fallback.on_tool_dispatched(
                 &source_call("retry", DecisionEvidenceKindV1::Implementation),
                 3,
             ),
-            legacy_graph_denial(),
+            conventional_fallback_graph_denial(),
             "fallback must not immediately reopen graph exploration"
         );
 

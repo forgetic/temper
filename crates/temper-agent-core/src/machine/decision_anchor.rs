@@ -30,7 +30,7 @@ mod settlement;
 
 use output::{
     anchor_output, graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
-    trusted_unavailable_provider_output,
+    trusted_unavailable_provider_output, valid_graph_correlation,
 };
 use progress::{AcceptedEvidence, ResultProgress};
 
@@ -73,6 +73,7 @@ pub(super) struct DecisionAnchorState {
     next_call_order: u64,
     later_roots: usize,
     non_progressing_batches: u8,
+    targeted_graph_authority_seen: bool,
     source_authorities: Vec<SourceTargetAuthority>,
     pending_exact_reads: BTreeMap<String, PendingExactRead>,
     exact_read_authorities: Vec<ExactReadAuthority>,
@@ -244,6 +245,7 @@ impl DecisionAnchorState {
             next_call_order: 0,
             later_roots: 0,
             non_progressing_batches: 0,
+            targeted_graph_authority_seen: false,
             source_authorities: Vec::new(),
             pending_exact_reads: BTreeMap::new(),
             exact_read_authorities: Vec::new(),
@@ -503,9 +505,7 @@ impl DecisionAnchorState {
                     graph_tool_for_name(finished.name),
                 )
         }) {
-            self.phase = None;
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::Unchanged;
+            return self.release_provider_fallback(anchors);
         }
 
         if finished
@@ -541,6 +541,11 @@ impl DecisionAnchorState {
                     self.enter_gap_recovery(anchors)
                 }
                 phase => {
+                    if phase.is_none() && self.targeted_graph_authority_seen {
+                        self.phase = Some(AnchorPhase::Exhausted(SourceEvidence::default()));
+                        self.exploration = ExplorationStatus::BudgetExhausted;
+                        return DecisionAnchorTransition::RecoveryExhausted;
+                    }
                     self.phase = phase;
                     self.exploration = ExplorationStatus::BudgetExhausted;
                     DecisionAnchorTransition::ExplorationExhausted
@@ -632,14 +637,9 @@ impl RecoveryTupleIdentity {
             .and_then(serde_json::Value::as_str)?;
         let mut digest = Sha256::new();
         digest.update(b"temper-rejected-recovery-tuple-v2\0");
-        hash_recovery_identity_part(&mut digest, active_root.as_bytes());
-        hash_recovery_identity_part(&mut digest, action.model_label().as_bytes());
-        hash_recovery_identity_part(&mut digest, selector.as_bytes());
+        admission::hash_recovery_identity_part(&mut digest, active_root.as_bytes());
+        admission::hash_recovery_identity_part(&mut digest, action.model_label().as_bytes());
+        admission::hash_recovery_identity_part(&mut digest, selector.as_bytes());
         Some(Self(digest.finalize().into()))
     }
-}
-
-fn hash_recovery_identity_part(digest: &mut Sha256, value: &[u8]) {
-    digest.update((value.len() as u64).to_be_bytes());
-    digest.update(value);
 }

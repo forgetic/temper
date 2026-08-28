@@ -12,6 +12,10 @@ impl DecisionAnchorState {
             self.settled_batches = self.settled_batches.saturating_add(1);
         }
         self.settle_exact_reads(completed);
+        self.targeted_graph_authority_seen |=
+            completed.iter().any(|(_, name, output, _, succeeded)| {
+                *succeeded && valid_graph_correlation(name, output)
+            });
         let finished = completed
             .iter()
             .filter_map(|(id, name, output, source_target, _)| {

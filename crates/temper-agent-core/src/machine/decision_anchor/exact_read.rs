@@ -205,8 +205,9 @@ impl DecisionAnchorState {
                 InvocationTargetAdmission::SourceNeutralProcess
                 | InvocationTargetAdmission::ControlPlane,
             ) => false,
-            Some(InvocationTargetAdmission::Mutation(_)) => {
-                self.phase.as_ref().is_some_and(|phase| match phase {
+            Some(InvocationTargetAdmission::Mutation(_)) => self.phase.as_ref().map_or(
+                self.targeted_graph_authority_seen,
+                |phase| match phase {
                     AnchorPhase::AwaitingExactRead(anchors) => {
                         !self.mutation_targets_authorized(anchors, admission)
                     }
@@ -218,10 +219,10 @@ impl DecisionAnchorState {
                     AnchorPhase::ConventionalFallback(_) => {
                         !self.conventional_mutation_targets_authorized(admission)
                     }
-                })
-            }
+                },
+            ),
             Some(InvocationTargetAdmission::Read(_) | InvocationTargetAdmission::Ineligible(_))
-            | None => self.phase.is_some(),
+            | None => self.phase.is_some() || self.targeted_graph_authority_seen,
         }
     }
 
