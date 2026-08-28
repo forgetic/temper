@@ -10,8 +10,8 @@ use jig_core::ScriptFile;
 use jig_server::FakeLlm;
 use serde::Serialize;
 use temper_protocol_activity::{AgentActivityCapturePolicyV1, CaptureModeV1};
-use temper_protocol_agent::OPERATOR_TRANSCRIPT_FLAG;
 use temper_protocol_agent::PROVIDER_CREDENTIALS_ENV;
+use temper_protocol_agent::{AgentSessionState, OPERATOR_TRANSCRIPT_FLAG};
 use temper_worker::{
     AgentRunOutput, AgentRunner, AgentRuntimeLimitsV1, OutOfProcessRunner, TraceCollector,
     WorkerAgentTraceConfig,
@@ -20,8 +20,8 @@ use temper_worker::{
 use crate::{
     AggregateError, AnalyzeOptions, ArtifactLayoutError, BenchmarkAggregateV1,
     BenchmarkArtifactLayout, BenchmarkConditionV1, BenchmarkModeV1, BenchmarkRunV1,
-    ReportWriteError, ResolvedBenchmarkManifest, TraceIngestError, TraceInputKindV1,
-    WorkspacePreparationError, aggregate_run_summaries, analyze_trace,
+    PreparedBenchmarkWorkspace, ReportWriteError, ResolvedBenchmarkManifest, TraceIngestError,
+    TraceInputKindV1, WorkspacePreparationError, aggregate_run_summaries, analyze_trace,
     collect_environment_metadata, load_benchmark_manifest, prepare_benchmark_workspace,
     render_aggregate_markdown, write_canonical_export, write_run_summary,
 };
@@ -286,7 +286,7 @@ fn run_repetition(
     repetition: u32,
     condition: Option<BenchmarkConditionV1>,
 ) -> Result<CompletedRepetition, BenchmarkRunError> {
-    let workspace = prepare_benchmark_workspace(manifest, repetition)?;
+    let workspace = prepare_direct_workspace(manifest, repetition)?;
     let paths = layout.snapshot_inputs(repetition, manifest, &workspace)?;
 
     let jig_script_path = match condition {
@@ -377,6 +377,15 @@ fn run_repetition(
         summary,
         agent_failure,
     })
+}
+
+fn prepare_direct_workspace(
+    manifest: &ResolvedBenchmarkManifest,
+    repetition: u32,
+) -> Result<PreparedBenchmarkWorkspace, BenchmarkRunError> {
+    let mut workspace = prepare_benchmark_workspace(manifest, repetition)?;
+    workspace.set_agent_session(AgentSessionState::new(uuid::Uuid::new_v4().to_string()));
+    Ok(workspace)
 }
 
 #[allow(clippy::too_many_arguments)]
