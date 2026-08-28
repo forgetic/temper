@@ -51,6 +51,28 @@ impl DecisionAnchorLineageRegistry {
             .record_source(&self.scope, &lineage, input, typed_parts);
         Some(lineage)
     }
+
+    pub(crate) fn recovery_selector_guidance(
+        &self,
+        lineage: &DecisionAnchorLineageV1,
+    ) -> Option<String> {
+        self.lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .recovery_selector_guidance(&lineage.root_binding)
+    }
+
+    pub(crate) fn expand_recovery_selector(
+        &self,
+        tool_name: &str,
+        input: &mut Value,
+        evidence_kind: Option<DecisionEvidenceKindV1>,
+    ) -> Result<(), ()> {
+        self.lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .expand_recovery_selector(tool_name, input, evidence_kind)
+    }
 }
 
 impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
@@ -206,6 +228,12 @@ impl DecisionAnchorLineages {
             }
             None => None,
         };
+        if self
+            .validate_recovery_selector(tool_name, input, evidence_purpose)
+            .is_err()
+        {
+            return Ineligible(MalformedSelector);
+        }
         let Some(selector) = self.selector_for_input(target_kind, input) else {
             return Ineligible(MalformedSelector);
         };

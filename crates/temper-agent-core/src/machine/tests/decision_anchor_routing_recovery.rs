@@ -75,6 +75,56 @@ fn cross_root_focused_test_cannot_complete_the_staged_implementation_root() {
 }
 
 #[test]
+fn trace_and_implementation_without_actionable_descendants_release_fallback() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    assert_eq!(
+        state.on_tool_finished(
+            "root",
+            "codebase_memory_search_graph",
+            &output_with_kinds(
+                "codebase_memory_search_graph",
+                ROOT,
+                DecisionAnchorLineageStageV1::Root,
+                &[DecisionAnchorTargetKindV1::QualifiedName],
+            ),
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
+            "implementation",
+            ROOT,
+            DecisionEvidenceKindV1::Implementation,
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+    state.on_tool_dispatched(&call("empty-caller-trace", "codebase_memory_trace_path"), 2);
+    assert_eq!(
+        state.on_tool_finished(
+            "empty-caller-trace",
+            "codebase_memory_trace_path",
+            &output_with_caller_discovery(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                CallerDiscoveryOutcomeV1::NoEligibleSelector,
+            ),
+        ),
+        DecisionAnchorTransition::ConventionalFallbackReleased,
+    );
+    assert_eq!(state.recovery_details(), None);
+    assert_eq!(
+        state.on_tool_dispatched(&source_call("blind-caller", DecisionEvidenceKindV1::Caller), 3),
+        conventional_fallback_graph_denial(),
+    );
+}
+
+#[test]
 fn focused_test_recovery_traverses_from_consumed_caller_then_reads_returned_test() {
     let mut state = focused_test_recovery_state();
 

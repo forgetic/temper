@@ -241,7 +241,7 @@ crates/temper-agent-core/src/machine/tests/decision_anchor.rs
 
 # Opaque decision-chain integration coverage keeps every bypass and the successful
 # exact-read route on one scripted provider/model fixture for comparable ordering.
-crates/temper-agent/tests/support/opaque_decision_chain.rs
+crates/temper-agent/tests/support/opaque_decision_chain/fake.rs
 
 # Typed lineage extraction cases share provider-shape fixtures across canonical
 # aliases, ambiguity rejection, mirrored parts, and privacy-safe digest evidence.

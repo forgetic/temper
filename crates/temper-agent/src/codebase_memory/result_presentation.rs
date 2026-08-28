@@ -3,6 +3,7 @@ use super::MAX_CODEBASE_MEMORY_OUTPUT_BYTES;
 /// Neutral marker for one complete typed wrapper result. The pure machine
 /// appends the authoritative active-root classification after settlement.
 pub(super) const DECISION_ANCHOR: &str = "\n\n[Decision anchor: complete typed graph result; active-root eligibility is pending the stateful Decision guidance appended after this result. Do not choose a dependent graph call until that guidance classifies this result.]";
+pub(super) const RECOVERY_SELECTOR_GUIDANCE_RESERVE_BYTES: usize = 768;
 
 pub(super) struct PresentedResult {
     pub(super) text: String,
@@ -18,7 +19,9 @@ pub(super) fn present_result(
     correlation: Option<&temper_protocol_activity::GraphCorrelationV1>,
 ) -> PresentedResult {
     let max_result_bytes = if correlation.is_some() {
-        MAX_CODEBASE_MEMORY_OUTPUT_BYTES.saturating_sub(DECISION_ANCHOR.len())
+        MAX_CODEBASE_MEMORY_OUTPUT_BYTES
+            .saturating_sub(DECISION_ANCHOR.len())
+            .saturating_sub(RECOVERY_SELECTOR_GUIDANCE_RESERVE_BYTES)
     } else {
         MAX_CODEBASE_MEMORY_OUTPUT_BYTES
     };

@@ -232,7 +232,7 @@ fn wrapper_carries_only_typed_equivalent_provider_identities_under_one_opaque_ro
 }
 
 #[test]
-fn wrapper_uses_private_typed_parts_without_changing_model_text_or_details() {
+fn wrapper_adds_only_opaque_recovery_references_to_private_typed_parts() {
     const PRIVATE_TYPED_VALUE: &str = "PRIVATE-TYPED-PART-SENTINEL";
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");
@@ -276,7 +276,8 @@ fn wrapper_uses_private_typed_parts_without_changing_model_text_or_details() {
         let root = lineage(&root_output);
         let root_text = output_text(&root_output);
         assert!(root_text.starts_with("MODEL-VISIBLE-TYPED-RESULT symbol=run"));
-        assert!(root_text.ends_with(DECISION_ANCHOR));
+        assert!(root_text.contains(DECISION_ANCHOR));
+        assert!(root_text.contains("[Recovery selector references:"));
         assert!(
             !root_text.contains(PRIVATE_TYPED_VALUE),
             "structured-only values must not alter model-visible text"

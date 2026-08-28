@@ -94,6 +94,18 @@ impl Tool for CodebaseMemoryTool {
                 }
             };
 
+        if self
+            .decision_anchor_lineages
+            .expand_recovery_selector(&self.public_name, &mut input, decision_evidence_kind)
+            .is_err()
+        {
+            let timings = ToolCallTimings {
+                duration_ms: budget.elapsed_ms(),
+                ..ToolCallTimings::default()
+            };
+            return Ok(self.failed_output("", ToolFailureCategory::InvalidModelInput, timings));
+        }
+
         let scope = Arc::clone(&self.scope);
         let mcp_name = self.mcp_name.clone();
         let default_project_key = self.default_project_key;
@@ -256,6 +268,10 @@ impl Tool for CodebaseMemoryTool {
                 })
             })
             .flatten();
+        let recovery_selector_guidance = decision_anchor_lineage.as_ref().and_then(|lineage| {
+            self.decision_anchor_lineages
+                .recovery_selector_guidance(lineage)
+        });
 
         emit_mcp_tool_result(McpToolResult {
             tool_name: &self.public_name,
@@ -288,9 +304,18 @@ impl Tool for CodebaseMemoryTool {
             details[SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY] =
                 serde_json::to_value(lineage).expect("decision-anchor lineage serializes");
         }
+        let mut model_text = presented.text;
+        if let Some(guidance) = recovery_selector_guidance {
+            debug_assert!(
+                guidance.len()
+                    <= super::result_presentation::RECOVERY_SELECTOR_GUIDANCE_RESERVE_BYTES
+            );
+            model_text.push_str("\n\n");
+            model_text.push_str(&guidance);
+        }
         Ok(ToolOutput {
             content: vec![ContentBlock::Text(TextContent {
-                text: presented.text,
+                text: model_text,
                 text_signature: None,
             })],
             details: Some(details),

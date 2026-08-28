@@ -15,7 +15,7 @@ TOOLS = [
 def opaque():
     return "crate::opaque_" + uuid.uuid4().hex
 
-targets = {name: opaque() for name in ["root", "refinement", "implementation", "caller", "behavior"]}
+targets = {name: opaque() for name in ["root", "refinement", "implementation", "caller", "behavior", "selectorless_implementation"]}
 fallback_targets = [f"crate.fallback.nonviable_{index}" for index in range(3)]
 
 def send(value):
@@ -50,11 +50,23 @@ def response(name, args):
         )
     if name == "search_code":
         pattern = args.get("pattern")
+        if pattern == "selectorless-viable-root":
+            return result(
+                current_root=targets["root"],
+                next=targets["selectorless_implementation"],
+                qualified_name=targets["selectorless_implementation"],
+            )
         if pattern in {"nonviable-one", "nonviable-two", "nonviable-three"}:
             index = ["nonviable-one", "nonviable-two", "nonviable-three"].index(pattern)
             return result(qualified_name=fallback_targets[index])
         next = targets["implementation"] if pattern == targets["refinement"] else opaque()
         return result(next=next, qualified_name=next)
+    if name == "trace_path" and args.get("function_name") == targets["selectorless_implementation"]:
+        return {
+            "function": {"qualified_name": targets["selectorless_implementation"]},
+            "callers": [],
+            "results": [{"qualified_name": targets["selectorless_implementation"]}],
+        }
     if name == "trace_path" and args.get("function_name") in fallback_targets:
         return {
             "function": {"qualified_name": args.get("function_name")},
@@ -75,6 +87,14 @@ def response(name, args):
         }
     if name == "trace_path":
         return result(next=opaque(), qualified_name=opaque())
+    if name == "get_code_snippet" and args.get("qualified_name") == targets["selectorless_implementation"]:
+        return result(
+            next=targets["selectorless_implementation"],
+            qualified_name=targets["selectorless_implementation"],
+            file_path="EVIDENCE.md",
+            source=opaque(),
+            implementation_source=opaque(),
+        )
     if name == "get_code_snippet" and args.get("qualified_name") in fallback_targets:
         return result(
             qualified_name=args.get("qualified_name"),
