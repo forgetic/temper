@@ -108,6 +108,7 @@ impl DecisionAnchorLineages {
         target_kind: GraphCorrelationTargetKindV1,
         input: &Value,
         root: &str,
+        result_candidates: &BTreeSet<Candidate>,
         origin: SelectorOrigin,
     ) -> Option<()> {
         let selector = self.selector_for_input(target_kind, input)?;
@@ -125,12 +126,43 @@ impl DecisionAnchorLineages {
                             .is_disjoint(&identity_digests))
                     .then_some(Candidate {
                         kind: selector.kind,
+                        provider_kind: result_candidates
+                            .iter()
+                            .filter(|candidate| {
+                                candidate.kind == selector.kind && candidate.value == selector.value
+                            })
+                            .min_by_key(|candidate| candidate.provider_kind != candidate.kind)
+                            .map(|candidate| candidate.provider_kind)
+                            .unwrap_or_else(|| {
+                                if selector.kind == DecisionAnchorTargetKindV1::QualifiedName
+                                    && canonical_qualified_name(&selector.value).is_none()
+                                {
+                                    DecisionAnchorTargetKindV1::FunctionName
+                                } else {
+                                    selector.kind
+                                }
+                            }),
                         value: selector.value.clone(),
                     })
                 })
             })
             .collect();
-        self.mark_candidates(root, equivalents, origin).map(|_| ())
+        self.mark_candidates(root, equivalents, origin)?;
+        if matches!(origin, SelectorOrigin::ImplementationEvidenceResult { .. })
+            && target_kind == GraphCorrelationTargetKindV1::QualifiedName
+        {
+            let provider_value = input.get("qualified_name")?.as_str()?;
+            (!provider_value.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX)).then_some(())?;
+            let key = RecoverySelectorKey {
+                root_binding: root.to_string(),
+                purpose: RecoverySelectorPurpose::ImplementationTrace,
+            };
+            let reference = self.recovery_references.get(&key)?.clone();
+            let recovery = self.recovery_reference_selectors.get_mut(&reference)?;
+            recovery.source_selector = Some(selector);
+            recovery.source_provider_value = Some(provider_value.to_string());
+        }
+        Some(())
     }
 }
 

@@ -56,6 +56,26 @@ fn jig_defers_partial_implementation_traversal_then_completes_typed_evidence() {
         1,
         "the immediate traversal over partial caller metadata must stay local",
     );
+    assert_eq!(
+        calls[1]["arguments"]["qualified_name"],
+        PARTIAL_IMPLEMENTATION
+    );
+    assert_eq!(
+        calls[2]["arguments"]["qualified_name"], PARTIAL_IMPLEMENTATION,
+        "the readiness source recheck must retain the exact qualified provider selector",
+    );
+    assert_eq!(calls[3]["arguments"]["function_name"], PARTIAL_FUNCTION);
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| {
+                call["name"] == "get_code_snippet"
+                    && call["arguments"]["qualified_name"] == PARTIAL_FUNCTION
+            })
+            .count(),
+        0,
+        "the source recheck must not use the suffix-resolvable function selector",
+    );
 }
 
 fn partial_readiness_reply(view: &RequestView) -> Reply {

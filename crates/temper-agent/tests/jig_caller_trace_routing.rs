@@ -19,6 +19,8 @@ mod coding_agent_workspace;
 use coding_agent_workspace::{REPO_DIR, TempCheckout};
 
 const IMPLEMENTATION: &str = "crate::routing::select_worker";
+const PARTIAL_IMPLEMENTATION: &str = "temper-v1-private.src.routing.worker_slot";
+const PARTIAL_FUNCTION: &str = "worker_slot";
 const CALLER: &str = "crate::delivery::dispatch";
 const FOCUSED_TEST: &str = "crate::tests::keeps_affinity";
 #[path = "jig_caller_trace_routing/context.rs"]
@@ -384,10 +386,12 @@ fn caller_relationship(view: &RequestView) -> String {
     provider_results(view)
         .into_iter()
         .find(|result| {
-            result
-                .pointer("/function/qualified_name")
-                .and_then(JsonValue::as_str)
-                == Some(IMPLEMENTATION)
+            matches!(
+                result
+                    .pointer("/function/qualified_name")
+                    .and_then(JsonValue::as_str),
+                Some(IMPLEMENTATION) | Some(PARTIAL_IMPLEMENTATION)
+            )
         })
         .and_then(|result| {
             result
@@ -560,7 +564,7 @@ for line in sys.stdin:
             selected = arguments.get("pattern")
             if selected == "partial select worker":
                 partial_implementation_reads = 0
-                result(request["id"], {"results": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
+                result(request["id"], {"results": [{"qualified_name": "temper-v1-private.src.routing.worker_slot", "name": "worker_slot"}]})
             elif selected == SEMANTIC_IMPLEMENTATION:
                 result(request["id"], {"results": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}]})
             else:
@@ -568,7 +572,10 @@ for line in sys.stdin:
         elif name == "trace_path":
             selected = arguments.get("function_name")
             assert arguments.get("direction") == "inbound"
-            if selected == IMPLEMENTATION:
+            if selected == "worker_slot":
+                assert partial_implementation_reads is not None
+                result(request["id"], {"function": {"qualified_name": "temper-v1-private.src.routing.worker_slot", "name": "worker_slot"}, "direction": "inbound", "complete": True, "callers": [{"qualified_name": CALLER, "name": "dispatch"}]})
+            elif selected == IMPLEMENTATION:
                 assert not arguments.get("include_tests", False)
                 result(request["id"], {"function": {"qualified_name": IMPLEMENTATION, "name": "select_worker"}, "direction": "inbound", "complete": True, "callers": [{"qualified_name": CALLER, "name": "dispatch"}]})
             elif selected == CALLER:
@@ -589,7 +596,13 @@ for line in sys.stdin:
                 raise AssertionError("unexpected trace selector " + str(selected))
         elif name == "get_code_snippet":
             selected = arguments.get("qualified_name")
-            if selected == IMPLEMENTATION:
+            if selected in ("temper-v1-private.src.routing.worker_slot", "worker_slot"):
+                payload = {"qualified_name": "temper-v1-private.src.routing.worker_slot", "name": "worker_slot", "file_path": "ROUTE.md", "source": "partial implementation source"}
+                if partial_implementation_reads is not None:
+                    partial_implementation_reads += 1
+                payload["callers"] = 1 if partial_implementation_reads == 1 else [{"qualified_name": CALLER, "name": "dispatch"}]
+                result(request["id"], payload)
+            elif selected == IMPLEMENTATION:
                 payload = {"qualified_name": IMPLEMENTATION, "name": "select_worker", "file_path": "ROUTE.md", "source": "implementation source"}
                 if partial_implementation_reads is not None:
                     partial_implementation_reads += 1

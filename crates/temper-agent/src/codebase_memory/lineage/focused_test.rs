@@ -110,14 +110,16 @@ impl DecisionAnchorLineages {
         };
         let mut reference_candidates = candidates.iter().cloned().collect::<Vec<_>>();
         reference_candidates.sort_by_key(|candidate| {
-            if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName
-                && candidate.value.contains("::")
+            if candidate.kind == purpose.selector_kind()
+                && candidate.provider_kind == purpose.selector_kind()
             {
                 0
-            } else if candidate.kind == purpose.selector_kind() {
+            } else if candidate.kind == candidate.provider_kind {
                 1
-            } else {
+            } else if candidate.kind == purpose.selector_kind() {
                 2
+            } else {
+                3
             }
         });
         let mut marked = 0;
@@ -224,8 +226,9 @@ impl DecisionAnchorLineages {
                 RecoverySelectorReference {
                     purpose,
                     selector,
-                    source_selector,
-                    provider_value: candidate.value,
+                    provider_value: candidate.value.clone(),
+                    source_selector: source_selector.clone(),
+                    source_provider_value: source_selector.map(|_| candidate.value),
                 },
             );
             self.recovery_references.insert(key, reference);
@@ -320,6 +323,7 @@ pub(super) fn source_confirms_exact_test(
         focused.has_test_classification
             && focused.exact_source_candidates.contains(&Candidate {
                 kind: selector.kind,
+                provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
                 value: selector.value.clone(),
             })
     })
@@ -547,6 +551,7 @@ fn collect_direct_exact_source_candidates(
     {
         candidates.insert(Candidate {
             kind: DecisionAnchorTargetKindV1::QualifiedName,
+            provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
             value: identity,
         });
     }
@@ -560,6 +565,7 @@ fn canonical_source_selector(value: &str) -> Option<String> {
 fn insert_exact_source_candidate(candidates: &mut BTreeSet<Candidate>, value: &str) -> Option<()> {
     candidates.insert(Candidate {
         kind: DecisionAnchorTargetKindV1::QualifiedName,
+        provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
         value: canonical_source_selector(value)?,
     });
     Some(())

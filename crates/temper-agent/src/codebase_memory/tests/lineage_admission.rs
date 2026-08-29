@@ -252,7 +252,8 @@ fn implementation_snapshot_with_caller_names_is_immediately_traversal_ready() {
 
 #[test]
 fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
-    const PRIVATE_SELECTOR: &str = "crate::private::engine::run";
+    const PRIVATE_SELECTOR: &str = "temper-v1-private.src.engine.run";
+    const FUNCTION_SELECTOR: &str = "run";
     let mut lineages = DecisionAnchorLineages::default();
     let root = lineages
         .record(
@@ -268,7 +269,8 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
             &correlation(GraphCorrelationTargetKindV1::QualifiedName),
             &serde_json::json!({"qualified_name": PRIVATE_SELECTOR}),
             Some(&structured_parts(serde_json::json!({
-                "qualified_name": PRIVATE_SELECTOR
+                "qualified_name": PRIVATE_SELECTOR,
+                "name": FUNCTION_SELECTOR
             }))),
             Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
         )
@@ -305,7 +307,7 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
             None,
         )
         .unwrap();
-    assert_eq!(trace_input["function_name"], PRIVATE_SELECTOR);
+    assert_eq!(trace_input["function_name"], FUNCTION_SELECTOR);
 
     let unknown_reference = format!("{reference}-inexact");
     let mut unknown_input = serde_json::json!({"function_name": unknown_reference});
@@ -338,6 +340,10 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
         )
         .unwrap();
     assert_eq!(source_input["qualified_name"], PRIVATE_SELECTOR);
+    assert_ne!(
+        source_input["qualified_name"], trace_input["function_name"],
+        "one opaque reference must retain tool-specific provider selector forms",
+    );
 
     let mut wrong_purpose = serde_json::json!({"qualified_name": reference});
     assert!(
