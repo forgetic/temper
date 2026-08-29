@@ -266,6 +266,88 @@ fn acceptance_002_through_005_missing_stages_have_one_deterministic_continuation
     ));
 }
 
+#[test]
+fn incomplete_traversal_is_denied_without_spending_recovery_and_then_recovers() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    state.on_tool_finished(
+        "root",
+        "codebase_memory_search_graph",
+        &output(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        ),
+    );
+    state.take_model_guidance();
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    finish_with_evidence(
+        &mut state,
+        "implementation",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.take_model_guidance();
+
+    let scrubbed = call("missing-function-name", crate::REJECTED_TOOL_NAME);
+    assert_eq!(
+        state.on_tool_batch_dispatched_with_closed_inputs(
+            &[scrubbed],
+            2,
+            &[None],
+            &[None],
+            &[Some(GraphCorrelationToolV1::TracePath)],
+        ),
+        [recovery_graph_denial(
+            [
+                GraphRecoveryEvidenceKindV1::Trace,
+                GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ],
+            4,
+        )],
+    );
+    let denied = one_guidance(&mut state);
+    assert!(denied.contains("result=non_progress"));
+    assert!(denied.contains(
+        "required next stage=[trace_path/function_name/trace/selector=implementation_evidence_result/relationship=calls/direction=inbound]"
+    ));
+
+    let mut recovered = call("complete-trace", "codebase_memory_trace_path");
+    recovered.arguments = serde_json::json!({
+        "function_name": "provider-returned-implementation",
+        "direction": "inbound",
+    });
+    let admission = EligibleLineageAdmission::implementation_caller_traversal(
+        ROOT.to_string(),
+        DecisionAnchorTargetKindV1::FunctionName,
+    )
+    .unwrap();
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &recovered,
+            3,
+            Some(&LineageAdmissionOutcome::Eligible(admission)),
+        ),
+        None,
+    );
+    state.on_tool_finished(
+        "complete-trace",
+        "codebase_memory_trace_path",
+        &output_with_caller_discovery(
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+            CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
+        ),
+    );
+    let recovered = one_guidance(&mut state);
+    assert!(recovered.contains("accepted evidence=[trace]"));
+    assert!(recovered.contains("get_code_snippet/qualified_name/caller"));
+}
+
 fn state_through_caller_trace() -> DecisionAnchorState {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);

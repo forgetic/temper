@@ -26,6 +26,8 @@ mod context;
 use context::workspace_context;
 #[path = "jig_caller_trace_routing/focused_test_fallback.rs"]
 mod focused_test_fallback;
+#[path = "jig_caller_trace_routing/incomplete_selector.rs"]
+mod incomplete_selector;
 #[path = "jig_caller_trace_routing/semantic_routing.rs"]
 mod semantic_routing;
 static JIG_LOCK: Mutex<()> = Mutex::new(());

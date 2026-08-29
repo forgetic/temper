@@ -62,6 +62,7 @@ impl DecisionAnchorState {
 
     /// Adds canonical ordinary target facts to the immutable graph-recovery
     /// snapshot. Both admission vectors are wrapper-owned and content-free.
+    #[cfg(test)]
     pub(in crate::machine) fn on_tool_batch_dispatched_with_admissions_and_targets(
         &mut self,
         calls: &[ToolCall],
@@ -69,8 +70,26 @@ impl DecisionAnchorState {
         admissions: &[Option<LineageAdmissionOutcome>],
         invocation_targets: &[Option<InvocationTargetAdmission>],
     ) -> Vec<Option<ToolCallDenial>> {
+        self.on_tool_batch_dispatched_with_closed_inputs(
+            calls,
+            turn,
+            admissions,
+            invocation_targets,
+            &vec![None; calls.len()],
+        )
+    }
+
+    pub(in crate::machine) fn on_tool_batch_dispatched_with_closed_inputs(
+        &mut self,
+        calls: &[ToolCall],
+        turn: usize,
+        admissions: &[Option<LineageAdmissionOutcome>],
+        invocation_targets: &[Option<InvocationTargetAdmission>],
+        incomplete_graph_selectors: &[Option<GraphCorrelationToolV1>],
+    ) -> Vec<Option<ToolCallDenial>> {
         debug_assert_eq!(calls.len(), admissions.len());
         debug_assert_eq!(calls.len(), invocation_targets.len());
+        debug_assert_eq!(calls.len(), incomplete_graph_selectors.len());
         let snapshot = self.staged_admission_snapshot();
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
@@ -78,19 +97,30 @@ impl DecisionAnchorState {
         let mut local_rejections = Vec::new();
         let mut denials = Vec::with_capacity(calls.len());
 
-        for ((call, admission), invocation_target) in
-            calls.iter().zip(admissions).zip(invocation_targets)
+        for (((call, admission), invocation_target), incomplete_graph_selector) in calls
+            .iter()
+            .zip(admissions)
+            .zip(invocation_targets)
+            .zip(incomplete_graph_selectors)
         {
             let order = self.next_call_order;
             self.next_call_order = self.next_call_order.saturating_add(1);
             let mut denial = None;
-            if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+            if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX)
+                || incomplete_graph_selector.is_some()
+            {
                 let eligible = match admission.as_ref() {
                     Some(LineageAdmissionOutcome::Eligible(admission)) => Some(admission),
                     Some(LineageAdmissionOutcome::Ineligible(_)) | None => None,
                 };
-                let requested_gap = DecisionGap::from_call(call);
-                let requested_action = DecisionGap::recovery_action_for_call(call);
+                let requested_gap = incomplete_graph_selector
+                    .is_some_and(|tool| tool == GraphCorrelationToolV1::TracePath)
+                    .then_some(DecisionGap::Trace)
+                    .or_else(|| DecisionGap::from_call(call));
+                let requested_action = DecisionGap::recovery_action_for_call(call).or_else(|| {
+                    requested_gap
+                        .map(|gap| GraphRecoveryActionV1::for_evidence(gap.recovery_kind()))
+                });
                 let recovery_gap = eligible
                     .and_then(DecisionGap::from_admission)
                     .or_else(|| admission.is_none().then_some(requested_gap).flatten());
@@ -102,7 +132,7 @@ impl DecisionAnchorState {
                     // Tests and non-codebase-memory compositions retain the
                     // legacy typed-call path without interpreting a selector.
                     .or_else(|| {
-                        (admission.is_none())
+                        (admission.is_none() && incomplete_graph_selector.is_none())
                             .then(|| {
                                 snapshot
                                     .as_ref()
@@ -119,7 +149,7 @@ impl DecisionAnchorState {
                 let already_rejected = tuple_identity
                     .is_some_and(|identity| self.rejected_recovery_tuples.contains(&identity));
 
-                let staged_call = admission.is_some()
+                let staged_call = (admission.is_some() || incomplete_graph_selector.is_some())
                     && snapshot.as_ref().is_some_and(|snapshot| {
                         requested_action.is_some()
                             && admitted_root
@@ -167,7 +197,7 @@ impl DecisionAnchorState {
                     }
                 }
 
-                if denial.is_none() {
+                if denial.is_none() && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
                     if let Some(call_key) = call_key {
                         self.calls.insert(
                             call_key,

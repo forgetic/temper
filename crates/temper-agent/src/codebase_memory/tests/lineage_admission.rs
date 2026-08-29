@@ -35,6 +35,29 @@ fn exact_selectors_resolve_before_provider_with_only_closed_values() {
             Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
         )
         .unwrap();
+    for (input, expected) in [
+        (
+            serde_json::json!({}),
+            LineageAdmissionStatus::MalformedSelector,
+        ),
+        (
+            serde_json::json!({"function_name": ""}),
+            LineageAdmissionStatus::MalformedSelector,
+        ),
+        (
+            serde_json::json!({"qualified_name": PRIVATE_SELECTOR}),
+            LineageAdmissionStatus::IncapableSelection,
+        ),
+        (
+            serde_json::json!({"function_name": "not_returned"}),
+            LineageAdmissionStatus::UnknownSelector,
+        ),
+    ] {
+        assert_eq!(
+            lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &input),
+            LineageAdmissionOutcome::Ineligible(expected),
+        );
+    }
     let admission = lineages.resolve(
         GraphCorrelationToolV1::TracePath.public_name(),
         &serde_json::json!({"function_name": "run"}),
