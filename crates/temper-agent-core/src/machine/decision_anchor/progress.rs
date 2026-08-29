@@ -117,6 +117,19 @@ impl DecisionAnchorState {
         ));
     }
 
+    pub(super) fn queue_local_traversal_readiness_guidance(
+        &mut self,
+        rejected_action: Option<GraphRecoveryActionV1>,
+    ) {
+        let snapshot = self.guidance_snapshot();
+        let mut guidance =
+            snapshot.model_message(ResultDisposition::NonProgress, &BTreeSet::new(), None);
+        if rejected_action.is_some() {
+            guidance.push_str(" [Traversal readiness: the current-root traversal was locally deferred because its typed provider snapshot reported callers without caller identities; no provider call or recovery allowance was consumed. Retry the required traversal once in the next model turn.]");
+        }
+        self.model_guidance.push(guidance);
+    }
+
     pub(in crate::machine) fn take_model_guidance(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_guidance)
     }

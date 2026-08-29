@@ -95,6 +95,7 @@ impl DecisionAnchorState {
         let mut admitted_actions = Vec::new();
         let mut admitted_count = 0u8;
         let mut local_rejections = Vec::new();
+        let mut local_readiness_deferrals = Vec::new();
         let mut denials = Vec::with_capacity(calls.len());
 
         for (((call, admission), invocation_target), incomplete_graph_selector) in calls
@@ -109,6 +110,12 @@ impl DecisionAnchorState {
             if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX)
                 || incomplete_graph_selector.is_some()
             {
+                let traversal_not_ready = matches!(
+                    admission,
+                    Some(LineageAdmissionOutcome::Ineligible(
+                        crate::LineageAdmissionStatus::TraversalNotReady
+                    ))
+                );
                 let eligible = match admission.as_ref() {
                     Some(LineageAdmissionOutcome::Eligible(admission)) => Some(admission),
                     Some(LineageAdmissionOutcome::Ineligible(_)) | None => None,
@@ -207,7 +214,9 @@ impl DecisionAnchorState {
                             || self.graph_exploration_denial(),
                             |snapshot| snapshot.denial.clone(),
                         ));
-                        if requested_action.is_some() {
+                        if traversal_not_ready {
+                            local_readiness_deferrals.push(requested_action);
+                        } else if requested_action.is_some() {
                             let excluded = already_rejected
                                 || tuple_identity.is_some_and(|identity| {
                                     self.rejected_recovery_tuples.insert(identity)
@@ -261,6 +270,9 @@ impl DecisionAnchorState {
 
         for (action, excluded) in local_rejections {
             self.queue_local_denial_guidance(action, excluded);
+        }
+        for action in local_readiness_deferrals {
+            self.queue_local_traversal_readiness_guidance(action);
         }
         denials
     }

@@ -376,6 +376,88 @@ fn incomplete_traversal_is_denied_without_spending_recovery_and_then_recovers() 
     assert!(recovered.contains("get_code_snippet/qualified_name/caller"));
 }
 
+#[test]
+fn partial_traversal_readiness_defers_locally_without_excluding_the_retry() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    state.on_tool_finished(
+        "root",
+        "codebase_memory_search_graph",
+        &output(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        ),
+    );
+    state.take_model_guidance();
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    finish_with_evidence(
+        &mut state,
+        "implementation",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.take_model_guidance();
+
+    let mut trace = call("partial-trace", "codebase_memory_trace_path");
+    trace.arguments = serde_json::json!({
+        "function_name": "provider-returned-implementation",
+        "direction": "inbound",
+    });
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &trace,
+            2,
+            Some(&LineageAdmissionOutcome::Ineligible(
+                LineageAdmissionStatus::TraversalNotReady,
+            )),
+        ),
+        recovery_graph_denial(
+            [
+                GraphRecoveryEvidenceKindV1::Trace,
+                GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ],
+            4,
+        ),
+    );
+    let guidance = state.take_model_guidance();
+    assert_eq!(guidance.len(), 1);
+    assert!(guidance[0].contains("remaining allowance=n/a"));
+    assert!(guidance[0].contains("required next stage=[trace_path/function_name/trace/"));
+    assert!(!guidance[0].contains("do not repeat that selector value"));
+    assert!(guidance[0].contains("locally deferred"));
+    assert!(guidance[0].contains("no provider call or recovery allowance was consumed"));
+
+    let admission = EligibleLineageAdmission::implementation_caller_traversal(
+        ROOT.to_string(),
+        DecisionAnchorTargetKindV1::FunctionName,
+    )
+    .unwrap();
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &trace,
+            3,
+            Some(&LineageAdmissionOutcome::Eligible(admission)),
+        ),
+        None,
+    );
+    state.on_tool_finished(
+        "partial-trace",
+        "codebase_memory_trace_path",
+        &output_with_caller_discovery(
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+            CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
+        ),
+    );
+    let recovered = one_guidance(&mut state);
+    assert!(recovered.contains("accepted evidence=[trace]"));
+}
+
 fn state_through_caller_trace() -> DecisionAnchorState {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);

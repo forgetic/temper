@@ -76,6 +76,13 @@ impl DecisionAnchorLineageRegistry {
 }
 
 impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
+    fn advance_local_traversal_readiness(&self) {
+        self.lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .advance_local_traversal_readiness();
+    }
+
     fn resolve(&self, tool_name: &str, arguments: &Value) -> LineageAdmissionOutcome {
         let mut lineages = self
             .lineages
@@ -108,7 +115,7 @@ impl DecisionAnchorLineages {
         use LineageAdmissionOutcome::{Eligible, Ineligible};
         use LineageAdmissionStatus::{
             AmbiguousSelector, BroadSelector, IncapableSelection, MalformedSelector,
-            UnknownSelector, UnsupportedTool,
+            TraversalNotReady, UnknownSelector, UnsupportedTool,
         };
 
         let Some(tool_kind) = GraphCorrelationToolV1::from_public_name(tool_name) else {
@@ -238,6 +245,28 @@ impl DecisionAnchorLineages {
         let Some(selector) = self.selector_for_input(target_kind, input) else {
             return Ineligible(MalformedSelector);
         };
+        if tool_kind == GraphCorrelationToolV1::TracePath
+            && recovery_purpose.is_none()
+            && self
+                .selectors
+                .get(&selector)
+                .and_then(Option::as_ref)
+                .is_some_and(|binding| {
+                    binding.implementation_evidence_result
+                        && binding.implementation_traversal_readiness
+                            != super::ImplementationTraversalReadiness::Ready
+                })
+        {
+            if let Some(Some(binding)) = self.selectors.get_mut(&selector) {
+                if binding.implementation_traversal_readiness
+                    == super::ImplementationTraversalReadiness::Partial
+                {
+                    binding.implementation_traversal_readiness =
+                        super::ImplementationTraversalReadiness::LocallyDeferred;
+                }
+            }
+            return Ineligible(TraversalNotReady);
+        }
         let binding = match self.selectors.get(&selector) {
             Some(Some(binding)) => binding,
             Some(None) => return Ineligible(AmbiguousSelector),
@@ -302,5 +331,16 @@ impl DecisionAnchorLineages {
         )
         .map(Eligible)
         .unwrap_or(Ineligible(IncapableSelection))
+    }
+
+    pub(in crate::codebase_memory) fn advance_local_traversal_readiness(&mut self) {
+        for binding in self.selectors.values_mut().flatten() {
+            if binding.implementation_traversal_readiness
+                == super::ImplementationTraversalReadiness::LocallyDeferred
+            {
+                binding.implementation_traversal_readiness =
+                    super::ImplementationTraversalReadiness::Ready;
+            }
+        }
     }
 }

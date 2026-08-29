@@ -32,8 +32,8 @@ use recovery_selector::{
     RecoverySelectorReference,
 };
 use selection::{
-    canonical_function_name, canonical_qualified_name, provider_caller_candidates,
-    terminal_function_name,
+    canonical_function_name, canonical_qualified_name, implementation_traversal_ready,
+    provider_caller_candidates, terminal_function_name,
 };
 
 #[derive(Default)]
@@ -68,6 +68,14 @@ struct SelectorBinding {
     caller_evidence_result: bool,
     focused_test_result: bool,
     focused_test_confirmation_required: bool,
+    implementation_traversal_readiness: ImplementationTraversalReadiness,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImplementationTraversalReadiness {
+    Ready,
+    Partial,
+    LocallyDeferred,
 }
 
 impl DecisionAnchorLineages {
@@ -189,11 +197,12 @@ impl DecisionAnchorLineages {
                     )?;
                 }
                 if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Implementation) {
+                    let traversal_ready = implementation_traversal_ready(typed_parts);
                     self.mark_input_selector(
                         correlation.target_kind,
                         input,
                         &root_binding,
-                        SelectorOrigin::ImplementationEvidenceResult,
+                        SelectorOrigin::ImplementationEvidenceResult { traversal_ready },
                     )?;
                 }
                 if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Caller) {

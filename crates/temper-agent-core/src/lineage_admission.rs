@@ -25,6 +25,10 @@ pub type LineageAdmissionHandle = Arc<dyn LineageAdmissionResolver>;
 pub trait LineageAdmissionResolver: Send + Sync {
     fn resolve(&self, tool_name: &str, arguments: &Value) -> LineageAdmissionOutcome;
 
+    /// Advances selectors deferred for one model turn while their provider
+    /// result was only partially enriched.
+    fn advance_local_traversal_readiness(&self) {}
+
     fn resolve_source_target(&self, _lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
         TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
     }
@@ -123,6 +127,7 @@ pub enum LineageAdmissionStatus {
     BroadSelector,
     UnsupportedTool,
     IncapableSelection,
+    TraversalNotReady,
 }
 
 /// Closed pre-provider result. Neither variant can retain a raw selector.

@@ -88,6 +88,8 @@ impl DecisionAnchorLineages {
                             caller_evidence_result: false,
                             focused_test_result: false,
                             focused_test_confirmation_required: false,
+                            implementation_traversal_readiness:
+                                ImplementationTraversalReadiness::Ready,
                         }),
                     );
                 }
@@ -131,6 +133,72 @@ impl DecisionAnchorLineages {
             })
             .collect();
         self.mark_candidates(root, equivalents, origin).map(|_| ())
+    }
+}
+
+pub(super) fn implementation_traversal_ready(typed_parts: Option<&[McpToolResultPart]>) -> bool {
+    let mut positive_caller_count = false;
+    let mut caller_identity = false;
+    for part in typed_parts.unwrap_or_default() {
+        let value = match part {
+            McpToolResultPart::StructuredContent(value) => {
+                value.is_object().then_some(value.clone())
+            }
+            McpToolResultPart::Content(block) => content_part_json(block).flatten(),
+        };
+        if let Some(value) = value {
+            collect_traversal_readiness(&value, &mut positive_caller_count, &mut caller_identity);
+        }
+    }
+    !positive_caller_count || caller_identity
+}
+
+fn collect_traversal_readiness(
+    value: &Value,
+    positive_caller_count: &mut bool,
+    caller_identity: &mut bool,
+) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_traversal_readiness(value, positive_caller_count, caller_identity);
+            }
+        }
+        Value::Object(values) => {
+            for (field, value) in values {
+                match field.as_str() {
+                    "callers" | "caller_list" | "callerList" | "caller_functions"
+                    | "callerFunctions" => {
+                        if value.as_u64().is_some_and(|count| count > 0) {
+                            *positive_caller_count = true;
+                        } else if let Some(values) = value.as_array() {
+                            let mut candidates = BTreeMap::new();
+                            if collect_reference_list(value, &mut candidates).is_some()
+                                && !values.is_empty()
+                                && !candidates.is_empty()
+                            {
+                                *caller_identity = true;
+                            }
+                        }
+                    }
+                    "caller_names" | "callerNames" => {
+                        if value.as_array().is_some_and(|names| {
+                            !names.is_empty()
+                                && names.iter().all(|name| {
+                                    name.as_str().and_then(canonical_function_name).is_some()
+                                })
+                        }) {
+                            *caller_identity = true;
+                        }
+                    }
+                    "results" | "source_metadata" | "sourceMetadata" => {
+                        collect_traversal_readiness(value, positive_caller_count, caller_identity);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
 }
 

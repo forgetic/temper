@@ -14,7 +14,7 @@ pub(super) enum FocusedTestRecoveryState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SelectorOrigin {
-    ImplementationEvidenceResult,
+    ImplementationEvidenceResult { traversal_ready: bool },
     CallerTraversalResult,
     CallerEvidenceResult,
     FocusedTestResult,
@@ -97,7 +97,7 @@ impl DecisionAnchorLineages {
         origin: SelectorOrigin,
     ) -> Option<usize> {
         let purpose = match origin {
-            SelectorOrigin::ImplementationEvidenceResult => {
+            SelectorOrigin::ImplementationEvidenceResult { .. } => {
                 RecoverySelectorPurpose::ImplementationTrace
             }
             SelectorOrigin::CallerTraversalResult => RecoverySelectorPurpose::CallerSource,
@@ -131,8 +131,13 @@ impl DecisionAnchorLineages {
                 continue;
             }
             match origin {
-                SelectorOrigin::ImplementationEvidenceResult => {
-                    binding.implementation_evidence_result = true
+                SelectorOrigin::ImplementationEvidenceResult { traversal_ready } => {
+                    binding.implementation_evidence_result = true;
+                    binding.implementation_traversal_readiness = if traversal_ready {
+                        ImplementationTraversalReadiness::Ready
+                    } else {
+                        ImplementationTraversalReadiness::Partial
+                    };
                 }
                 SelectorOrigin::CallerTraversalResult => binding.caller_traversal_result = true,
                 SelectorOrigin::CallerEvidenceResult => binding.caller_evidence_result = true,

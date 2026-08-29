@@ -78,6 +78,90 @@ fn exact_selectors_resolve_before_provider_with_only_closed_values() {
 }
 
 #[test]
+fn partial_implementation_snapshot_defers_traversal_until_one_turn_boundary() {
+    let mut lineages = DecisionAnchorLineages::default();
+    let root = lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+            &serde_json::json!({"query": "partial implementation"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run"
+            }))),
+        )
+        .unwrap();
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::engine::run"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run",
+                "callers": 1
+            }))),
+            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+
+    let guidance = lineages
+        .recovery_selector_guidance(&root.root_binding)
+        .expect("partial implementation retains a bounded traversal reference");
+    let reference = guidance
+        .split_once("implementation_evidence_result=")
+        .and_then(|(_, rest)| rest.split([',', '.']).next())
+        .expect("implementation traversal reference");
+    let trace = serde_json::json!({"function_name": reference, "direction": "inbound"});
+    assert_eq!(
+        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::TraversalNotReady),
+    );
+    assert_eq!(
+        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::TraversalNotReady),
+        "parallel siblings in the same model turn must remain deferred",
+    );
+
+    lineages.advance_local_traversal_readiness();
+    let LineageAdmissionOutcome::Eligible(admission) =
+        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace)
+    else {
+        panic!("the bounded turn boundary must release the exact current-root traversal");
+    };
+    assert!(admission.matches_root(&root.root_binding));
+}
+
+#[test]
+fn implementation_snapshot_with_caller_names_is_immediately_traversal_ready() {
+    let mut lineages = DecisionAnchorLineages::default();
+    lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+            &serde_json::json!({"query": "ready implementation"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run"
+            }))),
+        )
+        .unwrap();
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::engine::run"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run",
+                "callers": 1,
+                "caller_names": ["dispatch"]
+            }))),
+            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+    assert!(matches!(
+        lineages.resolve(
+            GraphCorrelationToolV1::TracePath.public_name(),
+            &serde_json::json!({"function_name": "run", "direction": "inbound"}),
+        ),
+        LineageAdmissionOutcome::Eligible(_)
+    ));
+}
+
+#[test]
 fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
     const PRIVATE_SELECTOR: &str = "crate::private::engine::run";
     let mut lineages = DecisionAnchorLineages::default();
