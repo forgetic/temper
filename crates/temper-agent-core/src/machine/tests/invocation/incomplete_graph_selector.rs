@@ -4,9 +4,8 @@ use temper_protocol_activity::{
 };
 
 const ACTIVE_ROOT: &str = "00000000-0000-4000-8000-000000000001";
-const SIBLING_ROOT: &str = "00000000-0000-4000-8000-000000000002";
 const ACTIVE_IMPLEMENTATION: &str = "returned-implementation";
-const NON_RETURNED_ACTIVE_SELECTOR: &str = "advertised-sibling-implementation";
+const UNKNOWN_SELECTOR: &str = "schema-valid-but-never-returned";
 
 struct RootAwareTraversalAdmission;
 
@@ -32,14 +31,6 @@ impl LineageAdmissionResolver for RootAwareTraversalAdmission {
             {
                 EligibleLineageAdmission::implementation_caller_traversal(
                     ACTIVE_ROOT.to_string(),
-                    DecisionAnchorTargetKindV1::FunctionName,
-                )
-            }
-            "codebase_memory_trace_path"
-                if arguments["function_name"] == NON_RETURNED_ACTIVE_SELECTOR =>
-            {
-                EligibleLineageAdmission::implementation_caller_traversal(
-                    SIBLING_ROOT.to_string(),
                     DecisionAnchorTargetKindV1::FunctionName,
                 )
             }
@@ -74,7 +65,8 @@ fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selecto
         ),
         "the regression schema deliberately admits a direction-only traversal"
     );
-    let mut machine = machine(catalog);
+    let mut machine =
+        machine(catalog).with_lineage_admission(Arc::new(RootAwareTraversalAdmission));
     let _ = machine.on_start(EngineTime::ZERO);
 
     let output = |tool: GraphCorrelationToolV1,
@@ -256,7 +248,7 @@ fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selecto
 }
 
 #[test]
-fn staged_non_returned_trace_is_denied_before_dispatch_then_accepts_active_selector() {
+fn staged_unknown_trace_is_denied_before_dispatch_then_accepts_active_selector() {
     use temper_protocol_activity::{
         DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, GraphCorrelationTargetKindV1,
         GraphCorrelationV1, GraphExplorationClosedV1, GraphRecoveryEvidenceKindV1,
@@ -272,7 +264,7 @@ fn staged_non_returned_trace_is_denied_before_dispatch_then_accepts_active_selec
             .schema("codebase_memory_trace_path")
             .expect("trace schema"),
         &serde_json::json!({
-            "function_name": NON_RETURNED_ACTIVE_SELECTOR,
+            "function_name": UNKNOWN_SELECTOR,
             "direction": "inbound"
         }),
     ));
@@ -325,18 +317,11 @@ fn staged_non_returned_trace_is_denied_before_dispatch_then_accepts_active_selec
         &mut machine,
         llm_responded(assistant(
             "openai-responses",
-            vec![
-                (
-                    "active-root",
-                    "codebase_memory_search_graph",
-                    serde_json::json!({"query":"selected implementation"}),
-                ),
-                (
-                    "sibling-root",
-                    "codebase_memory_search_graph",
-                    serde_json::json!({"query":"independent implementation"}),
-                ),
-            ],
+            vec![(
+                "active-root",
+                "codebase_memory_search_graph",
+                serde_json::json!({"query":"selected implementation"}),
+            )],
         )),
     );
     let _ = complete(
@@ -345,19 +330,6 @@ fn staged_non_returned_trace_is_denied_before_dispatch_then_accepts_active_selec
             "active-root",
             output(
                 ACTIVE_ROOT,
-                GraphCorrelationToolV1::SearchGraph,
-                GraphCorrelationTargetKindV1::GraphQuery,
-                DecisionAnchorLineageStageV1::Root,
-                None,
-            ),
-        ),
-    );
-    let _ = complete(
-        &mut machine,
-        tool_finished(
-            "sibling-root",
-            output(
-                SIBLING_ROOT,
                 GraphCorrelationToolV1::SearchGraph,
                 GraphCorrelationTargetKindV1::GraphQuery,
                 DecisionAnchorLineageStageV1::Root,
@@ -401,7 +373,7 @@ fn staged_non_returned_trace_is_denied_before_dispatch_then_accepts_active_selec
                 "non-returned-trace",
                 "codebase_memory_trace_path",
                 serde_json::json!({
-                    "function_name": NON_RETURNED_ACTIVE_SELECTOR,
+                    "function_name": UNKNOWN_SELECTOR,
                     "direction": "inbound"
                 }),
             )],

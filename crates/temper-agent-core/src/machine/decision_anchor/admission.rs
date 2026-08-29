@@ -127,12 +127,22 @@ impl DecisionAnchorState {
                 let recovery_action = eligible
                     .and_then(DecisionGap::recovery_action_for_admission)
                     .or_else(|| admission.is_none().then_some(requested_action).flatten());
+                let is_traversal = call.name == GraphCorrelationToolV1::TracePath.public_name();
+                let has_traversal_selector = is_traversal
+                    && call
+                        .arguments
+                        .get("function_name")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|selector| !selector.is_empty());
                 let admitted_root = eligible
                     .and_then(|admission| self.root_matching_admission(admission))
-                    // Tests and non-codebase-memory compositions retain the
-                    // legacy typed-call path without interpreting a selector.
+                    // Direct state tests and non-codebase-memory compositions
+                    // retain their legacy untyped-call path. A schema-valid
+                    // traversal selector must instead have root admission.
                     .or_else(|| {
-                        (admission.is_none() && incomplete_graph_selector.is_none())
+                        (admission.is_none()
+                            && incomplete_graph_selector.is_none()
+                            && !has_traversal_selector)
                             .then(|| {
                                 snapshot
                                     .as_ref()
@@ -150,17 +160,22 @@ impl DecisionAnchorState {
                     .is_some_and(|identity| self.rejected_recovery_tuples.contains(&identity));
 
                 // A traversal is meaningful only for the staged active root.
-                // A selector owned by a retained sibling must be denied just
-                // like an unknown selector instead of escaping to the provider.
-                let is_traversal = call.name == GraphCorrelationToolV1::TracePath.public_name();
-                let staged_call = (admission.is_some() || incomplete_graph_selector.is_some())
-                    && snapshot.as_ref().is_some_and(|snapshot| {
+                // A selector owned by a retained sibling or by no root must be
+                // denied instead of escaping to the provider.
+                let staged_call = snapshot.as_ref().is_some_and(|snapshot| {
+                    if is_traversal {
                         requested_action.is_some()
-                            && (is_traversal
-                                || admitted_root
-                                    .as_deref()
-                                    .is_none_or(|root| root == snapshot.active_root))
-                    });
+                            && (has_traversal_selector
+                                || admission.is_some()
+                                || incomplete_graph_selector.is_some())
+                    } else {
+                        (admission.is_some() || incomplete_graph_selector.is_some())
+                            && requested_action.is_some()
+                            && admitted_root
+                                .as_deref()
+                                .is_none_or(|root| root == snapshot.active_root)
+                    }
+                });
                 if self.exploration != ExplorationStatus::Open || staged_call {
                     let admissible = snapshot.as_ref().is_some_and(|snapshot| {
                         !already_rejected

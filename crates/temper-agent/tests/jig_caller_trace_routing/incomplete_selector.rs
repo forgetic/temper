@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "unknown_selector.rs"]
+mod unknown_selector;
+
 const NON_RETURNED_ACTIVE_SELECTOR: &str = "crate::scheduler::choose_lane";
 
 #[test]
