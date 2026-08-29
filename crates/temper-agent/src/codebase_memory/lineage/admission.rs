@@ -152,8 +152,12 @@ impl DecisionAnchorLineages {
                     .focused_test_recovery
                     .iter()
                     .filter_map(|(root, state)| {
-                        (*state == super::FocusedTestRecoveryState::TraversalReturnedEmpty)
-                            .then_some(root.clone())
+                        matches!(
+                            state,
+                            super::FocusedTestRecoveryState::SemanticSearchReady
+                                | super::FocusedTestRecoveryState::TraversalReturnedEmpty
+                        )
+                        .then_some(root.clone())
                     });
                 let Some(root_binding) = roots.next() else {
                     return Ineligible(BroadSelector);
@@ -173,10 +177,7 @@ impl DecisionAnchorLineages {
                             .insert(query_digest, Some(root_binding.clone()));
                     }
                 }
-                self.focused_test_recovery.insert(
-                    root_binding.clone(),
-                    super::FocusedTestRecoveryState::FallbackPending,
-                );
+                self.begin_focused_test_semantic_search(&root_binding);
                 return EligibleLineageAdmission::focused_test_semantic_fallback(
                     root_binding,
                     temper_protocol_activity::DecisionAnchorTargetKindV1::GraphQuery,

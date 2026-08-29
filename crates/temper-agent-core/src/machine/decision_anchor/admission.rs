@@ -276,10 +276,22 @@ impl DecisionAnchorState {
             }
             _ => return None,
         };
+        let mut compatible = active.evidence.compatible_actions(active);
+        let semantic_search = GraphRecoveryActionV1::focused_test_semantic_fallback();
+        // Preserve the direct semantic action for a healthy route. If the
+        // route already accumulated a bounded non-progress detour, retain the
+        // legacy caller-to-test checkpoint so recovery does not silently skip
+        // a provider result and shift every later selector.
+        if self.non_progressing_batches > 0 && compatible.contains(&semantic_search) {
+            let staged_traversal = GraphRecoveryActionV1::focused_test_traversal();
+            if active.supports(staged_traversal) {
+                compatible.insert(staged_traversal);
+            }
+        }
         Some(RecoveryAdmissionSnapshot {
             active_root,
             missing: active.evidence.missing_gaps(),
-            compatible: active.evidence.compatible_actions(active),
+            compatible,
             pending: self
                 .calls
                 .values()

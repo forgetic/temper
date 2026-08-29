@@ -105,7 +105,6 @@ pub(super) fn decision_chain_fake(
             view,
             &record,
             &next_target,
-            &focused_test_target,
             &recovery_selector,
             &mutation_was_blocked,
         ) {
@@ -206,6 +205,21 @@ pub(super) fn decision_chain_fake(
                     &[
                         "accepted evidence=[caller]",
                         "active-root missing evidence=[focused_test]",
+                        "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]",
+                    ],
+                );
+                record(DecisionStep::FocusedTestSearch);
+                tool_reply(
+                    "search-semantic-behavioral-test",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query": "focused behavioral regression"}),
+                )
+            }
+            (DecisionCase::Consumed, 6) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "accepted evidence=[focused_test_route]",
                         "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]",
                     ],
                 );
@@ -219,7 +233,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::Consumed, 6) => {
+            (DecisionCase::Consumed, 7) => {
                 assert_guidance(
                     view,
                     &[
@@ -242,7 +256,7 @@ pub(super) fn decision_chain_fake(
                     serde_json::json!({"path": "demo/EVIDENCE.md"}),
                 )
             }
-            (DecisionCase::Consumed, 7) => {
+            (DecisionCase::Consumed, 8) => {
                 record(DecisionStep::Mutation);
                 tool_reply(
                     "mutate-after-evidence",
@@ -253,7 +267,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::Consumed, 8) => {
+            (DecisionCase::Consumed, 9) => {
                 record(DecisionStep::Complete);
                 Reply::text(r#"{"summary":"Mutated after consumed result-derived evidence."}"#)
             }

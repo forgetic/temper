@@ -46,6 +46,7 @@ pub enum DecisionStep {
     Refinement,
     Trace,
     ImplementationSource,
+    FocusedTestSearch,
     FocusedTestTraversal,
     CallerSource,
     CallerSourceDetour,

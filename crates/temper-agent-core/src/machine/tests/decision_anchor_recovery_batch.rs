@@ -37,9 +37,13 @@ impl LineageAdmissionResolver for RecoveryAdmissionFixture {
                     .and_then(|value| serde_json::from_value(value).ok());
                 eligible_admission(root, GraphCorrelationToolV1::GetCodeSnippet, evidence).unwrap()
             }
-            GraphCorrelationToolV1::SearchGraph => {
-                LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::BroadSelector)
-            }
+            GraphCorrelationToolV1::SearchGraph => LineageAdmissionOutcome::Eligible(
+                EligibleLineageAdmission::focused_test_semantic_fallback(
+                    ROOT.to_string(),
+                    DecisionAnchorTargetKindV1::GraphQuery,
+                )
+                .expect("semantic search admission"),
+            ),
             GraphCorrelationToolV1::SearchCode => {
                 LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection)
             }
@@ -174,33 +178,56 @@ fn immutable_recovery_batch_admits_only_the_next_staged_root_action() {
     );
     assert_eq!(state.recovery_details().unwrap().remaining_allowance, 2);
 
-    for (turn, id, kind, expected) in [
-        (
-            5,
+    let caller_admission = eligible_admission(
+        ROOT,
+        GraphCorrelationToolV1::GetCodeSnippet,
+        Some(DecisionEvidenceKindV1::Caller),
+    );
+    let mut caller = source_call("caller", DecisionEvidenceKindV1::Caller);
+    caller.arguments["qualified_name"] = serde_json::json!("returned-caller");
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(&caller, 5, caller_admission.as_ref()),
+        None,
+    );
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
             "caller",
-            DecisionEvidenceKindV1::Caller,
-            DecisionAnchorTransition::GapRecoveryNeeded,
-        ),
-        (
-            6,
-            "test",
-            DecisionEvidenceKindV1::FocusedTest,
-            DecisionAnchorTransition::Converged,
-        ),
-    ] {
-        let admission = eligible_admission(
             ROOT,
-            GraphCorrelationToolV1::GetCodeSnippet,
-            Some(kind),
-        );
-        let mut source = source_call(id, kind);
-        source.arguments["qualified_name"] = serde_json::json!(format!("returned-{id}"));
-        assert_eq!(
-            state.on_tool_dispatched_with_admission(&source, turn, admission.as_ref()),
-            None,
-        );
-        assert_eq!(finish_with_evidence(&mut state, id, ROOT, kind), expected);
-    }
+            DecisionEvidenceKindV1::Caller,
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    assert_eq!(
+        finish_semantic_test_search(
+            &mut state,
+            "semantic-test-search",
+            ROOT,
+            6,
+            FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    let test_admission = eligible_admission(
+        ROOT,
+        GraphCorrelationToolV1::GetCodeSnippet,
+        Some(DecisionEvidenceKindV1::FocusedTest),
+    );
+    let mut test = source_call("test", DecisionEvidenceKindV1::FocusedTest);
+    test.arguments["qualified_name"] = serde_json::json!("returned-test");
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(&test, 7, test_admission.as_ref()),
+        None,
+    );
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
+            "test",
+            ROOT,
+            DecisionEvidenceKindV1::FocusedTest,
+        ),
+        DecisionAnchorTransition::Converged,
+    );
     assert_eq!(
         state.on_tool_dispatched(&call("mutation", "write"), 7),
         Some(ToolCallDenial::DecisionAnchorMutation)
@@ -303,29 +330,68 @@ fn machine_executes_only_each_snapshot_compatible_staged_call() {
         ),
     );
 
-    for (id, kind) in [
-        ("caller", DecisionEvidenceKindV1::Caller),
-        ("test", DecisionEvidenceKindV1::FocusedTest),
-    ] {
-        let mut source = assistant_tool_calls(&[(id, "codebase_memory_get_code_snippet")]);
-        let tongs::model::ContentBlock::ToolCall(call) = &mut source.content[0] else {
-            unreachable!();
-        };
-        call.arguments = serde_json::json!({
-            "qualified_name": "active",
-            "decision_evidence_kind": kind,
-        });
-        let requests = complete(&mut machine, llm_responded(source));
-        assert_eq!(run_tools(&requests), [id]);
-        let settled = complete(
-            &mut machine,
-            tool_finished(
-                id,
-                output_with_evidence(ROOT, DecisionAnchorLineageStageV1::CarryForward, kind),
+    let mut caller = assistant_tool_calls(&[("caller", "codebase_memory_get_code_snippet")]);
+    let tongs::model::ContentBlock::ToolCall(call) = &mut caller.content[0] else {
+        unreachable!();
+    };
+    call.arguments = serde_json::json!({
+        "qualified_name": "active",
+        "decision_evidence_kind": "caller",
+    });
+    let requests = complete(&mut machine, llm_responded(caller));
+    assert_eq!(run_tools(&requests), ["caller"]);
+    let _ = complete(
+        &mut machine,
+        tool_finished(
+            "caller",
+            output_with_evidence(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                DecisionEvidenceKindV1::Caller,
             ),
-        );
-        if kind == DecisionEvidenceKindV1::FocusedTest {
-            assert!(message_containing(&settled, DECISION_ANCHOR_CONVERGENCE_MESSAGE));
-        }
-    }
+        ),
+    );
+
+    let mut search = assistant_tool_calls(&[("semantic-test-search", "codebase_memory_search_graph")]);
+    let tongs::model::ContentBlock::ToolCall(call) = &mut search.content[0] else {
+        unreachable!();
+    };
+    call.arguments = serde_json::json!({"query": "behavioral regression intent"});
+    let requests = complete(&mut machine, llm_responded(search));
+    assert_eq!(run_tools(&requests), ["semantic-test-search"]);
+    let _ = complete(
+        &mut machine,
+        tool_finished(
+            "semantic-test-search",
+            output_with_focused_test_discovery(
+                "codebase_memory_search_graph",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
+            ),
+        ),
+    );
+
+    let mut test = assistant_tool_calls(&[("test", "codebase_memory_get_code_snippet")]);
+    let tongs::model::ContentBlock::ToolCall(call) = &mut test.content[0] else {
+        unreachable!();
+    };
+    call.arguments = serde_json::json!({
+        "qualified_name": "active",
+        "decision_evidence_kind": "focused_test",
+    });
+    let requests = complete(&mut machine, llm_responded(test));
+    assert_eq!(run_tools(&requests), ["test"]);
+    let settled = complete(
+        &mut machine,
+        tool_finished(
+            "test",
+            output_with_evidence(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                DecisionEvidenceKindV1::FocusedTest,
+            ),
+        ),
+    );
+    assert!(message_containing(&settled, DECISION_ANCHOR_CONVERGENCE_MESSAGE));
 }

@@ -159,28 +159,22 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          Only the selected-implementation traversal's provider-returned caller identities are eligible\n\
          later-turn caller/model selectors. A\n\
          complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
-         manufacture caller evidence by rereading the traced symbol as its own caller. Use the initial\n\
-         task-semantic graph search as focused-test discovery when it returns a behaviorally relevant test\n\
-         identity. Reserve that exact provider-returned test while completing implementation and caller\n\
-         stages; never read it early or substitute an implementation/caller-shaped selector.\n\
-         After implementation and exact traversal-derived caller source evidence are complete, follow the\n\
-         single focused-test action named by Decision guidance. If it names `get_code_snippet` /\n\
-         `qualified_name` / `focused_test` with `selector=focused_test_result`, consume the reserved exact\n\
-         semantic-search test in the next turn without another trace or speculative snippet. Only when no\n\
-         eligible semantic test selector exists may the closed menu list a focused-test traversal using the\n\
-         provider-returned caller in a later `trace_path` call with relationship `calls`, direction\n\
-         `inbound`, and test inclusion enabled. Read the exact provider-returned test with\n\
-         `get_code_snippet` / `qualified_name` / `focused_test` in another later turn; traversal discovers\n\
-         a selector but is not source evidence. If that complete traversal returns no eligible test identity,\n\
-         and only then, the closed menu may list one same-root `search_graph` / `graph_query` fallback.\n\
-         Derive that query from the task's behavioral regression intent; never copy a fixture or test name\n\
-         from task text, source, diagnostics, or an independent root. Consume only the exact test returned\n\
-         by that fallback in one still-later focused-test source read. If traversal and fallback both return\n\
-         no eligible test, stop without a product instead of retrying either route.\n\
+         manufacture caller evidence by rereading the traced symbol as its own caller. Initial task-semantic\n\
+         discovery may over-return a test-shaped candidate, but that candidate cannot complete or select\n\
+         focused-test evidence. After implementation traversal and exact traversal-derived caller source\n\
+         evidence are complete, follow the single action named by Decision guidance: issue one same-root\n\
+         `search_graph` / `graph_query` focused-test search in the next turn. Derive its query from the task's\n\
+         behavioral regression intent; never copy a fixture or test name from task text, source, diagnostics,\n\
+         an initial provider result, or an independent root. Then consume only the exact test returned by\n\
+         that semantic search with `get_code_snippet` / `qualified_name` / `focused_test` in one still-later\n\
+         turn. Do not substitute the initial test-shaped candidate, issue a caller-to-test traversal, or\n\
+         make another provider request between the semantic search and its exact returned test source. If\n\
+         the semantic search returns no eligible test, follow the resulting closed stop or fallback guidance\n\
+         without retrying or inventing a selector.\n\
          After a local\n\
          decision-evidence denial, follow only the compatible recovery menu and never repeat the denied\n\
-         tool/selector/evidence-kind tuple. Do not batch speculative snippets with a traversal, and do not\n\
-         issue the test source read until a later turn has received that traversal's typed result. When\n\
+         tool/selector/evidence-kind tuple. Do not batch speculative snippets with a producer, and do not\n\
+         issue the test source read until a later turn has received the semantic search's typed result. When\n\
          multiple typed routes could fill a decision gap, favor the route whose producer query, returned\n\
          implementation, and consumer chain are semantically connected to the requested behavior; an\n\
          evidence-kind declaration alone does not make an incidental route preferable. Keep every source\n\
@@ -391,31 +385,26 @@ for line in sys.stdin:
             "later-turn caller/model selectors",
             "complete empty inbound trace settles that selected symbol's graph-caller relationship",
             "manufacture caller evidence by rereading the traced symbol as its own caller",
-            "Use the initial",
-            "task-semantic graph search as focused-test discovery",
-            "Reserve that exact provider-returned test",
-            "never read it early or substitute an implementation/caller-shaped selector",
-            "exact traversal-derived caller source evidence are complete",
-            "single focused-test action named by Decision guidance",
-            "`selector=focused_test_result`",
-            "without another trace or speculative snippet",
-            "Only when no",
-            "eligible semantic test selector exists",
-            "focused-test traversal using the",
-            "provider-returned caller in a later `trace_path` call with relationship `calls`, direction",
-            "Read the exact provider-returned test with",
-            "`focused_test` in another later turn",
-            "a selector but is not source evidence",
-            "complete traversal returns no eligible test identity",
-            "one same-root `search_graph` / `graph_query` fallback",
+            "Initial task-semantic",
+            "test-shaped candidate, but that candidate cannot complete or select",
+            "focused-test evidence",
+            "exact traversal-derived caller source",
+            "single action named by Decision guidance",
+            "one same-root",
+            "`search_graph` / `graph_query` focused-test search",
             "behavioral regression intent",
             "never copy a fixture or test name",
-            "by that fallback in one still-later",
-            "stop without a product instead of retrying either route",
+            "an initial provider result, or an independent root",
+            "exact test returned by",
+            "`get_code_snippet` / `qualified_name` / `focused_test`",
+            "Do not substitute the initial test-shaped candidate",
+            "issue a caller-to-test traversal",
+            "between the semantic search and its exact returned test source",
+            "without retrying or inventing a selector",
             "follow only the compatible recovery menu",
             "tool/selector/evidence-kind tuple",
-            "Do not batch speculative snippets with a traversal",
-            "issue the test source read until a later turn has received that traversal's typed result",
+            "Do not batch speculative snippets with a producer",
+            "issue the test source read until a later turn has received the semantic search's typed result",
             "multiple typed routes could fill a decision gap",
             "whose producer query, returned",
             "implementation, and consumer chain are semantically connected to the requested behavior",

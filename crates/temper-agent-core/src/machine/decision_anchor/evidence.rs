@@ -328,6 +328,10 @@ impl SourceEvidence {
             self.focused_test_fallback_turn
                 .map_or(turn, |current| current.min(turn)),
         );
+        // The mandatory post-caller search must produce the selector used by
+        // the focused-test source stage. Initial discovery may over-return a
+        // test shape, but it cannot bypass this search.
+        self.focused_test_selector_available = false;
     }
 
     pub(super) fn record_focused_test_discovery(
@@ -399,7 +403,7 @@ impl SourceEvidence {
             ),
             Some(GraphCorrelationToolV1::SearchGraph) => {
                 gap == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
-                    && self.focused_test_fallback_turn.is_some()
+                    && self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
             }
             None => false,
         }
@@ -487,7 +491,10 @@ impl SourceEvidence {
         }
 
         if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)) {
-            if self.focused_test_selector_available {
+            // The controlled multi-root recovery path retains its immutable
+            // parallel source batch. Healthy single-root routing always takes
+            // a fresh task-semantic focused-test search after caller source.
+            if self.trace_before_implementation && self.focused_test_selector_available {
                 let action =
                     GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::FocusedTest);
                 if anchor.supports(action) {
@@ -495,26 +502,24 @@ impl SourceEvidence {
                     return actions;
                 }
             }
-            if self
+            if !self
                 .decision_kinds
                 .contains(&DecisionEvidenceKindV1::Caller)
-                && self.focused_test_traversal_turn.is_none()
             {
-                let traversal = GraphRecoveryActionV1::focused_test_traversal();
-                if anchor.supports(traversal) {
-                    actions.insert(traversal);
+                return actions;
+            }
+            if self.focused_test_fallback_turn.is_none() {
+                let search = GraphRecoveryActionV1::focused_test_semantic_fallback();
+                if anchor.supports(search) {
+                    actions.insert(search);
                 }
-            } else if self.focused_test_traversal_outcome
-                == Some(FocusedTestDiscoveryOutcomeV1::NoEligibleSelector)
-                && !self.focused_test_selector_available
-                && self
-                    .decision_kinds
-                    .contains(&DecisionEvidenceKindV1::Caller)
-                && self.focused_test_fallback_turn.is_none()
-            {
-                let fallback = GraphRecoveryActionV1::focused_test_semantic_fallback();
-                if anchor.supports(fallback) {
-                    actions.insert(fallback);
+                return actions;
+            }
+            if self.focused_test_selector_available {
+                let action =
+                    GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::FocusedTest);
+                if anchor.supports(action) {
+                    actions.insert(action);
                 }
             }
         }
@@ -533,6 +538,7 @@ impl SourceEvidence {
             && !self.caller_selector_available
             && self.caller_traversal_outcome == Some(CallerDiscoveryOutcomeV1::NoEligibleSelector)
             || self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
+                && self.focused_test_fallback_turn.is_some()
                 && !self.focused_test_selector_available
                 && self.focused_test_fallback_outcome
                     == Some(FocusedTestDiscoveryOutcomeV1::NoEligibleSelector)

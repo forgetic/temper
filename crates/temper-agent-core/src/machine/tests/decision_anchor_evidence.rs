@@ -79,24 +79,13 @@ fn over_returned_later_kinds_require_their_staged_provider_routes() {
         DecisionAnchorTransition::GapRecoveryNeeded,
     );
 
-    let mut focused_traversal = call("caller-tests", "codebase_memory_trace_path");
-    focused_traversal.arguments = serde_json::json!({
-        "function_name": "provider-returned-caller",
-        "mode": "calls",
-        "direction": "inbound",
-        "include_tests": true,
-    });
-    state.on_tool_dispatched(&focused_traversal, 6);
     assert_eq!(
-        state.on_tool_finished(
-            "caller-tests",
-            "codebase_memory_trace_path",
-            &output_with_focused_test_discovery(
-                "codebase_memory_trace_path",
-                ROOT,
-                DecisionAnchorLineageStageV1::CarryForward,
-                FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
-            ),
+        finish_semantic_test_search(
+            &mut state,
+            "semantic-test-search",
+            ROOT,
+            6,
+            FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
         ),
         DecisionAnchorTransition::GapRecoveryNeeded,
     );

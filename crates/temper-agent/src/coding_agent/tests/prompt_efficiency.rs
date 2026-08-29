@@ -52,27 +52,19 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "eligible later-turn caller/model selectors",
         "complete empty inbound trace settles that selected symbol's graph-caller relationship",
         "do not manufacture caller evidence by rereading the traced symbol as its own caller",
-        "Use the initial task-semantic graph search as focused-test discovery",
-        "behaviorally relevant test identity",
-        "reserve that exact provider-returned test",
-        "never read it early or substitute an implementation/caller-shaped selector",
-        "follow the single focused-test action named by Decision guidance",
-        "`selector=focused_test_result`",
-        "without another trace or speculative snippet",
-        "Only when no eligible semantic test selector exists",
-        "focused-test traversal from the provider-returned caller",
-        "later turn with `trace_path` / `function_name`",
-        "relationship `calls`, direction",
-        "`inbound`, and test inclusion enabled",
-        "Read the exact test identity returned by that traversal",
-        "`get_code_snippet` / `qualified_name` / `focused_test` in another later turn",
-        "selector discovery, not focused-test source evidence",
-        "complete traversal returns no eligible test identity",
-        "one listed same-root `search_graph` / `graph_query` fallback",
+        "Initial task-semantic discovery may over-return a test-shaped candidate",
+        "cannot complete or select focused-test evidence",
+        "After caller source evidence is complete",
+        "single focused-test action named by Decision guidance",
+        "one same-root `search_graph` / `graph_query` semantic search",
         "behavioral-regression query from task intent",
-        "never copy a fixture or test name from task text, source, diagnostics, or an independent root",
-        "exact test returned by that fallback in one still-later focused-test source read",
-        "stop without a product if both routes return no eligible test",
+        "never copy a fixture or test name from task text, source, diagnostics, an initial result, or an independent root",
+        "exact test returned by that search",
+        "`get_code_snippet` / `qualified_name` / `focused_test` in one still-later turn",
+        "Do not substitute the initial test-shaped candidate",
+        "issue a caller-to-test traversal",
+        "between the semantic search and its exact returned source",
+        "without retrying or inventing a selector",
         "multiple typed routes could fill a decision gap",
         "producer query, returned implementation, and consumer chain are semantically connected",
         "evidence-kind declaration alone cannot make an incidental route preferable",
@@ -81,9 +73,9 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "After a local decision-evidence denial",
         "follow only this compatible menu",
         "never repeat the denied tool/selector/evidence-kind tuple",
-        "Do not batch speculative snippet reads with a traversal",
+        "Do not batch speculative snippet reads with a producer",
         "never issue the test source read until a later",
-        "turn after the traversal has returned its exact provider-typed test identity",
+        "turn after the semantic search has returned its exact provider-typed test identity",
         "Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused behavioral tests",
         "smallest semantic diff",
         "closed decision-evidence recovery guidance lists compatible actions",
@@ -229,11 +221,11 @@ fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
     assert!(implementation < trace && trace < relationships && relationships < empty);
     assert!(empty < denial);
     assert!(engineer.contains("do not manufacture caller evidence by rereading the traced symbol"));
-    assert!(engineer.contains("Use the initial task-semantic graph search"));
+    assert!(engineer.contains("Initial task-semantic discovery may over-return"));
     assert!(engineer.contains("single focused-test action named by Decision guidance"));
-    assert!(engineer.contains("without another trace or speculative snippet"));
-    assert!(engineer.contains("Read the exact test identity returned by that traversal"));
-    assert!(engineer.contains("another later turn"));
+    assert!(engineer.contains("one same-root `search_graph` / `graph_query` semantic search"));
+    assert!(engineer.contains("Do not substitute the initial test-shaped candidate"));
+    assert!(engineer.contains("one still-later turn"));
 }
 
 #[test]

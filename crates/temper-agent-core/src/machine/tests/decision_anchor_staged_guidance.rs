@@ -49,8 +49,7 @@ fn missing_caller_rejects_caller_shaped_and_focused_sources_with_one_exact_next_
     );
     let early_guidance = one_guidance(&mut state);
     assert!(early_guidance.contains("required next stage=[get_code_snippet/qualified_name/caller"));
-    assert!(!early_guidance
-        .contains("required next stage=[get_code_snippet/qualified_name/focused_test"));
+    assert!(!early_guidance.contains("required next stage=[search_graph/graph_query/focused_test"));
 
     let mut caller = source_call("exact-caller", DecisionEvidenceKindV1::Caller);
     caller.arguments["qualified_name"] = serde_json::json!("provider-returned-caller");
@@ -73,12 +72,12 @@ fn missing_caller_rejects_caller_shaped_and_focused_sources_with_one_exact_next_
     let caller_guidance = one_guidance(&mut state);
     assert!(caller_guidance.contains("accepted evidence=[caller]"));
     assert!(caller_guidance.contains(
-        "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]"
+        "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]"
     ));
 }
 
 #[test]
-fn semantic_test_selector_rejects_repeated_traversal_detours_before_exact_source() {
+fn semantic_test_stage_rejects_initial_result_and_traversal_detours_before_exact_source() {
     let mut state = state_through_caller_trace();
     let caller = source_call("caller", DecisionEvidenceKindV1::Caller);
     state.on_tool_dispatched_with_admission(
@@ -96,41 +95,81 @@ fn semantic_test_selector_rejects_repeated_traversal_detours_before_exact_source
     );
     state.take_model_guidance();
 
-    for (turn, id) in [(4, "focused-detour"), (5, "focused-detour-repeat")] {
-        let mut traversal = call(id, "codebase_memory_trace_path");
-        traversal.arguments = serde_json::json!({
-            "function_name": "provider-returned-caller",
-            "mode": "calls",
-            "direction": "inbound",
-            "include_tests": true,
-        });
-        assert_eq!(
-            state.on_tool_dispatched_with_admission(
-                &traversal,
-                turn,
-                Some(&LineageAdmissionOutcome::Eligible(
-                    EligibleLineageAdmission::focused_test_traversal(
-                        ROOT.to_string(),
-                        DecisionAnchorTargetKindV1::FunctionName,
-                    )
-                    .unwrap(),
-                )),
-            ),
-            recovery_graph_denial([GraphRecoveryEvidenceKindV1::FocusedTest], 4),
-        );
-        let guidance = one_guidance(&mut state);
-        assert!(guidance.contains("result=non_progress"));
-        assert!(guidance.contains(
-            "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]"
-        ));
-        assert!(!guidance.contains("required next stage=[trace_path/function_name/focused_test"));
-    }
+    let initial_test = source_call("initial-search-test", DecisionEvidenceKindV1::FocusedTest);
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &initial_test,
+            4,
+            Some(&LineageAdmissionOutcome::Eligible(source_admission(
+                DecisionEvidenceKindV1::FocusedTest,
+            ))),
+        ),
+        recovery_graph_denial([GraphRecoveryEvidenceKindV1::FocusedTest], 4),
+    );
+    let initial_guidance = one_guidance(&mut state);
+    assert!(initial_guidance.contains(
+        "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]"
+    ));
 
-    let exact_test = source_call("exact-test", DecisionEvidenceKindV1::FocusedTest);
+    let mut traversal = call("focused-traversal-detour", "codebase_memory_trace_path");
+    traversal.arguments = serde_json::json!({
+        "function_name": "provider-returned-caller",
+        "mode": "calls",
+        "direction": "inbound",
+        "include_tests": true,
+    });
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &traversal,
+            5,
+            Some(&LineageAdmissionOutcome::Eligible(
+                EligibleLineageAdmission::focused_test_traversal(
+                    ROOT.to_string(),
+                    DecisionAnchorTargetKindV1::FunctionName,
+                )
+                .unwrap(),
+            )),
+        ),
+        recovery_graph_denial([GraphRecoveryEvidenceKindV1::FocusedTest], 4),
+    );
+    let traversal_guidance = one_guidance(&mut state);
+    assert!(traversal_guidance.contains(
+        "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]"
+    ));
+
+    let search = semantic_search_call("semantic-test-search");
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &search,
+            6,
+            Some(&LineageAdmissionOutcome::Eligible(
+                semantic_search_admission(),
+            )),
+        ),
+        None,
+    );
+    state.on_tool_finished(
+        "semantic-test-search",
+        "codebase_memory_search_graph",
+        &output_with_focused_test_discovery(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+            FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
+        ),
+    );
+    let search_guidance = one_guidance(&mut state);
+    assert!(search_guidance.contains("accepted evidence=[focused_test_route]"));
+    assert!(search_guidance.contains(
+        "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]"
+    ));
+
+    let mut exact_test = source_call("exact-test", DecisionEvidenceKindV1::FocusedTest);
+    exact_test.arguments["qualified_name"] = serde_json::json!("semantic-search-returned-test");
     assert_eq!(
         state.on_tool_dispatched_with_admission(
             &exact_test,
-            6,
+            7,
             Some(&LineageAdmissionOutcome::Eligible(source_admission(
                 DecisionEvidenceKindV1::FocusedTest,
             ))),
@@ -148,6 +187,85 @@ fn semantic_test_selector_rejects_repeated_traversal_detours_before_exact_source
     );
 }
 
+#[test]
+fn acceptance_002_through_005_missing_stages_have_one_deterministic_continuation() {
+    for case in ["003", "005"] {
+        let mut state = state_through_caller_trace();
+        let early_test = source_call(case, DecisionEvidenceKindV1::FocusedTest);
+        assert_eq!(
+            state.on_tool_dispatched_with_admission(
+                &early_test,
+                3,
+                Some(&LineageAdmissionOutcome::Eligible(source_admission(
+                    DecisionEvidenceKindV1::FocusedTest,
+                ))),
+            ),
+            recovery_graph_denial(
+                [
+                    GraphRecoveryEvidenceKindV1::Caller,
+                    GraphRecoveryEvidenceKindV1::FocusedTest,
+                ],
+                4,
+            ),
+            "acceptance {case} must not retain focused-test evidence before caller source",
+        );
+        let guidance = one_guidance(&mut state);
+        assert!(guidance.contains(
+            "required next stage=[get_code_snippet/qualified_name/caller/selector=caller_traversal_result]"
+        ));
+    }
+
+    let mut case_004 = DecisionAnchorState::from_effects(&effects()).unwrap();
+    case_004.on_tool_dispatched(&call("root-004", "codebase_memory_search_graph"), 0);
+    case_004.on_tool_finished(
+        "root-004",
+        "codebase_memory_search_graph",
+        &output(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        ),
+    );
+    case_004.take_model_guidance();
+    case_004.on_tool_dispatched(
+        &source_call(
+            "implementation-004",
+            DecisionEvidenceKindV1::Implementation,
+        ),
+        1,
+    );
+    finish_with_evidence(
+        &mut case_004,
+        "implementation-004",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    let guidance_004 = one_guidance(&mut case_004);
+    assert!(guidance_004.contains(
+        "required next stage=[trace_path/function_name/trace/selector=implementation_evidence_result/relationship=calls/direction=inbound]"
+    ));
+
+    let mut case_002 = state_through_caller_trace();
+    let caller = source_call("caller-002", DecisionEvidenceKindV1::Caller);
+    case_002.on_tool_dispatched_with_admission(
+        &caller,
+        3,
+        Some(&LineageAdmissionOutcome::Eligible(source_admission(
+            DecisionEvidenceKindV1::Caller,
+        ))),
+    );
+    finish_with_evidence(
+        &mut case_002,
+        "caller-002",
+        ROOT,
+        DecisionEvidenceKindV1::Caller,
+    );
+    let guidance_002 = one_guidance(&mut case_002);
+    assert!(guidance_002.contains(
+        "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]"
+    ));
+}
+
 fn state_through_caller_trace() -> DecisionAnchorState {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
@@ -163,7 +281,10 @@ fn state_through_caller_trace() -> DecisionAnchorState {
     );
     state.take_model_guidance();
     state.on_tool_dispatched(
-        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        &source_call(
+            "implementation",
+            DecisionEvidenceKindV1::Implementation,
+        ),
         1,
     );
     finish_with_evidence(
@@ -193,6 +314,20 @@ fn source_admission(kind: DecisionEvidenceKindV1) -> EligibleLineageAdmission {
         DecisionAnchorTargetKindV1::QualifiedName,
         GraphCorrelationToolV1::GetCodeSnippet,
         Some(kind),
+    )
+    .unwrap()
+}
+
+fn semantic_search_call(id: &str) -> ToolCall {
+    let mut search = call(id, "codebase_memory_search_graph");
+    search.arguments = serde_json::json!({"query": "behavioral regression intent"});
+    search
+}
+
+fn semantic_search_admission() -> EligibleLineageAdmission {
+    EligibleLineageAdmission::focused_test_semantic_fallback(
+        ROOT.to_string(),
+        DecisionAnchorTargetKindV1::GraphQuery,
     )
     .unwrap()
 }

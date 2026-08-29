@@ -104,17 +104,34 @@ pub(super) fn reply(
                 }),
             )
         }
-        count @ 6..=7 => {
+        6 => {
             assert_guidance(
                 view,
                 &[
                     "active-root missing evidence=[focused_test]",
-                    "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]",
+                    "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]",
                 ],
             );
             record(DecisionStep::FocusedTestDetour);
             tool_reply(
-                &format!("unsupported-focused-traversal-{count}"),
+                "initial-search-test-detour",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": source_target("implementation_source"),
+                    "decision_evidence_kind": "focused_test",
+                }),
+            )
+        }
+        7 => {
+            assert_guidance(
+                view,
+                &[
+                    "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]",
+                ],
+            );
+            record(DecisionStep::FocusedTestDetour);
+            tool_reply(
+                "unsupported-focused-traversal",
                 "codebase_memory_trace_path",
                 serde_json::json!({
                     "function_name": recovery_selector("caller_evidence_result"),
@@ -135,7 +152,30 @@ pub(super) fn reply(
                             .contains("decision-evidence recovery required")
                 })
                 .count();
-            assert_eq!(local_detours, 3, "all three detours stay local");
+            assert_eq!(
+                local_detours, 3,
+                "all three missing-stage detours stay local"
+            );
+            assert_guidance(
+                view,
+                &[
+                    "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]",
+                ],
+            );
+            record(DecisionStep::FocusedTestSearch);
+            tool_reply(
+                "search-staged-semantic-test",
+                "codebase_memory_search_graph",
+                serde_json::json!({"query": "staged behavioral regression"}),
+            )
+        }
+        9 => {
+            assert_guidance(
+                view,
+                &[
+                    "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]",
+                ],
+            );
             record(DecisionStep::BehavioralTestSource);
             tool_reply(
                 "read-exact-semantic-test",
@@ -146,7 +186,7 @@ pub(super) fn reply(
                 }),
             )
         }
-        9 => {
+        10 => {
             record(DecisionStep::SourceRead);
             tool_reply(
                 "read-detour-recovery-target",
@@ -154,7 +194,7 @@ pub(super) fn reply(
                 serde_json::json!({"path": "demo/EVIDENCE.md"}),
             )
         }
-        10 => {
+        11 => {
             record(DecisionStep::Mutation);
             tool_reply(
                 "mutate-after-detour-recovery",
@@ -165,7 +205,7 @@ pub(super) fn reply(
                 }),
             )
         }
-        11 => {
+        12 => {
             record(DecisionStep::Complete);
             Reply::text(r#"{"summary":"Recovered the exact staged graph chain."}"#)
         }

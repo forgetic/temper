@@ -292,50 +292,13 @@ fn pivoted_root_rebuilds_evidence_before_exact_read_mutation_and_submission() {
         );
     }
 
-    let mut traversal = call("old-focused-traversal", "codebase_memory_trace_path");
-    traversal.arguments = serde_json::json!({
-        "function_name": "provider-returned-caller",
-        "mode": "calls",
-        "direction": "inbound",
-        "include_tests": true,
-    });
-    state.on_tool_dispatched(&traversal, 6);
     assert_eq!(
-        state.on_tool_finished(
-            "old-focused-traversal",
-            "codebase_memory_trace_path",
-            &output_with_focused_test_discovery(
-                "codebase_memory_trace_path",
-                ROOT,
-                DecisionAnchorLineageStageV1::CarryForward,
-                FocusedTestDiscoveryOutcomeV1::NoEligibleSelector,
-            ),
-        ),
-        DecisionAnchorTransition::GapRecoveryNeeded,
-    );
-    let mut fallback = call("old-focused-fallback", "codebase_memory_search_graph");
-    fallback.arguments = serde_json::json!({"query": "provider-derived focused test route"});
-    let fallback_admission = LineageAdmissionOutcome::Eligible(
-        EligibleLineageAdmission::focused_test_semantic_fallback(
-            ROOT.to_string(),
-            DecisionAnchorTargetKindV1::GraphQuery,
-        )
-        .expect("provider-derived fallback admission"),
-    );
-    assert_eq!(
-        state.on_tool_dispatched_with_admission(&fallback, 7, Some(&fallback_admission)),
-        None,
-    );
-    assert_eq!(
-        state.on_tool_finished(
-            "old-focused-fallback",
-            "codebase_memory_search_graph",
-            &output_with_focused_test_discovery(
-                "codebase_memory_search_graph",
-                ROOT,
-                DecisionAnchorLineageStageV1::CarryForward,
-                FocusedTestDiscoveryOutcomeV1::NoEligibleSelector,
-            ),
+        finish_semantic_test_search(
+            &mut state,
+            "old-focused-search",
+            ROOT,
+            6,
+            FocusedTestDiscoveryOutcomeV1::NoEligibleSelector,
         ),
         DecisionAnchorTransition::GapRecoveryNeeded,
         "the retained viable sibling must be selected before terminal exhaustion",
