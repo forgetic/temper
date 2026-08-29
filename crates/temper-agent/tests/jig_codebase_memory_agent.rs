@@ -115,11 +115,14 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "selected-implementation traversal's provider-returned caller identities",
         "complete empty inbound trace settles that selected symbol's graph-caller relationship",
         "do not manufacture caller evidence by rereading the traced symbol as its own caller",
-        "initial task-semantic graph search as focused-test discovery",
-        "reserve that exact provider-returned test",
-        "single focused-test action named by Decision guidance",
-        "selector=focused_test_result",
-        "without another trace or speculative snippet",
+        "Initial task-semantic discovery may over-return a test-shaped candidate",
+        "cannot complete or select focused-test evidence",
+        "single action named by Decision guidance",
+        "one same-root",
+        "search_graph` / `graph_query` focused-test search",
+        "exact test returned by",
+        "Do not substitute the initial test-shaped candidate",
+        "between the semantic search and its exact returned test source",
         "multiple typed routes could fill a decision gap",
         "semantically connected to the requested behavior",
         "selector provider-derived and on the active root",
@@ -322,13 +325,10 @@ fn codebase_memory_agent_fake(
         },
         4 => Reply {
             turns: vec![Turn::ToolCall {
-                id: "call_trace_memory_test".to_string(),
-                name: "codebase_memory_trace_path".to_string(),
+                id: "call_search_memory_test".to_string(),
+                name: "codebase_memory_search_graph".to_string(),
                 args: serde_json::json!({
-                    "function_name": "crate::WidgetCaller",
-                    "mode": "calls",
-                    "direction": "inbound",
-                    "include_tests": true
+                    "query": "widget service notes behavior"
                 }),
             }],
             usage: Default::default(),
@@ -408,6 +408,7 @@ import json
 import sys
 
 TOOLS = [
+    {"name": "search_graph", "description": "Semantic graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
     {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "pattern": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
     {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
@@ -438,12 +439,17 @@ for line in sys.stdin:
             text = json.dumps({"project": args.get("project", ""), "status": "fresh"})
         elif name == "search_code":
             text = json.dumps({"results": [{"qualified_name": "crate::WidgetService", "summary": "FAKE_MCP_SEARCH_RESULT"}]})
+        elif name == "search_graph" and args.get("query") == "widget service notes behavior":
+            text = json.dumps({"results": [{"qualified_name": "crate::WidgetTest", "is_test": True}]})
         elif name == "trace_path" and args.get("function_name") == "crate::WidgetService":
             text = json.dumps({"function": {"qualified_name": "crate::WidgetService"}, "callers": [{"qualified_name": "crate::WidgetCaller"}]})
         elif name == "trace_path" and args.get("function_name") == "crate::WidgetCaller":
             text = json.dumps({"function": {"qualified_name": "crate::WidgetCaller"}, "callers": [{"qualified_name": "crate::WidgetTest", "is_test": True}]})
         elif name == "get_code_snippet":
-            text = json.dumps({"qualified_name": args.get("qualified_name"), "file_path": "MEMORY_NOTES.md", "source": "typed source"})
+            payload = {"qualified_name": args.get("qualified_name"), "file_path": "MEMORY_NOTES.md", "source": "typed source"}
+            if args.get("qualified_name") == "crate::WidgetTest":
+                payload["is_test"] = True
+            text = json.dumps(payload)
         else:
             raise AssertionError("unexpected tool call " + str(params))
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}})

@@ -49,15 +49,6 @@ mod tests {
         include!("decision_anchor_evidence.rs");
     }
 
-    fn all_missing() -> [GraphRecoveryEvidenceKindV1; 4] {
-        [
-            GraphRecoveryEvidenceKindV1::Trace,
-            GraphRecoveryEvidenceKindV1::Implementation,
-            GraphRecoveryEvidenceKindV1::Caller,
-            GraphRecoveryEvidenceKindV1::FocusedTest,
-        ]
-    }
-
     fn completed_graph_denial() -> Option<ToolCallDenial> {
         Some(ToolCallDenial::GraphExplorationClosed(Some(
             GraphExplorationClosedV1::completed(),
@@ -282,6 +273,8 @@ mod tests {
             is_error: false,
         }
     }
+
+    include!("decision_anchor_semantic_search.rs");
 
     fn failure_output(category: &str) -> ToolOutput {
         ToolOutput {

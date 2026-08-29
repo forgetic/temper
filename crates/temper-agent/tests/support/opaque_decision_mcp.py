@@ -3,7 +3,7 @@ import sys
 import uuid
 
 TOOLS = [
-    {"name": "search_graph", "description": "Targeted graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
+    {"name": "search_graph", "description": "Targeted graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}, "force_unavailable": {"type": "boolean"}}, "required": ["query"]}},
     {"name": "search_code", "description": "Targeted code search", "inputSchema": {"type": "object", "properties": {"pattern": {"type": "string"}, "project": {"type": "string"}, "force_unavailable": {"type": "boolean"}}, "required": ["pattern"]}},
     {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}, "force_unavailable": {"type": "boolean"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}, "force_unavailable": {"type": "boolean"}}, "required": ["qualified_name"]}},
@@ -134,6 +134,7 @@ def response(name, args):
             file_path="EVIDENCE.md",
             source=opaque(),
             behavioral_test=opaque(),
+            is_test=True,
         )
     return result(qualified_name=opaque(), evidence=opaque())
 

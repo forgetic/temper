@@ -5,6 +5,7 @@ use temper_protocol_activity::FocusedTestDiscoveryOutcomeV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FocusedTestRecoveryState {
+    SemanticSearchReady,
     TraversalReturnedEligible,
     TraversalReturnedEmpty,
     FallbackPending,
@@ -188,6 +189,32 @@ impl DecisionAnchorLineages {
             self.recovery_references.insert(key, reference);
         }
         Some(marked)
+    }
+
+    pub(super) fn record_caller_evidence_ready(&mut self, root_binding: &str) {
+        self.focused_test_recovery
+            .entry(root_binding.to_string())
+            .or_insert(FocusedTestRecoveryState::SemanticSearchReady);
+    }
+
+    pub(super) fn begin_focused_test_semantic_search(&mut self, root_binding: &str) {
+        for binding in self.selectors.values_mut().flatten() {
+            if binding.root_binding == root_binding {
+                binding.focused_test_result = false;
+                binding.focused_test_confirmation_required = false;
+            }
+        }
+        let reference_key = RecoverySelectorKey {
+            root_binding: root_binding.to_string(),
+            purpose: RecoverySelectorPurpose::FocusedTestSource,
+        };
+        if let Some(reference) = self.recovery_references.remove(&reference_key) {
+            self.recovery_reference_selectors.remove(&reference);
+        }
+        self.focused_test_recovery.insert(
+            root_binding.to_string(),
+            FocusedTestRecoveryState::FallbackPending,
+        );
     }
 
     pub(super) fn record_registered_focused_test_recovery(

@@ -203,6 +203,7 @@ impl DecisionAnchorLineages {
                         &root_binding,
                         SelectorOrigin::CallerEvidenceResult,
                     )?;
+                    self.record_caller_evidence_ready(&root_binding);
                 }
                 if let Some(callers) = caller_candidates {
                     let marked = self.mark_candidates(

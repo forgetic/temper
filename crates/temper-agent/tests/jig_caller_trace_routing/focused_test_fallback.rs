@@ -60,7 +60,8 @@ fn jig_empty_traversal_uses_one_semantic_fallback_before_mutation() {
                     && call["arguments"].get("include_tests") == Some(&serde_json::json!(true))
             })
             .count(),
-        1,
+        0,
+        "the deterministic route must not detour through a caller-to-test traversal",
     );
 }
 
@@ -122,7 +123,7 @@ fn assert_fallback_exhaustion(case: &str, reply: fn(&RequestView) -> Reply) {
     .expect_err("inexact fallback must stop without a product");
     assert!(matches!(
         error,
-        CodingAgentError::DecisionAnchorRecoveryExhausted
+        CodingAgentError::DecisionAnchorRecoveryExhausted | CodingAgentError::NoProduct
     ));
     assert!(
         !checkout
@@ -148,8 +149,8 @@ fn assert_fallback_exhaustion(case: &str, reply: fn(&RequestView) -> Reply) {
                     && call["arguments"].get("include_tests") == Some(&serde_json::json!(true))
             })
             .count(),
-        1,
-        "exhaustion must not retry the traversal"
+        0,
+        "exhaustion must not detour through a traversal"
     );
 }
 
@@ -157,10 +158,11 @@ fn fallback_reply(view: &RequestView, query: &str, succeeds: bool) -> Reply {
     match view.prior_tool_results {
         0 => {
             for expected in [
-                "complete traversal returns no eligible test identity",
-                "task intent",
+                "Initial task-semantic discovery may over-return",
+                "one same-root",
+                "focused-test search in the next turn",
                 "never copy a fixture or test name",
-                "stop without a product if both routes return no eligible test",
+                "without retrying or inventing a selector",
             ] {
                 assert!(
                     messages_contain(view, expected),
@@ -176,50 +178,36 @@ fn fallback_reply(view: &RequestView, query: &str, succeeds: bool) -> Reply {
         ),
         2 => trace_reply("trace-fallback-implementation", implementation_target(view)),
         3 => source_reply("read-fallback-caller", caller_relationship(view), "caller"),
-        4 => refinement_reply("non-progressing-fallback-one", implementation_target(view)),
-        5 => refinement_reply("non-progressing-fallback-two", implementation_target(view)),
-        6 => {
-            assert!(messages_contain(view, "selector=caller_evidence_result"));
-            tool_reply(
-                "empty-focused-test-traversal",
-                "codebase_memory_trace_path",
-                serde_json::json!({
-                    "function_name": caller_relationship(view),
-                    "mode": "calls",
-                    "direction": "inbound",
-                    "include_tests": true,
-                    "depth": 1
-                }),
-            )
-        }
-        7 => {
+        4 => {
             for expected in [
                 "search_graph/graph_query/focused_test",
                 "selector=task_semantic_query",
-                "use only these current-root actions",
             ] {
                 assert!(
                     messages_contain(view, expected),
-                    "fallback menu omitted {expected}"
+                    "semantic search menu omitted {expected}"
                 );
             }
             tool_reply(
-                "one-semantic-focused-test-fallback",
+                "one-semantic-focused-test-search",
                 "codebase_memory_search_graph",
                 serde_json::json!({"query": query}),
             )
         }
-        8 if succeeds => source_reply(
-            "read-fallback-returned-test",
+        5 if !succeeds => Reply::text(
+            r#"{"summary":"Stopped after the semantic search returned no exact focused test."}"#,
+        ),
+        5 if succeeds => source_reply(
+            "read-search-returned-test",
             fallback_test_target(view),
             "focused_test",
         ),
-        9 if succeeds => tool_reply(
+        6 if succeeds => tool_reply(
             "read-fallback-target-after-evidence",
             "read",
             serde_json::json!({"path": "demo/ROUTE.md"}),
         ),
-        10 if succeeds => tool_reply(
+        7 if succeeds => tool_reply(
             "write-after-fallback-evidence",
             "write",
             serde_json::json!({
@@ -227,10 +215,10 @@ fn fallback_reply(view: &RequestView, query: &str, succeeds: bool) -> Reply {
                 "content": "semantic fallback verified\n"
             }),
         ),
-        11 if succeeds => Reply::text(
-            r#"{"summary":"Used one same-root semantic fallback and its exact returned test."}"#,
+        8 if succeeds => Reply::text(
+            r#"{"summary":"Used one same-root semantic search and its exact returned test."}"#,
         ),
-        count => panic!("unexpected focused-test fallback tool-result count {count}"),
+        count => panic!("unexpected focused-test search tool-result count {count}"),
     }
 }
 

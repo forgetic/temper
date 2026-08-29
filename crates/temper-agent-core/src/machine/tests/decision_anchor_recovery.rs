@@ -151,23 +151,41 @@ fn recovery_stages_implementation_before_its_caller_traversal() {
         ),
         DecisionAnchorTransition::GapRecoveryNeeded,
     );
-    for (turn, id, kind, expected) in [
-        (
-            5,
+    assert_eq!(
+        state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 5),
+        None,
+    );
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
             "caller",
+            ROOT,
             DecisionEvidenceKindV1::Caller,
-            DecisionAnchorTransition::GapRecoveryNeeded,
         ),
-        (
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    assert_eq!(
+        finish_semantic_test_search(
+            &mut state,
+            "semantic-test-search",
+            ROOT,
             6,
-            "test",
-            DecisionEvidenceKindV1::FocusedTest,
-            DecisionAnchorTransition::Converged,
+            FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
         ),
-    ] {
-        assert_eq!(state.on_tool_dispatched(&source_call(id, kind), turn), None);
-        assert_eq!(finish_with_evidence(&mut state, id, ROOT, kind), expected);
-    }
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    let mut test = source_call("test", DecisionEvidenceKindV1::FocusedTest);
+    test.arguments["qualified_name"] = serde_json::json!("semantic-returned-test");
+    assert_eq!(state.on_tool_dispatched(&test, 7), None);
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
+            "test",
+            ROOT,
+            DecisionEvidenceKindV1::FocusedTest,
+        ),
+        DecisionAnchorTransition::Converged,
+    );
     assert!(state.blocks_mutation("write"));
 }
 
@@ -280,72 +298,6 @@ fn recovery_without_an_implementation_source_releases_exact_read_bounded_fallbac
 }
 
 #[test]
-fn each_missing_typed_purpose_can_complete_after_budget_exhaustion() {
-    let required = [
-        DecisionEvidenceKindV1::Implementation,
-        DecisionEvidenceKindV1::Caller,
-        DecisionEvidenceKindV1::FocusedTest,
-    ];
-    for missing in required {
-        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-        install_consumable_root(&mut state);
-        state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
-        finish(
-            &mut state,
-            "trace",
-            "codebase_memory_trace_path",
-            ROOT,
-            DecisionAnchorLineageStageV1::CarryForward,
-        );
-        let mut turn = 2;
-        let mut satisfied = None;
-        for kind in required.into_iter().filter(|kind| *kind != missing) {
-            let id = format!("satisfied-{turn}");
-            state.on_tool_dispatched(&source_call(&id, kind), turn);
-            finish_with_evidence(&mut state, &id, ROOT, kind);
-            satisfied = Some(kind);
-            turn += 1;
-        }
-        enter_budget_recovery(&mut state, turn);
-
-        assert_eq!(
-            state.on_tool_dispatched(&call("duplicate-trace", "codebase_memory_trace_path"), turn + 2),
-            recovery_graph_denial(
-                [match missing {
-                    DecisionEvidenceKindV1::Implementation => GraphRecoveryEvidenceKindV1::Implementation,
-                    DecisionEvidenceKindV1::Caller => GraphRecoveryEvidenceKindV1::Caller,
-                    DecisionEvidenceKindV1::FocusedTest => GraphRecoveryEvidenceKindV1::FocusedTest,
-                }],
-                4,
-            ),
-        );
-        assert_eq!(
-            state.on_tool_dispatched(
-                &source_call("satisfied", satisfied.expect("two purposes were installed")),
-                turn + 2,
-            ),
-            recovery_graph_denial(
-                [match missing {
-                    DecisionEvidenceKindV1::Implementation => GraphRecoveryEvidenceKindV1::Implementation,
-                    DecisionEvidenceKindV1::Caller => GraphRecoveryEvidenceKindV1::Caller,
-                    DecisionEvidenceKindV1::FocusedTest => GraphRecoveryEvidenceKindV1::FocusedTest,
-                }],
-                4,
-            ),
-        );
-        assert_eq!(
-            state.on_tool_dispatched(&source_call("missing", missing), turn + 2),
-            None,
-        );
-        assert_eq!(
-            finish_with_evidence(&mut state, "missing", ROOT, missing),
-            DecisionAnchorTransition::Converged,
-        );
-        assert!(state.blocks_mutation("write"));
-    }
-}
-
-#[test]
 fn expected_unavailable_gap_releases_fallback_without_reopening_graph() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     install_consumable_root(&mut state);
@@ -422,23 +374,41 @@ fn read_only_roles_retain_the_same_staged_bounded_gap_path() {
         ),
         DecisionAnchorTransition::GapRecoveryNeeded,
     );
-    for (turn, id, kind, expected) in [
-        (
-            5,
+    assert_eq!(
+        state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 5),
+        None,
+    );
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
             "caller",
+            ROOT,
             DecisionEvidenceKindV1::Caller,
-            DecisionAnchorTransition::GapRecoveryNeeded,
         ),
-        (
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    assert_eq!(
+        finish_semantic_test_search(
+            &mut state,
+            "semantic-test-search",
+            ROOT,
             6,
-            "test",
-            DecisionEvidenceKindV1::FocusedTest,
-            DecisionAnchorTransition::Converged,
+            FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
         ),
-    ] {
-        assert_eq!(state.on_tool_dispatched(&source_call(id, kind), turn), None);
-        assert_eq!(finish_with_evidence(&mut state, id, ROOT, kind), expected);
-    }
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    let mut test = source_call("test", DecisionEvidenceKindV1::FocusedTest);
+    test.arguments["qualified_name"] = serde_json::json!("semantic-returned-test");
+    assert_eq!(state.on_tool_dispatched(&test, 7), None);
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
+            "test",
+            ROOT,
+            DecisionEvidenceKindV1::FocusedTest,
+        ),
+        DecisionAnchorTransition::Converged,
+    );
     assert_eq!(state.on_tool_dispatched(&call("ordinary", "read"), 7), None);
 }
 

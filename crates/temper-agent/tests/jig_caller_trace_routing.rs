@@ -72,7 +72,7 @@ fn jig_routes_empty_inbound_trace_and_exact_source_relationships() {
             "get_code_snippet",
             "trace_path",
             "get_code_snippet",
-            "trace_path",
+            "search_graph",
             "get_code_snippet",
         ]
     );
@@ -80,10 +80,10 @@ fn jig_routes_empty_inbound_trace_and_exact_source_relationships() {
     assert_eq!(calls[2]["arguments"]["function_name"], IMPLEMENTATION);
     assert_eq!(calls[2]["arguments"]["direction"], "inbound");
     assert_eq!(calls[3]["arguments"]["qualified_name"], CALLER);
-    assert_eq!(calls[4]["arguments"]["function_name"], CALLER);
-    assert_eq!(calls[4]["arguments"]["mode"], "calls");
-    assert_eq!(calls[4]["arguments"]["direction"], "inbound");
-    assert_eq!(calls[4]["arguments"]["include_tests"], true);
+    assert_eq!(
+        calls[4]["arguments"]["query"],
+        "request affinity remains stable across worker selection"
+    );
     assert_eq!(calls[5]["arguments"]["qualified_name"], FOCUSED_TEST);
     assert_eq!(
         calls
@@ -137,8 +137,8 @@ fn jig_does_not_repeat_a_locally_denied_selector_evidence_pair() {
             .iter()
             .filter(|call| call["name"] == "trace_path")
             .count(),
-        2,
-        "only the implementation trace and one caller-to-test traversal may reach the provider"
+        1,
+        "only the implementation caller trace may reach the provider"
     );
     assert_eq!(
         calls
@@ -181,10 +181,16 @@ fn minimal_routing_reply(view: &RequestView) -> Reply {
         ),
         2 => trace_reply("trace-selected-implementation", implementation_target(view)),
         3 => source_reply("read-returned-caller", caller_relationship(view), "caller"),
-        4 => test_trace_reply("find-focused-test-from-caller", caller_relationship(view)),
+        4 => tool_reply(
+            "search-focused-test-semantically",
+            "codebase_memory_search_graph",
+            serde_json::json!({
+                "query": "request affinity remains stable across worker selection"
+            }),
+        ),
         5 => source_reply(
             "read-returned-focused-test",
-            focused_test_relationship(view),
+            semantic_test_relationship(view),
             "focused_test",
         ),
         6 => tool_reply(
@@ -238,10 +244,8 @@ fn recovery_routing_reply(view: &RequestView) -> Reply {
         6 => {
             assert!(messages_contain(view, "missing evidence: [focused_test]"));
             for expected in [
-                "selector=caller_evidence_result",
-                "relationship=calls",
-                "direction=inbound",
-                "include_tests=true",
+                "search_graph/graph_query/focused_test",
+                "selector=task_semantic_query",
             ] {
                 assert!(messages_contain(view, expected), "menu omitted {expected}");
             }
@@ -255,13 +259,10 @@ fn recovery_routing_reply(view: &RequestView) -> Reply {
                     }),
                 ),
                 (
-                    "recover-test-selector-from-caller",
-                    "codebase_memory_trace_path",
+                    "recover-test-selector-semantically",
+                    "codebase_memory_search_graph",
                     serde_json::json!({
-                        "function_name": caller_relationship(view),
-                        "mode": "calls",
-                        "direction": "inbound",
-                        "include_tests": true
+                        "query": "request affinity remains stable across worker selection"
                     }),
                 ),
             ])
@@ -279,7 +280,7 @@ fn recovery_routing_reply(view: &RequestView) -> Reply {
                 "recover-exact-returned-focused-test",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "qualified_name": focused_test_relationship(view),
+                    "qualified_name": semantic_test_relationship(view),
                     "decision_evidence_kind": "focused_test"
                 }),
             ),
@@ -317,19 +318,6 @@ fn trace_reply(id: &str, function_name: String) -> Reply {
         id,
         "codebase_memory_trace_path",
         serde_json::json!({"function_name": function_name, "direction": "inbound"}),
-    )
-}
-
-fn test_trace_reply(id: &str, function_name: String) -> Reply {
-    tool_reply(
-        id,
-        "codebase_memory_trace_path",
-        serde_json::json!({
-            "function_name": function_name,
-            "mode": "calls",
-            "direction": "inbound",
-            "include_tests": true
-        }),
     )
 }
 
@@ -406,17 +394,20 @@ fn caller_relationship(view: &RequestView) -> String {
         .expect("exact implementation source returned a caller")
 }
 
-fn focused_test_relationship(view: &RequestView) -> String {
+fn semantic_test_relationship(view: &RequestView) -> String {
     provider_results(view)
-        .into_iter()
-        .find(|result| result.get("include_tests").and_then(JsonValue::as_bool) == Some(true))
-        .and_then(|result| {
+        .iter()
+        .rev()
+        .filter_map(|result| result.get("results").and_then(JsonValue::as_array))
+        .flatten()
+        .find_map(|result| {
             result
-                .pointer("/callers/0/qualified_name")
+                .get("qualified_name")
                 .and_then(JsonValue::as_str)
+                .filter(|target| *target == FOCUSED_TEST)
                 .map(str::to_string)
         })
-        .expect("test-inclusive caller traversal returned a focused test")
+        .expect("semantic search returned a focused test")
 }
 
 fn provider_results(view: &RequestView) -> Vec<JsonValue> {

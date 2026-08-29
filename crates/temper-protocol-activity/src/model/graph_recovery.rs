@@ -127,7 +127,7 @@ impl GraphRecoveryActionV1 {
         }
     }
 
-    /// Discovers a focused test after a settled empty caller traversal.
+    /// Discovers a focused test after exact caller source evidence.
     pub const fn focused_test_semantic_fallback() -> Self {
         Self {
             tool: GraphCorrelationToolV1::SearchGraph,

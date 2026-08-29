@@ -161,6 +161,138 @@ fn caller_to_test_traversal_requires_typed_origins_and_unlocks_exact_test_source
 }
 
 #[test]
+fn post_caller_semantic_search_replaces_initial_test_candidates() {
+    let mut lineages = DecisionAnchorLineages::default();
+    let root = lineages
+        .record(
+            &GraphCorrelationV1::new(
+                GraphCorrelationToolV1::SearchGraph,
+                GraphCorrelationTargetKindV1::GraphQuery,
+                "worker selection behavior",
+            )
+            .unwrap(),
+            &serde_json::json!({"query": "worker selection behavior"}),
+            Some(&structured_parts(serde_json::json!({
+                "results": [
+                    {"qualified_name": "crate::route::select_worker"},
+                    {
+                        "qualified_name": "crate::tests::initial_candidate",
+                        "is_test": true
+                    }
+                ]
+            }))),
+        )
+        .unwrap();
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::route::select_worker"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::route::select_worker"
+            }))),
+            Some(DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+    let trace_input = serde_json::json!({
+        "function_name": "crate::route::select_worker",
+        "mode": "calls",
+        "direction": "inbound"
+    });
+    assert!(matches!(
+        lineages.resolve(
+            GraphCorrelationToolV1::TracePath.public_name(),
+            &trace_input,
+        ),
+        LineageAdmissionOutcome::Eligible(_)
+    ));
+    lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::FunctionName),
+            &trace_input,
+            Some(&structured_parts(serde_json::json!({
+                "function": {"qualified_name": "crate::route::select_worker"},
+                "callers": [{"qualified_name": "crate::delivery::dispatch"}]
+            }))),
+        )
+        .unwrap();
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::delivery::dispatch"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::delivery::dispatch"
+            }))),
+            Some(DecisionEvidenceKindV1::Caller),
+        )
+        .unwrap();
+
+    let semantic_input = serde_json::json!({"query": "worker selection regression"});
+    let semantic_admission = lineages.resolve(
+        GraphCorrelationToolV1::SearchGraph.public_name(),
+        &semantic_input,
+    );
+    let LineageAdmissionOutcome::Eligible(semantic_admission) = semantic_admission else {
+        panic!("exact caller evidence must admit the semantic focused-test stage");
+    };
+    assert!(semantic_admission.matches_root(&root.root_binding));
+    assert_eq!(
+        lineages.resolve(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &serde_json::json!({
+                "qualified_name": "crate::tests::initial_candidate",
+                "decision_evidence_kind": "focused_test"
+            }),
+        ),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection),
+        "the semantic stage must revoke the initial search's test-shaped candidate",
+    );
+
+    let semantic_result = lineages
+        .record(
+            &GraphCorrelationV1::new(
+                GraphCorrelationToolV1::SearchGraph,
+                GraphCorrelationTargetKindV1::GraphQuery,
+                "worker selection regression",
+            )
+            .unwrap(),
+            &semantic_input,
+            Some(&structured_parts(serde_json::json!({
+                "results": [{
+                    "qualified_name": "crate::tests::semantic_candidate",
+                    "is_test": true
+                }]
+            }))),
+        )
+        .unwrap();
+    assert_eq!(semantic_result.root_binding, root.root_binding);
+    assert_eq!(
+        semantic_result.focused_test_discovery,
+        Some(FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned)
+    );
+    assert_eq!(
+        lineages.resolve(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &serde_json::json!({
+                "qualified_name": "crate::tests::initial_candidate",
+                "decision_evidence_kind": "focused_test"
+            }),
+        ),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection),
+    );
+    let exact_semantic_test = lineages.resolve(
+        GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+        &serde_json::json!({
+            "qualified_name": "crate::tests::semantic_candidate",
+            "decision_evidence_kind": "focused_test"
+        }),
+    );
+    let LineageAdmissionOutcome::Eligible(exact_semantic_test) = exact_semantic_test else {
+        panic!("the exact semantic-search result must become the sole focused-test selector");
+    };
+    assert!(exact_semantic_test.matches_root(&root.root_binding));
+}
+
+#[test]
 fn empty_traversal_opens_one_same_root_semantic_fallback_and_only_its_exact_test() {
     let mut lineages = DecisionAnchorLineages::default();
     let root = lineages

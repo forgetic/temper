@@ -8,7 +8,6 @@ pub(super) fn reply(
     view: &RequestView,
     record: &impl Fn(DecisionStep),
     next_target: &impl Fn() -> String,
-    focused_test_target: &impl Fn() -> String,
     recovery_selector: &impl Fn(&str) -> String,
     mutation_was_blocked: &impl Fn() -> bool,
 ) -> Option<Reply> {
@@ -144,10 +143,9 @@ pub(super) fn reply(
             record(DecisionStep::ProviderFailure);
             tool_reply(
                 "implementation-focused-provider-failure",
-                "codebase_memory_get_code_snippet",
+                "codebase_memory_search_graph",
                 serde_json::json!({
-                    "qualified_name": focused_test_target(),
-                    "decision_evidence_kind": "focused_test",
+                    "query": "focused behavioral regression",
                     "force_unavailable": true,
                 }),
             )
