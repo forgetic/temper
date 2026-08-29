@@ -149,12 +149,17 @@ impl DecisionAnchorState {
                 let already_rejected = tuple_identity
                     .is_some_and(|identity| self.rejected_recovery_tuples.contains(&identity));
 
+                // A traversal is meaningful only for the staged active root.
+                // A selector owned by a retained sibling must be denied just
+                // like an unknown selector instead of escaping to the provider.
+                let is_traversal = call.name == GraphCorrelationToolV1::TracePath.public_name();
                 let staged_call = (admission.is_some() || incomplete_graph_selector.is_some())
                     && snapshot.as_ref().is_some_and(|snapshot| {
                         requested_action.is_some()
-                            && admitted_root
-                                .as_deref()
-                                .is_none_or(|root| root == snapshot.active_root)
+                            && (is_traversal
+                                || admitted_root
+                                    .as_deref()
+                                    .is_none_or(|root| root == snapshot.active_root))
                     });
                 if self.exploration != ExplorationStatus::Open || staged_call {
                     let admissible = snapshot.as_ref().is_some_and(|snapshot| {

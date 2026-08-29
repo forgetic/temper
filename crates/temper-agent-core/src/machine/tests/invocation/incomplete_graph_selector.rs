@@ -1,3 +1,57 @@
+use crate::EligibleLineageAdmission;
+use temper_protocol_activity::{
+    DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphCorrelationToolV1,
+};
+
+const ACTIVE_ROOT: &str = "00000000-0000-4000-8000-000000000001";
+const SIBLING_ROOT: &str = "00000000-0000-4000-8000-000000000002";
+const ACTIVE_IMPLEMENTATION: &str = "returned-implementation";
+const NON_RETURNED_ACTIVE_SELECTOR: &str = "advertised-sibling-implementation";
+
+struct RootAwareTraversalAdmission;
+
+impl LineageAdmissionResolver for RootAwareTraversalAdmission {
+    fn resolve(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> LineageAdmissionOutcome {
+        let eligible = match tool_name {
+            "codebase_memory_get_code_snippet"
+                if arguments["qualified_name"] == ACTIVE_IMPLEMENTATION =>
+            {
+                EligibleLineageAdmission::new(
+                    ACTIVE_ROOT.to_string(),
+                    DecisionAnchorTargetKindV1::QualifiedName,
+                    GraphCorrelationToolV1::GetCodeSnippet,
+                    Some(DecisionEvidenceKindV1::Implementation),
+                )
+            }
+            "codebase_memory_trace_path"
+                if arguments["function_name"] == ACTIVE_IMPLEMENTATION =>
+            {
+                EligibleLineageAdmission::implementation_caller_traversal(
+                    ACTIVE_ROOT.to_string(),
+                    DecisionAnchorTargetKindV1::FunctionName,
+                )
+            }
+            "codebase_memory_trace_path"
+                if arguments["function_name"] == NON_RETURNED_ACTIVE_SELECTOR =>
+            {
+                EligibleLineageAdmission::implementation_caller_traversal(
+                    SIBLING_ROOT.to_string(),
+                    DecisionAnchorTargetKindV1::FunctionName,
+                )
+            }
+            _ => None,
+        };
+        eligible.map_or_else(
+            || LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector),
+            LineageAdmissionOutcome::Eligible,
+        )
+    }
+}
+
 #[test]
 fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selector() {
     use temper_protocol_activity::{
@@ -198,5 +252,206 @@ fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selecto
             if call.id == "complete-trace"
                 && call.name == "codebase_memory_trace_path"
                 && call.arguments["function_name"] == "returned-implementation"
+    )));
+}
+
+#[test]
+fn staged_non_returned_trace_is_denied_before_dispatch_then_accepts_active_selector() {
+    use temper_protocol_activity::{
+        DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, GraphCorrelationTargetKindV1,
+        GraphCorrelationV1, GraphExplorationClosedV1, GraphRecoveryEvidenceKindV1,
+    };
+
+    let catalog = catalog(&[
+        "codebase_memory_search_graph",
+        "codebase_memory_get_code_snippet",
+        "codebase_memory_trace_path",
+    ]);
+    assert!(crate::arguments_match(
+        catalog
+            .schema("codebase_memory_trace_path")
+            .expect("trace schema"),
+        &serde_json::json!({
+            "function_name": NON_RETURNED_ACTIVE_SELECTOR,
+            "direction": "inbound"
+        }),
+    ));
+    let mut machine = machine(catalog)
+        .with_lineage_admission(Arc::new(RootAwareTraversalAdmission));
+    let _ = machine.on_start(EngineTime::ZERO);
+
+    let output = |root: &str,
+                  tool: GraphCorrelationToolV1,
+                  target_kind: GraphCorrelationTargetKindV1,
+                  stage: DecisionAnchorLineageStageV1,
+                  evidence: Option<DecisionEvidenceKindV1>| {
+        let result_kinds = [
+            DecisionAnchorTargetKindV1::FunctionName,
+            DecisionAnchorTargetKindV1::QualifiedName,
+        ];
+        let lineage = evidence.map_or_else(
+            || {
+                DecisionAnchorLineageV1::new(
+                    root.to_string(),
+                    stage,
+                    DecisionAnchorTargetKindV1::from_graph_correlation(target_kind),
+                    result_kinds,
+                )
+                .unwrap()
+            },
+            |evidence| {
+                DecisionAnchorLineageV1::new_with_decision_evidence_kind(
+                    root.to_string(),
+                    stage,
+                    DecisionAnchorTargetKindV1::from_graph_correlation(target_kind),
+                    result_kinds,
+                    evidence,
+                )
+                .unwrap()
+            },
+        );
+        ToolOutput {
+            content: Vec::new(),
+            details: Some(serde_json::json!({
+                SAFE_GRAPH_CORRELATION_DETAIL_KEY:
+                    GraphCorrelationV1::new(tool, target_kind, "request").unwrap(),
+                SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: lineage,
+            })),
+            is_error: false,
+        }
+    };
+
+    let _ = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "openai-responses",
+            vec![
+                (
+                    "active-root",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query":"selected implementation"}),
+                ),
+                (
+                    "sibling-root",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query":"independent implementation"}),
+                ),
+            ],
+        )),
+    );
+    let _ = complete(
+        &mut machine,
+        tool_finished(
+            "active-root",
+            output(
+                ACTIVE_ROOT,
+                GraphCorrelationToolV1::SearchGraph,
+                GraphCorrelationTargetKindV1::GraphQuery,
+                DecisionAnchorLineageStageV1::Root,
+                None,
+            ),
+        ),
+    );
+    let _ = complete(
+        &mut machine,
+        tool_finished(
+            "sibling-root",
+            output(
+                SIBLING_ROOT,
+                GraphCorrelationToolV1::SearchGraph,
+                GraphCorrelationTargetKindV1::GraphQuery,
+                DecisionAnchorLineageStageV1::Root,
+                None,
+            ),
+        ),
+    );
+    let _ = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "openai-responses",
+            vec![(
+                "implementation",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": ACTIVE_IMPLEMENTATION,
+                    "decision_evidence_kind": "implementation"
+                }),
+            )],
+        )),
+    );
+    let _ = complete(
+        &mut machine,
+        tool_finished(
+            "implementation",
+            output(
+                ACTIVE_ROOT,
+                GraphCorrelationToolV1::GetCodeSnippet,
+                GraphCorrelationTargetKindV1::QualifiedName,
+                DecisionAnchorLineageStageV1::CarryForward,
+                Some(DecisionEvidenceKindV1::Implementation),
+            ),
+        ),
+    );
+
+    let denied = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "openai-responses",
+            vec![(
+                "non-returned-trace",
+                "codebase_memory_trace_path",
+                serde_json::json!({
+                    "function_name": NON_RETURNED_ACTIVE_SELECTOR,
+                    "direction": "inbound"
+                }),
+            )],
+        )),
+    );
+    let expected = GraphExplorationClosedV1::recoverable_without_actions(
+        [
+            GraphRecoveryEvidenceKindV1::Trace,
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ],
+        4,
+    )
+    .unwrap();
+    assert!(denied.iter().any(|request| matches!(
+        request,
+        AgentRequest::RunTool {
+            call,
+            denial: Some(ToolCallDenial::GraphExplorationClosed(Some(details))),
+            rejection: None,
+            ..
+        } if call.id == "non-returned-trace" && details == &expected
+    )));
+
+    let _ = complete(
+        &mut machine,
+        tool_failed(
+            "non-returned-trace",
+            tool_output("local traversal denial", true),
+            ToolFailureDiagnostic::graph_exploration(expected),
+        ),
+    );
+    let recovered = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "openai-responses",
+            vec![(
+                "active-trace",
+                "codebase_memory_trace_path",
+                serde_json::json!({
+                    "function_name": ACTIVE_IMPLEMENTATION,
+                    "direction": "inbound"
+                }),
+            )],
+        )),
+    );
+    assert!(recovered.iter().any(|request| matches!(
+        request,
+        AgentRequest::RunTool { call, denial: None, rejection: None, .. }
+            if call.id == "active-trace"
+                && call.arguments["function_name"] == ACTIVE_IMPLEMENTATION
     )));
 }
