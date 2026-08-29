@@ -22,9 +22,7 @@ impl DecisionAnchorLineages {
             return self
                 .recovery_reference_selectors
                 .get(raw_value)
-                .map(|reference| &reference.selector)
-                .filter(|selector| selector.kind == selector_kind)
-                .cloned();
+                .and_then(|reference| reference.selector(selector_kind));
         }
         let value = match target_kind {
             GraphCorrelationTargetKindV1::FunctionName => canonical_function_name(raw_value),
@@ -136,7 +134,16 @@ impl DecisionAnchorLineages {
     }
 }
 
-pub(super) fn implementation_traversal_ready(typed_parts: Option<&[McpToolResultPart]>) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ImplementationTraversalEvidence {
+    Ready,
+    Partial,
+    CallerIdentity,
+}
+
+pub(super) fn implementation_traversal_evidence(
+    typed_parts: Option<&[McpToolResultPart]>,
+) -> ImplementationTraversalEvidence {
     let mut positive_caller_count = false;
     let mut caller_identity = false;
     for part in typed_parts.unwrap_or_default() {
@@ -150,7 +157,13 @@ pub(super) fn implementation_traversal_ready(typed_parts: Option<&[McpToolResult
             collect_traversal_readiness(&value, &mut positive_caller_count, &mut caller_identity);
         }
     }
-    !positive_caller_count || caller_identity
+    if caller_identity {
+        ImplementationTraversalEvidence::CallerIdentity
+    } else if positive_caller_count {
+        ImplementationTraversalEvidence::Partial
+    } else {
+        ImplementationTraversalEvidence::Ready
+    }
 }
 
 fn collect_traversal_readiness(

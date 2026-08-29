@@ -500,7 +500,7 @@ SEMANTIC_FOCUSED_TEST = "crate::tests::renamed_replay_preserves_shard_ownership"
 ACTIVE_ROOT_TEST = "crate::tests::replay_uses_selected_lane"
 INCIDENTAL_IMPLEMENTATION = "crate::routing::legacy_dispatch_key"
 CALL_LOG = os.path.join(os.path.dirname(__file__), "calls.jsonl")
-partial_implementation = False
+partial_implementation_reads = None
 
 TOOLS = [
     {"name": "search_graph", "description": "Targeted graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "name_pattern": {"type": "string"}, "project": {"type": "string"}}}},
@@ -559,7 +559,7 @@ for line in sys.stdin:
         elif name == "search_code":
             selected = arguments.get("pattern")
             if selected == "partial select worker":
-                partial_implementation = True
+                partial_implementation_reads = 0
                 result(request["id"], {"results": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})
             elif selected == SEMANTIC_IMPLEMENTATION:
                 result(request["id"], {"results": [{"qualified_name": SEMANTIC_IMPLEMENTATION, "name": "choose_lane"}]})
@@ -591,7 +591,9 @@ for line in sys.stdin:
             selected = arguments.get("qualified_name")
             if selected == IMPLEMENTATION:
                 payload = {"qualified_name": IMPLEMENTATION, "name": "select_worker", "file_path": "ROUTE.md", "source": "implementation source"}
-                payload["callers"] = 1 if partial_implementation else [{"qualified_name": CALLER, "name": "dispatch"}]
+                if partial_implementation_reads is not None:
+                    partial_implementation_reads += 1
+                payload["callers"] = 1 if partial_implementation_reads == 1 else [{"qualified_name": CALLER, "name": "dispatch"}]
                 result(request["id"], payload)
             elif selected == CALLER:
                 result(request["id"], {"qualified_name": CALLER, "name": "dispatch", "file_path": "ROUTE.md", "source": "caller source", "callees": [{"qualified_name": IMPLEMENTATION, "name": "select_worker"}]})

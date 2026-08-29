@@ -22,7 +22,7 @@ fn jig_defers_partial_implementation_traversal_then_completes_typed_evidence() {
             &provider,
             &context,
             &cwd,
-            11,
+            12,
             None,
             Some(&config),
         )
@@ -40,6 +40,7 @@ fn jig_defers_partial_implementation_traversal_then_completes_typed_evidence() {
         tool_names(&calls),
         [
             "search_code",
+            "get_code_snippet",
             "get_code_snippet",
             "trace_path",
             "get_code_snippet",
@@ -93,31 +94,39 @@ fn partial_readiness_reply(view: &RequestView) -> Reply {
                 view,
                 "no provider call or recovery allowance was consumed"
             ));
-            assert!(messages_contain(view, "remaining allowance=n/a"));
-            trace_reply(
-                "trace-after-local-deferral",
+            assert!(messages_contain(
+                view,
+                "required next stage=[get_code_snippet/qualified_name/implementation]"
+            ));
+            source_reply(
+                "refresh-partial-implementation",
                 implementation_recovery_reference(view),
+                "implementation",
             )
         }
-        4 => source_reply("read-partial-caller", caller_relationship(view), "caller"),
-        5 => tool_reply(
+        4 => trace_reply(
+            "trace-after-provider-enrichment",
+            implementation_recovery_reference(view),
+        ),
+        5 => source_reply("read-partial-caller", caller_relationship(view), "caller"),
+        6 => tool_reply(
             "search-partial-focused-test",
             "codebase_memory_search_graph",
             serde_json::json!({
                 "query": "request affinity remains stable across worker selection"
             }),
         ),
-        6 => source_reply(
+        7 => source_reply(
             "read-partial-focused-test",
             semantic_test_relationship(view),
             "focused_test",
         ),
-        7 => tool_reply(
+        8 => tool_reply(
             "read-partial-target",
             "read",
             serde_json::json!({"path": "demo/ROUTE.md"}),
         ),
-        8 => tool_reply(
+        9 => tool_reply(
             "write-partial-product",
             "write",
             serde_json::json!({
@@ -125,7 +134,7 @@ fn partial_readiness_reply(view: &RequestView) -> Reply {
                 "content": "partial traversal recovered locally\n"
             }),
         ),
-        9 => Reply::text(
+        10 => Reply::text(
             r#"{"summary":"Deferred partial traversal and completed typed caller and focused-test evidence."}"#,
         ),
         count => panic!("unexpected partial-readiness tool-result count {count}"),

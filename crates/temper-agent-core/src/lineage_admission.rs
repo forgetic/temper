@@ -25,10 +25,6 @@ pub type LineageAdmissionHandle = Arc<dyn LineageAdmissionResolver>;
 pub trait LineageAdmissionResolver: Send + Sync {
     fn resolve(&self, tool_name: &str, arguments: &Value) -> LineageAdmissionOutcome;
 
-    /// Advances selectors deferred for one model turn while their provider
-    /// result was only partially enriched.
-    fn advance_local_traversal_readiness(&self) {}
-
     fn resolve_source_target(&self, _lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
         TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
     }
@@ -128,6 +124,7 @@ pub enum LineageAdmissionStatus {
     UnsupportedTool,
     IncapableSelection,
     TraversalNotReady,
+    TraversalReadinessExhausted,
 }
 
 /// Closed pre-provider result. Neither variant can retain a raw selector.
@@ -145,6 +142,7 @@ pub struct EligibleLineageAdmission {
     tool_kind: GraphCorrelationToolV1,
     evidence_purpose: Option<DecisionEvidenceKindV1>,
     recovery_purpose: Option<DecisionEvidenceKindV1>,
+    traversal_readiness_recheck: bool,
 }
 
 impl EligibleLineageAdmission {
@@ -176,6 +174,7 @@ impl EligibleLineageAdmission {
             tool_kind,
             evidence_purpose,
             recovery_purpose: None,
+            traversal_readiness_recheck: false,
         })
     }
 
@@ -190,6 +189,22 @@ impl EligibleLineageAdmission {
             tool_kind: GraphCorrelationToolV1::TracePath,
             evidence_purpose: None,
             recovery_purpose: None,
+            traversal_readiness_recheck: false,
+        })
+    }
+
+    pub fn implementation_traversal_readiness_recheck(
+        root_binding: String,
+        selector_kind: DecisionAnchorTargetKindV1,
+    ) -> Option<Self> {
+        (selector_kind == DecisionAnchorTargetKindV1::QualifiedName).then_some(())?;
+        Some(Self {
+            root_binding: OpaqueLineageRootBinding::new(root_binding)?,
+            selector_kind,
+            tool_kind: GraphCorrelationToolV1::GetCodeSnippet,
+            evidence_purpose: Some(DecisionEvidenceKindV1::Implementation),
+            recovery_purpose: None,
+            traversal_readiness_recheck: true,
         })
     }
 
@@ -204,6 +219,7 @@ impl EligibleLineageAdmission {
             tool_kind: GraphCorrelationToolV1::TracePath,
             evidence_purpose: None,
             recovery_purpose: Some(DecisionEvidenceKindV1::FocusedTest),
+            traversal_readiness_recheck: false,
         })
     }
 
@@ -218,6 +234,7 @@ impl EligibleLineageAdmission {
             tool_kind: GraphCorrelationToolV1::SearchGraph,
             evidence_purpose: None,
             recovery_purpose: Some(DecisionEvidenceKindV1::FocusedTest),
+            traversal_readiness_recheck: false,
         })
     }
 
@@ -237,6 +254,10 @@ impl EligibleLineageAdmission {
         self.recovery_purpose
     }
 
+    pub const fn is_traversal_readiness_recheck(&self) -> bool {
+        self.traversal_readiness_recheck
+    }
+
     /// Compares a trusted lineage root without exposing this process-local
     /// binding to callers, formatting, messages, or serialization.
     pub fn matches_root(&self, candidate: &str) -> bool {
@@ -253,6 +274,10 @@ impl fmt::Debug for EligibleLineageAdmission {
             .field("tool_kind", &self.tool_kind)
             .field("evidence_purpose", &self.evidence_purpose)
             .field("recovery_purpose", &self.recovery_purpose)
+            .field(
+                "traversal_readiness_recheck",
+                &self.traversal_readiness_recheck,
+            )
             .finish()
     }
 }

@@ -76,13 +76,6 @@ impl DecisionAnchorLineageRegistry {
 }
 
 impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
-    fn advance_local_traversal_readiness(&self) {
-        self.lineages
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .advance_local_traversal_readiness();
-    }
-
     fn resolve(&self, tool_name: &str, arguments: &Value) -> LineageAdmissionOutcome {
         let mut lineages = self
             .lineages
@@ -115,7 +108,7 @@ impl DecisionAnchorLineages {
         use LineageAdmissionOutcome::{Eligible, Ineligible};
         use LineageAdmissionStatus::{
             AmbiguousSelector, BroadSelector, IncapableSelection, MalformedSelector,
-            TraversalNotReady, UnknownSelector, UnsupportedTool,
+            TraversalNotReady, TraversalReadinessExhausted, UnknownSelector, UnsupportedTool,
         };
 
         let Some(tool_kind) = GraphCorrelationToolV1::from_public_name(tool_name) else {
@@ -245,33 +238,70 @@ impl DecisionAnchorLineages {
         let Some(selector) = self.selector_for_input(target_kind, input) else {
             return Ineligible(MalformedSelector);
         };
-        if tool_kind == GraphCorrelationToolV1::TracePath
-            && recovery_purpose.is_none()
-            && self
+        if tool_kind == GraphCorrelationToolV1::TracePath && recovery_purpose.is_none() {
+            let readiness = self
                 .selectors
                 .get(&selector)
                 .and_then(Option::as_ref)
-                .is_some_and(|binding| {
-                    binding.implementation_evidence_result
-                        && binding.implementation_traversal_readiness
-                            != super::ImplementationTraversalReadiness::Ready
-                })
-        {
-            if let Some(Some(binding)) = self.selectors.get_mut(&selector) {
-                if binding.implementation_traversal_readiness
-                    == super::ImplementationTraversalReadiness::Partial
-                {
-                    binding.implementation_traversal_readiness =
-                        super::ImplementationTraversalReadiness::LocallyDeferred;
+                .filter(|binding| binding.implementation_evidence_result)
+                .map(|binding| binding.implementation_traversal_readiness);
+            let status = match readiness {
+                Some(super::ImplementationTraversalReadiness::Partial) => {
+                    self.transition_equivalent_readiness(
+                        &selector,
+                        super::ImplementationTraversalReadiness::Partial,
+                        super::ImplementationTraversalReadiness::RecheckAvailable,
+                    );
+                    Some(TraversalNotReady)
                 }
+                Some(super::ImplementationTraversalReadiness::RecheckAvailable) => {
+                    self.transition_equivalent_readiness(
+                        &selector,
+                        super::ImplementationTraversalReadiness::RecheckAvailable,
+                        super::ImplementationTraversalReadiness::RecheckExhausted,
+                    );
+                    Some(TraversalReadinessExhausted)
+                }
+                Some(
+                    super::ImplementationTraversalReadiness::RecheckPending
+                    | super::ImplementationTraversalReadiness::RecheckExhausted,
+                ) => Some(TraversalReadinessExhausted),
+                Some(super::ImplementationTraversalReadiness::Ready) | None => None,
+            };
+            if let Some(status) = status {
+                return Ineligible(status);
             }
-            return Ineligible(TraversalNotReady);
         }
         let binding = match self.selectors.get(&selector) {
             Some(Some(binding)) => binding,
             Some(None) => return Ineligible(AmbiguousSelector),
             None => return Ineligible(UnknownSelector),
         };
+        let readiness_recheck = tool_kind == GraphCorrelationToolV1::GetCodeSnippet
+            && evidence_purpose == Some(DecisionEvidenceKindV1::Implementation)
+            && object
+                .get("qualified_name")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.starts_with(super::RECOVERY_SELECTOR_REFERENCE_PREFIX));
+        if readiness_recheck {
+            if binding.implementation_traversal_readiness
+                != super::ImplementationTraversalReadiness::RecheckAvailable
+            {
+                return Ineligible(IncapableSelection);
+            }
+            let root_binding = binding.root_binding.clone();
+            self.transition_equivalent_readiness(
+                &selector,
+                super::ImplementationTraversalReadiness::RecheckAvailable,
+                super::ImplementationTraversalReadiness::RecheckPending,
+            );
+            return EligibleLineageAdmission::implementation_traversal_readiness_recheck(
+                root_binding,
+                selector.kind,
+            )
+            .map(Eligible)
+            .unwrap_or(Ineligible(IncapableSelection));
+        }
         if evidence_purpose == Some(DecisionEvidenceKindV1::Implementation)
             && !binding.implementation_evidence_result
             && self.selectors.values().flatten().any(|candidate| {
@@ -333,13 +363,25 @@ impl DecisionAnchorLineages {
         .unwrap_or(Ineligible(IncapableSelection))
     }
 
-    pub(in crate::codebase_memory) fn advance_local_traversal_readiness(&mut self) {
+    fn transition_equivalent_readiness(
+        &mut self,
+        selector: &super::Selector,
+        from: super::ImplementationTraversalReadiness,
+        to: super::ImplementationTraversalReadiness,
+    ) {
+        let Some(Some(binding)) = self.selectors.get(selector) else {
+            return;
+        };
+        let root_binding = binding.root_binding.clone();
+        let target_digests = binding.canonical_target_digests.clone();
         for binding in self.selectors.values_mut().flatten() {
-            if binding.implementation_traversal_readiness
-                == super::ImplementationTraversalReadiness::LocallyDeferred
+            if binding.root_binding == root_binding
+                && !binding
+                    .canonical_target_digests
+                    .is_disjoint(&target_digests)
+                && binding.implementation_traversal_readiness == from
             {
-                binding.implementation_traversal_readiness =
-                    super::ImplementationTraversalReadiness::Ready;
+                binding.implementation_traversal_readiness = to;
             }
         }
     }

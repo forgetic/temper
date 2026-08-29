@@ -377,7 +377,7 @@ fn incomplete_traversal_is_denied_without_spending_recovery_and_then_recovers() 
 }
 
 #[test]
-fn partial_traversal_readiness_defers_locally_without_excluding_the_retry() {
+fn partial_traversal_guides_one_typed_recheck_before_accepting_fresh_readiness() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
     state.on_tool_finished(
@@ -404,7 +404,7 @@ fn partial_traversal_readiness_defers_locally_without_excluding_the_retry() {
 
     let mut trace = call("partial-trace", "codebase_memory_trace_path");
     trace.arguments = serde_json::json!({
-        "function_name": "provider-returned-implementation",
+        "function_name": "temper-recovery-selector:opaque",
         "direction": "inbound",
     });
     assert_eq!(
@@ -424,13 +424,38 @@ fn partial_traversal_readiness_defers_locally_without_excluding_the_retry() {
             4,
         ),
     );
-    let guidance = state.take_model_guidance();
-    assert_eq!(guidance.len(), 1);
-    assert!(guidance[0].contains("remaining allowance=n/a"));
-    assert!(guidance[0].contains("required next stage=[trace_path/function_name/trace/"));
-    assert!(!guidance[0].contains("do not repeat that selector value"));
-    assert!(guidance[0].contains("locally deferred"));
-    assert!(guidance[0].contains("no provider call or recovery allowance was consumed"));
+    let guidance = one_guidance(&mut state);
+    assert!(guidance.contains("remaining allowance=n/a"));
+    assert!(guidance.contains(
+        "required next stage=[get_code_snippet/qualified_name/implementation]"
+    ));
+    assert!(guidance.contains("Repeat exactly one typed implementation"));
+    assert!(guidance.contains("implementation_evidence_result"));
+    assert!(guidance.contains("no provider call or recovery allowance was consumed"));
+
+    let mut recheck = source_call("implementation-recheck", DecisionEvidenceKindV1::Implementation);
+    recheck.arguments["qualified_name"] = serde_json::json!("temper-recovery-selector:opaque");
+    let recheck_admission =
+        EligibleLineageAdmission::implementation_traversal_readiness_recheck(
+            ROOT.to_string(),
+            DecisionAnchorTargetKindV1::QualifiedName,
+        )
+        .unwrap();
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &recheck,
+            3,
+            Some(&LineageAdmissionOutcome::Eligible(recheck_admission)),
+        ),
+        None,
+    );
+    finish_with_evidence(
+        &mut state,
+        "implementation-recheck",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.take_model_guidance();
 
     let admission = EligibleLineageAdmission::implementation_caller_traversal(
         ROOT.to_string(),
@@ -440,7 +465,7 @@ fn partial_traversal_readiness_defers_locally_without_excluding_the_retry() {
     assert_eq!(
         state.on_tool_dispatched_with_admission(
             &trace,
-            3,
+            4,
             Some(&LineageAdmissionOutcome::Eligible(admission)),
         ),
         None,
@@ -454,8 +479,71 @@ fn partial_traversal_readiness_defers_locally_without_excluding_the_retry() {
             CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
         ),
     );
-    let recovered = one_guidance(&mut state);
-    assert!(recovered.contains("accepted evidence=[trace]"));
+    assert!(one_guidance(&mut state).contains("accepted evidence=[trace]"));
+}
+
+#[test]
+fn repeated_partial_readiness_enters_bounded_gap_recovery() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    state.on_tool_finished(
+        "root",
+        "codebase_memory_search_graph",
+        &output(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        ),
+    );
+    state.take_model_guidance();
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    finish_with_evidence(
+        &mut state,
+        "implementation",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.take_model_guidance();
+
+    let mut trace = call("partial-trace", "codebase_memory_trace_path");
+    trace.arguments = serde_json::json!({
+        "function_name": "temper-recovery-selector:opaque",
+        "direction": "inbound",
+    });
+    state.on_tool_dispatched_with_admission(
+        &trace,
+        2,
+        Some(&LineageAdmissionOutcome::Ineligible(
+            LineageAdmissionStatus::TraversalNotReady,
+        )),
+    );
+    state.take_model_guidance();
+    let denial = state.on_tool_dispatched_with_admission(
+        &trace,
+        3,
+        Some(&LineageAdmissionOutcome::Ineligible(
+            LineageAdmissionStatus::TraversalReadinessExhausted,
+        )),
+    );
+    assert_eq!(
+        denial,
+        recovery_graph_denial(
+            [
+                GraphRecoveryEvidenceKindV1::Trace,
+                GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ],
+            4,
+        ),
+    );
+    let recovery = state.recovery_details().expect("bounded gap recovery");
+    assert_eq!(recovery.remaining_allowance, 4);
+    let guidance = one_guidance(&mut state);
+    assert!(guidance.contains("recovery=evidence_recovery"));
+    assert!(guidance.contains("remaining allowance=4"));
 }
 
 fn state_through_caller_trace() -> DecisionAnchorState {

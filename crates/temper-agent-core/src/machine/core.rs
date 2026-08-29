@@ -293,9 +293,6 @@ impl AgentMachine {
 
     /// Begin the next model turn: inject any queued steering, then call the LLM.
     fn begin_turn(&mut self) -> Vec<AgentRequest> {
-        if let Some(admission) = &self.lineage_admission {
-            admission.advance_local_traversal_readiness();
-        }
         let mut requests = Vec::new();
         if !self.queued_steering.is_empty() {
             let steering = std::mem::take(&mut self.queued_steering);
