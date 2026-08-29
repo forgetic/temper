@@ -78,6 +78,9 @@ pub struct AgentMachine {
     invocation_catalog: Arc<ToolInvocationCatalog>,
     /// Typed local failures for calls scrubbed by the invocation boundary.
     invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
+    /// Content-free traversal kinds whose required selector was absent before
+    /// invocation scrubbing.
+    incomplete_graph_selectors: BTreeMap<String, GraphCorrelationToolV1>,
     /// Bounded per-run ordinary-tool identities. This state contains only
     /// process-local digests and is never projected through the protocol.
     ordinary_failures: OrdinaryFailureCircuit,
@@ -170,6 +173,7 @@ impl AgentMachine {
             turn: 0,
             invocation_catalog,
             invocation_rejections: BTreeMap::new(),
+            incomplete_graph_selectors: BTreeMap::new(),
             ordinary_failures: OrdinaryFailureCircuit::default(),
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
@@ -342,7 +346,8 @@ impl AgentMachine {
     fn on_llm_responded(&mut self, mut assistant: AssistantMessage) -> Vec<AgentRequest> {
         // Normalize before the assistant turn is emitted, retained, inspected
         // by policy, previewed, batched, or dispatched.
-        self.invocation_rejections = self.invocation_catalog.canonicalize_message(&mut assistant);
+        (self.invocation_rejections, self.incomplete_graph_selectors) =
+            self.invocation_catalog.canonicalize_message(&mut assistant);
         let mut requests = vec![AgentRequest::Emit(AgentEvent::AssistantMessage {
             content: assistant.content.clone(),
         })];
@@ -411,6 +416,10 @@ impl AgentMachine {
                 .flatten()
             })
             .collect::<Vec<_>>();
+        let incomplete_graph_selectors = calls
+            .iter()
+            .map(|call| self.incomplete_graph_selectors.get(&call.id).copied())
+            .collect::<Vec<_>>();
         let invocation_targets = calls
             .iter()
             .map(|call| {
@@ -429,11 +438,12 @@ impl AgentMachine {
             }
         }
         let denials = if let Some(state) = self.decision_anchors.as_mut() {
-            let denials = state.on_tool_batch_dispatched_with_admissions_and_targets(
+            let denials = state.on_tool_batch_dispatched_with_closed_inputs(
                 &calls,
                 model_turn,
                 &closed_admissions,
                 &invocation_targets,
+                &incomplete_graph_selectors,
             );
             self.decision_anchor_guidance
                 .extend(state.take_model_guidance());
@@ -442,7 +452,11 @@ impl AgentMachine {
             vec![None; calls.len()]
         };
         for (call, denial) in calls.into_iter().zip(denials) {
-            let rejection = self.invocation_rejections.get(&call.id).cloned();
+            let incomplete_staged_selector = self.incomplete_graph_selectors.contains_key(&call.id)
+                && matches!(denial, Some(ToolCallDenial::GraphExplorationClosed(_)));
+            let rejection = (!incomplete_staged_selector)
+                .then(|| self.invocation_rejections.get(&call.id).cloned())
+                .flatten();
             let shell_discovery_disposition = (rejection.is_none()
                 && call.name == "bash"
                 && matches!(&denial, Some(ToolCallDenial::DecisionAnchorMutation)))
@@ -629,6 +643,7 @@ impl AgentMachine {
             }
             for pending in &batch {
                 self.invocation_rejections.remove(&pending.call.id);
+                self.incomplete_graph_selectors.remove(&pending.call.id);
             }
             self.turn_results.extend(batch);
         }
