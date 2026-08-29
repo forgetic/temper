@@ -55,8 +55,9 @@ pub struct CanonicalInvocation {
     /// Present when the call must settle locally without consulting the tool
     /// registry. The call itself has already been scrubbed in this case.
     pub rejection: Option<ToolFailureDiagnostic>,
-    /// Closed shape retained only when a recognized traversal call omitted
-    /// its required selector. The supplied name and arguments are scrubbed.
+    /// Closed shape retained only when a schema-rejected traversal call did
+    /// not carry its usable required selector. The supplied name and
+    /// arguments are scrubbed.
     pub(crate) incomplete_graph_selector: Option<GraphCorrelationToolV1>,
 }
 

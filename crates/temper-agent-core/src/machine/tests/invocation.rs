@@ -19,7 +19,8 @@ use super::common::{
     complete, llm_responded, run_tools, tool_failed, tool_finished, tool_output, user,
 };
 use crate::machine::{
-    AgentEvent, AgentMachine, AgentRequest, ToolFailureDiagnostic, ToolFailureReason,
+    AgentEvent, AgentMachine, AgentRequest, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, ToolCallDenial, ToolFailureDiagnostic, ToolFailureReason,
 };
 use crate::{
     InvocationTargetAdmission, LineageAdmissionOutcome, LineageAdmissionResolver,
@@ -154,6 +155,17 @@ fn catalog(names: &[&'static str]) -> Arc<ToolInvocationCatalog> {
                     }),
                     ToolEffects::read(),
                 ),
+                "codebase_memory_trace_path" => (
+                    serde_json::json!({
+                        "type":"object",
+                        "properties":{
+                            "function_name":{"type":"string"},
+                            "direction":{"type":"string"}
+                        },
+                        "required":["function_name"]
+                    }),
+                    ToolEffects::read(),
+                ),
                 other => panic!("unsupported fixture tool {other}"),
             };
             Box::new(ContractTool {
@@ -230,6 +242,11 @@ fn canonical_graph_call_queries_run_local_admission_before_dispatch() {
             .iter()
             .any(|request| matches!(request, AgentRequest::RunTool { .. }))
     );
+}
+
+mod incomplete_graph_selector {
+    use super::*;
+    include!("invocation/incomplete_graph_selector.rs");
 }
 
 mod target_admission {

@@ -78,8 +78,8 @@ pub struct AgentMachine {
     invocation_catalog: Arc<ToolInvocationCatalog>,
     /// Typed local failures for calls scrubbed by the invocation boundary.
     invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
-    /// Content-free traversal kinds whose required selector was absent before
-    /// invocation scrubbing.
+    /// Content-free traversal kinds whose required selector was unusable
+    /// before invocation scrubbing.
     incomplete_graph_selectors: BTreeMap<String, GraphCorrelationToolV1>,
     /// Bounded per-run ordinary-tool identities. This state contains only
     /// process-local digests and is never projected through the protocol.
