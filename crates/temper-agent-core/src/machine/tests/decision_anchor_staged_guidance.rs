@@ -292,6 +292,34 @@ fn incomplete_traversal_is_denied_without_spending_recovery_and_then_recovers() 
     );
     state.take_model_guidance();
 
+    let mut unknown = call("unknown-function-name", "codebase_memory_trace_path");
+    unknown.arguments = serde_json::json!({
+        "function_name": "schema-valid-but-never-returned",
+        "direction": "inbound",
+    });
+    assert_eq!(
+        state.on_tool_batch_dispatched_with_closed_inputs(
+            &[unknown],
+            2,
+            &[None],
+            &[None],
+            &[None],
+        ),
+        [recovery_graph_denial(
+            [
+                GraphRecoveryEvidenceKindV1::Trace,
+                GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ],
+            4,
+        )],
+    );
+    let denied = one_guidance(&mut state);
+    assert!(denied.contains("result=non_progress"));
+    assert!(denied.contains(
+        "required next stage=[trace_path/function_name/trace/selector=implementation_evidence_result/relationship=calls/direction=inbound]"
+    ));
+
     let scrubbed = call("missing-function-name", crate::REJECTED_TOOL_NAME);
     assert_eq!(
         state.on_tool_batch_dispatched_with_closed_inputs(
