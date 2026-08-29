@@ -376,6 +376,176 @@ fn incomplete_traversal_is_denied_without_spending_recovery_and_then_recovers() 
     assert!(recovered.contains("get_code_snippet/qualified_name/caller"));
 }
 
+#[test]
+fn partial_traversal_guides_one_typed_recheck_before_accepting_fresh_readiness() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    state.on_tool_finished(
+        "root",
+        "codebase_memory_search_graph",
+        &output(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        ),
+    );
+    state.take_model_guidance();
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    finish_with_evidence(
+        &mut state,
+        "implementation",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.take_model_guidance();
+
+    let mut trace = call("partial-trace", "codebase_memory_trace_path");
+    trace.arguments = serde_json::json!({
+        "function_name": "temper-recovery-selector:opaque",
+        "direction": "inbound",
+    });
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &trace,
+            2,
+            Some(&LineageAdmissionOutcome::Ineligible(
+                LineageAdmissionStatus::TraversalNotReady,
+            )),
+        ),
+        recovery_graph_denial(
+            [
+                GraphRecoveryEvidenceKindV1::Trace,
+                GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ],
+            4,
+        ),
+    );
+    let guidance = one_guidance(&mut state);
+    assert!(guidance.contains("remaining allowance=n/a"));
+    assert!(guidance.contains(
+        "required next stage=[get_code_snippet/qualified_name/implementation]"
+    ));
+    assert!(guidance.contains("Repeat exactly one typed implementation"));
+    assert!(guidance.contains("implementation_evidence_result"));
+    assert!(guidance.contains("no provider call or recovery allowance was consumed"));
+
+    let mut recheck = source_call("implementation-recheck", DecisionEvidenceKindV1::Implementation);
+    recheck.arguments["qualified_name"] = serde_json::json!("temper-recovery-selector:opaque");
+    let recheck_admission =
+        EligibleLineageAdmission::implementation_traversal_readiness_recheck(
+            ROOT.to_string(),
+            DecisionAnchorTargetKindV1::QualifiedName,
+        )
+        .unwrap();
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &recheck,
+            3,
+            Some(&LineageAdmissionOutcome::Eligible(recheck_admission)),
+        ),
+        None,
+    );
+    finish_with_evidence(
+        &mut state,
+        "implementation-recheck",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.take_model_guidance();
+
+    let admission = EligibleLineageAdmission::implementation_caller_traversal(
+        ROOT.to_string(),
+        DecisionAnchorTargetKindV1::FunctionName,
+    )
+    .unwrap();
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &trace,
+            4,
+            Some(&LineageAdmissionOutcome::Eligible(admission)),
+        ),
+        None,
+    );
+    state.on_tool_finished(
+        "partial-trace",
+        "codebase_memory_trace_path",
+        &output_with_caller_discovery(
+            ROOT,
+            DecisionAnchorLineageStageV1::CarryForward,
+            CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
+        ),
+    );
+    assert!(one_guidance(&mut state).contains("accepted evidence=[trace]"));
+}
+
+#[test]
+fn repeated_partial_readiness_enters_bounded_gap_recovery() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    state.on_tool_finished(
+        "root",
+        "codebase_memory_search_graph",
+        &output(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        ),
+    );
+    state.take_model_guidance();
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    finish_with_evidence(
+        &mut state,
+        "implementation",
+        ROOT,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.take_model_guidance();
+
+    let mut trace = call("partial-trace", "codebase_memory_trace_path");
+    trace.arguments = serde_json::json!({
+        "function_name": "temper-recovery-selector:opaque",
+        "direction": "inbound",
+    });
+    state.on_tool_dispatched_with_admission(
+        &trace,
+        2,
+        Some(&LineageAdmissionOutcome::Ineligible(
+            LineageAdmissionStatus::TraversalNotReady,
+        )),
+    );
+    state.take_model_guidance();
+    let denial = state.on_tool_dispatched_with_admission(
+        &trace,
+        3,
+        Some(&LineageAdmissionOutcome::Ineligible(
+            LineageAdmissionStatus::TraversalReadinessExhausted,
+        )),
+    );
+    assert_eq!(
+        denial,
+        recovery_graph_denial(
+            [
+                GraphRecoveryEvidenceKindV1::Trace,
+                GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ],
+            4,
+        ),
+    );
+    let recovery = state.recovery_details().expect("bounded gap recovery");
+    assert_eq!(recovery.remaining_allowance, 4);
+    let guidance = one_guidance(&mut state);
+    assert!(guidance.contains("recovery=evidence_recovery"));
+    assert!(guidance.contains("remaining allowance=4"));
+}
+
 fn state_through_caller_trace() -> DecisionAnchorState {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);

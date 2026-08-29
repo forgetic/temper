@@ -117,6 +117,18 @@ impl DecisionAnchorState {
         ));
     }
 
+    pub(super) fn queue_local_traversal_readiness_guidance(&mut self) {
+        let mut snapshot = self.guidance_snapshot();
+        snapshot.next_actions = vec![
+            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation)
+                .model_label(),
+        ];
+        let mut guidance =
+            snapshot.model_message(ResultDisposition::NonProgress, &BTreeSet::new(), None);
+        guidance.push_str(" [Traversal readiness: the current-root traversal remains closed because its typed provider snapshot reported callers without caller identities; no provider call or recovery allowance was consumed. Repeat exactly one typed implementation get_code_snippet lookup in the next model turn by copying the existing implementation_evidence_result recovery reference into qualified_name.]");
+        self.model_guidance.push(guidance);
+    }
+
     pub(in crate::machine) fn take_model_guidance(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_guidance)
     }

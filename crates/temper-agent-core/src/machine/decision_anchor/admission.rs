@@ -95,6 +95,8 @@ impl DecisionAnchorState {
         let mut admitted_actions = Vec::new();
         let mut admitted_count = 0u8;
         let mut local_rejections = Vec::new();
+        let mut local_readiness_deferrals = 0usize;
+        let mut local_readiness_exhaustions = 0usize;
         let mut denials = Vec::with_capacity(calls.len());
 
         for (((call, admission), invocation_target), incomplete_graph_selector) in calls
@@ -109,6 +111,18 @@ impl DecisionAnchorState {
             if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX)
                 || incomplete_graph_selector.is_some()
             {
+                let traversal_not_ready = matches!(
+                    admission,
+                    Some(LineageAdmissionOutcome::Ineligible(
+                        crate::LineageAdmissionStatus::TraversalNotReady
+                    ))
+                );
+                let traversal_readiness_exhausted = matches!(
+                    admission,
+                    Some(LineageAdmissionOutcome::Ineligible(
+                        crate::LineageAdmissionStatus::TraversalReadinessExhausted
+                    ))
+                );
                 let eligible = match admission.as_ref() {
                     Some(LineageAdmissionOutcome::Eligible(admission)) => Some(admission),
                     Some(LineageAdmissionOutcome::Ineligible(_)) | None => None,
@@ -158,6 +172,8 @@ impl DecisionAnchorState {
                 });
                 let already_rejected = tuple_identity
                     .is_some_and(|identity| self.rejected_recovery_tuples.contains(&identity));
+                let readiness_recheck =
+                    eligible.is_some_and(EligibleLineageAdmission::is_traversal_readiness_recheck);
 
                 // A traversal is meaningful only for the staged active root.
                 // A selector owned by a retained sibling or by no root must be
@@ -177,37 +193,52 @@ impl DecisionAnchorState {
                     }
                 });
                 if self.exploration != ExplorationStatus::Open || staged_call {
-                    let admissible = snapshot.as_ref().is_some_and(|snapshot| {
-                        !already_rejected
-                            && call_key.is_some()
-                            && recovery_gap.is_some_and(|gap| {
-                                snapshot.missing.contains(&gap)
-                                    && recovery_action
+                    let readiness_recheck_admissible = readiness_recheck
+                        && snapshot.as_ref().is_some_and(|snapshot| {
+                            !already_rejected
+                                && call_key.is_some()
+                                && snapshot.missing.contains(&DecisionGap::Trace)
+                                && admitted_root.as_deref() == Some(snapshot.active_root.as_str())
+                        });
+                    let admissible = readiness_recheck_admissible
+                        || snapshot.as_ref().is_some_and(|snapshot| {
+                            !already_rejected
+                                && call_key.is_some()
+                                && recovery_gap.is_some_and(|gap| {
+                                    snapshot.missing.contains(&gap)
+                                        && recovery_action.is_some_and(|action| {
+                                            snapshot.compatible.contains(&action)
+                                        })
+                                        && !snapshot.pending.contains(&gap)
+                                        && !selected.contains(&gap)
+                                        && admitted_count < snapshot.remaining
+                                })
+                                && admitted_root.as_deref() == Some(snapshot.active_root.as_str())
+                                && eligible.is_none_or(|admission| {
+                                    DecisionGap::recovery_action_for_admission(admission)
                                         .is_some_and(|action| snapshot.compatible.contains(&action))
-                                    && !snapshot.pending.contains(&gap)
-                                    && !selected.contains(&gap)
-                                    && admitted_count < snapshot.remaining
-                            })
-                            && admitted_root.as_deref() == Some(snapshot.active_root.as_str())
-                            && eligible.is_none_or(|admission| {
-                                DecisionGap::recovery_action_for_admission(admission)
-                                    .is_some_and(|action| snapshot.compatible.contains(&action))
-                                    && admission.matches_root(&snapshot.active_root)
-                            })
-                    });
+                                        && admission.matches_root(&snapshot.active_root)
+                                })
+                        });
                     if admissible {
                         let gap = recovery_gap.expect("admissible recovery has a purpose");
                         selected.insert(gap);
-                        admitted_actions.push(
-                            recovery_action.expect("admissible recovery has a closed action"),
-                        );
-                        admitted_count = admitted_count.saturating_add(1);
+                        if !readiness_recheck_admissible {
+                            admitted_actions.push(
+                                recovery_action.expect("admissible recovery has a closed action"),
+                            );
+                            admitted_count = admitted_count.saturating_add(1);
+                        }
                     } else {
                         denial = Some(snapshot.as_ref().map_or_else(
                             || self.graph_exploration_denial(),
                             |snapshot| snapshot.denial.clone(),
                         ));
-                        if requested_action.is_some() {
+                        if traversal_not_ready {
+                            local_readiness_deferrals += 1;
+                        } else if traversal_readiness_exhausted {
+                            local_readiness_exhaustions += 1;
+                        } else if requested_action.is_some() {
                             let excluded = already_rejected
                                 || tuple_identity.is_some_and(|identity| {
                                     self.rejected_recovery_tuples.insert(identity)
@@ -259,8 +290,20 @@ impl DecisionAnchorState {
             }
         }
 
+        for _ in 0..local_readiness_exhaustions {
+            self.enter_local_traversal_readiness_recovery();
+            self.queue_local_denial_guidance(
+                Some(GraphRecoveryActionV1::for_evidence(
+                    GraphRecoveryEvidenceKindV1::Trace,
+                )),
+                true,
+            );
+        }
         for (action, excluded) in local_rejections {
             self.queue_local_denial_guidance(action, excluded);
+        }
+        for _ in 0..local_readiness_deferrals {
+            self.queue_local_traversal_readiness_guidance();
         }
         denials
     }
@@ -350,6 +393,42 @@ impl DecisionAnchorState {
             remaining,
             denial,
         })
+    }
+
+    fn enter_local_traversal_readiness_recovery(&mut self) {
+        let Some(phase) = self.phase.take() else {
+            return;
+        };
+        match phase {
+            AnchorPhase::Root(anchors) | AnchorPhase::Trail(anchors) => {
+                let _ = self.enter_gap_recovery(anchors);
+            }
+            AnchorPhase::GapRecovery(mut recovery) => {
+                recovery.remaining = recovery.remaining.saturating_sub(1);
+                if recovery.remaining == 0 {
+                    let evidence = recovery
+                        .anchors
+                        .roots
+                        .get(&recovery.active_root)
+                        .map(|anchor| anchor.evidence.clone())
+                        .unwrap_or_default();
+                    self.phase = Some(AnchorPhase::Exhausted(evidence));
+                    self.exploration = ExplorationStatus::BudgetExhausted;
+                } else {
+                    self.phase = Some(AnchorPhase::GapRecovery(recovery));
+                    self.exploration = ExplorationStatus::GapRecovery;
+                }
+            }
+            AnchorPhase::Exhausted(evidence) => {
+                self.phase = Some(AnchorPhase::Exhausted(evidence));
+                self.exploration = ExplorationStatus::BudgetExhausted;
+            }
+            phase @ (AnchorPhase::Recovery(_)
+            | AnchorPhase::AwaitingExactRead(_)
+            | AnchorPhase::ConventionalFallback(_)) => {
+                self.phase = Some(phase);
+            }
+        }
     }
 }
 

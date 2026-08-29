@@ -14,7 +14,9 @@ pub(super) enum FocusedTestRecoveryState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SelectorOrigin {
-    ImplementationEvidenceResult,
+    ImplementationEvidenceResult {
+        traversal_evidence: ImplementationTraversalEvidence,
+    },
     CallerTraversalResult,
     CallerEvidenceResult,
     FocusedTestResult,
@@ -97,7 +99,7 @@ impl DecisionAnchorLineages {
         origin: SelectorOrigin,
     ) -> Option<usize> {
         let purpose = match origin {
-            SelectorOrigin::ImplementationEvidenceResult => {
+            SelectorOrigin::ImplementationEvidenceResult { .. } => {
                 RecoverySelectorPurpose::ImplementationTrace
             }
             SelectorOrigin::CallerTraversalResult => RecoverySelectorPurpose::CallerSource,
@@ -131,8 +133,31 @@ impl DecisionAnchorLineages {
                 continue;
             }
             match origin {
-                SelectorOrigin::ImplementationEvidenceResult => {
-                    binding.implementation_evidence_result = true
+                SelectorOrigin::ImplementationEvidenceResult { traversal_evidence } => {
+                    let already_recorded = binding.implementation_evidence_result;
+                    binding.implementation_evidence_result = true;
+                    binding.implementation_traversal_readiness = match (
+                        already_recorded,
+                        binding.implementation_traversal_readiness,
+                        traversal_evidence,
+                    ) {
+                        (_, _, ImplementationTraversalEvidence::CallerIdentity) => {
+                            ImplementationTraversalReadiness::Ready
+                        }
+                        (false, _, ImplementationTraversalEvidence::Ready) => {
+                            ImplementationTraversalReadiness::Ready
+                        }
+                        (false, _, ImplementationTraversalEvidence::Partial) => {
+                            ImplementationTraversalReadiness::Partial
+                        }
+                        (true, ImplementationTraversalReadiness::Ready, _) => {
+                            ImplementationTraversalReadiness::Ready
+                        }
+                        (true, ImplementationTraversalReadiness::RecheckPending, _) => {
+                            ImplementationTraversalReadiness::RecheckExhausted
+                        }
+                        (true, readiness, _) => readiness,
+                    };
                 }
                 SelectorOrigin::CallerTraversalResult => binding.caller_traversal_result = true,
                 SelectorOrigin::CallerEvidenceResult => binding.caller_evidence_result = true,
@@ -178,11 +203,28 @@ impl DecisionAnchorLineages {
                 "{RECOVERY_SELECTOR_REFERENCE_PREFIX}{}",
                 uuid::Uuid::new_v4()
             );
+            let source_selector = (purpose == RecoverySelectorPurpose::ImplementationTrace)
+                .then(|| {
+                    canonical_qualified_name(&candidate.value)
+                        .or_else(|| canonical_function_name(&candidate.value))
+                        .map(|value| Selector {
+                            kind: DecisionAnchorTargetKindV1::QualifiedName,
+                            value,
+                        })
+                })
+                .flatten()
+                .filter(|selector| {
+                    self.selectors
+                        .get(selector)
+                        .and_then(Option::as_ref)
+                        .is_some_and(|binding| binding.root_binding == root)
+                });
             self.recovery_reference_selectors.insert(
                 reference.clone(),
                 RecoverySelectorReference {
                     purpose,
                     selector,
+                    source_selector,
                     provider_value: candidate.value,
                 },
             );

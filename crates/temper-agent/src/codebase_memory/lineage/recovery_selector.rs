@@ -44,7 +44,21 @@ pub(super) struct RecoverySelectorKey {
 pub(super) struct RecoverySelectorReference {
     pub(super) purpose: RecoverySelectorPurpose,
     pub(super) selector: Selector,
+    pub(super) source_selector: Option<Selector>,
     pub(super) provider_value: String,
+}
+
+impl RecoverySelectorReference {
+    pub(super) fn selector(&self, kind: DecisionAnchorTargetKindV1) -> Option<Selector> {
+        if self.selector.kind == kind {
+            Some(self.selector.clone())
+        } else {
+            self.source_selector
+                .as_ref()
+                .filter(|selector| selector.kind == kind)
+                .cloned()
+        }
+    }
 }
 
 impl DecisionAnchorLineages {
@@ -111,19 +125,28 @@ impl DecisionAnchorLineages {
         if !reference.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX) {
             return Ok(None);
         }
-        let expected_purpose = match tool {
-            GraphCorrelationToolV1::TracePath => match input.get("include_tests") {
-                Some(Value::Bool(true)) => RecoverySelectorPurpose::CallerTestTraversal,
-                Some(Value::Bool(false)) | None => RecoverySelectorPurpose::ImplementationTrace,
-                Some(_) => return Err(()),
-            },
-            GraphCorrelationToolV1::GetCodeSnippet => match evidence_kind {
-                Some(DecisionEvidenceKindV1::Caller) => RecoverySelectorPurpose::CallerSource,
-                Some(DecisionEvidenceKindV1::FocusedTest) => {
-                    RecoverySelectorPurpose::FocusedTestSource
-                }
-                Some(DecisionEvidenceKindV1::Implementation) | None => return Err(()),
-            },
+        let (expected_purpose, expected_selector_kind) = match tool {
+            GraphCorrelationToolV1::TracePath => (
+                match input.get("include_tests") {
+                    Some(Value::Bool(true)) => RecoverySelectorPurpose::CallerTestTraversal,
+                    Some(Value::Bool(false)) | None => RecoverySelectorPurpose::ImplementationTrace,
+                    Some(_) => return Err(()),
+                },
+                DecisionAnchorTargetKindV1::FunctionName,
+            ),
+            GraphCorrelationToolV1::GetCodeSnippet => (
+                match evidence_kind {
+                    Some(DecisionEvidenceKindV1::Implementation) => {
+                        RecoverySelectorPurpose::ImplementationTrace
+                    }
+                    Some(DecisionEvidenceKindV1::Caller) => RecoverySelectorPurpose::CallerSource,
+                    Some(DecisionEvidenceKindV1::FocusedTest) => {
+                        RecoverySelectorPurpose::FocusedTestSource
+                    }
+                    None => return Err(()),
+                },
+                DecisionAnchorTargetKindV1::QualifiedName,
+            ),
             GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => {
                 return Err(());
             }
@@ -132,7 +155,7 @@ impl DecisionAnchorLineages {
             .get(reference)
             .filter(|reference| {
                 reference.purpose == expected_purpose
-                    && reference.selector.kind == expected_purpose.selector_kind()
+                    && reference.selector(expected_selector_kind).is_some()
             })
             .map(|reference| Some((field, reference)))
             .ok_or(())

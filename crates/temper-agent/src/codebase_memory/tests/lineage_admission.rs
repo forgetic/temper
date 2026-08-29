@@ -78,6 +78,179 @@ fn exact_selectors_resolve_before_provider_with_only_closed_values() {
 }
 
 #[test]
+fn partial_implementation_snapshot_stays_closed_when_recheck_does_not_enrich() {
+    let mut lineages = DecisionAnchorLineages::default();
+    let root = lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+            &serde_json::json!({"query": "partial implementation"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run"
+            }))),
+        )
+        .unwrap();
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::engine::run"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run",
+                "callers": 1
+            }))),
+            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+
+    let guidance = lineages
+        .recovery_selector_guidance(&root.root_binding)
+        .expect("partial implementation retains a bounded recovery reference");
+    let reference = guidance
+        .split_once("implementation_evidence_result=")
+        .and_then(|(_, rest)| rest.split([',', '.']).next())
+        .expect("implementation recovery reference");
+    let trace = serde_json::json!({"function_name": reference, "direction": "inbound"});
+    assert_eq!(
+        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::TraversalNotReady),
+    );
+
+    let source = serde_json::json!({
+        "qualified_name": reference,
+        "decision_evidence_kind": "implementation"
+    });
+    let LineageAdmissionOutcome::Eligible(recheck) =
+        lineages.resolve(GraphCorrelationToolV1::GetCodeSnippet.public_name(), &source)
+    else {
+        panic!("one exact typed implementation recheck must be admitted");
+    };
+    assert!(recheck.is_traversal_readiness_recheck());
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::engine::run"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run",
+                "callers": 1
+            }))),
+            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+
+    for _ in 0..3 {
+        assert_eq!(
+            lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace),
+            LineageAdmissionOutcome::Ineligible(
+                LineageAdmissionStatus::TraversalReadinessExhausted
+            ),
+            "elapsed model turns and repeated partial results cannot authorize traversal",
+        );
+    }
+    assert_eq!(
+        lineages.resolve(GraphCorrelationToolV1::GetCodeSnippet.public_name(), &source),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection),
+        "the provider recheck is bounded to one exact attempt",
+    );
+}
+
+#[test]
+fn partial_implementation_becomes_ready_only_after_new_caller_identity_evidence() {
+    let mut lineages = DecisionAnchorLineages::default();
+    let root = lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+            &serde_json::json!({"query": "partial implementation"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run"
+            }))),
+        )
+        .unwrap();
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::engine::run"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run",
+                "callers": 1
+            }))),
+            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+    let guidance = lineages
+        .recovery_selector_guidance(&root.root_binding)
+        .expect("partial implementation recovery guidance");
+    let reference = guidance
+        .split_once("implementation_evidence_result=")
+        .and_then(|(_, rest)| rest.split([',', '.']).next())
+        .expect("implementation recovery reference");
+    let trace = serde_json::json!({"function_name": reference, "direction": "inbound"});
+    assert_eq!(
+        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::TraversalNotReady),
+    );
+    assert!(matches!(
+        lineages.resolve(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &serde_json::json!({
+                "qualified_name": reference,
+                "decision_evidence_kind": "implementation"
+            }),
+        ),
+        LineageAdmissionOutcome::Eligible(_)
+    ));
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::engine::run"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run",
+                "callers": 1,
+                "caller_names": ["dispatch"]
+            }))),
+            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+    let LineageAdmissionOutcome::Eligible(admission) =
+        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace)
+    else {
+        panic!("new eligible caller identity evidence must authorize traversal");
+    };
+    assert!(admission.matches_root(&root.root_binding));
+}
+
+#[test]
+fn implementation_snapshot_with_caller_names_is_immediately_traversal_ready() {
+    let mut lineages = DecisionAnchorLineages::default();
+    lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+            &serde_json::json!({"query": "ready implementation"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run"
+            }))),
+        )
+        .unwrap();
+    lineages
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "crate::engine::run"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::engine::run",
+                "callers": 1,
+                "caller_names": ["dispatch"]
+            }))),
+            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+    assert!(matches!(
+        lineages.resolve(
+            GraphCorrelationToolV1::TracePath.public_name(),
+            &serde_json::json!({"function_name": "run", "direction": "inbound"}),
+        ),
+        LineageAdmissionOutcome::Eligible(_)
+    ));
+}
+
+#[test]
 fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
     const PRIVATE_SELECTOR: &str = "crate::private::engine::run";
     let mut lineages = DecisionAnchorLineages::default();
@@ -152,6 +325,19 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
             )
             .is_err()
     );
+
+    let mut source_input = serde_json::json!({
+        "qualified_name": reference,
+        "decision_evidence_kind": "implementation"
+    });
+    lineages
+        .expand_recovery_selector(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &mut source_input,
+            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap();
+    assert_eq!(source_input["qualified_name"], PRIVATE_SELECTOR);
 
     let mut wrong_purpose = serde_json::json!({"qualified_name": reference});
     assert!(
