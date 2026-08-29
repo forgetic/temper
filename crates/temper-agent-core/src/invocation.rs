@@ -167,6 +167,8 @@ impl ToolInvocationCatalog {
             return rejected(call, ToolFailureReason::UnknownTool, None);
         };
         call.name = canonical_name.clone();
+        let incomplete_graph_selector =
+            incomplete_required_graph_selector(&canonical_name, &call.arguments);
         if normalize_arguments(api, &canonical_name, &mut call.arguments).is_err()
             || !arguments_match(
                 &self
@@ -178,8 +180,6 @@ impl ToolInvocationCatalog {
                 &call.arguments,
             )
         {
-            let incomplete_graph_selector =
-                incomplete_required_graph_selector(&canonical_name, &call.arguments);
             return rejected(
                 call,
                 ToolFailureReason::InvalidArguments,
@@ -266,7 +266,8 @@ fn incomplete_required_graph_selector(
         return None;
     }
     arguments
-        .get("function_name")
+        .as_object()
+        .and_then(|arguments| arguments.get("function_name"))
         .and_then(Value::as_str)
         .is_none_or(|selector| selector.trim().is_empty())
         .then_some(tool)
