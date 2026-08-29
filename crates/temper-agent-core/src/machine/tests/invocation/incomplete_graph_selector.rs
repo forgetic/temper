@@ -6,11 +6,21 @@ fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selecto
         GraphCorrelationV1, GraphExplorationClosedV1, GraphRecoveryEvidenceKindV1,
     };
 
-    let mut machine = machine(catalog(&[
+    let catalog = catalog(&[
         "codebase_memory_search_graph",
         "codebase_memory_get_code_snippet",
         "codebase_memory_trace_path",
-    ]));
+    ]);
+    assert!(
+        crate::arguments_match(
+            catalog
+                .schema("codebase_memory_trace_path")
+                .expect("trace schema"),
+            &serde_json::json!({"direction":"inbound"}),
+        ),
+        "the regression schema deliberately admits a direction-only traversal"
+    );
+    let mut machine = machine(catalog);
     let _ = machine.on_start(EngineTime::ZERO);
 
     let output = |tool: GraphCorrelationToolV1,
