@@ -55,9 +55,9 @@ pub struct CanonicalInvocation {
     /// Present when the call must settle locally without consulting the tool
     /// registry. The call itself has already been scrubbed in this case.
     pub rejection: Option<ToolFailureDiagnostic>,
-    /// Closed shape retained only when a schema-rejected traversal call did
-    /// not carry its usable required selector. The supplied name and
-    /// arguments are scrubbed.
+    /// Closed shape retained when a locally rejected traversal call did not
+    /// carry its usable required selector. The supplied name and arguments
+    /// are scrubbed.
     pub(crate) incomplete_graph_selector: Option<GraphCorrelationToolV1>,
 }
 
@@ -169,6 +169,9 @@ impl ToolInvocationCatalog {
         call.name = canonical_name.clone();
         let incomplete_graph_selector =
             incomplete_required_graph_selector(&canonical_name, &call.arguments);
+        if let Some(tool) = incomplete_graph_selector {
+            return rejected(call, ToolFailureReason::InvalidArguments, Some(tool));
+        }
         if normalize_arguments(api, &canonical_name, &mut call.arguments).is_err()
             || !arguments_match(
                 &self
@@ -180,11 +183,7 @@ impl ToolInvocationCatalog {
                 &call.arguments,
             )
         {
-            return rejected(
-                call,
-                ToolFailureReason::InvalidArguments,
-                incomplete_graph_selector,
-            );
+            return rejected(call, ToolFailureReason::InvalidArguments, None);
         }
         CanonicalInvocation {
             call,

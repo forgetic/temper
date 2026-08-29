@@ -161,8 +161,7 @@ fn catalog(names: &[&'static str]) -> Arc<ToolInvocationCatalog> {
                         "properties":{
                             "function_name":{"type":"string"},
                             "direction":{"type":"string"}
-                        },
-                        "required":["function_name"]
+                        }
                     }),
                     ToolEffects::read(),
                 ),
