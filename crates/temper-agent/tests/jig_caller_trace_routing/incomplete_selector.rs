@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn jig_denies_incomplete_inbound_trace_locally_then_recovers_exact_selector() {
+fn jig_denies_scalar_inbound_trace_locally_then_recovers_exact_selector() {
     let _serial = JIG_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -63,7 +63,7 @@ fn incomplete_trace_reply(view: &RequestView) -> Reply {
         2 => tool_reply(
             "trace-without-function-name",
             "codebase_memory_trace_path",
-            serde_json::json!({"direction": "inbound"}),
+            serde_json::json!("inbound"),
         ),
         3 => {
             let latest_tool = view
