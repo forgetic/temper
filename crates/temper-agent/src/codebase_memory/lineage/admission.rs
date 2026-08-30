@@ -81,7 +81,20 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
             .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        lineages.resolve(tool_name, arguments)
+        lineages.resolve_for_active_root(tool_name, arguments, None)
+    }
+
+    fn resolve_for_active_root(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> LineageAdmissionOutcome {
+        let mut lineages = self
+            .lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        lineages.resolve_for_active_root(tool_name, arguments, active_root)
     }
 
     fn resolve_source_target(&self, lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
@@ -104,7 +117,17 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
 }
 
 impl DecisionAnchorLineages {
+    #[cfg(test)]
     pub(crate) fn resolve(&mut self, tool_name: &str, input: &Value) -> LineageAdmissionOutcome {
+        self.resolve_for_active_root(tool_name, input, None)
+    }
+
+    pub(crate) fn resolve_for_active_root(
+        &mut self,
+        tool_name: &str,
+        input: &Value,
+        active_root: Option<&str>,
+    ) -> LineageAdmissionOutcome {
         use LineageAdmissionOutcome::{Eligible, Ineligible};
         use LineageAdmissionStatus::{
             AmbiguousSelector, BroadSelector, IncapableSelection, MalformedSelector,
@@ -136,11 +159,19 @@ impl DecisionAnchorLineages {
         let (expected_field, target_kind) = match tool_kind {
             GraphCorrelationToolV1::SearchGraph => {
                 if present[0] != "query" {
-                    return Ineligible(if matches!(present[0], "name_pattern" | "qn_pattern") {
-                        BroadSelector
-                    } else {
-                        IncapableSelection
-                    });
+                    if !matches!(present[0], "name_pattern" | "qn_pattern") {
+                        return Ineligible(IncapableSelection);
+                    }
+                    if object.get("label").is_none() {
+                        return Ineligible(BroadSelector);
+                    }
+                    if object.get("label").and_then(Value::as_str).is_none() {
+                        return Ineligible(MalformedSelector);
+                    }
+                    return self
+                        .resolve_exact_graph_narrowing(input, active_root)
+                        .map(Eligible)
+                        .unwrap_or_else(Ineligible);
                 }
                 let Some(query) = object.get("query").and_then(Value::as_str) else {
                     return Ineligible(MalformedSelector);

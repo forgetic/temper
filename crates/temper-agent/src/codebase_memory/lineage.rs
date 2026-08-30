@@ -18,12 +18,14 @@ use crate::mcp::McpToolResultPart;
 const MAX_RESULT_TARGETS: usize = 64;
 
 mod admission;
+mod exact_narrowing;
 mod focused_test;
 mod recovery_selector;
 mod selection;
 mod target;
 
 pub(super) use admission::DecisionAnchorLineageRegistry;
+use exact_narrowing::{ExactGraphSelector, PendingExactGraphNarrowing};
 use focused_test::{
     FocusedTestDiscovery, FocusedTestRecoveryState, SelectorOrigin, focused_test_discovery,
 };
@@ -33,18 +35,21 @@ use recovery_selector::{
 };
 use selection::{
     ImplementationTraversalEvidence, canonical_function_name, canonical_qualified_name,
-    implementation_traversal_evidence, provider_caller_candidates, terminal_function_name,
+    canonical_target_digests, implementation_traversal_evidence, provider_caller_candidates,
+    terminal_function_name,
 };
 
 #[derive(Default)]
 pub(super) struct DecisionAnchorLineages {
-    /// `None` marks a value offered by more than one root; such a value cannot
-    /// advance either root.
+    /// `None` marks a value offered by more than one root; it cannot advance either root.
     selectors: BTreeMap<Selector, Option<SelectorBinding>>,
     focused_test_recovery: BTreeMap<String, FocusedTestRecoveryState>,
     semantic_fallback_queries: BTreeMap<String, Option<String>>,
     recovery_references: BTreeMap<RecoverySelectorKey, String>,
     recovery_reference_selectors: BTreeMap<String, RecoverySelectorReference>,
+    exact_graph_selectors: BTreeMap<ExactGraphSelector, BTreeMap<String, Option<BTreeSet<String>>>>,
+    pending_exact_graph_narrowings:
+        BTreeMap<ExactGraphSelector, Option<PendingExactGraphNarrowing>>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -108,10 +113,25 @@ impl DecisionAnchorLineages {
         }
         let target_kind =
             DecisionAnchorTargetKindV1::from_graph_correlation(correlation.target_kind);
+        let exact_graph_identities = (correlation.tool == GraphCorrelationToolV1::SearchGraph)
+            .then(|| exact_narrowing::provider_exact_graph_identities(typed_parts))
+            .flatten();
+        let exact_narrowing =
+            self.consume_exact_graph_narrowing(correlation, input, exact_graph_identities.as_ref());
         let input_selector = self.selector_for_input(correlation.target_kind, input);
-        let selector_binding = input_selector
+        let selector_binding = exact_narrowing
             .as_ref()
-            .and_then(|selector| self.selectors.get(selector).cloned().flatten());
+            .map(|narrowing| {
+                SelectorBinding::new(
+                    narrowing.root_binding.clone(),
+                    narrowing.canonical_target_digests.clone(),
+                )
+            })
+            .or_else(|| {
+                input_selector
+                    .as_ref()
+                    .and_then(|selector| self.selectors.get(selector).cloned().flatten())
+            });
         let admitted_evidence_kind = self.admitted_evidence_kind(
             decision_evidence_kind,
             input_selector.as_ref(),
@@ -189,7 +209,17 @@ impl DecisionAnchorLineages {
         let result_target_kinds = match provider_candidates(typed_parts) {
             Some(candidates) => {
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
+                if let Some(narrowing) = exact_narrowing.as_ref() {
+                    self.promote_exact_graph_identity(
+                        &narrowing.root_binding,
+                        &narrowing.canonical_target_digests,
+                        &candidates,
+                    );
+                }
                 self.register(&root_binding, candidates.clone())?;
+                if let Some(identities) = exact_graph_identities.as_ref() {
+                    self.register_exact_graph_identities(&root_binding, identities);
+                }
                 if correlation.tool == GraphCorrelationToolV1::SearchGraph
                     && fallback_root.is_none()
                 {

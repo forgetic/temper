@@ -2,6 +2,21 @@
 
 use super::*;
 
+impl SelectorBinding {
+    pub(super) fn new(root_binding: String, canonical_target_digests: BTreeSet<String>) -> Self {
+        Self {
+            root_binding,
+            canonical_target_digests,
+            implementation_evidence_result: false,
+            caller_traversal_result: false,
+            caller_evidence_result: false,
+            focused_test_result: false,
+            focused_test_confirmation_required: false,
+            implementation_traversal_readiness: ImplementationTraversalReadiness::Ready,
+        }
+    }
+}
+
 impl DecisionAnchorLineages {
     pub(super) fn selector_for_input(
         &self,
@@ -78,17 +93,10 @@ impl DecisionAnchorLineages {
                 None => {
                     self.selectors.insert(
                         selector,
-                        Some(SelectorBinding {
-                            root_binding: root.to_string(),
+                        Some(SelectorBinding::new(
+                            root.to_string(),
                             canonical_target_digests,
-                            implementation_evidence_result: false,
-                            caller_traversal_result: false,
-                            caller_evidence_result: false,
-                            focused_test_result: false,
-                            focused_test_confirmation_required: false,
-                            implementation_traversal_readiness:
-                                ImplementationTraversalReadiness::Ready,
-                        }),
+                        )),
                     );
                 }
                 Some(Some(existing))
@@ -290,7 +298,7 @@ fn collect_caller_result(value: &Value, candidates: &mut BTreeMap<Candidate, u8>
     (candidates.len() <= MAX_RESULT_TARGETS).then_some(())
 }
 
-fn canonical_target_digests(value: &str) -> Option<BTreeSet<String>> {
+pub(super) fn canonical_target_digests(value: &str) -> Option<BTreeSet<String>> {
     let qualified = canonical_qualified_name(value);
     let components = qualified
         .as_deref()

@@ -96,6 +96,107 @@ mod progress {
     }
 
     #[test]
+    fn exact_graph_narrowing_is_one_bounded_active_root_route_progress_step() {
+        let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+        state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+        finish(
+            &mut state,
+            "root",
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+        );
+        state.take_model_guidance();
+
+        let exact_call = |id: &str| ToolCall {
+            id: id.to_string(),
+            name: GraphCorrelationToolV1::SearchGraph.public_name().to_string(),
+            arguments: serde_json::json!({
+                "name_pattern": "worker_slot",
+                "label": "Function"
+            }),
+        };
+        let admission = LineageAdmissionOutcome::Eligible(
+            EligibleLineageAdmission::exact_graph_narrowing(
+                ROOT.to_string(),
+                DecisionAnchorTargetKindV1::NamePattern,
+            )
+            .unwrap(),
+        );
+        let exact_output = || {
+            let correlation = GraphCorrelationV1::new(
+                GraphCorrelationToolV1::SearchGraph,
+                GraphCorrelationTargetKindV1::NamePattern,
+                "worker_slot",
+            )
+            .unwrap();
+            let lineage = DecisionAnchorLineageV1::new(
+                ROOT.to_string(),
+                DecisionAnchorLineageStageV1::CarryForward,
+                DecisionAnchorTargetKindV1::NamePattern,
+                [
+                    DecisionAnchorTargetKindV1::Pattern,
+                    DecisionAnchorTargetKindV1::FunctionName,
+                    DecisionAnchorTargetKindV1::QualifiedName,
+                ],
+            )
+            .unwrap();
+            ToolOutput {
+                content: Vec::new(),
+                details: Some(serde_json::json!({
+                    SAFE_GRAPH_CORRELATION_DETAIL_KEY: correlation,
+                    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: lineage,
+                })),
+                is_error: false,
+            }
+        };
+
+        assert_eq!(
+            state.on_tool_dispatched_with_admission(
+                &exact_call("exact"),
+                1,
+                Some(&admission),
+            ),
+            None,
+        );
+        assert_eq!(
+            state.on_tool_finished(
+                "exact",
+                GraphCorrelationToolV1::SearchGraph.public_name(),
+                &exact_output(),
+            ),
+            DecisionAnchorTransition::Unchanged,
+        );
+        let guidance = one_guidance(&mut state);
+        assert!(guidance.contains("result=active_root_progress"));
+        assert!(!guidance.contains(ROOT));
+
+        for (turn, id, transition) in [
+            (2, "repeat-one", DecisionAnchorTransition::Unchanged),
+            (3, "repeat-two", DecisionAnchorTransition::GapRecoveryNeeded),
+        ] {
+            assert_eq!(
+                state.on_tool_dispatched_with_admission(
+                    &exact_call(id),
+                    turn,
+                    Some(&admission),
+                ),
+                None,
+            );
+            assert_eq!(
+                state.on_tool_finished(
+                    id,
+                    GraphCorrelationToolV1::SearchGraph.public_name(),
+                    &exact_output(),
+                ),
+                transition,
+                "repeating the same narrowing remains bounded non-progress",
+            );
+            state.take_model_guidance();
+        }
+    }
+
+    #[test]
     fn sibling_result_is_explicitly_non_authoritative_for_the_active_root() {
         let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
         state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);

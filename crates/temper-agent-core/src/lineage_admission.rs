@@ -25,6 +25,17 @@ pub type LineageAdmissionHandle = Arc<dyn LineageAdmissionResolver>;
 pub trait LineageAdmissionResolver: Send + Sync {
     fn resolve(&self, tool_name: &str, arguments: &Value) -> LineageAdmissionOutcome;
 
+    /// Resolves a selector against the machine-selected active root. The root
+    /// is process-local policy state and is never exposed to the model.
+    fn resolve_for_active_root(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        _active_root: Option<&str>,
+    ) -> LineageAdmissionOutcome {
+        self.resolve(tool_name, arguments)
+    }
+
     fn resolve_source_target(&self, _lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
         TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
     }
@@ -173,6 +184,26 @@ impl EligibleLineageAdmission {
             selector_kind,
             tool_kind,
             evidence_purpose,
+            recovery_purpose: None,
+            traversal_readiness_recheck: false,
+        })
+    }
+
+    pub fn exact_graph_narrowing(
+        root_binding: String,
+        selector_kind: DecisionAnchorTargetKindV1,
+    ) -> Option<Self> {
+        matches!(
+            selector_kind,
+            DecisionAnchorTargetKindV1::NamePattern
+                | DecisionAnchorTargetKindV1::QualifiedNamePattern
+        )
+        .then_some(())?;
+        Some(Self {
+            root_binding: OpaqueLineageRootBinding::new(root_binding)?,
+            selector_kind,
+            tool_kind: GraphCorrelationToolV1::SearchGraph,
+            evidence_purpose: None,
             recovery_purpose: None,
             traversal_readiness_recheck: false,
         })
@@ -331,6 +362,27 @@ mod tests {
         let debug = format!("{admission:?}");
         assert!(debug.contains("FocusedTest"));
         assert!(!debug.contains(ROOT));
+    }
+
+    #[test]
+    fn exact_graph_narrowing_accepts_only_closed_graph_pattern_kinds() {
+        const ROOT: &str = "00000000-0000-4000-8000-000000000001";
+        for kind in [
+            DecisionAnchorTargetKindV1::NamePattern,
+            DecisionAnchorTargetKindV1::QualifiedNamePattern,
+        ] {
+            let admission = EligibleLineageAdmission::exact_graph_narrowing(ROOT.to_string(), kind)
+                .expect("exact graph selector admission");
+            assert!(admission.matches_root(ROOT));
+            assert_eq!(admission.tool_kind(), GraphCorrelationToolV1::SearchGraph);
+        }
+        assert!(
+            EligibleLineageAdmission::exact_graph_narrowing(
+                ROOT.to_string(),
+                DecisionAnchorTargetKindV1::GraphQuery,
+            )
+            .is_none()
+        );
     }
 
     #[test]

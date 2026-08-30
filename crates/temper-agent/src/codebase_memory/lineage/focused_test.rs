@@ -65,7 +65,10 @@ pub(super) fn focused_test_discovery(
     } else {
         None
     };
-    let outcome = if correlation.tool == GraphCorrelationToolV1::SearchGraph && !is_fallback {
+    let outcome = if correlation.tool == GraphCorrelationToolV1::SearchGraph
+        && correlation.target_kind == GraphCorrelationTargetKindV1::GraphQuery
+        && !is_fallback
+    {
         provider_candidates(typed_parts).map(|candidates| {
             if candidates.is_empty() {
                 FocusedTestDiscoveryOutcomeV1::NoEligibleSelector
