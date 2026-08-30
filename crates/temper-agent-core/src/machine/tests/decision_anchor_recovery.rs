@@ -71,7 +71,7 @@ fn unconsumable_roots_have_two_recovery_attempts_then_stay_blocked() {
 }
 
 #[test]
-fn failed_or_malformed_graph_results_create_no_anchor_or_mutation_block() {
+fn failed_or_malformed_graph_results_never_release_mutation_authority() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("failed", "codebase_memory_search_graph"), 0);
     let failed = ToolOutput {
@@ -83,7 +83,7 @@ fn failed_or_malformed_graph_results_create_no_anchor_or_mutation_block() {
         state.on_tool_finished("failed", "codebase_memory_search_graph", &failed),
         DecisionAnchorTransition::Unchanged
     );
-    assert!(!state.blocks_mutation("write"));
+    assert!(state.blocks_mutation("write"));
 
     state.on_tool_dispatched(&call("malformed", "codebase_memory_search_graph"), 1);
     let malformed = ToolOutput {
@@ -97,7 +97,7 @@ fn failed_or_malformed_graph_results_create_no_anchor_or_mutation_block() {
         state.on_tool_finished("malformed", "codebase_memory_search_graph", &malformed),
         DecisionAnchorTransition::Unchanged
     );
-    assert!(!state.blocks_mutation("write"));
+    assert!(state.blocks_mutation("write"));
 }
 
 #[test]
@@ -113,8 +113,8 @@ fn trusted_initial_provider_unavailability_releases_fallback_without_retry() {
         DecisionAnchorTransition::ProviderUnavailableFallback,
     );
     assert!(
-        !state.blocks_mutation("write"),
-        "an initial outage preserves the predecessor's unrestricted conventional control"
+        state.blocks_mutation("write"),
+        "an initial outage requires fresh exact-read authority without reopening graph exploration"
     );
     assert_eq!(
         state.on_tool_dispatched(&call("retry", "codebase_memory_search_graph"), 1),

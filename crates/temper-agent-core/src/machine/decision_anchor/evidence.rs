@@ -68,16 +68,11 @@ impl DecisionAnchorState {
         DecisionAnchorTransition::GapRecoveryNeeded
     }
 
-    pub(super) fn enter_provider_unavailable(
-        &mut self,
-        exact_read_required: bool,
-    ) -> DecisionAnchorTransition {
+    pub(super) fn enter_provider_unavailable(&mut self) -> DecisionAnchorTransition {
         self.source_authorities.clear();
         self.pending_exact_reads.clear();
         self.exact_read_authorities.clear();
-        self.phase = Some(AnchorPhase::ProviderUnavailable {
-            exact_read_required,
-        });
+        self.phase = Some(AnchorPhase::ProviderUnavailable);
         self.exploration = ExplorationStatus::ProviderUnavailable;
         DecisionAnchorTransition::ProviderUnavailableFallback
     }
@@ -255,8 +250,7 @@ impl DecisionAnchorState {
                     .recovery_gap
                     .is_some_and(|gap| active.evidence.needs(gap))
         }) {
-            let exact_read_required = anchors.has_any_evidence();
-            return self.enter_provider_unavailable(exact_read_required);
+            return self.enter_provider_unavailable();
         }
 
         let has_path = !active.evidence.compatible_actions(active).is_empty();

@@ -29,7 +29,7 @@ mod settlement;
 
 use output::{
     anchor_output, graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
-    trusted_unavailable_provider_output, valid_graph_correlation,
+    trusted_unavailable_provider_output,
 };
 use progress::{AcceptedEvidence, ResultProgress};
 
@@ -72,7 +72,6 @@ pub(super) struct DecisionAnchorState {
     next_call_order: u64,
     later_roots: usize,
     non_progressing_batches: u8,
-    targeted_graph_authority_seen: bool,
     source_authorities: Vec<SourceTargetAuthority>,
     pending_exact_reads: BTreeMap<String, PendingExactRead>,
     exact_read_authorities: Vec<ExactReadAuthority>,
@@ -94,9 +93,7 @@ enum AnchorPhase {
     /// Enabled graph activity which exhausted bounded recovery while incomplete.
     EnabledIncomplete(SourceEvidence),
     /// Trusted systemic graph unavailability with the predecessor fallback policy.
-    ProviderUnavailable {
-        exact_read_required: bool,
-    },
+    ProviderUnavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,7 +247,6 @@ impl DecisionAnchorState {
             next_call_order: 0,
             later_roots: 0,
             non_progressing_batches: 0,
-            targeted_graph_authority_seen: false,
             source_authorities: Vec::new(),
             pending_exact_reads: BTreeMap::new(),
             exact_read_authorities: Vec::new(),
@@ -539,8 +535,7 @@ impl DecisionAnchorState {
                     graph_tool_for_name(finished.name),
                 )
         }) {
-            let exact_read_required = anchors.has_any_evidence();
-            return self.enter_provider_unavailable(exact_read_required);
+            return self.enter_provider_unavailable();
         }
 
         if finished

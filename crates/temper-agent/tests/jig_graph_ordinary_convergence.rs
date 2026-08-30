@@ -20,15 +20,13 @@ mod coding_agent_workspace;
 use coding_agent_workspace::{REPO_DIR, TempCheckout};
 
 #[test]
-fn jig_native_loop_redirects_an_identical_ordinary_failure_and_recovers() {
-    let checkout = TempCheckout::new("jig-ordinary-recovery-after-graph-closure");
+fn jig_disabled_mode_redirects_an_identical_ordinary_failure_and_recovers() {
+    let checkout = TempCheckout::new("jig-ordinary-recovery-with-graph-disabled");
     checkout.init_git();
     let attempt_path = checkout.repo_path().join("ordinary-attempts.log");
     let fake = ordinary_recovery_fake(attempt_path.clone());
     let provider = ProviderConfig::anthropic_oauth(Some(jig_auth_fixture()))
         .with_base_url_override(fake.base_url());
-    let mcp_dir = fake_codebase_memory_mcp_script();
-    let tool_config = codebase_memory_tool_config(&mcp_dir);
     let submit_calls = Arc::new(AtomicUsize::new(0));
     let forge_calls = Arc::new(AtomicUsize::new(0));
     let submit = accepting_submit_host(
@@ -49,7 +47,7 @@ fn jig_native_loop_redirects_an_identical_ordinary_failure_and_recovers() {
             12,
             None,
             false,
-            Some(&tool_config),
+            None,
             Some(submit),
             Some(forge),
             Default::default(),
@@ -67,8 +65,6 @@ fn jig_native_loop_redirects_an_identical_ordinary_failure_and_recovers() {
         .collect::<Vec<_>>()
         .join("\n");
     for expected in [
-        "FAKE_MCP_ARCHITECTURE_RESULT",
-        "codebase-memory exploration is closed for this run",
         "# demo",
         "repeats a non-retryable failure",
         "Synthetic fixture context",
@@ -95,9 +91,16 @@ fn jig_native_loop_redirects_an_identical_ordinary_failure_and_recovers() {
 }
 
 #[test]
-fn jig_graph_closure_and_graph_circuit_leave_ordinary_tools_available() {
+fn jig_trusted_graph_unavailability_requires_fresh_read_before_ordinary_mutation() {
     let checkout = TempCheckout::new("jig-graph-closure-locality");
     checkout.init_git();
+    fs::write(
+        checkout.repo_path().join("CLOSURE.md"),
+        "pending trusted fallback\n",
+    )
+    .expect("seed fallback target");
+    checkout.git(&["add", "CLOSURE.md"]);
+    checkout.git(&["commit", "-m", "seed trusted fallback target"]);
     let fake = graph_locality_fake();
     let provider = ProviderConfig::new(
         "jig-openai-compatible",
@@ -152,26 +155,16 @@ fn ordinary_recovery_fake(attempt_path: PathBuf) -> FakeLlm {
     const FAILED_COMMAND: &str = "printf 'attempt\\n' >> demo/ordinary-attempts.log; exit 9";
     let script = Script::rule(move |view| match view.prior_tool_results {
         0 => tool_reply(
-            "graph-discovery",
-            "codebase_memory_get_architecture",
-            serde_json::json!({}),
-        ),
-        1 => tool_reply(
-            "close-graph-exploration",
-            "codebase_memory_get_architecture",
-            serde_json::json!({"close": true}),
-        ),
-        2 => tool_reply(
             "provider-native-read",
             "Read",
             serde_json::json!({"file_path": "demo/README.md"}),
         ),
-        3 => tool_reply(
+        1 => tool_reply(
             "malformed-shell-operation",
             "Bash",
             serde_json::json!({"command": FAILED_COMMAND}),
         ),
-        4 => {
+        2 => {
             assert_eq!(
                 fs::read_to_string(&attempt_path).expect("first bash counter"),
                 "attempt\n"
@@ -182,7 +175,7 @@ fn ordinary_recovery_fake(attempt_path: PathBuf) -> FakeLlm {
                 serde_json::json!({"command": FAILED_COMMAND}),
             )
         }
-        5 => {
+        3 => {
             assert_eq!(
                 fs::read_to_string(&attempt_path).expect("redirect counter"),
                 "attempt\n",
@@ -205,7 +198,7 @@ fn ordinary_recovery_fake(attempt_path: PathBuf) -> FakeLlm {
                     }),
                 ),
                 (
-                    "read-forge-after-closure",
+                    "read-forge-after-recovery",
                     "forge_get_item",
                     serde_json::json!({"repo":"acme/demo","number":25,"type":"issue"}),
                 ),
@@ -216,8 +209,8 @@ fn ordinary_recovery_fake(attempt_path: PathBuf) -> FakeLlm {
                 ),
             ])
         }
-        9 => Reply::text(
-            r#"{"title":"Recover ordinary tools after graph closure","body":"Validated recovery.","summary":"Recovered and submitted."}"#,
+        7 => Reply::text(
+            r#"{"title":"Recover ordinary tools with graph disabled","body":"Validated recovery.","summary":"Recovered and submitted."}"#,
         ),
         count => panic!("unexpected ordinary-recovery tool-result count {count}"),
     });
@@ -233,56 +226,55 @@ fn graph_locality_fake() -> FakeLlm {
         };
         match view.prior_tool_results {
             0 => tool_reply(
-                "closed-graph",
+                "systemic-graph-failure",
                 "codebase_memory_get_architecture",
-                serde_json::json!({"close": true}),
+                serde_json::json!({"systemic": true}),
             ),
             1 => {
-                assert!(saw("codebase-memory exploration is closed for this run"));
-                tool_reply(
-                    "systemic-graph-failure",
-                    "codebase_memory_get_architecture",
-                    serde_json::json!({"systemic": true}),
-                )
-            }
-            2 => {
                 assert!(saw("provider or protocol request failed"));
+                assert!(view.messages.iter().any(|message| {
+                    message
+                        .content
+                        .contains("Do not retry codebase-memory")
+                }));
                 tool_reply(
-                    "graph-circuit-open",
+                    "graph-retry-after-unavailability",
                     "codebase_memory_get_architecture",
                     serde_json::json!({}),
                 )
             }
-            3 => {
-                assert!(saw("no compatible provider-derived recovery action remains"));
-                tool_replies(&[
-                    (
-                        "write-after-graph-stops",
-                        "write",
-                        serde_json::json!({
-                            "path": "demo/CLOSURE.md",
-                            "content": "graph closure stayed local\n"
-                        }),
-                    ),
-                    (
-                        "validate-after-graph-stops",
-                        "bash",
-                        serde_json::json!({
-                            "command": "test \"$(cat demo/CLOSURE.md)\" = 'graph closure stayed local'"
-                        }),
-                    ),
-                    (
-                        "forge-after-graph-stops",
-                        "forge_get_item",
-                        serde_json::json!({"repo":"acme/demo","number":25}),
-                    ),
-                    (
-                        "submit-after-graph-stops",
-                        "submit_for_pr",
-                        serde_json::json!({"summary":"graph-local recovery ready"}),
-                    ),
-                ])
-            }
+            2 => tool_reply(
+                "fresh-fallback-read",
+                "read",
+                serde_json::json!({"path": "demo/CLOSURE.md"}),
+            ),
+            3 => tool_replies(&[
+                (
+                    "write-after-trusted-unavailability",
+                    "write",
+                    serde_json::json!({
+                        "path": "demo/CLOSURE.md",
+                        "content": "graph closure stayed local\n"
+                    }),
+                ),
+                (
+                    "validate-after-graph-stops",
+                    "bash",
+                    serde_json::json!({
+                        "command": "test \"$(cat demo/CLOSURE.md)\" = 'graph closure stayed local'"
+                    }),
+                ),
+                (
+                    "forge-after-graph-stops",
+                    "forge_get_item",
+                    serde_json::json!({"repo":"acme/demo","number":25}),
+                ),
+                (
+                    "submit-after-graph-stops",
+                    "submit_for_pr",
+                    serde_json::json!({"summary":"graph-local recovery ready"}),
+                ),
+            ]),
             7 => {
                 assert!(saw("Synthetic fixture context"));
                 assert!(saw("submit_for_pr accepted by host"));

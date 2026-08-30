@@ -45,6 +45,15 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
         None
     );
     state.on_tool_finished("early-bulk-read", "read", &successful_read());
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("pre-evidence-mutation", "write"),
+            1,
+            Some(&mutation_targets(vec![target_a.clone()])),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+        "enabled mode cannot authorize mutation before graph evidence is complete",
+    );
 
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 1);
     finish(
@@ -68,6 +77,14 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
             DecisionEvidenceKindV1::Implementation,
         ),
         Some(&target_a),
+    );
+
+    let incomplete = call("incomplete-evidence-read", "read");
+    state.on_tool_dispatched_with_targets(&incomplete, 3, Some(&read_target(TARGET_A)));
+    state.on_tool_finished(
+        "incomplete-evidence-read",
+        "read",
+        &successful_read(),
     );
 
     state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 3);
@@ -139,7 +156,7 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
             Some(&mutation_targets(vec![target_a.clone()])),
         ),
         Some(ToolCallDenial::DecisionAnchorMutation),
-        "early and graph-source-sibling reads cannot gain retroactive authority",
+        "pre-completion and graph-source-sibling reads cannot gain retroactive authority",
     );
 
     let failed = call("failed-exact-read", "read");
@@ -235,6 +252,60 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
     let debug = format!("{:?} {:?}", read_target(TARGET_A), read_target(TARGET_B));
     assert!(!debug.contains(TARGET_A));
     assert!(!debug.contains(TARGET_B));
+}
+
+#[test]
+fn initial_provider_unavailability_requires_a_fresh_matching_conventional_read() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    let target_a = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
+
+    let early = call("pre-failure-read", "read");
+    state.on_tool_dispatched_with_targets(&early, 0, Some(&read_target(TARGET_A)));
+    state.on_tool_finished("pre-failure-read", "read", &successful_read());
+
+    state.on_tool_dispatched(&call("unavailable", "codebase_memory_search_graph"), 1);
+    assert_eq!(
+        state.on_tool_finished(
+            "unavailable",
+            "codebase_memory_search_graph",
+            &failure_output("transport"),
+        ),
+        DecisionAnchorTransition::ProviderUnavailableFallback,
+    );
+    let mutation = call("fallback-mutation", "write");
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &mutation,
+            2,
+            Some(&mutation_targets(vec![target_a.clone()])),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+        "a conventional read completed before unavailability is not fresh authority",
+    );
+
+    let wrong = call("wrong-fallback-read", "read");
+    state.on_tool_dispatched_with_targets(&wrong, 3, Some(&read_target(TARGET_B)));
+    state.on_tool_finished("wrong-fallback-read", "read", &successful_read());
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &mutation,
+            4,
+            Some(&mutation_targets(vec![target_a.clone()])),
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+    );
+
+    let matching = call("matching-fallback-read", "read");
+    state.on_tool_dispatched_with_targets(&matching, 5, Some(&read_target(TARGET_A)));
+    state.on_tool_finished("matching-fallback-read", "read", &successful_read());
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &mutation,
+            6,
+            Some(&mutation_targets(vec![target_a])),
+        ),
+        None,
+    );
 }
 
 #[test]

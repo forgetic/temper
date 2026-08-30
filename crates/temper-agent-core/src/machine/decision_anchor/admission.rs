@@ -351,7 +351,7 @@ impl DecisionAnchorState {
             | AnchorPhase::EnabledComplete(anchors) => anchors,
             AnchorPhase::Recovery(recovery) => &recovery.anchors,
             AnchorPhase::GapRecovery(recovery) => &recovery.anchors,
-            AnchorPhase::EnabledIncomplete(_) | AnchorPhase::ProviderUnavailable { .. } => {
+            AnchorPhase::EnabledIncomplete(_) | AnchorPhase::ProviderUnavailable => {
                 return None;
             }
         };
@@ -446,7 +446,7 @@ impl DecisionAnchorState {
             }
             phase @ (AnchorPhase::Recovery(_)
             | AnchorPhase::EnabledComplete(_)
-            | AnchorPhase::ProviderUnavailable { .. }) => {
+            | AnchorPhase::ProviderUnavailable) => {
                 self.phase = Some(phase);
             }
         }
