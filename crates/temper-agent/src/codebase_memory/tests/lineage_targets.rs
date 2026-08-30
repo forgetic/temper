@@ -173,6 +173,16 @@
             ),
             InvocationTargetAdmission::SourceNeutralProcess
         );
+        for command in ["true", "false"] {
+            assert_eq!(
+                registry.resolve_invocation_targets(
+                    "bash",
+                    &serde_json::json!({"command": command})
+                ),
+                InvocationTargetAdmission::SourceNeutralProcess,
+                "shell status builtins must remain ordinary circuit-eligible",
+            );
+        }
         assert_eq!(
             registry.resolve_invocation_targets(
                 "submit_for_pr",

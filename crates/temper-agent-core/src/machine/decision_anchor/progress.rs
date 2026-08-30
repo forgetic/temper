@@ -63,7 +63,7 @@ impl DecisionAnchorState {
     }
 
     pub(super) fn queue_finished_guidance(&mut self, finished: &[FinishedCodebaseCall<'_>]) {
-        if matches!(self.phase, Some(AnchorPhase::ProviderUnavailable { .. })) {
+        if matches!(self.phase, Some(AnchorPhase::ProviderUnavailable)) {
             return;
         }
         let snapshot = self.guidance_snapshot();
@@ -180,7 +180,7 @@ impl DecisionAnchorState {
                 remaining: Some(0),
                 complete: false,
             },
-            Some(AnchorPhase::ProviderUnavailable { .. }) => GuidanceSnapshot::empty(),
+            Some(AnchorPhase::ProviderUnavailable) => GuidanceSnapshot::empty(),
             None => GuidanceSnapshot::empty(),
         }
     }

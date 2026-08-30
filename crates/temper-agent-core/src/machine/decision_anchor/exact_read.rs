@@ -41,12 +41,7 @@ impl DecisionAnchorState {
         order: u64,
         admission: Option<&InvocationTargetAdmission>,
     ) {
-        if matches!(
-            self.phase,
-            Some(AnchorPhase::ProviderUnavailable {
-                exact_read_required: true
-            })
-        ) {
+        if matches!(self.phase, Some(AnchorPhase::ProviderUnavailable)) {
             let Some(InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(target))) =
                 admission
             else {
@@ -58,6 +53,9 @@ impl DecisionAnchorState {
             }
             return;
         }
+        let Some(AnchorPhase::EnabledComplete(anchors)) = self.phase.as_ref() else {
+            return;
+        };
         let Some(InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(target))) =
             admission
         else {
@@ -67,7 +65,8 @@ impl DecisionAnchorState {
             .source_authorities
             .iter()
             .filter(|source| {
-                source.target.matches(target)
+                anchors.root_has_complete_evidence(&source.root_binding)
+                    && source.target.matches(target)
                     && source.completed_batch <= self.settled_batches
                     && (turn > source.completed_turn
                         || turn == source.completed_turn && order > source.completed_order)
@@ -210,9 +209,8 @@ impl DecisionAnchorState {
                 InvocationTargetAdmission::SourceNeutralProcess
                 | InvocationTargetAdmission::ControlPlane,
             ) => false,
-            Some(InvocationTargetAdmission::Mutation(_)) => self.phase.as_ref().map_or(
-                self.targeted_graph_authority_seen,
-                |phase| match phase {
+            Some(InvocationTargetAdmission::Mutation(_)) => {
+                self.phase.as_ref().is_none_or(|phase| match phase {
                     AnchorPhase::EnabledComplete(anchors) => {
                         !self.mutation_targets_authorized(anchors, admission)
                     }
@@ -221,26 +219,13 @@ impl DecisionAnchorState {
                     | AnchorPhase::Recovery(_)
                     | AnchorPhase::GapRecovery(_)
                     | AnchorPhase::EnabledIncomplete(_) => true,
-                    AnchorPhase::ProviderUnavailable {
-                        exact_read_required,
-                    } => {
-                        *exact_read_required
-                            && !self.conventional_mutation_targets_authorized(admission)
+                    AnchorPhase::ProviderUnavailable => {
+                        !self.conventional_mutation_targets_authorized(admission)
                     }
-                },
-            ),
+                })
+            }
             Some(InvocationTargetAdmission::Read(_) | InvocationTargetAdmission::Ineligible(_))
-            | None => self
-                .phase
-                .as_ref()
-                .map_or(self.targeted_graph_authority_seen, |phase| {
-                    !matches!(
-                        phase,
-                        AnchorPhase::ProviderUnavailable {
-                            exact_read_required: false
-                        }
-                    )
-                }),
+            | None => true,
         }
     }
 

@@ -12,10 +12,6 @@ impl DecisionAnchorState {
             self.settled_batches = self.settled_batches.saturating_add(1);
         }
         self.settle_exact_reads(completed);
-        self.targeted_graph_authority_seen |=
-            completed.iter().any(|(_, name, output, _, succeeded)| {
-                *succeeded && valid_graph_correlation(name, output)
-            });
         let finished = completed
             .iter()
             .filter_map(|(id, name, output, source_target, _)| {
@@ -43,7 +39,7 @@ impl DecisionAnchorState {
                     trusted_unavailable_provider_output(finished.name, finished.output)
                 }) =>
                 {
-                    self.enter_provider_unavailable(false)
+                    self.enter_provider_unavailable()
                 }
                 None if successful_graph_batch(&finished) => self.record_non_progress(None),
                 None => DecisionAnchorTransition::Unchanged,
@@ -95,12 +91,8 @@ impl DecisionAnchorState {
                     self.exploration = ExplorationStatus::EnabledIncomplete;
                     DecisionAnchorTransition::Unchanged
                 }
-                Some(AnchorPhase::ProviderUnavailable {
-                    exact_read_required,
-                }) => {
-                    self.phase = Some(AnchorPhase::ProviderUnavailable {
-                        exact_read_required,
-                    });
+                Some(AnchorPhase::ProviderUnavailable) => {
+                    self.phase = Some(AnchorPhase::ProviderUnavailable);
                     self.exploration = ExplorationStatus::ProviderUnavailable;
                     DecisionAnchorTransition::Unchanged
                 }
