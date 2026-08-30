@@ -104,25 +104,6 @@ pub(in crate::codebase_memory) struct CandidateRecovery {
 }
 
 impl DecisionAnchorLineages {
-    pub(in crate::codebase_memory) fn implementation_trace_recovery_selector(
-        &self,
-        root_binding: &str,
-    ) -> Option<&str> {
-        let key = RecoverySelectorKey {
-            root_binding: root_binding.to_string(),
-            purpose: RecoverySelectorPurpose::ImplementationTrace,
-        };
-        self.recovery_references
-            .get(&key)?
-            .iter()
-            .find_map(|reference| {
-                self.recovery_reference_selectors
-                    .get(reference)
-                    .is_some_and(|selector| selector.state == RecoverySelectorState::Available)
-                    .then_some(reference.as_str())
-            })
-    }
-
     pub(in crate::codebase_memory) fn recovery_selector_guidance(
         &self,
         root_binding: &str,
@@ -151,7 +132,7 @@ impl DecisionAnchorLineages {
         }
         (!references.is_empty()).then(|| {
             format!(
-                "[Recovery selector references: {}. Copy one reference exactly into the matching selector field named by Decision guidance; numbered references are distinct same-root provider candidates; references are run-local, provider-derived, and current-root bound.]",
+                "[Recovery selector references: {}. These are provider-result-local candidates, not a post-batch action. Do not use any reference unless the later Active-root selector handoff repeats exactly one of them with its public tool and selector field; sibling and alternate references remain non-actionable.]",
                 references.join(", "),
             )
         })
@@ -539,7 +520,7 @@ impl DecisionAnchorLineages {
             .map(|_| ())
     }
 
-    fn recovery_selector<'a>(
+    pub(super) fn recovery_selector<'a>(
         &'a self,
         tool_name: &str,
         input: &Value,

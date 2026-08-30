@@ -33,6 +33,7 @@ use output::{
     graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
     trusted_unavailable_provider_output,
 };
+pub(super) use progress::active_root_selector_handoff;
 use progress::{AcceptedEvidence, ResultProgress};
 
 /// Reserved wrapper detail carrying a process-local-root-bound lineage record.
@@ -63,8 +64,6 @@ const MAX_NON_PROGRESSING_GRAPH_BATCHES: u8 = 2;
 /// Budget exhaustion preserves exactly enough attempts to fill every possible
 /// trace/evidence gap once, without reopening broad graph exploration.
 const MAX_DECISION_GAP_RECOVERY_CALLS: u8 = MAX_GRAPH_RECOVERY_ALLOWANCE_V1;
-/// Bounds opaque source, pending-read, and successful-read authority.
-const MAX_EXACT_TARGET_AUTHORITIES: usize = 64;
 
 pub(super) struct DecisionAnchorState {
     mutation_tools: BTreeSet<String>,
@@ -80,6 +79,7 @@ pub(super) struct DecisionAnchorState {
     settled_batches: u64,
     batch_progress: BTreeMap<String, ResultProgress>,
     model_guidance: Vec<String>,
+    handoff_override: Option<GraphRecoveryActionV1>,
     rejected_recovery_tuples: BTreeSet<RecoveryTupleIdentity>,
     pending_conventional_reads: BTreeMap<String, EligibleWorkspaceTarget>,
     conventional_read_authorities: Vec<EligibleWorkspaceTarget>,
@@ -262,6 +262,7 @@ impl DecisionAnchorState {
             settled_batches: 0,
             batch_progress: BTreeMap::new(),
             model_guidance: Vec::new(),
+            handoff_override: None,
             rejected_recovery_tuples: BTreeSet::new(),
             pending_conventional_reads: BTreeMap::new(),
             conventional_read_authorities: Vec::new(),

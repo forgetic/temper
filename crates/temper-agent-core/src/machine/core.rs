@@ -46,6 +46,8 @@ use super::protocol::{
 };
 use super::tool_failure::ToolFailureDiagnostic;
 
+mod accessors;
+
 /// Where the loop is in the call/tool cycle.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Phase {
@@ -81,6 +83,10 @@ pub struct AgentMachine {
     /// Content-free traversal kinds whose required selector was unusable
     /// before invocation scrubbing.
     incomplete_graph_selectors: BTreeMap<String, GraphCorrelationToolV1>,
+    /// Closed opaque-reference classifications captured before malformed
+    /// arguments are scrubbed by the public invocation boundary.
+    pub(super) recovery_reference_dispositions:
+        BTreeMap<String, temper_protocol_activity::GraphRecoveryReferenceDispositionV1>,
     /// Bounded per-run ordinary-tool identities. This state contains only
     /// process-local digests and is never projected through the protocol.
     ordinary_failures: OrdinaryFailureCircuit,
@@ -93,10 +99,10 @@ pub struct AgentMachine {
     turn_results: Vec<PendingTool>,
     /// Per-run graph guard enabled whenever codebase-memory tools are present,
     /// including read-only roles with no mutation authorization.
-    decision_anchors: Option<DecisionAnchorState>,
+    pub(super) decision_anchors: Option<DecisionAnchorState>,
     /// Optional wrapper-owned run-local selector resolver. Its results are
     /// closed process-local policy values and never enter events or messages.
-    lineage_admission: Option<LineageAdmissionHandle>,
+    pub(super) lineage_admission: Option<LineageAdmissionHandle>,
     /// Fixed convergence instruction queued once complete current-root evidence
     /// closes graph exploration.
     decision_anchor_complete: bool,
@@ -107,6 +113,9 @@ pub struct AgentMachine {
     decision_anchor_gap_recovery: Option<GraphExplorationClosedV1>,
     /// Per-result closed active-root classifications queued after tool results.
     decision_anchor_guidance: Vec<String>,
+    /// The one selector-complete active-root continuation, emitted after all
+    /// result-local candidate lists and lifecycle guidance.
+    pub(super) decision_anchor_active_handoff: Option<String>,
     /// Stops the run after incomplete enabled evidence exhausts bounded recovery.
     decision_anchor_incomplete: bool,
     /// The most recent assistant message (the run's product on completion).
@@ -174,6 +183,7 @@ impl AgentMachine {
             invocation_catalog,
             invocation_rejections: BTreeMap::new(),
             incomplete_graph_selectors: BTreeMap::new(),
+            recovery_reference_dispositions: BTreeMap::new(),
             ordinary_failures: OrdinaryFailureCircuit::default(),
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
@@ -183,6 +193,7 @@ impl AgentMachine {
             decision_anchor_recovery: false,
             decision_anchor_gap_recovery: None,
             decision_anchor_guidance: Vec::new(),
+            decision_anchor_active_handoff: None,
             decision_anchor_incomplete: false,
             last_assistant: None,
             model_failure: None,
@@ -209,11 +220,6 @@ impl AgentMachine {
         self
     }
 
-    /// The current conversation (test/observability accessor).
-    pub fn messages(&self) -> &[Message] {
-        &self.messages
-    }
-
     fn finish(&mut self, stop: AgentStop) -> Vec<AgentRequest> {
         self.phase = Phase::Done;
         self.active_llm = None;
@@ -224,6 +230,7 @@ impl AgentMachine {
         self.decision_anchor_recovery = false;
         self.decision_anchor_gap_recovery = None;
         self.decision_anchor_guidance.clear();
+        self.decision_anchor_active_handoff = None;
         self.decision_anchor_incomplete = false;
         let final_message = self
             .last_assistant
@@ -256,39 +263,6 @@ impl AgentMachine {
             .checked_add(1)
             .expect("agent batch generation exhausted");
         generation
-    }
-
-    /// The operation/batch identity currently allowed to complete. This is
-    /// primarily useful to deterministic protocol tests that synthesize shell
-    /// completions without running an executor.
-    pub fn active_generations(&self) -> Option<(OperationGeneration, BatchGeneration)> {
-        match self.phase {
-            Phase::AwaitingLlm => self.active_llm.map(|operation| (operation, 0)),
-            Phase::AwaitingTools => self.active_tool_batch.as_ref().and_then(|batch| {
-                batch
-                    .operations
-                    .values()
-                    .next()
-                    .copied()
-                    .map(|operation| (operation, batch.generation))
-            }),
-            Phase::Cancelling => self.cancellation_generation,
-            Phase::Done => None,
-        }
-    }
-
-    /// The operation/batch identity currently allowed to complete for `id`.
-    /// Returns `None` unless that exact tool call is in the active batch.
-    pub fn active_tool_generations(
-        &self,
-        id: &str,
-    ) -> Option<(OperationGeneration, BatchGeneration)> {
-        let batch = self.active_tool_batch.as_ref()?;
-        batch
-            .operations
-            .get(id)
-            .copied()
-            .map(|operation| (operation, batch.generation))
     }
 
     /// Begin the next model turn: inject any queued steering, then call the LLM.
@@ -327,6 +301,12 @@ impl AgentMachine {
                 timestamp: 0,
             }));
         }
+        if let Some(guidance) = self.decision_anchor_active_handoff.take() {
+            self.messages.push(Message::User(UserMessage {
+                content: UserContent::Text(guidance),
+                timestamp: 0,
+            }));
+        }
         self.phase = Phase::AwaitingLlm;
         let operation_generation = self.next_operation_generation();
         self.active_llm = Some(operation_generation);
@@ -344,6 +324,7 @@ impl AgentMachine {
     }
 
     fn on_llm_responded(&mut self, mut assistant: AssistantMessage) -> Vec<AgentRequest> {
+        self.capture_recovery_reference_dispositions(&assistant);
         // Normalize before the assistant turn is emitted, retained, inspected
         // by policy, previewed, batched, or dispatched.
         (self.invocation_rejections, self.incomplete_graph_selectors) =
@@ -433,34 +414,12 @@ impl AgentMachine {
             .iter()
             .map(|call| self.incomplete_graph_selectors.get(&call.id).copied())
             .collect::<Vec<_>>();
-        let recovery_reference_dispositions = resolved_admissions
-            .iter()
-            .zip(&incomplete_graph_selectors)
-            .map(|(resolved, incomplete)| {
-                resolved
-                    .as_ref()
-                    .and_then(|(_, disposition)| *disposition)
-                    .or_else(|| {
-                        (*incomplete == Some(GraphCorrelationToolV1::TracePath)).then_some(
-                            temper_protocol_activity::GraphRecoveryReferenceDispositionV1::Missing,
-                        )
-                    })
-            })
-            .collect::<Vec<_>>();
-        let trace_recovery_selectors = calls
-            .iter()
-            .zip(&incomplete_graph_selectors)
-            .map(|(call, incomplete)| {
-                (call.name == GraphCorrelationToolV1::TracePath.public_name()
-                    || *incomplete == Some(GraphCorrelationToolV1::TracePath))
-                .then(|| {
-                    self.lineage_admission.as_ref().and_then(|admission| {
-                        admission.trace_recovery_selector(active_decision_root.as_deref()?)
-                    })
-                })
-                .flatten()
-            })
-            .collect::<Vec<_>>();
+        let recovery_reference_dispositions = self.resolve_recovery_reference_dispositions(
+            &calls,
+            &resolved_admissions,
+            &incomplete_graph_selectors,
+            active_decision_root.as_deref(),
+        );
         let invocation_targets = calls
             .iter()
             .map(|call| {
@@ -478,6 +437,7 @@ impl AgentMachine {
                 pending.invocation_targets = admission;
             }
         }
+        let mut active_handoff = None;
         let denials = if let Some(state) = self.decision_anchors.as_mut() {
             let denials = state.on_tool_batch_dispatched_with_closed_inputs(
                 &calls,
@@ -485,14 +445,21 @@ impl AgentMachine {
                 &closed_admissions,
                 &invocation_targets,
                 &incomplete_graph_selectors,
-                &trace_recovery_selectors,
+                &recovery_reference_dispositions,
             );
-            self.decision_anchor_guidance
-                .extend(state.take_model_guidance());
+            let candidate_handoff = state.active_recovery_action();
+            let guidance = state.take_model_guidance();
+            if !guidance.is_empty() {
+                active_handoff = candidate_handoff;
+            }
+            self.decision_anchor_guidance.extend(guidance);
             denials
         } else {
             vec![None; calls.len()]
         };
+        if active_handoff.is_some() {
+            self.refresh_active_root_handoff(active_handoff);
+        }
         for ((call, denial), recovery_reference_disposition) in calls
             .into_iter()
             .zip(denials)
@@ -649,7 +616,7 @@ impl AgentMachine {
         // than on each transport completion, so a parallel graph batch always
         // sees complete results in its original dispatch order.
         if let Some(batch) = self.pending_batches.pop_front() {
-            if let Some(state) = self.decision_anchors.as_mut() {
+            let active_handoff = if let Some(state) = self.decision_anchors.as_mut() {
                 let completed = batch
                     .iter()
                     .filter_map(|pending| {
@@ -685,12 +652,19 @@ impl AgentMachine {
                         self.decision_anchor_complete = true;
                     }
                 }
+                let active_handoff = state.active_recovery_action();
                 self.decision_anchor_guidance
                     .extend(state.take_model_guidance());
-            }
+                active_handoff
+            } else {
+                None
+            };
+            self.refresh_active_root_handoff(active_handoff);
             for pending in &batch {
                 self.invocation_rejections.remove(&pending.call.id);
                 self.incomplete_graph_selectors.remove(&pending.call.id);
+                self.recovery_reference_dispositions
+                    .remove(&pending.call.id);
             }
             self.turn_results.extend(batch);
         }
@@ -829,7 +803,7 @@ impl temper_agent_io::Machine for AgentMachine {
 }
 
 /// Pulls the tool-call blocks out of an assistant message, in order.
-fn extract_tool_calls(content: &[ContentBlock]) -> Vec<ToolCall> {
+pub(super) fn extract_tool_calls(content: &[ContentBlock]) -> Vec<ToolCall> {
     content
         .iter()
         .filter_map(|block| match block {

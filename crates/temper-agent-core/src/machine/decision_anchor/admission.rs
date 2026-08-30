@@ -1,9 +1,11 @@
 //! Immutable, root-local pre-provider recovery admission.
 
-use crate::{EligibleLineageAdmission, LineageAdmissionOutcome, OpaqueRecoverySelectorReference};
+use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
 use sha2::{Digest as _, Sha256};
 
 use super::*;
+
+const MAX_REJECTED_RECOVERY_TUPLES: usize = 64;
 
 struct RecoveryAdmissionSnapshot {
     active_root: String,
@@ -41,10 +43,10 @@ impl DecisionAnchorState {
     }
 
     /// Evaluates every sibling against one immutable recovery snapshot. Only
-    /// admitted calls are retained for settlement. An ineligible call-shaped
-    /// attempt at the current compatible action is recorded as non-progress
-    /// and consumes one bounded recovery slot instead of returning an
-    /// unchanged menu indefinitely.
+    /// admitted calls are retained for settlement. An ineligible ordinary
+    /// selector attempt at the current compatible action is bounded as
+    /// non-progress; rejected opaque references remain fail-closed without
+    /// spending an unattempted valid active-root action.
     #[cfg(test)]
     pub(in crate::machine) fn on_tool_batch_dispatched_with_admissions(
         &mut self,
@@ -87,12 +89,14 @@ impl DecisionAnchorState {
         admissions: &[Option<LineageAdmissionOutcome>],
         invocation_targets: &[Option<InvocationTargetAdmission>],
         incomplete_graph_selectors: &[Option<GraphCorrelationToolV1>],
-        trace_recovery_selectors: &[Option<OpaqueRecoverySelectorReference>],
+        recovery_reference_dispositions: &[Option<
+            temper_protocol_activity::GraphRecoveryReferenceDispositionV1,
+        >],
     ) -> Vec<Option<ToolCallDenial>> {
         debug_assert_eq!(calls.len(), admissions.len());
         debug_assert_eq!(calls.len(), invocation_targets.len());
         debug_assert_eq!(calls.len(), incomplete_graph_selectors.len());
-        debug_assert_eq!(calls.len(), trace_recovery_selectors.len());
+        debug_assert_eq!(calls.len(), recovery_reference_dispositions.len());
         let snapshot = self.staged_admission_snapshot();
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
@@ -104,13 +108,13 @@ impl DecisionAnchorState {
 
         for (
             (((call, admission), invocation_target), incomplete_graph_selector),
-            trace_recovery_selector,
+            recovery_reference_disposition,
         ) in calls
             .iter()
             .zip(admissions)
             .zip(invocation_targets)
             .zip(incomplete_graph_selectors)
-            .zip(trace_recovery_selectors)
+            .zip(recovery_reference_dispositions)
         {
             let order = self.next_call_order;
             self.next_call_order = self.next_call_order.saturating_add(1);
@@ -248,20 +252,19 @@ impl DecisionAnchorState {
                         } else if requested_action.is_some() {
                             let excluded = already_rejected
                                 || tuple_identity.is_some_and(|identity| {
-                                    self.rejected_recovery_tuples.insert(identity)
+                                    if self.rejected_recovery_tuples.len()
+                                        >= MAX_REJECTED_RECOVERY_TUPLES
+                                    {
+                                        true
+                                    } else {
+                                        self.rejected_recovery_tuples.insert(identity)
+                                    }
                                 });
-                            let recovery_selector = trace_recovery_selector
-                                .as_ref()
-                                .filter(|_| {
-                                    requested_gap == Some(DecisionGap::Trace)
-                                        && snapshot.as_ref().is_some_and(|snapshot| {
-                                            requested_action.is_some_and(|action| {
-                                                snapshot.compatible.contains(&action)
-                                            })
-                                        })
-                                })
-                                .cloned();
-                            local_rejections.push((requested_action, excluded, recovery_selector));
+                            let rejected_reference = *recovery_reference_disposition
+                                == Some(
+                                    temper_protocol_activity::GraphRecoveryReferenceDispositionV1::Rejected,
+                                );
+                            local_rejections.push((requested_action, excluded, rejected_reference));
                         }
                     }
                 }
@@ -315,15 +318,17 @@ impl DecisionAnchorState {
                     GraphRecoveryEvidenceKindV1::Trace,
                 )),
                 true,
-                None,
             );
         }
-        let local_batch_made_no_progress = admitted_count == 0 && !local_rejections.is_empty();
+        let local_batch_made_no_progress = admitted_count == 0
+            && local_rejections
+                .iter()
+                .any(|(_, _, rejected_reference)| !rejected_reference);
         if local_batch_made_no_progress {
             self.enter_local_traversal_readiness_recovery();
         }
-        for (action, excluded, recovery_selector) in local_rejections {
-            self.queue_local_denial_guidance(action, excluded, recovery_selector.as_ref());
+        for (action, excluded, _) in local_rejections {
+            self.queue_local_denial_guidance(action, excluded);
         }
         for _ in 0..local_readiness_deferrals {
             self.queue_local_traversal_readiness_guidance();

@@ -2,6 +2,8 @@
 
 use super::*;
 
+const MAX_EXACT_TARGET_AUTHORITIES: usize = 64;
+
 impl DecisionAnchorState {
     pub(super) fn record_source_authority(
         &mut self,
