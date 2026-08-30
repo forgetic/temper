@@ -120,14 +120,19 @@ impl DecisionAnchorLineages {
                         }
                         (true, readiness, _) => readiness,
                     };
+                    binding.recovery_reference_required = false;
                 }
                 SelectorOrigin::CallerTraversalResult => binding.caller_traversal_result = true,
-                SelectorOrigin::CallerEvidenceResult => binding.caller_evidence_result = true,
+                SelectorOrigin::CallerEvidenceResult => {
+                    binding.caller_evidence_result = true;
+                    binding.recovery_reference_required = false;
+                }
                 SelectorOrigin::FocusedTestResult => binding.focused_test_result = true,
             }
             marked += 1;
         }
-        self.replace_recovery_references(root, purpose, &candidates);
+        let ordered = candidates.iter().cloned().collect::<Vec<_>>();
+        self.replace_recovery_references(root, purpose, &ordered);
         Some(marked)
     }
 

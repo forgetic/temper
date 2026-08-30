@@ -17,8 +17,6 @@ use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
 };
 
-const MAX_RESULT_TARGETS: usize = 64;
-
 mod tests {
     use super::*;
 
@@ -396,20 +394,13 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_oversized_provider_records_do_not_create_carry_forwards() {
-        let mut cases = vec![
+    fn malformed_provider_records_do_not_create_carry_forwards() {
+        let cases = vec![
             serde_json::json!({"qualified_name": ["not a string"]}),
             serde_json::json!({"name":"unbound_display_name"}),
             serde_json::json!({"unknown_target":"crate::engine::run"}),
             serde_json::json!({"callers": "not a list"}),
         ];
-        cases.push(serde_json::json!({
-            "results": (0..=MAX_RESULT_TARGETS)
-                .map(|index| serde_json::json!({
-                    "qualified_name": format!("crate::engine::run_{index}"),
-                }))
-                .collect::<Vec<_>>(),
-        }));
         for result in cases {
             let mut lineages = DecisionAnchorLineages::default();
             let root_parts = text_parts(result);

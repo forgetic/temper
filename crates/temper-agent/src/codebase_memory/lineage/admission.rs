@@ -361,6 +361,12 @@ impl DecisionAnchorLineages {
         if active_root.is_some_and(|active_root| binding.root_binding != active_root) {
             return Ineligible(UnknownSelector);
         }
+        let used_recovery_reference = object[expected_field]
+            .as_str()
+            .is_some_and(|value| value.starts_with(super::RECOVERY_SELECTOR_REFERENCE_PREFIX));
+        if binding.recovery_reference_required && !used_recovery_reference {
+            return Ineligible(IncapableSelection);
+        }
         let readiness_recheck = tool_kind == GraphCorrelationToolV1::GetCodeSnippet
             && evidence_purpose == Some(DecisionEvidenceKindV1::Implementation)
             && self.is_implementation_trace_reference(input);

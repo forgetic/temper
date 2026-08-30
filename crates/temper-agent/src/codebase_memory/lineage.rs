@@ -18,6 +18,7 @@ use crate::mcp::McpToolResultPart;
 const MAX_RESULT_TARGETS: usize = 64;
 
 mod admission;
+mod candidate_projection;
 mod exact_narrowing;
 mod focused_test;
 mod recovery_selector;
@@ -25,6 +26,7 @@ mod selection;
 mod target;
 
 pub(super) use admission::DecisionAnchorLineageRegistry;
+use candidate_projection::{CandidateCollection, provider_candidates};
 use exact_narrowing::{ExactGraphSelector, PendingExactGraphNarrowing};
 use focused_test::{FocusedTestDiscovery, SelectorOrigin, focused_test_discovery};
 use recovery_selector::{
@@ -71,6 +73,7 @@ struct SelectorBinding {
     caller_evidence_result: bool,
     focused_test_result: bool,
     focused_test_confirmation_required: bool,
+    recovery_reference_required: bool,
     implementation_traversal_readiness: ImplementationTraversalReadiness,
 }
 
@@ -193,7 +196,11 @@ impl DecisionAnchorLineages {
 
         let mut marked_focused_tests = None;
         let result_target_kinds = match provider_candidates(typed_parts) {
-            Some(candidates) => {
+            Some(provider_candidates) => {
+                let mut candidates = provider_candidates.candidates;
+                if let Some(focused_tests) = focused_tests.as_ref() {
+                    candidates.extend(focused_tests.iter().cloned());
+                }
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
                 if let Some(narrowing) = exact_narrowing.as_ref() {
                     self.promote_exact_graph_identity(
@@ -202,7 +209,11 @@ impl DecisionAnchorLineages {
                         &candidates,
                     );
                 }
-                self.register(&root_binding, candidates.clone())?;
+                self.register(
+                    &root_binding,
+                    candidates.clone(),
+                    provider_candidates.projected,
+                )?;
                 if stage == DecisionAnchorLineageStageV1::Root
                     && matches!(
                         correlation.tool,
@@ -212,11 +223,16 @@ impl DecisionAnchorLineages {
                     self.replace_recovery_references(
                         &root_binding,
                         RecoverySelectorPurpose::ImplementationCandidate,
-                        &implementation_root_candidates(&candidates, focused_tests.as_ref()),
+                        &implementation_root_candidates(
+                            &provider_candidates.provider_order,
+                            focused_tests.as_ref(),
+                        ),
                     );
                 }
-                if let Some(identities) = exact_graph_identities.as_ref() {
-                    self.register_exact_graph_identities(&root_binding, identities);
+                if !provider_candidates.projected {
+                    if let Some(identities) = exact_graph_identities.as_ref() {
+                        self.register_exact_graph_identities(&root_binding, identities);
+                    }
                 }
                 if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Implementation) {
                     let traversal_evidence = implementation_traversal_evidence(typed_parts);
@@ -285,52 +301,6 @@ impl DecisionAnchorLineages {
     }
 }
 
-/// Extracts candidates only from the provider-neutral result representations
-/// exercised by the benchmark. Arbitrary nested JSON is deliberately ignored:
-/// only nested `results`, short symbols, caller/callee lists, related-source
-/// references, and source metadata may contribute selectors.
-fn provider_candidates(typed_parts: Option<&[McpToolResultPart]>) -> Option<BTreeSet<Candidate>> {
-    let typed_parts = typed_parts?;
-    let mut candidates = BTreeMap::new();
-    let mut content_values = Vec::new();
-    for part in typed_parts {
-        let value = match part {
-            McpToolResultPart::StructuredContent(value) => {
-                let value = value.is_object().then(|| Some(value.clone()))?;
-                // MCP servers commonly mirror one result as both JSON text
-                // content and structuredContent. Skip only that exact
-                // cross-representation mirror. Candidate uniqueness is about
-                // provider identities rather than equivalent selectors, so
-                // representation mirrors cannot make a returned symbol
-                // ineligible.
-                if value
-                    .as_ref()
-                    .is_some_and(|value| content_values.contains(value))
-                {
-                    continue;
-                }
-                value
-            }
-            McpToolResultPart::Content(block) => {
-                let value = content_part_json(block)?;
-                if let Some(value) = &value {
-                    content_values.push(value.clone());
-                }
-                value
-            }
-        };
-        // Non-text blocks and non-JSON text remain fully model-visible, but
-        // cannot manufacture a typed lineage candidate. A malformed text
-        // block or structured part invalidates the complete typed collection.
-        let Some(value) = value else {
-            continue;
-        };
-        collect_result(&value, &mut candidates)?;
-    }
-    let candidates = candidates.into_keys().collect::<BTreeSet<_>>();
-    (candidates.len() <= MAX_RESULT_TARGETS).then_some(candidates)
-}
-
 /// Only valid MCP text blocks can provide JSON lineage candidates.
 fn content_part_json(block: &Value) -> Option<Option<Value>> {
     let block = block.as_object()?;
@@ -343,7 +313,7 @@ fn content_part_json(block: &Value) -> Option<Option<Value>> {
     }
 }
 
-fn collect_result(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
+fn collect_result<C: CandidateCollection>(value: &Value, candidates: &mut C) -> Option<()> {
     match value {
         Value::Array(values) => {
             for value in values {
@@ -353,10 +323,10 @@ fn collect_result(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Op
         Value::Object(values) => collect_result_record(values, candidates)?,
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => return None,
     }
-    (candidates.len() <= MAX_RESULT_TARGETS).then_some(())
+    candidates.within_result_limit().then_some(())
 }
 
-fn collect_result_item(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
+fn collect_result_item<C: CandidateCollection>(value: &Value, candidates: &mut C) -> Option<()> {
     match value {
         Value::Array(values) => {
             for value in values {
@@ -367,12 +337,12 @@ fn collect_result_item(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) 
         Value::String(value) => insert_reference(candidates, value)?,
         Value::Null | Value::Bool(_) | Value::Number(_) => return None,
     }
-    (candidates.len() <= MAX_RESULT_TARGETS).then_some(())
+    candidates.within_result_limit().then_some(())
 }
 
-fn collect_result_record(
+fn collect_result_record<C: CandidateCollection>(
     values: &serde_json::Map<String, Value>,
-    candidates: &mut BTreeMap<Candidate, u8>,
+    candidates: &mut C,
 ) -> Option<()> {
     collect_direct_symbol(values, candidates)?;
 
@@ -398,12 +368,12 @@ fn collect_result_record(
             _ => {}
         }
     }
-    (candidates.len() <= MAX_RESULT_TARGETS).then_some(())
+    candidates.within_result_limit().then_some(())
 }
 
-fn collect_direct_symbol(
+fn collect_direct_symbol<C: CandidateCollection>(
     values: &serde_json::Map<String, Value>,
-    candidates: &mut BTreeMap<Candidate, u8>,
+    candidates: &mut C,
 ) -> Option<()> {
     let qualified_field = one_symbol_field(values, &["qualified_name", "qualifiedName"])?;
     let (qualified, short_from_qualified_field, invalid_qualified_field) = match &qualified_field {
@@ -500,16 +470,16 @@ fn one_symbol_field(
     Some(value)
 }
 
-fn collect_reference_list(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
+fn collect_reference_list<C: CandidateCollection>(value: &Value, candidates: &mut C) -> Option<()> {
     for value in value.as_array()? {
         collect_reference(value, candidates)?;
     }
     Some(())
 }
 
-fn collect_reference_list_or_count(
+fn collect_reference_list_or_count<C: CandidateCollection>(
     value: &Value,
-    candidates: &mut BTreeMap<Candidate, u8>,
+    candidates: &mut C,
 ) -> Option<()> {
     if value.is_u64() {
         // Source metadata reports caller cardinality under the same field name
@@ -520,11 +490,14 @@ fn collect_reference_list_or_count(
     }
 }
 
-fn collect_source_metadata(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
+fn collect_source_metadata<C: CandidateCollection>(
+    value: &Value,
+    candidates: &mut C,
+) -> Option<()> {
     collect_result_record(value.as_object()?, candidates)
 }
 
-fn collect_reference(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) -> Option<()> {
+fn collect_reference<C: CandidateCollection>(value: &Value, candidates: &mut C) -> Option<()> {
     match value {
         Value::String(value) => insert_reference(candidates, value),
         Value::Object(value) => collect_result_record(value, candidates),
@@ -532,14 +505,14 @@ fn collect_reference(value: &Value, candidates: &mut BTreeMap<Candidate, u8>) ->
     }
 }
 
-fn insert_reference(candidates: &mut BTreeMap<Candidate, u8>, value: &str) -> Option<()> {
+fn insert_reference<C: CandidateCollection>(candidates: &mut C, value: &str) -> Option<()> {
     match canonical_qualified_name(value) {
         Some(value) => insert_qualified(candidates, value),
         None => insert_function(candidates, canonical_function_name(value)?),
     }
 }
 
-fn insert_qualified(candidates: &mut BTreeMap<Candidate, u8>, value: String) -> Option<()> {
+fn insert_qualified<C: CandidateCollection>(candidates: &mut C, value: String) -> Option<()> {
     let function = terminal_function_name(&value)?;
     insert(
         candidates,
@@ -579,7 +552,7 @@ fn insert_qualified(candidates: &mut BTreeMap<Candidate, u8>, value: String) -> 
     )
 }
 
-fn insert_function(candidates: &mut BTreeMap<Candidate, u8>, value: String) -> Option<()> {
+fn insert_function<C: CandidateCollection>(candidates: &mut C, value: String) -> Option<()> {
     insert(
         candidates,
         DecisionAnchorTargetKindV1::FunctionName,
@@ -600,8 +573,8 @@ fn insert_function(candidates: &mut BTreeMap<Candidate, u8>, value: String) -> O
     )
 }
 
-fn insert(
-    candidates: &mut BTreeMap<Candidate, u8>,
+fn insert<C: CandidateCollection>(
+    candidates: &mut C,
     source_kind: DecisionAnchorTargetKindV1,
     target_kind: DecisionAnchorTargetKindV1,
     value: String,
@@ -612,12 +585,10 @@ fn insert(
     // They are equivalent representations of the same result, not ambiguous
     // independently returned candidates. The registry still rejects a
     // selector that later appears under a distinct root.
-    candidates
-        .entry(Candidate {
-            kind: target_kind,
-            provider_kind: source_kind,
-            value,
-        })
-        .or_insert(0);
+    candidates.insert_candidate(Candidate {
+        kind: target_kind,
+        provider_kind: source_kind,
+        value,
+    });
     Some(())
 }
