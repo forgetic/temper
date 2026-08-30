@@ -82,25 +82,11 @@ impl DecisionAnchorLineages {
             SelectorOrigin::CallerEvidenceResult => RecoverySelectorPurpose::CallerTestTraversal,
             SelectorOrigin::FocusedTestResult => RecoverySelectorPurpose::FocusedTestSource,
         };
-        let mut reference_candidates = candidates.iter().cloned().collect::<Vec<_>>();
-        reference_candidates.sort_by_key(|candidate| {
-            if candidate.kind == purpose.selector_kind()
-                && candidate.provider_kind == purpose.selector_kind()
-            {
-                0
-            } else if candidate.kind == candidate.provider_kind {
-                1
-            } else if candidate.kind == purpose.selector_kind() {
-                2
-            } else {
-                3
-            }
-        });
         let mut marked = 0;
-        for candidate in candidates {
+        for candidate in &candidates {
             let selector = Selector {
                 kind: candidate.kind,
-                value: candidate.value,
+                value: candidate.value.clone(),
             };
             let Some(Some(binding)) = self.selectors.get_mut(&selector) else {
                 continue;
@@ -141,72 +127,7 @@ impl DecisionAnchorLineages {
             }
             marked += 1;
         }
-        let reference_candidate = reference_candidates.into_iter().find_map(|candidate| {
-            let selector_kind = purpose.selector_kind();
-            let selector_value = match selector_kind {
-                DecisionAnchorTargetKindV1::FunctionName => {
-                    canonical_function_name(&candidate.value)?
-                }
-                DecisionAnchorTargetKindV1::QualifiedName => {
-                    canonical_qualified_name(&candidate.value)
-                        .or_else(|| canonical_function_name(&candidate.value))?
-                }
-                DecisionAnchorTargetKindV1::GraphQuery
-                | DecisionAnchorTargetKindV1::Pattern
-                | DecisionAnchorTargetKindV1::NamePattern
-                | DecisionAnchorTargetKindV1::QualifiedNamePattern => return None,
-            };
-            let selector = Selector {
-                kind: selector_kind,
-                value: selector_value,
-            };
-            self.selectors
-                .get(&selector)
-                .and_then(Option::as_ref)
-                .is_some_and(|binding| binding.root_binding == root)
-                .then_some((candidate, selector))
-        });
-        if let Some((candidate, selector)) = reference_candidate {
-            let key = RecoverySelectorKey {
-                root_binding: root.to_string(),
-                purpose,
-            };
-            let reference = format!(
-                "{RECOVERY_SELECTOR_REFERENCE_PREFIX}{}",
-                uuid::Uuid::new_v4()
-            );
-            let source_selector = (purpose == RecoverySelectorPurpose::ImplementationTrace)
-                .then(|| {
-                    canonical_qualified_name(&candidate.value)
-                        .or_else(|| canonical_function_name(&candidate.value))
-                        .map(|value| Selector {
-                            kind: DecisionAnchorTargetKindV1::QualifiedName,
-                            value,
-                        })
-                })
-                .flatten()
-                .filter(|selector| {
-                    self.selectors
-                        .get(selector)
-                        .and_then(Option::as_ref)
-                        .is_some_and(|binding| binding.root_binding == root)
-                });
-            self.recovery_reference_selectors.insert(
-                reference.clone(),
-                RecoverySelectorReference {
-                    root_binding: root.to_string(),
-                    purpose,
-                    selector,
-                    provider_value: candidate.value.clone(),
-                    source_selector: source_selector.clone(),
-                    source_provider_value: source_selector.map(|_| candidate.value),
-                    state: RecoverySelectorState::Available,
-                },
-            );
-            if let Some(stale) = self.recovery_references.insert(key, reference) {
-                self.recovery_reference_selectors.remove(&stale);
-            }
-        }
+        self.replace_recovery_references(root, purpose, &candidates);
         Some(marked)
     }
 

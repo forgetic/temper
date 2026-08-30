@@ -2,6 +2,28 @@
 
 use super::*;
 
+pub(super) fn implementation_root_candidates(
+    candidates: &BTreeSet<Candidate>,
+    focused_tests: Option<&BTreeSet<Candidate>>,
+) -> BTreeSet<Candidate> {
+    let Some(focused_tests) = focused_tests else {
+        return candidates.clone();
+    };
+    candidates
+        .iter()
+        .filter(|candidate| {
+            let Some(candidate_digests) = canonical_target_digests(&candidate.value) else {
+                return false;
+            };
+            focused_tests.iter().all(|focused_test| {
+                canonical_target_digests(&focused_test.value)
+                    .is_none_or(|focused_digests| candidate_digests.is_disjoint(&focused_digests))
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 impl SelectorBinding {
     pub(super) fn new(root_binding: String, canonical_target_digests: BTreeSet<String>) -> Self {
         Self {
@@ -118,6 +140,7 @@ impl DecisionAnchorLineages {
         root: &str,
         result_candidates: &BTreeSet<Candidate>,
         origin: SelectorOrigin,
+        trace_provider_value: Option<&str>,
     ) -> Option<()> {
         let selector = self.selector_for_input(target_kind, input)?;
         let binding = self.selectors.get(&selector)?.as_ref()?;
@@ -165,12 +188,95 @@ impl DecisionAnchorLineages {
                 root_binding: root.to_string(),
                 purpose: RecoverySelectorPurpose::ImplementationTrace,
             };
-            let reference = self.recovery_references.get(&key)?.clone();
-            let recovery = self.recovery_reference_selectors.get_mut(&reference)?;
+            let references = self.recovery_references.get(&key)?.clone();
+            let reference = references
+                .iter()
+                .find(|reference| {
+                    self.recovery_reference_selectors
+                        .get(*reference)
+                        .and_then(|recovery| recovery.source_selector.as_ref())
+                        == Some(&selector)
+                })
+                .or_else(|| references.first())?;
+            let recovery = self.recovery_reference_selectors.get_mut(reference)?;
+            recovery.provider_value = trace_provider_value.unwrap_or(provider_value).to_string();
             recovery.source_selector = Some(selector);
             recovery.source_provider_value = Some(provider_value.to_string());
         }
         Some(())
+    }
+}
+
+pub(super) fn provider_function_name_for_source(
+    typed_parts: Option<&[McpToolResultPart]>,
+    input: &Value,
+) -> Option<String> {
+    let selected = input
+        .get("qualified_name")
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            canonical_qualified_name(value).or_else(|| canonical_function_name(value))
+        })?;
+    provider_explicit_source_names(typed_parts).remove(&selected)
+}
+
+pub(super) fn provider_explicit_source_names(
+    typed_parts: Option<&[McpToolResultPart]>,
+) -> BTreeMap<String, String> {
+    let mut names = BTreeMap::<String, Option<String>>::new();
+    for part in typed_parts.unwrap_or_default() {
+        let value = match part {
+            McpToolResultPart::StructuredContent(value) => {
+                value.is_object().then_some(value.clone())
+            }
+            McpToolResultPart::Content(block) => content_part_json(block).flatten(),
+        };
+        if let Some(value) = value {
+            collect_explicit_source_names(&value, &mut names);
+        }
+    }
+    names
+        .into_iter()
+        .filter_map(|(qualified, name)| name.map(|name| (qualified, name)))
+        .collect()
+}
+
+fn collect_explicit_source_names(value: &Value, names: &mut BTreeMap<String, Option<String>>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_explicit_source_names(value, names);
+            }
+        }
+        Value::Object(values) => {
+            let qualified = values
+                .get("qualified_name")
+                .or_else(|| values.get("qualifiedName"))
+                .and_then(Value::as_str)
+                .and_then(|value| {
+                    canonical_qualified_name(value).or_else(|| canonical_function_name(value))
+                });
+            let name = values
+                .get("name")
+                .and_then(Value::as_str)
+                .and_then(canonical_function_name);
+            if let (Some(qualified), Some(name)) = (qualified, name) {
+                names
+                    .entry(qualified)
+                    .and_modify(|existing| {
+                        if existing.as_ref() != Some(&name) {
+                            *existing = None;
+                        }
+                    })
+                    .or_insert(Some(name));
+            }
+            for field in ["results", "source_metadata", "sourceMetadata"] {
+                if let Some(value) = values.get(field) {
+                    collect_explicit_source_names(value, names);
+                }
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
 }
 

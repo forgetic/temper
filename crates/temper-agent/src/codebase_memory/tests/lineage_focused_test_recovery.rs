@@ -246,6 +246,13 @@ fn implementation_caller_route_remains_root_local_and_later_turn_ordered() {
         trace.caller_discovery,
         Some(CallerDiscoveryOutcomeV1::EligibleSelectorReturned)
     );
+    let caller_guidance = lineages
+        .recovery_selector_guidance(&root.root_binding)
+        .expect("caller traversal exposes an exact source continuation");
+    assert!(
+        caller_guidance.contains("caller_traversal_result="),
+        "{caller_guidance}"
+    );
     let caller = lineages.resolve_for_active_root(
         GraphCorrelationToolV1::GetCodeSnippet.public_name(),
         &serde_json::json!({

@@ -28,12 +28,13 @@ pub(super) use admission::DecisionAnchorLineageRegistry;
 use exact_narrowing::{ExactGraphSelector, PendingExactGraphNarrowing};
 use focused_test::{FocusedTestDiscovery, SelectorOrigin, focused_test_discovery};
 use recovery_selector::{
-    RECOVERY_SELECTOR_REFERENCE_PREFIX, RecoverySelectorKey, RecoverySelectorPurpose,
-    RecoverySelectorReference, RecoverySelectorState,
+    CandidateRecovery, ExpandedRecoverySelector, RECOVERY_SELECTOR_REFERENCE_PREFIX,
+    RecoverySelectorKey, RecoverySelectorPurpose, RecoverySelectorReference,
 };
 use selection::{
     ImplementationTraversalEvidence, canonical_function_name, canonical_qualified_name,
-    canonical_target_digests, implementation_traversal_evidence, provider_caller_candidates,
+    canonical_target_digests, implementation_root_candidates, implementation_traversal_evidence,
+    provider_caller_candidates, provider_explicit_source_names, provider_function_name_for_source,
     terminal_function_name,
 };
 
@@ -41,7 +42,7 @@ use selection::{
 pub(super) struct DecisionAnchorLineages {
     /// `None` marks a value offered by more than one root; it cannot advance either root.
     selectors: BTreeMap<Selector, Option<SelectorBinding>>,
-    recovery_references: BTreeMap<RecoverySelectorKey, String>,
+    recovery_references: BTreeMap<RecoverySelectorKey, Vec<String>>,
     recovery_reference_selectors: BTreeMap<String, RecoverySelectorReference>,
     exact_graph_selectors: BTreeMap<ExactGraphSelector, BTreeMap<String, Option<BTreeSet<String>>>>,
     pending_exact_graph_narrowings:
@@ -202,17 +203,32 @@ impl DecisionAnchorLineages {
                     );
                 }
                 self.register(&root_binding, candidates.clone())?;
+                if stage == DecisionAnchorLineageStageV1::Root
+                    && matches!(
+                        correlation.tool,
+                        GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode
+                    )
+                {
+                    self.replace_recovery_references(
+                        &root_binding,
+                        RecoverySelectorPurpose::ImplementationCandidate,
+                        &implementation_root_candidates(&candidates, focused_tests.as_ref()),
+                    );
+                }
                 if let Some(identities) = exact_graph_identities.as_ref() {
                     self.register_exact_graph_identities(&root_binding, identities);
                 }
                 if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Implementation) {
                     let traversal_evidence = implementation_traversal_evidence(typed_parts);
+                    let trace_provider_value =
+                        provider_function_name_for_source(typed_parts, input);
                     self.mark_input_selector(
                         correlation.target_kind,
                         input,
                         &root_binding,
                         &candidates,
                         SelectorOrigin::ImplementationEvidenceResult { traversal_evidence },
+                        trace_provider_value.as_deref(),
                     )?;
                 }
                 if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Caller) {
@@ -222,6 +238,7 @@ impl DecisionAnchorLineages {
                         &root_binding,
                         &candidates,
                         SelectorOrigin::CallerEvidenceResult,
+                        None,
                     )?;
                 }
                 if let Some(callers) = caller_candidates {
@@ -240,6 +257,11 @@ impl DecisionAnchorLineages {
                         focused_tests.clone(),
                         SelectorOrigin::FocusedTestResult,
                     )?);
+                    self.prefer_explicit_source_names(
+                        &root_binding,
+                        RecoverySelectorPurpose::FocusedTestSource,
+                        &provider_explicit_source_names(typed_parts),
+                    );
                 }
                 kinds
             }

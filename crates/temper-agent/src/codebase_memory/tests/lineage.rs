@@ -724,6 +724,11 @@ mod tests {
         include!("lineage_admission.rs");
     }
 
+    mod candidates {
+        use super::*;
+        include!("lineage_candidates.rs");
+    }
+
     mod exact_narrowing {
         include!("lineage_exact_narrowing.rs");
     }

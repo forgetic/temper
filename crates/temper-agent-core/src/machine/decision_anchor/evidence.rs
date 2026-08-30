@@ -5,6 +5,30 @@ use crate::EligibleLineageAdmission;
 use super::*;
 
 impl DecisionAnchorState {
+    pub(super) fn settle_open_candidate_recovery(
+        &mut self,
+        anchors: AnchorForest,
+        finished: &[FinishedCodebaseCall<'_>],
+        active_root: Option<&str>,
+    ) -> Result<AnchorForest, DecisionAnchorTransition> {
+        let disposition = finished.iter().find_map(|finished| {
+            (finished.call.admitted_root.as_deref() == active_root)
+                .then(|| candidate_recovery_disposition(finished.name, finished.output))
+                .flatten()
+        });
+        match disposition {
+            Some(CandidateRecoveryDisposition::RetryAvailable) => {
+                self.phase = Some(AnchorPhase::Trail(anchors));
+                Err(DecisionAnchorTransition::Unchanged)
+            }
+            Some(CandidateRecoveryDisposition::Exhausted) => {
+                let evidence = anchors.active_evidence();
+                Err(self.enter_incomplete_enabled(evidence))
+            }
+            None => Ok(anchors),
+        }
+    }
+
     pub(super) fn enter_gap_recovery(&mut self, anchors: AnchorForest) -> DecisionAnchorTransition {
         debug_assert!(!anchors.has_complete_evidence());
         let mut anchors = anchors;
@@ -241,6 +265,32 @@ impl DecisionAnchorState {
             self.phase = Some(AnchorPhase::EnabledComplete(anchors));
             self.exploration = ExplorationStatus::EnabledComplete;
             return DecisionAnchorTransition::EnabledEvidenceComplete;
+        }
+
+        let candidate_recovery = finished.iter().find_map(|finished| {
+            (finished.call.admitted_root.as_deref() == Some(active_root.as_str()))
+                .then(|| candidate_recovery_disposition(finished.name, finished.output))
+                .flatten()
+        });
+        match candidate_recovery {
+            Some(CandidateRecoveryDisposition::RetryAvailable) => {
+                self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
+                    anchors,
+                    active_root,
+                    route,
+                    remaining: remaining
+                        .saturating_add(1)
+                        .min(MAX_DECISION_GAP_RECOVERY_CALLS),
+                    exhausted_roots,
+                    remaining_pivots,
+                }));
+                self.exploration = ExplorationStatus::GapRecovery;
+                return DecisionAnchorTransition::GapRecoveryNeeded;
+            }
+            Some(CandidateRecoveryDisposition::Exhausted) => {
+                return self.enter_incomplete_enabled(active_evidence);
+            }
+            None => {}
         }
 
         if compatible.iter().any(|(_, call, output, _)| {
