@@ -48,7 +48,7 @@ fn exact_source_selection_bundle_maps_feature_1151_without_rewriting_history() {
         Some("ai/temper#1152")
     );
     assert_eq!(mapping.source_branch, "agent/pr-for-feature-1151");
-    assert_eq!(mapping.change.as_str(), "updated");
+    assert_eq!(mapping.change.as_str(), "new");
 
     let manifest = fs::read_to_string(scenario_path.join("scenario.toml")).expect("manifest");
     let readme = fs::read_to_string(scenario_path.join("README.md")).expect("README");
