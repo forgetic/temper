@@ -103,6 +103,15 @@ fn oversized_search_graph_projects_provider_order_and_admits_the_exact_source_ch
         .map(|(_, value)| value.to_string())
         .collect::<Vec<_>>();
     assert_eq!(implementation_references.len(), 4);
+    let selected_reference = lineages
+        .active_root_recovery_selector(
+            &root.root_binding,
+            temper_protocol_activity::GraphRecoveryActionV1::for_evidence(
+                temper_protocol_activity::GraphRecoveryEvidenceKindV1::Implementation,
+            ),
+        )
+        .expect("the active root has one deterministic implementation continuation");
+    assert_eq!(selected_reference, implementation_references[0]);
     for private in [
         "zeta_worker",
         "select_worker",

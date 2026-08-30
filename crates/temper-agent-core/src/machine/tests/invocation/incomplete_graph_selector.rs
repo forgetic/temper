@@ -9,7 +9,6 @@ const ACTIVE_IMPLEMENTATION: &str = "returned-implementation";
 const UNKNOWN_SELECTOR: &str = "schema-valid-but-never-returned";
 const RECOVERY_REFERENCE: &str =
     "temper-recovery-selector:00000000-0000-4000-8000-000000000002";
-
 struct RootAwareTraversalAdmission;
 
 impl LineageAdmissionResolver for RootAwareTraversalAdmission {
@@ -68,14 +67,42 @@ impl LineageAdmissionResolver for RootAwareTraversalAdmission {
         (outcome, disposition)
     }
 
-    fn trace_recovery_selector(
+    fn recovery_reference_disposition(
+        &self,
+        _tool_name: &str,
+        arguments: &serde_json::Value,
+        _active_root: Option<&str>,
+    ) -> Option<GraphRecoveryReferenceDispositionV1> {
+        arguments
+            .as_object()
+            .is_some_and(|arguments| {
+                arguments.values().any(|value| {
+                    value.as_str().is_some_and(|value| {
+                        value.starts_with("temper-recovery-selector:")
+                    })
+                })
+            })
+            .then_some(GraphRecoveryReferenceDispositionV1::Rejected)
+    }
+
+    fn active_root_recovery_selector(
         &self,
         active_root: &str,
+        action: temper_protocol_activity::GraphRecoveryActionV1,
     ) -> Option<crate::OpaqueRecoverySelectorReference> {
-        (active_root == ACTIVE_ROOT)
-            .then(|| crate::OpaqueRecoverySelectorReference::new(RECOVERY_REFERENCE.to_string()))
-            .flatten()
+        (active_root == ACTIVE_ROOT
+            && action
+                == temper_protocol_activity::GraphRecoveryActionV1::for_evidence(
+                    temper_protocol_activity::GraphRecoveryEvidenceKindV1::Trace,
+                ))
+        .then(|| crate::OpaqueRecoverySelectorReference::new(RECOVERY_REFERENCE.to_string()))
+        .flatten()
     }
+}
+
+mod parallel_projected_roots {
+    use super::*;
+    include!("incomplete_parallel_projected_roots.rs");
 }
 
 #[test]
@@ -278,7 +305,7 @@ fn staged_incomplete_trace_returns_an_invokable_opaque_selector_then_accepts_it(
                 "wrong-field-trace",
                 "codebase_memory_trace_path",
                 serde_json::json!({
-                    "qualified_name": ACTIVE_IMPLEMENTATION,
+                    "qualified_name": RECOVERY_REFERENCE,
                     "direction": "inbound"
                 }),
             )],

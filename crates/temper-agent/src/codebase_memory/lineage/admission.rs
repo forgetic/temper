@@ -125,6 +125,8 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
             .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let presented_reference =
+            lineages.recovery_reference_disposition(tool_name, arguments, active_root);
         if GraphCorrelationToolV1::from_public_name(tool_name)
             == Some(GraphCorrelationToolV1::TracePath)
         {
@@ -146,14 +148,16 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
                 Ok(None) => {
                     return (
                         lineages.resolve_for_active_root(tool_name, arguments, active_root),
-                        active_root
-                            .is_some()
-                            .then_some(GraphRecoveryReferenceDispositionV1::Missing),
+                        presented_reference.or_else(|| {
+                            active_root
+                                .is_some()
+                                .then_some(GraphRecoveryReferenceDispositionV1::Missing)
+                        }),
                     );
                 }
             }
         }
-        let outcome = lineages.resolve_for_active_root(tool_name, arguments, active_root);
+        let mut outcome = lineages.resolve_for_active_root(tool_name, arguments, active_root);
         if GraphCorrelationToolV1::from_public_name(tool_name)
             == Some(GraphCorrelationToolV1::GetCodeSnippet)
             && active_root.is_some()
@@ -167,15 +171,35 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
                     if admission.evidence_purpose()
                         == Some(DecisionEvidenceKindV1::FocusedTest)
             ) {
-                return (sibling, None);
+                outcome = sibling;
             }
         }
-        (outcome, None)
+        let disposition = presented_reference.map(|_| {
+            if matches!(&outcome, LineageAdmissionOutcome::Eligible(_)) {
+                GraphRecoveryReferenceDispositionV1::Recognized
+            } else {
+                GraphRecoveryReferenceDispositionV1::Rejected
+            }
+        });
+        (outcome, disposition)
     }
 
-    fn trace_recovery_selector(
+    fn recovery_reference_disposition(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> Option<GraphRecoveryReferenceDispositionV1> {
+        self.lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .recovery_reference_disposition(tool_name, arguments, active_root)
+    }
+
+    fn active_root_recovery_selector(
         &self,
         active_root: &str,
+        action: temper_protocol_activity::GraphRecoveryActionV1,
     ) -> Option<OpaqueRecoverySelectorReference> {
         let lineages = self
             .lineages
@@ -183,7 +207,7 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         OpaqueRecoverySelectorReference::new(
             lineages
-                .implementation_trace_recovery_selector(active_root)?
+                .active_root_recovery_selector(active_root, action)?
                 .to_string(),
         )
     }

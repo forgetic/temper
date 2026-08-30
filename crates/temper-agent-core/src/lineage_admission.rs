@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, DecisionAnchorTargetKindV1, DecisionEvidenceKindV1,
-    GraphCorrelationToolV1, GraphRecoveryReferenceDispositionV1,
+    GraphCorrelationToolV1, GraphRecoveryActionV1, GraphRecoveryReferenceDispositionV1,
 };
 
 /// Shared process-local resolver installed for one agent run.
@@ -55,13 +55,25 @@ pub trait LineageAdmissionResolver: Send + Sync {
         )
     }
 
-    /// Returns the model-safe selector reference for a caller traversal of the
-    /// exact active implementation root. The malformed call that prompted
-    /// this lookup is still denied locally; only a later model turn may use
-    /// the reference in the public `function_name` field.
-    fn trace_recovery_selector(
+    /// Classifies an opaque-reference-shaped invocation without reserving or
+    /// expanding it. Schema-rejected calls use this closed path because normal
+    /// admission must not acquire authority for malformed arguments.
+    fn recovery_reference_disposition(
+        &self,
+        _tool_name: &str,
+        _arguments: &Value,
+        _active_root: Option<&str>,
+    ) -> Option<GraphRecoveryReferenceDispositionV1> {
+        None
+    }
+
+    /// Returns one model-safe selector reference for the machine-selected
+    /// active-root action. It remains unreserved until a later invocation uses
+    /// it in the action's public selector field.
+    fn active_root_recovery_selector(
         &self,
         _active_root: &str,
+        _action: GraphRecoveryActionV1,
     ) -> Option<OpaqueRecoverySelectorReference> {
         None
     }

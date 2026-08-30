@@ -102,7 +102,7 @@ impl DecisionAnchorState {
                 }
             }
             self.model_guidance
-                .push(snapshot.model_message(disposition, &accepted, None, None));
+                .push(snapshot.model_message(disposition, &accepted, None));
         }
     }
 
@@ -110,31 +110,62 @@ impl DecisionAnchorState {
         &mut self,
         rejected_action: Option<GraphRecoveryActionV1>,
         selector_tuple_excluded: bool,
-        recovery_selector: Option<&OpaqueRecoverySelectorReference>,
     ) {
         let snapshot = self.guidance_snapshot();
         self.model_guidance.push(snapshot.model_message(
             ResultDisposition::NonProgress,
             &BTreeSet::new(),
             rejected_action.map(|action| (action, selector_tuple_excluded)),
-            recovery_selector,
         ));
     }
 
     pub(super) fn queue_local_traversal_readiness_guidance(&mut self) {
+        let implementation_action =
+            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
+        self.handoff_override = Some(implementation_action);
         let mut snapshot = self.guidance_snapshot();
-        snapshot.next_actions = vec![
-            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation)
-                .model_label(),
-        ];
+        snapshot.next_actions = vec![implementation_action.model_label()];
         let mut guidance =
-            snapshot.model_message(ResultDisposition::NonProgress, &BTreeSet::new(), None, None);
+            snapshot.model_message(ResultDisposition::NonProgress, &BTreeSet::new(), None);
         guidance.push_str(" [Traversal readiness: the current-root traversal remains closed because its typed provider snapshot reported callers without caller identities; no provider call or recovery allowance was consumed. Repeat exactly one typed implementation get_code_snippet lookup in the next model turn by copying the existing implementation_evidence_result recovery reference into qualified_name.]");
         self.model_guidance.push(guidance);
     }
 
     pub(in crate::machine) fn take_model_guidance(&mut self) -> Vec<String> {
+        self.handoff_override = None;
         std::mem::take(&mut self.model_guidance)
+    }
+
+    pub(in crate::machine) fn active_recovery_action(
+        &self,
+    ) -> Option<(String, GraphRecoveryActionV1)> {
+        let (binding, active, route) = match self.phase.as_ref()? {
+            AnchorPhase::Root(anchors) | AnchorPhase::Trail(anchors) => {
+                let (binding, route) = anchors.active_selection(&BTreeSet::new())?;
+                (binding, anchors.roots.get(binding)?, route)
+            }
+            AnchorPhase::Recovery(recovery) => {
+                let (binding, route) = recovery.anchors.active_selection(&BTreeSet::new())?;
+                (binding, recovery.anchors.roots.get(binding)?, route)
+            }
+            AnchorPhase::GapRecovery(recovery) => (
+                &recovery.active_root,
+                recovery.anchors.roots.get(&recovery.active_root)?,
+                recovery.route,
+            ),
+            AnchorPhase::EnabledComplete(_)
+            | AnchorPhase::EnabledIncomplete(_)
+            | AnchorPhase::ProviderUnavailable => return None,
+        };
+        self.handoff_override
+            .or_else(|| {
+                active
+                    .evidence
+                    .compatible_actions(active, route)
+                    .into_iter()
+                    .next()
+            })
+            .map(|action| (binding.clone(), action))
     }
 
     fn guidance_snapshot(&self) -> GuidanceSnapshot {
@@ -269,7 +300,6 @@ impl GuidanceSnapshot {
         disposition: ResultDisposition,
         accepted: &BTreeSet<AcceptedEvidence>,
         rejected: Option<(GraphRecoveryActionV1, bool)>,
-        recovery_selector: Option<&OpaqueRecoverySelectorReference>,
     ) -> String {
         let disposition = match disposition {
             ResultDisposition::ActiveRootProgress => "active_root_progress",
@@ -298,12 +328,7 @@ impl GuidanceSnapshot {
         let remaining = self
             .remaining
             .map_or_else(|| "n/a".to_string(), |remaining| remaining.to_string());
-        let required_next_stage = if let Some(selector) = recovery_selector {
-            format!(
-                "; required next call=[codebase_memory_trace_path arguments={{\"function_name\":\"{}\",\"direction\":\"inbound\"}}]; issue exactly this one selector-complete call in the next model turn; the host will expand the run-local reference to the active root's provider-returned function selector",
-                selector.as_public_selector(),
-            )
-        } else if self.next_actions.len() == 1 && !self.complete {
+        let required_next_stage = if self.next_actions.len() == 1 && !self.complete {
             format!(
                 "; required next stage=[{}]; issue exactly this one action in the next model turn",
                 self.next_actions[0],
@@ -337,4 +362,36 @@ impl GuidanceSnapshot {
             self.lifecycle,
         )
     }
+}
+
+pub(in crate::machine) fn active_root_selector_handoff(
+    action: GraphRecoveryActionV1,
+    selector: &OpaqueRecoverySelectorReference,
+) -> Option<String> {
+    if !action.is_valid() {
+        return None;
+    }
+    let reference = selector.as_public_selector();
+    let (selector_field, arguments) = match (action.tool, action.selector_kind) {
+        (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => (
+            "qualified_name",
+            format!(
+                "{{\"qualified_name\":\"{reference}\",\"decision_evidence_kind\":\"{}\"}}",
+                action.evidence_kind.as_str(),
+            ),
+        ),
+        (GraphCorrelationToolV1::TracePath, DecisionAnchorTargetKindV1::FunctionName) => (
+            "function_name",
+            format!(
+                "{{\"function_name\":\"{reference}\",\"mode\":\"calls\",\"direction\":\"inbound\",\"include_tests\":{}}}",
+                action.include_tests,
+            ),
+        ),
+        _ => return None,
+    };
+    Some(format!(
+        "[Active-root selector handoff: required next call=[{} arguments={}]; selector field={selector_field}; exactly one active-root-bound opaque reference is authorized; provider-result-local sibling and alternate references are not actionable; issue exactly this one call in the next model turn.]",
+        action.tool.public_name(),
+        arguments,
+    ))
 }

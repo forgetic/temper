@@ -24,6 +24,7 @@
 //! - [`batching`] — the pure effect-compatible tool-batching policy.
 //! - [`core`] — the [`AgentMachine`] driving logic and `Machine` trait impl.
 
+mod active_root_handoff;
 mod batching;
 mod core;
 mod decision_anchor;

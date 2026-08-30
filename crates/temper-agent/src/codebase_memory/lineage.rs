@@ -9,7 +9,7 @@ use serde_json::Value;
 use temper_protocol_activity::{
     CallerDiscoveryOutcomeV1, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
     DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphCorrelationTargetKindV1,
-    GraphCorrelationToolV1, GraphCorrelationV1,
+    GraphCorrelationToolV1, GraphCorrelationV1, GraphRecoveryActionV1,
 };
 use uuid::Uuid;
 
@@ -17,6 +17,7 @@ use crate::mcp::McpToolResultPart;
 
 const MAX_RESULT_TARGETS: usize = 64;
 
+mod active_root_handoff;
 mod admission;
 mod candidate_projection;
 mod exact_narrowing;
@@ -31,7 +32,7 @@ use exact_narrowing::{ExactGraphSelector, PendingExactGraphNarrowing};
 use focused_test::{FocusedTestDiscovery, SelectorOrigin, focused_test_discovery};
 use recovery_selector::{
     CandidateRecovery, ExpandedRecoverySelector, RECOVERY_SELECTOR_REFERENCE_PREFIX,
-    RecoverySelectorKey, RecoverySelectorPurpose, RecoverySelectorReference,
+    RecoverySelectorKey, RecoverySelectorPurpose, RecoverySelectorReference, RecoverySelectorState,
 };
 use selection::{
     ImplementationTraversalEvidence, canonical_function_name, canonical_qualified_name,
