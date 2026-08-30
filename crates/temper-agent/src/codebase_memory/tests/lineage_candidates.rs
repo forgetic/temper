@@ -76,6 +76,59 @@ fn multi_result_root_retains_bounded_same_root_candidates_and_selects_a_later_on
 }
 
 #[test]
+fn durable_lineage_serialization_excludes_transient_candidate_state() {
+    const RAW_SELECTOR: &str = "PRIVATE raw routing selector";
+    const LOCAL_PATH: &str = "/private/worktree/src/route.rs";
+    const STRUCTURED_PROVIDER_VALUE: &str = "PRIVATE structured provider payload";
+    const FIRST_CANDIDATE: &str = "crate::private::alpha_worker";
+    const SECOND_CANDIDATE: &str = "crate::private::beta_worker";
+
+    let mut lineages = DecisionAnchorLineages::default();
+    let lineage = lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+            &serde_json::json!({"query": RAW_SELECTOR}),
+            Some(&structured_parts(serde_json::json!({
+                "results": [
+                    {
+                        "qualified_name": FIRST_CANDIDATE,
+                        "path": LOCAL_PATH,
+                        "source": STRUCTURED_PROVIDER_VALUE
+                    },
+                    {"qualified_name": SECOND_CANDIDATE}
+                ]
+            }))),
+        )
+        .expect("typed provider result creates lineage");
+    let recovery_guidance = lineages
+        .recovery_selector_guidance(&lineage.root_binding)
+        .expect("candidate identities produce opaque recovery references");
+    let opaque_references = recovery_guidance
+        .split([',', '.', ' ', ']'])
+        .filter_map(|part| part.split_once('=').map(|(_, value)| value))
+        .filter(|value| value.starts_with("temper-recovery-selector:"))
+        .collect::<Vec<_>>();
+    assert_eq!(opaque_references.len(), 2);
+
+    let durable = serde_json::to_string(&lineage).expect("lineage serializes");
+    for private_value in [
+        RAW_SELECTOR,
+        LOCAL_PATH,
+        STRUCTURED_PROVIDER_VALUE,
+        FIRST_CANDIDATE,
+        SECOND_CANDIDATE,
+    ]
+    .into_iter()
+    .chain(opaque_references)
+    {
+        assert!(
+            !durable.contains(private_value),
+            "durable lineage retained transient value {private_value:?}"
+        );
+    }
+}
+
+#[test]
 fn candidate_miss_keeps_only_root_local_alternatives_without_authority() {
     let mut lineages = DecisionAnchorLineages::default();
     let root = lineages

@@ -27,10 +27,30 @@ fn application_candidate_misses_are_local_but_provider_outages_remain_systemic()
             ToolFailureCategory::InvalidModelInput,
         );
     }
-    assert_eq!(
-        classify_provider_failure("provider protocol unavailable"),
-        ToolFailureCategory::ProviderProtocol,
-    );
+    for (message, expected) in [
+        (
+            "provider unavailable for source lookup",
+            ToolFailureCategory::ProviderProtocol,
+        ),
+        (
+            "source index unavailable",
+            ToolFailureCategory::IndexFailure,
+        ),
+        (
+            "provider process unavailable",
+            ToolFailureCategory::ProcessExit,
+        ),
+        (
+            "source transport unavailable",
+            ToolFailureCategory::Transport,
+        ),
+    ] {
+        let category = classify_provider_failure(message);
+        assert_eq!(category, expected);
+        assert!(
+            ToolFailureDiagnostic::codebase_memory(category).fallback_to_conventional_discovery
+        );
+    }
     let candidate_miss =
         ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::InvalidModelInput);
     assert!(!candidate_miss.fallback_to_conventional_discovery);

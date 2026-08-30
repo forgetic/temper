@@ -58,6 +58,8 @@ pub(in crate::codebase_memory) fn classify_provider_failure(message: &str) -> To
     let lowered = message.to_ascii_lowercase();
     if lowered.contains("timed out") || lowered.contains("timeout") {
         ToolFailureCategory::Timeout
+    } else if let Some(category) = explicit_systemic_unavailability(&lowered) {
+        category
     } else if lowered.contains("index") && (lowered.contains("fail") || lowered.contains("error")) {
         ToolFailureCategory::IndexFailure
     } else if lowered.contains("project")
@@ -71,6 +73,32 @@ pub(in crate::codebase_memory) fn classify_provider_failure(message: &str) -> To
         ToolFailureCategory::InvalidModelInput
     } else {
         ToolFailureCategory::ProviderProtocol
+    }
+}
+
+fn explicit_systemic_unavailability(lowered: &str) -> Option<ToolFailureCategory> {
+    let reports_unavailability = [
+        "unavailable",
+        "not available",
+        "unusable",
+        "failed",
+        "failure",
+        "error",
+    ]
+    .into_iter()
+    .any(|fragment| lowered.contains(fragment));
+    reports_unavailability.then_some(())?;
+
+    if lowered.contains("index") {
+        Some(ToolFailureCategory::IndexFailure)
+    } else if lowered.contains("transport") {
+        Some(ToolFailureCategory::Transport)
+    } else if lowered.contains("process") {
+        Some(ToolFailureCategory::ProcessExit)
+    } else if lowered.contains("provider") || lowered.contains("protocol") {
+        Some(ToolFailureCategory::ProviderProtocol)
+    } else {
+        None
     }
 }
 
