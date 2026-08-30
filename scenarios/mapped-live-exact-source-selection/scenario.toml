@@ -17,7 +17,7 @@ uses = "manifest"
 feature = "ai/temper#1151"
 plan = "ai/temper#1152"
 source_branch = "agent/pr-for-feature-1151"
-change = "updated"
+change = "new"
 
 [feature_contract]
 claim = "An exact route read performed before qualifying graph source evidence has no retroactive authority; a direct mutation remains local until one successful exact ordinary read follows complete typed evidence."
