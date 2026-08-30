@@ -36,6 +36,17 @@ pub trait LineageAdmissionResolver: Send + Sync {
         self.resolve(tool_name, arguments)
     }
 
+    /// Returns the model-safe selector reference for a caller traversal of the
+    /// exact active implementation root. The malformed call that prompted
+    /// this lookup is still denied locally; only a later model turn may use
+    /// the reference in the public `function_name` field.
+    fn trace_recovery_selector(
+        &self,
+        _active_root: &str,
+    ) -> Option<OpaqueRecoverySelectorReference> {
+        None
+    }
+
     fn resolve_source_target(&self, _lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
         TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
     }
@@ -85,6 +96,34 @@ impl fmt::Debug for EligibleWorkspaceTarget {
             .debug_struct("EligibleWorkspaceTarget")
             .field("identity", &self.identity)
             .finish()
+    }
+}
+
+/// An unguessable, run-local reference that is safe to return to the model and
+/// accepted as a public graph selector. The trusted wrapper expands it to the
+/// exact provider-returned value immediately before provider dispatch.
+#[derive(Clone, Eq, PartialEq)]
+pub struct OpaqueRecoverySelectorReference(String);
+
+impl OpaqueRecoverySelectorReference {
+    const PREFIX: &'static str = "temper-recovery-selector:";
+
+    pub fn new(value: String) -> Option<Self> {
+        value
+            .strip_prefix(Self::PREFIX)
+            .is_some_and(valid_run_local_identity)
+            .then_some(Self(value))
+    }
+
+    /// The deliberately model-visible value for the public selector field.
+    pub fn as_public_selector(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for OpaqueRecoverySelectorReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<opaque-recovery-selector>")
     }
 }
 

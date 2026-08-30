@@ -1,6 +1,6 @@
 //! Immutable, root-local pre-provider recovery admission.
 
-use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
+use crate::{EligibleLineageAdmission, LineageAdmissionOutcome, OpaqueRecoverySelectorReference};
 use sha2::{Digest as _, Sha256};
 
 use super::*;
@@ -76,6 +76,7 @@ impl DecisionAnchorState {
             admissions,
             invocation_targets,
             &vec![None; calls.len()],
+            &vec![None; calls.len()],
         )
     }
 
@@ -86,10 +87,12 @@ impl DecisionAnchorState {
         admissions: &[Option<LineageAdmissionOutcome>],
         invocation_targets: &[Option<InvocationTargetAdmission>],
         incomplete_graph_selectors: &[Option<GraphCorrelationToolV1>],
+        trace_recovery_selectors: &[Option<OpaqueRecoverySelectorReference>],
     ) -> Vec<Option<ToolCallDenial>> {
         debug_assert_eq!(calls.len(), admissions.len());
         debug_assert_eq!(calls.len(), invocation_targets.len());
         debug_assert_eq!(calls.len(), incomplete_graph_selectors.len());
+        debug_assert_eq!(calls.len(), trace_recovery_selectors.len());
         let snapshot = self.staged_admission_snapshot();
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
@@ -99,11 +102,15 @@ impl DecisionAnchorState {
         let mut local_readiness_exhaustions = 0usize;
         let mut denials = Vec::with_capacity(calls.len());
 
-        for (((call, admission), invocation_target), incomplete_graph_selector) in calls
+        for (
+            (((call, admission), invocation_target), incomplete_graph_selector),
+            trace_recovery_selector,
+        ) in calls
             .iter()
             .zip(admissions)
             .zip(invocation_targets)
             .zip(incomplete_graph_selectors)
+            .zip(trace_recovery_selectors)
         {
             let order = self.next_call_order;
             self.next_call_order = self.next_call_order.saturating_add(1);
@@ -243,7 +250,18 @@ impl DecisionAnchorState {
                                 || tuple_identity.is_some_and(|identity| {
                                     self.rejected_recovery_tuples.insert(identity)
                                 });
-                            local_rejections.push((requested_action, excluded));
+                            let recovery_selector = trace_recovery_selector
+                                .as_ref()
+                                .filter(|_| {
+                                    requested_gap == Some(DecisionGap::Trace)
+                                        && snapshot.as_ref().is_some_and(|snapshot| {
+                                            requested_action.is_some_and(|action| {
+                                                snapshot.compatible.contains(&action)
+                                            })
+                                        })
+                                })
+                                .cloned();
+                            local_rejections.push((requested_action, excluded, recovery_selector));
                         }
                     }
                 }
@@ -297,10 +315,11 @@ impl DecisionAnchorState {
                     GraphRecoveryEvidenceKindV1::Trace,
                 )),
                 true,
+                None,
             );
         }
-        for (action, excluded) in local_rejections {
-            self.queue_local_denial_guidance(action, excluded);
+        for (action, excluded, recovery_selector) in local_rejections {
+            self.queue_local_denial_guidance(action, excluded, recovery_selector.as_ref());
         }
         for _ in 0..local_readiness_deferrals {
             self.queue_local_traversal_readiness_guidance();

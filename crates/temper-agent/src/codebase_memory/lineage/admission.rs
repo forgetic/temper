@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::Value;
 use temper_agent_core::{
     EligibleLineageAdmission, InvocationTargetAdmission, LineageAdmissionOutcome,
-    LineageAdmissionResolver, LineageAdmissionStatus, TargetAdmissionOutcome,
+    LineageAdmissionResolver, LineageAdmissionStatus, OpaqueRecoverySelectorReference,
+    TargetAdmissionOutcome,
 };
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, DecisionEvidenceKindV1, GraphCorrelationTargetKindV1,
@@ -95,6 +96,21 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         lineages.resolve_for_active_root(tool_name, arguments, active_root)
+    }
+
+    fn trace_recovery_selector(
+        &self,
+        active_root: &str,
+    ) -> Option<OpaqueRecoverySelectorReference> {
+        let lineages = self
+            .lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        OpaqueRecoverySelectorReference::new(
+            lineages
+                .implementation_trace_recovery_selector(active_root)?
+                .to_string(),
+        )
     }
 
     fn resolve_source_target(&self, lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {

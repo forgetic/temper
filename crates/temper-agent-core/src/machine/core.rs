@@ -429,6 +429,20 @@ impl AgentMachine {
             .iter()
             .map(|call| self.incomplete_graph_selectors.get(&call.id).copied())
             .collect::<Vec<_>>();
+        let trace_recovery_selectors = calls
+            .iter()
+            .zip(&incomplete_graph_selectors)
+            .map(|(call, incomplete)| {
+                (call.name == GraphCorrelationToolV1::TracePath.public_name()
+                    || *incomplete == Some(GraphCorrelationToolV1::TracePath))
+                .then(|| {
+                    self.lineage_admission.as_ref().and_then(|admission| {
+                        admission.trace_recovery_selector(active_decision_root.as_deref()?)
+                    })
+                })
+                .flatten()
+            })
+            .collect::<Vec<_>>();
         let invocation_targets = calls
             .iter()
             .map(|call| {
@@ -453,6 +467,7 @@ impl AgentMachine {
                 &closed_admissions,
                 &invocation_targets,
                 &incomplete_graph_selectors,
+                &trace_recovery_selectors,
             );
             self.decision_anchor_guidance
                 .extend(state.take_model_guidance());

@@ -6,6 +6,8 @@ use temper_protocol_activity::{
 const ACTIVE_ROOT: &str = "00000000-0000-4000-8000-000000000001";
 const ACTIVE_IMPLEMENTATION: &str = "returned-implementation";
 const UNKNOWN_SELECTOR: &str = "schema-valid-but-never-returned";
+const RECOVERY_REFERENCE: &str =
+    "temper-recovery-selector:00000000-0000-4000-8000-000000000002";
 
 struct RootAwareTraversalAdmission;
 
@@ -27,7 +29,8 @@ impl LineageAdmissionResolver for RootAwareTraversalAdmission {
                 )
             }
             "codebase_memory_trace_path"
-                if arguments["function_name"] == ACTIVE_IMPLEMENTATION =>
+                if arguments["function_name"] == ACTIVE_IMPLEMENTATION
+                    || arguments["function_name"] == RECOVERY_REFERENCE =>
             {
                 EligibleLineageAdmission::implementation_caller_traversal(
                     ACTIVE_ROOT.to_string(),
@@ -41,10 +44,19 @@ impl LineageAdmissionResolver for RootAwareTraversalAdmission {
             LineageAdmissionOutcome::Eligible,
         )
     }
+
+    fn trace_recovery_selector(
+        &self,
+        active_root: &str,
+    ) -> Option<crate::OpaqueRecoverySelectorReference> {
+        (active_root == ACTIVE_ROOT)
+            .then(|| crate::OpaqueRecoverySelectorReference::new(RECOVERY_REFERENCE.to_string()))
+            .flatten()
+    }
 }
 
 #[test]
-fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selector() {
+fn staged_incomplete_trace_returns_an_invokable_opaque_selector_then_accepts_it() {
     use temper_protocol_activity::{
         DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
         DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
@@ -218,8 +230,53 @@ fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selecto
         AgentRequest::CallLlm { messages, .. } => messages.iter().any(|message| {
             matches!(message, Message::User(message)
                 if matches!(&message.content, tongs::model::UserContent::Text(text)
-                    if text.contains("trace_path/function_name/trace/selector=implementation_evidence_result")
-                        && text.contains("direction=inbound")))
+                    if text.contains("required next call=[codebase_memory_trace_path")
+                        && text.contains(RECOVERY_REFERENCE)
+                        && text.contains("\"direction\":\"inbound\"")))
+        }),
+        _ => false,
+    }));
+
+    let second_denied = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "openai-responses",
+            vec![(
+                "wrong-field-trace",
+                "codebase_memory_trace_path",
+                serde_json::json!({
+                    "qualified_name": ACTIVE_IMPLEMENTATION,
+                    "direction": "inbound"
+                }),
+            )],
+        )),
+    );
+    let second_details = second_denied
+        .iter()
+        .find_map(|request| match request {
+            AgentRequest::RunTool {
+                call,
+                denial: Some(ToolCallDenial::GraphExplorationClosed(Some(details))),
+                rejection: None,
+                ..
+            } if call.id == "wrong-field-trace" => Some(details.clone()),
+            _ => None,
+        })
+        .expect("repeated malformed traversal remains a local decision denial");
+    assert_eq!(second_details, expected);
+    let second_next_turn = complete(
+        &mut machine,
+        tool_failed(
+            "wrong-field-trace",
+            tool_output("local traversal denial", true),
+            ToolFailureDiagnostic::graph_exploration(second_details),
+        ),
+    );
+    assert!(second_next_turn.iter().any(|request| match request {
+        AgentRequest::CallLlm { messages, .. } => messages.iter().any(|message| {
+            matches!(message, Message::User(message)
+                if matches!(&message.content, tongs::model::UserContent::Text(text)
+                    if text.contains(RECOVERY_REFERENCE)))
         }),
         _ => false,
     }));
@@ -232,7 +289,7 @@ fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selecto
                 "complete-trace",
                 "codebase_memory_trace_path",
                 serde_json::json!({
-                    "function_name":"returned-implementation",
+                    "function_name": RECOVERY_REFERENCE,
                     "direction":"inbound"
                 }),
             )],
@@ -243,7 +300,7 @@ fn staged_incomplete_trace_is_a_local_decision_denial_then_accepts_exact_selecto
         AgentRequest::RunTool { call, denial: None, rejection: None, .. }
             if call.id == "complete-trace"
                 && call.name == "codebase_memory_trace_path"
-                && call.arguments["function_name"] == "returned-implementation"
+                && call.arguments["function_name"] == RECOVERY_REFERENCE
     )));
 }
 
