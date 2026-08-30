@@ -112,6 +112,7 @@ struct Anchor {
     produced_turn: usize,
     produced_order: u64,
     result_target_kinds: BTreeSet<DecisionAnchorTargetKindV1>,
+    exact_graph_narrowing_selected: bool,
     evidence: SourceEvidence,
 }
 
@@ -460,6 +461,19 @@ impl DecisionAnchorState {
                         output.lineage.focused_test_discovery,
                     );
                     self.mark_accepted(id, AcceptedEvidence::FocusedTestRoute);
+                }
+                GraphCorrelationToolV1::SearchGraph
+                    if matches!(
+                        output.lineage.target_kind,
+                        DecisionAnchorTargetKindV1::NamePattern
+                            | DecisionAnchorTargetKindV1::QualifiedNamePattern
+                    ) =>
+                {
+                    if !anchor.exact_graph_narrowing_selected {
+                        anchor.exact_graph_narrowing_selected = true;
+                        route_progressed = true;
+                        self.mark_route_progress(id);
+                    }
                 }
                 GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => {}
                 GraphCorrelationToolV1::TracePath => {}

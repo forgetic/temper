@@ -2,6 +2,21 @@
 
 use super::*;
 
+impl DecisionAnchorState {
+    pub(in crate::machine) fn active_root_binding(&self) -> Option<&str> {
+        let anchors = match self.phase.as_ref()? {
+            AnchorPhase::Root(anchors)
+            | AnchorPhase::Trail(anchors)
+            | AnchorPhase::AwaitingExactRead(anchors)
+            | AnchorPhase::ConventionalFallback(anchors) => anchors,
+            AnchorPhase::Recovery(recovery) => &recovery.anchors,
+            AnchorPhase::GapRecovery(recovery) => &recovery.anchors,
+            AnchorPhase::Exhausted(_) => return None,
+        };
+        anchors.active_root().map(|(binding, _)| binding.as_str())
+    }
+}
+
 impl Anchor {
     fn from_output(call: &PendingCodebaseCall, output: &AnchorOutput) -> Self {
         let mut evidence = SourceEvidence::default();
@@ -16,6 +31,7 @@ impl Anchor {
             produced_turn: call.turn,
             produced_order: call.order,
             result_target_kinds: output.lineage.result_target_kinds.iter().copied().collect(),
+            exact_graph_narrowing_selected: false,
             evidence,
         }
     }
@@ -36,6 +52,14 @@ impl Anchor {
     ) -> bool {
         call.turn > self.produced_turn
             && (self.result_target_kinds.contains(&lineage.target_kind)
+                || (lineage.target_kind == DecisionAnchorTargetKindV1::NamePattern
+                    && self
+                        .result_target_kinds
+                        .contains(&DecisionAnchorTargetKindV1::FunctionName))
+                || (lineage.target_kind == DecisionAnchorTargetKindV1::QualifiedNamePattern
+                    && self
+                        .result_target_kinds
+                        .contains(&DecisionAnchorTargetKindV1::QualifiedName))
                 || (call.recovery_gap
                     == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
                     && lineage.target_kind == DecisionAnchorTargetKindV1::GraphQuery))
@@ -78,6 +102,11 @@ impl AnchorForest {
                     existing
                         .result_target_kinds
                         .extend(output.lineage.result_target_kinds.iter().copied());
+                    existing.exact_graph_narrowing_selected |= matches!(
+                        output.lineage.target_kind,
+                        DecisionAnchorTargetKindV1::NamePattern
+                            | DecisionAnchorTargetKindV1::QualifiedNamePattern
+                    );
                     if output.tool == GraphCorrelationToolV1::TracePath {
                         existing.evidence.record_trace(finished.call.turn);
                     }
@@ -124,6 +153,8 @@ impl AnchorForest {
                     existing
                         .result_target_kinds
                         .extend(next_root.result_target_kinds);
+                    existing.exact_graph_narrowing_selected |=
+                        next_root.exact_graph_narrowing_selected;
                     existing.evidence.merge(next_root.evidence);
                     progressed |= existing.result_target_kinds.len() > kinds_before
                         || existing.evidence.progress_count() > evidence_before;

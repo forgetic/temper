@@ -724,6 +724,10 @@ mod tests {
         include!("lineage_admission.rs");
     }
 
+    mod exact_narrowing {
+        include!("lineage_exact_narrowing.rs");
+    }
+
     mod focused_test_recovery {
         include!("lineage_focused_test_recovery.rs");
     }

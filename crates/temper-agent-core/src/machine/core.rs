@@ -403,15 +403,24 @@ impl AgentMachine {
         let mut operations = BTreeMap::new();
         let mut requests = Vec::new();
         let model_turn = self.turn.saturating_sub(1);
+        let active_decision_root = self
+            .decision_anchors
+            .as_ref()
+            .and_then(|state| state.active_root_binding())
+            .map(str::to_string);
         let closed_admissions = calls
             .iter()
             .map(|call| {
                 (!self.invocation_rejections.contains_key(&call.id)
                     && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX))
                 .then(|| {
-                    self.lineage_admission
-                        .as_ref()
-                        .map(|admission| admission.resolve(&call.name, &call.arguments))
+                    self.lineage_admission.as_ref().map(|admission| {
+                        admission.resolve_for_active_root(
+                            &call.name,
+                            &call.arguments,
+                            active_decision_root.as_deref(),
+                        )
+                    })
                 })
                 .flatten()
             })
