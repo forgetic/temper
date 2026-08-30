@@ -533,7 +533,7 @@ pub(super) fn decision_chain_fake(
                     serde_json::json!({"query": "unconsumable"}),
                 )
             }
-            (DecisionCase::AllRootsNonViableFallback, 0) => {
+            (DecisionCase::AllRootsNonViableIncomplete, 0) => {
                 record(DecisionStep::Discovery);
                 tool_replies(&[
                     (
@@ -553,7 +553,7 @@ pub(super) fn decision_chain_fake(
                     ),
                 ])
             }
-            (DecisionCase::AllRootsNonViableFallback, count @ 3..=4) => {
+            (DecisionCase::AllRootsNonViableIncomplete, count @ 3..=4) => {
                 record(DecisionStep::Recovery);
                 tool_reply(
                     &format!("bounded-non-progress-{count}"),
@@ -561,7 +561,7 @@ pub(super) fn decision_chain_fake(
                     serde_json::json!({}),
                 )
             }
-            (DecisionCase::AllRootsNonViableFallback, count @ 5 | count @ 7 | count @ 9) => {
+            (DecisionCase::AllRootsNonViableIncomplete, count @ 5 | count @ 7 | count @ 9) => {
                 let root_index = (count - 5) / 2;
                 let target = provider_values("qualified_name")
                     .get(root_index)
@@ -578,7 +578,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::AllRootsNonViableFallback, count @ 6 | count @ 8 | count @ 10) => {
+            (DecisionCase::AllRootsNonViableIncomplete, count @ 6 | count @ 8 | count @ 10) => {
                 let root_index = (count - 6) / 2;
                 let target = provider_values("qualified_name")
                     .get(root_index)
@@ -594,95 +594,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::AllRootsNonViableFallback, 11) => {
-                let guidance = view
-                    .messages
-                    .iter()
-                    .filter(|message| {
-                        message.role == "user"
-                            && message.content.contains("minimal conventional fallback")
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(guidance.len(), 1, "fallback guidance is released exactly once");
-                assert!(guidance[0].content.contains("one simple discovery command"));
-                assert!(guidance[0].content.contains("ordinary read tool"));
-                for private in provider_values("qualified_name") {
-                    assert!(!guidance[0].content.contains(&private));
-                }
-                record(DecisionStep::GraphRetry);
-                tool_reply(
-                    "closed-graph-retry",
-                    "codebase_memory_search_graph",
-                    serde_json::json!({"query": "must-remain-closed"}),
-                )
-            }
-            (DecisionCase::AllRootsNonViableFallback, 12) => {
-                assert_eq!(
-                    result_count(),
-                    9,
-                    "the denied graph retry never reached the provider"
-                );
-                assert!(view.messages.iter().any(|message| {
-                    message.role == "tool"
-                        && message
-                            .content
-                            .contains("no compatible provider-derived recovery action remains")
-                }));
-                record(DecisionStep::ConventionalDiscovery);
-                tool_reply(
-                    "bounded-conventional-discovery",
-                    "bash",
-                    serde_json::json!({"command": "rg pending demo/EVIDENCE.md"}),
-                )
-            }
-            (DecisionCase::AllRootsNonViableFallback, 13) => {
-                record(DecisionStep::SourceRead);
-                tool_reply(
-                    "ordinary-fallback-source-read",
-                    "read",
-                    serde_json::json!({"path": "demo/EVIDENCE.md"}),
-                )
-            }
-            (DecisionCase::AllRootsNonViableFallback, 14) => {
-                record(DecisionStep::Mutation);
-                tool_reply(
-                    "bounded-fallback-mutation",
-                    "write",
-                    serde_json::json!({
-                        "path": "demo/EVIDENCE.md",
-                        "content": "bounded fallback completed\n",
-                    }),
-                )
-            }
-            (DecisionCase::AllRootsNonViableFallback, 15) => {
-                record(DecisionStep::Validation);
-                tool_reply(
-                    "validate-bounded-fallback",
-                    "bash",
-                    serde_json::json!({
-                        "command": "test \"$(cat demo/EVIDENCE.md)\" = 'bounded fallback completed'",
-                    }),
-                )
-            }
-            (DecisionCase::AllRootsNonViableFallback, 16) => {
-                record(DecisionStep::Submission);
-                tool_reply(
-                    "submit-bounded-fallback",
-                    "submit_for_pr",
-                    serde_json::json!({"summary": "bounded fallback validated"}),
-                )
-            }
-            (DecisionCase::AllRootsNonViableFallback, 17) => {
-                assert!(view.messages.iter().any(|message| {
-                    message.role == "tool"
-                        && message.content.contains("submit_for_pr accepted by host")
-                }));
-                record(DecisionStep::Complete);
-                Reply::text(
-                    r#"{"title":"Complete bounded fallback","body":"Validated and submitted.","summary":"Bounded fallback completed."}"#,
-                )
-            }
-            (DecisionCase::SelectorlessViableRootFallback, 0) => {
+            (DecisionCase::SelectorlessViableRootIncomplete, 0) => {
                 record(DecisionStep::Discovery);
                 tool_reply(
                     "selectorless-root",
@@ -690,7 +602,7 @@ pub(super) fn decision_chain_fake(
                     serde_json::json!({"pattern": "selectorless-viable-root"}),
                 )
             }
-            (DecisionCase::SelectorlessViableRootFallback, 1) => {
+            (DecisionCase::SelectorlessViableRootIncomplete, 1) => {
                 record(DecisionStep::ImplementationSource);
                 tool_reply(
                     "selectorless-implementation",
@@ -701,7 +613,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::SelectorlessViableRootFallback, 2) => {
+            (DecisionCase::SelectorlessViableRootIncomplete, 2) => {
                 record(DecisionStep::Trace);
                 tool_reply(
                     "selectorless-trace",
@@ -711,68 +623,6 @@ pub(super) fn decision_chain_fake(
                         "mode": "calls",
                         "direction": "inbound",
                     }),
-                )
-            }
-            (DecisionCase::SelectorlessViableRootFallback, 3) => {
-                assert!(view.messages.iter().any(|message| {
-                    message.role == "user"
-                        && message.content.contains("minimal conventional fallback")
-                }));
-                assert!(!view.messages.iter().any(|message| {
-                    message.role == "user" && message.content.contains("caller_traversal_result=")
-                }));
-                record(DecisionStep::ConventionalDiscovery);
-                tool_reply(
-                    "selectorless-conventional-discovery",
-                    "bash",
-                    serde_json::json!({"command": "rg pending demo/EVIDENCE.md"}),
-                )
-            }
-            (DecisionCase::SelectorlessViableRootFallback, 4) => {
-                record(DecisionStep::SourceRead);
-                tool_reply(
-                    "selectorless-source-read",
-                    "read",
-                    serde_json::json!({"path": "demo/EVIDENCE.md"}),
-                )
-            }
-            (DecisionCase::SelectorlessViableRootFallback, 5) => {
-                record(DecisionStep::Mutation);
-                tool_reply(
-                    "selectorless-mutation",
-                    "write",
-                    serde_json::json!({
-                        "path": "demo/EVIDENCE.md",
-                        "content": "selectorless fallback completed\n",
-                    }),
-                )
-            }
-            (DecisionCase::SelectorlessViableRootFallback, 6) => {
-                record(DecisionStep::Validation);
-                tool_reply(
-                    "selectorless-validation",
-                    "bash",
-                    serde_json::json!({
-                        "command": "test \"$(cat demo/EVIDENCE.md)\" = 'selectorless fallback completed'",
-                    }),
-                )
-            }
-            (DecisionCase::SelectorlessViableRootFallback, 7) => {
-                record(DecisionStep::Submission);
-                tool_reply(
-                    "selectorless-submission",
-                    "submit_for_pr",
-                    serde_json::json!({"summary": "selectorless fallback validated"}),
-                )
-            }
-            (DecisionCase::SelectorlessViableRootFallback, 8) => {
-                assert!(view.messages.iter().any(|message| {
-                    message.role == "tool"
-                        && message.content.contains("submit_for_pr accepted by host")
-                }));
-                record(DecisionStep::Complete);
-                Reply::text(
-                    r#"{"title":"Complete selectorless fallback","body":"Validated and submitted.","summary":"Selectorless fallback completed."}"#,
                 )
             }
             (_, turn) => panic!("unexpected model turn {turn} for {case:?}"),

@@ -39,6 +39,12 @@ impl DecisionAnchorState {
         let transition = if prior_phase.is_none() {
             match AnchorForest::from_finished(&finished, None) {
                 Some(anchors) => self.install_roots(anchors, 0, false),
+                None if finished.iter().any(|finished| {
+                    trusted_unavailable_provider_output(finished.name, finished.output)
+                }) =>
+                {
+                    self.enter_provider_unavailable(false)
+                }
                 None if successful_graph_batch(&finished) => self.record_non_progress(None),
                 None => DecisionAnchorTransition::Unchanged,
             }
@@ -47,10 +53,10 @@ impl DecisionAnchorState {
                 None => unreachable!("the empty phase was handled above"),
                 Some(AnchorPhase::Root(anchors)) | Some(AnchorPhase::Trail(anchors)) => {
                     if anchors.has_complete_evidence() {
-                        self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
+                        self.phase = Some(AnchorPhase::EnabledComplete(anchors));
                         if self.exploration == ExplorationStatus::Open {
-                            self.exploration = ExplorationStatus::Complete;
-                            DecisionAnchorTransition::Converged
+                            self.exploration = ExplorationStatus::EnabledComplete;
+                            DecisionAnchorTransition::EnabledEvidenceComplete
                         } else {
                             DecisionAnchorTransition::Unchanged
                         }
@@ -80,18 +86,22 @@ impl DecisionAnchorState {
                 Some(AnchorPhase::GapRecovery(recovery)) => {
                     self.advance_gap_recovery(recovery, &finished)
                 }
-                Some(AnchorPhase::AwaitingExactRead(anchors)) => {
-                    self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
+                Some(AnchorPhase::EnabledComplete(anchors)) => {
+                    self.phase = Some(AnchorPhase::EnabledComplete(anchors));
                     DecisionAnchorTransition::Unchanged
                 }
-                Some(AnchorPhase::Exhausted(evidence)) => {
-                    self.phase = Some(AnchorPhase::Exhausted(evidence));
-                    self.exploration = ExplorationStatus::BudgetExhausted;
+                Some(AnchorPhase::EnabledIncomplete(evidence)) => {
+                    self.phase = Some(AnchorPhase::EnabledIncomplete(evidence));
+                    self.exploration = ExplorationStatus::EnabledIncomplete;
                     DecisionAnchorTransition::Unchanged
                 }
-                Some(AnchorPhase::ConventionalFallback(anchors)) => {
-                    self.phase = Some(AnchorPhase::ConventionalFallback(anchors));
-                    self.exploration = ExplorationStatus::BudgetExhausted;
+                Some(AnchorPhase::ProviderUnavailable {
+                    exact_read_required,
+                }) => {
+                    self.phase = Some(AnchorPhase::ProviderUnavailable {
+                        exact_read_required,
+                    });
+                    self.exploration = ExplorationStatus::ProviderUnavailable;
                     DecisionAnchorTransition::Unchanged
                 }
             }

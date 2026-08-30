@@ -42,8 +42,8 @@ pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation b
 pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration, use the ordinary read tool to read the exact workspace target selected by the qualifying graph source result, and only then mutate that matching target.";
 /// Fixed, privacy-safe result for graph calls denied after convergence or exhaustion.
 pub const CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE: &str = "codebase-memory exploration is closed for this run; continue with conventional tools; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
-/// Fixed bounded fallback released only after every valid retained root lacks an action.
-pub const DECISION_ANCHOR_CONVENTIONAL_FALLBACK_MESSAGE: &str = "codebase-memory exploration is closed for this run because no retained root has a compatible provider-derived recovery action. Do not retry codebase-memory. Perform only the existing minimal conventional fallback: one simple discovery command plus a necessary directory change, if any; then use the ordinary read tool to read the exact source target before making only the matching minimal mutation. Continue through the normal validation and submission gates.";
+/// Fixed bounded fallback released only after trusted systemic provider unavailability.
+pub const DECISION_ANCHOR_PROVIDER_UNAVAILABLE_FALLBACK_MESSAGE: &str = "codebase-memory is systemically unavailable and graph exploration is closed for this run. Do not retry codebase-memory. Perform only the existing minimal conventional fallback: one simple discovery command plus a necessary directory change, if any; then use the ordinary read tool to read the exact source target before making only the matching minimal mutation. Continue through the normal validation and submission gates.";
 
 /// Generic, privacy-safe correction injected after a successful result cannot
 /// be consumed as the active anchor's typed descendant.
@@ -87,19 +87,25 @@ pub(super) struct DecisionAnchorState {
 enum AnchorPhase {
     Root(AnchorForest),
     Trail(AnchorForest),
-    AwaitingExactRead(AnchorForest),
     Recovery(Recovery),
     GapRecovery(GapRecovery),
-    Exhausted(SourceEvidence),
-    ConventionalFallback(AnchorForest),
+    /// Complete enabled evidence awaiting its exact ordinary source read.
+    EnabledComplete(AnchorForest),
+    /// Enabled graph activity which exhausted bounded recovery while incomplete.
+    EnabledIncomplete(SourceEvidence),
+    /// Trusted systemic graph unavailability with the predecessor fallback policy.
+    ProviderUnavailable {
+        exact_read_required: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExplorationStatus {
     Open,
     GapRecovery,
-    Complete,
-    BudgetExhausted,
+    EnabledComplete,
+    EnabledIncomplete,
+    ProviderUnavailable,
 }
 
 struct AnchorForest {
@@ -221,10 +227,9 @@ pub(super) enum DecisionAnchorTransition {
     Unchanged,
     RecoveryNeeded,
     GapRecoveryNeeded,
-    RecoveryExhausted,
-    ConventionalFallbackReleased,
-    Converged,
-    ExplorationExhausted,
+    EnabledEvidenceComplete,
+    EnabledEvidenceIncomplete,
+    ProviderUnavailableFallback,
 }
 
 impl DecisionAnchorState {
@@ -504,9 +509,9 @@ impl DecisionAnchorState {
         if evidence_progressed || route_progressed || roots_progressed {
             self.non_progressing_batches = 0;
             if anchors.has_complete_evidence() {
-                self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
-                self.exploration = ExplorationStatus::Complete;
-                return DecisionAnchorTransition::Converged;
+                self.phase = Some(AnchorPhase::EnabledComplete(anchors));
+                self.exploration = ExplorationStatus::EnabledComplete;
+                return DecisionAnchorTransition::EnabledEvidenceComplete;
             }
             if !anchors.active_has_compatible_actions() {
                 return self.enter_gap_recovery(anchors);
@@ -534,7 +539,8 @@ impl DecisionAnchorState {
                     graph_tool_for_name(finished.name),
                 )
         }) {
-            return self.release_provider_fallback(anchors);
+            let exact_read_required = anchors.has_any_evidence();
+            return self.enter_provider_unavailable(exact_read_required);
         }
 
         if finished
@@ -569,16 +575,7 @@ impl DecisionAnchorState {
                 Some(AnchorPhase::Trail(anchors)) | Some(AnchorPhase::Root(anchors)) => {
                     self.enter_gap_recovery(anchors)
                 }
-                phase => {
-                    if phase.is_none() && self.targeted_graph_authority_seen {
-                        self.phase = Some(AnchorPhase::Exhausted(SourceEvidence::default()));
-                        self.exploration = ExplorationStatus::BudgetExhausted;
-                        return DecisionAnchorTransition::RecoveryExhausted;
-                    }
-                    self.phase = phase;
-                    self.exploration = ExplorationStatus::BudgetExhausted;
-                    DecisionAnchorTransition::ExplorationExhausted
-                }
+                _ => self.enter_incomplete_enabled(SourceEvidence::default()),
             };
         }
         self.phase = phase;
@@ -587,9 +584,7 @@ impl DecisionAnchorState {
 
     fn enter_recovery(&mut self, anchors: AnchorForest, attempts: u8) -> DecisionAnchorTransition {
         if attempts >= MAX_DECISION_ANCHOR_RECOVERY_ATTEMPTS {
-            self.phase = Some(AnchorPhase::Exhausted(anchors.active_evidence()));
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            DecisionAnchorTransition::RecoveryExhausted
+            self.enter_incomplete_enabled(anchors.active_evidence())
         } else {
             self.phase = Some(AnchorPhase::Recovery(Recovery { anchors, attempts }));
             DecisionAnchorTransition::RecoveryNeeded
@@ -621,7 +616,7 @@ impl DecisionAnchorState {
 
     fn graph_exploration_denial(&self) -> ToolCallDenial {
         let details = match self.exploration {
-            ExplorationStatus::Complete => Some(GraphExplorationClosedV1::completed()),
+            ExplorationStatus::EnabledComplete => Some(GraphExplorationClosedV1::completed()),
             ExplorationStatus::GapRecovery => self.recovery_denial_details().or_else(|| {
                 let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
                     return None;
@@ -629,15 +624,15 @@ impl DecisionAnchorState {
                 let active = recovery.anchors.roots.get(&recovery.active_root)?;
                 GraphExplorationClosedV1::exhausted(active.evidence.missing_kinds())
             }),
-            ExplorationStatus::BudgetExhausted => match self.phase.as_ref() {
-                Some(AnchorPhase::Exhausted(evidence)) => {
-                    GraphExplorationClosedV1::exhausted(evidence.missing_kinds())
-                }
-                Some(AnchorPhase::ConventionalFallback(_)) => {
-                    Some(GraphExplorationClosedV1::conventional_fallback())
-                }
-                _ => None,
-            },
+            ExplorationStatus::EnabledIncomplete => self.phase.as_ref().and_then(|phase| {
+                let AnchorPhase::EnabledIncomplete(evidence) = phase else {
+                    return None;
+                };
+                GraphExplorationClosedV1::exhausted(evidence.missing_kinds())
+            }),
+            ExplorationStatus::ProviderUnavailable => {
+                Some(GraphExplorationClosedV1::conventional_fallback())
+            }
             ExplorationStatus::Open => None,
         };
         ToolCallDenial::GraphExplorationClosed(details)

@@ -63,7 +63,7 @@ impl DecisionAnchorState {
     }
 
     pub(super) fn queue_finished_guidance(&mut self, finished: &[FinishedCodebaseCall<'_>]) {
-        if matches!(self.phase, Some(AnchorPhase::ConventionalFallback(_))) {
+        if matches!(self.phase, Some(AnchorPhase::ProviderUnavailable { .. })) {
             return;
         }
         let snapshot = self.guidance_snapshot();
@@ -145,7 +145,7 @@ impl DecisionAnchorState {
                     GuidanceSnapshot::from_active(binding, active, "open", None, false)
                 })
                 .unwrap_or_else(GuidanceSnapshot::empty),
-            Some(AnchorPhase::AwaitingExactRead(anchors)) => anchors
+            Some(AnchorPhase::EnabledComplete(anchors)) => anchors
                 .active_root()
                 .map(|(binding, active)| {
                     GuidanceSnapshot::from_active(binding, active, "complete", None, true)
@@ -172,7 +172,7 @@ impl DecisionAnchorState {
                     )
                 })
                 .unwrap_or_else(GuidanceSnapshot::empty),
-            Some(AnchorPhase::Exhausted(evidence)) => GuidanceSnapshot {
+            Some(AnchorPhase::EnabledIncomplete(evidence)) => GuidanceSnapshot {
                 active_root: None,
                 missing: evidence.missing_kinds(),
                 next_actions: Vec::new(),
@@ -180,7 +180,7 @@ impl DecisionAnchorState {
                 remaining: Some(0),
                 complete: false,
             },
-            Some(AnchorPhase::ConventionalFallback(_)) => GuidanceSnapshot::empty(),
+            Some(AnchorPhase::ProviderUnavailable { .. }) => GuidanceSnapshot::empty(),
             None => GuidanceSnapshot::empty(),
         }
     }

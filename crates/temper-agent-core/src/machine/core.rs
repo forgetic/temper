@@ -33,7 +33,7 @@ use crate::{LineageAdmissionHandle, ToolInvocationCatalog};
 
 use super::batching::{PendingTool, plan_batches};
 use super::decision_anchor::{
-    DECISION_ANCHOR_CONVENTIONAL_FALLBACK_MESSAGE, DECISION_ANCHOR_CONVERGENCE_MESSAGE,
+    DECISION_ANCHOR_CONVERGENCE_MESSAGE, DECISION_ANCHOR_PROVIDER_UNAVAILABLE_FALLBACK_MESSAGE,
     DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState, DecisionAnchorTransition,
     SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
@@ -99,7 +99,7 @@ pub struct AgentMachine {
     lineage_admission: Option<LineageAdmissionHandle>,
     /// Fixed convergence instruction queued once complete current-root evidence
     /// closes graph exploration.
-    decision_anchor_convergence: bool,
+    decision_anchor_complete: bool,
     /// Generic, privacy-safe recovery instruction queued by an unconsumable
     /// anchor. It is distinct from operator steering.
     decision_anchor_recovery: bool,
@@ -107,8 +107,8 @@ pub struct AgentMachine {
     decision_anchor_gap_recovery: Option<GraphExplorationClosedV1>,
     /// Per-result closed active-root classifications queued after tool results.
     decision_anchor_guidance: Vec<String>,
-    /// Stops the run after the active batch drains once bounded recovery fails.
-    decision_anchor_exhausted: bool,
+    /// Stops the run after incomplete enabled evidence exhausts bounded recovery.
+    decision_anchor_incomplete: bool,
     /// The most recent assistant message (the run's product on completion).
     last_assistant: Option<AssistantMessage>,
     /// Structured terminal provider/model failure, kept independently from
@@ -179,11 +179,11 @@ impl AgentMachine {
             turn_results: Vec::new(),
             decision_anchors,
             lineage_admission: None,
-            decision_anchor_convergence: false,
+            decision_anchor_complete: false,
             decision_anchor_recovery: false,
             decision_anchor_gap_recovery: None,
             decision_anchor_guidance: Vec::new(),
-            decision_anchor_exhausted: false,
+            decision_anchor_incomplete: false,
             last_assistant: None,
             model_failure: None,
             queued_steering: Vec::new(),
@@ -220,11 +220,11 @@ impl AgentMachine {
         self.active_tool_batch = None;
         self.pending_batches.clear();
         self.cancellation_generation = None;
-        self.decision_anchor_convergence = false;
+        self.decision_anchor_complete = false;
         self.decision_anchor_recovery = false;
         self.decision_anchor_gap_recovery = None;
         self.decision_anchor_guidance.clear();
-        self.decision_anchor_exhausted = false;
+        self.decision_anchor_incomplete = false;
         let final_message = self
             .last_assistant
             .clone()
@@ -307,8 +307,8 @@ impl AgentMachine {
                 timestamp: 0,
             }));
         }
-        if self.decision_anchor_convergence {
-            self.decision_anchor_convergence = false;
+        if self.decision_anchor_complete {
+            self.decision_anchor_complete = false;
             self.messages.push(Message::User(UserMessage {
                 content: UserContent::Text(DECISION_ANCHOR_CONVERGENCE_MESSAGE.to_string()),
                 timestamp: 0,
@@ -673,17 +673,17 @@ impl AgentMachine {
                     DecisionAnchorTransition::GapRecoveryNeeded => {
                         self.decision_anchor_gap_recovery = state.recovery_details();
                     }
-                    DecisionAnchorTransition::RecoveryExhausted => {
-                        self.decision_anchor_exhausted = true;
+                    DecisionAnchorTransition::EnabledEvidenceIncomplete => {
+                        self.decision_anchor_incomplete = true;
                     }
-                    DecisionAnchorTransition::ConventionalFallbackReleased => {
-                        self.decision_anchor_guidance
-                            .push(DECISION_ANCHOR_CONVENTIONAL_FALLBACK_MESSAGE.to_string());
+                    DecisionAnchorTransition::ProviderUnavailableFallback => {
+                        self.decision_anchor_guidance.push(
+                            DECISION_ANCHOR_PROVIDER_UNAVAILABLE_FALLBACK_MESSAGE.to_string(),
+                        );
                     }
-                    DecisionAnchorTransition::Converged => {
-                        self.decision_anchor_convergence = true;
+                    DecisionAnchorTransition::EnabledEvidenceComplete => {
+                        self.decision_anchor_complete = true;
                     }
-                    DecisionAnchorTransition::ExplorationExhausted => {}
                 }
                 self.decision_anchor_guidance
                     .extend(state.take_model_guidance());
@@ -695,7 +695,7 @@ impl AgentMachine {
             self.turn_results.extend(batch);
         }
 
-        if self.decision_anchor_exhausted {
+        if self.decision_anchor_incomplete {
             requests.extend(self.finish(AgentStop::DecisionAnchorRecoveryExhausted));
             return requests;
         }

@@ -123,7 +123,7 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
                 true,
             ),
         ]),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
     assert_eq!(
         state.on_tool_dispatched(&call("closed-graph", "codebase_memory_search_graph"), 6),
@@ -310,7 +310,7 @@ fn provider_failure_requires_fresh_conventional_authority_for_an_independent_tar
                 failed_name,
                 &failure_output("provider_protocol"),
             ),
-            DecisionAnchorTransition::ConventionalFallbackReleased,
+            DecisionAnchorTransition::ProviderUnavailableFallback,
         );
 
         let mutation = call("partial-mutation", "write");
@@ -386,7 +386,7 @@ fn successful_targeted_result_without_lineage_cannot_authorize_mutation() {
             "codebase_memory_search_graph",
             &output_without_lineage,
         ),
-        DecisionAnchorTransition::RecoveryExhausted,
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
         "bounded unretained targeted results stop without a product",
     );
 }

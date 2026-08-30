@@ -1,24 +1,20 @@
 // Authoritative root-pivot recovery regressions.
 
 #[test]
-fn three_nonviable_roots_release_fallback_without_graph_or_cross_root_authority() {
-    let mut effects = effects();
-    effects.insert("bash".to_string(), ToolEffects::process());
-    effects.insert("submit_for_pr".to_string(), ToolEffects::process());
-    let mut state = DecisionAnchorState::from_effects(&effects).unwrap();
+fn three_nonviable_roots_stop_without_graph_or_conventional_authority() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     let third_root = "00000000-0000-4000-8000-000000000003";
     for id in ["first-root", "second-root", "third-root"] {
         state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), 0);
     }
-    let roots = [ROOT, OTHER_ROOT, third_root]
-        .map(|root| {
-            output_with_kinds(
-                "codebase_memory_search_graph",
-                root,
-                DecisionAnchorLineageStageV1::Root,
-                &[DecisionAnchorTargetKindV1::FunctionName],
-            )
-        });
+    let roots = [ROOT, OTHER_ROOT, third_root].map(|root| {
+        output_with_kinds(
+            "codebase_memory_search_graph",
+            root,
+            DecisionAnchorLineageStageV1::Root,
+            &[DecisionAnchorTargetKindV1::FunctionName],
+        )
+    });
     assert_eq!(
         state.on_tool_batch_finished(&[
             ("first-root", "codebase_memory_search_graph", &roots[0]),
@@ -32,7 +28,7 @@ fn three_nonviable_roots_release_fallback_without_graph_or_cross_root_authority(
         (
             2,
             "broad-two",
-            DecisionAnchorTransition::ConventionalFallbackReleased,
+            DecisionAnchorTransition::EnabledEvidenceIncomplete,
         ),
     ] {
         state.on_tool_dispatched(&call(id, "codebase_memory_get_architecture"), turn);
@@ -45,10 +41,10 @@ fn three_nonviable_roots_release_fallback_without_graph_or_cross_root_authority(
     assert_eq!(state.recovery_details(), None);
     assert_eq!(
         state.on_tool_dispatched(&call("closed-graph", "codebase_memory_search_graph"), 3),
-        conventional_fallback_graph_denial(),
+        exhausted_graph_denial(all_missing()),
     );
     let target = TargetAdmissionOutcome::Eligible(exact_target(TARGET_A));
-    let mutation = call("fallback-mutation", "write");
+    let mutation = call("incomplete-mutation", "write");
     assert_eq!(
         state.on_tool_dispatched_with_targets(
             &mutation,
@@ -57,40 +53,23 @@ fn three_nonviable_roots_release_fallback_without_graph_or_cross_root_authority(
         ),
         Some(ToolCallDenial::DecisionAnchorMutation),
     );
-    let read = call("fallback-source-read", "read");
+    let read = call("incomplete-source-read", "read");
     assert_eq!(
         state.on_tool_dispatched_with_targets(&read, 5, Some(&read_target(TARGET_A))),
         None,
     );
-    state.on_tool_finished("fallback-source-read", "read", &successful_read());
+    state.on_tool_finished("incomplete-source-read", "read", &successful_read());
     assert_eq!(
         state.on_tool_dispatched_with_targets(
             &mutation,
             6,
             Some(&mutation_targets(vec![target])),
         ),
-        None,
-    );
-    assert_eq!(
-        state.on_tool_dispatched_with_targets(
-            &call("validation", "bash"),
-            7,
-            Some(&InvocationTargetAdmission::SourceNeutralProcess),
-        ),
-        None,
-    );
-    assert_eq!(
-        state.on_tool_dispatched_with_targets(
-            &call("submission", "submit_for_pr"),
-            8,
-            Some(&InvocationTargetAdmission::ControlPlane),
-        ),
-        None,
+        Some(ToolCallDenial::DecisionAnchorMutation),
     );
 }
-
 #[test]
-fn nonviable_roots_pivot_once_each_then_release_fallback_without_oscillation() {
+fn nonviable_roots_pivot_once_each_then_stop_without_oscillation() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     let root_kinds = [
         DecisionAnchorTargetKindV1::FunctionName,
@@ -199,11 +178,14 @@ fn nonviable_roots_pivot_once_each_then_release_fallback_without_oscillation() {
             OTHER_ROOT,
             DecisionEvidenceKindV1::Implementation,
         ),
-        DecisionAnchorTransition::ConventionalFallbackReleased,
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
     );
     assert_eq!(
         state.on_tool_dispatched(&call("no-root-retry", "codebase_memory_trace_path"), 7),
-        conventional_fallback_graph_denial(),
+        exhausted_graph_denial([
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ]),
     );
 }
 
@@ -366,7 +348,7 @@ fn pivoted_root_rebuilds_evidence_before_exact_read_mutation_and_submission() {
             12,
             "new-focused-test",
             DecisionEvidenceKindV1::FocusedTest,
-            DecisionAnchorTransition::Converged,
+            DecisionAnchorTransition::EnabledEvidenceComplete,
         ),
     ] {
         state.on_tool_dispatched(&source_call(id, kind), turn);

@@ -80,7 +80,7 @@ mod progress {
                 ROOT,
                 DecisionEvidenceKindV1::FocusedTest,
             ),
-            DecisionAnchorTransition::Converged,
+            DecisionAnchorTransition::EnabledEvidenceComplete,
         );
         let complete = one_guidance(&mut state);
         assert!(complete.contains("accepted evidence=[focused_test]"));

@@ -72,10 +72,6 @@ mod tests {
         ))
     }
 
-    fn legacy_graph_denial() -> Option<ToolCallDenial> {
-        Some(ToolCallDenial::GraphExplorationClosed(None))
-    }
-
     fn effects() -> BTreeMap<String, ToolEffects> {
         [
             ("codebase_memory_search_graph", ToolEffects::read()),
@@ -590,7 +586,7 @@ mod tests {
                 "codebase_memory_get_code_snippet",
                 &failure_output("transport"),
             ),
-            DecisionAnchorTransition::ConventionalFallbackReleased
+            DecisionAnchorTransition::ProviderUnavailableFallback
         );
         assert!(
             fallback.blocks_mutation("write"),

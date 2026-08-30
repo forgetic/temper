@@ -36,8 +36,8 @@ pub enum DecisionCase {
     IncompleteSourceEvidence,
     UnavailableAfterRoot,
     UnconsumableRecoveryExhausted,
-    AllRootsNonViableFallback,
-    SelectorlessViableRootFallback,
+    AllRootsNonViableIncomplete,
+    SelectorlessViableRootIncomplete,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,10 +95,10 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         DecisionCase::Consumed
             | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
-            | DecisionCase::AllRootsNonViableFallback
+            | DecisionCase::AllRootsNonViableIncomplete
             | DecisionCase::ImplementationOnlyProviderFallback
             | DecisionCase::ImplementationFocusedProviderFallback
-            | DecisionCase::SelectorlessViableRootFallback
+            | DecisionCase::SelectorlessViableRootIncomplete
     ) {
         fs::write(
             checkout.repo_path().join("EVIDENCE.md"),
@@ -150,9 +150,7 @@ pub fn run(case: DecisionCase) -> DecisionRun {
             | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
             | DecisionCase::ImplementationOnlyProviderFallback
-            | DecisionCase::ImplementationFocusedProviderFallback
-            | DecisionCase::AllRootsNonViableFallback
-            | DecisionCase::SelectorlessViableRootFallback,
+            | DecisionCase::ImplementationFocusedProviderFallback,
             Ok(result),
         ) => {
             assert_eq!(result.verdict, None)
@@ -162,9 +160,7 @@ pub fn run(case: DecisionCase) -> DecisionRun {
             | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
             | DecisionCase::ImplementationOnlyProviderFallback
-            | DecisionCase::ImplementationFocusedProviderFallback
-            | DecisionCase::AllRootsNonViableFallback
-            | DecisionCase::SelectorlessViableRootFallback,
+            | DecisionCase::ImplementationFocusedProviderFallback,
             Err(error),
         ) => {
             panic!("native Jig agent completes the consumed decision chain: {error}")

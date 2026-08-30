@@ -9,7 +9,7 @@ impl DecisionAnchorState {
         debug_assert!(!anchors.has_complete_evidence());
         let mut anchors = anchors;
         let Some(active_root) = anchors.recovery_root_binding() else {
-            return self.release_conventional_fallback(anchors);
+            return self.enter_incomplete_enabled(anchors.active_evidence());
         };
         if anchors.roots.len() > 1 {
             let active = anchors
@@ -36,7 +36,6 @@ impl DecisionAnchorState {
         exhausted_root: String,
         mut exhausted_roots: BTreeSet<String>,
         remaining_pivots: usize,
-        conventional_fallback_authorized: bool,
     ) -> DecisionAnchorTransition {
         let exhausted_evidence = anchors
             .roots
@@ -48,12 +47,7 @@ impl DecisionAnchorState {
             .then(|| anchors.recovery_root_binding_excluding(&exhausted_roots))
             .flatten();
         let Some(active_root) = next_root else {
-            if conventional_fallback_authorized {
-                return self.release_conventional_fallback(anchors);
-            }
-            self.phase = Some(AnchorPhase::Exhausted(exhausted_evidence));
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            return DecisionAnchorTransition::RecoveryExhausted;
+            return self.enter_incomplete_enabled(exhausted_evidence);
         };
 
         if anchors.roots.len() > 1 {
@@ -74,29 +68,27 @@ impl DecisionAnchorState {
         DecisionAnchorTransition::GapRecoveryNeeded
     }
 
-    pub(super) fn release_provider_fallback(
+    pub(super) fn enter_provider_unavailable(
         &mut self,
-        anchors: AnchorForest,
-    ) -> DecisionAnchorTransition {
-        if !anchors.has_any_evidence() {
-            self.phase = None;
-            self.exploration = ExplorationStatus::BudgetExhausted;
-            self.targeted_graph_authority_seen = false;
-            return DecisionAnchorTransition::Unchanged;
-        }
-        self.release_conventional_fallback(anchors)
-    }
-
-    pub(super) fn release_conventional_fallback(
-        &mut self,
-        anchors: AnchorForest,
+        exact_read_required: bool,
     ) -> DecisionAnchorTransition {
         self.source_authorities.clear();
         self.pending_exact_reads.clear();
         self.exact_read_authorities.clear();
-        self.phase = Some(AnchorPhase::ConventionalFallback(anchors));
-        self.exploration = ExplorationStatus::BudgetExhausted;
-        DecisionAnchorTransition::ConventionalFallbackReleased
+        self.phase = Some(AnchorPhase::ProviderUnavailable {
+            exact_read_required,
+        });
+        self.exploration = ExplorationStatus::ProviderUnavailable;
+        DecisionAnchorTransition::ProviderUnavailableFallback
+    }
+
+    pub(super) fn enter_incomplete_enabled(
+        &mut self,
+        evidence: SourceEvidence,
+    ) -> DecisionAnchorTransition {
+        self.phase = Some(AnchorPhase::EnabledIncomplete(evidence));
+        self.exploration = ExplorationStatus::EnabledIncomplete;
+        DecisionAnchorTransition::EnabledEvidenceIncomplete
     }
 
     pub(super) fn advance_gap_recovery(
@@ -117,7 +109,6 @@ impl DecisionAnchorState {
                 active_root,
                 exhausted_roots,
                 remaining_pivots,
-                false,
             );
         };
         let compatible = finished
@@ -237,9 +228,9 @@ impl DecisionAnchorState {
         active.evidence.record_decision_kinds(accepted_kinds);
 
         if active.evidence.is_complete() {
-            self.phase = Some(AnchorPhase::AwaitingExactRead(anchors));
-            self.exploration = ExplorationStatus::Complete;
-            return DecisionAnchorTransition::Converged;
+            self.phase = Some(AnchorPhase::EnabledComplete(anchors));
+            self.exploration = ExplorationStatus::EnabledComplete;
+            return DecisionAnchorTransition::EnabledEvidenceComplete;
         }
 
         if compatible.iter().any(|(_, call, output, _)| {
@@ -253,7 +244,6 @@ impl DecisionAnchorState {
                 active_root,
                 exhausted_roots,
                 remaining_pivots,
-                false,
             );
         }
 
@@ -265,18 +255,17 @@ impl DecisionAnchorState {
                     .recovery_gap
                     .is_some_and(|gap| active.evidence.needs(gap))
         }) {
-            return self.release_provider_fallback(anchors);
+            let exact_read_required = anchors.has_any_evidence();
+            return self.enter_provider_unavailable(exact_read_required);
         }
 
         let has_path = !active.evidence.compatible_actions(active).is_empty();
         if !has_path {
-            let fallback_authorized = active.evidence.proves_no_compatible_action();
             return self.pivot_gap_recovery_or_exhaust(
                 anchors,
                 active_root,
                 exhausted_roots,
                 remaining_pivots,
-                fallback_authorized,
             );
         }
 
@@ -531,17 +520,6 @@ impl SourceEvidence {
             .into_iter()
             .map(DecisionGap::recovery_kind)
             .collect()
-    }
-
-    fn proves_no_compatible_action(&self) -> bool {
-        self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::Caller))
-            && !self.caller_selector_available
-            && self.caller_traversal_outcome == Some(CallerDiscoveryOutcomeV1::NoEligibleSelector)
-            || self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
-                && self.focused_test_fallback_turn.is_some()
-                && !self.focused_test_selector_available
-                && self.focused_test_fallback_outcome
-                    == Some(FocusedTestDiscoveryOutcomeV1::NoEligibleSelector)
     }
 
     pub(super) fn is_complete(&self) -> bool {

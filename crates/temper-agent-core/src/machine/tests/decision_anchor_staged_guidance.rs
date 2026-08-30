@@ -183,7 +183,7 @@ fn semantic_test_stage_rejects_initial_result_and_traversal_detours_before_exact
             ROOT,
             DecisionEvidenceKindV1::FocusedTest,
         ),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
 }
 

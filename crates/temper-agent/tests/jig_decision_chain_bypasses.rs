@@ -147,12 +147,13 @@ fn jig_agent_uses_conventional_fallback_after_an_unavailable_expected_descendant
 }
 
 #[test]
-fn jig_agent_releases_bounded_fallback_after_every_graph_root_becomes_nonviable() {
-    let run = run(DecisionCase::AllRootsNonViableFallback);
+fn jig_agent_stops_after_every_graph_root_becomes_nonviable() {
+    let run = run(DecisionCase::AllRootsNonViableIncomplete);
 
     assert_eq!(
         run.mutation,
-        Some("bounded fallback completed\n".to_string()),
+        Some("pending exact read\n".to_string()),
+        "incomplete enabled evidence must not release conventional mutation authority",
     );
     assert_eq!(
         run.steps,
@@ -166,24 +167,18 @@ fn jig_agent_releases_bounded_fallback_after_every_graph_root_becomes_nonviable(
             DecisionStep::ImplementationSource,
             DecisionStep::Trace,
             DecisionStep::ImplementationSource,
-            DecisionStep::GraphRetry,
-            DecisionStep::ConventionalDiscovery,
-            DecisionStep::SourceRead,
-            DecisionStep::Mutation,
-            DecisionStep::Validation,
-            DecisionStep::Submission,
-            DecisionStep::Complete,
         ],
     );
 }
 
 #[test]
-fn jig_agent_releases_fallback_when_a_viable_root_has_no_actionable_descendants() {
-    let run = run(DecisionCase::SelectorlessViableRootFallback);
+fn jig_agent_stops_when_a_viable_root_has_no_actionable_descendants() {
+    let run = run(DecisionCase::SelectorlessViableRootIncomplete);
 
     assert_eq!(
         run.mutation,
-        Some("selectorless fallback completed\n".to_string()),
+        Some("pending exact read\n".to_string()),
+        "selector-less enabled evidence must stop without conventional fallback",
     );
     assert_eq!(
         run.steps,
@@ -191,12 +186,6 @@ fn jig_agent_releases_fallback_when_a_viable_root_has_no_actionable_descendants(
             DecisionStep::Discovery,
             DecisionStep::ImplementationSource,
             DecisionStep::Trace,
-            DecisionStep::ConventionalDiscovery,
-            DecisionStep::SourceRead,
-            DecisionStep::Mutation,
-            DecisionStep::Validation,
-            DecisionStep::Submission,
-            DecisionStep::Complete,
         ],
     );
 }

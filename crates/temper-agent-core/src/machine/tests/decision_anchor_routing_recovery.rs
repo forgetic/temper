@@ -66,7 +66,7 @@ fn cross_root_focused_test_cannot_complete_the_staged_implementation_root() {
             ROOT,
             DecisionEvidenceKindV1::FocusedTest,
         ),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
     assert_eq!(
         state.on_tool_dispatched(&call("mutation", "write"), 6),
@@ -75,7 +75,7 @@ fn cross_root_focused_test_cannot_complete_the_staged_implementation_root() {
 }
 
 #[test]
-fn trace_and_implementation_without_actionable_descendants_release_fallback() {
+fn trace_and_implementation_without_actionable_descendants_stop_incomplete() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
     assert_eq!(
@@ -115,12 +115,15 @@ fn trace_and_implementation_without_actionable_descendants_release_fallback() {
                 CallerDiscoveryOutcomeV1::NoEligibleSelector,
             ),
         ),
-        DecisionAnchorTransition::ConventionalFallbackReleased,
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
     );
     assert_eq!(state.recovery_details(), None);
     assert_eq!(
         state.on_tool_dispatched(&source_call("blind-caller", DecisionEvidenceKindV1::Caller), 3),
-        conventional_fallback_graph_denial(),
+        exhausted_graph_denial([
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ]),
     );
 }
 
@@ -175,7 +178,7 @@ fn unavailable_semantic_search_releases_conventional_fallback() {
             "codebase_memory_search_graph",
             &failure_output("transport"),
         ),
-        DecisionAnchorTransition::ConventionalFallbackReleased,
+        DecisionAnchorTransition::ProviderUnavailableFallback,
     );
 }
 
@@ -250,7 +253,7 @@ fn focused_test_recovery_searches_semantically_then_reads_returned_test() {
             ROOT,
             DecisionEvidenceKindV1::FocusedTest,
         ),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
     assert!(state.blocks_mutation("write"));
 }
@@ -311,12 +314,12 @@ fn semantic_search_admits_only_one_request_then_one_exact_test_source() {
             ROOT,
             DecisionEvidenceKindV1::FocusedTest,
         ),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
 }
 
 #[test]
-fn empty_semantic_search_releases_bounded_conventional_route() {
+fn empty_semantic_search_stops_incomplete_without_conventional_route() {
     let mut state = focused_test_recovery_state();
     assert_eq!(
         state.on_tool_dispatched_with_admission(
@@ -337,12 +340,12 @@ fn empty_semantic_search_releases_bounded_conventional_route() {
                 FocusedTestDiscoveryOutcomeV1::NoEligibleSelector,
             ),
         ),
-        DecisionAnchorTransition::ConventionalFallbackReleased,
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
     );
     assert!(state.blocks_mutation("write"));
     assert_eq!(
         state.on_tool_dispatched(&semantic_fallback_call("retry"), 7),
-        conventional_fallback_graph_denial(),
+        exhausted_graph_denial([GraphRecoveryEvidenceKindV1::FocusedTest]),
     );
 }
 
@@ -372,7 +375,7 @@ fn semantic_search_with_typed_targets_but_no_exact_selector_exhausts_without_esc
                 ],
             ),
         ),
-        DecisionAnchorTransition::RecoveryExhausted,
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
     );
     assert!(state.blocks_mutation("write"));
     assert_eq!(
@@ -490,7 +493,7 @@ fn multi_root_over_returned_candidates_recover_on_the_selected_root() {
                 &focused_test,
             ),
         ]),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
     assert!(state.blocks_mutation("write"));
 }

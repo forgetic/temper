@@ -43,7 +43,7 @@ fn fallback_source_without_typed_test_evidence_exhausts_without_retry() {
                 &[DecisionAnchorTargetKindV1::QualifiedName],
             ),
         ),
-        DecisionAnchorTransition::RecoveryExhausted,
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
     );
     assert!(state.blocks_mutation("write"));
     assert_eq!(

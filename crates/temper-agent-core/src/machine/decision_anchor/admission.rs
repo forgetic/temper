@@ -348,10 +348,12 @@ impl DecisionAnchorState {
         let anchors = match self.phase.as_ref()? {
             AnchorPhase::Root(anchors)
             | AnchorPhase::Trail(anchors)
-            | AnchorPhase::AwaitingExactRead(anchors) => anchors,
+            | AnchorPhase::EnabledComplete(anchors) => anchors,
             AnchorPhase::Recovery(recovery) => &recovery.anchors,
             AnchorPhase::GapRecovery(recovery) => &recovery.anchors,
-            AnchorPhase::Exhausted(_) | AnchorPhase::ConventionalFallback(_) => return None,
+            AnchorPhase::EnabledIncomplete(_) | AnchorPhase::ProviderUnavailable { .. } => {
+                return None;
+            }
         };
         anchors
             .roots
@@ -431,20 +433,20 @@ impl DecisionAnchorState {
                         .get(&recovery.active_root)
                         .map(|anchor| anchor.evidence.clone())
                         .unwrap_or_default();
-                    self.phase = Some(AnchorPhase::Exhausted(evidence));
-                    self.exploration = ExplorationStatus::BudgetExhausted;
+                    self.phase = Some(AnchorPhase::EnabledIncomplete(evidence));
+                    self.exploration = ExplorationStatus::EnabledIncomplete;
                 } else {
                     self.phase = Some(AnchorPhase::GapRecovery(recovery));
                     self.exploration = ExplorationStatus::GapRecovery;
                 }
             }
-            AnchorPhase::Exhausted(evidence) => {
-                self.phase = Some(AnchorPhase::Exhausted(evidence));
-                self.exploration = ExplorationStatus::BudgetExhausted;
+            AnchorPhase::EnabledIncomplete(evidence) => {
+                self.phase = Some(AnchorPhase::EnabledIncomplete(evidence));
+                self.exploration = ExplorationStatus::EnabledIncomplete;
             }
             phase @ (AnchorPhase::Recovery(_)
-            | AnchorPhase::AwaitingExactRead(_)
-            | AnchorPhase::ConventionalFallback(_)) => {
+            | AnchorPhase::EnabledComplete(_)
+            | AnchorPhase::ProviderUnavailable { .. }) => {
                 self.phase = Some(phase);
             }
         }

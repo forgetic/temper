@@ -51,7 +51,7 @@ fn unconsumable_roots_have_two_recovery_attempts_then_stay_blocked() {
         (
             2,
             "recovery-two",
-            DecisionAnchorTransition::RecoveryExhausted,
+            DecisionAnchorTransition::EnabledEvidenceIncomplete,
         ),
     ] {
         state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), turn);
@@ -98,6 +98,28 @@ fn failed_or_malformed_graph_results_create_no_anchor_or_mutation_block() {
         DecisionAnchorTransition::Unchanged
     );
     assert!(!state.blocks_mutation("write"));
+}
+
+#[test]
+fn trusted_initial_provider_unavailability_releases_fallback_without_retry() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("unavailable", "codebase_memory_search_graph"), 0);
+    assert_eq!(
+        state.on_tool_finished(
+            "unavailable",
+            "codebase_memory_search_graph",
+            &failure_output("transport"),
+        ),
+        DecisionAnchorTransition::ProviderUnavailableFallback,
+    );
+    assert!(
+        !state.blocks_mutation("write"),
+        "an initial outage preserves the predecessor's unrestricted conventional control"
+    );
+    assert_eq!(
+        state.on_tool_dispatched(&call("retry", "codebase_memory_search_graph"), 1),
+        conventional_fallback_graph_denial(),
+    );
 }
 
 #[test]
@@ -184,7 +206,7 @@ fn recovery_stages_implementation_before_its_caller_traversal() {
             ROOT,
             DecisionEvidenceKindV1::FocusedTest,
         ),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
     assert!(state.blocks_mutation("write"));
 }
@@ -251,7 +273,7 @@ fn allowance_floor_keeps_a_distinct_provider_selector_actionable() {
 }
 
 #[test]
-fn recovery_without_an_implementation_source_releases_exact_read_bounded_fallback() {
+fn recovery_without_an_implementation_source_stops_without_fallback() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
     assert_eq!(
@@ -281,7 +303,7 @@ fn recovery_without_an_implementation_source_releases_exact_read_bounded_fallbac
             "codebase_memory_get_architecture",
             &plain_success(),
         ),
-        DecisionAnchorTransition::ConventionalFallbackReleased,
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
     );
     assert!(state.blocks_mutation("write"));
     assert_eq!(
@@ -289,11 +311,11 @@ fn recovery_without_an_implementation_source_releases_exact_read_bounded_fallbac
             &source_call("unsupported-source", DecisionEvidenceKindV1::Implementation),
             3,
         ),
-        conventional_fallback_graph_denial(),
+        exhausted_graph_denial(all_missing()),
     );
     assert_eq!(
         state.on_tool_dispatched(&call("unsupported-trace", "codebase_memory_trace_path"), 4),
-        conventional_fallback_graph_denial(),
+        exhausted_graph_denial(all_missing()),
     );
 }
 
@@ -328,7 +350,7 @@ fn expected_unavailable_gap_releases_fallback_without_reopening_graph() {
             "codebase_memory_get_code_snippet",
             &failure_output("transport"),
         ),
-        DecisionAnchorTransition::ConventionalFallbackReleased,
+        DecisionAnchorTransition::ProviderUnavailableFallback,
     );
     assert!(state.blocks_mutation("write"));
     assert_eq!(
@@ -407,7 +429,7 @@ fn read_only_roles_retain_the_same_staged_bounded_gap_path() {
             ROOT,
             DecisionEvidenceKindV1::FocusedTest,
         ),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
     assert_eq!(state.on_tool_dispatched(&call("ordinary", "read"), 7), None);
 }
@@ -496,7 +518,7 @@ fn broad_recovery_denial_retains_exact_missing_caller_evidence() {
             ROOT,
             DecisionEvidenceKindV1::Caller,
         ),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
 }
 
@@ -561,7 +583,7 @@ fn budget_exhaustion_queues_exact_actionable_missing_evidence_guidance() {
 }
 
 #[test]
-fn no_compatible_implementation_source_releases_fallback_before_another_graph_loop() {
+fn no_compatible_implementation_source_stops_without_a_product() {
     let mut machine = AgentMachine::with_effects(vec![user("repair")], 10, effects());
     let _ = machine.on_start(EngineTime::ZERO);
     let _ = complete(
@@ -580,7 +602,7 @@ fn no_compatible_implementation_source_releases_fallback_before_another_graph_lo
             ),
         ),
     );
-    let mut fallback = Vec::new();
+    let mut terminal = Vec::new();
     for id in ["broad-one", "broad-two"] {
         let _ = complete(
             &mut machine,
@@ -589,12 +611,12 @@ fn no_compatible_implementation_source_releases_fallback_before_another_graph_lo
                 "codebase_memory_get_architecture",
             )])),
         );
-        fallback = complete(&mut machine, tool_finished(id, plain_success()));
+        terminal = complete(&mut machine, tool_finished(id, plain_success()));
     }
-    assert_eq!(calls_llm(&fallback), 1);
-    assert!(message_containing(
-        &fallback,
-        DECISION_ANCHOR_CONVENTIONAL_FALLBACK_MESSAGE,
+    assert_eq!(calls_llm(&terminal), 0);
+    assert!(!message_containing(
+        &terminal,
+        DECISION_ANCHOR_PROVIDER_UNAVAILABLE_FALLBACK_MESSAGE,
     ));
-    assert!(!machine.is_stopped());
+    assert!(machine.is_stopped());
 }

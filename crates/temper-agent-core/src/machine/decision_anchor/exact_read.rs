@@ -41,7 +41,12 @@ impl DecisionAnchorState {
         order: u64,
         admission: Option<&InvocationTargetAdmission>,
     ) {
-        if matches!(self.phase, Some(AnchorPhase::ConventionalFallback(_))) {
+        if matches!(
+            self.phase,
+            Some(AnchorPhase::ProviderUnavailable {
+                exact_read_required: true
+            })
+        ) {
             let Some(InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(target))) =
                 admission
             else {
@@ -208,21 +213,34 @@ impl DecisionAnchorState {
             Some(InvocationTargetAdmission::Mutation(_)) => self.phase.as_ref().map_or(
                 self.targeted_graph_authority_seen,
                 |phase| match phase {
-                    AnchorPhase::AwaitingExactRead(anchors) => {
+                    AnchorPhase::EnabledComplete(anchors) => {
                         !self.mutation_targets_authorized(anchors, admission)
                     }
                     AnchorPhase::Root(_)
                     | AnchorPhase::Trail(_)
                     | AnchorPhase::Recovery(_)
                     | AnchorPhase::GapRecovery(_)
-                    | AnchorPhase::Exhausted(_) => true,
-                    AnchorPhase::ConventionalFallback(_) => {
-                        !self.conventional_mutation_targets_authorized(admission)
+                    | AnchorPhase::EnabledIncomplete(_) => true,
+                    AnchorPhase::ProviderUnavailable {
+                        exact_read_required,
+                    } => {
+                        *exact_read_required
+                            && !self.conventional_mutation_targets_authorized(admission)
                     }
                 },
             ),
             Some(InvocationTargetAdmission::Read(_) | InvocationTargetAdmission::Ineligible(_))
-            | None => self.phase.is_some() || self.targeted_graph_authority_seen,
+            | None => self
+                .phase
+                .as_ref()
+                .map_or(self.targeted_graph_authority_seen, |phase| {
+                    !matches!(
+                        phase,
+                        AnchorPhase::ProviderUnavailable {
+                            exact_read_required: false
+                        }
+                    )
+                }),
         }
     }
 

@@ -226,7 +226,7 @@ fn immutable_recovery_batch_admits_only_the_next_staged_root_action() {
             ROOT,
             DecisionEvidenceKindV1::FocusedTest,
         ),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::EnabledEvidenceComplete,
     );
     assert_eq!(
         state.on_tool_dispatched(&call("mutation", "write"), 7),

@@ -7,11 +7,12 @@ impl DecisionAnchorState {
         let anchors = match self.phase.as_ref()? {
             AnchorPhase::Root(anchors)
             | AnchorPhase::Trail(anchors)
-            | AnchorPhase::AwaitingExactRead(anchors)
-            | AnchorPhase::ConventionalFallback(anchors) => anchors,
+            | AnchorPhase::EnabledComplete(anchors) => anchors,
             AnchorPhase::Recovery(recovery) => &recovery.anchors,
             AnchorPhase::GapRecovery(recovery) => &recovery.anchors,
-            AnchorPhase::Exhausted(_) => return None,
+            AnchorPhase::EnabledIncomplete(_) | AnchorPhase::ProviderUnavailable { .. } => {
+                return None;
+            }
         };
         anchors.active_root().map(|(binding, _)| binding.as_str())
     }
