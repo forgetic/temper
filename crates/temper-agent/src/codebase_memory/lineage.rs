@@ -56,6 +56,7 @@ struct Selector {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Candidate {
     kind: DecisionAnchorTargetKindV1,
+    provider_kind: DecisionAnchorTargetKindV1,
     value: String,
 }
 
@@ -188,13 +189,13 @@ impl DecisionAnchorLineages {
         let result_target_kinds = match provider_candidates(typed_parts) {
             Some(candidates) => {
                 let kinds = candidates.iter().map(|candidate| candidate.kind).collect();
-                self.register(&root_binding, candidates)?;
+                self.register(&root_binding, candidates.clone())?;
                 if correlation.tool == GraphCorrelationToolV1::SearchGraph
                     && fallback_root.is_none()
                 {
                     self.mark_candidates(
                         &root_binding,
-                        provider_candidates(typed_parts)?,
+                        candidates.clone(),
                         SelectorOrigin::FocusedTestResult,
                     )?;
                 }
@@ -204,6 +205,7 @@ impl DecisionAnchorLineages {
                         correlation.target_kind,
                         input,
                         &root_binding,
+                        &candidates,
                         SelectorOrigin::ImplementationEvidenceResult { traversal_evidence },
                     )?;
                 }
@@ -212,6 +214,7 @@ impl DecisionAnchorLineages {
                         correlation.target_kind,
                         input,
                         &root_binding,
+                        &candidates,
                         SelectorOrigin::CallerEvidenceResult,
                     )?;
                     self.record_caller_evidence_ready(&root_binding);
@@ -421,35 +424,35 @@ fn collect_direct_symbol(
     };
     let selected_short = match (short_from_qualified_field, short) {
         (Some(from_qualified), Some(short)) if from_qualified == short => Some(short),
-        // Explicit provider symbol fields must agree. A display `name` is
-        // considered only as a fallback below, so it cannot contradict an
-        // otherwise complete qualified identity.
         (Some(_), Some(_)) => return None,
         (Some(short), None) | (None, Some(short)) => Some(short),
         (None, None) => None,
     };
-    let selected_short = if qualified.is_none() && selected_short.is_none() {
-        // `name` is a provider record's short symbol only beside an explicit
-        // qualified field. A standalone display name must not manufacture a
-        // decision candidate in arbitrary metadata.
-        if qualified_field.is_some() {
-            match one_symbol_field(values, &["name"])? {
-                Some(value) => Some(canonical_function_name(&value)?),
-                None => None,
-            }
-        } else {
-            None
+    let display_short = if qualified_field.is_some() {
+        match one_symbol_field(values, &["name"])? {
+            Some(value) => Some(canonical_function_name(&value)?),
+            None => None,
         }
     } else {
-        selected_short
+        None
+    };
+    let selected_short = match (selected_short, display_short) {
+        (Some(short), Some(display)) if short == display => Some(short),
+        (Some(_), Some(_)) => return None,
+        (Some(short), None) | (None, Some(short)) => Some(short),
+        (None, None) => None,
     };
     if invalid_qualified_field && selected_short.is_none() {
         return None;
     }
 
     match (qualified, selected_short) {
-        (Some(qualified), Some(short)) if terminal_function_name(&qualified)? != short => None,
-        (Some(qualified), _) => insert_qualified(candidates, qualified),
+        (Some(qualified), Some(short)) => {
+            (terminal_function_name(&qualified)? == short).then_some(())?;
+            insert_qualified(candidates, qualified)?;
+            insert_function(candidates, short)
+        }
+        (Some(qualified), None) => insert_qualified(candidates, qualified),
         (None, Some(short)) => insert_function(candidates, short),
         (None, None) => Some(()),
     }
@@ -592,6 +595,7 @@ fn insert(
     candidates
         .entry(Candidate {
             kind: target_kind,
+            provider_kind: source_kind,
             value,
         })
         .or_insert(0);

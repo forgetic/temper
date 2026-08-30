@@ -44,8 +44,9 @@ pub(super) struct RecoverySelectorKey {
 pub(super) struct RecoverySelectorReference {
     pub(super) purpose: RecoverySelectorPurpose,
     pub(super) selector: Selector,
-    pub(super) source_selector: Option<Selector>,
     pub(super) provider_value: String,
+    pub(super) source_selector: Option<Selector>,
+    pub(super) source_provider_value: Option<String>,
 }
 
 impl RecoverySelectorReference {
@@ -57,6 +58,16 @@ impl RecoverySelectorReference {
                 .as_ref()
                 .filter(|selector| selector.kind == kind)
                 .cloned()
+        }
+    }
+
+    pub(super) fn provider_value(&self, kind: DecisionAnchorTargetKindV1) -> Option<&str> {
+        if self.selector.kind == kind {
+            Some(&self.provider_value)
+        } else if self.source_selector.as_ref()?.kind == kind {
+            self.source_provider_value.as_deref()
+        } else {
+            None
         }
     }
 }
@@ -90,7 +101,12 @@ impl DecisionAnchorLineages {
         else {
             return Ok(());
         };
-        input[field] = Value::String(reference.provider_value.clone());
+        let kind = match field {
+            "function_name" => DecisionAnchorTargetKindV1::FunctionName,
+            "qualified_name" => DecisionAnchorTargetKindV1::QualifiedName,
+            _ => return Err(()),
+        };
+        input[field] = Value::String(reference.provider_value(kind).ok_or(())?.to_string());
         Ok(())
     }
 
