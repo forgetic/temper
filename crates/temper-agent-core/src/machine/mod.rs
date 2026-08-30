@@ -41,14 +41,15 @@ pub use decision_anchor::{
 pub use protocol::{
     AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,
     CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, DiagnosticToolArguments, ModelCallStatus,
-    OperationGeneration, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
-    StreamDelta, ToolCallDenial, ToolCallStatus, ToolResultMetadata, ToolStartPresentation,
+    OperationGeneration, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
+    SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, StreamDelta,
+    ToolCallDenial, ToolCallStatus, ToolResultMetadata, ToolStartPresentation,
 };
 pub use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
     DecisionEvidenceKindV1, GraphExplorationClosedReasonV1, GraphExplorationClosedV1,
-    GraphRecoveryEvidenceKindV1, GraphRecoveryPermittedActionV1, ShellDiscoveryDispositionStatusV1,
-    ShellDiscoveryDispositionV1,
+    GraphRecoveryActionV1, GraphRecoveryEvidenceKindV1, GraphRecoveryPermittedActionV1,
+    ShellDiscoveryDispositionStatusV1, ShellDiscoveryDispositionV1,
 };
 pub use tool_failure::{
     ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason, ToolRetryDisposition,

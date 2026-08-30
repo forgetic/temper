@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use serde::Deserialize;
+use temper_protocol_agent::{AgentSessionState, WorkspaceContext};
 
 use super::evaluation::validation_summary_matches;
 use super::{AcceptanceError, BenchmarkAcceptancePolicyV1};
@@ -54,7 +55,7 @@ pub(super) fn load_trial_set(
     let aggregate = read_json::<BenchmarkAggregateV1>(&root.join("aggregate.json"))?;
     let _aggregate_markdown = read_bytes(&root.join("aggregate.md"))?;
     let expected_manifest = manifest.source().as_bytes();
-    let expected_context = read_json_value(manifest.workspace_context_path())?;
+    let expected_context = manifest.workspace_context();
     let expected_patch = manifest.expected_patch_path().map(read_bytes).transpose()?;
     let mut validations = Vec::with_capacity(aggregate.runs.len());
     let mut artifact_integrity = true;
@@ -78,8 +79,10 @@ pub(super) fn load_trial_set(
         artifact_integrity &= diff.version == DIFF_ARTIFACT_VERSION;
         artifact_integrity &= summary.diff.as_ref() == Some(&diff.statistics);
         artifact_integrity &= read_bytes(&repetition.join("manifest.toml"))? == expected_manifest;
-        artifact_integrity &=
-            read_json_value(&repetition.join("workspace-context.json"))? == expected_context;
+        let context_path = repetition.join("workspace-context.json");
+        let (context, canonical_context) = read_workspace_context(&context_path)?;
+        artifact_integrity &= canonical_context;
+        artifact_integrity &= context_snapshot_matches(expected_context, &context, &summary);
         if let Some(expected_patch) = &expected_patch {
             artifact_integrity &=
                 read_bytes(&repetition.join("expected.patch"))? == *expected_patch;
@@ -125,6 +128,40 @@ pub(super) fn load_trial_set(
     })
 }
 
+fn read_workspace_context(path: &Path) -> Result<(WorkspaceContext, bool), AcceptanceError> {
+    let value = read_json::<serde_json::Value>(path)?;
+    let context = serde_json::from_value::<WorkspaceContext>(value.clone()).map_err(|source| {
+        AcceptanceError::Json {
+            path: path.to_path_buf(),
+            source,
+        }
+    })?;
+    let canonical = serde_json::to_value(&context)
+        .expect("WorkspaceContext serialization to a JSON value cannot fail");
+    Ok((context, canonical == value))
+}
+
+fn context_snapshot_matches(
+    source: &WorkspaceContext,
+    snapshot: &WorkspaceContext,
+    summary: &RunSummaryV1,
+) -> bool {
+    let Some(session_id) = summary.identity.agent_session_id.as_deref() else {
+        return false;
+    };
+    if session_id.trim().is_empty() {
+        return false;
+    }
+    let session = AgentSessionState::new(session_id);
+    if snapshot.agent_session.as_ref() != Some(&session) {
+        return false;
+    }
+
+    let mut expected = source.clone();
+    expected.agent_session = Some(session);
+    snapshot == &expected
+}
+
 fn require_directory(path: &Path) -> Result<(), AcceptanceError> {
     let metadata = fs::symlink_metadata(path).map_err(|source| AcceptanceError::Inspect {
         path: path.to_path_buf(),
@@ -156,10 +193,6 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, AcceptanceE
         path: path.to_path_buf(),
         source,
     })
-}
-
-fn read_json_value(path: &Path) -> Result<serde_json::Value, AcceptanceError> {
-    read_json(path)
 }
 
 fn scan_privacy(root: &Path, forbidden: &[String]) -> Result<bool, AcceptanceError> {

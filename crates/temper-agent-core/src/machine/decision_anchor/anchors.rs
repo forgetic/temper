@@ -2,11 +2,38 @@
 
 use super::*;
 
+impl DecisionAnchorState {
+    pub(in crate::machine) fn active_root_binding(&self) -> Option<&str> {
+        let anchors = match self.phase.as_ref()? {
+            AnchorPhase::Root(anchors)
+            | AnchorPhase::Trail(anchors)
+            | AnchorPhase::EnabledComplete(anchors) => anchors,
+            AnchorPhase::Recovery(recovery) => &recovery.anchors,
+            AnchorPhase::GapRecovery(recovery) => &recovery.anchors,
+            AnchorPhase::EnabledIncomplete(_) | AnchorPhase::ProviderUnavailable { .. } => {
+                return None;
+            }
+        };
+        anchors.active_root().map(|(binding, _)| binding.as_str())
+    }
+}
+
 impl Anchor {
-    fn from_output(turn: usize, lineage: &DecisionAnchorLineageV1) -> Self {
+    fn from_output(call: &PendingCodebaseCall, output: &AnchorOutput) -> Self {
+        let mut evidence = SourceEvidence::default();
+        if output.tool == GraphCorrelationToolV1::TracePath
+            && output.lineage.caller_discovery.is_some()
+        {
+            evidence.record_trace(call.turn);
+            evidence.record_caller_discovery(output.lineage.caller_discovery);
+        }
+        evidence.record_focused_test_discovery(output.tool, output.lineage.focused_test_discovery);
         Self {
-            produced_turn: turn,
-            result_target_kinds: lineage.result_target_kinds.iter().copied().collect(),
+            produced_turn: call.turn,
+            produced_order: call.order,
+            result_target_kinds: output.lineage.result_target_kinds.iter().copied().collect(),
+            exact_graph_narrowing_selected: false,
+            evidence,
         }
     }
 
@@ -14,8 +41,29 @@ impl Anchor {
         !self.result_target_kinds.is_empty()
     }
 
-    fn accepts(&self, call: &PendingCodebaseCall, lineage: &DecisionAnchorLineageV1) -> bool {
-        call.turn > self.produced_turn && self.result_target_kinds.contains(&lineage.target_kind)
+    pub(super) fn supports(&self, action: GraphRecoveryActionV1) -> bool {
+        action == GraphRecoveryActionV1::focused_test_semantic_fallback()
+            || self.result_target_kinds.contains(&action.selector_kind)
+    }
+
+    pub(super) fn accepts(
+        &self,
+        call: &PendingCodebaseCall,
+        lineage: &DecisionAnchorLineageV1,
+    ) -> bool {
+        call.turn > self.produced_turn
+            && (self.result_target_kinds.contains(&lineage.target_kind)
+                || (lineage.target_kind == DecisionAnchorTargetKindV1::NamePattern
+                    && self
+                        .result_target_kinds
+                        .contains(&DecisionAnchorTargetKindV1::FunctionName))
+                || (lineage.target_kind == DecisionAnchorTargetKindV1::QualifiedNamePattern
+                    && self
+                        .result_target_kinds
+                        .contains(&DecisionAnchorTargetKindV1::QualifiedName))
+                || (call.recovery_gap
+                    == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
+                    && lineage.target_kind == DecisionAnchorTargetKindV1::GraphQuery))
     }
 }
 
@@ -27,7 +75,6 @@ impl AnchorForest {
         let mut roots = BTreeMap::new();
         let mut valid = true;
         let mut latest_produced_turn = 0;
-        let mut trace_root_turn: Option<usize> = None;
         let mut saw_root = false;
 
         for finished in finished {
@@ -41,27 +88,29 @@ impl AnchorForest {
             }
             saw_root = true;
             latest_produced_turn = latest_produced_turn.max(finished.call.turn);
-            if output.tool == GraphCorrelationToolV1::TracePath {
-                trace_root_turn = Some(
-                    trace_root_turn.map_or(finished.call.turn, |turn| turn.min(finished.call.turn)),
-                );
-            }
             if roots.len() >= MAX_DECISION_ANCHOR_ROOTS {
-                // Overflowing roots are not partially usable: that would make
-                // policy depend on an arbitrary provider-result subset.
                 valid = false;
                 continue;
             }
             match roots.entry(output.lineage.root_binding.clone()) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(Anchor::from_output(finished.call.turn, &output.lineage));
+                    entry.insert(Anchor::from_output(&finished.call, &output));
                 }
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     let existing = entry.get_mut();
                     existing.produced_turn = existing.produced_turn.min(finished.call.turn);
+                    existing.produced_order = existing.produced_order.min(finished.call.order);
                     existing
                         .result_target_kinds
                         .extend(output.lineage.result_target_kinds.iter().copied());
+                    existing.exact_graph_narrowing_selected |= matches!(
+                        output.lineage.target_kind,
+                        DecisionAnchorTargetKindV1::NamePattern
+                            | DecisionAnchorTargetKindV1::QualifiedNamePattern
+                    );
+                    if output.tool == GraphCorrelationToolV1::TracePath {
+                        existing.evidence.record_trace(finished.call.turn);
+                    }
                 }
             }
         }
@@ -70,7 +119,6 @@ impl AnchorForest {
             roots,
             valid,
             latest_produced_turn,
-            trace_root_turn,
         })
     }
 
@@ -91,11 +139,6 @@ impl AnchorForest {
         }
         let mut progressed = false;
         self.latest_produced_turn = self.latest_produced_turn.max(next.latest_produced_turn);
-        self.trace_root_turn = match (self.trace_root_turn, next.trace_root_turn) {
-            (Some(current), Some(next)) => Some(current.min(next)),
-            (Some(turn), None) | (None, Some(turn)) => Some(turn),
-            (None, None) => None,
-        };
         for (root_binding, next_root) in next.roots {
             match self.roots.entry(root_binding) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
@@ -105,11 +148,17 @@ impl AnchorForest {
                 std::collections::btree_map::Entry::Occupied(mut entry) => {
                     let existing = entry.get_mut();
                     existing.produced_turn = existing.produced_turn.min(next_root.produced_turn);
-                    let before = existing.result_target_kinds.len();
+                    existing.produced_order = existing.produced_order.min(next_root.produced_order);
+                    let kinds_before = existing.result_target_kinds.len();
+                    let evidence_before = existing.evidence.progress_count();
                     existing
                         .result_target_kinds
                         .extend(next_root.result_target_kinds);
-                    progressed |= existing.result_target_kinds.len() > before;
+                    existing.exact_graph_narrowing_selected |=
+                        next_root.exact_graph_narrowing_selected;
+                    existing.evidence.merge(next_root.evidence);
+                    progressed |= existing.result_target_kinds.len() > kinds_before
+                        || existing.evidence.progress_count() > evidence_before;
                 }
             }
         }
@@ -124,32 +173,95 @@ impl AnchorForest {
         self.valid && self.roots.values().any(Anchor::is_consumable)
     }
 
-    pub(super) fn supports(&self, gap: DecisionGap) -> bool {
-        let target_kind = match gap {
-            DecisionGap::Trace => DecisionAnchorTargetKindV1::FunctionName,
-            DecisionGap::Evidence(_) => DecisionAnchorTargetKindV1::QualifiedName,
-        };
-        self.valid
-            && self
-                .roots
-                .values()
-                .any(|root| root.result_target_kinds.contains(&target_kind))
-    }
-
-    pub(super) fn accepts(
+    pub(super) fn accepted_root(
         &self,
         call: &PendingCodebaseCall,
         lineage: &DecisionAnchorLineageV1,
-    ) -> bool {
-        self.valid
-            && lineage.stage == DecisionAnchorLineageStageV1::CarryForward
-            && self
-                .roots
-                .get(&lineage.root_binding)
-                .is_some_and(|root| root.accepts(call, lineage))
+    ) -> Option<String> {
+        (self.valid && lineage.stage == DecisionAnchorLineageStageV1::CarryForward)
+            .then(|| self.roots.get(&lineage.root_binding))
+            .flatten()
+            .filter(|root| root.accepts(call, lineage))
+            .map(|_| lineage.root_binding.clone())
     }
 
     pub(super) fn contains_producer_turn(&self, call: &PendingCodebaseCall) -> bool {
         call.turn <= self.latest_produced_turn
+    }
+
+    pub(super) fn has_any_evidence(&self) -> bool {
+        self.roots
+            .values()
+            .any(|root| root.evidence.progress_count() > 0)
+    }
+
+    pub(super) fn has_complete_evidence(&self) -> bool {
+        self.roots.values().any(|root| root.evidence.is_complete())
+    }
+
+    pub(super) fn root_has_complete_evidence(&self, root_binding: &str) -> bool {
+        self.roots
+            .get(root_binding)
+            .is_some_and(|root| root.evidence.is_complete())
+    }
+
+    pub(super) fn active_evidence(&self) -> SourceEvidence {
+        self.active_root()
+            .map(|(_, root)| root.evidence.clone())
+            .unwrap_or_default()
+    }
+
+    /// Selects one recoverable root by actual typed progress, then by the
+    /// wrapper-independent stable call order which first produced that root.
+    pub(super) fn recovery_root_binding(&self) -> Option<String> {
+        self.recovery_root_binding_excluding(&BTreeSet::new())
+    }
+
+    pub(super) fn recovery_root_binding_excluding(
+        &self,
+        exhausted_roots: &BTreeSet<String>,
+    ) -> Option<String> {
+        self.ranked_roots()
+            .find(|(binding, root)| {
+                !exhausted_roots.contains(binding.as_str())
+                    && !root.evidence.compatible_actions(root).is_empty()
+            })
+            .map(|(binding, _)| binding.clone())
+    }
+
+    pub(super) fn active_has_compatible_actions(&self) -> bool {
+        self.active_root()
+            .is_some_and(|(_, root)| !root.evidence.compatible_actions(root).is_empty())
+    }
+
+    pub(super) fn expected_for_call(
+        &self,
+        call: &PendingCodebaseCall,
+        gap: Option<DecisionGap>,
+        tool: Option<GraphCorrelationToolV1>,
+    ) -> bool {
+        let root = call
+            .admitted_root
+            .as_ref()
+            .and_then(|binding| self.roots.get(binding))
+            .or_else(|| self.active_root().map(|(_, root)| root));
+        root.is_some_and(|root| root.evidence.expects(gap, tool))
+    }
+
+    pub(super) fn active_root(&self) -> Option<(&String, &Anchor)> {
+        self.ranked_roots().next()
+    }
+
+    fn ranked_roots(&self) -> impl Iterator<Item = (&String, &Anchor)> {
+        let mut roots = self.roots.iter().collect::<Vec<_>>();
+        roots.sort_by(|(left_binding, left), (right_binding, right)| {
+            right
+                .evidence
+                .progress_count()
+                .cmp(&left.evidence.progress_count())
+                .then_with(|| left.produced_order.cmp(&right.produced_order))
+                .then_with(|| left_binding.cmp(right_binding))
+        });
+        roots.into_iter()
     }
 }

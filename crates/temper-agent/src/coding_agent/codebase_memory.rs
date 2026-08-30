@@ -5,7 +5,7 @@ use crate::codebase_memory::{
 use std::path::Path;
 use std::time::Duration;
 
-use temper_agent_core::AgentContainmentContext;
+use temper_agent_core::{AgentContainmentContext, LineageAdmissionHandle};
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
 use tongs::tools::ToolRegistry;
 
@@ -19,6 +19,7 @@ pub(super) struct PreparedCodebaseMemoryTools {
 pub(super) struct PreparedCodebaseMemoryGuidance {
     prompt_section: Option<String>,
     registered_safe_names: Vec<String>,
+    lineage_admission: Option<LineageAdmissionHandle>,
 }
 
 impl PreparedCodebaseMemoryTools {
@@ -29,10 +30,12 @@ impl PreparedCodebaseMemoryTools {
         registry: &mut ToolRegistry,
     ) -> PreparedCodebaseMemoryGuidance {
         let registered_safe_names = self.toolset.registered_tool_names().to_vec();
+        let lineage_admission = self.toolset.lineage_admission();
         self.toolset.append_to_registry(registry);
         PreparedCodebaseMemoryGuidance {
             prompt_section: self.prompt_section,
             registered_safe_names,
+            lineage_admission,
         }
     }
 }
@@ -50,6 +53,10 @@ impl PreparedCodebaseMemoryGuidance {
         } else {
             None
         }
+    }
+
+    pub(super) fn lineage_admission(&self) -> Option<LineageAdmissionHandle> {
+        self.lineage_admission.clone()
     }
 }
 
@@ -124,7 +131,10 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
     Some(format!(
         "\nCODEBASE MEMORY:\n\
          You have repository-index tools for architecture, symbol search, code search,\n\
-         and call/impact tracing.\n\n\
+         and call/impact tracing. For work that needs code discovery, use a targeted repository-index\n\
+         query before any shell inventory. Do not precede graph-based source selection with a compound\n\
+         shell inventory; keep repository status, validation, and other operational checks as separate\n\
+         calls after selection.\n\n\
          When work requires implementation selection, caller/data-flow understanding, or\n\
          behavioral preservation, use every successful targeted graph result as a decision\n\
          checkpoint: consume it with the work-item requirements before selecting a dependent\n\
@@ -133,7 +143,42 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          current-root result; select from that provider result, not unrelated discovery. It is\n\
          absent for failures, unavailable tools, and truncated or ambiguous output. A generic decision-anchor\n\
          recovery message means a successful result was unconsumable: make a bounded later targeted\n\
-         correction or stop without a product. Failures and unavailable tools retain conventional\n\
+         correction or stop without a product. Before selecting the initial graph route, derive query\n\
+         terms from the requested behavior and intended repair. If the work item also names an incidental\n\
+         field, accessor, or symbol, begin with a task-semantic graph query that describes the behavior;\n\
+         do not lead with a name pattern or identifier token. Narrow with identifiers returned by that\n\
+         semantic result only afterward. An implementation-purpose result may over-return caller- or\n\
+         test-shaped candidates. Reuse its exact implementation candidate, but never credit those later\n\
+         evidence kinds through direct source reads. Consume the selected implementation source first;\n\
+         only then traverse inbound calls from that exact implementation in a later turn. Admit caller\n\
+         source only from an exact identity returned by that traversal. Among returned implementation\n\
+         candidates, favor the one whose result context matches the requested behavior, then use the\n\
+         shortest provider-derived refinement needed for the decision. Consume the exact behaviorally\n\
+         relevant caller source; do not choose an outer wrapper or incidental caller merely because it can\n\
+         carry a caller evidence label.\n\
+         Only the selected-implementation traversal's provider-returned caller identities are eligible\n\
+         later-turn caller/model selectors. A\n\
+         complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
+         manufacture caller evidence by rereading the traced symbol as its own caller. Initial task-semantic\n\
+         discovery may over-return a test-shaped candidate, but that candidate cannot complete or select\n\
+         focused-test evidence. After implementation traversal and exact traversal-derived caller source\n\
+         evidence are complete, follow the single action named by Decision guidance: issue one same-root\n\
+         `search_graph` / `graph_query` focused-test search in the next turn. Derive its query from the task's\n\
+         behavioral regression intent; never copy a fixture or test name from task text, source, diagnostics,\n\
+         an initial provider result, or an independent root. Then consume only the exact test returned by\n\
+         that semantic search with `get_code_snippet` / `qualified_name` / `focused_test` in one still-later\n\
+         turn. Do not substitute the initial test-shaped candidate, issue a caller-to-test traversal, or\n\
+         make another provider request between the semantic search and its exact returned test source. If\n\
+         the semantic search returns no eligible test, follow the resulting closed stop or fallback guidance\n\
+         without retrying or inventing a selector.\n\
+         After a local\n\
+         decision-evidence denial, follow only the compatible recovery menu and never repeat the denied\n\
+         tool/selector/evidence-kind tuple. Do not batch speculative snippets with a producer, and do not\n\
+         issue the test source read until a later turn has received the semantic search's typed result. When\n\
+         multiple typed routes could fill a decision gap, favor the route whose producer query, returned\n\
+         implementation, and consumer chain are semantically connected to the requested behavior; an\n\
+         evidence-kind declaration alone does not make an incidental route preferable. Keep every source\n\
+         selector provider-derived and on the active root. Failures and unavailable tools retain conventional\n\
          discovery as the fallback. Keep genuinely independent discovery parallel. A call that\n\
          consumes the current result must be in a later model turn; later evidence calls whose\n\
          selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
@@ -304,6 +349,11 @@ for line in sys.stdin:
         .expect("registered tool renders prompt section");
 
         for expected in [
+            "use a targeted repository-index",
+            "query before any shell inventory",
+            "Do not precede graph-based source selection with a compound",
+            "keep repository status, validation, and other operational checks as separate",
+            "calls after selection",
             "implementation selection, caller/data-flow understanding, or",
             "use every successful targeted graph result as a decision",
             "checkpoint: consume it with the work-item requirements",
@@ -314,6 +364,55 @@ for line in sys.stdin:
             "current-root result; select from that provider result, not unrelated discovery.",
             "absent for failures, unavailable tools, and truncated or ambiguous output.",
             "Keep genuinely independent discovery parallel",
+            "derive query",
+            "terms from the requested behavior and intended repair",
+            "also names an incidental",
+            "begin with a task-semantic graph query that describes the behavior",
+            "do not lead with a name pattern or identifier token",
+            "Narrow with identifiers returned by that",
+            "semantic result only afterward",
+            "implementation-purpose result may over-return caller- or",
+            "never credit those later",
+            "Consume the selected implementation source first",
+            "traverse inbound calls from that exact implementation in a later turn",
+            "Admit caller",
+            "source only from an exact identity returned by that traversal",
+            "shortest provider-derived refinement",
+            "relevant caller source",
+            "outer wrapper or incidental caller merely because it can",
+            "carry a caller evidence label",
+            "Only the selected-implementation traversal's provider-returned caller identities",
+            "later-turn caller/model selectors",
+            "complete empty inbound trace settles that selected symbol's graph-caller relationship",
+            "manufacture caller evidence by rereading the traced symbol as its own caller",
+            "Initial task-semantic",
+            "test-shaped candidate, but that candidate cannot complete or select",
+            "focused-test evidence",
+            "exact traversal-derived caller source",
+            "single action named by Decision guidance",
+            "one same-root",
+            "`search_graph` / `graph_query` focused-test search",
+            "behavioral regression intent",
+            "never copy a fixture or test name",
+            "an initial provider result, or an independent root",
+            "exact test returned by",
+            "`get_code_snippet` / `qualified_name` / `focused_test`",
+            "Do not substitute the initial test-shaped candidate",
+            "issue a caller-to-test traversal",
+            "between the semantic search and its exact returned test source",
+            "without retrying or inventing a selector",
+            "follow only the compatible recovery menu",
+            "tool/selector/evidence-kind tuple",
+            "Do not batch speculative snippets with a producer",
+            "issue the test source read until a later turn has received the semantic search's typed result",
+            "multiple typed routes could fill a decision gap",
+            "whose producer query, returned",
+            "implementation, and consumer chain are semantically connected to the requested behavior",
+            "requested behavior; an",
+            "evidence-kind declaration alone does not make an incidental route",
+            "preferable",
+            "Keep every source",
+            "selector provider-derived and on the active root",
             "Do not mutate until consumed",
             "selected current-root implementation, its caller/model",
             "focused behavioral tests",
@@ -358,6 +457,7 @@ for line in sys.stdin:
                 .expect("absent config is ok");
             assert!(absent.prompt_section.is_none());
             assert!(absent.toolset.registered_tool_names().is_empty());
+            assert!(absent.toolset.lineage_admission().is_none());
 
             let role_mismatch = config(&dir, CodebaseMemoryMode::Required, vec!["reviewer"]);
             let mismatch = prepare_codebase_memory_tools(
@@ -392,6 +492,7 @@ for line in sys.stdin:
                 .prompt_section
                 .clone()
                 .expect("registered tools produce prompt section");
+            assert!(prepared.toolset.lineage_admission().is_some());
             for expected in [
                 "CODEBASE MEMORY",
                 "repository-index tools for architecture, symbol search, code search",
@@ -436,6 +537,10 @@ for line in sys.stdin:
             let empty_registry = tongs::tools::ToolRegistry::new();
             let mut registry = tongs::tools::ToolRegistry::new();
             let guidance = prepared.append_to_registry(&mut registry);
+            assert!(
+                guidance.lineage_admission().is_some(),
+                "the finalized codebase-memory composition retains its run-local admission handle"
+            );
             assert!(
                 guidance
                     .prompt_section_for_registry(&empty_registry)

@@ -179,6 +179,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
                     truncated: false,
                 })),
                 shell_discovery_disposition: None,
+                recovery_reference_disposition: None,
             }),
         ),
         event(
@@ -199,6 +200,7 @@ fn canonical_run() -> Vec<AgentRunEventV1> {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             }),
         ),
         event(

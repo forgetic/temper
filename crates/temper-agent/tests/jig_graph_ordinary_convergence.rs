@@ -254,7 +254,7 @@ fn graph_locality_fake() -> FakeLlm {
                 )
             }
             3 => {
-                assert!(saw("codebase-memory is disabled for this run"));
+                assert!(saw("no compatible provider-derived recovery action remains"));
                 tool_replies(&[
                     (
                         "write-after-graph-stops",

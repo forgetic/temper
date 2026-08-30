@@ -9,7 +9,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use temper_protocol_activity::{GraphExplorationClosedV1, ShellDiscoveryDispositionV1};
+use temper_protocol_activity::{
+    DecisionAnchorLineageV1, GraphCorrelationToolV1, GraphCorrelationV1, GraphExplorationClosedV1,
+    ShellDiscoveryDispositionV1,
+};
 use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, ToolCall, UserContent, UserMessage,
 };
@@ -25,18 +28,20 @@ pub type ToolStartPresentationFn =
 /// Compatibility name retained for the existing run-builder parameter.
 pub type ArgPreviewFn = ToolStartPresentationFn;
 
-use crate::ToolInvocationCatalog;
 use crate::model_failure::ModelFailureDiagnostic;
+use crate::{LineageAdmissionHandle, ToolInvocationCatalog};
 
 use super::batching::{PendingTool, plan_batches};
 use super::decision_anchor::{
-    DECISION_ANCHOR_CONVERGENCE_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState,
-    DecisionAnchorTransition,
+    DECISION_ANCHOR_CONVERGENCE_MESSAGE, DECISION_ANCHOR_PROVIDER_UNAVAILABLE_FALLBACK_MESSAGE,
+    DECISION_ANCHOR_RECOVERY_MESSAGE, DecisionAnchorState, DecisionAnchorTransition,
+    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 use super::messages::{error_assistant, tool_result_message};
 use super::ordinary_failure::OrdinaryFailureCircuit;
 use super::protocol::{
-    AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration, OperationGeneration,
+    AgentCompletion, AgentEvent, AgentRequest, AgentStop, BatchGeneration,
+    CODEBASE_MEMORY_TOOL_PREFIX, OperationGeneration, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
     ToolCallDenial, ToolStartPresentation,
 };
 use super::tool_failure::ToolFailureDiagnostic;
@@ -73,6 +78,9 @@ pub struct AgentMachine {
     invocation_catalog: Arc<ToolInvocationCatalog>,
     /// Typed local failures for calls scrubbed by the invocation boundary.
     invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
+    /// Content-free traversal kinds whose required selector was unusable
+    /// before invocation scrubbing.
+    incomplete_graph_selectors: BTreeMap<String, GraphCorrelationToolV1>,
     /// Bounded per-run ordinary-tool identities. This state contains only
     /// process-local digests and is never projected through the protocol.
     ordinary_failures: OrdinaryFailureCircuit,
@@ -86,16 +94,21 @@ pub struct AgentMachine {
     /// Per-run graph guard enabled whenever codebase-memory tools are present,
     /// including read-only roles with no mutation authorization.
     decision_anchors: Option<DecisionAnchorState>,
+    /// Optional wrapper-owned run-local selector resolver. Its results are
+    /// closed process-local policy values and never enter events or messages.
+    lineage_admission: Option<LineageAdmissionHandle>,
     /// Fixed convergence instruction queued once complete current-root evidence
     /// closes graph exploration.
-    decision_anchor_convergence: bool,
+    decision_anchor_complete: bool,
     /// Generic, privacy-safe recovery instruction queued by an unconsumable
     /// anchor. It is distinct from operator steering.
     decision_anchor_recovery: bool,
     /// Actionable, privacy-safe guidance for bounded missing-evidence recovery.
     decision_anchor_gap_recovery: Option<GraphExplorationClosedV1>,
-    /// Stops the run after the active batch drains once bounded recovery fails.
-    decision_anchor_exhausted: bool,
+    /// Per-result closed active-root classifications queued after tool results.
+    decision_anchor_guidance: Vec<String>,
+    /// Stops the run after incomplete enabled evidence exhausts bounded recovery.
+    decision_anchor_incomplete: bool,
     /// The most recent assistant message (the run's product on completion).
     last_assistant: Option<AssistantMessage>,
     /// Structured terminal provider/model failure, kept independently from
@@ -160,14 +173,17 @@ impl AgentMachine {
             turn: 0,
             invocation_catalog,
             invocation_rejections: BTreeMap::new(),
+            incomplete_graph_selectors: BTreeMap::new(),
             ordinary_failures: OrdinaryFailureCircuit::default(),
             pending_batches: VecDeque::new(),
             turn_results: Vec::new(),
             decision_anchors,
-            decision_anchor_convergence: false,
+            lineage_admission: None,
+            decision_anchor_complete: false,
             decision_anchor_recovery: false,
             decision_anchor_gap_recovery: None,
-            decision_anchor_exhausted: false,
+            decision_anchor_guidance: Vec::new(),
+            decision_anchor_incomplete: false,
             last_assistant: None,
             model_failure: None,
             queued_steering: Vec::new(),
@@ -187,6 +203,12 @@ impl AgentMachine {
         self
     }
 
+    /// Installs the trusted run-local pre-provider lineage resolver.
+    pub fn with_lineage_admission(mut self, admission: LineageAdmissionHandle) -> Self {
+        self.lineage_admission = Some(admission);
+        self
+    }
+
     /// The current conversation (test/observability accessor).
     pub fn messages(&self) -> &[Message] {
         &self.messages
@@ -198,10 +220,11 @@ impl AgentMachine {
         self.active_tool_batch = None;
         self.pending_batches.clear();
         self.cancellation_generation = None;
-        self.decision_anchor_convergence = false;
+        self.decision_anchor_complete = false;
         self.decision_anchor_recovery = false;
         self.decision_anchor_gap_recovery = None;
-        self.decision_anchor_exhausted = false;
+        self.decision_anchor_guidance.clear();
+        self.decision_anchor_incomplete = false;
         let final_message = self
             .last_assistant
             .clone()
@@ -278,8 +301,14 @@ impl AgentMachine {
             }));
             self.messages.extend(steering);
         }
-        if self.decision_anchor_convergence {
-            self.decision_anchor_convergence = false;
+        for guidance in std::mem::take(&mut self.decision_anchor_guidance) {
+            self.messages.push(Message::User(UserMessage {
+                content: UserContent::Text(guidance),
+                timestamp: 0,
+            }));
+        }
+        if self.decision_anchor_complete {
+            self.decision_anchor_complete = false;
             self.messages.push(Message::User(UserMessage {
                 content: UserContent::Text(DECISION_ANCHOR_CONVERGENCE_MESSAGE.to_string()),
                 timestamp: 0,
@@ -294,10 +323,7 @@ impl AgentMachine {
         }
         if let Some(details) = self.decision_anchor_gap_recovery.take() {
             self.messages.push(Message::User(UserMessage {
-                content: UserContent::Text(format!(
-                    "{}. Do not mutate until every missing evidence kind is complete.",
-                    details.model_message()
-                )),
+                content: UserContent::Text(details.model_message()),
                 timestamp: 0,
             }));
         }
@@ -320,7 +346,8 @@ impl AgentMachine {
     fn on_llm_responded(&mut self, mut assistant: AssistantMessage) -> Vec<AgentRequest> {
         // Normalize before the assistant turn is emitted, retained, inspected
         // by policy, previewed, batched, or dispatched.
-        self.invocation_rejections = self.invocation_catalog.canonicalize_message(&mut assistant);
+        (self.invocation_rejections, self.incomplete_graph_selectors) =
+            self.invocation_catalog.canonicalize_message(&mut assistant);
         let mut requests = vec![AgentRequest::Emit(AgentEvent::AssistantMessage {
             content: assistant.content.clone(),
         })];
@@ -376,12 +403,106 @@ impl AgentMachine {
         let mut operations = BTreeMap::new();
         let mut requests = Vec::new();
         let model_turn = self.turn.saturating_sub(1);
-        for call in calls {
-            let rejection = self.invocation_rejections.get(&call.id).cloned();
-            let denial = self
-                .decision_anchors
-                .as_mut()
-                .and_then(|state| state.on_tool_dispatched(&call, model_turn));
+        let active_decision_root = self
+            .decision_anchors
+            .as_ref()
+            .and_then(|state| state.active_root_binding())
+            .map(str::to_string);
+        let resolved_admissions = calls
+            .iter()
+            .map(|call| {
+                (!self.invocation_rejections.contains_key(&call.id)
+                    && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX))
+                .then(|| {
+                    self.lineage_admission.as_ref().map(|admission| {
+                        admission.resolve_for_active_root_with_recovery(
+                            &call.name,
+                            &call.arguments,
+                            active_decision_root.as_deref(),
+                        )
+                    })
+                })
+                .flatten()
+            })
+            .collect::<Vec<_>>();
+        let closed_admissions = resolved_admissions
+            .iter()
+            .map(|resolved| resolved.as_ref().map(|(admission, _)| admission.clone()))
+            .collect::<Vec<_>>();
+        let incomplete_graph_selectors = calls
+            .iter()
+            .map(|call| self.incomplete_graph_selectors.get(&call.id).copied())
+            .collect::<Vec<_>>();
+        let recovery_reference_dispositions = resolved_admissions
+            .iter()
+            .zip(&incomplete_graph_selectors)
+            .map(|(resolved, incomplete)| {
+                resolved
+                    .as_ref()
+                    .and_then(|(_, disposition)| *disposition)
+                    .or_else(|| {
+                        (*incomplete == Some(GraphCorrelationToolV1::TracePath)).then_some(
+                            temper_protocol_activity::GraphRecoveryReferenceDispositionV1::Missing,
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        let trace_recovery_selectors = calls
+            .iter()
+            .zip(&incomplete_graph_selectors)
+            .map(|(call, incomplete)| {
+                (call.name == GraphCorrelationToolV1::TracePath.public_name()
+                    || *incomplete == Some(GraphCorrelationToolV1::TracePath))
+                .then(|| {
+                    self.lineage_admission.as_ref().and_then(|admission| {
+                        admission.trace_recovery_selector(active_decision_root.as_deref()?)
+                    })
+                })
+                .flatten()
+            })
+            .collect::<Vec<_>>();
+        let invocation_targets = calls
+            .iter()
+            .map(|call| {
+                (!self.invocation_rejections.contains_key(&call.id))
+                    .then(|| {
+                        self.lineage_admission.as_ref().map(|admission| {
+                            admission.resolve_invocation_targets(&call.name, &call.arguments)
+                        })
+                    })
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        if let Some(batch) = self.pending_batches.front_mut() {
+            for (pending, admission) in batch.iter_mut().zip(invocation_targets.iter().cloned()) {
+                pending.invocation_targets = admission;
+            }
+        }
+        let denials = if let Some(state) = self.decision_anchors.as_mut() {
+            let denials = state.on_tool_batch_dispatched_with_closed_inputs(
+                &calls,
+                model_turn,
+                &closed_admissions,
+                &invocation_targets,
+                &incomplete_graph_selectors,
+                &trace_recovery_selectors,
+            );
+            self.decision_anchor_guidance
+                .extend(state.take_model_guidance());
+            denials
+        } else {
+            vec![None; calls.len()]
+        };
+        for ((call, denial), recovery_reference_disposition) in calls
+            .into_iter()
+            .zip(denials)
+            .zip(recovery_reference_dispositions)
+        {
+            let incomplete_staged_selector = self.incomplete_graph_selectors.contains_key(&call.id)
+                && matches!(denial, Some(ToolCallDenial::GraphExplorationClosed(_)));
+            let rejection = (!incomplete_staged_selector)
+                .then(|| self.invocation_rejections.get(&call.id).cloned())
+                .flatten();
             let shell_discovery_disposition = (rejection.is_none()
                 && call.name == "bash"
                 && matches!(&denial, Some(ToolCallDenial::DecisionAnchorMutation)))
@@ -404,6 +525,7 @@ impl AgentMachine {
                 arg_preview: presentation.arg_preview,
                 diagnostic_arguments: presentation.diagnostic_arguments,
                 shell_discovery_disposition,
+                recovery_reference_disposition,
             }));
             let redirect = (rejection.is_none() && denial.is_none())
                 .then(|| self.ordinary_failures.redirect_for(&call))
@@ -461,6 +583,43 @@ impl AgentMachine {
         // conversation, avoiding a second parallel instrumentation path.
         let mut requests = Vec::new();
 
+        // Resolve a typed source target only after the trusted wrapper has
+        // returned its valid lineage. The opaque outcome remains attached to
+        // this in-memory pending call and is never projected into protocol.
+        let is_typed_source_call = self.pending_batches.front().is_some_and(|batch| {
+            batch.iter().any(|pending| {
+                pending.call.id == id
+                    && pending.call.name == GraphCorrelationToolV1::GetCodeSnippet.public_name()
+            })
+        });
+        let source_target = (is_typed_source_call
+            && !output.is_error
+            && failure.is_none()
+            && !self.invocation_rejections.contains_key(&id))
+        .then(|| {
+            let details = output.details.as_ref()?;
+            let correlation = serde_json::from_value::<GraphCorrelationV1>(
+                details.get(SAFE_GRAPH_CORRELATION_DETAIL_KEY)?.clone(),
+            )
+            .ok()?;
+            let lineage = serde_json::from_value::<DecisionAnchorLineageV1>(
+                details
+                    .get(SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY)?
+                    .clone(),
+            )
+            .ok()?;
+            (correlation.is_valid()
+                && correlation.tool == GraphCorrelationToolV1::GetCodeSnippet
+                && lineage.is_valid_for(&correlation))
+            .then(|| {
+                self.lineage_admission
+                    .as_ref()
+                    .map(|admission| admission.resolve_source_target(&lineage))
+            })
+            .flatten()
+        })
+        .flatten();
+
         // Record the result into the in-flight (front) batch.
         let mut completed_call = None;
         if let Some(batch) = self.pending_batches.front_mut() {
@@ -468,6 +627,7 @@ impl AgentMachine {
                 if !self.invocation_rejections.contains_key(&id) {
                     completed_call = Some(pending.call.clone());
                 }
+                pending.source_target = source_target;
                 pending.output = Some(output);
                 pending.failure = failure.clone();
             }
@@ -494,11 +654,18 @@ impl AgentMachine {
                     .iter()
                     .filter_map(|pending| {
                         pending.output.as_ref().map(|output| {
-                            (pending.call.id.as_str(), pending.call.name.as_str(), output)
+                            (
+                                pending.call.id.as_str(),
+                                pending.call.name.as_str(),
+                                output,
+                                pending.source_target.as_ref(),
+                                !output.is_error && pending.failure.is_none(),
+                            )
                         })
                     })
                     .collect::<Vec<_>>();
-                match state.on_tool_batch_finished(&completed) {
+                let transition = state.on_tool_batch_finished_with_targets(&completed);
+                match transition {
                     DecisionAnchorTransition::Unchanged => {}
                     DecisionAnchorTransition::RecoveryNeeded => {
                         self.decision_anchor_recovery = true;
@@ -506,22 +673,29 @@ impl AgentMachine {
                     DecisionAnchorTransition::GapRecoveryNeeded => {
                         self.decision_anchor_gap_recovery = state.recovery_details();
                     }
-                    DecisionAnchorTransition::RecoveryExhausted => {
-                        self.decision_anchor_exhausted = true;
+                    DecisionAnchorTransition::EnabledEvidenceIncomplete => {
+                        self.decision_anchor_incomplete = true;
                     }
-                    DecisionAnchorTransition::Converged => {
-                        self.decision_anchor_convergence = true;
+                    DecisionAnchorTransition::ProviderUnavailableFallback => {
+                        self.decision_anchor_guidance.push(
+                            DECISION_ANCHOR_PROVIDER_UNAVAILABLE_FALLBACK_MESSAGE.to_string(),
+                        );
                     }
-                    DecisionAnchorTransition::ExplorationExhausted => {}
+                    DecisionAnchorTransition::EnabledEvidenceComplete => {
+                        self.decision_anchor_complete = true;
+                    }
                 }
+                self.decision_anchor_guidance
+                    .extend(state.take_model_guidance());
             }
             for pending in &batch {
                 self.invocation_rejections.remove(&pending.call.id);
+                self.incomplete_graph_selectors.remove(&pending.call.id);
             }
             self.turn_results.extend(batch);
         }
 
-        if self.decision_anchor_exhausted {
+        if self.decision_anchor_incomplete {
             requests.extend(self.finish(AgentStop::DecisionAnchorRecoveryExhausted));
             return requests;
         }

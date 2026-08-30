@@ -239,6 +239,10 @@ crates/temper-agent/src/activity/normalizer.rs
 # bounded fallback, and mutation gating against the same state-machine fixture.
 crates/temper-agent-core/src/machine/tests/decision_anchor.rs
 
+# Opaque decision-chain integration coverage keeps every bypass and the successful
+# exact-read route on one scripted provider/model fixture for comparable ordering.
+crates/temper-agent/tests/support/opaque_decision_chain/fake.rs
+
 # Typed lineage extraction cases share provider-shape fixtures across canonical
 # aliases, ambiguity rejection, mirrored parts, and privacy-safe digest evidence.
 crates/temper-agent/src/codebase_memory/tests/lineage.rs
@@ -262,3 +266,7 @@ crates/temper-testing/src/live_manifest/bundle_tests.rs
 # Live bundle loading keeps resolved fixture validation, cadence policy, and
 # typed scenario assembly together while provider and action parsing stay split.
 crates/temper-testing/src/live_manifest/bundle.rs
+
+# Sub-agent integration coverage shares one provider/runtime harness across tool-loop,
+# event forwarding, cancellation, steering, and budget-exhaustion composition cases.
+crates/temper-agent-core/tests/jig_sub_agent.rs

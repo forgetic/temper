@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
+use temper_protocol_activity::GraphCorrelationToolV1;
 use tongs::model::{AssistantMessage, ContentBlock, ToolCall};
 use tongs::provider::ToolDef;
 use tongs::tools::{ToolEffects, ToolRegistry};
@@ -54,6 +55,10 @@ pub struct CanonicalInvocation {
     /// Present when the call must settle locally without consulting the tool
     /// registry. The call itself has already been scrubbed in this case.
     pub rejection: Option<ToolFailureDiagnostic>,
+    /// Closed shape retained when a locally rejected traversal call did not
+    /// carry its usable required selector. The supplied name and arguments
+    /// are scrubbed.
+    pub(crate) incomplete_graph_selector: Option<GraphCorrelationToolV1>,
 }
 
 /// Registry-derived invocation contract used for definitions, effects, and
@@ -155,12 +160,18 @@ impl ToolInvocationCatalog {
             return CanonicalInvocation {
                 call,
                 rejection: None,
+                incomplete_graph_selector: None,
             };
         }
         let Some(canonical_name) = self.resolve_name(api, &call.name).map(str::to_string) else {
-            return rejected(call, ToolFailureReason::UnknownTool);
+            return rejected(call, ToolFailureReason::UnknownTool, None);
         };
         call.name = canonical_name.clone();
+        let incomplete_graph_selector =
+            incomplete_required_graph_selector(&canonical_name, &call.arguments);
+        if let Some(tool) = incomplete_graph_selector {
+            return rejected(call, ToolFailureReason::InvalidArguments, Some(tool));
+        }
         if normalize_arguments(api, &canonical_name, &mut call.arguments).is_err()
             || !arguments_match(
                 &self
@@ -172,21 +183,26 @@ impl ToolInvocationCatalog {
                 &call.arguments,
             )
         {
-            return rejected(call, ToolFailureReason::InvalidArguments);
+            return rejected(call, ToolFailureReason::InvalidArguments, None);
         }
         CanonicalInvocation {
             call,
             rejection: None,
+            incomplete_graph_selector: None,
         }
     }
 
     /// Canonicalizes every tool block in one assistant turn and returns typed
-    /// local failures keyed by provider call id.
+    /// local failures plus content-free incomplete traversal kinds keyed by call id.
     pub(crate) fn canonicalize_message(
         &self,
         assistant: &mut AssistantMessage,
-    ) -> BTreeMap<String, ToolFailureDiagnostic> {
+    ) -> (
+        BTreeMap<String, ToolFailureDiagnostic>,
+        BTreeMap<String, GraphCorrelationToolV1>,
+    ) {
         let mut rejections = BTreeMap::new();
+        let mut incomplete_graph_selectors = BTreeMap::new();
         let api = assistant.api.clone();
         for block in &mut assistant.content {
             let ContentBlock::ToolCall(call) = block else {
@@ -194,11 +210,14 @@ impl ToolInvocationCatalog {
             };
             let normalized = self.canonicalize(&api, call.clone());
             *call = normalized.call;
+            if let Some(tool) = normalized.incomplete_graph_selector {
+                incomplete_graph_selectors.insert(call.id.clone(), tool);
+            }
             if let Some(rejection) = normalized.rejection {
                 rejections.insert(call.id.clone(), rejection);
             }
         }
-        rejections
+        (rejections, incomplete_graph_selectors)
     }
 
     fn resolve_name(&self, api: &str, supplied: &str) -> Option<&str> {
@@ -223,13 +242,34 @@ impl ToolInvocationCatalog {
     }
 }
 
-fn rejected(mut call: ToolCall, reason: ToolFailureReason) -> CanonicalInvocation {
+fn rejected(
+    mut call: ToolCall,
+    reason: ToolFailureReason,
+    incomplete_graph_selector: Option<GraphCorrelationToolV1>,
+) -> CanonicalInvocation {
     call.name = REJECTED_TOOL_NAME.to_string();
     call.arguments = Value::Object(Map::new());
     CanonicalInvocation {
         call,
         rejection: Some(ToolFailureDiagnostic::schema(reason)),
+        incomplete_graph_selector,
     }
+}
+
+fn incomplete_required_graph_selector(
+    name: &str,
+    arguments: &Value,
+) -> Option<GraphCorrelationToolV1> {
+    let tool = GraphCorrelationToolV1::from_public_name(name)?;
+    if tool != GraphCorrelationToolV1::TracePath {
+        return None;
+    }
+    arguments
+        .as_object()
+        .and_then(|arguments| arguments.get("function_name"))
+        .and_then(Value::as_str)
+        .is_none_or(|selector| selector.trim().is_empty())
+        .then_some(tool)
 }
 
 fn normalize_arguments(api: &str, name: &str, arguments: &mut Value) -> Result<(), ()> {

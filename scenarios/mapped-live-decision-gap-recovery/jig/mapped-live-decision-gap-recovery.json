@@ -5,7 +5,7 @@
       "when": { "messages_contain": ["__mapped_live_decision_gap_recovery_fixture_runtime__"] },
       "sequence": [
         {
-          "text": "The live fixture owns transient selectors; only closed aggregate recovery and convergence facts may be retained."
+          "text": "The live fixture owns transient selectors, roots, provider data, and private runtime detail; only closed root-coherence, recovery, classification, and convergence aggregates may be retained."
         }
       ]
     }

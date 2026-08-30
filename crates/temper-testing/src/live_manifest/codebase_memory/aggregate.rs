@@ -2,6 +2,27 @@
 
 use super::{FakeMcpServer, McpToolCallEvidence};
 
+pub(super) fn is_current_root_source_checkpoint(checkpoint: Option<&str>) -> bool {
+    matches!(
+        checkpoint,
+        Some(
+            "served_current_root_source"
+                | "served_result_derived_consumer"
+                | "served_typed_lineage_consumer"
+                | "served_mapped_current_root_source"
+                | "served_convergence_source"
+                | "served_gap_sibling_source"
+                | "served_gap_active_source"
+                | "served_focus_implementation_source"
+                | "served_focus_caller_source"
+                | "served_focus_test_source"
+                | "served_selection_implementation_source"
+                | "served_selection_caller_source"
+                | "served_selection_focused_source"
+        )
+    )
+}
+
 pub(super) fn privacy_safe_checkpoints(
     mcp: &FakeMcpServer,
     calls: &[McpToolCallEvidence],
@@ -28,11 +49,29 @@ pub(super) fn privacy_safe_checkpoints(
         ],
         Some("mapped-live-decision-gap-recovery") => &[
             "served_gap_root",
-            "served_gap_refinement",
-            "served_gap_trace",
-            "served_gap_source",
-            "served_gap_duplicate",
-            "served_gap_recovery_source",
+            "served_gap_sibling_source",
+            "served_gap_active_trace",
+            "served_gap_active_source",
+        ],
+        Some("mapped-live-exact-source-selection") => &[
+            "served_selection_root",
+            "served_selection_implementation_source",
+            "served_selection_caller_trace",
+            "served_selection_caller_source",
+            "served_selection_generic",
+            "served_selection_forest",
+            "served_selection_focused_fallback",
+            "served_selection_focused_source",
+        ],
+        Some("mapped-live-focused-test-source-relevance") => &[
+            "served_focus_root",
+            "served_focus_implementation_source",
+            "served_focus_caller_trace",
+            "served_focus_caller_source",
+            "served_focus_non_progress",
+            "served_focus_empty_traversal",
+            "served_focus_fallback",
+            "served_focus_test_source",
         ],
         _ => return Vec::new(),
     };

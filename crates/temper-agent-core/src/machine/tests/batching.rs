@@ -401,6 +401,7 @@ fn graph_result_before_serialized_bash_denial_retains_closed_disposition() {
         graph_start,
         AgentEvent::ToolStart {
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
             ..
         }
     ));

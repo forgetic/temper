@@ -156,7 +156,7 @@ impl ToolFailureReason {
                 "tool arguments did not match the canonical schema; correct the call and try again"
             }
             Self::PolicyPrecondition => {
-                "workspace mutation blocked until the successful decision anchor is consumed through later result-derived codebase-memory evidence for the implementation, caller/model, and focused behavioral tests"
+                super::decision_anchor::DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE
             }
             Self::AccessDenied => {
                 "tool execution was denied by policy; use only authorized resources or satisfy the required precondition"

@@ -18,7 +18,7 @@ pub(super) fn successful_graph_batch(finished: &[FinishedCodebaseCall<'_>]) -> b
     finished.iter().any(|finished| !finished.output.is_error)
 }
 
-fn valid_graph_correlation(name: &str, output: &ToolOutput) -> bool {
+pub(super) fn valid_graph_correlation(name: &str, output: &ToolOutput) -> bool {
     if output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
         return false;
     }
@@ -38,7 +38,9 @@ pub(super) fn has_incompatible_targeted_result(
         let output = anchor_output(finished.name, finished.output);
         match output {
             Some(output) if output.lineage.stage == DecisionAnchorLineageStageV1::CarryForward => {
-                !active.accepts(&finished.call, &output.lineage)
+                active
+                    .accepted_root(&finished.call, &output.lineage)
+                    .is_none()
             }
             Some(_) => false,
             None => valid_graph_correlation(finished.name, finished.output),

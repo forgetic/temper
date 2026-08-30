@@ -1,0 +1,13 @@
+{
+  "phases": [
+    {
+      "name": "mapped-live-exact-source-selection-runtime",
+      "when": { "messages_contain": ["__mapped_live_exact_source_selection_fixture_runtime__"] },
+      "sequence": [
+        {
+          "text": "The live fixture owns transient runtime data; retain only closed early-read and post-source ordering, typed evidence, the declared selection target, local policy outcome, privacy, and convergence facts."
+        }
+      ]
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 
 //! End-to-end direct benchmark coverage through the real `temper-agent` process.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
@@ -110,6 +111,7 @@ cache_warmth = "cold"
             .contains("not representative LLM performance")
     );
 
+    let mut session_ids = BTreeSet::new();
     for repetition in ["001", "002"] {
         let root = output_dir.join("repetitions").join(repetition);
         let result: WorkspaceResult =
@@ -153,6 +155,19 @@ cache_warmth = "cold"
 
         let run: serde_json::Value =
             serde_json::from_slice(&fs::read(root.join("run.json")).unwrap()).unwrap();
+        let session_id = run["identity"]["agent_session_id"]
+            .as_str()
+            .expect("direct run has an agent session identity");
+        assert!(!session_id.trim().is_empty());
+        assert!(session_ids.insert(session_id.to_string()));
+        let context: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("workspace-context.json")).unwrap())
+                .unwrap();
+        assert_eq!(context["agent_session"]["session_id"], session_id);
+        assert_trace_session(
+            &fs::read_to_string(root.join("trace.export.jsonl")).unwrap(),
+            session_id,
+        );
         assert_eq!(run["benchmark"]["mode"], "harness");
         assert_eq!(
             run["workspace_result"]["title"],
@@ -162,7 +177,11 @@ cache_warmth = "cold"
         assert_eq!(run["validation"]["succeeded"], 2);
         assert_eq!(run["host"]["provider_region"], "loopback");
         assert_eq!(run["host"]["observed_models"][0]["provider"], "deepseek");
-        assert!(run["metrics"]["model"]["calls"].as_u64().unwrap() >= 4);
+        assert_eq!(
+            run["metrics"]["model"]["calls"].as_u64().unwrap(),
+            3,
+            "the Jig batches both independent writes before submit and terminal turns"
+        );
         assert!(
             fs::read_to_string(root.join("trace.export.jsonl"))
                 .unwrap()
@@ -174,6 +193,20 @@ cache_warmth = "cold"
                 .contains("not representative LLM performance")
         );
     }
+    assert_eq!(session_ids.len(), 2);
+}
+
+fn assert_trace_session(trace: &str, expected: &str) {
+    let mut events = 0;
+    for line in trace.lines() {
+        let record: serde_json::Value = serde_json::from_str(line).unwrap();
+        if record["type"] != "agent_run_event_v1" {
+            continue;
+        }
+        events += 1;
+        assert_eq!(record["event"]["agent_session_id"], expected);
+    }
+    assert!(events > 0, "canonical trace contains no agent events");
 }
 
 fn write_context(root: &Path) {
@@ -221,11 +254,7 @@ fn write_jig_script(root: &Path) {
                                 "content": "changed benchmark fixture\n"
                             }
                         }
-                    }],
-                    "stop": "tool_calls"
-                },
-                {
-                    "turns": [{
+                    }, {
                         "tool_call": {
                             "id": "call_write_output",
                             "name": "write",

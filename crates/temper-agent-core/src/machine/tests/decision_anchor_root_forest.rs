@@ -5,7 +5,7 @@ use super::*;
 const THIRD_ROOT: &str = "00000000-0000-4000-8000-000000000003";
 
 #[test]
-fn three_discovery_roots_jointly_cover_next_turn_trace_and_sources() {
+fn independent_roots_cannot_jointly_authorize_mutation() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     for id in ["affinity-root", "retry-root", "caller-root"] {
         state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), 0);
@@ -101,11 +101,11 @@ fn three_discovery_roots_jointly_cover_next_turn_trace_and_sources() {
                 &affinity_trace,
             ),
         ]),
-        DecisionAnchorTransition::Converged,
+        DecisionAnchorTransition::Unchanged,
     );
     assert!(
-        !state.blocks_mutation("write"),
-        "each descendant remains bound to its own root while the forest jointly covers evidence"
+        state.blocks_mutation("write"),
+        "caller and focused-test evidence on sibling roots cannot complete the active root"
     );
 }
 
@@ -205,7 +205,7 @@ fn later_independent_root_expansion_is_bounded() {
 }
 
 #[test]
-fn independent_trace_root_is_evidence_for_later_forest_sources() {
+fn independent_trace_root_cannot_authorize_other_root_sources() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     for (id, tool) in [
         ("trace-root", "codebase_memory_trace_path"),
@@ -279,5 +279,8 @@ fn independent_trace_root_is_evidence_for_later_forest_sources() {
             &test_source,
         ),
     ]);
-    assert!(!state.blocks_mutation("write"));
+    assert!(
+        state.blocks_mutation("write"),
+        "trace and source evidence owned by different roots must stay isolated"
+    );
 }
