@@ -84,6 +84,7 @@ fn balanced_quotes(segment: &str) -> bool {
 fn source_neutral_segment(segment: &str, substitution: bool) -> bool {
     let words = segment.split_ascii_whitespace().collect::<Vec<_>>();
     match words.as_slice() {
+        ["true"] | ["false"] => true,
         ["cd", path] => safe_word(path),
         ["cargo", "fmt", "--check"] => true,
         ["cargo", "test", arguments @ ..] => arguments.iter().all(|word| safe_word(word)),
