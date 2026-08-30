@@ -227,14 +227,18 @@ impl DecisionAnchorLineages {
             self.recovery_reference_selectors.insert(
                 reference.clone(),
                 RecoverySelectorReference {
+                    root_binding: root.to_string(),
                     purpose,
                     selector,
                     provider_value: candidate.value.clone(),
                     source_selector: source_selector.clone(),
                     source_provider_value: source_selector.map(|_| candidate.value),
+                    state: RecoverySelectorState::Available,
                 },
             );
-            self.recovery_references.insert(key, reference);
+            if let Some(stale) = self.recovery_references.insert(key, reference) {
+                self.recovery_reference_selectors.remove(&stale);
+            }
         }
         Some(marked)
     }

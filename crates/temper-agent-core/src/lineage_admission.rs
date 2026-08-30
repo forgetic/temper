@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, DecisionAnchorTargetKindV1, DecisionEvidenceKindV1,
-    GraphCorrelationToolV1,
+    GraphCorrelationToolV1, GraphRecoveryReferenceDispositionV1,
 };
 
 /// Shared process-local resolver installed for one agent run.
@@ -34,6 +34,25 @@ pub trait LineageAdmissionResolver: Send + Sync {
         _active_root: Option<&str>,
     ) -> LineageAdmissionOutcome {
         self.resolve(tool_name, arguments)
+    }
+
+    /// Resolves an active-root call and, when applicable, atomically reserves
+    /// one recognized opaque trace reference before ordinary selector
+    /// eligibility is evaluated. The closed disposition contains no selector,
+    /// reference, root, or provider value.
+    fn resolve_for_active_root_with_recovery(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> (
+        LineageAdmissionOutcome,
+        Option<GraphRecoveryReferenceDispositionV1>,
+    ) {
+        (
+            self.resolve_for_active_root(tool_name, arguments, active_root),
+            None,
+        )
     }
 
     /// Returns the model-safe selector reference for a caller traversal of the

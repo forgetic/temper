@@ -23,6 +23,7 @@ fn failed_tool_span_projects_closed_diagnostic_without_raw_result_values() {
                 name: "bash".into(),
                 arguments: None,
                 shell_discovery_disposition: None,
+                recovery_reference_disposition: None,
             }),
         ),
         event(
@@ -40,6 +41,7 @@ fn failed_tool_span_projects_closed_diagnostic_without_raw_result_values() {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             }),
         ),
     ]);

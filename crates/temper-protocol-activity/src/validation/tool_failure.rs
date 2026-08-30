@@ -1,6 +1,6 @@
 use crate::{
-    ActivityValidationError, MAX_TOOL_FAILURE_MESSAGE_BYTES, ToolFailureDiagnosticV1,
-    ToolFailureReasonV1, ToolRetryDispositionV1,
+    ActivityValidationError, GraphRecoveryReferenceDispositionV1, MAX_TOOL_FAILURE_MESSAGE_BYTES,
+    ToolFailureDiagnosticV1, ToolFailureReasonV1, ToolRetryDispositionV1,
 };
 
 use super::{ActivityValidationCode, error};
@@ -73,6 +73,46 @@ pub(super) fn validate_tool_failure(
         return Err(invalid_event(
             &format!("{path}.fallback_to_conventional_discovery"),
             "must use the fixed fallback guidance for its tool-failure reason",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_recovery_reference_start(
+    tool_name: &str,
+    disposition: GraphRecoveryReferenceDispositionV1,
+    path: &str,
+) -> Result<(), ActivityValidationError> {
+    if tool_name != "codebase_memory_trace_path" {
+        return Err(invalid_event(
+            path,
+            "is reserved for the trusted trace wrapper",
+        ));
+    }
+    if disposition == GraphRecoveryReferenceDispositionV1::Expanded {
+        return Err(invalid_event(
+            path,
+            "cannot report provider expansion before tool execution",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_recovery_reference_finish(
+    tool_name: &str,
+    disposition: GraphRecoveryReferenceDispositionV1,
+    path: &str,
+) -> Result<(), ActivityValidationError> {
+    if tool_name != "codebase_memory_trace_path" {
+        return Err(invalid_event(
+            path,
+            "is reserved for the trusted trace wrapper",
+        ));
+    }
+    if disposition != GraphRecoveryReferenceDispositionV1::Expanded {
+        return Err(invalid_event(
+            path,
+            "tool completion may retain only confirmed wrapper expansion",
         ));
     }
     Ok(())

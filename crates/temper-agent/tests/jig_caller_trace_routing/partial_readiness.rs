@@ -41,7 +41,6 @@ fn jig_defers_partial_implementation_traversal_then_recovers_malformed_selector(
         [
             "search_code",
             "get_code_snippet",
-            "get_code_snippet",
             "trace_path",
             "get_code_snippet",
             "search_graph",
@@ -54,27 +53,19 @@ fn jig_defers_partial_implementation_traversal_then_recovers_malformed_selector(
             .filter(|call| call["name"] == "trace_path")
             .count(),
         1,
-        "the immediate traversal over partial caller metadata must stay local",
+        "only the recognized live reference may dispatch a trace",
     );
     assert_eq!(
         calls[1]["arguments"]["qualified_name"],
         PARTIAL_IMPLEMENTATION
     );
-    assert_eq!(
-        calls[2]["arguments"]["qualified_name"], PARTIAL_IMPLEMENTATION,
-        "the readiness source recheck must retain the exact qualified provider selector",
-    );
-    assert_eq!(calls[3]["arguments"]["function_name"], PARTIAL_FUNCTION);
-    assert_eq!(
-        calls
-            .iter()
-            .filter(|call| {
-                call["name"] == "get_code_snippet"
-                    && call["arguments"]["qualified_name"] == PARTIAL_FUNCTION
-            })
-            .count(),
-        0,
-        "the source recheck must not use the suffix-resolvable function selector",
+    assert_eq!(calls[2]["arguments"]["function_name"], PARTIAL_FUNCTION);
+    assert_eq!(calls[2]["arguments"]["direction"], "inbound");
+    assert!(
+        !serde_json::to_string(&calls)
+            .expect("provider calls serialize")
+            .contains("temper-recovery-selector:"),
+        "the provider call log must never receive an opaque reference",
     );
 }
 
@@ -93,43 +84,12 @@ fn partial_readiness_reply(view: &RequestView) -> Reply {
             implementation_target(view),
             "implementation",
         ),
-        2 => trace_reply(
-            "trace-partial-immediately",
-            implementation_recovery_reference(view),
-        ),
-        3 => {
-            let latest_tool = view
-                .messages
-                .iter()
-                .rev()
-                .find(|message| message.role == "tool")
-                .expect("local readiness denial returned a tool result");
-            assert!(
-                latest_tool
-                    .content
-                    .contains("decision-evidence recovery required")
-            );
-            assert!(messages_contain(view, "Traversal readiness:"));
-            assert!(messages_contain(
-                view,
-                "no provider call or recovery allowance was consumed"
-            ));
-            assert!(messages_contain(
-                view,
-                "required next stage=[get_code_snippet/qualified_name/implementation]"
-            ));
-            source_reply(
-                "refresh-partial-implementation",
-                implementation_recovery_reference(view),
-                "implementation",
-            )
-        }
-        4 => tool_reply(
-            "trace-with-malformed-selector-after-readiness",
+        2 => tool_reply(
+            "trace-with-malformed-selector",
             "codebase_memory_trace_path",
             serde_json::json!("inbound"),
         ),
-        5 => {
+        3 => {
             let latest_tool = view
                 .messages
                 .iter()
@@ -147,29 +107,29 @@ fn partial_readiness_reply(view: &RequestView) -> Reply {
                 "required next call=[codebase_memory_trace_path"
             ));
             trace_reply(
-                "trace-after-provider-enrichment",
-                selector_complete_trace_reference(view),
+                "trace-with-live-recovery-reference",
+                implementation_recovery_reference(view),
             )
         }
-        6 => source_reply("read-partial-caller", caller_relationship(view), "caller"),
-        7 => tool_reply(
+        4 => source_reply("read-partial-caller", caller_relationship(view), "caller"),
+        5 => tool_reply(
             "search-partial-focused-test",
             "codebase_memory_search_graph",
             serde_json::json!({
                 "query": "request affinity remains stable across worker selection"
             }),
         ),
-        8 => source_reply(
+        6 => source_reply(
             "read-partial-focused-test",
             semantic_test_relationship(view),
             "focused_test",
         ),
-        9 => tool_reply(
+        7 => tool_reply(
             "read-partial-target",
             "read",
             serde_json::json!({"path": "demo/ROUTE.md"}),
         ),
-        10 => tool_reply(
+        8 => tool_reply(
             "write-partial-product",
             "write",
             serde_json::json!({
@@ -177,8 +137,8 @@ fn partial_readiness_reply(view: &RequestView) -> Reply {
                 "content": "partial traversal recovered locally\n"
             }),
         ),
-        11 => Reply::text(
-            r#"{"summary":"Deferred partial traversal and completed typed caller and focused-test evidence."}"#,
+        9 => Reply::text(
+            r#"{"summary":"Consumed the live recovery reference and completed typed caller and focused-test evidence."}"#,
         ),
         count => panic!("unexpected partial-readiness tool-result count {count}"),
     }
@@ -196,21 +156,5 @@ fn implementation_recovery_reference(view: &RequestView) -> String {
                 .and_then(|(_, rest)| rest.split([',', '.']).next())
                 .map(str::to_string)
         })
-        .expect("partial implementation returned an opaque traversal reference")
-}
-
-fn selector_complete_trace_reference(view: &RequestView) -> String {
-    const PREFIX: &str =
-        "required next call=[codebase_memory_trace_path arguments={\"function_name\":\"";
-    view.messages
-        .iter()
-        .rev()
-        .find_map(|message| {
-            message
-                .content
-                .split_once(PREFIX)
-                .and_then(|(_, rest)| rest.split_once('"'))
-                .map(|(reference, _)| reference.to_string())
-        })
-        .expect("local traversal denial supplied a selector-complete next call")
+        .expect("implementation tool output returned a live opaque trace reference")
 }

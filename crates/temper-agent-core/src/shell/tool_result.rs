@@ -1,10 +1,12 @@
-use temper_protocol_activity::{DecisionAnchorLineageV1, GraphCorrelationV1};
+use temper_protocol_activity::{
+    DecisionAnchorLineageV1, GraphCorrelationV1, GraphRecoveryReferenceDispositionV1,
+};
 use tongs::tools::ToolOutput;
 
 use crate::machine::{
     CODEBASE_MEMORY_TOOL_PREFIX, CodebaseMemoryTiming, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory,
-    ToolFailureDiagnostic, ToolResultMetadata,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory, ToolFailureDiagnostic, ToolResultMetadata,
 };
 
 pub(super) const TOOL_RESULT_PREVIEW_BYTES: usize = 4 * 1024;
@@ -30,6 +32,7 @@ pub(super) fn bounded_tool_result(name: &str, output: &ToolOutput) -> ToolResult
     let codebase_memory_timing = codebase_memory_timing(name, output);
     let graph_correlation = graph_correlation(name, output);
     let decision_anchor_lineage = decision_anchor_lineage(name, output, graph_correlation.as_ref());
+    let recovery_reference_disposition = recovery_reference_disposition(name, output);
     let text = result_text(output);
     let bytes = u64::try_from(text.len()).unwrap_or(u64::MAX);
     if text.is_empty() {
@@ -41,6 +44,7 @@ pub(super) fn bounded_tool_result(name: &str, output: &ToolOutput) -> ToolResult
             codebase_memory_timing,
             graph_correlation,
             decision_anchor_lineage,
+            recovery_reference_disposition,
         };
     }
     // Graph result text has one explicit private consumer in the executor.
@@ -61,7 +65,21 @@ pub(super) fn bounded_tool_result(name: &str, output: &ToolOutput) -> ToolResult
         codebase_memory_timing,
         graph_correlation,
         decision_anchor_lineage,
+        recovery_reference_disposition,
     }
+}
+
+fn recovery_reference_disposition(
+    name: &str,
+    output: &ToolOutput,
+) -> Option<GraphRecoveryReferenceDispositionV1> {
+    (name == "codebase_memory_trace_path").then_some(())?;
+    let value = output
+        .details
+        .as_ref()?
+        .get(SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY)?;
+    (value.as_str() == Some(GraphRecoveryReferenceDispositionV1::Expanded.as_str()))
+        .then_some(GraphRecoveryReferenceDispositionV1::Expanded)
 }
 
 fn result_text(output: &ToolOutput) -> String {

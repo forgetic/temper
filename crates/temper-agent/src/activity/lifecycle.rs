@@ -444,6 +444,7 @@ mod tests {
             arg_preview: None,
             diagnostic_arguments: None,
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         });
 
         let frames = lifecycle.lock().unwrap();
@@ -516,6 +517,7 @@ mod tests {
             arg_preview: Some("not-forwarded".to_string()),
             diagnostic_arguments: None,
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         });
         sink.emit(AgentEvent::ToolEnd {
             id: "tool-1".to_string(),
@@ -530,6 +532,7 @@ mod tests {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         });
         sink.emit(AgentEvent::Steered { count: 1 });

@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{DecisionAnchorLineageV1, GraphExplorationClosedV1};
+use super::{
+    DecisionAnchorLineageV1, GraphExplorationClosedV1, GraphRecoveryReferenceDispositionV1,
+};
 use sha2::{Digest as _, Sha256};
 
 use super::CapturedContentV1;
@@ -616,6 +618,8 @@ pub struct ToolStartedV1 {
     pub arguments: Option<CapturedContentV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell_discovery_disposition: Option<ShellDiscoveryDispositionV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_reference_disposition: Option<GraphRecoveryReferenceDispositionV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -635,6 +639,8 @@ pub struct ToolFinishedV1 {
     pub graph_correlation: Option<GraphCorrelationV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_anchor_lineage: Option<DecisionAnchorLineageV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_reference_disposition: Option<GraphRecoveryReferenceDispositionV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

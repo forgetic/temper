@@ -241,6 +241,7 @@ fn tool_error_logging_projects_only_closed_failure_fields() {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         )));
     });
@@ -289,6 +290,7 @@ fn denied_shell_start_logging_projects_only_the_closed_disposition() {
             shell_discovery_disposition: Some(
                 ShellDiscoveryDispositionV1::excluded_never_executed_local_policy_denial(),
             ),
+            recovery_reference_disposition: None,
         })));
     });
 
@@ -344,6 +346,7 @@ fn graph_recovery_logging_projects_only_closed_actionable_fields() {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         )));
     });

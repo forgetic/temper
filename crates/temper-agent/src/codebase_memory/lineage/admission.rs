@@ -10,7 +10,7 @@ use temper_agent_core::{
 };
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, DecisionEvidenceKindV1, GraphCorrelationTargetKindV1,
-    GraphCorrelationToolV1, GraphCorrelationV1,
+    GraphCorrelationToolV1, GraphCorrelationV1, GraphRecoveryReferenceDispositionV1,
 };
 
 use super::{DecisionAnchorLineages, target::WorkspaceTargetRegistry};
@@ -68,7 +68,7 @@ impl DecisionAnchorLineageRegistry {
         tool_name: &str,
         input: &mut Value,
         evidence_kind: Option<DecisionEvidenceKindV1>,
-    ) -> Result<(), ()> {
+    ) -> Result<bool, ()> {
         self.lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -96,6 +96,53 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         lineages.resolve_for_active_root(tool_name, arguments, active_root)
+    }
+
+    fn resolve_for_active_root_with_recovery(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> (
+        LineageAdmissionOutcome,
+        Option<GraphRecoveryReferenceDispositionV1>,
+    ) {
+        let mut lineages = self
+            .lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if GraphCorrelationToolV1::from_public_name(tool_name)
+            == Some(GraphCorrelationToolV1::TracePath)
+        {
+            match lineages.reserve_implementation_trace_reference(arguments, active_root) {
+                Ok(Some(admission)) => {
+                    return (
+                        LineageAdmissionOutcome::Eligible(admission),
+                        Some(GraphRecoveryReferenceDispositionV1::Recognized),
+                    );
+                }
+                Err(()) => {
+                    return (
+                        LineageAdmissionOutcome::Ineligible(
+                            LineageAdmissionStatus::MalformedSelector,
+                        ),
+                        Some(GraphRecoveryReferenceDispositionV1::Rejected),
+                    );
+                }
+                Ok(None) => {
+                    return (
+                        lineages.resolve_for_active_root(tool_name, arguments, active_root),
+                        active_root
+                            .is_some()
+                            .then_some(GraphRecoveryReferenceDispositionV1::Missing),
+                    );
+                }
+            }
+        }
+        (
+            lineages.resolve_for_active_root(tool_name, arguments, active_root),
+            None,
+        )
     }
 
     fn trace_recovery_selector(

@@ -1,10 +1,12 @@
 use super::result_presentation::present_result;
 use super::tool_schema::DECISION_EVIDENCE_KIND_PARAMETER;
 use super::*;
-use temper_agent_core::SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY;
+use temper_agent_core::{
+    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY,
+};
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, DecisionEvidenceKindV1, GraphCorrelationTargetKindV1,
-    GraphCorrelationToolV1, GraphCorrelationV1,
+    GraphCorrelationToolV1, GraphCorrelationV1, GraphRecoveryReferenceDispositionV1,
 };
 
 // This is a closed provider outcome, not text to search within an arbitrary
@@ -94,17 +96,30 @@ impl Tool for CodebaseMemoryTool {
                 }
             };
 
-        if self
+        let recovery_reference_expanded = match self
             .decision_anchor_lineages
             .expand_recovery_selector(&self.public_name, &mut input, decision_evidence_kind)
-            .is_err()
         {
-            let timings = ToolCallTimings {
-                duration_ms: budget.elapsed_ms(),
-                ..ToolCallTimings::default()
-            };
-            return Ok(self.failed_output("", ToolFailureCategory::InvalidModelInput, timings));
-        }
+            Ok(expanded) => expanded,
+            Err(()) => {
+                let timings = ToolCallTimings {
+                    duration_ms: budget.elapsed_ms(),
+                    ..ToolCallTimings::default()
+                };
+                return Ok(self.failed_output("", ToolFailureCategory::InvalidModelInput, timings));
+            }
+        };
+        let record_recovery_expansion = |mut output: ToolOutput| {
+            if recovery_reference_expanded {
+                output.details.get_or_insert_with(|| json!({}))
+                    [SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY] = Value::String(
+                    GraphRecoveryReferenceDispositionV1::Expanded
+                        .as_str()
+                        .to_string(),
+                );
+            }
+            output
+        };
 
         let scope = Arc::clone(&self.scope);
         let mcp_name = self.mcp_name.clone();
@@ -115,7 +130,11 @@ impl Tool for CodebaseMemoryTool {
                 duration_ms: budget.elapsed_ms(),
                 ..ToolCallTimings::default()
             };
-            return Ok(self.failed_output("", ToolFailureCategory::Timeout, timings));
+            return Ok(record_recovery_expansion(self.failed_output(
+                "",
+                ToolFailureCategory::Timeout,
+                timings,
+            )));
         };
         let input = match skein::runtime::spawn_blocking(move || {
             scope.prepare_tool_input(&mcp_name, default_project_key, input, readiness_budget)
@@ -130,7 +149,9 @@ impl Tool for CodebaseMemoryTool {
                     duration_ms: budget.elapsed_ms(),
                 };
                 let category = classify_input_failure(&message);
-                return Ok(self.failed_output("", category, timings));
+                return Ok(record_recovery_expansion(
+                    self.failed_output("", category, timings),
+                ));
             }
         };
         let readiness_wait_ms = duration_ms(readiness_started.elapsed());
@@ -161,11 +182,11 @@ impl Tool for CodebaseMemoryTool {
                 graph_execution_ms: 0,
                 duration_ms: budget.elapsed_ms(),
             };
-            return Ok(self.failed_output(
+            return Ok(record_recovery_expansion(self.failed_output(
                 &mcp_project,
                 ToolFailureCategory::InvalidModelInput,
                 timings,
-            ));
+            )));
         }
 
         let Some(gate_budget) = budget.remaining().and_then(completion_budget) else {
@@ -174,28 +195,37 @@ impl Tool for CodebaseMemoryTool {
                 graph_execution_ms: 0,
                 duration_ms: budget.elapsed_ms(),
             };
-            return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
+            return Ok(record_recovery_expansion(self.failed_output(
+                &mcp_project,
+                ToolFailureCategory::Timeout,
+                timings,
+            )));
         };
-        let _rpc_guard = match temper_agent_io::timeout(gate_budget, self.health.acquire_rpc())
-            .await
-        {
-            Ok(guard) => guard,
-            Err(_) => {
-                let timings = ToolCallTimings {
-                    readiness_wait_ms,
-                    graph_execution_ms: 0,
-                    duration_ms: budget.elapsed_ms(),
-                };
-                return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
-            }
-        };
+        let _rpc_guard =
+            match temper_agent_io::timeout(gate_budget, self.health.acquire_rpc()).await {
+                Ok(guard) => guard,
+                Err(_) => {
+                    let timings = ToolCallTimings {
+                        readiness_wait_ms,
+                        graph_execution_ms: 0,
+                        duration_ms: budget.elapsed_ms(),
+                    };
+                    return Ok(record_recovery_expansion(self.failed_output(
+                        &mcp_project,
+                        ToolFailureCategory::Timeout,
+                        timings,
+                    )));
+                }
+            };
         if let Some(cause) = self.health.open_cause() {
             let timings = ToolCallTimings {
                 readiness_wait_ms,
                 graph_execution_ms: 0,
                 duration_ms: budget.elapsed_ms(),
             };
-            return Ok(self.circuit_open_output(cause, timings));
+            return Ok(record_recovery_expansion(
+                self.circuit_open_output(cause, timings),
+            ));
         }
 
         let Some(execution_budget) = budget.remaining().and_then(completion_budget) else {
@@ -204,7 +234,11 @@ impl Tool for CodebaseMemoryTool {
                 graph_execution_ms: 0,
                 duration_ms: budget.elapsed_ms(),
             };
-            return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
+            return Ok(record_recovery_expansion(self.failed_output(
+                &mcp_project,
+                ToolFailureCategory::Timeout,
+                timings,
+            )));
         };
         emit_mcp_tool_called(McpToolCalled {
             tool_name: &self.public_name,
@@ -230,7 +264,11 @@ impl Tool for CodebaseMemoryTool {
                     duration_ms: budget.elapsed_ms(),
                 };
                 let category = classify_mcp_error(&error);
-                return Ok(self.failed_output(&mcp_project, category, timings));
+                return Ok(record_recovery_expansion(self.failed_output(
+                    &mcp_project,
+                    category,
+                    timings,
+                )));
             }
             Err(_) => {
                 let timings = ToolCallTimings {
@@ -238,7 +276,11 @@ impl Tool for CodebaseMemoryTool {
                     graph_execution_ms: duration_ms(graph_started.elapsed()),
                     duration_ms: budget.elapsed_ms(),
                 };
-                return Ok(self.failed_output(&mcp_project, ToolFailureCategory::Timeout, timings));
+                return Ok(record_recovery_expansion(self.failed_output(
+                    &mcp_project,
+                    ToolFailureCategory::Timeout,
+                    timings,
+                )));
             }
         };
         let timings = ToolCallTimings {
@@ -249,7 +291,11 @@ impl Tool for CodebaseMemoryTool {
         if result.is_error {
             let bounded = present_result(&result.text, None);
             let category = classify_provider_failure(&bounded.text);
-            return Ok(self.failed_output(&mcp_project, category, timings));
+            return Ok(record_recovery_expansion(self.failed_output(
+                &mcp_project,
+                category,
+                timings,
+            )));
         }
         let presented = present_result(&result.text, graph_correlation.as_ref());
         // Successful, complete, untruncated targeted calls alone may emit a
@@ -303,6 +349,13 @@ impl Tool for CodebaseMemoryTool {
         if let Some(lineage) = decision_anchor_lineage {
             details[SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY] =
                 serde_json::to_value(lineage).expect("decision-anchor lineage serializes");
+        }
+        if recovery_reference_expanded {
+            details[SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY] = Value::String(
+                GraphRecoveryReferenceDispositionV1::Expanded
+                    .as_str()
+                    .to_string(),
+            );
         }
         let mut model_text = presented.text;
         if let Some(guidance) = recovery_selector_guidance {

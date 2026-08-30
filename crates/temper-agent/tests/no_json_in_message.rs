@@ -168,6 +168,7 @@ fn capture_representative_run() -> Vec<Captured> {
             arg_preview: Some("crates/temper-config/src/resolve.rs".to_string()),
             diagnostic_arguments: None,
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_ok".to_string(),
@@ -185,6 +186,7 @@ fn capture_representative_run() -> Vec<Captured> {
                     .to_string(),
             )),
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_bad".to_string(),
@@ -204,6 +206,7 @@ fn capture_representative_run() -> Vec<Captured> {
             shell_discovery_disposition: Some(
                 ShellDiscoveryDispositionV1::excluded_never_executed_local_policy_denial(),
             ),
+            recovery_reference_disposition: None,
         });
         logger.emit(AgentEvent::ToolEnd {
             id: "call_denied".to_string(),

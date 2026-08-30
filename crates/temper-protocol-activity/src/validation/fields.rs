@@ -7,7 +7,11 @@ use crate::{
 };
 
 use super::{
-    ActivityValidationCode, ActivityValidationError, error, tool_failure::validate_tool_failure,
+    ActivityValidationCode, ActivityValidationError, error,
+    tool_failure::{
+        validate_recovery_reference_finish, validate_recovery_reference_start,
+        validate_tool_failure,
+    },
     validate_blob_reference,
 };
 
@@ -150,6 +154,13 @@ pub(super) fn event(
                     ));
                 }
             }
+            if let Some(disposition) = value.recovery_reference_disposition {
+                validate_recovery_reference_start(
+                    &value.name,
+                    disposition,
+                    &format!("{path}.data.recovery_reference_disposition"),
+                )?;
+            }
             Ok(())
         }
         Event::ToolFinished(value) => {
@@ -208,6 +219,13 @@ pub(super) fn event(
                         "does not match the closed public codebase-memory tool identity",
                     ));
                 }
+            }
+            if let Some(disposition) = value.recovery_reference_disposition {
+                validate_recovery_reference_finish(
+                    &value.name,
+                    disposition,
+                    &format!("{path}.data.recovery_reference_disposition"),
+                )?;
             }
             if let Some(lineage) = &value.decision_anchor_lineage {
                 if value.status != ToolStatusV1::Succeeded {

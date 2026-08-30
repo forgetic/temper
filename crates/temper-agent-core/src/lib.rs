@@ -48,10 +48,10 @@ pub use machine::{
     GraphExplorationClosedV1, GraphRecoveryActionV1, GraphRecoveryEvidenceKindV1,
     GraphRecoveryPermittedActionV1, ModelCallStatus, OperationGeneration,
     SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
-    SAFE_TOOL_FAILURE_DETAIL_KEY, ShellDiscoveryDispositionStatusV1, ShellDiscoveryDispositionV1,
-    StreamDelta, ToolCallDenial, ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
-    ToolFailureReason, ToolResultMetadata, ToolRetryDisposition, ToolStartPresentation,
-    ToolStartPresentationFn,
+    SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+    ShellDiscoveryDispositionStatusV1, ShellDiscoveryDispositionV1, StreamDelta, ToolCallDenial,
+    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason,
+    ToolResultMetadata, ToolRetryDisposition, ToolStartPresentation, ToolStartPresentationFn,
 };
 pub use managed_bash::ManagedBashTool;
 pub use managed_fs::joined_filesystem_tool;

@@ -31,7 +31,7 @@ use focused_test::{
 };
 use recovery_selector::{
     RECOVERY_SELECTOR_REFERENCE_PREFIX, RecoverySelectorKey, RecoverySelectorPurpose,
-    RecoverySelectorReference,
+    RecoverySelectorReference, RecoverySelectorState,
 };
 use selection::{
     ImplementationTraversalEvidence, canonical_function_name, canonical_qualified_name,
