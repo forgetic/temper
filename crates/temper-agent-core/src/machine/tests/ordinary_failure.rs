@@ -1,6 +1,7 @@
 //! Run-local ordinary-tool failure circuit tests.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use temper_agent_io::{EngineTime, Machine};
 use tongs::model::{ContentBlock, Message};
@@ -12,7 +13,12 @@ use super::common::{
 };
 use crate::machine::ordinary_failure::ORDINARY_FAILURE_CAPACITY;
 use crate::machine::{
-    AgentMachine, AgentRequest, ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason,
+    AgentMachine, AgentRequest, ToolCallDenial, ToolFailureCategory, ToolFailureDiagnostic,
+    ToolFailureReason,
+};
+use crate::{
+    InvocationTargetAdmission, LineageAdmissionOutcome, LineageAdmissionResolver,
+    LineageAdmissionStatus, TargetAdmissionStatus,
 };
 
 fn machine_for(name: &str, max_iterations: usize) -> AgentMachine {
@@ -32,6 +38,28 @@ fn redirect(requests: &[AgentRequest]) -> Option<ToolFailureDiagnostic> {
 
 fn non_retryable() -> ToolFailureDiagnostic {
     ToolFailureDiagnostic::execution(ToolFailureReason::ToolReportedFailure)
+}
+
+struct ShellAdmission;
+
+impl LineageAdmissionResolver for ShellAdmission {
+    fn resolve(&self, _: &str, _: &serde_json::Value) -> LineageAdmissionOutcome {
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
+    }
+
+    fn resolve_invocation_targets(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> InvocationTargetAdmission {
+        match (
+            tool_name,
+            arguments.get("command").and_then(serde_json::Value::as_str),
+        ) {
+            ("bash", Some("true" | "false")) => InvocationTargetAdmission::SourceNeutralProcess,
+            _ => InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool),
+        }
+    }
 }
 
 fn reordered_arguments(reverse: bool, value: u64) -> serde_json::Value {
@@ -141,6 +169,96 @@ fn second_canonical_non_retryable_call_redirects_but_corrected_arguments_run() {
     );
     assert_eq!(run_tools(&corrected), ["corrected"]);
     assert!(redirect(&corrected).is_none());
+}
+
+#[test]
+fn decision_anchor_admission_preserves_source_neutral_failure_redirects() {
+    let mut machine = AgentMachine::with_effects(
+        vec![user("exercise the graph-enabled ordinary circuit")],
+        10,
+        BTreeMap::from([
+            ("bash".to_string(), ToolEffects::process()),
+            (
+                "codebase_memory_search_graph".to_string(),
+                ToolEffects::read(),
+            ),
+        ]),
+    )
+    .with_lineage_admission(Arc::new(ShellAdmission));
+    let _ = machine.on_start(EngineTime::ZERO);
+    let status_args = serde_json::json!({"command":"false","timeout":60});
+
+    let first = complete(
+        &mut machine,
+        llm_responded(assistant_tool_call_with_args(
+            "initial-failure",
+            "bash",
+            status_args.clone(),
+        )),
+    );
+    assert_eq!(run_tools(&first), ["initial-failure"]);
+    assert!(redirect(&first).is_none());
+    let _ = complete(
+        &mut machine,
+        tool_failed(
+            "initial-failure",
+            tool_output("failed", true),
+            non_retryable(),
+        ),
+    );
+
+    let repeated = complete(
+        &mut machine,
+        llm_responded(assistant_tool_call_with_args(
+            "repeated-failure",
+            "bash",
+            status_args,
+        )),
+    );
+    assert!(run_tools(&repeated).is_empty());
+    let redirected = redirect(&repeated).expect("source-neutral retry redirects locally");
+    assert_eq!(redirected.category, ToolFailureCategory::CircuitRedirect);
+    let _ = complete(
+        &mut machine,
+        tool_failed(
+            "repeated-failure",
+            tool_output("redirected", true),
+            redirected,
+        ),
+    );
+
+    let corrected = complete(
+        &mut machine,
+        llm_responded(assistant_tool_call_with_args(
+            "corrected-status",
+            "bash",
+            serde_json::json!({"command":"true","timeout":60}),
+        )),
+    );
+    assert_eq!(run_tools(&corrected), ["corrected-status"]);
+    assert!(redirect(&corrected).is_none());
+    let _ = complete(
+        &mut machine,
+        tool_finished("corrected-status", tool_output("", false)),
+    );
+
+    let mutating = complete(
+        &mut machine,
+        llm_responded(assistant_tool_call_with_args(
+            "source-mutating-shell",
+            "bash",
+            serde_json::json!({"command":"printf changed > src/lib.rs"}),
+        )),
+    );
+    assert!(mutating.iter().any(|request| matches!(
+        request,
+        AgentRequest::RunTool {
+            call,
+            denial: Some(ToolCallDenial::DecisionAnchorMutation),
+            ..
+        } if call.id == "source-mutating-shell"
+    )));
+    assert!(redirect(&mutating).is_none());
 }
 
 #[test]
