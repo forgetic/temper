@@ -299,25 +299,27 @@ credentials, arguments, host output, and diagnostic traces remain ephemeral.
 The routing-repair benchmark corpus and all historical scenario mappings remain
 unchanged.
 
-### Mapped live exact source-selection mapping
+### Mapped live decision-evidence convergence mapping
 
 `mapped-live-exact-source-selection` is the dedicated active mapping for feature
-`ai/temper#1151` and plan `ai/temper#1152` on
-`agent/pr-for-feature-1151`. Its `introduced_by = "#1144"` provenance preserves
-the original #1139/#1140 mapping while the #1130 focused-test source mapping
-remains unchanged. An early same-turn read batch includes `repo/src/route.rs`
-before complete typed implementation, caller, and focused-test source evidence.
-A direct matching patch is then denied locally with the closed
-`policy_denial` / `policy_precondition` outcome and no workspace diff. Only one
-later successful exact ordinary read authorizes the matching minimal patch. The
-mapped reduction retains exactly one privacy-safe `selection` / `read` row for
-the declared route target and no authority for the early read or denied patch.
-Aggregate evidence contains only closed counts, checkpoint and policy
-categories, typed coverage, ordering, declared target, mode, binding, and gate
-facts. Runtime prompts, selectors, provider output, source, roots, credentials,
-mutation arguments, host output, and generated traces remain ephemeral. The
-routing-repair effectiveness criterion and acceptance thresholds remain frozen;
-every historical scenario mapping remains unchanged.
+`ai/temper#1210` and plan `ai/temper#1211` on
+`agent/pr-for-feature-1210`. Its `introduced_by = "#1144"` provenance and the
+historical feature `ai/temper#1151`, plan `ai/temper#1152`, and source branch
+`agent/pr-for-feature-1151` remain audit metadata. An early ordinary read of
+`repo/src/route.rs` has no retroactive authority. Separate routing and
+focused-test roots then reproduce incomplete live evidence before one immutable
+recovery batch admits only the active-root implementation and trace; cross-root,
+broad, malformed, denied, and failed siblings remain local and receive no
+credit. Later provider-derived caller and separate focused-test source consumers
+complete the retained implementation/caller/focused-test forest.
+Post-completion graph detours stay local, a direct patch is denied without a workspace effect, and exactly one
+post-source exact read authorizes exactly one matching mutation. Aggregate
+evidence retains only privacy-safe typed ordering, closed recovery and policy
+facts, the declared target, binding, and gate outcomes. Runtime prompts,
+selectors, provider output, source, roots, credentials, arguments, host output,
+local paths, and generated traces remain ephemeral. Trusted unavailable and
+disabled conventional controls remain observable through the unchanged routing
+harness, verifier, and historical mapped coverage.
 
 ### Mapped live denied-shell classification mapping
 

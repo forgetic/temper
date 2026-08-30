@@ -1,11 +1,11 @@
 {
   "phases": [
     {
-      "name": "mapped-live-exact-source-selection-runtime",
-      "when": { "messages_contain": ["__mapped_live_exact_source_selection_fixture_runtime__"] },
+      "name": "mapped-live-decision-evidence-convergence-runtime",
+      "when": { "messages_contain": ["__mapped_live_decision_evidence_convergence_runtime__"] },
       "sequence": [
         {
-          "text": "The live fixture owns transient runtime data; retain only closed early-read and post-source ordering, typed evidence, the declared selection target, local policy outcome, privacy, and convergence facts."
+          "text": "The live fixture owns transient runtime data; retain only typed root-local ordering, closed non-credit and policy outcomes, the declared exact target, privacy, and convergence facts."
         }
       ]
     }

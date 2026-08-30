@@ -5,9 +5,9 @@ use std::time::Duration;
 use super::*;
 
 #[test]
-fn exact_source_selection_bundle_maps_feature_1151_without_rewriting_history() {
+fn exact_source_selection_maps_feature_1210_and_retains_1151_audit() {
     let scenario_path = scenarios_root().join("mapped-live-exact-source-selection");
-    let bundle = ScenarioBundle::load(&scenario_path).expect("exact source-selection bundle");
+    let bundle = ScenarioBundle::load(&scenario_path).expect("decision-evidence bundle");
     let mcp = bundle
         .execution
         .steps
@@ -27,6 +27,7 @@ fn exact_source_selection_bundle_maps_feature_1151_without_rewriting_history() {
             "search_code".to_string(),
             "trace_path".to_string(),
             "get_code_snippet".to_string(),
+            "get_architecture".to_string(),
             "list_projects".to_string(),
             "index_status".to_string(),
         ]
@@ -42,55 +43,76 @@ fn exact_source_selection_bundle_maps_feature_1151_without_rewriting_history() {
         .as_ref()
         .and_then(|scenario| scenario.feature_mapping.as_ref())
         .expect("feature mapping");
-    assert_eq!(mapping.feature.to_string(), "ai/temper#1151");
+    assert_eq!(mapping.feature.to_string(), "ai/temper#1210");
     assert_eq!(
         mapping.plan.as_ref().map(ToString::to_string).as_deref(),
-        Some("ai/temper#1152")
+        Some("ai/temper#1211")
     );
-    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1151");
-    assert_eq!(mapping.change.as_str(), "new");
+    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1210");
+    assert_eq!(mapping.change.as_str(), "updated");
 
     let manifest = fs::read_to_string(scenario_path.join("scenario.toml")).expect("manifest");
     let readme = fs::read_to_string(scenario_path.join("README.md")).expect("README");
     let corpus_readme = fs::read_to_string(scenarios_root().join("README.md")).expect("README");
     let jig = fs::read_to_string(bundle.jig_script_path()).expect("Jig");
     for expected in [
-        "ten-successful-complete-v1-graph-results",
-        "typed-sources-denial-exact-read-and-matching-repair",
-        "early-read-precedes-typed-evidence-and-cannot-authorize-mutation",
-        "patch-route-before-post-source-read",
-        "validate-post-source-read-repair",
-        "submit-post-source-read-repair",
-        "read-route-after-source-evidence",
-        "policy_precondition",
-        "satisfy_policy",
-        "three-competing-generic-results",
-        "selection-competing-forest-traversal",
+        "introduced_by = \"#1144\"",
+        "six-successful-complete-v1-graph-results",
+        "two-retained-independent-roots",
+        "four-failed-noncredit-recovery-attempts-share-snapshot",
+        "recovery-cross-root-caller-denied",
+        "recovery-irrelevant-broad-denied",
+        "recovery-malformed-selector-denied",
+        "recovery-satisfied-implementation-denied",
         "graph.lineage.decision_evidence_kind",
-        "one-workspace-diff-only-after-successful-mutation",
+        "patch-route-before-post-source-read",
+        "read-route-after-complete-source-evidence",
+        "one-matching-minimal-mutation",
+        "one-workspace-diff-after-authorized-mutation",
     ] {
         assert!(manifest.contains(expected), "manifest omitted {expected}");
     }
+    for historical in [
+        "ai/temper#1151",
+        "ai/temper#1152",
+        "agent/pr-for-feature-1151",
+    ] {
+        assert!(
+            manifest.contains(historical),
+            "manifest omitted historical {historical}"
+        );
+        assert!(
+            readme.contains(historical),
+            "README omitted historical {historical}"
+        );
+        assert!(
+            corpus_readme.contains(historical),
+            "corpus README omitted historical {historical}"
+        );
+    }
     for expected in [
         "Privacy boundary",
-        "10/10",
-        "nine relevant",
-        "9/9",
-        "8/9 relevant",
-        "selection` / `read",
+        "complete retained decision evidence",
+        "cross-root",
+        "irrelevant",
+        "malformed",
+        "failed",
         "repo/src/route.rs",
-        "non-reusable",
-        "6c27457897c0a08a255b427ccc797781060cc1f7",
-        "422d6748d8fb4683cea6a9afab5980f438ea8bcde1f852ec8a8c6dcdb38fdaab",
-        "mapped-live-focused-test-source-relevance",
+        "one wholly fresh enabled smoke",
+        "five fresh enabled repetitions",
+        "five fresh disabled repetitions",
+        "five fresh forced-unavailable repetitions",
+        "exactly one verifier invocation",
+        "enabled_decision_evidence",
+        "Do not reuse #1203 artifacts",
     ] {
         assert!(readme.contains(expected), "README omitted {expected}");
     }
     assert!(
-        corpus_readme.contains("Mapped live exact source-selection mapping"),
-        "corpus README omitted the dedicated mapping"
+        corpus_readme.contains("Mapped live decision-evidence convergence mapping"),
+        "corpus README omitted the updated mapping"
     );
-    assert!(jig.contains("mapped-live-exact-source-selection-runtime"));
+    assert!(jig.contains("mapped-live-decision-evidence-convergence-runtime"));
     for forbidden in [
         "crate::",
         "opaque-",
@@ -98,7 +120,6 @@ fn exact_source_selection_bundle_maps_feature_1151_without_rewriting_history() {
         "source\"",
         "mutation arguments",
         "diagnostic trace",
-        "6c27457897c0a08a255b427ccc797781060cc1f7",
     ] {
         assert!(!jig.contains(forbidden), "Jig retained {forbidden}");
     }
@@ -108,17 +129,51 @@ fn exact_source_selection_bundle_maps_feature_1151_without_rewriting_history() {
 }
 
 #[test]
-fn exact_source_selection_keeps_routing_benchmark_contract_frozen() {
+fn exact_source_selection_keeps_routing_benchmark_and_controls_frozen() {
     let benchmark_root = scenarios_root()
         .parent()
         .expect("scenarios has repository root")
         .join("benchmarks/agent-sessions/codebase-memory-routing-repair");
-    let manifest = fs::read_to_string(benchmark_root.join("benchmark.toml"))
+    let benchmark = fs::read_to_string(benchmark_root.join("benchmark.toml"))
         .expect("routing-repair benchmark manifest");
+    let enabled = fs::read_to_string(benchmark_root.join("jig.json")).expect("enabled Jig");
+    let disabled =
+        fs::read_to_string(benchmark_root.join("jig-disabled.json")).expect("disabled Jig");
+    let unavailable =
+        fs::read_to_string(benchmark_root.join("jig-unavailable.json")).expect("unavailable Jig");
     let expected_patch = fs::read_to_string(benchmark_root.join("expected.patch"))
         .expect("routing-repair expected patch");
-    assert!(manifest.contains("expected_patch = \"expected.patch\""));
-    assert!(manifest.contains("aggregate_privacy_forbidden_fragments"));
+
+    for expected in [
+        "expected_patch = \"expected.patch\"",
+        "matrix_repetitions = 5",
+        "minimum_relevance_percent = 50",
+        "minimum_improvement_percent = 20",
+        "exact_source_selection_target = \"repo/src/route.rs\"",
+        "required_decision_kinds = [\"implementation\", \"caller\", \"focused_test\"]",
+        "required_consumption_modes = [\"source\", \"selection\"]",
+        "aggregate_privacy_forbidden_fragments",
+    ] {
+        assert!(benchmark.contains(expected), "benchmark omitted {expected}");
+    }
+    for expected in [
+        "recovery_cross_root_caller_denied",
+        "recovery_active_root_trace",
+        "recovery_active_root_implementation",
+        "read_route_after_source_chain",
+        "patch_retry_affinity",
+    ] {
+        assert!(enabled.contains(expected), "enabled Jig omitted {expected}");
+    }
+    assert!(!disabled.contains("codebase_memory_"));
+    let unavailable_graph = unavailable
+        .find("graph_find_affinity_unavailable")
+        .expect("one unavailable graph attempt");
+    let unavailable_shell = unavailable
+        .find("compound_shell_fallback_after_unavailable")
+        .expect("conventional fallback after unavailability");
+    assert!(unavailable_graph < unavailable_shell);
+    assert_eq!(unavailable.matches("codebase_memory_").count(), 1);
     assert!(expected_patch.contains("+    let routing_topic = attempt.affinity_topic();"));
 }
 
