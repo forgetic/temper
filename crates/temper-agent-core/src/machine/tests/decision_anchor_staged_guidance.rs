@@ -304,6 +304,7 @@ fn incomplete_traversal_is_denied_without_spending_recovery_and_then_recovers() 
             &[None],
             &[None],
             &[None],
+            &[None],
         ),
         [recovery_graph_denial(
             [
@@ -328,6 +329,7 @@ fn incomplete_traversal_is_denied_without_spending_recovery_and_then_recovers() 
             &[None],
             &[None],
             &[Some(GraphCorrelationToolV1::TracePath)],
+            &[None],
         ),
         [recovery_graph_denial(
             [

@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn jig_defers_partial_implementation_traversal_then_completes_typed_evidence() {
+fn jig_defers_partial_implementation_traversal_then_recovers_malformed_selector() {
     let _serial = JIG_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -124,29 +124,52 @@ fn partial_readiness_reply(view: &RequestView) -> Reply {
                 "implementation",
             )
         }
-        4 => trace_reply(
-            "trace-after-provider-enrichment",
-            implementation_recovery_reference(view),
+        4 => tool_reply(
+            "trace-with-malformed-selector-after-readiness",
+            "codebase_memory_trace_path",
+            serde_json::json!("inbound"),
         ),
-        5 => source_reply("read-partial-caller", caller_relationship(view), "caller"),
-        6 => tool_reply(
+        5 => {
+            let latest_tool = view
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == "tool")
+                .expect("local malformed traversal denial returned a tool result");
+            assert!(
+                latest_tool
+                    .content
+                    .contains("decision-evidence recovery required")
+            );
+            assert!(latest_tool.content.contains("remaining allowance: 4"));
+            assert!(messages_contain(
+                view,
+                "required next call=[codebase_memory_trace_path"
+            ));
+            trace_reply(
+                "trace-after-provider-enrichment",
+                selector_complete_trace_reference(view),
+            )
+        }
+        6 => source_reply("read-partial-caller", caller_relationship(view), "caller"),
+        7 => tool_reply(
             "search-partial-focused-test",
             "codebase_memory_search_graph",
             serde_json::json!({
                 "query": "request affinity remains stable across worker selection"
             }),
         ),
-        7 => source_reply(
+        8 => source_reply(
             "read-partial-focused-test",
             semantic_test_relationship(view),
             "focused_test",
         ),
-        8 => tool_reply(
+        9 => tool_reply(
             "read-partial-target",
             "read",
             serde_json::json!({"path": "demo/ROUTE.md"}),
         ),
-        9 => tool_reply(
+        10 => tool_reply(
             "write-partial-product",
             "write",
             serde_json::json!({
@@ -154,7 +177,7 @@ fn partial_readiness_reply(view: &RequestView) -> Reply {
                 "content": "partial traversal recovered locally\n"
             }),
         ),
-        10 => Reply::text(
+        11 => Reply::text(
             r#"{"summary":"Deferred partial traversal and completed typed caller and focused-test evidence."}"#,
         ),
         count => panic!("unexpected partial-readiness tool-result count {count}"),
@@ -174,4 +197,20 @@ fn implementation_recovery_reference(view: &RequestView) -> String {
                 .map(str::to_string)
         })
         .expect("partial implementation returned an opaque traversal reference")
+}
+
+fn selector_complete_trace_reference(view: &RequestView) -> String {
+    const PREFIX: &str =
+        "required next call=[codebase_memory_trace_path arguments={\"function_name\":\"";
+    view.messages
+        .iter()
+        .rev()
+        .find_map(|message| {
+            message
+                .content
+                .split_once(PREFIX)
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map(|(reference, _)| reference.to_string())
+        })
+        .expect("local traversal denial supplied a selector-complete next call")
 }

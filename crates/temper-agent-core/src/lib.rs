@@ -35,7 +35,8 @@ pub use invocation::{
 pub use lineage_admission::{
     EligibleLineageAdmission, EligibleWorkspaceTarget, InvocationTargetAdmission,
     LineageAdmissionHandle, LineageAdmissionOutcome, LineageAdmissionResolver,
-    LineageAdmissionStatus, TargetAdmissionOutcome, TargetAdmissionStatus,
+    LineageAdmissionStatus, OpaqueRecoverySelectorReference, TargetAdmissionOutcome,
+    TargetAdmissionStatus,
 };
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,

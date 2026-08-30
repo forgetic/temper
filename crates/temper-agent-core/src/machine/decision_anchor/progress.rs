@@ -1,5 +1,7 @@
 //! Model-visible, privacy-safe active-root progress guidance.
 
+use crate::OpaqueRecoverySelectorReference;
+
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -100,7 +102,7 @@ impl DecisionAnchorState {
                 }
             }
             self.model_guidance
-                .push(snapshot.model_message(disposition, &accepted, None));
+                .push(snapshot.model_message(disposition, &accepted, None, None));
         }
     }
 
@@ -108,12 +110,14 @@ impl DecisionAnchorState {
         &mut self,
         rejected_action: Option<GraphRecoveryActionV1>,
         selector_tuple_excluded: bool,
+        recovery_selector: Option<&OpaqueRecoverySelectorReference>,
     ) {
         let snapshot = self.guidance_snapshot();
         self.model_guidance.push(snapshot.model_message(
             ResultDisposition::NonProgress,
             &BTreeSet::new(),
             rejected_action.map(|action| (action, selector_tuple_excluded)),
+            recovery_selector,
         ));
     }
 
@@ -124,7 +128,7 @@ impl DecisionAnchorState {
                 .model_label(),
         ];
         let mut guidance =
-            snapshot.model_message(ResultDisposition::NonProgress, &BTreeSet::new(), None);
+            snapshot.model_message(ResultDisposition::NonProgress, &BTreeSet::new(), None, None);
         guidance.push_str(" [Traversal readiness: the current-root traversal remains closed because its typed provider snapshot reported callers without caller identities; no provider call or recovery allowance was consumed. Repeat exactly one typed implementation get_code_snippet lookup in the next model turn by copying the existing implementation_evidence_result recovery reference into qualified_name.]");
         self.model_guidance.push(guidance);
     }
@@ -242,6 +246,7 @@ impl GuidanceSnapshot {
         disposition: ResultDisposition,
         accepted: &BTreeSet<AcceptedEvidence>,
         rejected: Option<(GraphRecoveryActionV1, bool)>,
+        recovery_selector: Option<&OpaqueRecoverySelectorReference>,
     ) -> String {
         let disposition = match disposition {
             ResultDisposition::ActiveRootProgress => "active_root_progress",
@@ -270,7 +275,12 @@ impl GuidanceSnapshot {
         let remaining = self
             .remaining
             .map_or_else(|| "n/a".to_string(), |remaining| remaining.to_string());
-        let required_next_stage = if self.next_actions.len() == 1 && !self.complete {
+        let required_next_stage = if let Some(selector) = recovery_selector {
+            format!(
+                "; required next call=[codebase_memory_trace_path arguments={{\"function_name\":\"{}\",\"direction\":\"inbound\"}}]; issue exactly this one selector-complete call in the next model turn; the host will expand the run-local reference to the active root's provider-returned function selector",
+                selector.as_public_selector(),
+            )
+        } else if self.next_actions.len() == 1 && !self.complete {
             format!(
                 "; required next stage=[{}]; issue exactly this one action in the next model turn",
                 self.next_actions[0],

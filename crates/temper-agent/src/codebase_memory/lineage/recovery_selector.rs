@@ -73,6 +73,17 @@ impl RecoverySelectorReference {
 }
 
 impl DecisionAnchorLineages {
+    pub(in crate::codebase_memory) fn implementation_trace_recovery_selector(
+        &self,
+        root_binding: &str,
+    ) -> Option<&str> {
+        let key = RecoverySelectorKey {
+            root_binding: root_binding.to_string(),
+            purpose: RecoverySelectorPurpose::ImplementationTrace,
+        };
+        self.recovery_references.get(&key).map(String::as_str)
+    }
+
     pub(in crate::codebase_memory) fn recovery_selector_guidance(
         &self,
         root_binding: &str,
