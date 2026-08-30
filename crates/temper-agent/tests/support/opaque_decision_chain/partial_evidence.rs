@@ -14,7 +14,10 @@ pub(super) fn reply(
     let reply = match (case, result_count) {
         (
             DecisionCase::ImplementationOnlyProviderFallback
-            | DecisionCase::ImplementationFocusedProviderFallback,
+            | DecisionCase::ImplementationFocusedProviderFallback
+            | DecisionCase::ImplementationOnlyIncomplete
+            | DecisionCase::ImplementationAndFocusedTestIncomplete
+            | DecisionCase::ImplementationAndCallerIncomplete,
             0,
         ) => {
             record(DecisionStep::Discovery);
@@ -26,7 +29,10 @@ pub(super) fn reply(
         }
         (
             DecisionCase::ImplementationOnlyProviderFallback
-            | DecisionCase::ImplementationFocusedProviderFallback,
+            | DecisionCase::ImplementationFocusedProviderFallback
+            | DecisionCase::ImplementationOnlyIncomplete
+            | DecisionCase::ImplementationAndFocusedTestIncomplete
+            | DecisionCase::ImplementationAndCallerIncomplete,
             1,
         ) => {
             record(DecisionStep::Refinement);
@@ -38,7 +44,10 @@ pub(super) fn reply(
         }
         (
             DecisionCase::ImplementationOnlyProviderFallback
-            | DecisionCase::ImplementationFocusedProviderFallback,
+            | DecisionCase::ImplementationFocusedProviderFallback
+            | DecisionCase::ImplementationOnlyIncomplete
+            | DecisionCase::ImplementationAndFocusedTestIncomplete
+            | DecisionCase::ImplementationAndCallerIncomplete,
             2,
         ) => {
             record(DecisionStep::ImplementationSource);
@@ -187,6 +196,115 @@ pub(super) fn reply(
             record(DecisionStep::Complete);
             Reply::text(r#"{"summary":"Revoked partial graph authority before fallback."}"#)
         }
+        (DecisionCase::ImplementationOnlyIncomplete, 3) => {
+            record(DecisionStep::SourceRead);
+            tool_reply(
+                "implementation-only-exact-read",
+                "read",
+                serde_json::json!({"path": "demo/EVIDENCE.md"}),
+            )
+        }
+        (DecisionCase::ImplementationOnlyIncomplete, 4) => {
+            record(DecisionStep::MutationAttempt);
+            tool_reply(
+                "implementation-only-blocked-mutation",
+                "write",
+                serde_json::json!({
+                    "path": "demo/EVIDENCE.md",
+                    "content": "must remain blocked\n",
+                }),
+            )
+        }
+        (DecisionCase::ImplementationOnlyIncomplete, 5) => {
+            assert_incomplete(view, mutation_was_blocked);
+            record(DecisionStep::MutationBlocked);
+            record(DecisionStep::Complete);
+            Reply::text(r#"{"summary":"Stopped with caller and focused-test evidence missing."}"#)
+        }
+        (DecisionCase::ImplementationAndFocusedTestIncomplete, 3) => {
+            record(DecisionStep::BehavioralTestSource);
+            tool_reply(
+                "implementation-focused-source",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": recovery_selector("focused_test_result"),
+                    "decision_evidence_kind": "focused_test",
+                }),
+            )
+        }
+        (DecisionCase::ImplementationAndFocusedTestIncomplete, 4) => {
+            record(DecisionStep::SourceRead);
+            tool_reply(
+                "implementation-focused-exact-read",
+                "read",
+                serde_json::json!({"path": "demo/EVIDENCE.md"}),
+            )
+        }
+        (DecisionCase::ImplementationAndFocusedTestIncomplete, 5) => {
+            record(DecisionStep::MutationAttempt);
+            tool_reply(
+                "implementation-focused-blocked-mutation",
+                "write",
+                serde_json::json!({
+                    "path": "demo/EVIDENCE.md",
+                    "content": "must remain blocked\n",
+                }),
+            )
+        }
+        (DecisionCase::ImplementationAndFocusedTestIncomplete, 6) => {
+            assert_incomplete(view, mutation_was_blocked);
+            record(DecisionStep::MutationBlocked);
+            record(DecisionStep::Complete);
+            Reply::text(r#"{"summary":"Stopped with caller evidence missing."}"#)
+        }
+        (DecisionCase::ImplementationAndCallerIncomplete, 3) => {
+            record(DecisionStep::Trace);
+            tool_reply(
+                "implementation-caller-trace",
+                "codebase_memory_trace_path",
+                serde_json::json!({
+                    "function_name": recovery_selector("implementation_evidence_result"),
+                    "mode": "calls",
+                    "direction": "inbound",
+                }),
+            )
+        }
+        (DecisionCase::ImplementationAndCallerIncomplete, 4) => {
+            record(DecisionStep::CallerSource);
+            tool_reply(
+                "implementation-caller-source",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": recovery_selector("caller_traversal_result"),
+                    "decision_evidence_kind": "caller",
+                }),
+            )
+        }
+        (DecisionCase::ImplementationAndCallerIncomplete, 5) => {
+            record(DecisionStep::SourceRead);
+            tool_reply(
+                "implementation-caller-exact-read",
+                "read",
+                serde_json::json!({"path": "demo/EVIDENCE.md"}),
+            )
+        }
+        (DecisionCase::ImplementationAndCallerIncomplete, 6) => {
+            record(DecisionStep::MutationAttempt);
+            tool_reply(
+                "implementation-caller-blocked-mutation",
+                "write",
+                serde_json::json!({
+                    "path": "demo/EVIDENCE.md",
+                    "content": "must remain blocked\n",
+                }),
+            )
+        }
+        (DecisionCase::ImplementationAndCallerIncomplete, 7) => {
+            assert_incomplete(view, mutation_was_blocked);
+            record(DecisionStep::MutationBlocked);
+            record(DecisionStep::Complete);
+            Reply::text(r#"{"summary":"Stopped with focused-test evidence missing."}"#)
+        }
         (DecisionCase::NoRetainedDecisionEvidence, 0) => {
             record(DecisionStep::Discovery);
             tool_reply(
@@ -196,6 +314,14 @@ pub(super) fn reply(
             )
         }
         (DecisionCase::NoRetainedDecisionEvidence, 1) => {
+            record(DecisionStep::SourceRead);
+            tool_reply(
+                "unretained-exact-read",
+                "read",
+                serde_json::json!({"path": "demo/EVIDENCE.md"}),
+            )
+        }
+        (DecisionCase::NoRetainedDecisionEvidence, 2) => {
             record(DecisionStep::MutationAttempt);
             tool_reply(
                 "unretained-premature-mutation",
@@ -206,7 +332,7 @@ pub(super) fn reply(
                 }),
             )
         }
-        (DecisionCase::NoRetainedDecisionEvidence, 2) => {
+        (DecisionCase::NoRetainedDecisionEvidence, 3) => {
             assert!(mutation_was_blocked());
             record(DecisionStep::MutationBlocked);
             record(DecisionStep::Complete);
@@ -221,5 +347,15 @@ fn assert_fallback(view: &RequestView, mutation_was_blocked: &impl Fn() -> bool)
     assert!(mutation_was_blocked());
     assert!(view.messages.iter().any(|message| {
         message.role == "user" && message.content.contains("minimal conventional fallback")
+    }));
+}
+
+fn assert_incomplete(view: &RequestView, mutation_was_blocked: &impl Fn() -> bool) {
+    assert!(mutation_was_blocked());
+    assert!(view.messages.iter().all(|message| {
+        message.role != "user"
+            || !message.content.contains(
+                "codebase-memory is systemically unavailable and graph exploration is closed",
+            )
     }));
 }

@@ -15,7 +15,7 @@ TOOLS = [
 def opaque():
     return "crate::opaque_" + uuid.uuid4().hex
 
-targets = {name: opaque() for name in ["root", "refinement", "implementation", "caller", "behavior", "selectorless_implementation"]}
+targets = {name: opaque() for name in ["root", "refinement", "implementation", "caller", "behavior", "forest_behavior", "selectorless_implementation"]}
 fallback_targets = [f"crate.fallback.nonviable_{index}" for index in range(3)]
 
 def send(value):
@@ -45,6 +45,14 @@ def response(name, args):
             return result(qualified_name=fallback_targets[index])
         if query == "unconsumable":
             return result(opaque="PRIVATE-UNCONSUMABLE-SENTINEL")
+        if query == "forest-focused-test":
+            return result(
+                qualified_name=targets["forest_behavior"],
+                is_test=True,
+                provider_payload="PRIVATE-PROVIDER-PAYLOAD",
+                credential="Authorization: Bearer PRIVATE",
+                host_path="/srv/private/checkout",
+            )
         return {
             "results": [
                 {
@@ -133,6 +141,15 @@ def response(name, args):
             qualified_name=targets["behavior"],
             file_path="EVIDENCE.md",
             source=opaque(),
+            behavioral_test=opaque(),
+            is_test=True,
+        )
+    if name == "get_code_snippet" and args.get("qualified_name") == targets["forest_behavior"]:
+        return result(
+            qualified_name=targets["forest_behavior"],
+            file_path="EVIDENCE.md",
+            source="PRIVATE-PROVIDER-SOURCE",
+            provider_payload="PRIVATE-PROVIDER-PAYLOAD",
             behavioral_test=opaque(),
             is_test=True,
         )

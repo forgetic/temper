@@ -33,6 +33,7 @@ mod tests {
     mod convergence {
         include!("decision_anchor_convergence.rs");
         include!("decision_anchor_exact_read.rs");
+        include!("decision_anchor_convergence_matrix.rs");
         include!("decision_anchor_progress.rs");
     }
 

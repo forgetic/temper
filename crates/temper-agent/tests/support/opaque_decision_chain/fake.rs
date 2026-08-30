@@ -89,6 +89,21 @@ pub(super) fn decision_chain_fake(
                 })
                 .unwrap_or_else(|| panic!("missing provider-derived {label} reference"))
         };
+        let recovery_selector_from = |label: &str, result_marker: &str| {
+            let marker = format!("{label}=temper-recovery-selector:");
+            view.messages
+                .iter()
+                .find(|message| message.content.contains(result_marker))
+                .and_then(|message| {
+                    let start = message.content.find(&marker)? + label.len() + 1;
+                    let value = &message.content[start..];
+                    let end = value
+                        .find([',', ' ', ']', '.'])
+                        .unwrap_or(value.len());
+                    Some(value[..end].to_string())
+                })
+                .unwrap_or_else(|| panic!("missing {label} reference on {result_marker}"))
+        };
         let record = |step| observed_steps.lock().expect("decision steps lock").push(step);
         let mutation_was_blocked = || {
             view.messages.iter().any(|message| {
@@ -124,6 +139,120 @@ pub(super) fn decision_chain_fake(
         }
 
         match (case, view.prior_tool_results) {
+            (DecisionCase::RootCoherentForest, 0) => {
+                record(DecisionStep::Discovery);
+                tool_replies(&[
+                    (
+                        "discover-forest-implementation",
+                        "codebase_memory_search_graph",
+                        serde_json::json!({"query": "implementation"}),
+                    ),
+                    (
+                        "discover-forest-focused-test",
+                        "codebase_memory_search_graph",
+                        serde_json::json!({"query": "forest-focused-test"}),
+                    ),
+                ])
+            }
+            (DecisionCase::RootCoherentForest, 2) => {
+                record(DecisionStep::Refinement);
+                tool_reply(
+                    "refine-forest-implementation",
+                    "codebase_memory_search_code",
+                    serde_json::json!({"pattern": next_target()}),
+                )
+            }
+            (DecisionCase::RootCoherentForest, 3) => {
+                record(DecisionStep::ImplementationSource);
+                tool_reply(
+                    "read-forest-implementation",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": next_target(),
+                        "decision_evidence_kind": "implementation",
+                    }),
+                )
+            }
+            (DecisionCase::RootCoherentForest, 4) => {
+                record(DecisionStep::Trace);
+                tool_reply(
+                    "trace-forest-implementation",
+                    "codebase_memory_trace_path",
+                    serde_json::json!({
+                        "function_name": recovery_selector("implementation_evidence_result"),
+                        "direction": "inbound",
+                    }),
+                )
+            }
+            (DecisionCase::RootCoherentForest, 5) => {
+                record(DecisionStep::CallerSource);
+                tool_reply(
+                    "read-forest-caller",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": recovery_selector("caller_traversal_result"),
+                        "decision_evidence_kind": "caller",
+                    }),
+                )
+            }
+            (DecisionCase::RootCoherentForest, 6) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "active-root missing evidence=[focused_test]",
+                        "selector=focused_test_result",
+                    ],
+                );
+                record(DecisionStep::BehavioralTestSource);
+                tool_reply(
+                    "read-forest-focused-test",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": recovery_selector_from(
+                            "focused_test_result",
+                            "PRIVATE-PROVIDER-PAYLOAD",
+                        ),
+                        "decision_evidence_kind": "focused_test",
+                    }),
+                )
+            }
+            (DecisionCase::RootCoherentForest, 7) => {
+                assert_guidance(
+                    view,
+                    &[
+                        "active-root missing evidence=[]",
+                        "recovery=complete",
+                        "exact read",
+                    ],
+                );
+                record(DecisionStep::SourceRead);
+                tool_reply(
+                    "read-forest-target",
+                    "read",
+                    serde_json::json!({"path": "demo/EVIDENCE.md"}),
+                )
+            }
+            (DecisionCase::RootCoherentForest, 8) => {
+                record(DecisionStep::Mutation);
+                tool_reply(
+                    "mutate-after-forest-evidence",
+                    "write",
+                    serde_json::json!({
+                        "path": "demo/EVIDENCE.md",
+                        "content": "verified forest evidence\n",
+                    }),
+                )
+            }
+            (DecisionCase::RootCoherentForest, 9) => {
+                assert!(
+                    !mutation_was_blocked(),
+                    "complete forest plus exact read must admit the matching mutation",
+                );
+                record(DecisionStep::Complete);
+                Reply::text(
+                    r#"{"title":"Verify coherent decision forest","body":"Complete typed evidence preceded the exact read and mutation.","summary":"Validated coherent decision evidence."}"#,
+                )
+            }
             (DecisionCase::Consumed, 0) => {
                 record(DecisionStep::Discovery);
                 tool_reply(
@@ -281,6 +410,14 @@ pub(super) fn decision_chain_fake(
                     result_count(), 2,
                     "the unrelated target still receives a provider-shaped successful result"
                 );
+                record(DecisionStep::SourceRead);
+                tool_reply(
+                    "read-after-unrelated-result",
+                    "read",
+                    serde_json::json!({"path": "demo/README.md"}),
+                )
+            }
+            (DecisionCase::UnrelatedLaterTarget, 3) => {
                 record(DecisionStep::MutationAttempt);
                 tool_reply(
                     "blocked-unrelated-mutation",
@@ -291,7 +428,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::UnrelatedLaterTarget, 3) => {
+            (DecisionCase::UnrelatedLaterTarget, 4) => {
                 assert!(mutation_was_blocked(), "the core must deny the unrelated mutation");
                 record(DecisionStep::MutationBlocked);
                 record(DecisionStep::Complete);

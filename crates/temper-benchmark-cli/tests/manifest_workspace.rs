@@ -10,6 +10,7 @@ use temper_benchmark_cli::{
     BenchmarkArtifactLayout, BenchmarkManifestError, GraphConsumptionModeV1, GraphDecisionKindV1,
     load_benchmark_manifest, prepare_benchmark_workspace,
 };
+use temper_protocol_activity::GraphCorrelationToolV1;
 use tempfile::TempDir;
 
 fn write_context(root: &Path, repositories: &[(&str, &str)]) {
@@ -274,6 +275,57 @@ fn checked_in_controlled_profile_resolves_fixture_provider_and_exact_patch() {
         "alias_retries_stay_on_the_original_ordered_worker"
     );
     assert_eq!(targets[4].target, "repo/src/route.rs");
+}
+
+#[test]
+fn checked_in_decision_evidence_benchmark_shape_remains_frozen() {
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../benchmarks/agent-sessions/codebase-memory-routing-repair/benchmark.toml");
+    let manifest = load_benchmark_manifest(manifest_path).unwrap();
+    let benchmark = manifest.manifest();
+    let targets = &benchmark.graph_decision_targets;
+
+    assert_eq!(
+        targets.iter().map(|target| target.kind).collect::<Vec<_>>(),
+        [
+            GraphDecisionKindV1::Implementation,
+            GraphDecisionKindV1::Implementation,
+            GraphDecisionKindV1::Caller,
+            GraphDecisionKindV1::FocusedTest,
+            GraphDecisionKindV1::Implementation,
+        ],
+    );
+    assert_eq!(
+        (
+            targets[2].producer.tool,
+            targets[2].consumption[0].tool,
+            targets[3].producer.tool,
+            targets[3].consumption[0].tool,
+            targets[4].producer.tool,
+            targets[4].target.as_str(),
+        ),
+        (
+            GraphCorrelationToolV1::TracePath,
+            GraphCorrelationToolV1::GetCodeSnippet,
+            GraphCorrelationToolV1::SearchGraph,
+            GraphCorrelationToolV1::GetCodeSnippet,
+            GraphCorrelationToolV1::GetCodeSnippet,
+            "repo/src/route.rs",
+        ),
+        "caller and focused-test source consumption plus the exact implementation selection must stay mapped",
+    );
+    let acceptance = benchmark.acceptance.as_ref().unwrap();
+    assert_eq!(
+        acceptance.required_consumption_modes,
+        [
+            GraphConsumptionModeV1::Source,
+            GraphConsumptionModeV1::Selection,
+        ],
+    );
+    assert_eq!(
+        acceptance.exact_source_selection_target,
+        "repo/src/route.rs"
+    );
 }
 
 #[test]
