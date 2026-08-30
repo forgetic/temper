@@ -26,11 +26,15 @@ use guidance::assert_guidance;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DecisionCase {
     Consumed,
+    RootCoherentForest,
     StagedDetourRecovery,
     UnrelatedLaterTarget,
     ProducerTurnDependents,
     ImplementationOnlyProviderFallback,
     ImplementationFocusedProviderFallback,
+    ImplementationOnlyIncomplete,
+    ImplementationAndFocusedTestIncomplete,
+    ImplementationAndCallerIncomplete,
     NoRetainedDecisionEvidence,
     ConventionalReadSubstitution,
     IncompleteSourceEvidence,
@@ -72,6 +76,7 @@ pub enum DecisionStep {
 pub struct DecisionRun {
     pub steps: Vec<DecisionStep>,
     pub mutation: Option<String>,
+    pub report: Option<String>,
 }
 
 static DECISION_CHAIN_RUN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -93,11 +98,16 @@ pub fn run(case: DecisionCase) -> DecisionRun {
     if matches!(
         case,
         DecisionCase::Consumed
+            | DecisionCase::RootCoherentForest
             | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
             | DecisionCase::AllRootsNonViableIncomplete
             | DecisionCase::ImplementationOnlyProviderFallback
             | DecisionCase::ImplementationFocusedProviderFallback
+            | DecisionCase::ImplementationOnlyIncomplete
+            | DecisionCase::ImplementationAndFocusedTestIncomplete
+            | DecisionCase::ImplementationAndCallerIncomplete
+            | DecisionCase::NoRetainedDecisionEvidence
             | DecisionCase::SelectorlessViableRootIncomplete
     ) {
         fs::write(
@@ -144,9 +154,14 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         )
         .await
     });
+    let report = result
+        .as_ref()
+        .ok()
+        .map(|result| serde_json::to_string(result).expect("serialize workspace report"));
     match (case, result) {
         (
             DecisionCase::Consumed
+            | DecisionCase::RootCoherentForest
             | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
             | DecisionCase::ImplementationOnlyProviderFallback
@@ -157,6 +172,7 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         }
         (
             DecisionCase::Consumed
+            | DecisionCase::RootCoherentForest
             | DecisionCase::StagedDetourRecovery
             | DecisionCase::UnavailableAfterRoot
             | DecisionCase::ImplementationOnlyProviderFallback
@@ -185,6 +201,7 @@ pub fn run(case: DecisionCase) -> DecisionRun {
             },
         ))
         .ok(),
+        report,
     }
 }
 

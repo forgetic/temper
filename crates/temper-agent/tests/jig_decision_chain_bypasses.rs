@@ -17,6 +17,7 @@ fn jig_agent_does_not_mutate_after_an_unrelated_later_turn_target() {
         vec![
             DecisionStep::Discovery,
             DecisionStep::UnrelatedLaterTarget,
+            DecisionStep::SourceRead,
             DecisionStep::MutationAttempt,
             DecisionStep::MutationBlocked,
             DecisionStep::Complete,
@@ -113,16 +114,109 @@ fn jig_agent_requires_complete_evidence_or_an_exact_conventional_fallback() {
 fn jig_agent_stops_when_successful_targeted_results_retain_no_decision_evidence() {
     let run = run(DecisionCase::NoRetainedDecisionEvidence);
 
-    assert_eq!(run.mutation, None);
+    assert_eq!(run.mutation.as_deref(), Some("pending exact read\n"));
     assert_eq!(
         run.steps,
         vec![
             DecisionStep::Discovery,
+            DecisionStep::SourceRead,
             DecisionStep::MutationAttempt,
             DecisionStep::MutationBlocked,
             DecisionStep::Complete,
         ],
     );
+}
+
+#[test]
+fn jig_agent_stops_after_exact_reads_for_every_incomplete_successful_kind_matrix() {
+    for (case, expected_steps) in [
+        (
+            DecisionCase::ImplementationOnlyIncomplete,
+            vec![
+                DecisionStep::Discovery,
+                DecisionStep::Refinement,
+                DecisionStep::ImplementationSource,
+                DecisionStep::SourceRead,
+                DecisionStep::MutationAttempt,
+                DecisionStep::MutationBlocked,
+                DecisionStep::Complete,
+            ],
+        ),
+        (
+            DecisionCase::ImplementationAndFocusedTestIncomplete,
+            vec![
+                DecisionStep::Discovery,
+                DecisionStep::Refinement,
+                DecisionStep::ImplementationSource,
+                DecisionStep::BehavioralTestSource,
+                DecisionStep::SourceRead,
+                DecisionStep::MutationAttempt,
+                DecisionStep::MutationBlocked,
+                DecisionStep::Complete,
+            ],
+        ),
+        (
+            DecisionCase::ImplementationAndCallerIncomplete,
+            vec![
+                DecisionStep::Discovery,
+                DecisionStep::Refinement,
+                DecisionStep::ImplementationSource,
+                DecisionStep::Trace,
+                DecisionStep::CallerSource,
+                DecisionStep::SourceRead,
+                DecisionStep::MutationAttempt,
+                DecisionStep::MutationBlocked,
+                DecisionStep::Complete,
+            ],
+        ),
+    ] {
+        let run = run(case);
+        assert_eq!(
+            run.mutation.as_deref(),
+            Some("pending exact read\n"),
+            "{case:?} changed the seeded target",
+        );
+        assert_eq!(run.steps, expected_steps, "{case:?}");
+    }
+}
+
+#[test]
+fn jig_agent_completes_a_root_coherent_forest_before_exact_read_and_mutation() {
+    let run = run(DecisionCase::RootCoherentForest);
+
+    assert_eq!(run.mutation.as_deref(), Some("verified forest evidence\n"));
+    assert_eq!(
+        run.steps,
+        vec![
+            DecisionStep::Discovery,
+            DecisionStep::Refinement,
+            DecisionStep::ImplementationSource,
+            DecisionStep::Trace,
+            DecisionStep::CallerSource,
+            DecisionStep::BehavioralTestSource,
+            DecisionStep::SourceRead,
+            DecisionStep::Mutation,
+            DecisionStep::Complete,
+        ],
+    );
+    let report = run
+        .report
+        .expect("complete forest returns a workspace report");
+    for private in [
+        "PRIVATE-PROVIDER-PAYLOAD",
+        "PRIVATE-PROVIDER-SOURCE",
+        "Authorization: Bearer PRIVATE",
+        "/srv/private/checkout",
+        "crate::opaque_",
+        "qualified_name",
+        "decision_evidence_kind",
+        "\"arguments\"",
+    ] {
+        assert!(
+            !report.contains(private),
+            "workspace summary leaked {private:?}"
+        );
+    }
 }
 
 #[test]
@@ -143,6 +237,10 @@ fn jig_agent_uses_conventional_fallback_after_an_unavailable_expected_descendant
             DecisionStep::Mutation,
             DecisionStep::Complete,
         ]
+    );
+    assert!(
+        !run.steps.contains(&DecisionStep::GraphRetry),
+        "trusted unavailability must not trigger an immediate graph retry",
     );
 }
 
