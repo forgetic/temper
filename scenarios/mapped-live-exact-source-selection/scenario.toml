@@ -19,7 +19,7 @@ uses = "manifest"
 feature = "ai/temper#1210"
 plan = "ai/temper#1211"
 source_branch = "agent/pr-for-feature-1210"
-change = "updated"
+change = "new"
 
 [feature_contract]
 claim = "Enabled mutation authority requires one retained root-coherent forest containing implementation, caller, and focused_test source evidence; incomplete, cross-root, irrelevant, malformed, denied, and failed activity receives no credit, and only one exact ordinary read after completion authorizes the matching mutation."
