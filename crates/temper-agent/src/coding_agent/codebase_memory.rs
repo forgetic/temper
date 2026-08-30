@@ -159,36 +159,34 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          Only the selected-implementation traversal's provider-returned caller identities are eligible\n\
          later-turn caller/model selectors. A\n\
          complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
-         manufacture caller evidence by rereading the traced symbol as its own caller. Initial task-semantic\n\
-         discovery may over-return a test-shaped candidate, but that candidate cannot complete or select\n\
-         focused-test evidence. After implementation traversal and exact traversal-derived caller source\n\
-         evidence are complete, follow the single action named by Decision guidance: issue one same-root\n\
-         `search_graph` / `graph_query` focused-test search in the next turn. Derive its query from the task's\n\
-         behavioral regression intent; never copy a fixture or test name from task text, source, diagnostics,\n\
-         an initial provider result, or an independent root. Then consume only the exact test returned by\n\
-         that semantic search with `get_code_snippet` / `qualified_name` / `focused_test` in one still-later\n\
-         turn. Do not substitute the initial test-shaped candidate, issue a caller-to-test traversal, or\n\
-         make another provider request between the semantic search and its exact returned test source. If\n\
-         the semantic search returns no eligible test, follow the resulting closed stop or fallback guidance\n\
-         without retrying or inventing a selector.\n\
+         manufacture caller evidence by rereading the traced symbol as its own caller. Initial discovery may\n\
+         establish independent implementation and focused-test roots in parallel, but every dependent selector\n\
+         must come from its own provider result. Focused-test evidence follows a separately admitted root:\n\
+         consume only an exact test identity returned by that root in a later turn, and keep its exact source\n\
+         lineage on that root. Never move focused-test evidence onto the implementation root, derive a recovery\n\
+         selector from task text, source, diagnostics, or another root, or issue an unlisted semantic search or\n\
+         caller-to-test traversal. If no provider-derived focused-test action remains, follow the closed\n\
+         stop-without-product guidance without retrying or inventing a selector.\n\
          After a local\n\
          decision-evidence denial, follow only the compatible recovery menu and never repeat the denied\n\
          tool/selector/evidence-kind tuple. Do not batch speculative snippets with a producer, and do not\n\
-         issue the test source read until a later turn has received the semantic search's typed result. When\n\
+         issue a source consumer until a later turn has received its producer's typed result. When\n\
          multiple typed routes could fill a decision gap, favor the route whose producer query, returned\n\
          implementation, and consumer chain are semantically connected to the requested behavior; an\n\
          evidence-kind declaration alone does not make an incidental route preferable. Keep every source\n\
-         selector provider-derived and on the active root. Failures and unavailable tools retain conventional\n\
-         discovery as the fallback. Keep genuinely independent discovery parallel. A call that\n\
+         selector provider-derived and on the root that produced it. Successful enabled activity never\n\
+         releases conventional mutation authority: follow bounded compatible recovery or stop without a\n\
+         product. Trusted systemic unavailability remains a distinct one-failure, non-retrying conventional\n\
+         fallback. Keep genuinely independent discovery parallel. A call that\n\
          consumes the current result must be in a later model turn; later evidence calls whose\n\
          selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
-         source evidence covers the selected current-root implementation, its caller/model,\n\
-         and focused behavioral tests, sufficient to justify the smallest semantic diff. Bound later\n\
-         independent roots and do not repeat successful discovery that adds no typed evidence. Once a\n\
-         current-root trace and sufficient implementation/caller/test source evidence complete the\n\
-         decision chain, stop codebase-memory exploration, obey convergence or exploration-closed\n\
-         messages, use conventional reads for any remaining verification, and produce the smallest\n\
-         role-appropriate product.\n\n\
+         source evidence covers the selected implementation and its inbound caller on one root plus the\n\
+         focused behavioral test on its own retained root, sufficient to justify the smallest semantic diff.\n\
+         Bound later independent roots, pivots, readiness rechecks, and rejected selector tuples; repeated,\n\
+         broad, malformed, irrelevant, or cross-root attempts add no evidence and cannot reopen exploration.\n\
+         Once the retained forest contains the complete implementation/caller and focused-test lineages, stop\n\
+         codebase-memory exploration, obey convergence or exploration-closed messages, use conventional reads\n\
+         for any remaining verification, and produce the smallest role-appropriate product.\n\n\
          Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
          - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
            symptom, file, or area; then use call/path tracing and read exact source snippets as\n\
@@ -385,26 +383,26 @@ for line in sys.stdin:
             "later-turn caller/model selectors",
             "complete empty inbound trace settles that selected symbol's graph-caller relationship",
             "manufacture caller evidence by rereading the traced symbol as its own caller",
-            "Initial task-semantic",
-            "test-shaped candidate, but that candidate cannot complete or select",
-            "focused-test evidence",
-            "exact traversal-derived caller source",
-            "single action named by Decision guidance",
-            "one same-root",
-            "`search_graph` / `graph_query` focused-test search",
-            "behavioral regression intent",
-            "never copy a fixture or test name",
-            "an initial provider result, or an independent root",
-            "exact test returned by",
-            "`get_code_snippet` / `qualified_name` / `focused_test`",
-            "Do not substitute the initial test-shaped candidate",
-            "issue a caller-to-test traversal",
-            "between the semantic search and its exact returned test source",
+            "Initial discovery may",
+            "independent implementation and focused-test roots",
+            "every dependent selector",
+            "must come from its own provider result",
+            "Focused-test evidence follows a separately admitted root",
+            "exact test identity returned by that root in a later turn",
+            "keep its exact source",
+            "lineage on that root",
+            "Never move focused-test evidence onto the implementation root",
+            "derive a recovery",
+            "selector from task text",
+            "unlisted semantic search or",
+            "caller-to-test traversal",
+            "no provider-derived focused-test action remains",
+            "stop-without-product guidance",
             "without retrying or inventing a selector",
             "follow only the compatible recovery menu",
             "tool/selector/evidence-kind tuple",
             "Do not batch speculative snippets with a producer",
-            "issue the test source read until a later turn has received the semantic search's typed result",
+            "issue a source consumer until a later turn has received its producer's typed result",
             "multiple typed routes could fill a decision gap",
             "whose producer query, returned",
             "implementation, and consumer chain are semantically connected to the requested behavior",
@@ -412,16 +410,21 @@ for line in sys.stdin:
             "evidence-kind declaration alone does not make an incidental route",
             "preferable",
             "Keep every source",
-            "selector provider-derived and on the active root",
+            "selector provider-derived and on the root that produced it",
+            "Successful enabled activity never",
+            "Trusted systemic unavailability remains a distinct",
             "Do not mutate until consumed",
-            "selected current-root implementation, its caller/model",
-            "focused behavioral tests",
+            "selected implementation and its inbound caller on one root",
+            "focused behavioral test on its own retained root",
             "smallest semantic diff",
-            "Bound later",
-            "do not repeat successful discovery that adds no typed evidence",
-            "stop codebase-memory exploration",
+            "pivots, readiness rechecks, and rejected selector tuples",
+            "cannot reopen exploration",
+            "retained forest",
+            "stop",
+            "codebase-memory exploration",
             "convergence or exploration-closed",
-            "messages, use conventional reads for any remaining verification",
+            "use conventional reads",
+            "for any remaining verification",
             "role-appropriate product",
         ] {
             assert!(prompt.contains(expected), "prompt omitted {expected:?}");

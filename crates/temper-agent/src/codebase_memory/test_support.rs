@@ -250,7 +250,7 @@ for line in sys.stdin:
                     "MODEL-VISIBLE-TYPED-RESULT symbol=run",
                     structured={
                         "results": [
-                            {"results": [{"symbol": "run"}]},
+                            {"results": [{"symbol": "run"}, {"qualified_name": "crate::engine::behavior", "is_test": True}]},
                             {"callers": [{"qualifiedName": "crate::engine::caller"}]},
                             {"related_source_references": [{"qualified_name": "crate::engine::source"}]},
                             {"source_metadata": {

@@ -205,35 +205,20 @@ pub(super) fn decision_chain_fake(
                     &[
                         "accepted evidence=[caller]",
                         "active-root missing evidence=[focused_test]",
-                        "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]",
-                    ],
-                );
-                record(DecisionStep::FocusedTestSearch);
-                tool_reply(
-                    "search-semantic-behavioral-test",
-                    "codebase_memory_search_graph",
-                    serde_json::json!({"query": "focused behavioral regression"}),
-                )
-            }
-            (DecisionCase::Consumed, 6) => {
-                assert_guidance(
-                    view,
-                    &[
-                        "accepted evidence=[focused_test_route]",
                         "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]",
                     ],
                 );
                 record(DecisionStep::BehavioralTestSource);
                 tool_reply(
-                    "read-semantic-behavioral-test",
+                    "read-provider-behavioral-test",
                     "codebase_memory_get_code_snippet",
                     serde_json::json!({
-                        "qualified_name": focused_test_target(),
+                        "qualified_name": recovery_selector("focused_test_result"),
                         "decision_evidence_kind": "focused_test",
                     }),
                 )
             }
-            (DecisionCase::Consumed, 7) => {
+            (DecisionCase::Consumed, 6) => {
                 assert_guidance(
                     view,
                     &[
@@ -248,7 +233,7 @@ pub(super) fn decision_chain_fake(
                         && provider_values("caller_model").len() == 1
                         && provider_values("implementation_source").len() == 1
                         && provider_values("behavioral_test").len() == 1,
-                    "mutation requires consumed current-root, caller/model, and focused behavioral-test evidence"
+                    "mutation requires consumed implementation/caller and focused-test evidence"
                 );
                 tool_reply(
                     "read-exact-target-after-evidence",
@@ -256,7 +241,7 @@ pub(super) fn decision_chain_fake(
                     serde_json::json!({"path": "demo/EVIDENCE.md"}),
                 )
             }
-            (DecisionCase::Consumed, 8) => {
+            (DecisionCase::Consumed, 7) => {
                 record(DecisionStep::Mutation);
                 tool_reply(
                     "mutate-after-evidence",
@@ -267,7 +252,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::Consumed, 9) => {
+            (DecisionCase::Consumed, 8) => {
                 record(DecisionStep::Complete);
                 Reply::text(r#"{"summary":"Mutated after consumed result-derived evidence."}"#)
             }
@@ -566,6 +551,22 @@ pub(super) fn decision_chain_fake(
                 let target = provider_values("qualified_name")
                     .get(root_index)
                     .cloned()
+                    .expect("the retained root exposes its implementation selector");
+                record(DecisionStep::ImplementationSource);
+                tool_reply(
+                    &format!("nonviable-implementation-{root_index}"),
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": target,
+                        "decision_evidence_kind": "implementation",
+                    }),
+                )
+            }
+            (DecisionCase::AllRootsNonViableIncomplete, count @ 6 | count @ 8 | count @ 10) => {
+                let root_index = (count - 6) / 2;
+                let target = provider_values("qualified_name")
+                    .get(root_index)
+                    .cloned()
                     .expect("the retained root exposes its trace selector");
                 record(DecisionStep::Trace);
                 tool_reply(
@@ -575,22 +576,6 @@ pub(super) fn decision_chain_fake(
                         "function_name": target,
                         "mode": "calls",
                         "direction": "inbound",
-                    }),
-                )
-            }
-            (DecisionCase::AllRootsNonViableIncomplete, count @ 6 | count @ 8 | count @ 10) => {
-                let root_index = (count - 6) / 2;
-                let target = provider_values("qualified_name")
-                    .get(root_index)
-                    .cloned()
-                    .expect("the retained root exposes its implementation selector");
-                record(DecisionStep::ImplementationSource);
-                tool_reply(
-                    &format!("nonviable-implementation-{root_index}"),
-                    "codebase_memory_get_code_snippet",
-                    serde_json::json!({
-                        "qualified_name": target,
-                        "decision_evidence_kind": "implementation",
                     }),
                 )
             }

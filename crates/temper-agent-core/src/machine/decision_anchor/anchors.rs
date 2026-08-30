@@ -4,17 +4,20 @@ use super::*;
 
 impl DecisionAnchorState {
     pub(in crate::machine) fn active_root_binding(&self) -> Option<&str> {
-        let anchors = match self.phase.as_ref()? {
-            AnchorPhase::Root(anchors)
-            | AnchorPhase::Trail(anchors)
-            | AnchorPhase::EnabledComplete(anchors) => anchors,
-            AnchorPhase::Recovery(recovery) => &recovery.anchors,
-            AnchorPhase::GapRecovery(recovery) => &recovery.anchors,
-            AnchorPhase::EnabledIncomplete(_) | AnchorPhase::ProviderUnavailable => {
-                return None;
-            }
-        };
-        anchors.active_root().map(|(binding, _)| binding.as_str())
+        match self.phase.as_ref()? {
+            AnchorPhase::Root(anchors) | AnchorPhase::Trail(anchors) => anchors
+                .active_selection(&BTreeSet::new())
+                .map(|(binding, _)| binding.as_str()),
+            AnchorPhase::EnabledComplete(anchors) => anchors
+                .implementation_root()
+                .map(|(binding, _)| binding.as_str()),
+            AnchorPhase::Recovery(recovery) => recovery
+                .anchors
+                .active_selection(&BTreeSet::new())
+                .map(|(binding, _)| binding.as_str()),
+            AnchorPhase::GapRecovery(recovery) => Some(recovery.active_root.as_str()),
+            AnchorPhase::EnabledIncomplete(_) | AnchorPhase::ProviderUnavailable => None,
+        }
     }
 }
 
@@ -42,8 +45,7 @@ impl Anchor {
     }
 
     pub(super) fn supports(&self, action: GraphRecoveryActionV1) -> bool {
-        action == GraphRecoveryActionV1::focused_test_semantic_fallback()
-            || self.result_target_kinds.contains(&action.selector_kind)
+        self.result_target_kinds.contains(&action.selector_kind)
     }
 
     pub(super) fn accepts(
@@ -60,10 +62,7 @@ impl Anchor {
                 || (lineage.target_kind == DecisionAnchorTargetKindV1::QualifiedNamePattern
                     && self
                         .result_target_kinds
-                        .contains(&DecisionAnchorTargetKindV1::QualifiedName))
-                || (call.recovery_gap
-                    == Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
-                    && lineage.target_kind == DecisionAnchorTargetKindV1::GraphQuery))
+                        .contains(&DecisionAnchorTargetKindV1::QualifiedName)))
     }
 }
 
@@ -196,42 +195,50 @@ impl AnchorForest {
     }
 
     pub(super) fn has_complete_evidence(&self) -> bool {
-        self.roots.values().any(|root| root.evidence.is_complete())
+        self.roots
+            .iter()
+            .any(|(implementation_binding, implementation)| {
+                implementation.evidence.implementation_is_complete()
+                    && self.roots.iter().any(|(focused_binding, focused)| {
+                        (focused_binding != implementation_binding || self.roots.len() == 1)
+                            && focused.evidence.focused_test_is_complete()
+                    })
+            })
     }
 
     pub(super) fn root_has_complete_evidence(&self, root_binding: &str) -> bool {
-        self.roots
-            .get(root_binding)
-            .is_some_and(|root| root.evidence.is_complete())
+        self.roots.get(root_binding).is_some_and(|root| {
+            root.evidence.implementation_is_complete()
+                && self.roots.iter().any(|(focused_binding, focused)| {
+                    (focused_binding != root_binding || self.roots.len() == 1)
+                        && focused.evidence.focused_test_is_complete()
+                })
+        })
     }
 
     pub(super) fn active_evidence(&self) -> SourceEvidence {
-        self.active_root()
-            .map(|(_, root)| root.evidence.clone())
+        self.active_selection(&BTreeSet::new())
+            .and_then(|(binding, _)| self.roots.get(binding))
+            .or_else(|| self.implementation_root().map(|(_, root)| root))
+            .map(|root| root.evidence.clone())
             .unwrap_or_default()
     }
 
-    /// Selects one recoverable root by actual typed progress, then by the
-    /// wrapper-independent stable call order which first produced that root.
-    pub(super) fn recovery_root_binding(&self) -> Option<String> {
-        self.recovery_root_binding_excluding(&BTreeSet::new())
+    pub(super) fn recovery_selection(&self) -> Option<(String, RecoveryRoute)> {
+        self.active_selection(&BTreeSet::new())
+            .map(|(binding, route)| (binding.clone(), route))
     }
 
-    pub(super) fn recovery_root_binding_excluding(
+    pub(super) fn recovery_selection_excluding(
         &self,
         exhausted_roots: &BTreeSet<String>,
-    ) -> Option<String> {
-        self.ranked_roots()
-            .find(|(binding, root)| {
-                !exhausted_roots.contains(binding.as_str())
-                    && !root.evidence.compatible_actions(root).is_empty()
-            })
-            .map(|(binding, _)| binding.clone())
+    ) -> Option<(String, RecoveryRoute)> {
+        self.active_selection(exhausted_roots)
+            .map(|(binding, route)| (binding.clone(), route))
     }
 
-    pub(super) fn active_has_compatible_actions(&self) -> bool {
-        self.active_root()
-            .is_some_and(|(_, root)| !root.evidence.compatible_actions(root).is_empty())
+    pub(super) fn has_compatible_actions(&self) -> bool {
+        self.active_selection(&BTreeSet::new()).is_some()
     }
 
     pub(super) fn expected_for_call(
@@ -244,21 +251,105 @@ impl AnchorForest {
             .admitted_root
             .as_ref()
             .and_then(|binding| self.roots.get(binding))
-            .or_else(|| self.active_root().map(|(_, root)| root));
+            .or_else(|| {
+                self.active_selection(&BTreeSet::new())
+                    .and_then(|(binding, _)| self.roots.get(binding))
+            });
         root.is_some_and(|root| root.evidence.expects(gap, tool))
     }
 
-    pub(super) fn active_root(&self) -> Option<(&String, &Anchor)> {
-        self.ranked_roots().next()
+    pub(super) fn active_selection(
+        &self,
+        exhausted_roots: &BTreeSet<String>,
+    ) -> Option<(&String, RecoveryRoute)> {
+        if let Some((binding, _)) = self
+            .ranked_implementation_roots()
+            .find(|(binding, root)| {
+                !exhausted_roots.contains(binding.as_str())
+                    && (!root
+                        .evidence
+                        .compatible_actions(root, RecoveryRoute::Implementation)
+                        .is_empty()
+                        || root.evidence.implementation_is_complete())
+            })
+            .filter(|(_, root)| !root.evidence.implementation_is_complete())
+        {
+            return Some((binding, RecoveryRoute::Implementation));
+        }
+
+        let (implementation_binding, implementation) = self.implementation_root()?;
+        if !implementation.evidence.implementation_is_complete() {
+            return None;
+        }
+        self.ranked_focused_test_roots(implementation_binding)
+            .find(|(binding, root)| {
+                !exhausted_roots.contains(binding.as_str())
+                    && !root.evidence.focused_test_is_complete()
+                    && !root
+                        .evidence
+                        .compatible_actions(root, RecoveryRoute::FocusedTest)
+                        .is_empty()
+            })
+            .map(|(binding, _)| (binding, RecoveryRoute::FocusedTest))
     }
 
-    fn ranked_roots(&self) -> impl Iterator<Item = (&String, &Anchor)> {
+    pub(super) fn missing_kinds(
+        &self,
+        active_root: &str,
+        route: RecoveryRoute,
+    ) -> Vec<GraphRecoveryEvidenceKindV1> {
+        let mut missing = self
+            .roots
+            .get(active_root)
+            .map_or_else(Vec::new, |root| root.evidence.missing_kinds(route));
+        if route == RecoveryRoute::Implementation
+            && self
+                .roots
+                .get(active_root)
+                .is_some_and(|root| !root.evidence.focused_test_is_complete())
+        {
+            missing.push(GraphRecoveryEvidenceKindV1::FocusedTest);
+            missing.sort();
+            missing.dedup();
+        }
+        missing
+    }
+
+    pub(super) fn implementation_root(&self) -> Option<(&String, &Anchor)> {
+        self.ranked_implementation_roots()
+            .find(|(_, root)| root.evidence.implementation_is_complete())
+            .or_else(|| self.ranked_implementation_roots().next())
+    }
+
+    fn ranked_implementation_roots(&self) -> impl Iterator<Item = (&String, &Anchor)> {
         let mut roots = self.roots.iter().collect::<Vec<_>>();
         roots.sort_by(|(left_binding, left), (right_binding, right)| {
             right
                 .evidence
-                .progress_count()
-                .cmp(&left.evidence.progress_count())
+                .implementation_progress_count()
+                .cmp(&left.evidence.implementation_progress_count())
+                .then_with(|| left.produced_order.cmp(&right.produced_order))
+                .then_with(|| left_binding.cmp(right_binding))
+        });
+        roots.into_iter()
+    }
+
+    fn ranked_focused_test_roots<'a>(
+        &'a self,
+        implementation_binding: &'a str,
+    ) -> impl Iterator<Item = (&'a String, &'a Anchor)> {
+        let mut roots = self.roots.iter().collect::<Vec<_>>();
+        roots.sort_by(|(left_binding, left), (right_binding, right)| {
+            let left_same = left_binding.as_str() == implementation_binding;
+            let right_same = right_binding.as_str() == implementation_binding;
+            left_same
+                .cmp(&right_same)
+                .then_with(|| {
+                    right
+                        .evidence
+                        .focused_test_is_complete()
+                        .cmp(&left.evidence.focused_test_is_complete())
+                })
                 .then_with(|| left.produced_order.cmp(&right.produced_order))
                 .then_with(|| left_binding.cmp(right_binding))
         });

@@ -52,38 +52,35 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "eligible later-turn caller/model selectors",
         "complete empty inbound trace settles that selected symbol's graph-caller relationship",
         "do not manufacture caller evidence by rereading the traced symbol as its own caller",
-        "Initial task-semantic discovery may over-return a test-shaped candidate",
-        "cannot complete or select focused-test evidence",
-        "After caller source evidence is complete",
-        "single focused-test action named by Decision guidance",
-        "one same-root `search_graph` / `graph_query` semantic search",
-        "behavioral-regression query from task intent",
-        "never copy a fixture or test name from task text, source, diagnostics, an initial result, or an independent root",
-        "exact test returned by that search",
-        "`get_code_snippet` / `qualified_name` / `focused_test` in one still-later turn",
-        "Do not substitute the initial test-shaped candidate",
-        "issue a caller-to-test traversal",
-        "between the semantic search and its exact returned source",
-        "without retrying or inventing a selector",
+        "Initial discovery may establish independent implementation and focused-test roots",
+        "every dependent selector must come from its own provider result",
+        "Focused-test evidence follows a separately admitted root",
+        "exact test identity returned by that root in a later turn",
+        "keep its source lineage on that root",
+        "Never move focused-test evidence onto the implementation root",
+        "derive a recovery selector from task text",
+        "unlisted semantic search or caller-to-test traversal",
+        "no provider-derived focused-test action remains",
+        "stop without a product instead of inventing a selector",
         "multiple typed routes could fill a decision gap",
         "producer query, returned implementation, and consumer chain are semantically connected",
         "evidence-kind declaration alone cannot make an incidental route preferable",
         "Keep every source selector",
-        "provider-derived and on the active root",
+        "provider-derived and on the root that produced it",
+        "Successful enabled activity never releases conventional mutation authority",
+        "trusted systemic unavailability remains a distinct non-retrying fallback",
         "After a local decision-evidence denial",
         "follow only this compatible menu",
         "never repeat the denied tool/selector/evidence-kind tuple",
-        "Do not batch speculative snippet reads with a producer",
-        "never issue the test source read until a later",
-        "turn after the semantic search has returned its exact provider-typed test identity",
-        "Do not mutate until consumed source evidence covers the selected current-root implementation, its caller/model, and focused behavioral tests",
+        "Do not batch a source consumer with its producer",
+        "issue it only in a later turn after the exact provider-typed identity was admitted",
+        "Do not mutate until the retained forest covers the selected implementation and its inbound caller on one root plus the focused behavioral test on its own root",
         "smallest semantic diff",
         "closed decision-evidence recovery guidance lists compatible actions",
         "complete next-step menu for the selected active root",
         "use only those tool/selector/evidence combinations",
         "up to the remaining allowance",
-        "matching values already visible in that root's typed results",
-        "listed task-semantic graph-query fallback must be newly derived from task intent",
+        "matching provider-derived values already admitted for that root",
         "Do not issue unlisted discovery searches, start or switch to an unrelated root",
         "repeat a locally denied graph call, or mutate",
         "Independent root creation remains available during ordinary discovery",
@@ -112,7 +109,8 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "Task correctness and required validation take priority",
         "Keep repository-index exploration progress-bounded for this role",
         "do not repeat non-progressing discovery or grow new roots",
-        "Once a current-root trace and sufficient implementation/caller/test source evidence complete the decision chain",
+        "Bound pivots, readiness rechecks, and rejected selector tuples",
+        "Once the retained implementation/caller and focused-test lineages complete the forest",
         "stop graph calls",
         "obey convergence or exploration-closed messages",
         "use conventional reads for any remaining verification",
@@ -142,7 +140,7 @@ fn system_prompt_uses_role_aware_efficiency_guidance() {
         "8–12 total responses",
         "successful targeted graph result",
         "decision checkpoint",
-        "current-root implementation, its caller/model",
+        "selected implementation and its inbound caller on one root",
         "smallest semantic diff",
         "producer and consumer calls",
         "explanatory comments unless the task",
@@ -221,11 +219,12 @@ fn coding_prompt_routes_caller_work_from_provider_selected_implementation() {
     assert!(implementation < trace && trace < relationships && relationships < empty);
     assert!(empty < denial);
     assert!(engineer.contains("do not manufacture caller evidence by rereading the traced symbol"));
-    assert!(engineer.contains("Initial task-semantic discovery may over-return"));
-    assert!(engineer.contains("single focused-test action named by Decision guidance"));
-    assert!(engineer.contains("one same-root `search_graph` / `graph_query` semantic search"));
-    assert!(engineer.contains("Do not substitute the initial test-shaped candidate"));
-    assert!(engineer.contains("one still-later turn"));
+    assert!(engineer.contains(
+        "Initial discovery may establish independent implementation and focused-test roots"
+    ));
+    assert!(engineer.contains("Focused-test evidence follows a separately admitted root"));
+    assert!(engineer.contains("Never move focused-test evidence onto the implementation root"));
+    assert!(engineer.contains("derive a recovery selector from task text"));
 }
 
 #[test]
@@ -248,8 +247,8 @@ fn effective_prompts_converge_for_graph_enabled_delivery_and_mechanical_roles() 
         );
         for expected in [
             "exploration progress-bounded for this role",
-            "current-root trace",
-            "implementation/caller/test source evidence",
+            "retained implementation/caller and focused-test lineages",
+            "complete the forest",
             "stop graph calls",
             "smallest role-appropriate product",
         ] {

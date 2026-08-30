@@ -139,10 +139,24 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
                 }
             }
         }
-        (
-            lineages.resolve_for_active_root(tool_name, arguments, active_root),
-            None,
-        )
+        let outcome = lineages.resolve_for_active_root(tool_name, arguments, active_root);
+        if GraphCorrelationToolV1::from_public_name(tool_name)
+            == Some(GraphCorrelationToolV1::GetCodeSnippet)
+            && active_root.is_some()
+            && outcome
+                == LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
+        {
+            let sibling = lineages.resolve_for_active_root(tool_name, arguments, None);
+            if matches!(
+                &sibling,
+                LineageAdmissionOutcome::Eligible(admission)
+                    if admission.evidence_purpose()
+                        == Some(DecisionEvidenceKindV1::FocusedTest)
+            ) {
+                return (sibling, None);
+            }
+        }
+        (outcome, None)
     }
 
     fn trace_recovery_selector(
@@ -236,48 +250,7 @@ impl DecisionAnchorLineages {
                         .map(Eligible)
                         .unwrap_or_else(Ineligible);
                 }
-                let Some(query) = object.get("query").and_then(Value::as_str) else {
-                    return Ineligible(MalformedSelector);
-                };
-                let Some(query_digest) = GraphCorrelationV1::target_digest(query) else {
-                    return Ineligible(MalformedSelector);
-                };
-                let mut roots = self
-                    .focused_test_recovery
-                    .iter()
-                    .filter_map(|(root, state)| {
-                        matches!(
-                            state,
-                            super::FocusedTestRecoveryState::SemanticSearchReady
-                                | super::FocusedTestRecoveryState::TraversalReturnedEmpty
-                        )
-                        .then_some(root.clone())
-                    });
-                let Some(root_binding) = roots.next() else {
-                    return Ineligible(BroadSelector);
-                };
-                if roots.next().is_some() {
-                    return Ineligible(AmbiguousSelector);
-                }
-                match self.semantic_fallback_queries.get(&query_digest) {
-                    Some(Some(existing)) if existing != &root_binding => {
-                        self.semantic_fallback_queries.insert(query_digest, None);
-                        return Ineligible(AmbiguousSelector);
-                    }
-                    Some(None) => return Ineligible(AmbiguousSelector),
-                    Some(Some(_)) => {}
-                    None => {
-                        self.semantic_fallback_queries
-                            .insert(query_digest, Some(root_binding.clone()));
-                    }
-                }
-                self.begin_focused_test_semantic_search(&root_binding);
-                return EligibleLineageAdmission::focused_test_semantic_fallback(
-                    root_binding,
-                    temper_protocol_activity::DecisionAnchorTargetKindV1::GraphQuery,
-                )
-                .map(Eligible)
-                .unwrap_or(Ineligible(IncapableSelection));
+                return Ineligible(BroadSelector);
             }
             GraphCorrelationToolV1::SearchCode => {
                 ("pattern", GraphCorrelationTargetKindV1::Pattern)
@@ -371,6 +344,9 @@ impl DecisionAnchorLineages {
             Some(None) => return Ineligible(AmbiguousSelector),
             None => return Ineligible(UnknownSelector),
         };
+        if active_root.is_some_and(|active_root| binding.root_binding != active_root) {
+            return Ineligible(UnknownSelector);
+        }
         let readiness_recheck = tool_kind == GraphCorrelationToolV1::GetCodeSnippet
             && evidence_purpose == Some(DecisionEvidenceKindV1::Implementation)
             && object

@@ -140,22 +140,50 @@ impl DecisionAnchorState {
     fn guidance_snapshot(&self) -> GuidanceSnapshot {
         match self.phase.as_ref() {
             Some(AnchorPhase::Root(anchors)) | Some(AnchorPhase::Trail(anchors)) => anchors
-                .active_root()
-                .map(|(binding, active)| {
-                    GuidanceSnapshot::from_active(binding, active, "open", None, false)
+                .active_selection(&BTreeSet::new())
+                .and_then(|(binding, route)| {
+                    anchors.roots.get(binding).map(|active| {
+                        GuidanceSnapshot::from_active(
+                            binding,
+                            active,
+                            route,
+                            anchors.missing_kinds(binding, route),
+                            "open",
+                            None,
+                            false,
+                        )
+                    })
                 })
                 .unwrap_or_else(GuidanceSnapshot::empty),
             Some(AnchorPhase::EnabledComplete(anchors)) => anchors
-                .active_root()
+                .implementation_root()
                 .map(|(binding, active)| {
-                    GuidanceSnapshot::from_active(binding, active, "complete", None, true)
+                    GuidanceSnapshot::from_active(
+                        binding,
+                        active,
+                        RecoveryRoute::Implementation,
+                        Vec::new(),
+                        "complete",
+                        None,
+                        true,
+                    )
                 })
                 .unwrap_or_else(GuidanceSnapshot::empty),
             Some(AnchorPhase::Recovery(recovery)) => recovery
                 .anchors
-                .active_root()
-                .map(|(binding, active)| {
-                    GuidanceSnapshot::from_active(binding, active, "root_recovery", None, false)
+                .active_selection(&BTreeSet::new())
+                .and_then(|(binding, route)| {
+                    recovery.anchors.roots.get(binding).map(|active| {
+                        GuidanceSnapshot::from_active(
+                            binding,
+                            active,
+                            route,
+                            recovery.anchors.missing_kinds(binding, route),
+                            "root_recovery",
+                            None,
+                            false,
+                        )
+                    })
                 })
                 .unwrap_or_else(GuidanceSnapshot::empty),
             Some(AnchorPhase::GapRecovery(recovery)) => recovery
@@ -166,6 +194,10 @@ impl DecisionAnchorState {
                     GuidanceSnapshot::from_active(
                         &recovery.active_root,
                         active,
+                        recovery.route,
+                        recovery
+                            .anchors
+                            .missing_kinds(&recovery.active_root, recovery.route),
                         "evidence_recovery",
                         Some(recovery.remaining),
                         false,
@@ -174,7 +206,7 @@ impl DecisionAnchorState {
                 .unwrap_or_else(GuidanceSnapshot::empty),
             Some(AnchorPhase::EnabledIncomplete(evidence)) => GuidanceSnapshot {
                 active_root: None,
-                missing: evidence.missing_kinds(),
+                missing: evidence.all_missing_kinds(),
                 next_actions: Vec::new(),
                 lifecycle: "exhausted",
                 remaining: Some(0),
@@ -190,11 +222,12 @@ impl GuidanceSnapshot {
     fn from_active(
         binding: &str,
         active: &Anchor,
+        route: RecoveryRoute,
+        missing: Vec<GraphRecoveryEvidenceKindV1>,
         lifecycle: &'static str,
         remaining: Option<u8>,
         complete: bool,
     ) -> Self {
-        let missing = active.evidence.missing_kinds();
         let exhausted = remaining == Some(0);
         let lifecycle = if exhausted { "exhausted" } else { lifecycle };
         let mut next_actions = if exhausted {
@@ -202,21 +235,11 @@ impl GuidanceSnapshot {
         } else {
             active
                 .evidence
-                .compatible_actions(active)
+                .compatible_actions(active, route)
                 .into_iter()
                 .map(GraphRecoveryActionV1::model_label)
                 .collect::<Vec<_>>()
         };
-        if !complete
-            && !exhausted
-            && next_actions.is_empty()
-            && missing.contains(&GraphRecoveryEvidenceKindV1::Implementation)
-            && active
-                .result_target_kinds
-                .contains(&DecisionAnchorTargetKindV1::Pattern)
-        {
-            next_actions.push("search_code/pattern/implementation_selector".to_string());
-        }
         if complete {
             next_actions = vec!["read/workspace_target/exact_post_source".to_string()];
         }

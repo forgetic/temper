@@ -4,15 +4,6 @@ use super::*;
 use temper_protocol_activity::FocusedTestDiscoveryOutcomeV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum FocusedTestRecoveryState {
-    SemanticSearchReady,
-    TraversalReturnedEligible,
-    TraversalReturnedEmpty,
-    FallbackPending,
-    FallbackCompleted,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SelectorOrigin {
     ImplementationEvidenceResult {
         traversal_evidence: ImplementationTraversalEvidence,
@@ -20,13 +11,11 @@ pub(super) enum SelectorOrigin {
     CallerTraversalResult,
     CallerEvidenceResult,
     FocusedTestResult,
-    FocusedTestFallbackResult,
 }
 
 pub(super) struct FocusedTestDiscovery {
     pub(super) candidates: Option<BTreeSet<Candidate>>,
     pub(super) outcome: Option<FocusedTestDiscoveryOutcomeV1>,
-    pub(super) is_traversal: bool,
 }
 
 struct ProviderFocusedTestCandidates {
@@ -39,58 +28,42 @@ pub(super) fn focused_test_discovery(
     correlation: &GraphCorrelationV1,
     input: &Value,
     caller_evidence_result: bool,
-    is_fallback: bool,
     typed_parts: Option<&[McpToolResultPart]>,
 ) -> FocusedTestDiscovery {
     let focused_candidates = provider_focused_test_candidates(typed_parts);
-    let fallback_candidates = is_fallback
-        .then(|| {
-            let focused = focused_candidates.as_ref()?;
-            if focused.has_test_classification {
-                Some(focused.exact_source_candidates.clone())
-            } else {
-                provider_exact_source_candidates(typed_parts)
-            }
-        })
-        .flatten();
     let is_traversal = correlation.tool == GraphCorrelationToolV1::TracePath
         && input.get("mode").and_then(Value::as_str) == Some("calls")
         && input.get("direction").and_then(Value::as_str) == Some("inbound")
         && input.get("include_tests").and_then(Value::as_bool) == Some(true)
         && caller_evidence_result;
-    let candidates = if is_fallback {
-        fallback_candidates
-    } else if is_traversal {
-        focused_candidates.map(|focused| focused.candidates)
-    } else {
-        None
-    };
-    let outcome = if correlation.tool == GraphCorrelationToolV1::SearchGraph
+    let is_initial_search = correlation.tool == GraphCorrelationToolV1::SearchGraph
         && correlation.target_kind == GraphCorrelationTargetKindV1::GraphQuery
-        && !is_fallback
-    {
-        provider_candidates(typed_parts).map(|candidates| {
-            if candidates.is_empty() {
-                FocusedTestDiscoveryOutcomeV1::NoEligibleSelector
-            } else {
-                FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned
-            }
-        })
-    } else if is_traversal || is_fallback {
-        candidates.as_ref().map(|candidates| {
-            if candidates.is_empty() {
-                FocusedTestDiscoveryOutcomeV1::NoEligibleSelector
-            } else {
-                FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned
-            }
+        && !caller_evidence_result;
+    let candidates = if is_traversal {
+        focused_candidates.map(|focused| focused.candidates)
+    } else if is_initial_search {
+        focused_candidates.and_then(|focused| {
+            focused
+                .has_test_classification
+                .then_some(focused.exact_source_candidates)
         })
     } else {
         None
     };
+    let outcome = (is_initial_search || is_traversal)
+        .then(|| {
+            candidates.as_ref().map(|candidates| {
+                if candidates.is_empty() {
+                    FocusedTestDiscoveryOutcomeV1::NoEligibleSelector
+                } else {
+                    FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned
+                }
+            })
+        })
+        .flatten();
     FocusedTestDiscovery {
         candidates,
         outcome,
-        is_traversal,
     }
 }
 
@@ -107,9 +80,7 @@ impl DecisionAnchorLineages {
             }
             SelectorOrigin::CallerTraversalResult => RecoverySelectorPurpose::CallerSource,
             SelectorOrigin::CallerEvidenceResult => RecoverySelectorPurpose::CallerTestTraversal,
-            SelectorOrigin::FocusedTestResult | SelectorOrigin::FocusedTestFallbackResult => {
-                RecoverySelectorPurpose::FocusedTestSource
-            }
+            SelectorOrigin::FocusedTestResult => RecoverySelectorPurpose::FocusedTestSource,
         };
         let mut reference_candidates = candidates.iter().cloned().collect::<Vec<_>>();
         reference_candidates.sort_by_key(|candidate| {
@@ -167,10 +138,6 @@ impl DecisionAnchorLineages {
                 SelectorOrigin::CallerTraversalResult => binding.caller_traversal_result = true,
                 SelectorOrigin::CallerEvidenceResult => binding.caller_evidence_result = true,
                 SelectorOrigin::FocusedTestResult => binding.focused_test_result = true,
-                SelectorOrigin::FocusedTestFallbackResult => {
-                    binding.focused_test_result = true;
-                    binding.focused_test_confirmation_required = true;
-                }
             }
             marked += 1;
         }
@@ -243,42 +210,13 @@ impl DecisionAnchorLineages {
         Some(marked)
     }
 
-    pub(super) fn record_caller_evidence_ready(&mut self, root_binding: &str) {
-        self.focused_test_recovery
-            .entry(root_binding.to_string())
-            .or_insert(FocusedTestRecoveryState::SemanticSearchReady);
-    }
-
-    pub(super) fn begin_focused_test_semantic_search(&mut self, root_binding: &str) {
-        for binding in self.selectors.values_mut().flatten() {
-            if binding.root_binding == root_binding {
-                binding.focused_test_result = false;
-                binding.focused_test_confirmation_required = false;
-            }
-        }
-        let reference_key = RecoverySelectorKey {
-            root_binding: root_binding.to_string(),
-            purpose: RecoverySelectorPurpose::FocusedTestSource,
-        };
-        if let Some(reference) = self.recovery_references.remove(&reference_key) {
-            self.recovery_reference_selectors.remove(&reference);
-        }
-        self.focused_test_recovery.insert(
-            root_binding.to_string(),
-            FocusedTestRecoveryState::FallbackPending,
-        );
-    }
-
-    pub(super) fn record_registered_focused_test_recovery(
+    pub(super) fn record_registered_focused_test_candidates(
         &mut self,
-        root_binding: &str,
-        is_traversal: bool,
-        is_fallback: bool,
         had_candidates: bool,
         marked_candidates: Option<usize>,
         outcome: Option<FocusedTestDiscoveryOutcomeV1>,
     ) -> Option<FocusedTestDiscoveryOutcomeV1> {
-        let outcome = if (is_traversal || is_fallback) && had_candidates {
+        let outcome = if had_candidates {
             Some(if marked_candidates.unwrap_or_default() == 0 {
                 FocusedTestDiscoveryOutcomeV1::NoEligibleSelector
             } else {
@@ -287,38 +225,7 @@ impl DecisionAnchorLineages {
         } else {
             outcome
         };
-        self.record_focused_test_recovery(root_binding, is_traversal, is_fallback, outcome);
         outcome
-    }
-
-    pub(super) fn record_focused_test_recovery(
-        &mut self,
-        root_binding: &str,
-        is_traversal: bool,
-        is_fallback: bool,
-        outcome: Option<FocusedTestDiscoveryOutcomeV1>,
-    ) {
-        if is_traversal {
-            if let Some(outcome) = outcome {
-                self.focused_test_recovery.insert(
-                    root_binding.to_string(),
-                    match outcome {
-                        FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned => {
-                            FocusedTestRecoveryState::TraversalReturnedEligible
-                        }
-                        FocusedTestDiscoveryOutcomeV1::NoEligibleSelector => {
-                            FocusedTestRecoveryState::TraversalReturnedEmpty
-                        }
-                    },
-                );
-            }
-        }
-        if is_fallback {
-            self.focused_test_recovery.insert(
-                root_binding.to_string(),
-                FocusedTestRecoveryState::FallbackCompleted,
-            );
-        }
     }
 }
 
@@ -389,16 +296,39 @@ fn collect_focused_test_result(
                 .into_iter()
                 .filter_map(|field| values.get(field))
                 .collect::<Vec<_>>();
-            if !test_fields.is_empty() {
-                *has_test_classification = true;
-                let mut classifications = test_fields
+            let path_classifications = ["file_path", "filePath", "source_path", "sourcePath"]
+                .into_iter()
+                .filter_map(|field| values.get(field))
+                .map(|value| value.as_str().map(provider_classifies_test_path))
+                .collect::<Option<BTreeSet<_>>>()?;
+            let explicit_classification = if test_fields.is_empty() {
+                None
+            } else {
+                let classifications = test_fields
                     .into_iter()
                     .map(Value::as_bool)
                     .collect::<Option<BTreeSet<_>>>()?;
                 if classifications.len() != 1 {
                     return None;
                 }
-                if classifications.pop_first()? {
+                classifications.first().copied()
+            };
+            let path_classification = if path_classifications.is_empty() {
+                None
+            } else {
+                if path_classifications.len() != 1 {
+                    return None;
+                }
+                path_classifications.first().copied()
+            };
+            if explicit_classification.is_some() || path_classification == Some(true) {
+                *has_test_classification = true;
+                let is_test =
+                    explicit_classification.unwrap_or(false) || path_classification == Some(true);
+                if explicit_classification == Some(false) && path_classification == Some(true) {
+                    return None;
+                }
+                if is_test {
                     collect_direct_symbol(values, candidates)?;
                     collect_direct_exact_source_candidates(values, exact_source_candidates)?;
                 }
@@ -440,77 +370,13 @@ fn collect_focused_test_result(
         .then_some(())
 }
 
-fn provider_exact_source_candidates(
-    typed_parts: Option<&[McpToolResultPart]>,
-) -> Option<BTreeSet<Candidate>> {
-    let mut candidates = BTreeSet::new();
-    for part in typed_parts? {
-        let value = match part {
-            McpToolResultPart::StructuredContent(value) => {
-                value.is_object().then(|| Some(value.clone()))?
-            }
-            McpToolResultPart::Content(block) => content_part_json(block)?,
-        };
-        if let Some(value) = value {
-            collect_exact_source_result(&value, &mut candidates)?;
-        }
-    }
-    (candidates.len() <= MAX_RESULT_TARGETS).then_some(candidates)
-}
-
-fn collect_exact_source_result(value: &Value, candidates: &mut BTreeSet<Candidate>) -> Option<()> {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                match value {
-                    Value::String(value) => insert_exact_source_candidate(candidates, value)?,
-                    _ => collect_exact_source_result(value, candidates)?,
-                }
-            }
-        }
-        Value::Object(values) => {
-            collect_direct_symbol(values, &mut BTreeMap::new())?;
-            collect_direct_exact_source_candidates(values, candidates)?;
-            for (field, value) in values {
-                match field.as_str() {
-                    "results"
-                    | "semantic_results"
-                    | "semanticResults"
-                    | "callers"
-                    | "caller_list"
-                    | "callerList"
-                    | "caller_functions"
-                    | "callerFunctions"
-                    | "callees"
-                    | "callee_list"
-                    | "calleeList"
-                    | "callee_functions"
-                    | "calleeFunctions"
-                    | "symbols"
-                    | "short_symbols"
-                    | "shortSymbols"
-                    | "related_source_references"
-                    | "relatedSourceReferences"
-                    | "related_source_refs"
-                    | "relatedSourceRefs"
-                    | "related_sources"
-                    | "relatedSources" => {
-                        if !value.is_u64() {
-                            collect_exact_source_result(value, candidates)?;
-                        }
-                    }
-                    "next_target" | "nextTarget" | "function" | "source_metadata"
-                    | "sourceMetadata" => collect_exact_source_result(value, candidates)?,
-                    "symbol" if value.is_object() => {
-                        collect_exact_source_result(value, candidates)?
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => return None,
-    }
-    (candidates.len() <= MAX_RESULT_TARGETS).then_some(())
+fn provider_classifies_test_path(value: &str) -> bool {
+    let normalized = value.replace('\\', "/");
+    !normalized.starts_with('/')
+        && normalized
+            .split('/')
+            .all(|component| !matches!(component, "" | "." | ".."))
+        && (normalized.starts_with("tests/") || normalized.contains("/tests/"))
 }
 
 fn collect_direct_exact_source_candidates(
@@ -567,13 +433,4 @@ fn collect_direct_exact_source_candidates(
 
 fn canonical_source_selector(value: &str) -> Option<String> {
     canonical_qualified_name(value).or_else(|| canonical_function_name(value))
-}
-
-fn insert_exact_source_candidate(candidates: &mut BTreeSet<Candidate>, value: &str) -> Option<()> {
-    candidates.insert(Candidate {
-        kind: DecisionAnchorTargetKindV1::QualifiedName,
-        provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
-        value: canonical_source_selector(value)?,
-    });
-    Some(())
 }
