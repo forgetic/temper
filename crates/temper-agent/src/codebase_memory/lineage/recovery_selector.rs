@@ -161,7 +161,7 @@ impl DecisionAnchorLineages {
         &mut self,
         root: &str,
         purpose: RecoverySelectorPurpose,
-        candidates: &BTreeSet<Candidate>,
+        candidates: &[Candidate],
     ) {
         let key = RecoverySelectorKey {
             root_binding: root.to_string(),
@@ -176,25 +176,22 @@ impl DecisionAnchorLineages {
         let mut ordered = candidates.iter().collect::<Vec<_>>();
         ordered.sort_by_key(|candidate| {
             let qualified = canonical_qualified_name(&candidate.value).is_some();
-            (
-                if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName
-                    && candidate.provider_kind == DecisionAnchorTargetKindV1::QualifiedName
-                    && qualified
-                {
-                    0
-                } else if candidate.kind == purpose.selector_kind()
-                    && candidate.provider_kind == purpose.selector_kind()
-                {
-                    1
-                } else if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName && qualified {
-                    2
-                } else if candidate.kind == purpose.selector_kind() {
-                    3
-                } else {
-                    4
-                },
-                candidate.value.clone(),
-            )
+            if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName
+                && candidate.provider_kind == DecisionAnchorTargetKindV1::QualifiedName
+                && qualified
+            {
+                0
+            } else if candidate.kind == purpose.selector_kind()
+                && candidate.provider_kind == purpose.selector_kind()
+            {
+                1
+            } else if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName && qualified {
+                2
+            } else if candidate.kind == purpose.selector_kind() {
+                3
+            } else {
+                4
+            }
         });
 
         let mut retained = Vec::new();

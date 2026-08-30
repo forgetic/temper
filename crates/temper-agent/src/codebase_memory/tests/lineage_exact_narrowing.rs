@@ -69,7 +69,7 @@ fn exact_graph_narrowing_selects_the_active_root_and_promotes_its_source() {
 }
 
 #[test]
-fn exact_graph_narrowing_survives_an_unconsumable_broad_root() {
+fn exact_graph_narrowing_remains_scoped_to_an_independently_bounded_root() {
     const IMPLEMENTATION: &str = "temper-v1-private.src.route.worker_slot";
     let result = |count: usize| {
         let mut results = vec![serde_json::json!({
@@ -92,7 +92,22 @@ fn exact_graph_narrowing_survives_an_unconsumable_broad_root() {
             Some(&result(14)),
         )
         .unwrap();
-    assert!(broad.result_target_kinds.is_empty());
+    assert!(!broad.result_target_kinds.is_empty());
+    assert!(
+        lineages
+            .recovery_selector_guidance(&broad.root_binding)
+            .is_some()
+    );
+    let broad_exact = serde_json::json!({"name_pattern": "worker_slot", "label": "Function"});
+    assert_eq!(
+        lineages.resolve_for_active_root(
+            GraphCorrelationToolV1::SearchGraph.public_name(),
+            &broad_exact,
+            Some(&broad.root_binding),
+        ),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector),
+        "an oversized root exposes opaque candidates rather than exact narrowing authority",
+    );
     let narrowed = lineages
         .record(
             &correlation(GraphCorrelationTargetKindV1::GraphQuery),

@@ -3,11 +3,11 @@
 use super::*;
 
 pub(super) fn implementation_root_candidates(
-    candidates: &BTreeSet<Candidate>,
+    candidates: &[Candidate],
     focused_tests: Option<&BTreeSet<Candidate>>,
-) -> BTreeSet<Candidate> {
+) -> Vec<Candidate> {
     let Some(focused_tests) = focused_tests else {
-        return candidates.clone();
+        return candidates.to_vec();
     };
     candidates
         .iter()
@@ -34,6 +34,7 @@ impl SelectorBinding {
             caller_evidence_result: false,
             focused_test_result: false,
             focused_test_confirmation_required: false,
+            recovery_reference_required: false,
             implementation_traversal_readiness: ImplementationTraversalReadiness::Ready,
         }
     }
@@ -104,7 +105,12 @@ impl DecisionAnchorLineages {
         })
     }
 
-    pub(super) fn register(&mut self, root: &str, candidates: BTreeSet<Candidate>) -> Option<()> {
+    pub(super) fn register(
+        &mut self,
+        root: &str,
+        candidates: BTreeSet<Candidate>,
+        recovery_reference_required: bool,
+    ) -> Option<()> {
         for candidate in candidates {
             let canonical_target_digests = canonical_target_digests(&candidate.value)?;
             let selector = Selector {
@@ -113,13 +119,10 @@ impl DecisionAnchorLineages {
             };
             match self.selectors.get(&selector) {
                 None => {
-                    self.selectors.insert(
-                        selector,
-                        Some(SelectorBinding::new(
-                            root.to_string(),
-                            canonical_target_digests,
-                        )),
-                    );
+                    let mut binding =
+                        SelectorBinding::new(root.to_string(), canonical_target_digests);
+                    binding.recovery_reference_required = recovery_reference_required;
+                    self.selectors.insert(selector, Some(binding));
                 }
                 Some(Some(existing))
                     if existing.root_binding == root
