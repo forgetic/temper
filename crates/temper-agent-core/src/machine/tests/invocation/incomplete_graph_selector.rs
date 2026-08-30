@@ -1,6 +1,7 @@
 use crate::EligibleLineageAdmission;
 use temper_protocol_activity::{
     DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphCorrelationToolV1,
+    GraphRecoveryReferenceDispositionV1,
 };
 
 const ACTIVE_ROOT: &str = "00000000-0000-4000-8000-000000000001";
@@ -43,6 +44,28 @@ impl LineageAdmissionResolver for RootAwareTraversalAdmission {
             || LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector),
             LineageAdmissionOutcome::Eligible,
         )
+    }
+
+    fn resolve_for_active_root_with_recovery(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+        _active_root: Option<&str>,
+    ) -> (
+        LineageAdmissionOutcome,
+        Option<GraphRecoveryReferenceDispositionV1>,
+    ) {
+        let outcome = self.resolve(tool_name, arguments);
+        let disposition = (tool_name == "codebase_memory_trace_path").then(|| {
+            match arguments.get("function_name").and_then(serde_json::Value::as_str) {
+                Some(RECOVERY_REFERENCE) => GraphRecoveryReferenceDispositionV1::Recognized,
+                Some(value) if value.starts_with("temper-recovery-selector:") => {
+                    GraphRecoveryReferenceDispositionV1::Rejected
+                }
+                Some(_) | None => GraphRecoveryReferenceDispositionV1::Missing,
+            }
+        });
+        (outcome, disposition)
     }
 
     fn trace_recovery_selector(
@@ -183,6 +206,16 @@ fn staged_incomplete_trace_returns_an_invokable_opaque_selector_then_accepts_it(
             )],
         )),
     );
+    assert!(denied.iter().any(|request| matches!(
+        request,
+        AgentRequest::Emit(AgentEvent::ToolStart {
+            id,
+            recovery_reference_disposition: Some(
+                GraphRecoveryReferenceDispositionV1::Missing
+            ),
+            ..
+        }) if id == "incomplete-trace"
+    )));
     let expected = GraphExplorationClosedV1::recoverable_without_actions(
         [
             GraphRecoveryEvidenceKindV1::Trace,
@@ -295,6 +328,16 @@ fn staged_incomplete_trace_returns_an_invokable_opaque_selector_then_accepts_it(
             )],
         )),
     );
+    assert!(recovered.iter().any(|request| matches!(
+        request,
+        AgentRequest::Emit(AgentEvent::ToolStart {
+            id,
+            recovery_reference_disposition: Some(
+                GraphRecoveryReferenceDispositionV1::Recognized
+            ),
+            ..
+        }) if id == "complete-trace"
+    )));
     assert!(recovered.iter().any(|request| matches!(
         request,
         AgentRequest::RunTool { call, denial: None, rejection: None, .. }

@@ -5,7 +5,8 @@ use crate::machine::{
     CodebaseMemoryTiming, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
     DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphExplorationClosedReasonV1,
     GraphExplorationClosedV1, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolResultMetadata,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, ToolResultMetadata,
 };
 use crate::shell::tool_result::TOOL_RESULT_PREVIEW_BYTES;
 use async_trait::async_trait;
@@ -17,6 +18,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+    GraphRecoveryReferenceDispositionV1,
 };
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
@@ -171,6 +173,7 @@ fn completed_exploration_denial_never_invokes_provider_and_retains_only_closed_d
                 failure: Some(failure),
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
                 ..
             },
             ..
@@ -231,6 +234,7 @@ fn tool_duration_uses_the_injected_monotonic_clock() {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         } if id == "call-1" && name == "fake" && preview == "bounded result"
     ));
@@ -318,6 +322,35 @@ fn graph_result_metadata_and_debug_remain_content_free() {
     assert_eq!(metadata.preview, None);
     assert_eq!(metadata.bytes, text.len() as u64);
     assert!(!format!("{metadata:?}").contains(SECRET));
+}
+
+#[test]
+fn only_closed_expansion_marker_enters_trace_metadata() {
+    let output = ToolOutput {
+        content: Vec::new(),
+        details: Some(serde_json::json!({
+            SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY: "expanded",
+        })),
+        is_error: false,
+    };
+    assert_eq!(
+        bounded_tool_result("codebase_memory_trace_path", &output).recovery_reference_disposition,
+        Some(GraphRecoveryReferenceDispositionV1::Expanded),
+    );
+    assert_eq!(
+        bounded_tool_result("read", &output).recovery_reference_disposition,
+        None,
+    );
+    let forged = ToolOutput {
+        details: Some(serde_json::json!({
+            SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY: "recognized",
+        })),
+        ..output
+    };
+    assert_eq!(
+        bounded_tool_result("codebase_memory_trace_path", &forged).recovery_reference_disposition,
+        None,
+    );
 }
 
 #[test]

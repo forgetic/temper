@@ -136,9 +136,30 @@ fn partial_implementation_snapshot_stays_closed_when_recheck_does_not_enrich() {
         )
         .unwrap();
 
+    let refreshed_guidance = lineages
+        .recovery_selector_guidance(&root.root_binding)
+        .expect("partial recheck replaces the recovery reference");
+    let refreshed_reference = refreshed_guidance
+        .split_once("implementation_evidence_result=")
+        .and_then(|(_, rest)| rest.split([',', '.']).next())
+        .expect("refreshed implementation recovery reference");
+    let refreshed_trace =
+        serde_json::json!({"function_name": refreshed_reference, "direction": "inbound"});
+    let refreshed_source = serde_json::json!({
+        "qualified_name": refreshed_reference,
+        "decision_evidence_kind": "implementation"
+    });
+    assert_eq!(
+        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector),
+        "the pre-recheck reference is stale",
+    );
     for _ in 0..3 {
         assert_eq!(
-            lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace),
+            lineages.resolve(
+                GraphCorrelationToolV1::TracePath.public_name(),
+                &refreshed_trace,
+            ),
             LineageAdmissionOutcome::Ineligible(
                 LineageAdmissionStatus::TraversalReadinessExhausted
             ),
@@ -146,7 +167,10 @@ fn partial_implementation_snapshot_stays_closed_when_recheck_does_not_enrich() {
         );
     }
     assert_eq!(
-        lineages.resolve(GraphCorrelationToolV1::GetCodeSnippet.public_name(), &source),
+        lineages.resolve(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &refreshed_source,
+        ),
         LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::IncapableSelection),
         "the provider recheck is bounded to one exact attempt",
     );
@@ -209,9 +233,24 @@ fn partial_implementation_becomes_ready_only_after_new_caller_identity_evidence(
             Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
         )
         .unwrap();
-    let LineageAdmissionOutcome::Eligible(admission) =
-        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace)
-    else {
+    assert_eq!(
+        lineages.resolve(GraphCorrelationToolV1::TracePath.public_name(), &trace),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector),
+        "the earlier reference becomes stale when fresh implementation evidence replaces it",
+    );
+    let refreshed_guidance = lineages
+        .recovery_selector_guidance(&root.root_binding)
+        .expect("fresh implementation recovery guidance");
+    let refreshed_reference = refreshed_guidance
+        .split_once("implementation_evidence_result=")
+        .and_then(|(_, rest)| rest.split([',', '.']).next())
+        .expect("fresh implementation recovery reference");
+    let refreshed_trace =
+        serde_json::json!({"function_name": refreshed_reference, "direction": "inbound"});
+    let LineageAdmissionOutcome::Eligible(admission) = lineages.resolve(
+        GraphCorrelationToolV1::TracePath.public_name(),
+        &refreshed_trace,
+    ) else {
         panic!("new eligible caller identity evidence must authorize traversal");
     };
     assert!(admission.matches_root(&root.root_binding));
@@ -291,23 +330,45 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
         .expect("closed implementation trace reference");
     assert!(reference.starts_with("temper-recovery-selector:"));
 
-    let mut trace_input = serde_json::json!({"function_name": reference});
-    let admission = lineages.resolve(
-        GraphCorrelationToolV1::TracePath.public_name(),
-        &trace_input,
+    let mut source_form = serde_json::json!({
+        "qualified_name": reference,
+        "decision_evidence_kind": "implementation"
+    });
+    assert!(
+        lineages
+            .expand_recovery_selector(
+                GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+                &mut source_form,
+                Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+            )
+            .unwrap()
     );
-    let LineageAdmissionOutcome::Eligible(admission) = admission else {
-        panic!("opaque reference must resolve to its provider-derived selector");
-    };
+    assert_eq!(source_form["qualified_name"], PRIVATE_SELECTOR);
+
+    let mut trace_input = serde_json::json!({"function_name": reference});
+    let admission = lineages
+        .reserve_implementation_trace_reference(&trace_input, Some(&root.root_binding))
+        .expect("well-formed recovery reference")
+        .expect("current-root reference is recognized before selector readiness");
     assert!(admission.matches_root(&root.root_binding));
-    lineages
-        .expand_recovery_selector(
-            GraphCorrelationToolV1::TracePath.public_name(),
-            &mut trace_input,
-            None,
-        )
-        .unwrap();
+    assert!(
+        lineages
+            .expand_recovery_selector(
+                GraphCorrelationToolV1::TracePath.public_name(),
+                &mut trace_input,
+                None,
+            )
+            .unwrap()
+    );
     assert_eq!(trace_input["function_name"], FUNCTION_SELECTOR);
+
+    let repeated = serde_json::json!({"function_name": reference});
+    assert!(
+        lineages
+            .reserve_implementation_trace_reference(&repeated, Some(&root.root_binding))
+            .is_err(),
+        "a consumed reference cannot authorize a second dispatch",
+    );
 
     let unknown_reference = format!("{reference}-inexact");
     let mut unknown_input = serde_json::json!({"function_name": unknown_reference});
@@ -332,17 +393,15 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
         "qualified_name": reference,
         "decision_evidence_kind": "implementation"
     });
-    lineages
-        .expand_recovery_selector(
-            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
-            &mut source_input,
-            Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
-        )
-        .unwrap();
-    assert_eq!(source_input["qualified_name"], PRIVATE_SELECTOR);
-    assert_ne!(
-        source_input["qualified_name"], trace_input["function_name"],
-        "one opaque reference must retain tool-specific provider selector forms",
+    assert!(
+        lineages
+            .expand_recovery_selector(
+                GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+                &mut source_input,
+                Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+            )
+            .is_err(),
+        "a consumed trace reference is stale for every later purpose",
     );
 
     let mut wrong_purpose = serde_json::json!({"qualified_name": reference});
@@ -355,6 +414,84 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
             )
             .is_err(),
         "a trace reference cannot be substituted for a caller-source reference",
+    );
+}
+
+#[test]
+fn opaque_trace_reference_is_current_root_bound_and_superseded_fail_closed() {
+    const PRIVATE_SELECTOR: &str = "temper-v1-private.src.engine.run";
+    let mut lineages = DecisionAnchorLineages::default();
+    let root = lineages
+        .record(
+            &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+            &serde_json::json!({"query": "private discovery query"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": PRIVATE_SELECTOR,
+                "name": "run"
+            }))),
+        )
+        .unwrap();
+    let record_implementation = |lineages: &mut DecisionAnchorLineages| {
+        lineages
+            .record_with_evidence_kind(
+                &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+                &serde_json::json!({"qualified_name": PRIVATE_SELECTOR}),
+                Some(&structured_parts(serde_json::json!({
+                    "qualified_name": PRIVATE_SELECTOR,
+                    "name": "run",
+                    "callers": 1
+                }))),
+                Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
+            )
+            .unwrap();
+    };
+    record_implementation(&mut lineages);
+    let first_guidance = lineages
+        .recovery_selector_guidance(&root.root_binding)
+        .expect("first reference");
+    let first = first_guidance
+        .split_once("implementation_evidence_result=")
+        .and_then(|(_, rest)| rest.split([',', '.']).next())
+        .unwrap()
+        .to_string();
+
+    assert!(
+        lineages
+            .reserve_implementation_trace_reference(
+                &serde_json::json!({"function_name": first}),
+                Some("00000000-0000-4000-8000-000000000099"),
+            )
+            .is_err(),
+        "a reference cannot cross its run-local root",
+    );
+
+    record_implementation(&mut lineages);
+    let second_guidance = lineages
+        .recovery_selector_guidance(&root.root_binding)
+        .expect("replacement reference");
+    let second = second_guidance
+        .split_once("implementation_evidence_result=")
+        .and_then(|(_, rest)| rest.split([',', '.']).next())
+        .unwrap();
+    assert_ne!(first, second);
+    assert!(
+        lineages
+            .reserve_implementation_trace_reference(
+                &serde_json::json!({"function_name": first}),
+                Some(&root.root_binding),
+            )
+            .is_err(),
+        "a superseded reference must be stale",
+    );
+    assert!(
+        lineages
+            .reserve_implementation_trace_reference(
+                &serde_json::json!({"function_name": second}),
+                Some(&root.root_binding),
+            )
+            .unwrap()
+            .is_some(),
+        "the current reference remains admissible",
     );
 }
 

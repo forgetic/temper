@@ -28,6 +28,31 @@ impl GraphRecoveryEvidenceKindV1 {
     }
 }
 
+/// Content-free lifecycle evidence for one opaque recovery reference.
+///
+/// The reference and provider selector deliberately never enter this
+/// protocol. Start events report local admission; a finish event may report
+/// the wrapper-owned expansion immediately preceding provider dispatch.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphRecoveryReferenceDispositionV1 {
+    Missing,
+    Recognized,
+    Expanded,
+    Rejected,
+}
+
+impl GraphRecoveryReferenceDispositionV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Recognized => "recognized",
+            Self::Expanded => "expanded",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphRecoverySelectorOriginV1 {

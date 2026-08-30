@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "tool_failure/recovery_reference.rs"]
+mod recovery_reference;
+
 fn diagnostic(category: ToolFailureCategoryV1) -> ToolFailureDiagnosticV1 {
     ToolFailureDiagnosticV1::new(category)
 }
@@ -145,6 +148,7 @@ fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
         codebase_memory_timing: None,
         graph_correlation: None,
         decision_anchor_lineage: None,
+        recovery_reference_disposition: None,
     });
     event.validate().expect("closed recovery details validate");
 
@@ -368,18 +372,6 @@ fn malformed_or_untrusted_shell_dispositions_fail_closed() {
 }
 
 #[test]
-fn legacy_tool_start_without_disposition_remains_readable() {
-    let legacy = serde_json::json!({
-        "call_id": "legacy-bash",
-        "name": "bash"
-    });
-    let parsed: ToolStartedV1 = serde_json::from_value(legacy.clone()).unwrap();
-    assert_eq!(parsed.arguments, None);
-    assert_eq!(parsed.shell_discovery_disposition, None);
-    assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
-}
-
-#[test]
 fn graph_correlation_fingerprints_closed_targets_without_retaining_raw_arguments() {
     const SECRET: &str = "Authorization: Bearer GRAPH-CORRELATION-SECRET";
     let correlation = GraphCorrelationV1::new(
@@ -424,6 +416,7 @@ fn graph_correlation_fingerprints_closed_targets_without_retaining_raw_arguments
         codebase_memory_timing: None,
         graph_correlation: Some(correlation),
         decision_anchor_lineage: None,
+        recovery_reference_disposition: None,
     });
     event.validate().expect("closed correlation validates");
     let export = TraceExportRecordV1::event(event.clone());
@@ -472,6 +465,7 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
             [DecisionAnchorTargetKindV1::Pattern],
             [GraphCorrelationV1::target_digest("forged-root").unwrap()],
         ),
+        recovery_reference_disposition: None,
     });
     assert_eq!(
         event.validate(),
@@ -554,6 +548,7 @@ fn decision_evidence_is_closed_source_only_and_privacy_safe() {
         codebase_memory_timing: None,
         graph_correlation: Some(source),
         decision_anchor_lineage: Some(lineage),
+        recovery_reference_disposition: None,
     });
     event.validate().expect("closed source evidence validates");
     let activity = serde_json::to_string(&event).unwrap();
@@ -577,6 +572,7 @@ fn ordinary_tool_failures_validate_without_result_content() {
         codebase_memory_timing: None,
         graph_correlation: None,
         decision_anchor_lineage: None,
+        recovery_reference_disposition: None,
     });
     event.validate().expect("ordinary typed failure validates");
 
@@ -606,6 +602,7 @@ fn tool_failures_validate_only_on_non_success_boundaries() {
         }),
         graph_correlation: None,
         decision_anchor_lineage: None,
+        recovery_reference_disposition: None,
     });
     event.validate().expect("failed tool diagnostic validates");
 

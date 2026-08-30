@@ -8,7 +8,8 @@ use temper_protocol_activity::{
     AgentActivityCapturePolicyV1, AgentActivityEventV1, CaptureModeV1,
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
     DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
-    GraphCorrelationV1, ToolFailureCategoryV1, ToolFailureReasonV1, ToolRetryDispositionV1,
+    GraphCorrelationV1, GraphRecoveryReferenceDispositionV1, ToolFailureCategoryV1,
+    ToolFailureReasonV1, ToolRetryDispositionV1,
 };
 
 use super::{FakeClock, Recorder, ScopeFactory};
@@ -59,6 +60,7 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                 }),
                 graph_correlation: Some(correlation.clone()),
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         });
         let mut failure = ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::ProcessExit);
@@ -79,6 +81,7 @@ fn codebase_memory_results_and_safe_failures_follow_capture_policy() {
                 }),
                 graph_correlation: Some(correlation.clone()),
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         });
 
@@ -166,6 +169,7 @@ fn activity_carries_only_closed_source_decision_evidence() {
             codebase_memory_timing: None,
             graph_correlation: Some(correlation),
             decision_anchor_lineage: Some(lineage.clone()),
+            recovery_reference_disposition: None,
         },
     });
 
@@ -218,6 +222,7 @@ fn ordinary_failures_keep_only_shell_owned_diagnostics_in_every_capture_mode() {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         });
 
@@ -281,6 +286,7 @@ fn actionable_graph_recovery_activity_retains_only_closed_missing_kinds_allowanc
             codebase_memory_timing: None,
             graph_correlation: None,
             decision_anchor_lineage: None,
+            recovery_reference_disposition: None,
         },
     });
 
@@ -335,6 +341,7 @@ fn exploration_closed_activity_retains_only_the_stable_local_reason() {
             codebase_memory_timing: None,
             graph_correlation: None,
             decision_anchor_lineage: None,
+            recovery_reference_disposition: None,
         },
     });
 
@@ -359,4 +366,65 @@ fn exploration_closed_activity_retains_only_the_stable_local_reason() {
     );
     assert_eq!(finished.result, None);
     assert!(!serde_json::to_string(&*frames).unwrap().contains(SECRET));
+}
+
+#[test]
+fn recovery_reference_activity_retains_only_closed_lifecycle_dispositions() {
+    const PRIVATE_REFERENCE: &str = "temper-recovery-selector:00000000-0000-4000-8000-000000000099";
+    const PRIVATE_SELECTOR: &str = "private.provider.selector";
+    let recorder = Arc::new(Recorder::default());
+    let factory = ScopeFactory::with_parts(
+        AgentActivityCapturePolicyV1 {
+            capture: CaptureModeV1::Diagnostic,
+            max_inline_bytes: 256,
+            ..Default::default()
+        },
+        Arc::new(FakeClock::new(0..10)),
+        vec![recorder.clone()],
+    );
+    let run = factory.main("main", ModelIdentity::new("p", "m"));
+    run.observability.events.emit(AgentEvent::ToolStart {
+        id: "live-reference".to_string(),
+        name: "codebase_memory_trace_path".to_string(),
+        arg_preview: None,
+        diagnostic_arguments: None,
+        shell_discovery_disposition: None,
+        recovery_reference_disposition: Some(GraphRecoveryReferenceDispositionV1::Recognized),
+    });
+    run.observability.events.emit(AgentEvent::ToolEnd {
+        id: "live-reference".to_string(),
+        name: "codebase_memory_trace_path".to_string(),
+        status: ToolCallStatus::Succeeded,
+        duration_ms: 1,
+        result: ToolResultMetadata {
+            preview: Some(format!("{PRIVATE_REFERENCE} {PRIVATE_SELECTOR}")),
+            bytes: 128,
+            truncated: false,
+            failure: None,
+            codebase_memory_timing: None,
+            graph_correlation: None,
+            decision_anchor_lineage: None,
+            recovery_reference_disposition: Some(GraphRecoveryReferenceDispositionV1::Expanded),
+        },
+    });
+
+    let frames = recorder.0.lock().expect("frames");
+    let dispositions = frames
+        .iter()
+        .filter_map(|frame| match &frame.event {
+            AgentActivityEventV1::ToolStarted(started) => started.recovery_reference_disposition,
+            AgentActivityEventV1::ToolFinished(finished) => finished.recovery_reference_disposition,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        dispositions,
+        [
+            GraphRecoveryReferenceDispositionV1::Recognized,
+            GraphRecoveryReferenceDispositionV1::Expanded,
+        ]
+    );
+    let durable = format!("{frames:?} {}", serde_json::to_string(&*frames).unwrap());
+    assert!(!durable.contains(PRIVATE_REFERENCE));
+    assert!(!durable.contains(PRIVATE_SELECTOR));
 }

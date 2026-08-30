@@ -408,14 +408,14 @@ impl AgentMachine {
             .as_ref()
             .and_then(|state| state.active_root_binding())
             .map(str::to_string);
-        let closed_admissions = calls
+        let resolved_admissions = calls
             .iter()
             .map(|call| {
                 (!self.invocation_rejections.contains_key(&call.id)
                     && call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX))
                 .then(|| {
                     self.lineage_admission.as_ref().map(|admission| {
-                        admission.resolve_for_active_root(
+                        admission.resolve_for_active_root_with_recovery(
                             &call.name,
                             &call.arguments,
                             active_decision_root.as_deref(),
@@ -425,9 +425,27 @@ impl AgentMachine {
                 .flatten()
             })
             .collect::<Vec<_>>();
+        let closed_admissions = resolved_admissions
+            .iter()
+            .map(|resolved| resolved.as_ref().map(|(admission, _)| admission.clone()))
+            .collect::<Vec<_>>();
         let incomplete_graph_selectors = calls
             .iter()
             .map(|call| self.incomplete_graph_selectors.get(&call.id).copied())
+            .collect::<Vec<_>>();
+        let recovery_reference_dispositions = resolved_admissions
+            .iter()
+            .zip(&incomplete_graph_selectors)
+            .map(|(resolved, incomplete)| {
+                resolved
+                    .as_ref()
+                    .and_then(|(_, disposition)| *disposition)
+                    .or_else(|| {
+                        (*incomplete == Some(GraphCorrelationToolV1::TracePath)).then_some(
+                            temper_protocol_activity::GraphRecoveryReferenceDispositionV1::Missing,
+                        )
+                    })
+            })
             .collect::<Vec<_>>();
         let trace_recovery_selectors = calls
             .iter()
@@ -475,7 +493,11 @@ impl AgentMachine {
         } else {
             vec![None; calls.len()]
         };
-        for (call, denial) in calls.into_iter().zip(denials) {
+        for ((call, denial), recovery_reference_disposition) in calls
+            .into_iter()
+            .zip(denials)
+            .zip(recovery_reference_dispositions)
+        {
             let incomplete_staged_selector = self.incomplete_graph_selectors.contains_key(&call.id)
                 && matches!(denial, Some(ToolCallDenial::GraphExplorationClosed(_)));
             let rejection = (!incomplete_staged_selector)
@@ -503,6 +525,7 @@ impl AgentMachine {
                 arg_preview: presentation.arg_preview,
                 diagnostic_arguments: presentation.diagnostic_arguments,
                 shell_discovery_disposition,
+                recovery_reference_disposition,
             }));
             let redirect = (rejection.is_none() && denial.is_none())
                 .then(|| self.ordinary_failures.redirect_for(&call))
