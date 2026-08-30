@@ -58,8 +58,21 @@ FOCUSED_RELEVANCE_TOKENS = {
     "focused_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::alias_retry_stays_on_worker",
 }
 GRAPH_CALLS = 0
+EXACT_SELECTION_ROOT_QUERIES = set()
 
 TOOLS = [
+    {
+        "name": "get_architecture",
+        "description": "Get a high-level view of the bound project",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string"},
+                "aspects": {"type": "array", "items": {"type": "string"}},
+                "path": {"type": "string"},
+            },
+        },
+    },
     {
         "name": "search_graph",
         "description": "Search indexed symbols and relationships",
@@ -324,14 +337,14 @@ def is_graph_convergence_profile():
 
 
 def is_decision_gap_recovery_profile():
-    return LIFECYCLE_PROFILE == "mapped-live-decision-gap-recovery"
+    return LIFECYCLE_PROFILE in (
+        "mapped-live-decision-gap-recovery",
+        "mapped-live-exact-source-selection",
+    )
 
 
 def is_focused_relevance_profile():
-    return LIFECYCLE_PROFILE in (
-        "mapped-live-exact-source-selection",
-        "mapped-live-focused-test-source-relevance",
-    )
+    return LIFECYCLE_PROFILE == "mapped-live-focused-test-source-relevance"
 
 
 def is_exact_source_selection_profile():
@@ -440,14 +453,26 @@ for line in sys.stdin:
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
+        params = request.get("params") or {}
+        name = params.get("name")
+        arguments = params.get("arguments") or {}
+        if name == "get_architecture":
+            project = arguments.get("project", "")
+            successful = current_root_source(project, "src/lib.rs") is not None
+            payload = {"packages": ["fixture"], "binding": "current_prepared_checkout"}
+            log_tool(name, arguments, is_error=not successful)
+            result = (
+                text_result(json.dumps(payload), structured=payload)
+                if successful
+                else text_result("bound project unavailable", True)
+            )
+            send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+            continue
         ensure_result_driven_tokens()
         ensure_typed_lineage_tokens()
         ensure_mapped_graph_tokens()
         ensure_graph_convergence_tokens()
         ensure_focused_relevance_tokens()
-        params = request.get("params") or {}
-        name = params.get("name")
-        arguments = params.get("arguments") or {}
         if name == "index_status":
             if has_current_root_profile():
                 project = arguments.get("project", "")
@@ -550,10 +575,23 @@ for line in sys.stdin:
                 continue
             if is_decision_gap_recovery_profile():
                 stage = DECISION_GAP_RECOVERY_STAGE
-                if stage in (2, 3) and qualified_name == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]:
+                selection = is_exact_source_selection_profile()
+                if selection and stage == 2 and qualified_name == GRAPH_CONVERGENCE_TOKENS["implementation"]:
+                    source_path = "src/route.rs"
+                    event = "served_selection_active_source"
+                elif selection and stage == 4 and qualified_name == GRAPH_CONVERGENCE_TOKENS["caller"]:
+                    source_path = "src/lib.rs"
+                    event = "served_selection_active_source"
+                elif selection and stage == 5 and qualified_name in (
+                    GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
+                    terminal_function_name(GRAPH_CONVERGENCE_TOKENS["behavioral_test"]),
+                ):
+                    source_path = "tests/alias_retry.rs"
+                    event = "served_selection_focused_source"
+                elif not selection and stage in (2, 3) and qualified_name == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]:
                     source_path = "tests/alias_retry.rs"
                     event = "served_gap_sibling_source"
-                elif stage in (5, 6, 7) and qualified_name in (
+                elif not selection and stage in (5, 6, 7) and qualified_name in (
                     GRAPH_CONVERGENCE_TOKENS["caller"],
                     GRAPH_CONVERGENCE_TOKENS["active_behavioral_test"],
                 ):
@@ -578,9 +616,12 @@ for line in sys.stdin:
                     payload = {
                         "name": terminal_function_name(qualified_name),
                         "qualified_name": qualified_name,
+                        "file_path": source_path,
                         "source": source,
                         "binding": "current_prepared_checkout",
                     }
+                    if source_path == "tests/alias_retry.rs":
+                        payload["is_test"] = True
                     log_tool(name, arguments, fixture_event=event)
                     result = text_result(json.dumps(payload), structured=payload)
                 send({"jsonrpc": "2.0", "id": request["id"], "result": result})
@@ -1032,10 +1073,11 @@ for line in sys.stdin:
             if is_decision_gap_recovery_profile():
                 project = arguments.get("project", "")
                 expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
+                expected_stage = 3 if is_exact_source_selection_profile() else 4
                 successful = (
                     current_root_source(project, "src/route.rs") is not None
                     and decision_gap_recovery_step(
-                        4, expected, arguments.get("function_name", "")
+                        expected_stage, expected, arguments.get("function_name", "")
                     )
                 )
                 payload = {
@@ -1055,7 +1097,15 @@ for line in sys.stdin:
                     name,
                     arguments,
                     is_error=not successful,
-                    fixture_event="served_gap_active_trace" if successful else None,
+                    fixture_event=(
+                        (
+                            "served_selection_active_trace"
+                            if is_exact_source_selection_profile()
+                            else "served_gap_active_trace"
+                        )
+                        if successful
+                        else None
+                    ),
                 )
                 result = (
                     text_result(json.dumps(payload), structured=payload)
@@ -1254,31 +1304,53 @@ for line in sys.stdin:
             if is_decision_gap_recovery_profile():
                 project = arguments.get("project", "")
                 stage = DECISION_GAP_RECOVERY_STAGE
-                queries = {
-                    0: ("routing implementation affinity", [
+                query = arguments.get("query", "")
+                query_results = {
+                    "routing implementation affinity": [
                         GRAPH_CONVERGENCE_TOKENS["implementation"],
                         GRAPH_CONVERGENCE_TOKENS["caller"],
-                        GRAPH_CONVERGENCE_TOKENS["active_behavioral_test"],
-                    ]),
-                    1: ("focused alias retry behavior", [
+                    ],
+                    "focused alias retry behavior": [
                         GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
-                    ]),
+                    ],
                 }
-                selected = queries.get(stage)
-                successful = (
-                    selected is not None
-                    and current_root_source(project, "src/route.rs") is not None
-                    and decision_gap_recovery_step(
-                        stage, selected[0], arguments.get("query", "")
+                if is_exact_source_selection_profile():
+                    selected = query_results.get(query)
+                    successful = (
+                        stage in (0, 1)
+                        and selected is not None
+                        and query not in EXACT_SELECTION_ROOT_QUERIES
+                        and current_root_source(project, "src/route.rs") is not None
                     )
-                )
-                tokens = selected[1] if selected is not None else []
+                    if successful:
+                        EXACT_SELECTION_ROOT_QUERIES.add(query)
+                        if len(EXACT_SELECTION_ROOT_QUERIES) == 2:
+                            DECISION_GAP_RECOVERY_STAGE = 2
+                    tokens = selected or []
+                else:
+                    queries = {
+                        0: ("routing implementation affinity", query_results["routing implementation affinity"]),
+                        1: ("focused alias retry behavior", query_results["focused alias retry behavior"]),
+                    }
+                    selected = queries.get(stage)
+                    successful = (
+                        selected is not None
+                        and current_root_source(project, "src/route.rs") is not None
+                        and decision_gap_recovery_step(stage, selected[0], query)
+                    )
+                    tokens = selected[1] if selected is not None else []
                 payload = {
                     "results": [{
                         "results": [
                             {
                                 "name": terminal_function_name(token),
                                 "qualifiedName": token,
+                                "file_path": (
+                                    "tests/alias_retry.rs"
+                                    if token == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]
+                                    else "src/route.rs"
+                                ),
+                                "is_test": token == GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
                             }
                             for token in tokens
                         ],
@@ -1291,7 +1363,15 @@ for line in sys.stdin:
                     name,
                     arguments,
                     is_error=not successful,
-                    fixture_event="served_gap_root" if successful else None,
+                    fixture_event=(
+                        (
+                            "served_selection_root"
+                            if is_exact_source_selection_profile()
+                            else "served_gap_root"
+                        )
+                        if successful
+                        else None
+                    ),
                 )
                 result = (
                     text_result(json.dumps(payload), structured=payload)

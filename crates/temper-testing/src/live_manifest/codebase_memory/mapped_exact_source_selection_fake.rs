@@ -1,4 +1,4 @@
-//! Jig runtime for the mapped exact source-selection scenario.
+//! Jig runtime for the mapped decision-evidence convergence scenario.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -6,9 +6,14 @@ use std::sync::{Arc, Mutex};
 use jig_core::{Reply, RequestView, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use serde_json::Value as JsonValue;
-use temper_agent_core::DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE;
+use temper_agent_core::{
+    CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE, DECISION_ANCHOR_CONVERGENCE_MESSAGE,
+    DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
+};
 
 use super::{ModelObservations, is_current_root_source_result, messages_contain};
+
+const INCOMPLETE_GUIDANCE: &str = "decision-evidence recovery required; missing evidence: [trace, implementation, caller, focused_test]; permitted action: targeted_current_root_graph_call; remaining allowance: 4";
 
 pub(super) fn start(
     request_count: Arc<AtomicUsize>,
@@ -16,23 +21,21 @@ pub(super) fn start(
 ) -> Result<FakeLlm, String> {
     FakeLlm::start(Script::rule(move |view| {
         if !messages_contain(view, "ROLE: engineer") {
-            return Reply::text("unexpected mapped exact source-selection fake-LLM request");
+            return Reply::text("unexpected mapped decision-evidence convergence request");
         }
         request_count.fetch_add(1, Ordering::SeqCst);
         record_observations(view, &mut observations.lock().expect("observations lock"));
         reply(view)
     }))
-    .map_err(|error| format!("start mapped exact source-selection Jig fake LLM: {error}"))
+    .map_err(|error| format!("start mapped decision-evidence convergence Jig: {error}"))
 }
 
 fn record_observations(view: &RequestView, observations: &mut ModelObservations) {
     observations.prompt_guidance_seen |= messages_contain(view, "CODEBASE MEMORY");
-    observations.memory_result_seen |= provider_results(view)
-        .iter()
-        .any(|result| result.get("results").is_some());
+    observations.memory_result_seen |= root_results(view).next().is_some();
     observations.graph_trace_seen |= provider_results(view)
         .iter()
-        .any(|result| result.get("function").is_some());
+        .any(|result| result.get("callers").is_some());
     let sources = view
         .messages
         .iter()
@@ -44,148 +47,181 @@ fn record_observations(view: &RequestView, observations: &mut ModelObservations)
 
 fn reply(view: &RequestView) -> Reply {
     match view.prior_tool_results {
-        0 => tool_reply(
-            "discover-selection-root",
-            "codebase_memory_search_code",
-            serde_json::json!({"pattern": "route affinity"}),
-        ),
-        1 => tool_batch(&[
+        0 => tool_batch(&[
             (
-                "early-route-read-before-source",
-                "read",
-                serde_json::json!({"path": "repo/src/route.rs"}),
+                "discover-convergence-routing-root",
+                "codebase_memory_search_graph",
+                serde_json::json!({"query": "routing implementation affinity"}),
             ),
             (
-                "early-caller-read-before-source",
-                "read",
-                serde_json::json!({"path": "repo/src/lib.rs"}),
-            ),
-            (
-                "early-focused-test-read-before-source",
-                "read",
-                serde_json::json!({"path": "repo/tests/alias_retry.rs"}),
+                "discover-convergence-focused-test-root",
+                "codebase_memory_search_graph",
+                serde_json::json!({"query": "focused alias retry behavior"}),
             ),
         ]),
-        4 => source_reply(
-            "read-selection-implementation",
-            implementation_target(view),
-            "implementation",
+        2 => tool_reply(
+            "early-route-read-before-complete-evidence",
+            "read",
+            serde_json::json!({"path": "repo/src/route.rs"}),
         ),
-        5 => tool_reply(
-            "trace-selection-caller",
-            "codebase_memory_trace_path",
-            serde_json::json!({
-                "function_name": implementation_target(view),
-                "direction": "inbound",
-            }),
-        ),
-        6 => source_reply("read-selection-caller", caller_target(view), "caller"),
-        7 => tool_batch(&[
+        3 => tool_batch(&[
             (
-                "selection-competing-generic-one",
-                "codebase_memory_search_code",
-                serde_json::json!({"pattern": implementation_target(view)}),
+                "recovery-cross-root-caller-denied",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": root_result_at(view, 1, 0, "qualifiedName"),
+                    "decision_evidence_kind": "caller",
+                }),
             ),
             (
-                "selection-competing-generic-two",
-                "codebase_memory_search_code",
-                serde_json::json!({"pattern": implementation_target(view)}),
+                "recovery-irrelevant-broad-denied",
+                "codebase_memory_search_graph",
+                serde_json::json!({"query": "unscoped inventory"}),
+            ),
+            (
+                "recovery-active-root-implementation",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": root_result_at(view, 0, 0, "qualifiedName"),
+                    "decision_evidence_kind": "implementation",
+                }),
+            ),
+            (
+                "recovery-malformed-selector-denied",
+                "codebase_memory_trace_path",
+                serde_json::json!({"function_name": "src/private.rs::shared()"}),
+            ),
+            (
+                "recovery-failed-duplicate-implementation-denied",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": root_result_at(view, 1, 0, "qualifiedName"),
+                    "decision_evidence_kind": "implementation",
+                }),
             ),
         ]),
-        9 => tool_reply(
-            "selection-competing-generic-irrelevant",
-            "codebase_memory_search_code",
-            serde_json::json!({"pattern": implementation_target(view)}),
+        8 => {
+            assert!(
+                view.messages
+                    .iter()
+                    .filter(|message| message.content.contains(INCOMPLETE_GUIDANCE))
+                    .count()
+                    >= 4,
+                "cross-root, broad, and malformed attempts must share the incomplete snapshot"
+            );
+            tool_batch(&[
+                (
+                    "recovery-active-root-trace",
+                    "codebase_memory_trace_path",
+                    serde_json::json!({
+                        "function_name": recovery_selector(view, "implementation_evidence_result"),
+                    }),
+                ),
+                (
+                    "recovery-satisfied-implementation-denied",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": root_result_at(view, 0, 0, "qualifiedName"),
+                        "decision_evidence_kind": "implementation",
+                    }),
+                ),
+            ])
+        }
+        10 => source_reply(
+            "recovery-active-root-caller",
+            recovery_selector(view, "caller_traversal_result"),
+            "caller",
         ),
-        10 => tool_reply(
-            "selection-competing-forest-traversal",
-            "codebase_memory_trace_path",
-            serde_json::json!({
-                "function_name": caller_target(view),
-                "mode": "calls",
-                "direction": "inbound",
-                "include_tests": true,
-                "depth": 1,
-            }),
-        ),
-        11 => tool_reply(
-            "selection-focused-test-fallback",
-            "codebase_memory_search_graph",
-            serde_json::json!({"query": "focused alias retry behavior"}),
-        ),
-        12 => source_reply(
-            "selection-mismatched-confirmation-denied",
-            implementation_target(view),
+        11 => source_reply(
+            "recovery-focused-test-root-source",
+            recovery_selector(view, "focused_test_result"),
             "focused_test",
         ),
-        13 => source_reply(
-            "selection-exact-focused-test-source",
-            focused_test_target(view),
-            "focused_test",
-        ),
-        14 => patch_reply("patch-route-before-post-source-read"),
+        12 => {
+            assert!(
+                messages_contain(view, DECISION_ANCHOR_CONVERGENCE_MESSAGE),
+                "the active-root source batch must complete the retained forest"
+            );
+            tool_batch(&[
+                (
+                    "post-completion-broad-architecture-denied",
+                    "codebase_memory_get_architecture",
+                    serde_json::json!({}),
+                ),
+                (
+                    "post-completion-irrelevant-search-denied",
+                    "codebase_memory_search_graph",
+                    serde_json::json!({"query": "irrelevant completed inventory"}),
+                ),
+                (
+                    "post-completion-selectorless-source-denied",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": root_result_at(view, 0, 1, "qualifiedName"),
+                    }),
+                ),
+            ])
+        }
         15 => {
+            assert_eq!(
+                view.messages
+                    .iter()
+                    .filter(|message| message
+                        .content
+                        .contains(CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE))
+                    .count(),
+                3,
+                "all post-completion graph activity must remain local"
+            );
+            patch_reply("patch-route-before-post-source-read")
+        }
+        16 => {
             let denial = latest_tool_result(view);
-            assert!(
-                denial.contains(DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE),
-                "direct mutation must return actionable exact-read guidance"
-            );
-            assert!(
-                !denial.contains("let routing_topic = attempt.affinity_topic();"),
-                "local denial must not retain mutation content"
-            );
+            assert!(denial.contains(DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE));
+            assert!(!denial.contains("let routing_topic = attempt.affinity_topic();"));
             tool_reply(
-                "read-route-after-source-evidence",
+                "read-route-after-complete-source-evidence",
                 "read",
                 serde_json::json!({"path": "repo/src/route.rs"}),
             )
         }
-        16 => {
+        17 => {
             assert!(
                 latest_tool_result(view).contains("let routing_topic = if attempt.attempt == 0"),
-                "the denied direct mutation must leave the route source unchanged"
+                "the denied mutation must leave the exact target unchanged"
             );
-            patch_reply("patch-route-after-post-source-read")
+            patch_reply("patch-route-after-complete-source-evidence")
         }
-        17 => tool_reply(
-            "validate-post-source-read-repair",
+        18 => tool_reply(
+            "validate-converged-repair",
             "bash",
             serde_json::json!({
                 "command": "cd repo && cargo fmt --check && cargo test --quiet && git diff --check && test \"$(git diff --name-only)\" = src/route.rs && test \"$(git diff --numstat -- src/route.rs)\" = \"$(printf '1\\t5\\tsrc/route.rs')\"",
                 "timeout": 60,
             }),
         ),
-        18 => tool_reply(
-            "submit-post-source-read-repair",
+        19 => tool_reply(
+            "submit-converged-repair",
             "submit_for_pr",
             serde_json::json!({
-                "summary": "Validated denied-then-recovered post-source exact selection and the minimal repair."
+                "summary": "Validated complete retained decision evidence, one exact read, and the minimal repair."
             }),
         ),
-        19 => Reply::text(
-            r##"{"title":"Keep alias retries on the selected worker","body":"# Implementation report\nValidated typed source evidence, local precondition denial, post-source exact selection, one repair, and host submission.","summary":"Applied and validated the retry-affinity repair only after the required post-source exact read."}"##,
+        20 => Reply::text(
+            r##"{"title":"Keep alias retries on the selected worker","body":"# Implementation report\nValidated deterministic root-local evidence recovery, the post-source exact read, one repair, host submission, and Actions.","summary":"Applied and validated the retry-affinity repair after complete decision-evidence convergence."}"##,
         ),
-        turn => panic!("unexpected mapped exact source-selection model turn {turn}"),
+        turn => panic!("unexpected mapped decision-evidence convergence turn {turn}"),
     }
 }
 
 fn patch_reply(id: &str) -> Reply {
-    tool_reply(id, "apply_patch", patch_args())
-}
-
-fn patch_args() -> JsonValue {
-    serde_json::json!({
-        "patch": "diff --git a/repo/src/route.rs b/repo/src/route.rs\n--- a/repo/src/route.rs\n+++ b/repo/src/route.rs\n@@ -3,11 +3,7 @@ use crate::DeliveryAttempt;\n pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {\n     assert!(workers > 0, \"at least one delivery worker is required\");\n \n-    let routing_topic = if attempt.attempt == 0 {\n-        attempt.affinity_topic()\n-    } else {\n-        attempt.topic\n-    };\n+    let routing_topic = attempt.affinity_topic();\n     let mut hash = 0xcbf29ce484222325_u64;\n     for byte in attempt\n         .tenant\n"
-    })
-}
-
-fn latest_tool_result(view: &RequestView) -> &str {
-    view.messages
-        .iter()
-        .rev()
-        .find(|message| message.role == "tool")
-        .map(|message| message.content.as_str())
-        .expect("expected a prior tool result")
+    tool_reply(
+        id,
+        "apply_patch",
+        serde_json::json!({
+            "patch": "diff --git a/repo/src/route.rs b/repo/src/route.rs\n--- a/repo/src/route.rs\n+++ b/repo/src/route.rs\n@@ -3,11 +3,7 @@ use crate::DeliveryAttempt;\n pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {\n     assert!(workers > 0, \"at least one delivery worker is required\");\n \n-    let routing_topic = if attempt.attempt == 0 {\n-        attempt.affinity_topic()\n-    } else {\n-        attempt.topic\n-    };\n+    let routing_topic = attempt.affinity_topic();\n     let mut hash = 0xcbf29ce484222325_u64;\n     for byte in attempt\n         .tenant\n"
+        }),
+    )
 }
 
 fn source_reply(id: &str, qualified_name: String, kind: &str) -> Reply {
@@ -197,6 +233,29 @@ fn source_reply(id: &str, qualified_name: String, kind: &str) -> Reply {
             "decision_evidence_kind": kind,
         }),
     )
+}
+
+fn recovery_selector(view: &RequestView, label: &str) -> String {
+    let marker = format!("{label}=temper-recovery-selector:");
+    view.messages
+        .iter()
+        .rev()
+        .find_map(|message| {
+            let start = message.content.find(&marker)? + label.len() + 1;
+            let value = &message.content[start..];
+            let end = value.find([',', ' ', ']', '.']).unwrap_or(value.len());
+            Some(value[..end].to_string())
+        })
+        .unwrap_or_else(|| panic!("missing provider-derived {label} reference"))
+}
+
+fn latest_tool_result(view: &RequestView) -> &str {
+    view.messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "tool")
+        .map(|message| message.content.as_str())
+        .expect("expected a prior tool result")
 }
 
 fn tool_reply(id: &str, name: &str, args: JsonValue) -> Reply {
@@ -218,34 +277,42 @@ fn tool_batch(calls: &[(&str, &str, JsonValue)]) -> Reply {
     }
 }
 
-fn implementation_target(view: &RequestView) -> String {
-    provider_results(view)
-        .iter()
-        .find_map(|result| result.pointer("/results/0/qualified_name"))
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .expect("targeted root omitted its implementation selector")
+fn root_result_at(
+    view: &RequestView,
+    root_index: usize,
+    result_index: usize,
+    field: &str,
+) -> String {
+    let pointer = format!("/results/0/results/{result_index}/{field}");
+    root_results(view)
+        .nth(root_index)
+        .and_then(|result| {
+            result
+                .pointer(&pointer)
+                .and_then(JsonValue::as_str)
+                .map(str::to_string)
+        })
+        .expect("independent root omitted an approved later-turn selector")
 }
 
-fn caller_target(view: &RequestView) -> String {
-    provider_results(view)
-        .iter()
-        .find_map(|result| result.pointer("/callers/0/qualified_name"))
-        .and_then(JsonValue::as_str)
-        .map(str::to_string)
-        .expect("implementation trace omitted its caller selector")
-}
-
-fn focused_test_target(view: &RequestView) -> String {
-    provider_results(view)
-        .iter()
-        .rev()
-        .filter_map(|result| result.get("results").and_then(JsonValue::as_array))
-        .flatten()
-        .find(|result| result.get("is_test").and_then(JsonValue::as_bool) == Some(true))
-        .and_then(|result| result.get("qualified_name").and_then(JsonValue::as_str))
-        .map(str::to_string)
-        .expect("semantic fallback omitted its exact focused-test selector")
+fn root_results(view: &RequestView) -> impl Iterator<Item = JsonValue> {
+    let mut roots = provider_results(view)
+        .into_iter()
+        .filter(|result| {
+            result
+                .pointer("/results/0/results/0/qualifiedName")
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    roots.sort_by_key(|result| {
+        std::cmp::Reverse(
+            result
+                .pointer("/results/0/results")
+                .and_then(JsonValue::as_array)
+                .map_or(0, Vec::len),
+        )
+    });
+    roots.into_iter()
 }
 
 fn provider_results(view: &RequestView) -> Vec<JsonValue> {

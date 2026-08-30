@@ -81,6 +81,7 @@ impl LiveExecutionContext<'_> {
             "MCP hidden tool list must not be empty",
         )?;
         let supported = [
+            "get_architecture",
             "search_code",
             "search_graph",
             "trace_path",
