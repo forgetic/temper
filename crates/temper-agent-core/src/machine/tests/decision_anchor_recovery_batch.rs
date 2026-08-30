@@ -103,15 +103,17 @@ fn immutable_recovery_snapshots_bound_denied_and_speculative_siblings() {
                 CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
             ),
         ),
-        DecisionAnchorTransition::Unchanged,
+        DecisionAnchorTransition::GapRecoveryNeeded,
     );
-    assert_eq!(state.recovery_details(), None);
     assert_eq!(
-        state.on_tool_dispatched(&source_call("after-exhaustion", DecisionEvidenceKindV1::Caller), 5),
-        exhausted_graph_denial([
-            GraphRecoveryEvidenceKindV1::Trace,
+        state.recovery_details().unwrap().compatible_actions,
+        [GraphRecoveryActionV1::for_evidence(
             GraphRecoveryEvidenceKindV1::Caller,
-            GraphRecoveryEvidenceKindV1::FocusedTest,
-        ]),
+        )],
+        "denied siblings in a progressing batch do not consume its remaining recovery slots",
+    );
+    assert_eq!(
+        state.recovery_details().unwrap().remaining_allowance,
+        2,
     );
 }

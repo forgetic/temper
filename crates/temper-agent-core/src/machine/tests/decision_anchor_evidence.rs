@@ -160,14 +160,9 @@ fn one_batch_admits_only_the_first_provider_derived_stage() {
             ROOT,
             DecisionEvidenceKindV1::Implementation,
         ),
-        DecisionAnchorTransition::GapRecoveryNeeded,
+        DecisionAnchorTransition::Unchanged,
     );
-    assert_eq!(
-        state.recovery_details().unwrap().compatible_actions,
-        [GraphRecoveryActionV1::for_evidence(
-            GraphRecoveryEvidenceKindV1::Trace,
-        )],
-    );
+    assert_eq!(state.recovery_details(), None);
 }
 
 include!("decision_anchor_staged_guidance.rs");

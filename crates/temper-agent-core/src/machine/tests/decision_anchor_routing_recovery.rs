@@ -29,14 +29,11 @@ fn install_implementation_and_focused_roots(state: &mut DecisionAnchorState) {
     for id in ["implementation-root", "focused-root"] {
         state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), 0);
     }
-    let implementation = output_with_kinds(
+    let implementation = output_with_focused_test_discovery(
         "codebase_memory_search_graph",
         ROOT,
         DecisionAnchorLineageStageV1::Root,
-        &[
-            DecisionAnchorTargetKindV1::FunctionName,
-            DecisionAnchorTargetKindV1::QualifiedName,
-        ],
+        FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
     );
     let focused = output_with_focused_test_discovery(
         "codebase_memory_search_graph",
@@ -92,25 +89,16 @@ fn implementation_and_focused_test_roots_form_one_complete_retained_forest() {
 
     let trace = call("trace", "codebase_memory_trace_path");
     let speculative_caller = source_call("speculative-caller", DecisionEvidenceKindV1::Caller);
-    let speculative_test = source_call("speculative-test", DecisionEvidenceKindV1::FocusedTest);
     let denials = state.on_tool_batch_dispatched_with_admissions(
-        &[trace, speculative_caller, speculative_test],
+        &[trace, speculative_caller],
         2,
         &[
             Some(trace_admission(ROOT)),
             Some(source_admission(ROOT, DecisionEvidenceKindV1::Caller)),
-            Some(source_admission(
-                OTHER_ROOT,
-                DecisionEvidenceKindV1::FocusedTest,
-            )),
         ],
     );
     assert_eq!(denials[0], None);
     assert!(denials[1].is_some(), "same-batch caller consumer is denied");
-    assert!(
-        denials[2].is_some(),
-        "the focused sibling is not consumed while the implementation route is active"
-    );
     assert_eq!(
         state.on_tool_finished(
             "trace",
@@ -121,7 +109,7 @@ fn implementation_and_focused_test_roots_form_one_complete_retained_forest() {
                 CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
             ),
         ),
-        DecisionAnchorTransition::GapRecoveryNeeded,
+        DecisionAnchorTransition::Unchanged,
     );
     state.take_model_guidance();
 
@@ -137,7 +125,7 @@ fn implementation_and_focused_test_roots_form_one_complete_retained_forest() {
     );
     assert_eq!(
         finish_with_evidence(&mut state, "caller", ROOT, DecisionEvidenceKindV1::Caller),
-        DecisionAnchorTransition::GapRecoveryNeeded,
+        DecisionAnchorTransition::Unchanged,
     );
     let guidance = state.take_model_guidance();
     assert!(guidance.iter().any(|message| message.contains(
@@ -167,6 +155,159 @@ fn implementation_and_focused_test_roots_form_one_complete_retained_forest() {
         DecisionAnchorTransition::EnabledEvidenceComplete,
     );
     assert!(state.blocks_mutation("write"), "the exact ordinary read is still required");
+}
+
+#[test]
+fn multi_root_non_progress_preserves_trace_first_parallel_recovery() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    install_implementation_and_focused_roots(&mut state);
+
+    for (turn, id, expected) in [
+        (1, "sibling-one", DecisionAnchorTransition::Unchanged),
+        (2, "sibling-two", DecisionAnchorTransition::GapRecoveryNeeded),
+    ] {
+        let sibling = source_call(id, DecisionEvidenceKindV1::FocusedTest);
+        assert_eq!(
+            state.on_tool_dispatched_with_admission(
+                &sibling,
+                turn,
+                Some(&source_admission(
+                    OTHER_ROOT,
+                    DecisionEvidenceKindV1::FocusedTest,
+                )),
+            ),
+            None,
+        );
+        assert_eq!(
+            finish_with_evidence(
+                &mut state,
+                id,
+                OTHER_ROOT,
+                DecisionEvidenceKindV1::FocusedTest,
+            ),
+            expected,
+        );
+        state.take_model_guidance();
+    }
+
+    let initial = state.recovery_details().expect("trace-first recovery");
+    assert_eq!(initial.missing_evidence, all_missing());
+    assert_eq!(
+        initial.compatible_actions,
+        [GraphRecoveryActionV1::for_evidence(
+            GraphRecoveryEvidenceKindV1::Trace,
+        )],
+    );
+
+    let mut cross_caller = source_call("cross-caller", DecisionEvidenceKindV1::Caller);
+    cross_caller.arguments["qualified_name"] = serde_json::json!("cross-root-caller");
+    let mut cross_focused = source_call("cross-focused", DecisionEvidenceKindV1::FocusedTest);
+    cross_focused.arguments["qualified_name"] = serde_json::json!("cross-root-focused");
+    let calls = [
+        cross_caller,
+        call("trace", "codebase_memory_trace_path"),
+        cross_focused,
+    ];
+    let denials = state.on_tool_batch_dispatched_with_admissions(
+        &calls,
+        3,
+        &[
+            Some(source_admission(OTHER_ROOT, DecisionEvidenceKindV1::Caller)),
+            Some(trace_admission(ROOT)),
+            Some(source_admission(
+                OTHER_ROOT,
+                DecisionEvidenceKindV1::FocusedTest,
+            )),
+        ],
+    );
+    assert!(denials[0].is_some());
+    assert_eq!(denials[1], None);
+    assert!(denials[2].is_some());
+    assert_eq!(
+        state.on_tool_finished(
+            "trace",
+            "codebase_memory_trace_path",
+            &output_with_caller_discovery(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
+            ),
+        ),
+        DecisionAnchorTransition::GapRecoveryNeeded,
+    );
+    state.take_model_guidance();
+
+    let after_trace = state.recovery_details().expect("parallel source recovery");
+    assert_eq!(
+        after_trace.missing_evidence,
+        [
+            GraphRecoveryEvidenceKindV1::Implementation,
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ],
+    );
+    assert_eq!(after_trace.remaining_allowance, 3);
+    assert_eq!(after_trace.compatible_actions.len(), 3);
+
+    let mut implementation =
+        source_call("implementation", DecisionEvidenceKindV1::Implementation);
+    implementation.arguments["qualified_name"] = serde_json::json!("selected-implementation");
+    let mut caller = source_call("caller", DecisionEvidenceKindV1::Caller);
+    caller.arguments["qualified_name"] = serde_json::json!("returned-caller");
+    let mut focused = source_call("focused", DecisionEvidenceKindV1::FocusedTest);
+    focused.arguments["qualified_name"] = serde_json::json!("returned-focused");
+    let calls = [
+        implementation,
+        caller,
+        focused,
+        call("satisfied-trace", "codebase_memory_trace_path"),
+    ];
+    let denials = state.on_tool_batch_dispatched_with_admissions(
+        &calls,
+        4,
+        &[
+            Some(source_admission(
+                ROOT,
+                DecisionEvidenceKindV1::Implementation,
+            )),
+            Some(source_admission(ROOT, DecisionEvidenceKindV1::Caller)),
+            Some(source_admission(
+                ROOT,
+                DecisionEvidenceKindV1::FocusedTest,
+            )),
+            Some(trace_admission(ROOT)),
+        ],
+    );
+    assert_eq!(denials[..3], [None, None, None]);
+    assert!(denials[3].is_some());
+
+    let implementation = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    let caller = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::Caller,
+    );
+    let focused = output_with_evidence(
+        ROOT,
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionEvidenceKindV1::FocusedTest,
+    );
+    assert_eq!(
+        state.on_tool_batch_finished(&[
+            (
+                "implementation",
+                "codebase_memory_get_code_snippet",
+                &implementation,
+            ),
+            ("caller", "codebase_memory_get_code_snippet", &caller),
+            ("focused", "codebase_memory_get_code_snippet", &focused),
+        ]),
+        DecisionAnchorTransition::EnabledEvidenceComplete,
+    );
 }
 
 #[test]

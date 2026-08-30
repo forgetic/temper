@@ -20,7 +20,7 @@ fn provider_classified_focused_test_root_unlocks_only_its_exact_source() {
                     {"qualified_name": "crate::route::select_worker"},
                     {
                         "qualified_name": "crate::tests::keeps_affinity",
-                        "is_test": true
+                        "file_path": "tests/keeps_affinity.rs"
                     }
                 ]
             }))),

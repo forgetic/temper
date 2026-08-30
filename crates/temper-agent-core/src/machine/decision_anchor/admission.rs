@@ -185,7 +185,7 @@ impl DecisionAnchorState {
                 // A traversal is meaningful only for the staged active root.
                 // A selector owned by a retained sibling or by no root must be
                 // denied instead of escaping to the provider.
-                let staged_call = snapshot.as_ref().is_some_and(|_| {
+                let staged_call = snapshot.as_ref().is_some_and(|snapshot| {
                     if is_traversal {
                         requested_action.is_some()
                             && (has_traversal_selector
@@ -194,6 +194,9 @@ impl DecisionAnchorState {
                     } else {
                         (admission.is_some() || incomplete_graph_selector.is_some())
                             && requested_action.is_some()
+                            && admitted_root
+                                .as_deref()
+                                .is_none_or(|root| root == snapshot.active_root)
                     }
                 });
                 if self.exploration != ExplorationStatus::Open || staged_call {
@@ -315,8 +318,11 @@ impl DecisionAnchorState {
                 None,
             );
         }
-        for (action, excluded, recovery_selector) in local_rejections {
+        let local_batch_made_no_progress = admitted_count == 0 && !local_rejections.is_empty();
+        if local_batch_made_no_progress {
             self.enter_local_traversal_readiness_recovery();
+        }
+        for (action, excluded, recovery_selector) in local_rejections {
             self.queue_local_denial_guidance(action, excluded, recovery_selector.as_ref());
         }
         for _ in 0..local_readiness_deferrals {

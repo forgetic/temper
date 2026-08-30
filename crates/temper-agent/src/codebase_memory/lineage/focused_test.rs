@@ -296,16 +296,39 @@ fn collect_focused_test_result(
                 .into_iter()
                 .filter_map(|field| values.get(field))
                 .collect::<Vec<_>>();
-            if !test_fields.is_empty() {
-                *has_test_classification = true;
-                let mut classifications = test_fields
+            let path_classifications = ["file_path", "filePath", "source_path", "sourcePath"]
+                .into_iter()
+                .filter_map(|field| values.get(field))
+                .map(|value| value.as_str().map(provider_classifies_test_path))
+                .collect::<Option<BTreeSet<_>>>()?;
+            let explicit_classification = if test_fields.is_empty() {
+                None
+            } else {
+                let classifications = test_fields
                     .into_iter()
                     .map(Value::as_bool)
                     .collect::<Option<BTreeSet<_>>>()?;
                 if classifications.len() != 1 {
                     return None;
                 }
-                if classifications.pop_first()? {
+                classifications.first().copied()
+            };
+            let path_classification = if path_classifications.is_empty() {
+                None
+            } else {
+                if path_classifications.len() != 1 {
+                    return None;
+                }
+                path_classifications.first().copied()
+            };
+            if explicit_classification.is_some() || path_classification == Some(true) {
+                *has_test_classification = true;
+                let is_test =
+                    explicit_classification.unwrap_or(false) || path_classification == Some(true);
+                if explicit_classification == Some(false) && path_classification == Some(true) {
+                    return None;
+                }
+                if is_test {
                     collect_direct_symbol(values, candidates)?;
                     collect_direct_exact_source_candidates(values, exact_source_candidates)?;
                 }
@@ -345,6 +368,15 @@ fn collect_focused_test_result(
     }
     (candidates.len() <= MAX_RESULT_TARGETS && exact_source_candidates.len() <= MAX_RESULT_TARGETS)
         .then_some(())
+}
+
+fn provider_classifies_test_path(value: &str) -> bool {
+    let normalized = value.replace('\\', "/");
+    !normalized.starts_with('/')
+        && normalized
+            .split('/')
+            .all(|component| !matches!(component, "" | "." | ".."))
+        && (normalized.starts_with("tests/") || normalized.contains("/tests/"))
 }
 
 fn collect_direct_exact_source_candidates(

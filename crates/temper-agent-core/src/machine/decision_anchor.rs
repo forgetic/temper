@@ -19,6 +19,7 @@ use crate::{EligibleWorkspaceTarget, InvocationTargetAdmission, TargetAdmissionO
 
 use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, ToolCallDenial};
 
+mod actions;
 mod admission;
 mod anchors;
 mod evidence;
@@ -165,6 +166,7 @@ struct SourceEvidence {
     trace_turn: Option<usize>,
     decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
     caller_selector_available: bool,
+    trace_before_implementation: bool,
     caller_traversal_outcome: Option<CallerDiscoveryOutcomeV1>,
     focused_test_selector_available: bool,
     focused_test_traversal_turn: Option<usize>,
@@ -339,6 +341,9 @@ impl DecisionAnchorState {
         finished: &[FinishedCodebaseCall<'_>],
         recovery_attempts: u8,
     ) -> DecisionAnchorTransition {
+        let selected_active_root = anchors
+            .active_selection(&BTreeSet::new())
+            .map(|(binding, _)| binding.clone());
         let compatible = finished
             .iter()
             .filter_map(|finished| {
@@ -360,7 +365,9 @@ impl DecisionAnchorState {
             })
             .collect::<Vec<_>>();
         let mut evidence_progressed = false;
+        let mut active_evidence_progressed = false;
         let mut route_progressed = false;
+        let mut active_route_progressed = false;
         for (root, id, call, output, source_target) in &compatible {
             let Some(anchor) = anchors.roots.get_mut(root) else {
                 continue;
@@ -379,6 +386,7 @@ impl DecisionAnchorState {
                 .extend(output.lineage.result_target_kinds.iter().copied());
             if anchor.result_target_kinds.len() > target_kinds_before {
                 route_progressed = true;
+                active_route_progressed |= selected_active_root.as_ref() == Some(root);
                 self.mark_route_progress(id);
             }
             let mut accepted_source = false;
@@ -454,6 +462,7 @@ impl DecisionAnchorState {
                     if !anchor.exact_graph_narrowing_selected {
                         anchor.exact_graph_narrowing_selected = true;
                         route_progressed = true;
+                        active_route_progressed |= selected_active_root.as_ref() == Some(root);
                         self.mark_route_progress(id);
                     }
                 }
@@ -463,7 +472,10 @@ impl DecisionAnchorState {
             if accepted_source {
                 self.record_source_authority(root, call, *source_target);
             }
-            evidence_progressed |= anchor.evidence.progress_count() > before;
+            let root_progressed = anchor.evidence.progress_count() > before;
+            evidence_progressed |= root_progressed;
+            active_evidence_progressed |=
+                root_progressed && selected_active_root.as_ref() == Some(root);
         }
 
         // New roots are retained only after descendants were checked against
@@ -483,7 +495,7 @@ impl DecisionAnchorState {
             return self.enter_recovery(anchors, recovery_attempts);
         }
 
-        if evidence_progressed || route_progressed || roots_progressed {
+        if active_evidence_progressed || active_route_progressed || roots_progressed {
             self.non_progressing_batches = 0;
             if anchors.has_complete_evidence() {
                 self.phase = Some(AnchorPhase::EnabledComplete(anchors));
@@ -501,6 +513,10 @@ impl DecisionAnchorState {
                 return self.enter_gap_recovery(anchors);
             }
             return DecisionAnchorTransition::Unchanged;
+        }
+
+        if evidence_progressed || route_progressed {
+            return self.record_non_progress(Some(AnchorPhase::Trail(anchors)));
         }
 
         if root_merge == RootMerge::LimitExceeded {

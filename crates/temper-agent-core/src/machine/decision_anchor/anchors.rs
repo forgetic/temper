@@ -303,10 +303,10 @@ impl AnchorForest {
             .get(active_root)
             .map_or_else(Vec::new, |root| root.evidence.missing_kinds(route));
         if route == RecoveryRoute::Implementation
-            && !self
+            && self
                 .roots
-                .values()
-                .any(|root| root.evidence.focused_test_is_complete())
+                .get(active_root)
+                .is_some_and(|root| !root.evidence.focused_test_is_complete())
         {
             missing.push(GraphRecoveryEvidenceKindV1::FocusedTest);
             missing.sort();

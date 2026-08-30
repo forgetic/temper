@@ -7,9 +7,21 @@ use super::*;
 impl DecisionAnchorState {
     pub(super) fn enter_gap_recovery(&mut self, anchors: AnchorForest) -> DecisionAnchorTransition {
         debug_assert!(!anchors.has_complete_evidence());
+        let mut anchors = anchors;
         let Some((active_root, route)) = anchors.recovery_selection() else {
             return self.enter_incomplete_enabled(anchors.active_evidence());
         };
+        if route == RecoveryRoute::Implementation
+            && anchors.roots.iter().any(|(binding, root)| {
+                binding != &active_root && root.evidence.focused_test_is_complete()
+            })
+        {
+            let active = anchors
+                .roots
+                .get_mut(&active_root)
+                .expect("the selected recovery root remains installed");
+            active.evidence.trace_before_implementation = true;
+        }
         let remaining_pivots = anchors.roots.len().saturating_sub(1);
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
@@ -25,7 +37,7 @@ impl DecisionAnchorState {
 
     fn pivot_gap_recovery_or_exhaust(
         &mut self,
-        anchors: AnchorForest,
+        mut anchors: AnchorForest,
         exhausted_root: String,
         mut exhausted_roots: BTreeSet<String>,
         remaining_pivots: usize,
@@ -42,6 +54,17 @@ impl DecisionAnchorState {
         let Some((active_root, route)) = next else {
             return self.enter_incomplete_enabled(exhausted_evidence);
         };
+        if route == RecoveryRoute::Implementation
+            && anchors.roots.iter().any(|(binding, root)| {
+                binding != &active_root && root.evidence.focused_test_is_complete()
+            })
+        {
+            let active = anchors
+                .roots
+                .get_mut(&active_root)
+                .expect("the pivoted recovery root remains installed");
+            active.evidence.trace_before_implementation = true;
+        }
 
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
@@ -118,6 +141,7 @@ impl DecisionAnchorState {
             .evidence
             .decision_kinds
             .contains(&DecisionEvidenceKindV1::Implementation);
+        let parallel_recovery = active.evidence.trace_before_implementation;
         let batch_trace = (route == RecoveryRoute::Implementation)
             .then(|| {
                 compatible
@@ -145,10 +169,15 @@ impl DecisionAnchorState {
                                 route == RecoveryRoute::Implementation
                                     && had_trace
                                     && (had_caller_selector || !call.admission_checked)
-                                    && (had_implementation || !call.admission_checked)
+                                    && (had_implementation
+                                        || parallel_recovery
+                                        || !call.admission_checked)
                             }
                             DecisionEvidenceKindV1::FocusedTest => {
-                                route == RecoveryRoute::FocusedTest
+                                (route == RecoveryRoute::FocusedTest
+                                    || route == RecoveryRoute::Implementation
+                                        && parallel_recovery
+                                        && had_trace)
                                     && (had_focused_test_selector || !call.admission_checked)
                             }
                         } =>
@@ -347,6 +376,7 @@ impl SourceEvidence {
         if let Some(turn) = other.trace_turn {
             self.record_trace(turn);
         }
+        self.trace_before_implementation |= other.trace_before_implementation;
         self.caller_selector_available |= other.caller_selector_available;
         if self.caller_traversal_outcome.is_none() {
             self.caller_traversal_outcome = other.caller_traversal_outcome;
@@ -434,62 +464,6 @@ impl SourceEvidence {
             }
         }
         missing
-    }
-
-    /// Recovery follows one provider-derived route at a time. Implementation
-    /// source leads to its inbound caller traversal and exact caller source;
-    /// focused-test source remains on its independently admitted root.
-    pub(super) fn compatible_actions(
-        &self,
-        anchor: &Anchor,
-        route: RecoveryRoute,
-    ) -> BTreeSet<GraphRecoveryActionV1> {
-        let mut actions = BTreeSet::new();
-        match route {
-            RecoveryRoute::Implementation => {
-                if self.needs(DecisionGap::Evidence(
-                    DecisionEvidenceKindV1::Implementation,
-                )) {
-                    let action = GraphRecoveryActionV1::for_evidence(
-                        GraphRecoveryEvidenceKindV1::Implementation,
-                    );
-                    if anchor.supports(action) {
-                        actions.insert(action);
-                    }
-                    return actions;
-                }
-                if !self.has_trace() {
-                    let action =
-                        GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Trace);
-                    if anchor.supports(action) {
-                        actions.insert(action);
-                    }
-                    return actions;
-                }
-                if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::Caller))
-                    && self.caller_selector_available
-                {
-                    let action =
-                        GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Caller);
-                    if anchor.supports(action) {
-                        actions.insert(action);
-                    }
-                }
-            }
-            RecoveryRoute::FocusedTest => {
-                if self.needs(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
-                    && self.focused_test_selector_available
-                {
-                    let action = GraphRecoveryActionV1::for_evidence(
-                        GraphRecoveryEvidenceKindV1::FocusedTest,
-                    );
-                    if anchor.supports(action) {
-                        actions.insert(action);
-                    }
-                }
-            }
-        }
-        actions
     }
 
     pub(super) fn all_missing_kinds(&self) -> Vec<GraphRecoveryEvidenceKindV1> {

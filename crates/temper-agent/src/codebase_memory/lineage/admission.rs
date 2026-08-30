@@ -139,10 +139,19 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
                 }
             }
         }
-        (
-            lineages.resolve_for_active_root(tool_name, arguments, active_root),
-            None,
-        )
+        let outcome = lineages.resolve_for_active_root(tool_name, arguments, active_root);
+        if GraphCorrelationToolV1::from_public_name(tool_name)
+            == Some(GraphCorrelationToolV1::GetCodeSnippet)
+            && active_root.is_some()
+            && outcome
+                == LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
+        {
+            return (
+                lineages.resolve_for_active_root(tool_name, arguments, None),
+                None,
+            );
+        }
+        (outcome, None)
     }
 
     fn trace_recovery_selector(
