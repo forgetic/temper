@@ -61,6 +61,81 @@ fn provider_classified_focused_test_root_unlocks_only_its_exact_source() {
 }
 
 #[test]
+fn active_root_recovery_admits_only_focused_test_sources_from_a_sibling() {
+    use std::sync::Arc;
+
+    let workspace = tempfile::tempdir().unwrap();
+    let context = crate::codebase_memory::tests::test_support::workspace_context(
+        workspace.path(),
+        &[("acme", "demo", "demo")],
+    );
+    let scope = Arc::new(
+        crate::codebase_memory::scope::WorkspaceScope::from_context(&context, workspace.path())
+            .unwrap(),
+    );
+    let registry = DecisionAnchorLineageRegistry::new(scope);
+    let implementation = registry
+        .record_with_evidence_kind(
+            &GraphCorrelationV1::new(
+                GraphCorrelationToolV1::SearchGraph,
+                GraphCorrelationTargetKindV1::GraphQuery,
+                "implementation behavior",
+            )
+            .unwrap(),
+            &serde_json::json!({"query": "implementation behavior"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::route::select_worker"
+            }))),
+            None,
+        )
+        .unwrap();
+    let focused = registry
+        .record_with_evidence_kind(
+            &GraphCorrelationV1::new(
+                GraphCorrelationToolV1::SearchGraph,
+                GraphCorrelationTargetKindV1::GraphQuery,
+                "focused behavior",
+            )
+            .unwrap(),
+            &serde_json::json!({"query": "focused behavior"}),
+            Some(&structured_parts(serde_json::json!({
+                "qualified_name": "crate::tests::keeps_affinity",
+                "is_test": true
+            }))),
+            None,
+        )
+        .unwrap();
+
+    let focused_input = serde_json::json!({
+        "qualified_name": "crate::tests::keeps_affinity",
+        "decision_evidence_kind": "focused_test"
+    });
+    let (focused_outcome, _) = registry.resolve_for_active_root_with_recovery(
+        GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+        &focused_input,
+        Some(&implementation.root_binding),
+    );
+    let LineageAdmissionOutcome::Eligible(focused_admission) = focused_outcome else {
+        panic!("an independent focused-test root must remain admissible");
+    };
+    assert!(focused_admission.matches_root(&focused.root_binding));
+
+    let (implementation_outcome, _) = registry.resolve_for_active_root_with_recovery(
+        GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+        &serde_json::json!({
+            "qualified_name": "crate::tests::keeps_affinity",
+            "decision_evidence_kind": "implementation"
+        }),
+        Some(&implementation.root_binding),
+    );
+    assert_eq!(
+        implementation_outcome,
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector),
+        "a sibling selector cannot substitute for the active implementation route",
+    );
+}
+
+#[test]
 fn active_root_rejects_sibling_task_and_failed_selector_substitutions() {
     let mut lineages = DecisionAnchorLineages::default();
     let implementation = lineages

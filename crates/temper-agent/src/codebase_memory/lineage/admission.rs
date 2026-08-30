@@ -146,10 +146,15 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
             && outcome
                 == LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
         {
-            return (
-                lineages.resolve_for_active_root(tool_name, arguments, None),
-                None,
-            );
+            let sibling = lineages.resolve_for_active_root(tool_name, arguments, None);
+            if matches!(
+                &sibling,
+                LineageAdmissionOutcome::Eligible(admission)
+                    if admission.evidence_purpose()
+                        == Some(DecisionEvidenceKindV1::FocusedTest)
+            ) {
+                return (sibling, None);
+            }
         }
         (outcome, None)
     }
