@@ -20,7 +20,6 @@ fn jig_agent_consumes_opaque_result_driven_evidence_before_mutation() {
             DecisionStep::ImplementationSource,
             DecisionStep::Trace,
             DecisionStep::CallerSource,
-            DecisionStep::FocusedTestSearch,
             DecisionStep::BehavioralTestSource,
             DecisionStep::Mutation,
             DecisionStep::Complete,
@@ -30,7 +29,7 @@ fn jig_agent_consumes_opaque_result_driven_evidence_before_mutation() {
 }
 
 #[test]
-fn jig_agent_recovers_missing_caller_and_rejects_repeated_focused_test_detours() {
+fn jig_agent_recovers_missing_caller_and_rejects_a_focused_test_detour() {
     let run = run(DecisionCase::StagedDetourRecovery);
     assert_eq!(run.mutation, Some("staged detours recovered\n".to_string()));
     assert_eq!(
@@ -43,13 +42,11 @@ fn jig_agent_recovers_missing_caller_and_rejects_repeated_focused_test_detours()
             DecisionStep::CallerSourceDetour,
             DecisionStep::CallerSource,
             DecisionStep::FocusedTestDetour,
-            DecisionStep::FocusedTestDetour,
-            DecisionStep::FocusedTestSearch,
             DecisionStep::BehavioralTestSource,
             DecisionStep::SourceRead,
             DecisionStep::Mutation,
             DecisionStep::Complete,
         ],
-        "local detours must preserve one exact implementation/caller/semantic-test chain",
+        "local detours must preserve one exact implementation/caller/focused-test forest",
     );
 }

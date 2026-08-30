@@ -127,6 +127,7 @@ struct Recovery {
 struct GapRecovery {
     anchors: AnchorForest,
     active_root: String,
+    route: RecoveryRoute,
     remaining: u8,
     exhausted_roots: BTreeSet<String>,
     remaining_pivots: usize,
@@ -164,13 +165,18 @@ struct SourceEvidence {
     trace_turn: Option<usize>,
     decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
     caller_selector_available: bool,
-    trace_before_implementation: bool,
     caller_traversal_outcome: Option<CallerDiscoveryOutcomeV1>,
     focused_test_selector_available: bool,
     focused_test_traversal_turn: Option<usize>,
     focused_test_traversal_outcome: Option<FocusedTestDiscoveryOutcomeV1>,
     focused_test_fallback_turn: Option<usize>,
     focused_test_fallback_outcome: Option<FocusedTestDiscoveryOutcomeV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryRoute {
+    Implementation,
+    FocusedTest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -353,16 +359,6 @@ impl DecisionAnchorState {
                     })
             })
             .collect::<Vec<_>>();
-        let batch_caller_routes = compatible
-            .iter()
-            .filter(|(_, _, call, output, _)| {
-                output.tool == GraphCorrelationToolV1::TracePath
-                    && output.lineage.caller_discovery.is_some()
-                    && call.recovery_gap
-                        != Some(DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest))
-            })
-            .map(|(root, _, _, _, _)| root.clone())
-            .collect::<BTreeSet<_>>();
         let mut evidence_progressed = false;
         let mut route_progressed = false;
         for (root, id, call, output, source_target) in &compatible {
@@ -378,11 +374,6 @@ impl DecisionAnchorState {
                 .evidence
                 .decision_kinds
                 .contains(&DecisionEvidenceKindV1::Implementation);
-            let had_caller = anchor
-                .evidence
-                .decision_kinds
-                .contains(&DecisionEvidenceKindV1::Caller);
-            let parallel_recovery = anchor.evidence.trace_before_implementation;
             anchor
                 .result_target_kinds
                 .extend(output.lineage.result_target_kinds.iter().copied());
@@ -422,11 +413,7 @@ impl DecisionAnchorState {
                         Some(DecisionEvidenceKindV1::Caller)
                             if had_trace
                                 && (had_caller_selector || !call.admission_checked)
-                                && (had_implementation
-                                    || parallel_recovery
-                                    || !call.admission_checked)
-                                || !call.admission_checked
-                                    && batch_caller_routes.contains(root) =>
+                                && (had_implementation || !call.admission_checked) =>
                         {
                             anchor
                                 .evidence
@@ -435,13 +422,7 @@ impl DecisionAnchorState {
                             self.mark_accepted(id, AcceptedEvidence::Caller);
                         }
                         Some(DecisionEvidenceKindV1::FocusedTest)
-                            if had_trace
-                                && (had_focused_test_selector || !call.admission_checked)
-                                && (had_implementation && had_caller
-                                    || parallel_recovery
-                                    || !call.admission_checked)
-                                || !call.admission_checked
-                                    && batch_caller_routes.contains(root) =>
+                            if had_focused_test_selector || !call.admission_checked =>
                         {
                             anchor
                                 .evidence
@@ -509,7 +490,7 @@ impl DecisionAnchorState {
                 self.exploration = ExplorationStatus::EnabledComplete;
                 return DecisionAnchorTransition::EnabledEvidenceComplete;
             }
-            if !anchors.active_has_compatible_actions() {
+            if !anchors.has_compatible_actions() {
                 return self.enter_gap_recovery(anchors);
             }
             self.phase = Some(AnchorPhase::Trail(anchors));
@@ -592,9 +573,11 @@ impl DecisionAnchorState {
         };
         let active = recovery.anchors.roots.get(&recovery.active_root)?;
         GraphExplorationClosedV1::recoverable_with_actions(
-            active.evidence.missing_kinds(),
+            recovery
+                .anchors
+                .missing_kinds(&recovery.active_root, recovery.route),
             recovery.remaining,
-            active.evidence.compatible_actions(active),
+            active.evidence.compatible_actions(active, recovery.route),
         )
     }
 
@@ -602,9 +585,11 @@ impl DecisionAnchorState {
         let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
             return None;
         };
-        let active = recovery.anchors.roots.get(&recovery.active_root)?;
+        recovery.anchors.roots.get(&recovery.active_root)?;
         GraphExplorationClosedV1::recoverable_without_actions(
-            active.evidence.missing_kinds(),
+            recovery
+                .anchors
+                .missing_kinds(&recovery.active_root, recovery.route),
             recovery.remaining,
         )
     }
@@ -616,14 +601,18 @@ impl DecisionAnchorState {
                 let AnchorPhase::GapRecovery(recovery) = self.phase.as_ref()? else {
                     return None;
                 };
-                let active = recovery.anchors.roots.get(&recovery.active_root)?;
-                GraphExplorationClosedV1::exhausted(active.evidence.missing_kinds())
+                recovery.anchors.roots.get(&recovery.active_root)?;
+                GraphExplorationClosedV1::exhausted(
+                    recovery
+                        .anchors
+                        .missing_kinds(&recovery.active_root, recovery.route),
+                )
             }),
             ExplorationStatus::EnabledIncomplete => self.phase.as_ref().and_then(|phase| {
                 let AnchorPhase::EnabledIncomplete(evidence) = phase else {
                     return None;
                 };
-                GraphExplorationClosedV1::exhausted(evidence.missing_kinds())
+                GraphExplorationClosedV1::exhausted(evidence.all_missing_kinds())
             }),
             ExplorationStatus::ProviderUnavailable => {
                 Some(GraphExplorationClosedV1::conventional_fallback())

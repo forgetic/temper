@@ -115,18 +115,14 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "selected-implementation traversal's provider-returned caller identities",
         "complete empty inbound trace settles that selected symbol's graph-caller relationship",
         "do not manufacture caller evidence by rereading the traced symbol as its own caller",
-        "Initial task-semantic discovery may over-return a test-shaped candidate",
-        "cannot complete or select focused-test evidence",
-        "single action named by Decision guidance",
-        "one same-root",
-        "search_graph` / `graph_query` focused-test search",
-        "exact test returned by",
-        "Do not substitute the initial test-shaped candidate",
-        "between the semantic search and its exact returned test source",
-        "multiple typed routes could fill a decision gap",
-        "semantically connected to the requested behavior",
-        "selector provider-derived and on the active root",
+        "Initial discovery may establish independent implementation and focused-test roots",
+        "every dependent selector must come from its own provider result",
+        "Focused-test evidence follows a separately admitted root",
+        "Never move focused-test evidence onto the implementation root",
+        "derive a recovery selector from task text",
+        "provider-derived and on the root that produced it",
         "never repeat the denied tool/selector/evidence-kind tuple",
+        "retained forest",
         "smallest semantic diff",
     ] {
         assert!(
@@ -263,28 +259,26 @@ fn codebase_memory_agent_fake(
 ) -> FakeLlm {
     FakeLlm::start(Script::rule(move |view| match view.prior_tool_results {
         0 => Reply {
-            turns: vec![Turn::ToolCall {
-                id: "call_memory_search".to_string(),
-                name: "codebase_memory_search_code".to_string(),
-                args: serde_json::json!({ "query": "WidgetService", "pattern": "WidgetService" }),
-            }],
+            turns: vec![
+                Turn::ToolCall {
+                    id: "call_memory_search".to_string(),
+                    name: "codebase_memory_search_code".to_string(),
+                    args: serde_json::json!({ "query": "WidgetService", "pattern": "WidgetService" }),
+                },
+                Turn::ToolCall {
+                    id: "call_memory_focused_root".to_string(),
+                    name: "codebase_memory_search_graph".to_string(),
+                    args: serde_json::json!({ "query": "widget service notes behavior" }),
+                },
+            ],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
         },
-        1 => {
+        2 => {
             let saw_memory_result = view.messages.iter().any(|message| {
                 message.role == "tool" && message.content.contains("FAKE_MCP_SEARCH_RESULT")
             });
-            assert!(
-                saw_memory_result
-                    && view.messages.iter().any(|message| {
-                        message.role == "tool"
-                            && message
-                                .content
-                                .contains("[Decision anchor: complete typed graph result")
-                    }),
-                "fake LLM did not receive the anchored codebase-memory MCP result"
-            );
+            assert!(saw_memory_result, "fake LLM did not receive the implementation root");
             observed_memory_result.fetch_add(1, Ordering::SeqCst);
             Reply {
                 turns: vec![Turn::ToolCall {
@@ -299,7 +293,7 @@ fn codebase_memory_agent_fake(
                 stop: StopReason::ToolCalls,
             }
         }
-        2 => Reply {
+        3 => Reply {
             turns: vec![Turn::ToolCall {
                 id: "call_trace_memory_caller".to_string(),
                 name: "codebase_memory_trace_path".to_string(),
@@ -311,24 +305,13 @@ fn codebase_memory_agent_fake(
             usage: Default::default(),
             stop: StopReason::ToolCalls,
         },
-        3 => Reply {
+        4 => Reply {
             turns: vec![Turn::ToolCall {
                 id: "call_read_memory_caller".to_string(),
                 name: "codebase_memory_get_code_snippet".to_string(),
                 args: serde_json::json!({
                     "qualified_name": "crate::WidgetCaller",
                     "decision_evidence_kind": "caller"
-                }),
-            }],
-            usage: Default::default(),
-            stop: StopReason::ToolCalls,
-        },
-        4 => Reply {
-            turns: vec![Turn::ToolCall {
-                id: "call_search_memory_test".to_string(),
-                name: "codebase_memory_search_graph".to_string(),
-                args: serde_json::json!({
-                    "query": "widget service notes behavior"
                 }),
             }],
             usage: Default::default(),
@@ -362,14 +345,7 @@ fn codebase_memory_agent_fake(
             assert_eq!(
                 fs::read_to_string(&notes_path).expect("premature mutation target"),
                 "pending exact read\n",
-                "the denied direct mutation must not change the workspace",
             );
-            assert!(view.messages.iter().any(|message| {
-                message.role == "tool"
-                    && message.content.contains(
-                        "use the ordinary read tool to read the exact target named by this mutation",
-                    )
-            }));
             Reply {
                 turns: vec![Turn::ToolCall {
                     id: "call_read_memory_notes".to_string(),
@@ -393,7 +369,7 @@ fn codebase_memory_agent_fake(
             stop: StopReason::ToolCalls,
         },
         _ => Reply::text(
-            r#"{"summary":"Consumed codebase memory source evidence and a post-source exact read before writing MEMORY_NOTES.md."}"#,
+            r#"{"summary":"Consumed independent codebase memory implementation/caller and focused-test roots before the exact read."}"#,
         ),
     }))
     .expect("start codebase-memory fake LLM")

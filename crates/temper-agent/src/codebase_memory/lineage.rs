@@ -26,9 +26,7 @@ mod target;
 
 pub(super) use admission::DecisionAnchorLineageRegistry;
 use exact_narrowing::{ExactGraphSelector, PendingExactGraphNarrowing};
-use focused_test::{
-    FocusedTestDiscovery, FocusedTestRecoveryState, SelectorOrigin, focused_test_discovery,
-};
+use focused_test::{FocusedTestDiscovery, SelectorOrigin, focused_test_discovery};
 use recovery_selector::{
     RECOVERY_SELECTOR_REFERENCE_PREFIX, RecoverySelectorKey, RecoverySelectorPurpose,
     RecoverySelectorReference, RecoverySelectorState,
@@ -43,8 +41,6 @@ use selection::{
 pub(super) struct DecisionAnchorLineages {
     /// `None` marks a value offered by more than one root; it cannot advance either root.
     selectors: BTreeMap<Selector, Option<SelectorBinding>>,
-    focused_test_recovery: BTreeMap<String, FocusedTestRecoveryState>,
-    semantic_fallback_queries: BTreeMap<String, Option<String>>,
     recovery_references: BTreeMap<RecoverySelectorKey, String>,
     recovery_reference_selectors: BTreeMap<String, RecoverySelectorReference>,
     exact_graph_selectors: BTreeMap<ExactGraphSelector, BTreeMap<String, Option<BTreeSet<String>>>>,
@@ -138,18 +134,9 @@ impl DecisionAnchorLineages {
             selector_binding.as_ref(),
             typed_parts,
         );
-        let fallback_root = (correlation.tool == GraphCorrelationToolV1::SearchGraph
-            && correlation.target_kind == GraphCorrelationTargetKindV1::GraphQuery)
-            .then(|| {
-                self.semantic_fallback_queries
-                    .remove(&correlation.target_digest)
-                    .flatten()
-            })
-            .flatten();
         let matched_root = selector_binding
             .as_ref()
-            .map(|binding| binding.root_binding.clone())
-            .or_else(|| fallback_root.clone());
+            .map(|binding| binding.root_binding.clone());
         let (root_binding, stage, canonical_target_digests) = match matched_root {
             Some(root_binding) => (
                 root_binding,
@@ -194,14 +181,12 @@ impl DecisionAnchorLineages {
         let FocusedTestDiscovery {
             candidates: focused_tests,
             outcome: mut focused_test_discovery,
-            is_traversal: is_focused_test_traversal,
         } = focused_test_discovery(
             correlation,
             input,
             selector_binding
                 .as_ref()
                 .is_some_and(|binding| binding.caller_evidence_result),
-            fallback_root.is_some(),
             typed_parts,
         );
 
@@ -219,15 +204,6 @@ impl DecisionAnchorLineages {
                 self.register(&root_binding, candidates.clone())?;
                 if let Some(identities) = exact_graph_identities.as_ref() {
                     self.register_exact_graph_identities(&root_binding, identities);
-                }
-                if correlation.tool == GraphCorrelationToolV1::SearchGraph
-                    && fallback_root.is_none()
-                {
-                    self.mark_candidates(
-                        &root_binding,
-                        candidates.clone(),
-                        SelectorOrigin::FocusedTestResult,
-                    )?;
                 }
                 if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Implementation) {
                     let traversal_evidence = implementation_traversal_evidence(typed_parts);
@@ -247,7 +223,6 @@ impl DecisionAnchorLineages {
                         &candidates,
                         SelectorOrigin::CallerEvidenceResult,
                     )?;
-                    self.record_caller_evidence_ready(&root_binding);
                 }
                 if let Some(callers) = caller_candidates {
                     let marked = self.mark_candidates(
@@ -263,21 +238,14 @@ impl DecisionAnchorLineages {
                     marked_focused_tests = Some(self.mark_candidates(
                         &root_binding,
                         focused_tests.clone(),
-                        if fallback_root.is_some() {
-                            SelectorOrigin::FocusedTestFallbackResult
-                        } else {
-                            SelectorOrigin::FocusedTestResult
-                        },
+                        SelectorOrigin::FocusedTestResult,
                     )?);
                 }
                 kinds
             }
             None => BTreeSet::new(),
         };
-        focused_test_discovery = self.record_registered_focused_test_recovery(
-            &root_binding,
-            is_focused_test_traversal,
-            fallback_root.is_some(),
+        focused_test_discovery = self.record_registered_focused_test_candidates(
             focused_tests.is_some(),
             marked_focused_tests,
             focused_test_discovery,

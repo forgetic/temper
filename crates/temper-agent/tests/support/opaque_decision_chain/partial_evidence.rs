@@ -143,9 +143,10 @@ pub(super) fn reply(
             record(DecisionStep::ProviderFailure);
             tool_reply(
                 "implementation-focused-provider-failure",
-                "codebase_memory_search_graph",
+                "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "query": "focused behavioral regression",
+                    "qualified_name": recovery_selector("focused_test_result"),
+                    "decision_evidence_kind": "focused_test",
                     "force_unavailable": true,
                 }),
             )

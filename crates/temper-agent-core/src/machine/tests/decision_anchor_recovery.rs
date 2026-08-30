@@ -186,19 +186,8 @@ fn recovery_stages_implementation_before_its_caller_traversal() {
         ),
         DecisionAnchorTransition::GapRecoveryNeeded,
     );
-    assert_eq!(
-        finish_semantic_test_search(
-            &mut state,
-            "semantic-test-search",
-            ROOT,
-            6,
-            FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
-        ),
-        DecisionAnchorTransition::GapRecoveryNeeded,
-    );
-    let mut test = source_call("test", DecisionEvidenceKindV1::FocusedTest);
-    test.arguments["qualified_name"] = serde_json::json!("semantic-returned-test");
-    assert_eq!(state.on_tool_dispatched(&test, 7), None);
+    let test = source_call("test", DecisionEvidenceKindV1::FocusedTest);
+    assert_eq!(state.on_tool_dispatched(&test, 6), None);
     assert_eq!(
         finish_with_evidence(
             &mut state,
@@ -212,7 +201,7 @@ fn recovery_stages_implementation_before_its_caller_traversal() {
 }
 
 #[test]
-fn allowance_floor_keeps_a_distinct_provider_selector_actionable() {
+fn exhausted_allowance_cannot_be_reopened_by_a_distinct_selector() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     install_consumable_root(&mut state);
     enter_budget_recovery(&mut state, 1);
@@ -237,6 +226,11 @@ fn allowance_floor_keeps_a_distinct_provider_selector_actionable() {
             ),
             None,
         );
+        let expected = if index + 1 == MAX_GRAPH_RECOVERY_ALLOWANCE_V1 {
+            DecisionAnchorTransition::EnabledEvidenceIncomplete
+        } else {
+            DecisionAnchorTransition::GapRecoveryNeeded
+        };
         assert_eq!(
             state.on_tool_finished(
                 &id,
@@ -247,18 +241,11 @@ fn allowance_floor_keeps_a_distinct_provider_selector_actionable() {
                     DecisionEvidenceKindV1::Caller,
                 ),
             ),
-            DecisionAnchorTransition::GapRecoveryNeeded,
+            expected,
         );
     }
 
-    let details = state.recovery_details().expect("alternative remains actionable");
-    assert_eq!(details.remaining_allowance, 1);
-    assert_eq!(
-        details.compatible_actions,
-        [GraphRecoveryActionV1::for_evidence(
-            GraphRecoveryEvidenceKindV1::Implementation,
-        )]
-    );
+    assert_eq!(state.recovery_details(), None);
     assert_eq!(
         state.on_tool_dispatched_with_admission(
             &source_call(
@@ -268,7 +255,7 @@ fn allowance_floor_keeps_a_distinct_provider_selector_actionable() {
             7,
             Some(&LineageAdmissionOutcome::Eligible(admission)),
         ),
-        None,
+        exhausted_graph_denial(all_missing()),
     );
 }
 
@@ -409,19 +396,8 @@ fn read_only_roles_retain_the_same_staged_bounded_gap_path() {
         ),
         DecisionAnchorTransition::GapRecoveryNeeded,
     );
-    assert_eq!(
-        finish_semantic_test_search(
-            &mut state,
-            "semantic-test-search",
-            ROOT,
-            6,
-            FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
-        ),
-        DecisionAnchorTransition::GapRecoveryNeeded,
-    );
-    let mut test = source_call("test", DecisionEvidenceKindV1::FocusedTest);
-    test.arguments["qualified_name"] = serde_json::json!("semantic-returned-test");
-    assert_eq!(state.on_tool_dispatched(&test, 7), None);
+    let test = source_call("test", DecisionEvidenceKindV1::FocusedTest);
+    assert_eq!(state.on_tool_dispatched(&test, 6), None);
     assert_eq!(
         finish_with_evidence(
             &mut state,

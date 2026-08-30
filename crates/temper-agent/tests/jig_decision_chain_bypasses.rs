@@ -161,12 +161,12 @@ fn jig_agent_stops_after_every_graph_root_becomes_nonviable() {
             DecisionStep::Discovery,
             DecisionStep::Recovery,
             DecisionStep::Recovery,
-            DecisionStep::Trace,
             DecisionStep::ImplementationSource,
             DecisionStep::Trace,
             DecisionStep::ImplementationSource,
             DecisionStep::Trace,
             DecisionStep::ImplementationSource,
+            DecisionStep::Trace,
         ],
     );
 }

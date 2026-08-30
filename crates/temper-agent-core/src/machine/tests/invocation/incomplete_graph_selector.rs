@@ -296,7 +296,18 @@ fn staged_incomplete_trace_returns_an_invokable_opaque_selector_then_accepts_it(
             _ => None,
         })
         .expect("repeated malformed traversal remains a local decision denial");
-    assert_eq!(second_details, expected);
+    assert_eq!(
+        second_details,
+        GraphExplorationClosedV1::recoverable_without_actions(
+            [
+                GraphRecoveryEvidenceKindV1::Trace,
+                GraphRecoveryEvidenceKindV1::Caller,
+                GraphRecoveryEvidenceKindV1::FocusedTest,
+            ],
+            3,
+        )
+        .unwrap(),
+    );
     let second_next_turn = complete(
         &mut machine,
         tool_failed(

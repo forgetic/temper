@@ -226,9 +226,8 @@ mod progress {
     }
 
     #[test]
-    fn rejected_recovery_tuple_stays_excluded_while_a_distinct_selector_remains_actionable() {
+    fn repeated_rejected_recovery_tuple_is_bounded_and_never_exposes_its_selector() {
         const PRIVATE_SELECTOR: &str = "private::repeated::implementation";
-        const DISTINCT_SELECTOR: &str = "private::eligible::implementation";
         let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
         state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
         finish(
@@ -253,81 +252,25 @@ mod progress {
 
         let mut rejected = source_call("denied", DecisionEvidenceKindV1::Implementation);
         rejected.arguments["qualified_name"] = serde_json::json!(PRIVATE_SELECTOR);
-        assert_eq!(
-            state.on_tool_dispatched_with_admission(
-                &rejected,
-                3,
-                Some(&LineageAdmissionOutcome::Ineligible(
-                    LineageAdmissionStatus::UnknownSelector,
-                )),
-            ),
-            recovery_graph_denial(all_missing(), 4),
-        );
-        let first_guidance = one_guidance(&mut state);
-        assert!(first_guidance.contains("result=non_progress"));
-        assert!(first_guidance.contains("rejected selector tuple excluded=true"));
-        assert!(first_guidance.contains("remaining allowance=4"));
-        assert!(first_guidance.contains("get_code_snippet/qualified_name/implementation"));
-        assert!(!first_guidance.contains(PRIVATE_SELECTOR));
-        assert_eq!(
-            state.on_tool_finished(
-                "denied",
-                "codebase_memory_get_code_snippet",
-                &plain_success(),
-            ),
-            DecisionAnchorTransition::Unchanged,
-        );
-
-        let eligible_same_tuple = EligibleLineageAdmission::new(
-            ROOT.to_string(),
-            DecisionAnchorTargetKindV1::QualifiedName,
-            GraphCorrelationToolV1::GetCodeSnippet,
-            Some(DecisionEvidenceKindV1::Implementation),
-        )
-        .unwrap();
-        for (turn, id) in [(4, "retry"), (5, "eligible-retry")] {
-            rejected.id = id.to_string();
-            let admission = if id == "retry" {
-                LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
-            } else {
-                LineageAdmissionOutcome::Eligible(eligible_same_tuple.clone())
-            };
-            assert_eq!(
-                state.on_tool_dispatched_with_admission(&rejected, turn, Some(&admission)),
-                recovery_graph_denial(all_missing(), 4),
-                "a closed tuple cannot be retried or later admitted",
-            );
+        for index in 0..temper_protocol_activity::MAX_GRAPH_RECOVERY_ALLOWANCE_V1 {
+            rejected.id = format!("denied-{index}");
+            assert!(state
+                .on_tool_dispatched_with_admission(
+                    &rejected,
+                    usize::from(index) + 3,
+                    Some(&LineageAdmissionOutcome::Ineligible(
+                        LineageAdmissionStatus::UnknownSelector,
+                    )),
+                )
+                .is_some());
             let guidance = one_guidance(&mut state);
             assert!(guidance.contains("rejected selector tuple excluded=true"));
-            assert!(guidance.contains("remaining allowance=4"));
-            assert!(guidance.contains("get_code_snippet/qualified_name/implementation"));
             assert!(!guidance.contains(PRIVATE_SELECTOR));
-            assert_eq!(
-                state.on_tool_finished(id, "codebase_memory_get_code_snippet", &plain_success()),
-                DecisionAnchorTransition::Unchanged,
-            );
         }
-
-        let mut distinct = source_call("distinct", DecisionEvidenceKindV1::Implementation);
-        distinct.arguments["qualified_name"] = serde_json::json!(DISTINCT_SELECTOR);
         assert_eq!(
-            state.on_tool_dispatched_with_admission(
-                &distinct,
-                6,
-                Some(&LineageAdmissionOutcome::Eligible(eligible_same_tuple)),
-            ),
-            None,
+            state.on_tool_dispatched(&source_call("after", DecisionEvidenceKindV1::Implementation), 8),
+            exhausted_graph_denial(all_missing()),
         );
-        assert_eq!(
-            finish_with_evidence(
-                &mut state,
-                "distinct",
-                ROOT,
-                DecisionEvidenceKindV1::Implementation,
-            ),
-            DecisionAnchorTransition::GapRecoveryNeeded,
-        );
-        assert!(!one_guidance(&mut state).contains(DISTINCT_SELECTOR));
     }
 
     #[test]

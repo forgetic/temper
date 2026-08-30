@@ -8,7 +8,7 @@ pub(super) fn reply(
     view: &RequestView,
     record: &impl Fn(DecisionStep),
     next_target: &impl Fn() -> String,
-    focused_test_target: &impl Fn() -> String,
+    _focused_test_target: &impl Fn() -> String,
     source_target: &impl Fn(&str) -> String,
     recovery_selector: &impl Fn(&str) -> String,
 ) -> Option<Reply> {
@@ -109,12 +109,12 @@ pub(super) fn reply(
                 view,
                 &[
                     "active-root missing evidence=[focused_test]",
-                    "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]",
+                    "required next stage=[get_code_snippet/qualified_name/focused_test/selector=focused_test_result]",
                 ],
             );
             record(DecisionStep::FocusedTestDetour);
             tool_reply(
-                "initial-search-test-detour",
+                "wrong-root-focused-test-detour",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
                     "qualified_name": source_target("implementation_source"),
@@ -123,25 +123,6 @@ pub(super) fn reply(
             )
         }
         7 => {
-            assert_guidance(
-                view,
-                &[
-                    "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]",
-                ],
-            );
-            record(DecisionStep::FocusedTestDetour);
-            tool_reply(
-                "unsupported-focused-traversal",
-                "codebase_memory_trace_path",
-                serde_json::json!({
-                    "function_name": recovery_selector("caller_evidence_result"),
-                    "mode": "calls",
-                    "direction": "inbound",
-                    "include_tests": true,
-                }),
-            )
-        }
-        8 => {
             let local_detours = view
                 .messages
                 .iter()
@@ -152,24 +133,7 @@ pub(super) fn reply(
                             .contains("decision-evidence recovery required")
                 })
                 .count();
-            assert_eq!(
-                local_detours, 3,
-                "all three missing-stage detours stay local"
-            );
-            assert_guidance(
-                view,
-                &[
-                    "required next stage=[search_graph/graph_query/focused_test/selector=task_semantic_query]",
-                ],
-            );
-            record(DecisionStep::FocusedTestSearch);
-            tool_reply(
-                "search-staged-semantic-test",
-                "codebase_memory_search_graph",
-                serde_json::json!({"query": "staged behavioral regression"}),
-            )
-        }
-        9 => {
+            assert_eq!(local_detours, 2, "both missing-stage detours stay local");
             assert_guidance(
                 view,
                 &[
@@ -178,15 +142,15 @@ pub(super) fn reply(
             );
             record(DecisionStep::BehavioralTestSource);
             tool_reply(
-                "read-exact-semantic-test",
+                "read-exact-provider-test",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "qualified_name": focused_test_target(),
+                    "qualified_name": recovery_selector("focused_test_result"),
                     "decision_evidence_kind": "focused_test",
                 }),
             )
         }
-        10 => {
+        8 => {
             record(DecisionStep::SourceRead);
             tool_reply(
                 "read-detour-recovery-target",
@@ -194,7 +158,7 @@ pub(super) fn reply(
                 serde_json::json!({"path": "demo/EVIDENCE.md"}),
             )
         }
-        11 => {
+        9 => {
             record(DecisionStep::Mutation);
             tool_reply(
                 "mutate-after-detour-recovery",
@@ -205,7 +169,7 @@ pub(super) fn reply(
                 }),
             )
         }
-        12 => {
+        10 => {
             record(DecisionStep::Complete);
             Reply::text(r#"{"summary":"Recovered the exact staged graph chain."}"#)
         }

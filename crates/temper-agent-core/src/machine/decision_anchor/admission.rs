@@ -185,7 +185,7 @@ impl DecisionAnchorState {
                 // A traversal is meaningful only for the staged active root.
                 // A selector owned by a retained sibling or by no root must be
                 // denied instead of escaping to the provider.
-                let staged_call = snapshot.as_ref().is_some_and(|snapshot| {
+                let staged_call = snapshot.as_ref().is_some_and(|_| {
                     if is_traversal {
                         requested_action.is_some()
                             && (has_traversal_selector
@@ -194,9 +194,6 @@ impl DecisionAnchorState {
                     } else {
                         (admission.is_some() || incomplete_graph_selector.is_some())
                             && requested_action.is_some()
-                            && admitted_root
-                                .as_deref()
-                                .is_none_or(|root| root == snapshot.active_root)
                     }
                 });
                 if self.exploration != ExplorationStatus::Open || staged_call {
@@ -319,6 +316,7 @@ impl DecisionAnchorState {
             );
         }
         for (action, excluded, recovery_selector) in local_rejections {
+            self.enter_local_traversal_readiness_recovery();
             self.queue_local_denial_guidance(action, excluded, recovery_selector.as_ref());
         }
         for _ in 0..local_readiness_deferrals {
@@ -363,18 +361,20 @@ impl DecisionAnchorState {
     }
 
     fn staged_admission_snapshot(&self) -> Option<RecoveryAdmissionSnapshot> {
-        let (active_root, active, remaining, denial) = match self.phase.as_ref()? {
+        let (active_root, active, route, remaining, denial) = match self.phase.as_ref()? {
             AnchorPhase::Root(anchors) | AnchorPhase::Trail(anchors)
                 if self.exploration == ExplorationStatus::Open =>
             {
-                let (active_root, active) = anchors.active_root()?;
+                let (active_root, route) = anchors.active_selection(&BTreeSet::new())?;
+                let active = anchors.roots.get(active_root)?;
                 let details = GraphExplorationClosedV1::recoverable_without_actions(
-                    active.evidence.missing_kinds(),
+                    anchors.missing_kinds(active_root, route),
                     MAX_DECISION_GAP_RECOVERY_CALLS,
                 );
                 (
                     active_root.clone(),
                     active,
+                    route,
                     MAX_DECISION_GAP_RECOVERY_CALLS,
                     ToolCallDenial::GraphExplorationClosed(details),
                 )
@@ -384,27 +384,52 @@ impl DecisionAnchorState {
                 (
                     recovery.active_root.clone(),
                     active,
+                    recovery.route,
                     recovery.remaining,
                     self.graph_exploration_denial(),
                 )
             }
             _ => return None,
         };
-        let mut compatible = active.evidence.compatible_actions(active);
-        let semantic_search = GraphRecoveryActionV1::focused_test_semantic_fallback();
-        // Preserve the direct semantic action for a healthy route. If the
-        // route already accumulated a bounded non-progress detour, retain the
-        // legacy caller-to-test checkpoint so recovery does not silently skip
-        // a provider result and shift every later selector.
-        if self.non_progressing_batches > 0 && compatible.contains(&semantic_search) {
-            let staged_traversal = GraphRecoveryActionV1::focused_test_traversal();
-            if active.supports(staged_traversal) {
-                compatible.insert(staged_traversal);
-            }
-        }
+        let compatible = active.evidence.compatible_actions(active, route);
         Some(RecoveryAdmissionSnapshot {
-            active_root,
-            missing: active.evidence.missing_gaps(),
+            active_root: active_root.clone(),
+            missing: match self.phase.as_ref() {
+                Some(AnchorPhase::Root(anchors)) | Some(AnchorPhase::Trail(anchors)) => anchors
+                    .missing_kinds(&active_root, route)
+                    .into_iter()
+                    .map(|kind| match kind {
+                        GraphRecoveryEvidenceKindV1::Trace => DecisionGap::Trace,
+                        GraphRecoveryEvidenceKindV1::Implementation => {
+                            DecisionGap::Evidence(DecisionEvidenceKindV1::Implementation)
+                        }
+                        GraphRecoveryEvidenceKindV1::Caller => {
+                            DecisionGap::Evidence(DecisionEvidenceKindV1::Caller)
+                        }
+                        GraphRecoveryEvidenceKindV1::FocusedTest => {
+                            DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)
+                        }
+                    })
+                    .collect(),
+                Some(AnchorPhase::GapRecovery(recovery)) => recovery
+                    .anchors
+                    .missing_kinds(&active_root, route)
+                    .into_iter()
+                    .map(|kind| match kind {
+                        GraphRecoveryEvidenceKindV1::Trace => DecisionGap::Trace,
+                        GraphRecoveryEvidenceKindV1::Implementation => {
+                            DecisionGap::Evidence(DecisionEvidenceKindV1::Implementation)
+                        }
+                        GraphRecoveryEvidenceKindV1::Caller => {
+                            DecisionGap::Evidence(DecisionEvidenceKindV1::Caller)
+                        }
+                        GraphRecoveryEvidenceKindV1::FocusedTest => {
+                            DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)
+                        }
+                    })
+                    .collect(),
+                _ => BTreeSet::new(),
+            },
             compatible,
             pending: self
                 .calls
@@ -423,22 +448,11 @@ impl DecisionAnchorState {
         match phase {
             AnchorPhase::Root(anchors) | AnchorPhase::Trail(anchors) => {
                 let _ = self.enter_gap_recovery(anchors);
+                self.spend_local_recovery_slot();
             }
-            AnchorPhase::GapRecovery(mut recovery) => {
-                recovery.remaining = recovery.remaining.saturating_sub(1);
-                if recovery.remaining == 0 {
-                    let evidence = recovery
-                        .anchors
-                        .roots
-                        .get(&recovery.active_root)
-                        .map(|anchor| anchor.evidence.clone())
-                        .unwrap_or_default();
-                    self.phase = Some(AnchorPhase::EnabledIncomplete(evidence));
-                    self.exploration = ExplorationStatus::EnabledIncomplete;
-                } else {
-                    self.phase = Some(AnchorPhase::GapRecovery(recovery));
-                    self.exploration = ExplorationStatus::GapRecovery;
-                }
+            AnchorPhase::GapRecovery(recovery) => {
+                self.phase = Some(AnchorPhase::GapRecovery(recovery));
+                self.spend_local_recovery_slot();
             }
             AnchorPhase::EnabledIncomplete(evidence) => {
                 self.phase = Some(AnchorPhase::EnabledIncomplete(evidence));
@@ -450,6 +464,25 @@ impl DecisionAnchorState {
                 self.phase = Some(phase);
             }
         }
+    }
+
+    fn spend_local_recovery_slot(&mut self) {
+        let Some(AnchorPhase::GapRecovery(recovery)) = self.phase.as_mut() else {
+            return;
+        };
+        recovery.remaining = recovery.remaining.saturating_sub(1);
+        if recovery.remaining > 0 {
+            self.exploration = ExplorationStatus::GapRecovery;
+            return;
+        }
+        let evidence = recovery
+            .anchors
+            .roots
+            .get(&recovery.active_root)
+            .map(|anchor| anchor.evidence.clone())
+            .unwrap_or_default();
+        self.phase = Some(AnchorPhase::EnabledIncomplete(evidence));
+        self.exploration = ExplorationStatus::EnabledIncomplete;
     }
 }
 
