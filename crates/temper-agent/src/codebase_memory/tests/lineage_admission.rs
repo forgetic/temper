@@ -342,6 +342,7 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
                 Some(temper_protocol_activity::DecisionEvidenceKindV1::Implementation),
             )
             .unwrap()
+            .is_some()
     );
     assert_eq!(source_form["qualified_name"], PRIVATE_SELECTOR);
 
@@ -359,6 +360,7 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
                 None,
             )
             .unwrap()
+            .is_some()
     );
     assert_eq!(trace_input["function_name"], FUNCTION_SELECTOR);
 

@@ -235,7 +235,6 @@ impl ToolFailureReason {
                 | Self::Transport
                 | Self::ProcessExit
                 | Self::ProviderProtocol
-                | Self::InvalidModelInput
                 | Self::GraphCircuitOpen
         )
     }

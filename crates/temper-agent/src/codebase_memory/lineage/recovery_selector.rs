@@ -4,9 +4,11 @@ use super::*;
 use temper_agent_core::EligibleLineageAdmission;
 
 pub(super) const RECOVERY_SELECTOR_REFERENCE_PREFIX: &str = "temper-recovery-selector:";
+const MAX_RECOVERY_CANDIDATES_PER_PURPOSE: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum RecoverySelectorPurpose {
+    ImplementationCandidate,
     ImplementationTrace,
     CallerSource,
     CallerTestTraversal,
@@ -16,6 +18,7 @@ pub(super) enum RecoverySelectorPurpose {
 impl RecoverySelectorPurpose {
     pub(super) const fn label(self) -> &'static str {
         match self {
+            Self::ImplementationCandidate => "implementation_candidate",
             Self::ImplementationTrace => "implementation_evidence_result",
             Self::CallerSource => "caller_traversal_result",
             Self::CallerTestTraversal => "caller_evidence_result",
@@ -25,13 +28,20 @@ impl RecoverySelectorPurpose {
 
     pub(super) const fn selector_kind(self) -> DecisionAnchorTargetKindV1 {
         match self {
-            Self::ImplementationTrace | Self::CallerTestTraversal => {
-                DecisionAnchorTargetKindV1::FunctionName
-            }
+            Self::ImplementationCandidate
+            | Self::ImplementationTrace
+            | Self::CallerTestTraversal => DecisionAnchorTargetKindV1::FunctionName,
             Self::CallerSource | Self::FocusedTestSource => {
                 DecisionAnchorTargetKindV1::QualifiedName
             }
         }
+    }
+
+    const fn is_source_candidate(self) -> bool {
+        matches!(
+            self,
+            Self::ImplementationCandidate | Self::CallerSource | Self::FocusedTestSource
+        )
     }
 }
 
@@ -82,6 +92,17 @@ impl RecoverySelectorReference {
     }
 }
 
+/// Transient handle retained only while one wrapper invocation is in flight.
+/// It is deliberately not serializable or debug-visible.
+pub(in crate::codebase_memory) struct ExpandedRecoverySelector {
+    reference: String,
+}
+
+pub(in crate::codebase_memory) struct CandidateRecovery {
+    pub(in crate::codebase_memory) guidance: Option<String>,
+    pub(in crate::codebase_memory) has_alternative: bool,
+}
+
 impl DecisionAnchorLineages {
     pub(in crate::codebase_memory) fn implementation_trace_recovery_selector(
         &self,
@@ -91,25 +112,222 @@ impl DecisionAnchorLineages {
             root_binding: root_binding.to_string(),
             purpose: RecoverySelectorPurpose::ImplementationTrace,
         };
-        self.recovery_references.get(&key).map(String::as_str)
+        self.recovery_references
+            .get(&key)?
+            .iter()
+            .find_map(|reference| {
+                self.recovery_reference_selectors
+                    .get(reference)
+                    .is_some_and(|selector| selector.state == RecoverySelectorState::Available)
+                    .then_some(reference.as_str())
+            })
     }
 
     pub(in crate::codebase_memory) fn recovery_selector_guidance(
         &self,
         root_binding: &str,
     ) -> Option<String> {
-        let references = self
-            .recovery_references
-            .iter()
-            .filter(|(key, _)| key.root_binding == root_binding)
-            .map(|(key, reference)| format!("{}={reference}", key.purpose.label()))
-            .collect::<Vec<_>>();
+        let mut references = Vec::new();
+        for (key, purpose_references) in &self.recovery_references {
+            if key.root_binding != root_binding {
+                continue;
+            }
+            let available = purpose_references
+                .iter()
+                .filter(|reference| {
+                    self.recovery_reference_selectors
+                        .get(*reference)
+                        .is_some_and(|selector| selector.state == RecoverySelectorState::Available)
+                })
+                .collect::<Vec<_>>();
+            for (index, reference) in available.iter().enumerate() {
+                let label = if available.len() == 1 {
+                    key.purpose.label().to_string()
+                } else {
+                    format!("{}_{}", key.purpose.label(), index + 1)
+                };
+                references.push(format!("{label}={reference}"));
+            }
+        }
         (!references.is_empty()).then(|| {
             format!(
-                "[Recovery selector references: {}. Copy a reference exactly into the matching selector field named by Decision guidance; references are run-local, provider-derived, and current-root bound.]",
+                "[Recovery selector references: {}. Copy one reference exactly into the matching selector field named by Decision guidance; numbered references are distinct same-root provider candidates; references are run-local, provider-derived, and current-root bound.]",
                 references.join(", "),
             )
         })
+    }
+
+    pub(super) fn replace_recovery_references(
+        &mut self,
+        root: &str,
+        purpose: RecoverySelectorPurpose,
+        candidates: &BTreeSet<Candidate>,
+    ) {
+        let key = RecoverySelectorKey {
+            root_binding: root.to_string(),
+            purpose,
+        };
+        if let Some(stale) = self.recovery_references.remove(&key) {
+            for reference in stale {
+                self.recovery_reference_selectors.remove(&reference);
+            }
+        }
+
+        let mut ordered = candidates.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|candidate| {
+            let qualified = canonical_qualified_name(&candidate.value).is_some();
+            (
+                if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName
+                    && candidate.provider_kind == DecisionAnchorTargetKindV1::QualifiedName
+                    && qualified
+                {
+                    0
+                } else if candidate.kind == purpose.selector_kind()
+                    && candidate.provider_kind == purpose.selector_kind()
+                {
+                    1
+                } else if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName && qualified {
+                    2
+                } else if candidate.kind == purpose.selector_kind() {
+                    3
+                } else {
+                    4
+                },
+                candidate.value.clone(),
+            )
+        });
+
+        let mut retained = Vec::new();
+        let mut identities = BTreeSet::new();
+        for candidate in ordered {
+            let Some(selector_reference) = self.reference_for_candidate(root, purpose, candidate)
+            else {
+                continue;
+            };
+            let identity = (
+                selector_reference.selector.clone(),
+                selector_reference.source_selector.clone(),
+            );
+            let exact_selector = identity.1.as_ref().unwrap_or(&identity.0);
+            let is_short_alias = canonical_qualified_name(&exact_selector.value).is_none();
+            if is_short_alias
+                && identities.iter().any(
+                    |(selector, source_selector): &(Selector, Option<Selector>)| {
+                        let existing = source_selector.as_ref().unwrap_or(selector);
+                        canonical_function_name(&existing.value)
+                            == canonical_function_name(&exact_selector.value)
+                            && canonical_qualified_name(&existing.value).is_some()
+                    },
+                )
+            {
+                continue;
+            }
+            if !identities.insert(identity) {
+                continue;
+            }
+            let reference = format!(
+                "{RECOVERY_SELECTOR_REFERENCE_PREFIX}{}",
+                uuid::Uuid::new_v4()
+            );
+            self.recovery_reference_selectors
+                .insert(reference.clone(), selector_reference);
+            retained.push(reference);
+            if retained.len() == MAX_RECOVERY_CANDIDATES_PER_PURPOSE {
+                break;
+            }
+        }
+        if !retained.is_empty() {
+            self.recovery_references.insert(key, retained);
+        }
+    }
+
+    pub(super) fn prefer_explicit_source_names(
+        &mut self,
+        root: &str,
+        purpose: RecoverySelectorPurpose,
+        explicit_names: &BTreeMap<String, String>,
+    ) {
+        let key = RecoverySelectorKey {
+            root_binding: root.to_string(),
+            purpose,
+        };
+        for reference in self.recovery_references.get(&key).into_iter().flatten() {
+            let Some(reference) = self.recovery_reference_selectors.get_mut(reference) else {
+                continue;
+            };
+            if let Some(name) = explicit_names.get(&reference.selector.value) {
+                reference.provider_value = name.clone();
+            }
+        }
+    }
+
+    fn reference_for_candidate(
+        &self,
+        root: &str,
+        purpose: RecoverySelectorPurpose,
+        candidate: &Candidate,
+    ) -> Option<RecoverySelectorReference> {
+        let qualified = canonical_qualified_name(&candidate.value);
+        let function = canonical_function_name(&candidate.value)?;
+        let (selector, provider_value, source_selector, source_provider_value) = match purpose {
+            RecoverySelectorPurpose::ImplementationCandidate => {
+                let source_value = qualified.clone().unwrap_or_else(|| function.clone());
+                let source_selector = Selector {
+                    kind: DecisionAnchorTargetKindV1::QualifiedName,
+                    value: source_value,
+                };
+                (
+                    Selector {
+                        kind: DecisionAnchorTargetKindV1::FunctionName,
+                        value: function.clone(),
+                    },
+                    function,
+                    Some(source_selector),
+                    Some(candidate.value.clone()),
+                )
+            }
+            RecoverySelectorPurpose::ImplementationTrace
+            | RecoverySelectorPurpose::CallerTestTraversal => {
+                let source_selector = qualified.map(|value| Selector {
+                    kind: DecisionAnchorTargetKindV1::QualifiedName,
+                    value,
+                });
+                (
+                    Selector {
+                        kind: DecisionAnchorTargetKindV1::FunctionName,
+                        value: function.clone(),
+                    },
+                    function,
+                    source_selector.clone(),
+                    source_selector.map(|_| candidate.value.clone()),
+                )
+            }
+            RecoverySelectorPurpose::CallerSource | RecoverySelectorPurpose::FocusedTestSource => {
+                let selector = Selector {
+                    kind: DecisionAnchorTargetKindV1::QualifiedName,
+                    value: qualified.unwrap_or(function),
+                };
+                (selector, candidate.value.clone(), None, None)
+            }
+        };
+        let required_selector = if purpose == RecoverySelectorPurpose::ImplementationCandidate {
+            source_selector.as_ref()?
+        } else {
+            &selector
+        };
+        self.selectors
+            .get(required_selector)
+            .and_then(Option::as_ref)
+            .is_some_and(|binding| binding.root_binding == root)
+            .then_some(RecoverySelectorReference {
+                root_binding: root.to_string(),
+                purpose,
+                selector,
+                provider_value,
+                source_selector,
+                source_provider_value,
+                state: RecoverySelectorState::Available,
+            })
     }
 
     /// Reserves one exact current-root implementation trace reference. This
@@ -157,7 +375,11 @@ impl DecisionAnchorLineages {
             root_binding: active_root.to_string(),
             purpose: RecoverySelectorPurpose::ImplementationTrace,
         };
-        if self.recovery_references.get(&key).map(String::as_str) != Some(reference_value) {
+        if !self
+            .recovery_references
+            .get(&key)
+            .is_some_and(|references| references.iter().any(|value| value == reference_value))
+        {
             return Err(());
         }
         let reference = self
@@ -185,10 +407,10 @@ impl DecisionAnchorLineages {
         tool_name: &str,
         input: &mut Value,
         evidence_kind: Option<DecisionEvidenceKindV1>,
-    ) -> Result<bool, ()> {
+    ) -> Result<Option<ExpandedRecoverySelector>, ()> {
         let Some((field, reference)) = self.recovery_selector(tool_name, input, evidence_kind)?
         else {
-            return Ok(false);
+            return Ok(None);
         };
         let kind = match field {
             "function_name" => DecisionAnchorTargetKindV1::FunctionName,
@@ -202,14 +424,112 @@ impl DecisionAnchorLineages {
         if is_trace_reference && reference.state != RecoverySelectorState::Reserved {
             return Err(());
         }
+        let reference = self
+            .recovery_reference_selectors
+            .get_mut(&public_reference)
+            .ok_or(())?;
         if is_trace_reference {
-            self.recovery_reference_selectors
-                .get_mut(&public_reference)
-                .ok_or(())?
-                .state = RecoverySelectorState::Consumed;
+            reference.state = RecoverySelectorState::Consumed;
+        } else if reference.purpose.is_source_candidate() {
+            if reference.state != RecoverySelectorState::Available {
+                return Err(());
+            }
+            reference.state = RecoverySelectorState::Reserved;
         }
         input[field] = Value::String(provider_value);
-        Ok(true)
+        Ok(Some(ExpandedRecoverySelector {
+            reference: public_reference,
+        }))
+    }
+
+    pub(in crate::codebase_memory) fn complete_candidate_reference(
+        &mut self,
+        expanded: &ExpandedRecoverySelector,
+        preserve_alternatives: bool,
+    ) -> Option<CandidateRecovery> {
+        let candidate = self
+            .recovery_reference_selectors
+            .get(&expanded.reference)
+            .filter(|reference| reference.purpose.is_source_candidate())?;
+        let key = RecoverySelectorKey {
+            root_binding: candidate.root_binding.clone(),
+            purpose: candidate.purpose,
+        };
+        self.recovery_reference_selectors
+            .remove(&expanded.reference);
+        if preserve_alternatives {
+            let remove_key = self
+                .recovery_references
+                .get_mut(&key)
+                .is_some_and(|references| {
+                    references.retain(|reference| reference != &expanded.reference);
+                    references.is_empty()
+                });
+            if remove_key {
+                self.recovery_references.remove(&key);
+            }
+        } else if let Some(references) = self.recovery_references.remove(&key) {
+            for reference in references {
+                self.recovery_reference_selectors.remove(&reference);
+            }
+        }
+        let has_alternative = self
+            .recovery_references
+            .get(&key)
+            .is_some_and(|references| {
+                references.iter().any(|reference| {
+                    self.recovery_reference_selectors
+                        .get(reference)
+                        .is_some_and(|reference| {
+                            reference.state == RecoverySelectorState::Available
+                        })
+                })
+            });
+        let guidance = has_alternative.then(|| {
+            let references = self
+                .recovery_references
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .filter(|reference| {
+                    self.recovery_reference_selectors
+                        .get(*reference)
+                        .is_some_and(|reference| {
+                            reference.state == RecoverySelectorState::Available
+                        })
+                })
+                .collect::<Vec<_>>();
+            let labels = references
+                .iter()
+                .enumerate()
+                .map(|(index, reference)| {
+                    let label = if references.len() == 1 {
+                        key.purpose.label().to_string()
+                    } else {
+                        format!("{}_{}", key.purpose.label(), index + 1)
+                    };
+                    format!("{label}={reference}")
+                })
+                .collect::<Vec<_>>();
+            format!(
+                "[Candidate recovery: selected current-root candidate missed; no evidence or conventional mutation authority was earned; remaining compatible references: {}. Copy one reference exactly into the same selector field in a later model turn.]",
+                labels.join(", ")
+            )
+        });
+        Some(CandidateRecovery {
+            guidance,
+            has_alternative,
+        })
+    }
+
+    pub(super) fn is_implementation_trace_reference(&self, input: &Value) -> bool {
+        input
+            .get("qualified_name")
+            .and_then(Value::as_str)
+            .and_then(|reference| self.recovery_reference_selectors.get(reference))
+            .is_some_and(|reference| {
+                reference.purpose == RecoverySelectorPurpose::ImplementationTrace
+            })
     }
 
     pub(super) fn validate_recovery_selector(
@@ -237,46 +557,55 @@ impl DecisionAnchorLineages {
             GraphCorrelationToolV1::TracePath => "function_name",
             GraphCorrelationToolV1::GetCodeSnippet => "qualified_name",
         };
-        let Some(reference) = input.get(field).and_then(Value::as_str) else {
+        let Some(public_reference) = input.get(field).and_then(Value::as_str) else {
             return Ok(None);
         };
-        if !reference.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX) {
+        if !public_reference.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX) {
             return Ok(None);
         }
-        let (expected_purpose, expected_selector_kind) = match tool {
-            GraphCorrelationToolV1::TracePath => (
-                match input.get("include_tests") {
-                    Some(Value::Bool(true)) => RecoverySelectorPurpose::CallerTestTraversal,
-                    Some(Value::Bool(false)) | None => RecoverySelectorPurpose::ImplementationTrace,
-                    Some(_) => return Err(()),
-                },
-                DecisionAnchorTargetKindV1::FunctionName,
-            ),
-            GraphCorrelationToolV1::GetCodeSnippet => (
-                match evidence_kind {
-                    Some(DecisionEvidenceKindV1::Implementation) => {
-                        RecoverySelectorPurpose::ImplementationTrace
-                    }
-                    Some(DecisionEvidenceKindV1::Caller) => RecoverySelectorPurpose::CallerSource,
-                    Some(DecisionEvidenceKindV1::FocusedTest) => {
-                        RecoverySelectorPurpose::FocusedTestSource
-                    }
-                    None => return Err(()),
-                },
-                DecisionAnchorTargetKindV1::QualifiedName,
-            ),
+        let expected_selector_kind = match tool {
+            GraphCorrelationToolV1::TracePath => DecisionAnchorTargetKindV1::FunctionName,
+            GraphCorrelationToolV1::GetCodeSnippet => DecisionAnchorTargetKindV1::QualifiedName,
             GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => {
                 return Err(());
             }
         };
-        self.recovery_reference_selectors
-            .get(reference)
-            .filter(|reference| {
-                reference.purpose == expected_purpose
-                    && reference.selector(expected_selector_kind).is_some()
-                    && reference.state != RecoverySelectorState::Consumed
-            })
-            .map(|reference| Some((field, reference)))
+        let reference = self
+            .recovery_reference_selectors
+            .get(public_reference)
+            .ok_or(())?;
+        let purpose_matches = match tool {
+            GraphCorrelationToolV1::TracePath => match input.get("include_tests") {
+                Some(Value::Bool(true)) => {
+                    reference.purpose == RecoverySelectorPurpose::CallerTestTraversal
+                }
+                Some(Value::Bool(false)) | None => {
+                    reference.purpose == RecoverySelectorPurpose::ImplementationTrace
+                }
+                Some(_) => return Err(()),
+            },
+            GraphCorrelationToolV1::GetCodeSnippet => match evidence_kind {
+                Some(DecisionEvidenceKindV1::Implementation) => matches!(
+                    reference.purpose,
+                    RecoverySelectorPurpose::ImplementationCandidate
+                        | RecoverySelectorPurpose::ImplementationTrace
+                ),
+                Some(DecisionEvidenceKindV1::Caller) => {
+                    reference.purpose == RecoverySelectorPurpose::CallerSource
+                }
+                Some(DecisionEvidenceKindV1::FocusedTest) => {
+                    reference.purpose == RecoverySelectorPurpose::FocusedTestSource
+                }
+                None => return Err(()),
+            },
+            GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => {
+                unreachable!()
+            }
+        };
+        (purpose_matches
+            && reference.selector(expected_selector_kind).is_some()
+            && reference.state != RecoverySelectorState::Consumed)
+            .then_some(Some((field, reference)))
             .ok_or(())
     }
 }

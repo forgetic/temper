@@ -1,17 +1,17 @@
+mod failure;
+
 use super::result_presentation::present_result;
 use super::tool_schema::DECISION_EVIDENCE_KIND_PARAMETER;
 use super::*;
+pub(super) use failure::{classify_input_failure, classify_mcp_error, classify_provider_failure};
 use temper_agent_core::{
-    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY,
+    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY,
+    SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY,
 };
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, DecisionEvidenceKindV1, GraphCorrelationTargetKindV1,
     GraphCorrelationToolV1, GraphCorrelationV1, GraphRecoveryReferenceDispositionV1,
 };
-
-// This is a closed provider outcome, not text to search within an arbitrary
-// failure. Near-matches remain provider/protocol failures.
-const EXPLORATION_CLOSED_PROVIDER_OUTCOME: &str = "exploration_closed";
 
 // Reserve space for the JSON-RPC envelope, tool name, request id, and newline.
 // This keeps oversized model input on the local side of the process-fatal MCP
@@ -96,7 +96,7 @@ impl Tool for CodebaseMemoryTool {
                 }
             };
 
-        let recovery_reference_expanded = match self
+        let expanded_recovery_reference = match self
             .decision_anchor_lineages
             .expand_recovery_selector(&self.public_name, &mut input, decision_evidence_kind)
         {
@@ -110,7 +110,7 @@ impl Tool for CodebaseMemoryTool {
             }
         };
         let record_recovery_expansion = |mut output: ToolOutput| {
-            if recovery_reference_expanded {
+            if expanded_recovery_reference.is_some() {
                 output.details.get_or_insert_with(|| json!({}))
                     [SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY] = Value::String(
                     GraphRecoveryReferenceDispositionV1::Expanded
@@ -291,11 +291,34 @@ impl Tool for CodebaseMemoryTool {
         if result.is_error {
             let bounded = present_result(&result.text, None);
             let category = classify_provider_failure(&bounded.text);
-            return Ok(record_recovery_expansion(self.failed_output(
-                &mcp_project,
-                category,
-                timings,
-            )));
+            let candidate_recovery = (category == ToolFailureCategory::InvalidModelInput)
+                .then(|| {
+                    expanded_recovery_reference.as_ref().and_then(|expanded| {
+                        self.decision_anchor_lineages
+                            .complete_candidate_reference(expanded, true)
+                    })
+                })
+                .flatten();
+            let mut output = self.failed_output(&mcp_project, category, timings);
+            if let Some(candidate_recovery) = candidate_recovery {
+                output.details.get_or_insert_with(|| json!({}))
+                    [SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY] = Value::String(
+                    if candidate_recovery.has_alternative {
+                        "retry_available"
+                    } else {
+                        "exhausted"
+                    }
+                    .to_string(),
+                );
+                let guidance = candidate_recovery.guidance.unwrap_or_else(|| {
+                    "[Candidate recovery: the selected current-root candidate missed and no compatible provider-derived candidate remains; no evidence or conventional mutation authority was earned; stop without a product.]".to_string()
+                });
+                output.content.push(ContentBlock::Text(TextContent {
+                    text: guidance,
+                    text_signature: None,
+                }));
+            }
+            return Ok(record_recovery_expansion(output));
         }
         let presented = present_result(&result.text, graph_correlation.as_ref());
         // Successful, complete, untruncated targeted calls alone may emit a
@@ -314,6 +337,10 @@ impl Tool for CodebaseMemoryTool {
                 })
             })
             .flatten();
+        if let Some(expanded) = expanded_recovery_reference.as_ref() {
+            self.decision_anchor_lineages
+                .complete_candidate_reference(expanded, false);
+        }
         let recovery_selector_guidance = decision_anchor_lineage.as_ref().and_then(|lineage| {
             self.decision_anchor_lineages
                 .recovery_selector_guidance(lineage)
@@ -350,7 +377,7 @@ impl Tool for CodebaseMemoryTool {
             details[SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY] =
                 serde_json::to_value(lineage).expect("decision-anchor lineage serializes");
         }
-        if recovery_reference_expanded {
+        if expanded_recovery_reference.is_some() {
             details[SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY] = Value::String(
                 GraphRecoveryReferenceDispositionV1::Expanded
                     .as_str()
@@ -485,76 +512,6 @@ fn codebase_memory_failure_output_with_timings(
         // retryability, fallback guidance, and the fixed safe message itself.
         details: Some(details),
         is_error: true,
-    }
-}
-
-pub(super) fn classify_input_failure(message: &str) -> ToolFailureCategory {
-    let lowered = message.to_ascii_lowercase();
-    if lowered.contains("timed out")
-        || lowered.contains("timeout")
-        || lowered.contains("still in progress after")
-    {
-        ToolFailureCategory::Timeout
-    } else if lowered.contains("index") && lowered.contains("fail") {
-        ToolFailureCategory::IndexFailure
-    } else if lowered.contains("not ready") {
-        ToolFailureCategory::ProjectNotReady
-    } else {
-        ToolFailureCategory::InvalidModelInput
-    }
-}
-
-pub(super) fn classify_mcp_error(error: &McpError) -> ToolFailureCategory {
-    match error {
-        McpError::Spawn { .. } => ToolFailureCategory::ConfigurationStartup,
-        McpError::Io { .. } | McpError::Cancelled { .. } => ToolFailureCategory::Transport,
-        McpError::Timeout { .. } => ToolFailureCategory::Timeout,
-        McpError::ProcessExited { .. } => ToolFailureCategory::ProcessExit,
-        McpError::Json { operation, .. } if *operation == "encode request" => {
-            ToolFailureCategory::InvalidModelInput
-        }
-        McpError::Rpc { message, .. } if explicitly_invalid_input(message) => {
-            ToolFailureCategory::InvalidModelInput
-        }
-        McpError::ProtocolOverflow { direction, .. } if *direction == "outbound" => {
-            ToolFailureCategory::InvalidModelInput
-        }
-        McpError::Json { .. }
-        | McpError::Rpc { .. }
-        | McpError::ProtocolOverflow { .. }
-        | McpError::Protocol(_) => ToolFailureCategory::ProviderProtocol,
-    }
-}
-
-fn explicitly_invalid_input(message: &str) -> bool {
-    let lowered = message.to_ascii_lowercase();
-    lowered.contains("-32602")
-        || lowered.contains("invalid input")
-        || lowered.contains("invalid argument")
-        || lowered.contains("invalid parameter")
-        || lowered.contains("invalid params")
-}
-
-pub(super) fn classify_provider_failure(message: &str) -> ToolFailureCategory {
-    if message == EXPLORATION_CLOSED_PROVIDER_OUTCOME {
-        return ToolFailureCategory::GraphLifecycleDenial;
-    }
-    let lowered = message.to_ascii_lowercase();
-    if lowered.contains("timed out") || lowered.contains("timeout") {
-        ToolFailureCategory::Timeout
-    } else if lowered.contains("index") && (lowered.contains("fail") || lowered.contains("error")) {
-        ToolFailureCategory::IndexFailure
-    } else if lowered.contains("project")
-        && (lowered.contains("not ready")
-            || lowered.contains("not found")
-            || lowered.contains("missing")
-            || lowered.contains("unknown"))
-    {
-        ToolFailureCategory::ProjectNotReady
-    } else if explicitly_invalid_input(message) {
-        ToolFailureCategory::InvalidModelInput
-    } else {
-        ToolFailureCategory::ProviderProtocol
     }
 }
 

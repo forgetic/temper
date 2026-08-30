@@ -1,7 +1,10 @@
 // Decision-anchor recovery and malformed-result regressions.
 
 use super::*;
-use crate::{EligibleLineageAdmission, LineageAdmissionOutcome};
+use crate::{
+    EligibleLineageAdmission, LineageAdmissionOutcome,
+    SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY,
+};
 use temper_protocol_activity::MAX_GRAPH_RECOVERY_ALLOWANCE_V1;
 
 pub(super) fn conventional_fallback_graph_denial() -> Option<ToolCallDenial> {
@@ -98,6 +101,67 @@ fn failed_or_malformed_graph_results_never_release_mutation_authority() {
         DecisionAnchorTransition::Unchanged
     );
     assert!(state.blocks_mutation("write"));
+}
+
+#[test]
+fn candidate_miss_never_releases_fallback_and_preserves_one_exact_retry() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    install_consumable_root(&mut state);
+
+    let candidate_failure = |disposition: &str| ToolOutput {
+        content: Vec::new(),
+        details: Some(serde_json::json!({
+            SAFE_TOOL_FAILURE_DETAIL_KEY: {
+                "source": "codebase_memory",
+                "category": "invalid_model_input",
+            },
+            SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY: disposition,
+        })),
+        is_error: true,
+    };
+    state.on_tool_dispatched(
+        &source_call("miss", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "miss",
+            "codebase_memory_get_code_snippet",
+            &candidate_failure("retry_available"),
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+    assert!(state.blocks_mutation("write"));
+
+    state.on_tool_dispatched(
+        &source_call("replacement", DecisionEvidenceKindV1::Implementation),
+        2,
+    );
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
+            "replacement",
+            ROOT,
+            DecisionEvidenceKindV1::Implementation,
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+
+    let mut exhausted = DecisionAnchorState::from_effects(&effects()).unwrap();
+    install_consumable_root(&mut exhausted);
+    exhausted.on_tool_dispatched(
+        &source_call("last-miss", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
+    assert_eq!(
+        exhausted.on_tool_finished(
+            "last-miss",
+            "codebase_memory_get_code_snippet",
+            &candidate_failure("exhausted"),
+        ),
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
+    );
+    assert!(exhausted.blocks_mutation("write"));
 }
 
 #[test]

@@ -198,6 +198,10 @@ pub const SAFE_TOOL_FAILURE_DETAIL_KEY: &str = "temper_safe_tool_failure_v1";
 /// admitted opaque trace reference was expanded before provider dispatch.
 pub const SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY: &str =
     "temper_recovery_reference_disposition_v1";
+/// Reserved wrapper marker for a content-free, current-root candidate miss.
+/// The value is either `retry_available` or `exhausted`; candidate identities
+/// and provider diagnostics remain wrapper-local.
+pub const SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY: &str = "temper_graph_candidate_recovery_v1";
 /// Reserved [`ToolOutput::details`] key for the closed, wrapper-extracted graph
 /// correlation record. Generic tool details never enter activity metadata.
 pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1";

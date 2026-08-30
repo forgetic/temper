@@ -13,7 +13,10 @@ use temper_protocol_activity::{
     GraphCorrelationToolV1, GraphCorrelationV1, GraphRecoveryReferenceDispositionV1,
 };
 
-use super::{DecisionAnchorLineages, target::WorkspaceTargetRegistry};
+use super::{
+    CandidateRecovery, DecisionAnchorLineages, ExpandedRecoverySelector,
+    target::WorkspaceTargetRegistry,
+};
 use crate::codebase_memory::scope::WorkspaceScope;
 use crate::mcp::McpToolResultPart;
 
@@ -68,11 +71,22 @@ impl DecisionAnchorLineageRegistry {
         tool_name: &str,
         input: &mut Value,
         evidence_kind: Option<DecisionEvidenceKindV1>,
-    ) -> Result<bool, ()> {
+    ) -> Result<Option<ExpandedRecoverySelector>, ()> {
         self.lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .expand_recovery_selector(tool_name, input, evidence_kind)
+    }
+
+    pub(crate) fn complete_candidate_reference(
+        &self,
+        expanded: &ExpandedRecoverySelector,
+        preserve_alternatives: bool,
+    ) -> Option<CandidateRecovery> {
+        self.lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .complete_candidate_reference(expanded, preserve_alternatives)
     }
 }
 
@@ -349,10 +363,7 @@ impl DecisionAnchorLineages {
         }
         let readiness_recheck = tool_kind == GraphCorrelationToolV1::GetCodeSnippet
             && evidence_purpose == Some(DecisionEvidenceKindV1::Implementation)
-            && object
-                .get("qualified_name")
-                .and_then(Value::as_str)
-                .is_some_and(|value| value.starts_with(super::RECOVERY_SELECTOR_REFERENCE_PREFIX));
+            && self.is_implementation_trace_reference(input);
         if readiness_recheck {
             if binding.implementation_traversal_readiness
                 != super::ImplementationTraversalReadiness::RecheckAvailable

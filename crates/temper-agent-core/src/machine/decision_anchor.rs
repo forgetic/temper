@@ -29,7 +29,8 @@ mod progress;
 mod settlement;
 
 use output::{
-    anchor_output, graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
+    CandidateRecoveryDisposition, anchor_output, candidate_recovery_disposition,
+    graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
     trusted_unavailable_provider_output,
 };
 use progress::{AcceptedEvidence, ResultProgress};
@@ -478,8 +479,6 @@ impl DecisionAnchorState {
                 root_progressed && selected_active_root.as_ref() == Some(root);
         }
 
-        // New roots are retained only after descendants were checked against
-        // the pre-batch forest, so siblings can never consume a new root.
         let next_roots = AnchorForest::from_finished(finished, Some(anchors.latest_produced_turn));
         let root_merge = next_roots.map_or(RootMerge::NoProgress, |next| {
             anchors.merge_limited(
@@ -494,6 +493,15 @@ impl DecisionAnchorState {
         if !anchors.valid {
             return self.enter_recovery(anchors, recovery_attempts);
         }
+
+        let anchors = match self.settle_open_candidate_recovery(
+            anchors,
+            finished,
+            selected_active_root.as_deref(),
+        ) {
+            Ok(anchors) => anchors,
+            Err(transition) => return transition,
+        };
 
         if active_evidence_progressed || active_route_progressed || roots_progressed {
             self.non_progressing_batches = 0;
