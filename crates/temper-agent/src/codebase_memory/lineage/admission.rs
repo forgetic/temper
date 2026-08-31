@@ -121,67 +121,10 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
         LineageAdmissionOutcome,
         Option<GraphRecoveryReferenceDispositionV1>,
     ) {
-        let mut lineages = self
-            .lineages
+        self.lineages
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let presented_reference =
-            lineages.recovery_reference_disposition(tool_name, arguments, active_root);
-        if GraphCorrelationToolV1::from_public_name(tool_name)
-            == Some(GraphCorrelationToolV1::TracePath)
-        {
-            match lineages.reserve_implementation_trace_reference(arguments, active_root) {
-                Ok(Some(admission)) => {
-                    return (
-                        LineageAdmissionOutcome::Eligible(admission),
-                        Some(GraphRecoveryReferenceDispositionV1::Recognized),
-                    );
-                }
-                Err(()) => {
-                    return (
-                        LineageAdmissionOutcome::Ineligible(
-                            LineageAdmissionStatus::MalformedSelector,
-                        ),
-                        Some(GraphRecoveryReferenceDispositionV1::Rejected),
-                    );
-                }
-                Ok(None) => {
-                    return (
-                        lineages.resolve_for_active_root(tool_name, arguments, active_root),
-                        presented_reference.or_else(|| {
-                            active_root
-                                .is_some()
-                                .then_some(GraphRecoveryReferenceDispositionV1::Missing)
-                        }),
-                    );
-                }
-            }
-        }
-        let mut outcome = lineages.resolve_for_active_root(tool_name, arguments, active_root);
-        if GraphCorrelationToolV1::from_public_name(tool_name)
-            == Some(GraphCorrelationToolV1::GetCodeSnippet)
-            && active_root.is_some()
-            && outcome
-                == LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
-        {
-            let sibling = lineages.resolve_for_active_root(tool_name, arguments, None);
-            if matches!(
-                &sibling,
-                LineageAdmissionOutcome::Eligible(admission)
-                    if admission.evidence_purpose()
-                        == Some(DecisionEvidenceKindV1::FocusedTest)
-            ) {
-                outcome = sibling;
-            }
-        }
-        let disposition = presented_reference.map(|_| {
-            if matches!(&outcome, LineageAdmissionOutcome::Eligible(_)) {
-                GraphRecoveryReferenceDispositionV1::Recognized
-            } else {
-                GraphRecoveryReferenceDispositionV1::Rejected
-            }
-        });
-        (outcome, disposition)
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .resolve_for_active_root_with_recovery(tool_name, arguments, active_root)
     }
 
     fn recovery_reference_disposition(
@@ -232,6 +175,74 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
 }
 
 impl DecisionAnchorLineages {
+    pub(super) fn resolve_for_active_root_with_recovery(
+        &mut self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> (
+        LineageAdmissionOutcome,
+        Option<GraphRecoveryReferenceDispositionV1>,
+    ) {
+        let presented_reference =
+            self.recovery_reference_disposition(tool_name, arguments, active_root);
+        if GraphCorrelationToolV1::from_public_name(tool_name)
+            == Some(GraphCorrelationToolV1::TracePath)
+        {
+            match self.reserve_implementation_trace_reference(arguments, active_root) {
+                Ok(Some(admission)) => {
+                    return (
+                        LineageAdmissionOutcome::Eligible(admission),
+                        Some(GraphRecoveryReferenceDispositionV1::Recognized),
+                    );
+                }
+                Err(()) => {
+                    return (
+                        LineageAdmissionOutcome::Ineligible(
+                            LineageAdmissionStatus::MalformedSelector,
+                        ),
+                        Some(GraphRecoveryReferenceDispositionV1::Rejected),
+                    );
+                }
+                Ok(None) => {
+                    return (
+                        self.resolve_for_active_root(tool_name, arguments, active_root),
+                        presented_reference.or_else(|| {
+                            active_root
+                                .is_some()
+                                .then_some(GraphRecoveryReferenceDispositionV1::Missing)
+                        }),
+                    );
+                }
+            }
+        }
+        let mut outcome = self.resolve_for_active_root(tool_name, arguments, active_root);
+        if GraphCorrelationToolV1::from_public_name(tool_name)
+            == Some(GraphCorrelationToolV1::GetCodeSnippet)
+            && active_root.is_some()
+            && outcome
+                == LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
+        {
+            let sibling = self.resolve_for_active_root(tool_name, arguments, None);
+            if matches!(
+                &sibling,
+                LineageAdmissionOutcome::Eligible(admission)
+                    if admission.evidence_purpose()
+                        == Some(DecisionEvidenceKindV1::FocusedTest)
+            ) {
+                outcome = sibling;
+            }
+        }
+        let disposition = presented_reference.map(|_| {
+            if matches!(&outcome, LineageAdmissionOutcome::Eligible(_)) {
+                GraphRecoveryReferenceDispositionV1::Recognized
+            } else {
+                GraphRecoveryReferenceDispositionV1::Rejected
+            }
+        });
+        (outcome, disposition)
+    }
+
     #[cfg(test)]
     pub(crate) fn resolve(&mut self, tool_name: &str, input: &Value) -> LineageAdmissionOutcome {
         self.resolve_for_active_root(tool_name, input, None)

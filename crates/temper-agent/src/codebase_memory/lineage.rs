@@ -41,7 +41,7 @@ use selection::{
     terminal_function_name,
 };
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct DecisionAnchorLineages {
     /// `None` marks a value offered by more than one root; it cannot advance either root.
     selectors: BTreeMap<Selector, Option<SelectorBinding>>,

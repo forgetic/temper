@@ -45,20 +45,47 @@ impl DecisionAnchorLineages {
                 purpose,
             };
             if let Some(reference) = self.recovery_references.get(&key).and_then(|references| {
-                references.iter().find_map(|reference| {
+                references.iter().find(|reference| {
                     self.recovery_reference_selectors
-                        .get(reference)
+                        .get(*reference)
                         .is_some_and(|selector| {
                             selector.state == RecoverySelectorState::Available
                                 && selector.selector(action.selector_kind).is_some()
+                                && self.recovery_action_is_admissible(
+                                    root_binding,
+                                    action,
+                                    reference,
+                                )
                         })
-                        .then_some(reference.as_str())
                 })
             }) {
-                return Some(reference);
+                return Some(reference.as_str());
             }
         }
         None
+    }
+
+    fn recovery_action_is_admissible(
+        &self,
+        root_binding: &str,
+        action: GraphRecoveryActionV1,
+        reference: &str,
+    ) -> bool {
+        let Some(arguments) = recovery_action_arguments(action, reference) else {
+            return false;
+        };
+        let mut snapshot = self.clone();
+        let (outcome, disposition) = snapshot.resolve_for_active_root_with_recovery(
+            action.tool.public_name(),
+            &arguments,
+            Some(root_binding),
+        );
+        matches!(
+            outcome,
+            temper_agent_core::LineageAdmissionOutcome::Eligible(admission)
+                if admission.matches_root(root_binding)
+        ) && disposition
+            == Some(temper_protocol_activity::GraphRecoveryReferenceDispositionV1::Recognized)
     }
 
     pub(in crate::codebase_memory) fn recovery_reference_disposition(
@@ -90,5 +117,26 @@ impl DecisionAnchorLineages {
         } else {
             temper_protocol_activity::GraphRecoveryReferenceDispositionV1::Rejected
         })
+    }
+}
+
+fn recovery_action_arguments(action: GraphRecoveryActionV1, reference: &str) -> Option<Value> {
+    action.is_valid().then_some(())?;
+    match (action.tool, action.selector_kind) {
+        (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => {
+            Some(serde_json::json!({
+                "qualified_name": reference,
+                "decision_evidence_kind": action.evidence_kind.as_str(),
+            }))
+        }
+        (GraphCorrelationToolV1::TracePath, DecisionAnchorTargetKindV1::FunctionName) => {
+            Some(serde_json::json!({
+                "function_name": reference,
+                "mode": "calls",
+                "direction": "inbound",
+                "include_tests": action.include_tests,
+            }))
+        }
+        _ => None,
     }
 }
