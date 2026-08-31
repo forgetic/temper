@@ -120,7 +120,9 @@ impl DecisionAnchorLineages {
                         }
                         (true, readiness, _) => readiness,
                     };
-                    binding.recovery_reference_required = false;
+                    if candidate.kind != DecisionAnchorTargetKindV1::QualifiedName {
+                        binding.recovery_reference_required = false;
+                    }
                 }
                 SelectorOrigin::CallerTraversalResult => binding.caller_traversal_result = true,
                 SelectorOrigin::CallerEvidenceResult => {
@@ -132,7 +134,7 @@ impl DecisionAnchorLineages {
             marked += 1;
         }
         let ordered = candidates.iter().cloned().collect::<Vec<_>>();
-        self.replace_recovery_references(root, purpose, &ordered);
+        self.replace_recovery_references(root, purpose, &ordered, false);
         Some(marked)
     }
 

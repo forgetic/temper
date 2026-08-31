@@ -1,4 +1,4 @@
-//! Bounded provider-order projection for oversized typed graph results.
+//! Provider-order retention for complete typed graph results.
 
 use super::*;
 
@@ -31,8 +31,9 @@ impl CandidateCollection for BTreeMap<Candidate, u8> {
 }
 
 /// Extracts candidates only from the provider-neutral result representations
-/// exercised by the benchmark. The complete typed shape is validated while
-/// only the first bounded provider-ordered candidate projection is retained.
+/// exercised by the benchmark. The complete typed shape and provider order are
+/// retained for run-local admission. Results beyond the direct-selector bound
+/// are still marked projected so only opaque references can authorize them.
 pub(super) fn provider_candidates(
     typed_parts: Option<&[McpToolResultPart]>,
 ) -> Option<ProviderCandidates> {
@@ -85,9 +86,8 @@ impl CandidateCollection for OrderedCandidateProjection {
         if self.candidates.contains(&candidate) {
             return;
         }
-        if self.candidates.len() == MAX_RESULT_TARGETS {
+        if self.candidates.len() >= MAX_RESULT_TARGETS {
             self.projected = true;
-            return;
         }
         self.candidates.insert(candidate.clone());
         self.provider_order.push(candidate);

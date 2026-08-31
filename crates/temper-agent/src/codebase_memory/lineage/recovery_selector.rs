@@ -4,7 +4,7 @@ use super::*;
 use temper_agent_core::EligibleLineageAdmission;
 
 pub(super) const RECOVERY_SELECTOR_REFERENCE_PREFIX: &str = "temper-recovery-selector:";
-const MAX_RECOVERY_CANDIDATES_PER_PURPOSE: usize = 4;
+const MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum RecoverySelectorPurpose {
@@ -121,7 +121,11 @@ impl DecisionAnchorLineages {
                         .is_some_and(|selector| selector.state == RecoverySelectorState::Available)
                 })
                 .collect::<Vec<_>>();
-            for (index, reference) in available.iter().enumerate() {
+            for (index, reference) in available
+                .iter()
+                .take(MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE)
+                .enumerate()
+            {
                 let label = if available.len() == 1 {
                     key.purpose.label().to_string()
                 } else {
@@ -143,6 +147,7 @@ impl DecisionAnchorLineages {
         root: &str,
         purpose: RecoverySelectorPurpose,
         candidates: &[Candidate],
+        provider_ordered: bool,
     ) {
         let key = RecoverySelectorKey {
             root_binding: root.to_string(),
@@ -155,25 +160,27 @@ impl DecisionAnchorLineages {
         }
 
         let mut ordered = candidates.iter().collect::<Vec<_>>();
-        ordered.sort_by_key(|candidate| {
-            let qualified = canonical_qualified_name(&candidate.value).is_some();
-            if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName
-                && candidate.provider_kind == DecisionAnchorTargetKindV1::QualifiedName
-                && qualified
-            {
-                0
-            } else if candidate.kind == purpose.selector_kind()
-                && candidate.provider_kind == purpose.selector_kind()
-            {
-                1
-            } else if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName && qualified {
-                2
-            } else if candidate.kind == purpose.selector_kind() {
-                3
-            } else {
-                4
-            }
-        });
+        if !provider_ordered {
+            ordered.sort_by_key(|candidate| {
+                let qualified = canonical_qualified_name(&candidate.value).is_some();
+                if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName
+                    && candidate.provider_kind == DecisionAnchorTargetKindV1::QualifiedName
+                    && qualified
+                {
+                    0
+                } else if candidate.kind == purpose.selector_kind()
+                    && candidate.provider_kind == purpose.selector_kind()
+                {
+                    1
+                } else if candidate.kind == DecisionAnchorTargetKindV1::QualifiedName && qualified {
+                    2
+                } else if candidate.kind == purpose.selector_kind() {
+                    3
+                } else {
+                    4
+                }
+            });
+        }
 
         let mut retained = Vec::new();
         let mut identities = BTreeSet::new();
@@ -210,7 +217,7 @@ impl DecisionAnchorLineages {
             self.recovery_reference_selectors
                 .insert(reference.clone(), selector_reference);
             retained.push(reference);
-            if retained.len() == MAX_RECOVERY_CANDIDATES_PER_PURPOSE {
+            if !provider_ordered && retained.len() == MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE {
                 break;
             }
         }
@@ -485,6 +492,7 @@ impl DecisionAnchorLineages {
                             reference.state == RecoverySelectorState::Available
                         })
                 })
+                .take(MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE)
                 .collect::<Vec<_>>();
             let labels = references
                 .iter()
