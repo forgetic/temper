@@ -20,11 +20,13 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
     };
     use tongs::tools::{ToolEffects, ToolOutput};
 
+    const OPAQUE_REFERENCE_PREFIX: &str = "temper-recovery-selector:";
+
     fn projected_results(prefix: &str) -> serde_json::Value {
         serde_json::json!({
-            "total": 13,
+            "total": 15,
             "has_more": false,
-            "results": (1..=13)
+            "results": (1..=15)
                 .map(|rank| serde_json::json!({
                     "name": format!("{prefix}_{rank}"),
                     "qualified_name": format!("crate::{prefix}::{prefix}_{rank}"),
@@ -150,6 +152,15 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
             .expect("the machine exposes one active-root handoff")
     }
 
+    fn handoff_reference(handoff: &str) -> &str {
+        handoff
+            .split_once("\"qualified_name\":\"")
+            .and_then(|(_, value)| value.split_once('\"'))
+            .map(|(reference, _)| reference)
+            .filter(|reference| reference.starts_with(OPAQUE_REFERENCE_PREFIX))
+            .expect("the handoff contains one opaque qualified-name reference")
+    }
+
     let workspace = tempfile::tempdir().unwrap();
     let context = crate::codebase_memory::tests::test_support::workspace_context(
         workspace.path(),
@@ -198,40 +209,58 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
     let classified = registry
         .record_with_evidence_kind(
             &correlation(GraphCorrelationTargetKindV1::QualifiedName),
-            &serde_json::json!({"qualified_name": "crate::active::active_4"}),
+            &serde_json::json!({"qualified_name": "crate::active::active_7"}),
             Some(&structured_parts(serde_json::json!({
-                "name": "active_4",
-                "qualified_name": "crate::active::active_4",
-                "source": "fn active_4() {}",
+                "name": "active_7",
+                "qualified_name": "crate::active::active_7",
+                "source": "fn active_7() {}",
             }))),
             Some(DecisionEvidenceKindV1::Implementation),
         )
-        .expect("rank 4 becomes the provider-classified implementation result");
+        .expect("rank 7 becomes the provider-classified implementation result");
     assert_eq!(classified.root_binding, active.root_binding);
     assert_eq!(
         classified.decision_evidence_kind,
         Some(DecisionEvidenceKindV1::Implementation)
     );
 
+    let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
     registry
         .record_with_evidence_kind(
             &correlation(GraphCorrelationTargetKindV1::QualifiedName),
-            &serde_json::json!({"qualified_name": "crate::sibling::sibling_5"}),
+            &serde_json::json!({"qualified_name": "crate::sibling::sibling_7"}),
             Some(&structured_parts(serde_json::json!({
-                "name": "sibling_5",
-                "qualified_name": "crate::sibling::sibling_5",
-                "source": "fn sibling_5() {}",
+                "name": "sibling_7",
+                "qualified_name": "crate::sibling::sibling_7",
+                "source": "fn sibling_7() {}",
             }))),
             Some(DecisionEvidenceKindV1::Implementation),
         )
-        .expect("an implementation outside the sibling candidate window is classified");
-
-    let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
+        .expect("the sibling has one admission-valid candidate");
+    let sibling_selected = registry
+        .active_root_recovery_selector(&sibling.root_binding, action)
+        .expect("the sibling implementation reference is retained internally");
+    let mut sibling_provider_input = source_input(sibling_selected.as_public_selector());
+    let sibling_expanded = registry
+        .expand_recovery_selector(
+            action.tool.public_name(),
+            &mut sibling_provider_input,
+            Some(DecisionEvidenceKindV1::Implementation),
+        )
+        .unwrap()
+        .expect("the sibling reference can be consumed on only its own root");
+    assert_eq!(
+        sibling_provider_input["qualified_name"],
+        "crate::sibling::sibling_7"
+    );
+    registry
+        .complete_candidate_reference(&sibling_expanded, true)
+        .expect("the selected sibling candidate is closed");
     assert!(
         registry
             .active_root_recovery_selector(&sibling.root_binding, action)
             .is_none(),
-        "a projected root with no admission-valid retained candidate fails closed",
+        "a root whose remaining candidates are all incapable fails closed",
     );
 
     let effects = BTreeMap::from([
@@ -301,23 +330,46 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
         None,
     );
     let selected_handoff = active_handoff(&selected);
+    let selected_reference = handoff_reference(selected_handoff).to_string();
+    assert_eq!(selected_handoff.matches(&selected_reference).count(), 1);
     assert_eq!(
-        selected_handoff.matches(&active_references[3]).count(),
+        selected_handoff.matches(OPAQUE_REFERENCE_PREFIX).count(),
         1
     );
     assert!(selected_handoff.contains("codebase_memory_get_code_snippet"));
     assert!(selected_handoff.contains("selector field=qualified_name"));
-    for hidden in active_references[..3].iter().chain(&sibling_references) {
+    assert!(!active_references.contains(&selected_reference));
+    for hidden in active_references.iter().chain(&sibling_references) {
         assert!(!selected_handoff.contains(hidden));
+    }
+    for private in ["active_7", "sibling_1", "total", "has_more"] {
+        assert!(!selected_handoff.contains(private));
     }
 
     let denied = complete_llm(
         &mut machine,
-        assistant(vec![(
-            "active-distractor",
-            "codebase_memory_get_code_snippet",
-            source_input(&active_references[0]),
-        )]),
+        assistant(vec![
+            (
+                "active-raw",
+                "codebase_memory_get_code_snippet",
+                source_input("crate::active::active_7"),
+            ),
+            (
+                "active-distractor",
+                "codebase_memory_get_code_snippet",
+                source_input("temper-recovery-selector:distractor"),
+            ),
+            (
+                "active-alternate",
+                "codebase_memory_get_code_snippet",
+                source_input(&active_references[0]),
+            ),
+            (
+                "sibling-attempt",
+                "codebase_memory_get_code_snippet",
+                source_input(&sibling_references[0]),
+            ),
+        ]),
     );
     let expected = GraphExplorationClosedV1::recoverable_without_actions(
         [
@@ -329,43 +381,64 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
         MAX_GRAPH_RECOVERY_ALLOWANCE_V1,
     )
     .unwrap();
-    assert!(denied.iter().any(|request| matches!(
-        request,
-        AgentRequest::RunTool {
-            call,
-            denial: Some(ToolCallDenial::GraphExplorationClosed(Some(details))),
-            rejection: None,
-            ..
-        } if call.id == "active-distractor" && details == &expected
-    )));
-    assert!(denied.iter().any(|request| matches!(
-        request,
-        AgentRequest::Emit(AgentEvent::ToolStart {
-            id,
-            recovery_reference_disposition: Some(
-                GraphRecoveryReferenceDispositionV1::Rejected
-            ),
-            ..
-        }) if id == "active-distractor"
-    )));
-
-    let resumed = complete_tool(
-        &mut machine,
+    for id in [
+        "active-raw",
         "active-distractor",
-        ToolOutput {
-            content: Vec::new(),
-            details: None,
-            is_error: true,
-        },
-        Some(ToolFailureDiagnostic::graph_exploration(expected)),
-    );
+        "active-alternate",
+        "sibling-attempt",
+    ] {
+        assert!(denied.iter().any(|request| matches!(
+            request,
+            AgentRequest::RunTool {
+                call,
+                denial: Some(ToolCallDenial::GraphExplorationClosed(Some(details))),
+                rejection: None,
+                ..
+            } if call.id == id && details == &expected
+        )));
+    }
+    for id in ["active-distractor", "active-alternate", "sibling-attempt"] {
+        assert!(denied.iter().any(|request| matches!(
+            request,
+            AgentRequest::Emit(AgentEvent::ToolStart {
+                id: emitted_id,
+                recovery_reference_disposition: Some(
+                    GraphRecoveryReferenceDispositionV1::Rejected
+                ),
+                ..
+            }) if emitted_id == id
+        )));
+    }
+
+    let mut resumed = Vec::new();
+    for id in [
+        "active-raw",
+        "active-distractor",
+        "active-alternate",
+        "sibling-attempt",
+    ] {
+        resumed.extend(complete_tool(
+            &mut machine,
+            id,
+            ToolOutput {
+                content: Vec::new(),
+                details: None,
+                is_error: true,
+            },
+            Some(ToolFailureDiagnostic::graph_exploration(expected.clone())),
+        ));
+    }
     let resumed_handoff = active_handoff(&resumed);
-    assert_eq!(resumed_handoff.matches(&active_references[3]).count(), 1);
-    for hidden in active_references[..3].iter().chain(&sibling_references) {
+    assert_eq!(
+        handoff_reference(resumed_handoff),
+        selected_reference.as_str()
+    );
+    assert_eq!(resumed_handoff.matches(&selected_reference).count(), 1);
+    for hidden in active_references.iter().chain(&sibling_references) {
         assert!(!resumed_handoff.contains(hidden));
     }
 
-    let exact_input = source_input(&active_references[3]);
+    let exact_input = source_input(&selected_reference);
     let admitted = complete_llm(
         &mut machine,
         assistant(vec![(
@@ -403,15 +476,15 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
         )
         .unwrap()
         .expect("the admitted opaque handoff expands at provider dispatch");
-    assert_eq!(provider_input["qualified_name"], "crate::active::active_4");
+    assert_eq!(provider_input["qualified_name"], "crate::active::active_7");
     let advanced = registry
         .record_with_evidence_kind(
             &correlation(GraphCorrelationTargetKindV1::QualifiedName),
             &provider_input,
             Some(&structured_parts(serde_json::json!({
-                "name": "active_4",
-                "qualified_name": "crate::active::active_4",
-                "source": "fn active_4() {}",
+                "name": "active_7",
+                "qualified_name": "crate::active::active_7",
+                "source": "fn active_7() {}",
             }))),
             Some(DecisionEvidenceKindV1::Implementation),
         )

@@ -228,6 +228,7 @@ impl DecisionAnchorLineages {
                             &provider_candidates.provider_order,
                             focused_tests.as_ref(),
                         ),
+                        true,
                     );
                 }
                 if !provider_candidates.projected {
