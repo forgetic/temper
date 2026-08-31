@@ -323,6 +323,15 @@ impl DecisionAnchorLineages {
         if !reference_value.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX) {
             return Ok(None);
         }
+        let reference = self
+            .recovery_reference_selectors
+            .get(reference_value)
+            .ok_or(())?;
+        if reference.purpose != RecoverySelectorPurpose::ImplementationTrace {
+            return (reference.purpose == RecoverySelectorPurpose::CallerTestTraversal)
+                .then_some(None)
+                .ok_or(());
+        }
         let object = input.as_object().ok_or(())?;
         if [
             "query",

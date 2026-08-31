@@ -715,6 +715,11 @@ mod tests {
         include!("lineage_admission.rs");
     }
 
+    mod active_root_handoff {
+        use super::*;
+        include!("lineage_active_root_handoff.rs");
+    }
+
     mod candidates {
         use super::*;
         include!("lineage_candidates.rs");
