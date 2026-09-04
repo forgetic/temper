@@ -7,6 +7,8 @@ use super::*;
 
 mod forest_selection;
 
+use forest_selection::ForestRootSelection;
+
 const MAX_REJECTED_RECOVERY_TUPLES: usize = 64;
 
 struct RecoveryAdmissionSnapshot {
@@ -99,8 +101,10 @@ impl DecisionAnchorState {
         debug_assert_eq!(calls.len(), invocation_targets.len());
         debug_assert_eq!(calls.len(), incomplete_graph_selectors.len());
         debug_assert_eq!(calls.len(), recovery_reference_dispositions.len());
-        let forest_selection_conflict = !self.promote_unique_forest_root(admissions);
-        let snapshot = self.staged_admission_snapshot();
+        let forest_selection = self.promote_unique_forest_root(admissions);
+        let forest_selection_conflict = forest_selection.is_err();
+        let forest_selection = forest_selection.ok().flatten();
+        let snapshot = self.staged_admission_snapshot(forest_selection.as_ref());
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
         let mut admitted_count = 0u8;
@@ -380,12 +384,17 @@ impl DecisionAnchorState {
             .cloned()
     }
 
-    fn staged_admission_snapshot(&self) -> Option<RecoveryAdmissionSnapshot> {
+    fn staged_admission_snapshot(
+        &self,
+        forest_selection: Option<&ForestRootSelection>,
+    ) -> Option<RecoveryAdmissionSnapshot> {
         let (active_root, active, route, remaining, denial) = match self.phase.as_ref()? {
             AnchorPhase::Root(anchors) | AnchorPhase::Trail(anchors)
                 if self.exploration == ExplorationStatus::Open =>
             {
-                let (active_root, route) = anchors.active_selection(&BTreeSet::new())?;
+                let (active_root, route) = forest_selection
+                    .map(|selection| (&selection.active_root, selection.route))
+                    .or_else(|| anchors.active_selection(&BTreeSet::new()))?;
                 let active = anchors.roots.get(active_root)?;
                 let details = GraphExplorationClosedV1::recoverable_without_actions(
                     anchors.missing_kinds(active_root, route),

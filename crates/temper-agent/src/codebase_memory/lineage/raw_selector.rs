@@ -4,6 +4,12 @@ use temper_protocol_activity::GraphRecoveryEvidenceKindV1;
 
 use super::*;
 
+#[derive(Debug)]
+pub(super) enum ExactRawSelectorError {
+    Invalid,
+    ActiveRootTraceFallback,
+}
+
 pub(super) struct ExactRawSelector {
     pub(super) reference: String,
     pub(super) root_binding: String,
@@ -100,18 +106,27 @@ impl DecisionAnchorLineages {
         arguments: &Value,
         declared_override: Option<DecisionEvidenceKindV1>,
         allow_reserved_trace: bool,
-    ) -> Result<Option<ExactRawSelector>, ()> {
+    ) -> Result<Option<ExactRawSelector>, ExactRawSelectorError> {
         let Some(tool) = GraphCorrelationToolV1::from_public_name(tool_name) else {
             return Ok(None);
         };
-        let object = arguments.as_object().ok_or(())?;
+        if matches!(
+            tool,
+            GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode
+        ) {
+            return Ok(None);
+        }
+        let object = arguments
+            .as_object()
+            .ok_or(ExactRawSelectorError::Invalid)?;
         let declared = match declared_override {
             Some(kind) => Some(kind),
             None => match object.get("decision_evidence_kind") {
-                Some(value) if tool == GraphCorrelationToolV1::GetCodeSnippet => {
-                    Some(serde_json::from_value(value.clone()).map_err(|_| ())?)
-                }
-                Some(_) => return Err(()),
+                Some(value) if tool == GraphCorrelationToolV1::GetCodeSnippet => Some(
+                    serde_json::from_value(value.clone())
+                        .map_err(|_| ExactRawSelectorError::Invalid)?,
+                ),
+                Some(_) => return Err(ExactRawSelectorError::Invalid),
                 None => None,
             },
         };
@@ -128,7 +143,7 @@ impl DecisionAnchorLineages {
             .filter(|field| object.contains_key(*field))
             .collect::<Vec<_>>();
         if present.len() != 1 || object[present[0]].as_str().is_none() {
-            return Err(());
+            return Err(ExactRawSelectorError::Invalid);
         }
         let expected_field = match tool {
             GraphCorrelationToolV1::GetCodeSnippet => "qualified_name",
@@ -137,7 +152,9 @@ impl DecisionAnchorLineages {
                 return Ok(None);
             }
         };
-        let raw = object[present[0]].as_str().ok_or(())?;
+        let raw = object[present[0]]
+            .as_str()
+            .ok_or(ExactRawSelectorError::Invalid)?;
         if raw.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX) {
             return Ok(None);
         }
@@ -156,7 +173,10 @@ impl DecisionAnchorLineages {
             })
             .collect::<Vec<_>>();
         if present[0] != expected_field {
-            return exact_candidates.is_empty().then_some(None).ok_or(());
+            return exact_candidates
+                .is_empty()
+                .then_some(None)
+                .ok_or(ExactRawSelectorError::Invalid);
         }
         let compatible = exact_candidates
             .iter()
@@ -221,12 +241,31 @@ impl DecisionAnchorLineages {
                         })
                     });
                 if normalized_conflict {
-                    Err(())
+                    Err(ExactRawSelectorError::Invalid)
                 } else {
                     Ok(None)
                 }
             }
-            [] | [_, ..] => Err(()),
+            [] if tool == GraphCorrelationToolV1::TracePath
+                && exact_candidates.len() == 1
+                && exact_candidates[0].1.state == RecoverySelectorState::Available
+                && exact_candidates[0].1.purpose
+                    == RecoverySelectorPurpose::ImplementationCandidate
+                && object
+                    .get("mode")
+                    .and_then(Value::as_str)
+                    .is_none_or(|mode| mode == "calls")
+                && object
+                    .get("direction")
+                    .and_then(Value::as_str)
+                    .is_none_or(|direction| direction == "inbound")
+                && object
+                    .get("include_tests")
+                    .is_none_or(|include_tests| include_tests.as_bool() == Some(false)) =>
+            {
+                Err(ExactRawSelectorError::ActiveRootTraceFallback)
+            }
+            [] | [_, ..] => Err(ExactRawSelectorError::Invalid),
         }
     }
 }
@@ -315,6 +354,28 @@ mod tests {
                 )
                 .is_err()
         );
+
+        assert!(matches!(
+            lineages.exact_raw_selector(
+                GraphCorrelationToolV1::TracePath.public_name(),
+                &serde_json::json!({"function_name": "worker_slot"}),
+                None,
+                false,
+            ),
+            Err(ExactRawSelectorError::ActiveRootTraceFallback)
+        ));
+        assert!(matches!(
+            lineages.exact_raw_selector(
+                GraphCorrelationToolV1::TracePath.public_name(),
+                &serde_json::json!({
+                    "function_name": "worker_slot",
+                    "mode": "data_flow"
+                }),
+                None,
+                false,
+            ),
+            Err(ExactRawSelectorError::Invalid)
+        ));
 
         install(&mut lineages, "sibling", "sibling");
         assert!(

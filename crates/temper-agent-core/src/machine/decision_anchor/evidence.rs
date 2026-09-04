@@ -35,17 +35,7 @@ impl DecisionAnchorState {
         let Some((active_root, route)) = anchors.recovery_selection() else {
             return self.enter_incomplete_enabled(anchors.active_evidence());
         };
-        if route == RecoveryRoute::Implementation
-            && anchors.roots.iter().any(|(binding, root)| {
-                binding != &active_root && root.evidence.focused_test_is_complete()
-            })
-        {
-            let active = anchors
-                .roots
-                .get_mut(&active_root)
-                .expect("the selected recovery root remains installed");
-            active.evidence.trace_before_implementation = true;
-        }
+        anchors.mark_parallel_recovery(&active_root, route);
         let remaining_pivots = anchors.roots.len().saturating_sub(1);
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
@@ -78,17 +68,7 @@ impl DecisionAnchorState {
         let Some((active_root, route)) = next else {
             return self.enter_incomplete_enabled(exhausted_evidence);
         };
-        if route == RecoveryRoute::Implementation
-            && anchors.roots.iter().any(|(binding, root)| {
-                binding != &active_root && root.evidence.focused_test_is_complete()
-            })
-        {
-            let active = anchors
-                .roots
-                .get_mut(&active_root)
-                .expect("the pivoted recovery root remains installed");
-            active.evidence.trace_before_implementation = true;
-        }
+        anchors.mark_parallel_recovery(&active_root, route);
 
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
@@ -345,6 +325,7 @@ impl DecisionAnchorState {
         } else {
             (active_root, route)
         };
+        anchors.mark_parallel_recovery(&next_root, next_route);
         self.phase = Some(AnchorPhase::GapRecovery(GapRecovery {
             anchors,
             active_root: next_root,
