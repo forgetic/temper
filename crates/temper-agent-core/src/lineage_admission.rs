@@ -224,6 +224,7 @@ pub struct EligibleLineageAdmission {
     evidence_purpose: Option<DecisionEvidenceKindV1>,
     recovery_purpose: Option<DecisionEvidenceKindV1>,
     traversal_readiness_recheck: bool,
+    forest_root_selection: bool,
 }
 
 impl EligibleLineageAdmission {
@@ -256,6 +257,7 @@ impl EligibleLineageAdmission {
             evidence_purpose,
             recovery_purpose: None,
             traversal_readiness_recheck: false,
+            forest_root_selection: false,
         })
     }
 
@@ -276,6 +278,7 @@ impl EligibleLineageAdmission {
             evidence_purpose: None,
             recovery_purpose: None,
             traversal_readiness_recheck: false,
+            forest_root_selection: false,
         })
     }
 
@@ -291,6 +294,7 @@ impl EligibleLineageAdmission {
             evidence_purpose: None,
             recovery_purpose: None,
             traversal_readiness_recheck: false,
+            forest_root_selection: false,
         })
     }
 
@@ -306,6 +310,7 @@ impl EligibleLineageAdmission {
             evidence_purpose: Some(DecisionEvidenceKindV1::Implementation),
             recovery_purpose: None,
             traversal_readiness_recheck: true,
+            forest_root_selection: false,
         })
     }
 
@@ -321,6 +326,7 @@ impl EligibleLineageAdmission {
             evidence_purpose: None,
             recovery_purpose: Some(DecisionEvidenceKindV1::FocusedTest),
             traversal_readiness_recheck: false,
+            forest_root_selection: false,
         })
     }
 
@@ -336,7 +342,15 @@ impl EligibleLineageAdmission {
             evidence_purpose: None,
             recovery_purpose: Some(DecisionEvidenceKindV1::FocusedTest),
             traversal_readiness_recheck: false,
+            forest_root_selection: false,
         })
+    }
+
+    /// Marks an exact provider-returned selector as authority to select its
+    /// unique owning root from the machine's retained decision forest.
+    pub fn with_forest_root_selection(mut self) -> Self {
+        self.forest_root_selection = true;
+        self
     }
 
     pub const fn selector_kind(&self) -> DecisionAnchorTargetKindV1 {
@@ -359,6 +373,10 @@ impl EligibleLineageAdmission {
         self.traversal_readiness_recheck
     }
 
+    pub const fn selects_forest_root(&self) -> bool {
+        self.forest_root_selection
+    }
+
     /// Compares a trusted lineage root without exposing this process-local
     /// binding to callers, formatting, messages, or serialization.
     pub fn matches_root(&self, candidate: &str) -> bool {
@@ -379,6 +397,7 @@ impl fmt::Debug for EligibleLineageAdmission {
                 "traversal_readiness_recheck",
                 &self.traversal_readiness_recheck,
             )
+            .field("forest_root_selection", &self.forest_root_selection)
             .finish()
     }
 }

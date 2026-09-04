@@ -392,6 +392,7 @@ impl DecisionAnchorLineages {
         Ok(Some(ExpandedRecoverySelector {
             reference: public_reference,
             root_binding,
+            decision_evidence_kind: evidence_kind,
         }))
     }
 

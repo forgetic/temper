@@ -5,6 +5,8 @@ use sha2::{Digest as _, Sha256};
 
 use super::*;
 
+mod forest_selection;
+
 const MAX_REJECTED_RECOVERY_TUPLES: usize = 64;
 
 struct RecoveryAdmissionSnapshot {
@@ -97,6 +99,7 @@ impl DecisionAnchorState {
         debug_assert_eq!(calls.len(), invocation_targets.len());
         debug_assert_eq!(calls.len(), incomplete_graph_selectors.len());
         debug_assert_eq!(calls.len(), recovery_reference_dispositions.len());
+        let forest_selection_conflict = !self.promote_unique_forest_root(admissions);
         let snapshot = self.staged_admission_snapshot();
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
@@ -214,6 +217,9 @@ impl DecisionAnchorState {
                     let admissible = readiness_recheck_admissible
                         || snapshot.as_ref().is_some_and(|snapshot| {
                             !already_rejected
+                                && !(forest_selection_conflict
+                                    && eligible
+                                        .is_some_and(|admission| admission.selects_forest_root()))
                                 && call_key.is_some()
                                 && recovery_gap.is_some_and(|gap| {
                                     snapshot.missing.contains(&gap)
@@ -353,7 +359,10 @@ impl DecisionAnchorState {
         .flatten()
     }
 
-    fn root_matching_admission(&self, admission: &EligibleLineageAdmission) -> Option<String> {
+    pub(super) fn root_matching_admission(
+        &self,
+        admission: &EligibleLineageAdmission,
+    ) -> Option<String> {
         let anchors = match self.phase.as_ref()? {
             AnchorPhase::Root(anchors)
             | AnchorPhase::Trail(anchors)
@@ -545,7 +554,7 @@ impl DecisionGap {
         }
     }
 
-    fn recovery_action_for_admission(
+    pub(super) fn recovery_action_for_admission(
         admission: &EligibleLineageAdmission,
     ) -> Option<GraphRecoveryActionV1> {
         if admission.recovery_purpose() == Some(DecisionEvidenceKindV1::FocusedTest) {

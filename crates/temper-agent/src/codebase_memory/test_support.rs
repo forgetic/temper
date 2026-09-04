@@ -249,14 +249,15 @@ for line in sys.stdin:
                 payload = {"total": 70, "has_more": False, "results": results}
                 tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode == "active-root-handoff" and name == "get_code_snippet":
-                if args.get("qualified_name") != "worker_slot":
+                symbol = args.get("qualified_name")
+                if symbol not in ("worker_slot", "sibling_worker_slot"):
                     tool_result(request["id"], "invalid argument", True)
                 else:
                     payload = {
-                        "name": "worker_slot",
-                        "qualified_name": "worker_slot",
+                        "name": symbol,
+                        "qualified_name": symbol,
                         "file_path": "src/route.rs",
-                        "source": "fn worker_slot() {}",
+                        "source": f"fn {symbol}() {{}}",
                     }
                     tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode == "graph-errors" and args.get("query") == "invalid":
