@@ -30,7 +30,10 @@ mod selection;
 mod target;
 
 pub(super) use admission::DecisionAnchorLineageRegistry;
-use candidate_projection::{CandidateCollection, provider_candidates};
+use candidate_projection::{
+    Candidate, CandidateCollection, insert_function, insert_qualified, insert_reference,
+    provider_candidates,
+};
 use exact_narrowing::{ExactGraphSelector, PendingExactGraphNarrowing};
 use focused_test::{FocusedTestDiscovery, SelectorOrigin, focused_test_discovery};
 use recovery_record::ExpandedRecoverySelector;
@@ -62,13 +65,6 @@ pub(super) struct DecisionAnchorLineages {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct Selector {
     kind: DecisionAnchorTargetKindV1,
-    value: String,
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct Candidate {
-    kind: DecisionAnchorTargetKindV1,
-    provider_kind: DecisionAnchorTargetKindV1,
     value: String,
 }
 
@@ -472,11 +468,11 @@ fn collect_direct_symbol<C: CandidateCollection>(
     match (qualified, selected_short) {
         (Some(qualified), Some(short)) => {
             (terminal_function_name(&qualified)? == short).then_some(())?;
-            insert_qualified(candidates, qualified)?;
-            insert_function(candidates, short)
+            insert_qualified(candidates, qualified, qualified_field?)?;
+            insert_function(candidates, short.clone(), short)
         }
-        (Some(qualified), None) => insert_qualified(candidates, qualified),
-        (None, Some(short)) => insert_function(candidates, short),
+        (Some(qualified), None) => insert_qualified(candidates, qualified, qualified_field?),
+        (None, Some(short)) => insert_function(candidates, short.clone(), short),
         (None, None) => Some(()),
     }
 }
@@ -536,92 +532,4 @@ fn collect_reference<C: CandidateCollection>(value: &Value, candidates: &mut C) 
         Value::Object(value) => collect_result_record(value, candidates),
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) => None,
     }
-}
-
-fn insert_reference<C: CandidateCollection>(candidates: &mut C, value: &str) -> Option<()> {
-    match canonical_qualified_name(value) {
-        Some(value) => insert_qualified(candidates, value),
-        None => insert_function(candidates, canonical_function_name(value)?),
-    }
-}
-
-fn insert_qualified<C: CandidateCollection>(candidates: &mut C, value: String) -> Option<()> {
-    let function = terminal_function_name(&value)?;
-    insert(
-        candidates,
-        DecisionAnchorTargetKindV1::QualifiedName,
-        DecisionAnchorTargetKindV1::Pattern,
-        value.clone(),
-    )?;
-    // Pattern selectors commonly use the terminal symbol returned beside a
-    // provider-qualified identity. Retain that closed representation too;
-    // the registry's ambiguity handling prevents a shared terminal name from
-    // binding across distinct roots.
-    insert(
-        candidates,
-        DecisionAnchorTargetKindV1::QualifiedName,
-        DecisionAnchorTargetKindV1::Pattern,
-        function.clone(),
-    )?;
-    insert(
-        candidates,
-        DecisionAnchorTargetKindV1::QualifiedName,
-        DecisionAnchorTargetKindV1::QualifiedName,
-        value,
-    )?;
-    // A source-read wrapper accepts a short `qualified_name` selector. Keep
-    // the provider record's direct name as that closed representation too.
-    insert(
-        candidates,
-        DecisionAnchorTargetKindV1::QualifiedName,
-        DecisionAnchorTargetKindV1::QualifiedName,
-        function.clone(),
-    )?;
-    insert(
-        candidates,
-        DecisionAnchorTargetKindV1::QualifiedName,
-        DecisionAnchorTargetKindV1::FunctionName,
-        function,
-    )
-}
-
-fn insert_function<C: CandidateCollection>(candidates: &mut C, value: String) -> Option<()> {
-    insert(
-        candidates,
-        DecisionAnchorTargetKindV1::FunctionName,
-        DecisionAnchorTargetKindV1::Pattern,
-        value.clone(),
-    )?;
-    insert(
-        candidates,
-        DecisionAnchorTargetKindV1::FunctionName,
-        DecisionAnchorTargetKindV1::FunctionName,
-        value.clone(),
-    )?;
-    insert(
-        candidates,
-        DecisionAnchorTargetKindV1::FunctionName,
-        DecisionAnchorTargetKindV1::QualifiedName,
-        value,
-    )
-}
-
-fn insert<C: CandidateCollection>(
-    candidates: &mut C,
-    source_kind: DecisionAnchorTargetKindV1,
-    target_kind: DecisionAnchorTargetKindV1,
-    value: String,
-) -> Option<()> {
-    source_kind.can_carry_forward(target_kind).then_some(())?;
-    // A provider may report one identity through multiple approved fields
-    // (for example `qualified_name`, a terminal `name`, and a `symbol` list).
-    // They are equivalent representations of the same result, not ambiguous
-    // independently returned candidates. The registry still rejects a
-    // selector that later appears under a distinct root.
-    candidates.insert_candidate(Candidate {
-        kind: target_kind,
-        provider_kind: source_kind,
-        value,
-    });
-    Some(())
 }

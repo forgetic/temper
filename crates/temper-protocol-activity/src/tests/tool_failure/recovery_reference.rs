@@ -14,7 +14,7 @@ fn legacy_tool_start_without_disposition_remains_readable() {
 }
 
 #[test]
-fn recovery_reference_dispositions_are_closed_and_trace_only() {
+fn recovery_reference_dispositions_are_closed_and_wrapper_only() {
     const PRIVATE_REFERENCE: &str = "temper-recovery-selector:00000000-0000-4000-8000-000000000099";
     let mut event = usage_event(1);
     event.event = AgentActivityEventV1::ToolStarted(ToolStartedV1 {
@@ -33,6 +33,20 @@ fn recovery_reference_dispositions_are_closed_and_trace_only() {
             .contains(PRIVATE_REFERENCE)
     );
 
+    let AgentActivityEventV1::ToolStarted(started) = &mut event.event else {
+        unreachable!();
+    };
+    started.name = "codebase_memory_get_code_snippet".into();
+    event
+        .validate()
+        .expect("recognized source reference validates");
+    let AgentActivityEventV1::ToolStarted(started) = &mut event.event else {
+        unreachable!();
+    };
+    started.recovery_reference_disposition = Some(GraphRecoveryReferenceDispositionV1::Rejected);
+    event
+        .validate()
+        .expect("rejected source reference validates");
     let AgentActivityEventV1::ToolStarted(started) = &mut event.event else {
         unreachable!();
     };
