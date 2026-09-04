@@ -83,6 +83,9 @@ pub struct AgentMachine {
     /// Content-free traversal kinds whose required selector was unusable
     /// before invocation scrubbing.
     incomplete_graph_selectors: BTreeMap<String, GraphCorrelationToolV1>,
+    /// Content-free public graph kinds retained when canonical invocation
+    /// validation scrubbed their arguments and names.
+    rejected_graph_tools: BTreeMap<String, GraphCorrelationToolV1>,
     /// Closed opaque-reference classifications captured before malformed
     /// arguments are scrubbed by the public invocation boundary.
     pub(super) recovery_reference_dispositions:
@@ -183,6 +186,7 @@ impl AgentMachine {
             invocation_catalog,
             invocation_rejections: BTreeMap::new(),
             incomplete_graph_selectors: BTreeMap::new(),
+            rejected_graph_tools: BTreeMap::new(),
             recovery_reference_dispositions: BTreeMap::new(),
             ordinary_failures: OrdinaryFailureCircuit::default(),
             pending_batches: VecDeque::new(),
@@ -327,8 +331,11 @@ impl AgentMachine {
         self.capture_recovery_reference_dispositions(&assistant);
         // Normalize before the assistant turn is emitted, retained, inspected
         // by policy, previewed, batched, or dispatched.
-        (self.invocation_rejections, self.incomplete_graph_selectors) =
-            self.invocation_catalog.canonicalize_message(&mut assistant);
+        (
+            self.invocation_rejections,
+            self.incomplete_graph_selectors,
+            self.rejected_graph_tools,
+        ) = self.invocation_catalog.canonicalize_message(&mut assistant);
         let mut requests = vec![AgentRequest::Emit(AgentEvent::AssistantMessage {
             content: assistant.content.clone(),
         })];
@@ -437,15 +444,6 @@ impl AgentMachine {
                 pending.invocation_targets = admission;
             }
         }
-        let recovery_reference_correction =
-            calls
-                .iter()
-                .zip(&recovery_reference_dispositions)
-                .any(|(call, disposition)| {
-                    *disposition == Some(GraphRecoveryReferenceDispositionV1::Rejected)
-                        || self.invocation_rejections.contains_key(&call.id)
-                            && disposition.is_some()
-                });
         let mut active_handoff = None;
         let denials = if let Some(state) = self.decision_anchors.as_mut() {
             let denials = state.on_tool_batch_dispatched_with_closed_inputs(
@@ -456,9 +454,22 @@ impl AgentMachine {
                 &incomplete_graph_selectors,
                 &recovery_reference_dispositions,
             );
+            let local_graph_correction = calls
+                .iter()
+                .zip(&denials)
+                .zip(&recovery_reference_dispositions)
+                .any(|((call, denial), disposition)| {
+                    let graph_call = call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX)
+                        || self.rejected_graph_tools.contains_key(&call.id)
+                        || self.incomplete_graph_selectors.contains_key(&call.id);
+                    graph_call
+                        && (denial.is_some()
+                            || self.invocation_rejections.contains_key(&call.id)
+                            || *disposition == Some(GraphRecoveryReferenceDispositionV1::Rejected))
+                });
             let candidate_handoff = state.active_recovery_action();
             let guidance = state.take_model_guidance();
-            if !guidance.is_empty() || recovery_reference_correction {
+            if !guidance.is_empty() || local_graph_correction {
                 active_handoff = candidate_handoff;
             }
             self.decision_anchor_guidance.extend(guidance);
@@ -672,6 +683,7 @@ impl AgentMachine {
             for pending in &batch {
                 self.invocation_rejections.remove(&pending.call.id);
                 self.incomplete_graph_selectors.remove(&pending.call.id);
+                self.rejected_graph_tools.remove(&pending.call.id);
                 self.recovery_reference_dispositions
                     .remove(&pending.call.id);
             }
