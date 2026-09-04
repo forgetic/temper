@@ -720,6 +720,10 @@ mod tests {
         include!("lineage_active_root_handoff.rs");
     }
 
+    mod active_root_execution {
+        include!("lineage_active_root_execution.rs");
+    }
+
     mod candidates {
         use super::*;
         include!("lineage_candidates.rs");
