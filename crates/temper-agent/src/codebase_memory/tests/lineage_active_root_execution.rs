@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use temper_agent_core::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ToolCallDenial,
-    ToolFailureCategory, ToolFailureDiagnostic, ToolInvocationCatalog,
-    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    ToolFailureDiagnostic, ToolInvocationCatalog, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 use temper_agent_io::{EngineTime, Machine};
 use temper_protocol_activity::{
-    DecisionAnchorLineageV1, DecisionEvidenceKindV1, GraphRecoveryReferenceDispositionV1,
+    DecisionAnchorLineageV1, DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1,
+    GraphRecoveryReferenceDispositionV1,
 };
 use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode};
 use tongs::model::{
@@ -367,15 +367,18 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
         assert!(!correction.contains("include_neighbors"));
         assert!(!correction.contains("decision_anchor_recovery_exhausted"));
 
-        let missing_purpose = complete_llm(
+        let wrong_purpose = complete_llm(
             &mut machine,
             assistant(vec![(
-                "missing-purpose",
+                "wrong-purpose",
                 "codebase_memory_get_code_snippet",
-                serde_json::json!({"qualified_name":active_reference}),
+                serde_json::json!({
+                    "qualified_name":active_reference,
+                    "decision_evidence_kind":"caller"
+                }),
             )]),
         );
-        assert!(missing_purpose.iter().any(|request| matches!(
+        assert!(wrong_purpose.iter().any(|request| matches!(
             request,
             AgentRequest::Emit(AgentEvent::ToolStart {
                 id,
@@ -383,35 +386,14 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
                     GraphRecoveryReferenceDispositionV1::Rejected
                 ),
                 ..
-            }) if id == "missing-purpose"
+            }) if id == "wrong-purpose"
         )));
-        let missing_call = missing_purpose
-            .iter()
-            .find_map(|request| match request {
-                AgentRequest::RunTool {
-                    call,
-                    denial: None,
-                    rejection: None,
-                    ..
-                } if call.id == "missing-purpose" => Some(call.clone()),
-                _ => None,
-            })
-            .expect("a schema-valid incomplete handoff reaches wrapper validation");
-        let source = registry
-            .get("codebase_memory_get_code_snippet")
-            .unwrap();
-        let missing_output = source
-            .execute(&missing_call.id, missing_call.arguments, None)
-            .await
-            .unwrap();
-        assert!(missing_output.is_error);
+        let wrong_failure = local_failure(&wrong_purpose, "wrong-purpose");
         let correction = complete_tool(
             &mut machine,
-            "missing-purpose",
-            missing_output,
-            Some(ToolFailureDiagnostic::codebase_memory(
-                ToolFailureCategory::InvalidModelInput,
-            )),
+            "wrong-purpose",
+            failed_output(),
+            Some(wrong_failure),
         );
         let correction = active_handoff(&correction);
         assert_eq!(handoff_reference(correction), active_reference);

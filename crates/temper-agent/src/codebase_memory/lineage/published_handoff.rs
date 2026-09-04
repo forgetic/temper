@@ -60,6 +60,61 @@ impl DecisionAnchorLineageRegistry {
         })
     }
 
+    /// Infers the source purpose only for the exact opaque source handoff
+    /// currently published for the selected root. Raw, sibling, stale, and
+    /// structurally incompatible calls remain ineligible.
+    pub(super) fn published_source_evidence_kind(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+        evidence_kind: Option<DecisionEvidenceKindV1>,
+    ) -> Option<DecisionEvidenceKindV1> {
+        let references = arguments
+            .as_object()?
+            .values()
+            .filter_map(Value::as_str)
+            .filter(|value| value.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX))
+            .collect::<Vec<_>>();
+        let handoff = self
+            .published_handoff
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let handoff = handoff.as_ref()?;
+        let kind = match handoff.action.evidence_kind {
+            GraphRecoveryEvidenceKindV1::Implementation => DecisionEvidenceKindV1::Implementation,
+            GraphRecoveryEvidenceKindV1::Caller => DecisionEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest if !handoff.action.include_tests => {
+                DecisionEvidenceKindV1::FocusedTest
+            }
+            GraphRecoveryEvidenceKindV1::Trace | GraphRecoveryEvidenceKindV1::FocusedTest => {
+                return None;
+            }
+        };
+        (references.len() == 1
+            && handoff.action.is_valid()
+            && handoff.action.tool == GraphCorrelationToolV1::GetCodeSnippet
+            && handoff.action.selector_kind == DecisionAnchorTargetKindV1::QualifiedName
+            && handoff.action.tool.public_name() == tool_name
+            && active_root.is_none_or(|root| root == handoff.root_binding)
+            && references[0] == handoff.reference
+            && action_matches(handoff.action, &handoff.reference, arguments, evidence_kind))
+        .then_some(kind)
+    }
+
+    pub(super) fn published_source_arguments(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> Option<Value> {
+        let kind = self.published_source_evidence_kind(tool_name, arguments, active_root, None)?;
+        let mut inferred = arguments.clone();
+        inferred["decision_evidence_kind"] =
+            serde_json::to_value(kind).expect("closed evidence kind serializes");
+        Some(inferred)
+    }
+
     /// Replaces an exact provider-returned selector with its opaque identity
     /// only inside the wrapper invocation. The raw value is never projected
     /// into diagnostics or durable lineage.
@@ -215,7 +270,7 @@ fn action_matches(
                     .and_then(|value| serde_json::from_value(value).ok())
             });
             object.get("qualified_name").and_then(Value::as_str) == Some(reference)
-                && declared.is_some_and(|kind: DecisionEvidenceKindV1| {
+                && declared.is_none_or(|kind: DecisionEvidenceKindV1| {
                     matches!(
                         (kind, action.evidence_kind),
                         (

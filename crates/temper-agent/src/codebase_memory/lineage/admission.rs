@@ -111,6 +111,11 @@ impl DecisionAnchorLineageRegistry {
         } else {
             false
         };
+        if !canonicalized_raw {
+            effective_evidence_kind = effective_evidence_kind.or_else(|| {
+                self.published_source_evidence_kind(tool_name, input, None, effective_evidence_kind)
+            });
+        }
         if !canonicalized_raw
             && self
                 .published_reference_disposition(tool_name, input, None, effective_evidence_kind)
@@ -190,6 +195,8 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
         {
             return raw_admission;
         }
+        let inferred_arguments = self.published_source_arguments(tool_name, arguments, active_root);
+        let arguments = inferred_arguments.as_ref().unwrap_or(arguments);
         let (outcome, disposition) = self
             .lineages
             .lock()
