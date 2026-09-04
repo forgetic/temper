@@ -4,11 +4,16 @@ use crate::LineageAdmissionOutcome;
 
 use super::*;
 
+pub(super) struct ForestRootSelection {
+    pub(super) active_root: String,
+    pub(super) route: RecoveryRoute,
+}
+
 impl DecisionAnchorState {
     pub(super) fn promote_unique_forest_root(
         &mut self,
         admissions: &[Option<LineageAdmissionOutcome>],
-    ) -> bool {
+    ) -> Result<Option<ForestRootSelection>, ()> {
         let selections = admissions
             .iter()
             .filter_map(|outcome| match outcome {
@@ -29,18 +34,33 @@ impl DecisionAnchorState {
             })
             .collect::<Vec<_>>();
         let [(root, action)] = selections.as_slice() else {
-            return selections.is_empty();
+            return if selections.is_empty() {
+                Ok(None)
+            } else {
+                Err(())
+            };
         };
-        self.promote_forest_root(root, [*action])
+        let persist = !matches!(
+            self.phase.as_ref(),
+            Some(AnchorPhase::Root(_) | AnchorPhase::Trail(_))
+        ) || self.exploration != ExplorationStatus::Open;
+        let route = self
+            .promote_forest_root(root, [*action], persist)
+            .ok_or(())?;
+        Ok(Some(ForestRootSelection {
+            active_root: root.clone(),
+            route,
+        }))
     }
 
     fn promote_forest_root(
         &mut self,
         root: &str,
         actions: impl IntoIterator<Item = GraphRecoveryActionV1>,
-    ) -> bool {
+        persist: bool,
+    ) -> Option<RecoveryRoute> {
         let actions = actions.into_iter().collect::<BTreeSet<_>>();
-        let Some(route) = actions
+        let route = actions
             .iter()
             .next()
             .map(|action| match action.evidence_kind {
@@ -48,10 +68,7 @@ impl DecisionAnchorState {
                 GraphRecoveryEvidenceKindV1::Trace
                 | GraphRecoveryEvidenceKindV1::Implementation
                 | GraphRecoveryEvidenceKindV1::Caller => RecoveryRoute::Implementation,
-            })
-        else {
-            return false;
-        };
+            })?;
         if actions.iter().any(|action| {
             let candidate_route = match action.evidence_kind {
                 GraphRecoveryEvidenceKindV1::FocusedTest => RecoveryRoute::FocusedTest,
@@ -61,7 +78,7 @@ impl DecisionAnchorState {
             };
             candidate_route != route
         }) {
-            return false;
+            return None;
         }
         let admissible = match self.phase.as_ref() {
             Some(AnchorPhase::Root(anchors)) | Some(AnchorPhase::Trail(anchors)) => {
@@ -92,13 +109,16 @@ impl DecisionAnchorState {
             | None => false,
         };
         if !admissible {
-            return false;
+            return None;
+        }
+        if !persist {
+            return Some(route);
         }
         let phase = self
             .phase
             .take()
             .expect("an admissible forest is installed");
-        let promoted = match phase {
+        let mut promoted = match phase {
             AnchorPhase::Root(anchors)
             | AnchorPhase::Trail(anchors)
             | AnchorPhase::Recovery(Recovery { anchors, .. }) => {
@@ -123,8 +143,11 @@ impl DecisionAnchorState {
                 unreachable!("terminal phases are not admissible")
             }
         };
+        promoted
+            .anchors
+            .mark_parallel_recovery(root, promoted.route);
         self.phase = Some(AnchorPhase::GapRecovery(promoted));
         self.exploration = ExplorationStatus::GapRecovery;
-        true
+        Some(route)
     }
 }

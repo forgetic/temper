@@ -9,6 +9,7 @@ use temper_protocol_activity::{
 
 use super::{
     DecisionAnchorLineageRegistry, ExpandedRecoverySelector, RECOVERY_SELECTOR_REFERENCE_PREFIX,
+    raw_selector::ExactRawSelectorError,
 };
 
 #[derive(Clone)]
@@ -69,28 +70,26 @@ impl DecisionAnchorLineageRegistry {
         active_root: Option<&str>,
         evidence_kind: Option<DecisionEvidenceKindV1>,
     ) -> Result<Option<CanonicalPublishedRawSelector>, ()> {
-        let handoff = self
+        if self
             .published_handoff
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        let Some(handoff) = handoff else {
+            .is_none()
+        {
             return Ok(None);
-        };
+        }
         let lineages = self
             .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(selected) =
-            lineages.exact_raw_selector(tool_name, arguments, evidence_kind, true)?
-        else {
-            return Ok(None);
+        let selected = match lineages.exact_raw_selector(tool_name, arguments, evidence_kind, true)
+        {
+            Ok(Some(selected)) => selected,
+            Ok(None) | Err(ExactRawSelectorError::ActiveRootTraceFallback) => return Ok(None),
+            Err(ExactRawSelectorError::Invalid) => return Err(()),
         };
-        if !handoff.action.is_valid()
-            || active_root.is_some_and(|root| root != handoff.root_binding)
-            || selected.reference != handoff.reference
-            || selected.root_binding != handoff.root_binding
-            || selected.action != handoff.action
+        if !selected.action.is_valid()
+            || active_root.is_some_and(|root| root != selected.root_binding)
         {
             return Err(());
         }
@@ -116,8 +115,8 @@ impl DecisionAnchorLineageRegistry {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match lineages.exact_raw_selector(tool_name, arguments, None, false) {
                 Ok(Some(selected)) => selected,
-                Ok(None) => return None,
-                Err(()) => {
+                Ok(None) | Err(ExactRawSelectorError::ActiveRootTraceFallback) => return None,
+                Err(ExactRawSelectorError::Invalid) => {
                     return Some((
                         LineageAdmissionOutcome::Ineligible(
                             LineageAdmissionStatus::MalformedSelector,
@@ -133,22 +132,6 @@ impl DecisionAnchorLineageRegistry {
             && arguments.get("decision_evidence_kind").is_some()
         {
             return None;
-        }
-        if !selects_different_root && selected.reference_required {
-            let published = self
-                .published_handoff
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if !published.as_ref().is_some_and(|handoff| {
-                handoff.root_binding == selected.root_binding
-                    && handoff.action == selected.action
-                    && handoff.reference == selected.reference
-            }) {
-                return Some((
-                    LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector),
-                    Some(GraphRecoveryReferenceDispositionV1::Rejected),
-                ));
-            }
         }
         let canonical = selected.canonical_arguments(arguments);
         let outcome = self

@@ -102,17 +102,21 @@ impl DecisionAnchorLineageRegistry {
         evidence_kind: Option<DecisionEvidenceKindV1>,
     ) -> Result<Option<ExpandedRecoverySelector>, ()> {
         let mut effective_evidence_kind = evidence_kind;
-        if let Some(canonical) =
+        let canonicalized_raw = if let Some(canonical) =
             self.canonical_published_raw_selector(tool_name, input, None, evidence_kind)?
         {
             *input = canonical.arguments;
             effective_evidence_kind = canonical.evidence_kind;
-        }
-        if self
-            .published_reference_disposition(tool_name, input, None, effective_evidence_kind)
-            .is_some_and(|disposition| {
-                disposition != GraphRecoveryReferenceDispositionV1::Recognized
-            })
+            true
+        } else {
+            false
+        };
+        if !canonicalized_raw
+            && self
+                .published_reference_disposition(tool_name, input, None, effective_evidence_kind)
+                .is_some_and(|disposition| {
+                    disposition != GraphRecoveryReferenceDispositionV1::Recognized
+                })
         {
             return Err(());
         }

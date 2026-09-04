@@ -237,6 +237,20 @@ impl AnchorForest {
             .map(|(binding, route)| (binding.clone(), route))
     }
 
+    pub(super) fn mark_parallel_recovery(&mut self, active_root: &str, route: RecoveryRoute) {
+        if route == RecoveryRoute::Implementation
+            && self.roots.iter().any(|(binding, root)| {
+                binding != active_root && root.evidence.focused_test_is_complete()
+            })
+        {
+            let active = self
+                .roots
+                .get_mut(active_root)
+                .expect("the selected recovery root remains installed");
+            active.evidence.trace_before_implementation = true;
+        }
+    }
+
     pub(super) fn has_compatible_actions(&self) -> bool {
         self.active_selection(&BTreeSet::new()).is_some()
     }
