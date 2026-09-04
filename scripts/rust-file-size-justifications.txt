@@ -97,6 +97,10 @@ crates/temper-forge-forgejo/tests/issues.rs
 # Argument parser matrix tests are table-like and mostly assertion fixtures.
 crates/temper-testing/src/worker_bin/args_parse_tests.rs
 
+# Invocation canonicalization keeps schema closure, alias normalization, scrubbed
+# graph classification, and JSON-schema enforcement at one privacy boundary.
+crates/temper-agent-core/src/invocation.rs
+
 # Decision-anchor recovery diagnostics share opaque-root fixtures and transition
 # helpers so missing-kind, allowance, exhaustion, and convergence assertions cannot drift.
 crates/temper-agent-core/src/machine/tests/decision_anchor_recovery.rs

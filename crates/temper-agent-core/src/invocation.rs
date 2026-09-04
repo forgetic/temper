@@ -193,31 +193,41 @@ impl ToolInvocationCatalog {
     }
 
     /// Canonicalizes every tool block in one assistant turn and returns typed
-    /// local failures plus content-free incomplete traversal kinds keyed by call id.
+    /// local failures plus content-free rejected graph kinds keyed by call id.
     pub(crate) fn canonicalize_message(
         &self,
         assistant: &mut AssistantMessage,
     ) -> (
         BTreeMap<String, ToolFailureDiagnostic>,
         BTreeMap<String, GraphCorrelationToolV1>,
+        BTreeMap<String, GraphCorrelationToolV1>,
     ) {
         let mut rejections = BTreeMap::new();
         let mut incomplete_graph_selectors = BTreeMap::new();
+        let mut rejected_graph_tools = BTreeMap::new();
         let api = assistant.api.clone();
         for block in &mut assistant.content {
             let ContentBlock::ToolCall(call) = block else {
                 continue;
             };
+            let rejected_graph_tool = self
+                .resolve_name(&api, &call.name)
+                .and_then(GraphCorrelationToolV1::from_public_name);
             let normalized = self.canonicalize(&api, call.clone());
             *call = normalized.call;
             if let Some(tool) = normalized.incomplete_graph_selector {
                 incomplete_graph_selectors.insert(call.id.clone(), tool);
             }
+            if normalized.rejection.is_some() {
+                if let Some(tool) = rejected_graph_tool {
+                    rejected_graph_tools.insert(call.id.clone(), tool);
+                }
+            }
             if let Some(rejection) = normalized.rejection {
                 rejections.insert(call.id.clone(), rejection);
             }
         }
-        (rejections, incomplete_graph_selectors)
+        (rejections, incomplete_graph_selectors, rejected_graph_tools)
     }
 
     fn resolve_name(&self, api: &str, supplied: &str) -> Option<&str> {

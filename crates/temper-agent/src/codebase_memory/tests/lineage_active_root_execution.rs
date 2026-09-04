@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::sync::Arc;
 
 use temper_agent_core::{
@@ -13,7 +14,41 @@ use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode};
 use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, ToolCall, Usage, UserContent, UserMessage,
 };
-use tongs::tools::{ToolOutput, ToolRegistry};
+use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolRegistry, ToolUpdate};
+
+struct BlockedMutationTool;
+
+#[async_trait]
+impl Tool for BlockedMutationTool {
+    fn name(&self) -> &str {
+        "write"
+    }
+
+    fn description(&self) -> &str {
+        "test-only mutation"
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"]
+        })
+    }
+
+    fn effects(&self) -> ToolEffects {
+        ToolEffects::write()
+    }
+
+    async fn execute(
+        &self,
+        _: &str,
+        _: serde_json::Value,
+        _: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
+    ) -> tongs::Result<ToolOutput> {
+        unreachable!("the incomplete-evidence guard rejects this mutation")
+    }
+}
 
 const REFERENCE_PREFIX: &str = "temper-recovery-selector:";
 
@@ -193,7 +228,9 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
         .await
         .unwrap();
         let admission = toolset.lineage_admission().unwrap();
-        let registry = ToolRegistry::from_tools(toolset.into_tools());
+        let mut tools = toolset.into_tools();
+        tools.push(Box::new(BlockedMutationTool));
+        let registry = ToolRegistry::from_tools(tools);
         let catalog = Arc::new(ToolInvocationCatalog::from_registry(&registry).unwrap());
         let mut machine = AgentMachine::with_invocation_catalog(
             vec![Message::User(UserMessage {
@@ -219,6 +256,11 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
                     "codebase_memory_search_graph",
                     serde_json::json!({"query":"sibling routing implementation"}),
                 ),
+                (
+                    "blocked-mutation",
+                    "write",
+                    serde_json::json!({"path":"demo/src/route.rs","content":"changed"}),
+                ),
             ]),
         );
         let active_call = dispatched_call(&roots, "active-root");
@@ -240,8 +282,23 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             .unwrap();
         let active_root = lineage(&active_output);
         let active_references = references(&active_output);
-        let selected = complete_tool(&mut machine, "active-root", active_output, None);
+        let blocked = complete_tool(&mut machine, "active-root", active_output, None);
         assert_ne!(active_root.root_binding, sibling_root.root_binding);
+        assert!(blocked.iter().any(|request| matches!(
+            request,
+            AgentRequest::RunTool {
+                call,
+                denial: Some(ToolCallDenial::DecisionAnchorMutation),
+                rejection: None,
+                ..
+            } if call.id == "blocked-mutation"
+        )));
+        let selected = complete_tool(
+            &mut machine,
+            "blocked-mutation",
+            failed_output(),
+            Some(ToolFailureDiagnostic::policy_denial()),
+        );
         let handoff = active_handoff(&selected);
         let active_reference = handoff_reference(handoff).to_string();
         assert_eq!(active_reference, active_references[0]);
@@ -253,6 +310,53 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
         ] {
             assert!(!handoff.contains(private));
         }
+
+        let raw = complete_llm(
+            &mut machine,
+            assistant(vec![(
+                "raw-source",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name":"worker_slot",
+                    "decision_evidence_kind":"implementation",
+                    "include_neighbors":"invalid"
+                }),
+            )]),
+        );
+        let raw_failure = local_failure(&raw, "raw-source");
+        assert!(raw.iter().any(|request| matches!(
+            request,
+            AgentRequest::Emit(AgentEvent::ToolStart {
+                id,
+                recovery_reference_disposition: None,
+                ..
+            }) if id == "raw-source"
+        )));
+        assert!(raw.iter().any(|request| matches!(
+            request,
+            AgentRequest::RunTool {
+                call,
+                denial: None,
+                rejection: Some(_),
+                ..
+            } if call.id == "raw-source"
+        )));
+        let correction = complete_tool(
+            &mut machine,
+            "raw-source",
+            failed_output(),
+            Some(raw_failure),
+        );
+        let correction = active_handoff(&correction);
+        assert_eq!(handoff_reference(correction), active_reference);
+        assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 1);
+        assert!(correction.contains("codebase_memory_get_code_snippet"));
+        assert!(correction.contains("selector field=qualified_name"));
+        assert!(!correction.contains("worker_slot"));
+        assert!(!correction.contains(&sibling_references[0]));
+        assert!(!correction.contains(&active_references[1]));
+        assert!(!correction.contains("include_neighbors"));
+        assert!(!correction.contains("decision_anchor_recovery_exhausted"));
 
         let missing_purpose = complete_llm(
             &mut machine,
@@ -307,10 +411,6 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
         let fabricated = "temper-recovery-selector:00000000-0000-4000-8000-000000000099";
         let alternate = active_references[1].clone();
         let negatives = [
-            (
-                "raw",
-                serde_json::json!({"qualified_name":"worker_slot","decision_evidence_kind":"implementation"}),
-            ),
             (
                 "alternate",
                 serde_json::json!({"qualified_name":alternate,"decision_evidence_kind":"implementation"}),
