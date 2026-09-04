@@ -23,6 +23,7 @@ mod candidate_projection;
 mod exact_narrowing;
 mod focused_test;
 mod published_handoff;
+mod raw_selector;
 mod recovery_record;
 mod recovery_selector;
 mod selection;

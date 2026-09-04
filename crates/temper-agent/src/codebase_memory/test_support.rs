@@ -235,7 +235,11 @@ for line in sys.stdin:
                     if rank < worker_rank:
                         results.append({"label": "Module", "file_path": f"src/{prefix}_{rank}.rs"})
                     else:
-                        symbol = "worker_slot" if rank == worker_rank else f"{prefix}_{rank}"
+                        symbol = (
+                            "worker_slot" if active and rank == worker_rank
+                            else "sibling_worker_slot" if rank == worker_rank
+                            else f"{prefix}_{rank}"
+                        )
                         results.append({
                             "name": symbol,
                             "qualified_name": symbol,

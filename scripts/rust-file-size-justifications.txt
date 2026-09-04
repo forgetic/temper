@@ -247,6 +247,10 @@ crates/temper-agent-core/src/machine/tests/decision_anchor.rs
 # exact-read route on one scripted provider/model fixture for comparable ordering.
 crates/temper-agent/tests/support/opaque_decision_chain/fake.rs
 
+# Active-root execution keeps the real wrapper, provider, machine, rejection
+# matrix, and one-call lineage assertions in a single production-seam flow.
+crates/temper-agent/src/codebase_memory/tests/lineage_active_root_execution.rs
+
 # Typed lineage extraction cases share provider-shape fixtures across canonical
 # aliases, ambiguity rejection, mirrored parts, and privacy-safe digest evidence.
 crates/temper-agent/src/codebase_memory/tests/lineage.rs
