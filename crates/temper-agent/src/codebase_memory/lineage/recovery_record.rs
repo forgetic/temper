@@ -7,11 +7,24 @@ use super::*;
 pub(in crate::codebase_memory) struct ExpandedRecoverySelector {
     pub(super) reference: String,
     pub(super) root_binding: String,
+    pub(super) decision_evidence_kind: Option<DecisionEvidenceKindV1>,
 }
 
 impl ExpandedRecoverySelector {
     pub(super) fn root_binding(&self) -> &str {
         &self.root_binding
+    }
+
+    pub(super) fn with_evidence_kind(
+        mut self,
+        decision_evidence_kind: Option<DecisionEvidenceKindV1>,
+    ) -> Self {
+        self.decision_evidence_kind = decision_evidence_kind;
+        self
+    }
+
+    pub(in crate::codebase_memory) fn evidence_kind(&self) -> Option<DecisionEvidenceKindV1> {
+        self.decision_evidence_kind
     }
 }
 

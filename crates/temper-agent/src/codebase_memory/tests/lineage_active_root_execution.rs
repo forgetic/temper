@@ -197,8 +197,7 @@ fn failed_output() -> ToolOutput {
     }
 }
 
-#[test]
-fn published_parallel_active_root_handoff_executes_once_at_the_production_boundary() {
+fn run_parallel_forest_raw_selection(reverse_completion: bool) {
     let server = crate::codebase_memory::tests::test_support::fake_server_script();
     let workspace = tempfile::tempdir().unwrap();
     let log_path = workspace.path().join("mcp.log");
@@ -280,15 +279,19 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             "sibling result omitted references: {}",
             crate::codebase_memory::tests::test_support::output_text(&sibling_output)
         );
-        assert!(complete_tool(&mut machine, "sibling-root", sibling_output, None).is_empty());
-
         let active_output = search
             .execute(&active_call.id, active_call.arguments, None)
             .await
             .unwrap();
         let active_root = lineage(&active_output);
         let active_references = references(&active_output);
-        let blocked = complete_tool(&mut machine, "active-root", active_output, None);
+        let blocked = if reverse_completion {
+            assert!(complete_tool(&mut machine, "sibling-root", sibling_output, None).is_empty());
+            complete_tool(&mut machine, "active-root", active_output, None)
+        } else {
+            assert!(complete_tool(&mut machine, "active-root", active_output, None).is_empty());
+            complete_tool(&mut machine, "sibling-root", sibling_output, None)
+        };
         assert_ne!(active_root.root_binding, sibling_root.root_binding);
         assert!(blocked.iter().any(|request| matches!(
             request,
@@ -423,11 +426,6 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
                 serde_json::json!({"qualified_name":alternate_reference,"decision_evidence_kind":"implementation"}),
             ),
             (
-                "alternate-candidate",
-                "codebase_memory_get_code_snippet",
-                serde_json::json!({"qualified_name":"active_8","decision_evidence_kind":"implementation"}),
-            ),
-            (
                 "normalized-not-exact",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({"qualified_name":"  worker_slot  ","decision_evidence_kind":"implementation"}),
@@ -441,11 +439,6 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
                 "unreturned",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({"qualified_name":"not_returned","decision_evidence_kind":"implementation"}),
-            ),
-            (
-                "sibling-selector",
-                "codebase_memory_get_code_snippet",
-                serde_json::json!({"qualified_name":SIBLING_PROVIDER_SELECTOR,"decision_evidence_kind":"implementation"}),
             ),
             (
                 "wrong-tool",
@@ -503,14 +496,68 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             .is_empty()
         );
 
+        let sibling_exact = complete_llm(
+            &mut machine,
+            assistant(vec![(
+                "exact-sibling",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": SIBLING_PROVIDER_SELECTOR
+                }),
+            )]),
+        );
+        let sibling_call = sibling_exact
+            .iter()
+            .find_map(|request| match request {
+                AgentRequest::RunTool {
+                    call,
+                    denial: None,
+                    rejection: None,
+                    ..
+                } if call.id == "exact-sibling" => Some(call.clone()),
+                _ => None,
+            })
+            .expect("the non-published root is atomically selected by its exact raw value");
+        let source = registry
+            .get("codebase_memory_get_code_snippet")
+            .unwrap();
+        let sibling_source_output = source
+            .execute(&sibling_call.id, sibling_call.arguments, None)
+            .await
+            .unwrap();
+        assert!(!sibling_source_output.is_error);
+        let sibling_source_lineage = lineage(&sibling_source_output);
+        assert_eq!(sibling_source_lineage.root_binding, sibling_root.root_binding);
+        assert_eq!(
+            sibling_source_lineage.decision_evidence_kind,
+            Some(DecisionEvidenceKindV1::Implementation)
+        );
+        assert_eq!(
+            crate::codebase_memory::tests::test_support::calls_named(
+                &log_path,
+                "get_code_snippet"
+            )
+            .len(),
+            1
+        );
+        let sibling_advanced =
+            complete_tool(&mut machine, "exact-sibling", sibling_source_output, None);
+        assert!(sibling_advanced.iter().any(|request| match request {
+            AgentRequest::CallLlm { messages, .. } => messages.iter().any(|message| matches!(
+                message,
+                Message::User(message) if matches!(&message.content, UserContent::Text(text)
+                    if text.contains("accepted evidence=[implementation]"))
+            )),
+            _ => false,
+        }));
+
         let exact = complete_llm(
             &mut machine,
             assistant(vec![(
                 "exact-active",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "qualified_name": ACTIVE_PROVIDER_SELECTOR,
-                    "decision_evidence_kind": "implementation"
+                    "qualified_name": ACTIVE_PROVIDER_SELECTOR
                 }),
             )]),
         );
@@ -535,9 +582,6 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
                 _ => None,
             })
             .expect("the exact published handoff reaches the provider");
-        let source = registry
-            .get("codebase_memory_get_code_snippet")
-            .unwrap();
         let source_output = source
             .execute(&exact_call.id, exact_call.arguments, None)
             .await
@@ -558,16 +602,26 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             &log_path,
             "get_code_snippet",
         );
-        assert_eq!(source_calls.len(), 1);
+        assert_eq!(source_calls.len(), 2);
         assert_eq!(
-            source_calls[0]["arguments"]["qualified_name"],
-            ACTIVE_PROVIDER_SELECTOR
+            source_calls
+                .iter()
+                .filter(|call| {
+                    call["arguments"]["qualified_name"] == SIBLING_PROVIDER_SELECTOR
+                })
+                .count(),
+            1
         );
-        assert!(
-            source_calls[0]["arguments"]
-                .get("decision_evidence_kind")
-                .is_none()
+        assert_eq!(
+            source_calls
+                .iter()
+                .filter(|call| call["arguments"]["qualified_name"] == ACTIVE_PROVIDER_SELECTOR)
+                .count(),
+            1
         );
+        assert!(source_calls.iter().all(|call| call["arguments"]
+            .get("decision_evidence_kind")
+            .is_none()));
 
         let advanced = complete_tool(&mut machine, "exact-active", source_output, None);
         assert!(advanced.iter().any(|request| match request {
@@ -634,7 +688,7 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
                 "get_code_snippet"
             )
             .len(),
-            1
+            2
         );
         assert!(!stale_done.iter().any(|request| matches!(
             request,
@@ -644,4 +698,14 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             }
         )));
     });
+}
+
+#[test]
+fn parallel_forest_raw_selection_is_stable_in_request_order_completion() {
+    run_parallel_forest_raw_selection(false);
+}
+
+#[test]
+fn parallel_forest_raw_selection_is_stable_in_reverse_completion() {
+    run_parallel_forest_raw_selection(true);
 }

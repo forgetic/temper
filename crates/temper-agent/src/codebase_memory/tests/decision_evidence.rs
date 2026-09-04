@@ -52,6 +52,16 @@ fn source_evidence_schema_and_lineage_are_closed_and_provider_private() {
             source_parameters["properties"]["decision_evidence_kind"]["enum"],
             json!(["implementation", "caller", "focused_test"])
         );
+        assert!(
+            !source_parameters["required"]
+                .as_array()
+                .is_some_and(|required| {
+                    required
+                        .iter()
+                        .any(|field| field == "decision_evidence_kind")
+                }),
+            "exact retained candidates may infer the wrapper-owned source purpose"
+        );
         for name in [
             "codebase_memory_search_graph",
             "codebase_memory_search_code",

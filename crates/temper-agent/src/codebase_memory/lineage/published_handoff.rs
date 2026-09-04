@@ -9,6 +9,7 @@ use temper_protocol_activity::{
 
 use super::{
     DecisionAnchorLineageRegistry, ExpandedRecoverySelector, RECOVERY_SELECTOR_REFERENCE_PREFIX,
+    raw_selector::ExactRawSelectorError,
 };
 
 #[derive(Clone)]
@@ -16,6 +17,11 @@ pub(super) struct PublishedRecoveryHandoff {
     pub(super) root_binding: String,
     pub(super) action: GraphRecoveryActionV1,
     pub(super) reference: String,
+}
+
+pub(super) struct CanonicalPublishedRawSelector {
+    pub(super) arguments: Value,
+    pub(super) evidence_kind: Option<DecisionEvidenceKindV1>,
 }
 
 impl DecisionAnchorLineageRegistry {
@@ -54,79 +60,43 @@ impl DecisionAnchorLineageRegistry {
         })
     }
 
-    /// Replaces an exact provider-returned selector with its active opaque
-    /// identity only inside the wrapper invocation. The selected value is
-    /// never projected into diagnostics or durable lineage.
+    /// Replaces an exact provider-returned selector with its opaque identity
+    /// only inside the wrapper invocation. The raw value is never projected
+    /// into diagnostics or durable lineage.
     pub(super) fn canonical_published_raw_selector(
         &self,
         tool_name: &str,
         arguments: &Value,
         active_root: Option<&str>,
         evidence_kind: Option<DecisionEvidenceKindV1>,
-    ) -> Result<Option<Value>, ()> {
-        let handoff = self
+    ) -> Result<Option<CanonicalPublishedRawSelector>, ()> {
+        if self
             .published_handoff
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        let Some(handoff) = handoff else {
+            .is_none()
+        {
             return Ok(None);
-        };
+        }
         let lineages = self
             .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(provider_value) = lineages
-            .provider_selector_for_reference(&handoff.reference, handoff.action.selector_kind)
-        else {
-            return Ok(None);
-        };
-        if !lineages
-            .published_selector_requires_reference(&handoff.reference, handoff.action.selector_kind)
+        let selected = match lineages.exact_raw_selector(tool_name, arguments, evidence_kind, true)
         {
-            return Ok(None);
-        }
-        let selector_fields = [
-            "query",
-            "name_pattern",
-            "qn_pattern",
-            "pattern",
-            "function_name",
-            "qualified_name",
-        ];
-        let exact_selected = selector_fields
-            .iter()
-            .any(|field| arguments.get(*field).and_then(Value::as_str) == Some(provider_value));
-        let expected_field = action_selector_field(handoff.action).ok_or(())?;
-        let requested_selector = arguments.get(expected_field).and_then(Value::as_str);
-        if !exact_selected {
-            return if requested_selector.is_some_and(|selector| {
-                lineages.raw_selector_conflicts_with_published(
-                    &handoff.reference,
-                    handoff.action,
-                    selector,
-                )
-            }) {
-                Err(())
-            } else {
-                Ok(None)
-            };
-        }
-        if !handoff.action.is_valid()
-            || handoff.action.tool.public_name() != tool_name
-            || active_root.is_some_and(|root| root != handoff.root_binding)
-            || !action_matches(handoff.action, provider_value, arguments, evidence_kind)
-            || !lineages.exact_provider_selector_is_unambiguous(
-                &handoff.reference,
-                handoff.action,
-                provider_value,
-            )
+            Ok(Some(selected)) => selected,
+            Ok(None) | Err(ExactRawSelectorError::ActiveRootTraceFallback) => return Ok(None),
+            Err(ExactRawSelectorError::Invalid) => return Err(()),
+        };
+        if !selected.action.is_valid()
+            || active_root.is_some_and(|root| root != selected.root_binding)
         {
             return Err(());
         }
-        let mut canonical = arguments.clone();
-        canonical[expected_field] = Value::String(handoff.reference);
-        Ok(Some(canonical))
+        Ok(Some(CanonicalPublishedRawSelector {
+            arguments: selected.canonical_arguments(arguments),
+            evidence_kind: selected.evidence_kind,
+        }))
     }
 
     pub(super) fn resolve_published_raw_admission(
@@ -138,11 +108,15 @@ impl DecisionAnchorLineageRegistry {
         LineageAdmissionOutcome,
         Option<GraphRecoveryReferenceDispositionV1>,
     )> {
-        let canonical =
-            match self.canonical_published_raw_selector(tool_name, arguments, active_root, None) {
-                Ok(Some(canonical)) => canonical,
-                Ok(None) => return None,
-                Err(()) => {
+        let selected = {
+            let lineages = self
+                .lineages
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match lineages.exact_raw_selector(tool_name, arguments, None, false) {
+                Ok(Some(selected)) => selected,
+                Ok(None) | Err(ExactRawSelectorError::ActiveRootTraceFallback) => return None,
+                Err(ExactRawSelectorError::Invalid) => {
                     return Some((
                         LineageAdmissionOutcome::Ineligible(
                             LineageAdmissionStatus::MalformedSelector,
@@ -150,14 +124,49 @@ impl DecisionAnchorLineageRegistry {
                         Some(GraphRecoveryReferenceDispositionV1::Rejected),
                     ));
                 }
-            };
+            }
+        };
+        let selects_different_root = active_root != Some(selected.root_binding.as_str());
+        if !selects_different_root
+            && !selected.reference_required
+            && arguments.get("decision_evidence_kind").is_some()
+        {
+            return None;
+        }
+        let canonical = selected.canonical_arguments(arguments);
         let outcome = self
             .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .resolve_for_active_root_with_recovery(tool_name, &canonical, active_root)
+            .resolve_for_active_root_with_recovery(
+                tool_name,
+                &canonical,
+                Some(&selected.root_binding),
+            )
             .0;
-        Some((outcome, None))
+        match outcome {
+            LineageAdmissionOutcome::Eligible(admission) => {
+                *self
+                    .published_handoff
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                    Some(PublishedRecoveryHandoff {
+                        root_binding: selected.root_binding,
+                        action: selected.action,
+                        reference: selected.reference,
+                    });
+                let admission = if selects_different_root {
+                    admission.with_forest_root_selection()
+                } else {
+                    admission
+                };
+                Some((LineageAdmissionOutcome::Eligible(admission), None))
+            }
+            LineageAdmissionOutcome::Ineligible(status) => Some((
+                LineageAdmissionOutcome::Ineligible(status),
+                Some(GraphRecoveryReferenceDispositionV1::Rejected),
+            )),
+        }
     }
 
     pub(super) fn clear_completed_handoff(&self, expanded: &ExpandedRecoverySelector) {
@@ -171,18 +180,6 @@ impl DecisionAnchorLineageRegistry {
         {
             *handoff = None;
         }
-    }
-}
-
-fn action_selector_field(action: GraphRecoveryActionV1) -> Option<&'static str> {
-    match (action.tool, action.selector_kind) {
-        (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => {
-            Some("qualified_name")
-        }
-        (GraphCorrelationToolV1::TracePath, DecisionAnchorTargetKindV1::FunctionName) => {
-            Some("function_name")
-        }
-        _ => None,
     }
 }
 

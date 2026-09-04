@@ -101,23 +101,34 @@ impl DecisionAnchorLineageRegistry {
         input: &mut Value,
         evidence_kind: Option<DecisionEvidenceKindV1>,
     ) -> Result<Option<ExpandedRecoverySelector>, ()> {
-        if let Some(canonical) =
+        let mut effective_evidence_kind = evidence_kind;
+        let canonicalized_raw = if let Some(canonical) =
             self.canonical_published_raw_selector(tool_name, input, None, evidence_kind)?
         {
-            *input = canonical;
-        }
-        if self
-            .published_reference_disposition(tool_name, input, None, evidence_kind)
-            .is_some_and(|disposition| {
-                disposition != GraphRecoveryReferenceDispositionV1::Recognized
-            })
+            *input = canonical.arguments;
+            effective_evidence_kind = canonical.evidence_kind;
+            true
+        } else {
+            false
+        };
+        if !canonicalized_raw
+            && self
+                .published_reference_disposition(tool_name, input, None, effective_evidence_kind)
+                .is_some_and(|disposition| {
+                    disposition != GraphRecoveryReferenceDispositionV1::Recognized
+                })
         {
             return Err(());
         }
-        self.lineages
+        let expanded = self
+            .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .expand_recovery_selector(tool_name, input, evidence_kind)
+            .expand_recovery_selector(tool_name, input, effective_evidence_kind)?;
+        if let Some(object) = input.as_object_mut() {
+            object.remove("decision_evidence_kind");
+        }
+        Ok(expanded.map(|expanded| expanded.with_evidence_kind(effective_evidence_kind)))
     }
 
     pub(crate) fn complete_candidate_reference(

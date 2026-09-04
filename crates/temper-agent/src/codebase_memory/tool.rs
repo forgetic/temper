@@ -109,6 +109,10 @@ impl Tool for CodebaseMemoryTool {
                 return Ok(self.failed_output("", ToolFailureCategory::InvalidModelInput, timings));
             }
         };
+        let decision_evidence_kind = expanded_recovery_reference
+            .as_ref()
+            .and_then(|expanded| expanded.evidence_kind())
+            .or(decision_evidence_kind);
         let record_recovery_expansion = |mut output: ToolOutput| {
             if expanded_recovery_reference.is_some() {
                 output.details.get_or_insert_with(|| json!({}))
