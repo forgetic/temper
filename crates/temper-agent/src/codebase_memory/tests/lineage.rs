@@ -722,6 +722,7 @@ mod tests {
 
     mod active_root_execution {
         include!("lineage_active_root_execution.rs");
+        include!("lineage_parallel_active_root_execution.rs");
     }
 
     mod candidates {

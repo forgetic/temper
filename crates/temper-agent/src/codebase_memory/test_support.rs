@@ -226,7 +226,7 @@ for line in sys.stdin:
                 tool_result(request["id"], "exploration_closed", True)
             elif mode == "graph-systemic":
                 tool_result(request["id"], "provider protocol is unusable SECRET", True)
-            elif mode == "active-root-handoff" and name == "search_graph":
+            elif mode in ("active-root-handoff", "active-root-overlap-handoff") and name == "search_graph":
                 active = args.get("query") == "active routing implementation"
                 worker_rank = 7 if active else 5
                 prefix = "active" if active else "sibling"
@@ -237,20 +237,26 @@ for line in sys.stdin:
                     else:
                         symbol = (
                             "worker_slot" if active and rank == worker_rank
+                            else "worker_slot" if mode == "active-root-overlap-handoff" and rank == worker_rank
                             else "sibling_worker_slot" if rank == worker_rank
                             else f"{prefix}_{rank}"
                         )
-                        results.append({
+                        result = {
                             "name": symbol,
                             "qualified_name": symbol,
                             "label": "Function",
                             "file_path": "src/route.rs",
-                        })
+                        }
+                        if mode == "active-root-overlap-handoff" and rank == 70:
+                            result["is_test"] = True
+                            result["file_path"] = "tests/route.rs"
+                        results.append(result)
                 payload = {"total": 70, "has_more": False, "results": results}
                 tool_result(request["id"], json.dumps(payload), structured=payload)
-            elif mode == "active-root-handoff" and name == "get_code_snippet":
+            elif mode in ("active-root-handoff", "active-root-overlap-handoff") and name == "get_code_snippet":
                 symbol = args.get("qualified_name")
-                if symbol not in ("worker_slot", "sibling_worker_slot"):
+                expected = ("worker_slot",) if mode == "active-root-overlap-handoff" else ("worker_slot", "sibling_worker_slot")
+                if symbol not in expected:
                     tool_result(request["id"], "invalid argument", True)
                 else:
                     payload = {

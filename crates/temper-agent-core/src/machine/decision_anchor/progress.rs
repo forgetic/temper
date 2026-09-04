@@ -375,10 +375,7 @@ pub(in crate::machine) fn active_root_selector_handoff(
     let (selector_field, arguments) = match (action.tool, action.selector_kind) {
         (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => (
             "qualified_name",
-            format!(
-                "{{\"qualified_name\":\"{reference}\",\"decision_evidence_kind\":\"{}\"}}",
-                action.evidence_kind.as_str(),
-            ),
+            format!("{{\"qualified_name\":\"{reference}\"}}"),
         ),
         (GraphCorrelationToolV1::TracePath, DecisionAnchorTargetKindV1::FunctionName) => (
             "function_name",
