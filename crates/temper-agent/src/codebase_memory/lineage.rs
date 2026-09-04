@@ -22,6 +22,7 @@ mod admission;
 mod candidate_projection;
 mod exact_narrowing;
 mod focused_test;
+mod recovery_record;
 mod recovery_selector;
 mod selection;
 mod target;
@@ -30,9 +31,10 @@ pub(super) use admission::DecisionAnchorLineageRegistry;
 use candidate_projection::{CandidateCollection, provider_candidates};
 use exact_narrowing::{ExactGraphSelector, PendingExactGraphNarrowing};
 use focused_test::{FocusedTestDiscovery, SelectorOrigin, focused_test_discovery};
+use recovery_record::ExpandedRecoverySelector;
 use recovery_selector::{
-    CandidateRecovery, ExpandedRecoverySelector, RECOVERY_SELECTOR_REFERENCE_PREFIX,
-    RecoverySelectorKey, RecoverySelectorPurpose, RecoverySelectorReference, RecoverySelectorState,
+    CandidateRecovery, RECOVERY_SELECTOR_REFERENCE_PREFIX, RecoverySelectorKey,
+    RecoverySelectorPurpose, RecoverySelectorReference, RecoverySelectorState,
 };
 use selection::{
     ImplementationTraversalEvidence, canonical_function_name, canonical_qualified_name,
@@ -45,6 +47,9 @@ use selection::{
 pub(super) struct DecisionAnchorLineages {
     /// `None` marks a value offered by more than one root; it cannot advance either root.
     selectors: BTreeMap<Selector, Option<SelectorBinding>>,
+    /// Root-qualified bindings preserve opaque-reference authority when the
+    /// same provider selector is independently returned by parallel roots.
+    root_selectors: BTreeMap<(String, Selector), SelectorBinding>,
     recovery_references: BTreeMap<RecoverySelectorKey, Vec<String>>,
     recovery_reference_selectors: BTreeMap<String, RecoverySelectorReference>,
     exact_graph_selectors: BTreeMap<ExactGraphSelector, BTreeMap<String, Option<BTreeSet<String>>>>,
@@ -102,12 +107,30 @@ impl DecisionAnchorLineages {
     }
 
     /// Records lineage with an optional wrapper-validated source purpose.
+    #[cfg(test)]
     pub(super) fn record_with_evidence_kind(
         &mut self,
         correlation: &GraphCorrelationV1,
         input: &Value,
         typed_parts: Option<&[McpToolResultPart]>,
         decision_evidence_kind: Option<DecisionEvidenceKindV1>,
+    ) -> Option<DecisionAnchorLineageV1> {
+        self.record_with_recovery_root(
+            correlation,
+            input,
+            typed_parts,
+            decision_evidence_kind,
+            None,
+        )
+    }
+
+    fn record_with_recovery_root(
+        &mut self,
+        correlation: &GraphCorrelationV1,
+        input: &Value,
+        typed_parts: Option<&[McpToolResultPart]>,
+        decision_evidence_kind: Option<DecisionEvidenceKindV1>,
+        recovery_root: Option<&str>,
     ) -> Option<DecisionAnchorLineageV1> {
         if !correlation.is_valid() {
             return None;
@@ -131,7 +154,13 @@ impl DecisionAnchorLineages {
             .or_else(|| {
                 input_selector
                     .as_ref()
-                    .and_then(|selector| self.selectors.get(selector).cloned().flatten())
+                    .and_then(|selector| match recovery_root {
+                        Some(root) => self
+                            .root_selectors
+                            .get(&(root.to_string(), selector.clone()))
+                            .cloned(),
+                        None => self.selectors.get(selector).cloned().flatten(),
+                    })
             });
         let admitted_evidence_kind = self.admitted_evidence_kind(
             decision_evidence_kind,

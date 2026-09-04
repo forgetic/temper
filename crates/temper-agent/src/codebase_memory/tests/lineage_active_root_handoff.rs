@@ -1,5 +1,4 @@
-#[test]
-fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
+fn run_active_root_handoff(reverse_completion: bool, exhaust_active_candidate: bool) {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -24,15 +23,36 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
 
     fn projected_results(prefix: &str) -> serde_json::Value {
         serde_json::json!({
-            "total": 15,
+            "total": 13,
             "has_more": false,
-            "results": (1..=15)
-                .map(|rank| serde_json::json!({
-                    "name": format!("{prefix}_{rank}"),
-                    "qualified_name": format!("crate::{prefix}::{prefix}_{rank}"),
-                    "label": "Function",
-                    "file_path": "src/route.rs",
-                }))
+            "results": (1..=13)
+                .map(|rank| {
+                    if rank <= 2 {
+                        serde_json::json!({
+                            "label": "Module",
+                            "file_path": format!("src/{prefix}_{rank}.rs"),
+                        })
+                    } else {
+                        let name = if (prefix == "active" && rank == 6)
+                            || (prefix == "sibling" && rank == 3)
+                        {
+                            "worker_slot".to_string()
+                        } else {
+                            format!("{prefix}_{rank}")
+                        };
+                        let qualified_name = if name == "worker_slot" {
+                            name.clone()
+                        } else {
+                            format!("crate::{prefix}::{name}")
+                        };
+                        serde_json::json!({
+                            "name": name,
+                            "qualified_name": qualified_name,
+                            "label": "Function",
+                            "file_path": "src/route.rs",
+                        })
+                    }
+                })
                 .collect::<Vec<_>>()
         })
     }
@@ -182,6 +202,31 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
             None,
         )
         .expect("valid projected active root");
+    let active_references = implementation_references(
+        &registry
+            .recovery_selector_guidance(&active)
+            .expect("active projected candidates"),
+    );
+    assert_eq!(active_references.len(), 4);
+
+    let classified = registry
+        .record_with_evidence_kind(
+            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+            &serde_json::json!({"qualified_name": "worker_slot"}),
+            Some(&structured_parts(serde_json::json!({
+                "name": "worker_slot",
+                "qualified_name": "worker_slot",
+                "source": "fn worker_slot() {}",
+            }))),
+            Some(DecisionEvidenceKindV1::Implementation),
+        )
+        .expect("provider rank 6 becomes the classified implementation result");
+    assert_eq!(classified.root_binding, active.root_binding);
+    assert_eq!(
+        classified.decision_evidence_kind,
+        Some(DecisionEvidenceKindV1::Implementation)
+    );
+
     let sibling_correlation = correlation(GraphCorrelationTargetKindV1::GraphQuery);
     let sibling_input = serde_json::json!({"query": "sibling routing implementation"});
     let sibling = registry
@@ -192,76 +237,46 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
             None,
         )
         .expect("valid projected sibling root");
-
-    let active_references = implementation_references(
-        &registry
-            .recovery_selector_guidance(&active)
-            .expect("active projected candidates"),
-    );
     let sibling_references = implementation_references(
         &registry
             .recovery_selector_guidance(&sibling)
             .expect("sibling projected candidates"),
     );
-    assert_eq!(active_references.len(), 4);
     assert_eq!(sibling_references.len(), 4);
 
-    let classified = registry
-        .record_with_evidence_kind(
-            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
-            &serde_json::json!({"qualified_name": "crate::active::active_7"}),
-            Some(&structured_parts(serde_json::json!({
-                "name": "active_7",
-                "qualified_name": "crate::active::active_7",
-                "source": "fn active_7() {}",
-            }))),
-            Some(DecisionEvidenceKindV1::Implementation),
-        )
-        .expect("rank 7 becomes the provider-classified implementation result");
-    assert_eq!(classified.root_binding, active.root_binding);
-    assert_eq!(
-        classified.decision_evidence_kind,
-        Some(DecisionEvidenceKindV1::Implementation)
-    );
-
     let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
-    registry
-        .record_with_evidence_kind(
-            &correlation(GraphCorrelationTargetKindV1::QualifiedName),
-            &serde_json::json!({"qualified_name": "crate::sibling::sibling_7"}),
-            Some(&structured_parts(serde_json::json!({
-                "name": "sibling_7",
-                "qualified_name": "crate::sibling::sibling_7",
-                "source": "fn sibling_7() {}",
-            }))),
-            Some(DecisionEvidenceKindV1::Implementation),
-        )
-        .expect("the sibling has one admission-valid candidate");
-    let sibling_selected = registry
-        .active_root_recovery_selector(&sibling.root_binding, action)
-        .expect("the sibling implementation reference is retained internally");
-    let mut sibling_provider_input = source_input(sibling_selected.as_public_selector());
-    let sibling_expanded = registry
-        .expand_recovery_selector(
-            action.tool.public_name(),
-            &mut sibling_provider_input,
-            Some(DecisionEvidenceKindV1::Implementation),
-        )
-        .unwrap()
-        .expect("the sibling reference can be consumed on only its own root");
-    assert_eq!(
-        sibling_provider_input["qualified_name"],
-        "crate::sibling::sibling_7"
-    );
-    registry
-        .complete_candidate_reference(&sibling_expanded, true)
-        .expect("the selected sibling candidate is closed");
+    let selected_candidate = registry
+        .active_root_recovery_selector(&active.root_binding, action)
+        .expect("the active root retains its rank-6 reference after sibling registration")
+        .as_public_selector()
+        .to_string();
+    assert_eq!(selected_candidate, active_references[3]);
     assert!(
         registry
             .active_root_recovery_selector(&sibling.root_binding, action)
-            .is_none(),
-        "a root whose remaining candidates are all incapable fails closed",
+            .is_some(),
+        "a sibling candidate remains available but cannot authorize the active root",
     );
+    if exhaust_active_candidate {
+        let mut provider_input = source_input(&selected_candidate);
+        let expanded = registry
+            .expand_recovery_selector(
+                action.tool.public_name(),
+                &mut provider_input,
+                Some(DecisionEvidenceKindV1::Implementation),
+            )
+            .unwrap()
+            .expect("the active candidate can be closed for the no-valid case");
+        registry
+            .complete_candidate_reference(&expanded, true)
+            .expect("the selected active candidate is closed");
+        assert!(
+            registry
+                .active_root_recovery_selector(&active.root_binding, action)
+                .is_none(),
+            "incapable active alternates remain fail closed",
+        );
+    }
 
     let effects = BTreeMap::from([
         (
@@ -314,23 +329,54 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
         2,
         "both projected roots are dispatched in one parallel read batch",
     );
-    assert!(
+    let selected = if reverse_completion {
+        assert!(
+            complete_tool(
+                &mut machine,
+                "sibling-root",
+                machine_output(&sibling_correlation, &sibling),
+                None,
+            )
+            .is_empty()
+        );
+        complete_tool(
+            &mut machine,
+            "active-root",
+            machine_output(&active_correlation, &active),
+            None,
+        )
+    } else {
+        assert!(
+            complete_tool(
+                &mut machine,
+                "active-root",
+                machine_output(&active_correlation, &active),
+                None,
+            )
+            .is_empty()
+        );
         complete_tool(
             &mut machine,
             "sibling-root",
             machine_output(&sibling_correlation, &sibling),
             None,
         )
-        .is_empty()
-    );
-    let selected = complete_tool(
-        &mut machine,
-        "active-root",
-        machine_output(&active_correlation, &active),
-        None,
-    );
+    };
+    if exhaust_active_candidate {
+        assert!(selected.iter().all(|request| match request {
+            AgentRequest::CallLlm { messages, .. } => messages.iter().all(|message| {
+                !matches!(message, Message::User(message)
+                    if matches!(&message.content, UserContent::Text(text)
+                        if text.contains("Active-root selector handoff")))
+            }),
+            _ => true,
+        }));
+        return;
+    }
     let selected_handoff = active_handoff(&selected);
     let selected_reference = handoff_reference(selected_handoff).to_string();
+    assert_eq!(selected_reference, selected_candidate);
+    assert_eq!(selected_reference, active_references[3]);
     assert_eq!(selected_handoff.matches(&selected_reference).count(), 1);
     assert_eq!(
         selected_handoff.matches(OPAQUE_REFERENCE_PREFIX).count(),
@@ -338,11 +384,14 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
     );
     assert!(selected_handoff.contains("codebase_memory_get_code_snippet"));
     assert!(selected_handoff.contains("selector field=qualified_name"));
-    assert!(!active_references.contains(&selected_reference));
-    for hidden in active_references.iter().chain(&sibling_references) {
+    for hidden in active_references
+        .iter()
+        .filter(|reference| *reference != &selected_reference)
+        .chain(&sibling_references)
+    {
         assert!(!selected_handoff.contains(hidden));
     }
-    for private in ["active_7", "sibling_1", "total", "has_more"] {
+    for private in ["worker_slot", "sibling_3", "total", "has_more"] {
         assert!(!selected_handoff.contains(private));
     }
 
@@ -352,7 +401,7 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
             (
                 "active-raw",
                 "codebase_memory_get_code_snippet",
-                source_input("crate::active::active_7"),
+                source_input("worker_slot"),
             ),
             (
                 "active-distractor",
@@ -434,7 +483,11 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
         selected_reference.as_str()
     );
     assert_eq!(resumed_handoff.matches(&selected_reference).count(), 1);
-    for hidden in active_references.iter().chain(&sibling_references) {
+    for hidden in active_references
+        .iter()
+        .filter(|reference| *reference != &selected_reference)
+        .chain(&sibling_references)
+    {
         assert!(!resumed_handoff.contains(hidden));
     }
 
@@ -476,17 +529,18 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
         )
         .unwrap()
         .expect("the admitted opaque handoff expands at provider dispatch");
-    assert_eq!(provider_input["qualified_name"], "crate::active::active_7");
+    assert_eq!(provider_input["qualified_name"], "worker_slot");
     let advanced = registry
-        .record_with_evidence_kind(
+        .record_with_expanded_recovery(
             &correlation(GraphCorrelationTargetKindV1::QualifiedName),
             &provider_input,
             Some(&structured_parts(serde_json::json!({
-                "name": "active_7",
-                "qualified_name": "crate::active::active_7",
-                "source": "fn active_7() {}",
+                "name": "worker_slot",
+                "qualified_name": "worker_slot",
+                "source": "fn worker_slot() {}",
             }))),
             Some(DecisionEvidenceKindV1::Implementation),
+            Some(&expanded),
         )
         .expect("the exact admitted handoff advances implementation evidence");
     registry
@@ -515,4 +569,19 @@ fn active_root_handoff_selects_the_first_admission_valid_provider_candidate() {
         }),
         _ => false,
     }));
+}
+
+#[test]
+fn active_root_handoff_selects_the_first_presented_admission_valid_provider_candidate() {
+    run_active_root_handoff(false, false);
+}
+
+#[test]
+fn active_root_handoff_is_stable_when_parallel_roots_complete_in_reverse() {
+    run_active_root_handoff(true, false);
+}
+
+#[test]
+fn active_root_without_a_valid_presented_candidate_does_not_borrow_from_its_sibling() {
+    run_active_root_handoff(true, true);
 }

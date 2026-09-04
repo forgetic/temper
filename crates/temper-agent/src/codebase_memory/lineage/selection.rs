@@ -88,7 +88,7 @@ impl DecisionAnchorLineages {
             binding.is_some_and(|binding| match kind {
                 DecisionEvidenceKindV1::Implementation => {
                     binding.implementation_evidence_result
-                        || !self.selectors.values().flatten().any(|candidate| {
+                        || !self.root_selectors.values().any(|candidate| {
                             candidate.root_binding == binding.root_binding
                                 && candidate.implementation_evidence_result
                         })
@@ -117,6 +117,20 @@ impl DecisionAnchorLineages {
                 kind: candidate.kind,
                 value: candidate.value,
             };
+            let mut root_binding =
+                SelectorBinding::new(root.to_string(), canonical_target_digests.clone());
+            root_binding.recovery_reference_required = recovery_reference_required;
+            match self
+                .root_selectors
+                .entry((root.to_string(), selector.clone()))
+            {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(root_binding);
+                }
+                std::collections::btree_map::Entry::Occupied(entry)
+                    if entry.get().canonical_target_digests == canonical_target_digests => {}
+                std::collections::btree_map::Entry::Occupied(_) => return None,
+            }
             match self.selectors.get(&selector) {
                 None => {
                     let mut binding =
@@ -146,38 +160,37 @@ impl DecisionAnchorLineages {
         trace_provider_value: Option<&str>,
     ) -> Option<()> {
         let selector = self.selector_for_input(target_kind, input)?;
-        let binding = self.selectors.get(&selector)?.as_ref()?;
-        (binding.root_binding == root).then_some(())?;
+        let binding = self
+            .root_selectors
+            .get(&(root.to_string(), selector.clone()))?;
         let identity_digests = binding.canonical_target_digests.clone();
         let equivalents = self
-            .selectors
+            .root_selectors
             .iter()
-            .filter_map(|(selector, binding)| {
-                binding.as_ref().and_then(|binding| {
-                    (binding.root_binding == root
-                        && !binding
-                            .canonical_target_digests
-                            .is_disjoint(&identity_digests))
-                    .then_some(Candidate {
-                        kind: selector.kind,
-                        provider_kind: result_candidates
-                            .iter()
-                            .filter(|candidate| {
-                                candidate.kind == selector.kind && candidate.value == selector.value
-                            })
-                            .min_by_key(|candidate| candidate.provider_kind != candidate.kind)
-                            .map(|candidate| candidate.provider_kind)
-                            .unwrap_or_else(|| {
-                                if selector.kind == DecisionAnchorTargetKindV1::QualifiedName
-                                    && canonical_qualified_name(&selector.value).is_none()
-                                {
-                                    DecisionAnchorTargetKindV1::FunctionName
-                                } else {
-                                    selector.kind
-                                }
-                            }),
-                        value: selector.value.clone(),
-                    })
+            .filter_map(|((binding_root, selector), binding)| {
+                (binding_root == root
+                    && !binding
+                        .canonical_target_digests
+                        .is_disjoint(&identity_digests))
+                .then_some(Candidate {
+                    kind: selector.kind,
+                    provider_kind: result_candidates
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.kind == selector.kind && candidate.value == selector.value
+                        })
+                        .min_by_key(|candidate| candidate.provider_kind != candidate.kind)
+                        .map(|candidate| candidate.provider_kind)
+                        .unwrap_or_else(|| {
+                            if selector.kind == DecisionAnchorTargetKindV1::QualifiedName
+                                && canonical_qualified_name(&selector.value).is_none()
+                            {
+                                DecisionAnchorTargetKindV1::FunctionName
+                            } else {
+                                selector.kind
+                            }
+                        }),
+                    value: selector.value.clone(),
                 })
             })
             .collect();

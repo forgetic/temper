@@ -4,7 +4,7 @@ use super::*;
 use temper_agent_core::EligibleLineageAdmission;
 
 pub(super) const RECOVERY_SELECTOR_REFERENCE_PREFIX: &str = "temper-recovery-selector:";
-const MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE: usize = 4;
+pub(super) const MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum RecoverySelectorPurpose {
@@ -67,6 +67,7 @@ pub(super) struct RecoverySelectorReference {
     pub(super) source_selector: Option<Selector>,
     pub(super) source_provider_value: Option<String>,
     pub(super) state: RecoverySelectorState,
+    pub(super) presented: bool,
 }
 
 impl RecoverySelectorReference {
@@ -92,56 +93,12 @@ impl RecoverySelectorReference {
     }
 }
 
-/// Transient handle retained only while one wrapper invocation is in flight.
-/// It is deliberately not serializable or debug-visible.
-pub(in crate::codebase_memory) struct ExpandedRecoverySelector {
-    reference: String,
-}
-
 pub(in crate::codebase_memory) struct CandidateRecovery {
     pub(in crate::codebase_memory) guidance: Option<String>,
     pub(in crate::codebase_memory) has_alternative: bool,
 }
 
 impl DecisionAnchorLineages {
-    pub(in crate::codebase_memory) fn recovery_selector_guidance(
-        &self,
-        root_binding: &str,
-    ) -> Option<String> {
-        let mut references = Vec::new();
-        for (key, purpose_references) in &self.recovery_references {
-            if key.root_binding != root_binding {
-                continue;
-            }
-            let available = purpose_references
-                .iter()
-                .filter(|reference| {
-                    self.recovery_reference_selectors
-                        .get(*reference)
-                        .is_some_and(|selector| selector.state == RecoverySelectorState::Available)
-                })
-                .collect::<Vec<_>>();
-            for (index, reference) in available
-                .iter()
-                .take(MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE)
-                .enumerate()
-            {
-                let label = if available.len() == 1 {
-                    key.purpose.label().to_string()
-                } else {
-                    format!("{}_{}", key.purpose.label(), index + 1)
-                };
-                references.push(format!("{label}={reference}"));
-            }
-        }
-        (!references.is_empty()).then(|| {
-            format!(
-                "[Recovery selector references: {}. These are provider-result-local candidates, not a post-batch action. Do not use any reference unless the later Active-root selector handoff repeats exactly one of them with its public tool and selector field; sibling and alternate references remain non-actionable.]",
-                references.join(", "),
-            )
-        })
-    }
-
     pub(super) fn replace_recovery_references(
         &mut self,
         root: &str,
@@ -300,10 +257,8 @@ impl DecisionAnchorLineages {
         } else {
             &selector
         };
-        self.selectors
-            .get(required_selector)
-            .and_then(Option::as_ref)
-            .is_some_and(|binding| binding.root_binding == root)
+        self.root_selectors
+            .contains_key(&(root.to_string(), required_selector.clone()))
             .then_some(RecoverySelectorReference {
                 root_binding: root.to_string(),
                 purpose,
@@ -312,6 +267,7 @@ impl DecisionAnchorLineages {
                 source_selector,
                 source_provider_value,
                 state: RecoverySelectorState::Available,
+                presented: false,
             })
     }
 
@@ -384,6 +340,7 @@ impl DecisionAnchorLineages {
             || reference.purpose != RecoverySelectorPurpose::ImplementationTrace
             || reference.selector.kind != DecisionAnchorTargetKindV1::FunctionName
             || reference.state != RecoverySelectorState::Available
+            || !reference.presented
         {
             return Err(());
         }
@@ -418,6 +375,7 @@ impl DecisionAnchorLineages {
         if is_trace_reference && reference.state != RecoverySelectorState::Reserved {
             return Err(());
         }
+        let root_binding = reference.root_binding.clone();
         let reference = self
             .recovery_reference_selectors
             .get_mut(&public_reference)
@@ -433,6 +391,7 @@ impl DecisionAnchorLineages {
         input[field] = Value::String(provider_value);
         Ok(Some(ExpandedRecoverySelector {
             reference: public_reference,
+            root_binding,
         }))
     }
 
@@ -493,7 +452,13 @@ impl DecisionAnchorLineages {
                         })
                 })
                 .take(MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE)
+                .cloned()
                 .collect::<Vec<_>>();
+            for reference in &references {
+                if let Some(selector) = self.recovery_reference_selectors.get_mut(reference) {
+                    selector.presented = true;
+                }
+            }
             let labels = references
                 .iter()
                 .enumerate()
@@ -598,6 +563,7 @@ impl DecisionAnchorLineages {
             }
         };
         (purpose_matches
+            && reference.presented
             && reference.selector(expected_selector_kind).is_some()
             && reference.state != RecoverySelectorState::Consumed)
             .then_some(Some((field, reference)))
