@@ -51,6 +51,8 @@ impl Tool for BlockedMutationTool {
 }
 
 const REFERENCE_PREFIX: &str = "temper-recovery-selector:";
+const ACTIVE_PROVIDER_SELECTOR: &str = "worker_slot";
+const SIBLING_PROVIDER_SELECTOR: &str = "sibling_worker_slot";
 
 fn assistant(calls: Vec<(&str, &str, serde_json::Value)>) -> AssistantMessage {
     AssistantMessage {
@@ -184,7 +186,7 @@ fn local_failure(requests: &[AgentRequest], id: &str) -> ToolFailureDiagnostic {
             } if call.id == id => Some(failure.clone()),
             _ => None,
         })
-        .expect("negative selector is rejected locally")
+        .unwrap_or_else(|| panic!("negative selector {id} is rejected locally"))
 }
 
 fn failed_output() -> ToolOutput {
@@ -273,7 +275,11 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             .unwrap();
         let sibling_root = lineage(&sibling_output);
         let sibling_references = references(&sibling_output);
-        assert!(!sibling_references.is_empty());
+        assert!(
+            !sibling_references.is_empty(),
+            "sibling result omitted references: {}",
+            crate::codebase_memory::tests::test_support::output_text(&sibling_output)
+        );
         assert!(complete_tool(&mut machine, "sibling-root", sibling_output, None).is_empty());
 
         let active_output = search
@@ -311,7 +317,7 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             assert!(!handoff.contains(private));
         }
 
-        let raw = complete_llm(
+        let locally_rejected = complete_llm(
             &mut machine,
             assistant(vec![(
                 "raw-source",
@@ -323,8 +329,8 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
                 }),
             )]),
         );
-        let raw_failure = local_failure(&raw, "raw-source");
-        assert!(raw.iter().any(|request| matches!(
+        let raw_failure = local_failure(&locally_rejected, "raw-source");
+        assert!(locally_rejected.iter().any(|request| matches!(
             request,
             AgentRequest::Emit(AgentEvent::ToolStart {
                 id,
@@ -332,7 +338,7 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
                 ..
             }) if id == "raw-source"
         )));
-        assert!(raw.iter().any(|request| matches!(
+        assert!(locally_rejected.iter().any(|request| matches!(
             request,
             AgentRequest::RunTool {
                 call,
@@ -409,41 +415,85 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
         assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 1);
 
         let fabricated = "temper-recovery-selector:00000000-0000-4000-8000-000000000099";
-        let alternate = active_references[1].clone();
+        let alternate_reference = active_references[1].clone();
         let negatives = [
             (
-                "alternate",
-                serde_json::json!({"qualified_name":alternate,"decision_evidence_kind":"implementation"}),
+                "alternate-reference",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name":alternate_reference,"decision_evidence_kind":"implementation"}),
+            ),
+            (
+                "alternate-candidate",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name":"active_8","decision_evidence_kind":"implementation"}),
+            ),
+            (
+                "normalized-not-exact",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name":"  worker_slot  ","decision_evidence_kind":"implementation"}),
+            ),
+            (
+                "wrong-stage",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name":ACTIVE_PROVIDER_SELECTOR,"decision_evidence_kind":"caller"}),
+            ),
+            (
+                "unreturned",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name":"not_returned","decision_evidence_kind":"implementation"}),
+            ),
+            (
+                "sibling-selector",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name":SIBLING_PROVIDER_SELECTOR,"decision_evidence_kind":"implementation"}),
+            ),
+            (
+                "wrong-tool",
+                "codebase_memory_trace_path",
+                serde_json::json!({"function_name":ACTIVE_PROVIDER_SELECTOR}),
             ),
             (
                 "fabricated",
+                "codebase_memory_get_code_snippet",
                 serde_json::json!({"qualified_name":fabricated,"decision_evidence_kind":"implementation"}),
             ),
-            (
-                "sibling",
-                serde_json::json!({"qualified_name":sibling_references[0],"decision_evidence_kind":"implementation"}),
-            ),
-            (
-                "wrong-field",
-                serde_json::json!({"function_name":active_reference,"decision_evidence_kind":"implementation"}),
-            ),
         ];
-        for (id, arguments) in negatives {
-            let rejected = complete_llm(
+        let rejected = complete_llm(
+            &mut machine,
+            assistant(
+                negatives
+                    .iter()
+                    .map(|(id, tool, arguments)| (*id, *tool, arguments.clone()))
+                    .collect(),
+            ),
+        );
+        let failures = negatives
+            .iter()
+            .map(|(id, _, _)| (*id, local_failure(&rejected, id)))
+            .collect::<Vec<_>>();
+        let mut correction = Vec::new();
+        for (id, failure) in failures {
+            correction.extend(complete_tool(
                 &mut machine,
-                assistant(vec![(id, "codebase_memory_get_code_snippet", arguments)]),
-            );
-            let failure = local_failure(&rejected, id);
-            let correction = complete_tool(&mut machine, id, failed_output(), Some(failure));
-            let correction = active_handoff(&correction);
-            assert_eq!(handoff_reference(correction), active_reference);
-            assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 1);
-            assert!(!correction.contains(fabricated));
-            assert!(!correction.contains(&sibling_references[0]));
-            assert!(!correction.contains("worker_slot"));
-            assert!(correction.contains("codebase_memory_get_code_snippet"));
-            assert!(correction.contains("selector field=qualified_name"));
+                id,
+                failed_output(),
+                Some(failure),
+            ));
         }
+        let correction = active_handoff(&correction);
+        assert_eq!(handoff_reference(correction), active_reference);
+        assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 1);
+        for private in [
+            fabricated,
+            ACTIVE_PROVIDER_SELECTOR,
+            SIBLING_PROVIDER_SELECTOR,
+            "active_8",
+        ] {
+            assert!(!correction.contains(private));
+        }
+        assert!(!correction.contains(&sibling_references[0]));
+        assert!(correction.contains("codebase_memory_get_code_snippet"));
+        assert!(correction.contains("selector field=qualified_name"));
 
         assert!(
             crate::codebase_memory::tests::test_support::calls_named(
@@ -459,21 +509,20 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
                 "exact-active",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "qualified_name": active_reference,
+                    "qualified_name": ACTIVE_PROVIDER_SELECTOR,
                     "decision_evidence_kind": "implementation"
                 }),
             )]),
         );
-        assert!(exact.iter().any(|request| matches!(
-            request,
+        let exact_disposition = exact.iter().find_map(|request| match request {
             AgentRequest::Emit(AgentEvent::ToolStart {
                 id,
-                recovery_reference_disposition: Some(
-                    GraphRecoveryReferenceDispositionV1::Recognized
-                ),
+                recovery_reference_disposition,
                 ..
-            }) if id == "exact-active"
-        )));
+            }) if id == "exact-active" => Some(*recovery_reference_disposition),
+            _ => None,
+        });
+        assert_eq!(exact_disposition, Some(None));
         let exact_call = exact
             .iter()
             .find_map(|request| match request {
@@ -500,6 +549,11 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             source_lineage.decision_evidence_kind,
             Some(DecisionEvidenceKindV1::Implementation)
         );
+        assert!(
+            !serde_json::to_string(&source_lineage)
+                .unwrap()
+                .contains(ACTIVE_PROVIDER_SELECTOR)
+        );
         let source_calls = crate::codebase_memory::tests::test_support::calls_named(
             &log_path,
             "get_code_snippet",
@@ -507,7 +561,7 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
         assert_eq!(source_calls.len(), 1);
         assert_eq!(
             source_calls[0]["arguments"]["qualified_name"],
-            "worker_slot"
+            ACTIVE_PROVIDER_SELECTOR
         );
         assert!(
             source_calls[0]["arguments"]
@@ -532,13 +586,37 @@ fn published_parallel_active_root_handoff_executes_once_at_the_production_bounda
             }
         )));
 
+        let blocked_after_source = complete_llm(
+            &mut machine,
+            assistant(vec![(
+                "mutation-before-forest",
+                "write",
+                serde_json::json!({"path":"demo/src/route.rs","content":"changed"}),
+            )]),
+        );
+        assert!(blocked_after_source.iter().any(|request| matches!(
+            request,
+            AgentRequest::RunTool {
+                call,
+                denial: Some(ToolCallDenial::DecisionAnchorMutation),
+                rejection: None,
+                ..
+            } if call.id == "mutation-before-forest"
+        )));
+        let _ = complete_tool(
+            &mut machine,
+            "mutation-before-forest",
+            failed_output(),
+            Some(ToolFailureDiagnostic::policy_denial()),
+        );
+
         let stale = complete_llm(
             &mut machine,
             assistant(vec![(
                 "stale",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "qualified_name": active_reference,
+                    "qualified_name": ACTIVE_PROVIDER_SELECTOR,
                     "decision_evidence_kind": "implementation"
                 }),
             )]),

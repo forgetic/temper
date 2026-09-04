@@ -24,7 +24,7 @@ use crate::mcp::McpToolResultPart;
 /// admission. The mutexes protect only bounded in-memory selector and opaque
 /// target metadata.
 pub(crate) struct DecisionAnchorLineageRegistry {
-    lineages: Mutex<DecisionAnchorLineages>,
+    pub(super) lineages: Mutex<DecisionAnchorLineages>,
     pub(super) published_handoff: Mutex<Option<PublishedRecoveryHandoff>>,
     targets: Mutex<WorkspaceTargetRegistry>,
     scope: Arc<WorkspaceScope>,
@@ -101,6 +101,11 @@ impl DecisionAnchorLineageRegistry {
         input: &mut Value,
         evidence_kind: Option<DecisionEvidenceKindV1>,
     ) -> Result<Option<ExpandedRecoverySelector>, ()> {
+        if let Some(canonical) =
+            self.canonical_published_raw_selector(tool_name, input, None, evidence_kind)?
+        {
+            *input = canonical;
+        }
         if self
             .published_reference_disposition(tool_name, input, None, evidence_kind)
             .is_some_and(|disposition| {
@@ -168,6 +173,11 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
                 LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector),
                 published,
             );
+        }
+        if let Some(raw_admission) =
+            self.resolve_published_raw_admission(tool_name, arguments, active_root)
+        {
+            return raw_admission;
         }
         let (outcome, disposition) = self
             .lineages
