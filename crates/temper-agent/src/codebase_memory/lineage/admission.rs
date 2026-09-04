@@ -15,7 +15,7 @@ use temper_protocol_activity::{
 
 use super::{
     CandidateRecovery, DecisionAnchorLineages, ExpandedRecoverySelector,
-    target::WorkspaceTargetRegistry,
+    published_handoff::PublishedRecoveryHandoff, target::WorkspaceTargetRegistry,
 };
 use crate::codebase_memory::scope::WorkspaceScope;
 use crate::mcp::McpToolResultPart;
@@ -25,6 +25,7 @@ use crate::mcp::McpToolResultPart;
 /// target metadata.
 pub(crate) struct DecisionAnchorLineageRegistry {
     lineages: Mutex<DecisionAnchorLineages>,
+    pub(super) published_handoff: Mutex<Option<PublishedRecoveryHandoff>>,
     targets: Mutex<WorkspaceTargetRegistry>,
     scope: Arc<WorkspaceScope>,
 }
@@ -33,6 +34,7 @@ impl DecisionAnchorLineageRegistry {
     pub(crate) fn new(scope: Arc<WorkspaceScope>) -> Self {
         Self {
             lineages: Mutex::new(DecisionAnchorLineages::default()),
+            published_handoff: Mutex::new(None),
             targets: Mutex::new(WorkspaceTargetRegistry::default()),
             scope,
         }
@@ -99,6 +101,14 @@ impl DecisionAnchorLineageRegistry {
         input: &mut Value,
         evidence_kind: Option<DecisionEvidenceKindV1>,
     ) -> Result<Option<ExpandedRecoverySelector>, ()> {
+        if self
+            .published_reference_disposition(tool_name, input, None, evidence_kind)
+            .is_some_and(|disposition| {
+                disposition != GraphRecoveryReferenceDispositionV1::Recognized
+            })
+        {
+            return Err(());
+        }
         self.lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -110,10 +120,13 @@ impl DecisionAnchorLineageRegistry {
         expanded: &ExpandedRecoverySelector,
         preserve_alternatives: bool,
     ) -> Option<CandidateRecovery> {
-        self.lineages
+        let result = self
+            .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .complete_candidate_reference(expanded, preserve_alternatives)
+            .complete_candidate_reference(expanded, preserve_alternatives);
+        self.clear_completed_handoff(expanded);
+        result
     }
 }
 
@@ -148,10 +161,29 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
         LineageAdmissionOutcome,
         Option<GraphRecoveryReferenceDispositionV1>,
     ) {
-        self.lineages
+        let published =
+            self.published_reference_disposition(tool_name, arguments, active_root, None);
+        if published == Some(GraphRecoveryReferenceDispositionV1::Rejected) {
+            return (
+                LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector),
+                published,
+            );
+        }
+        let (outcome, disposition) = self
+            .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .resolve_for_active_root_with_recovery(tool_name, arguments, active_root)
+            .resolve_for_active_root_with_recovery(tool_name, arguments, active_root);
+        let disposition = published
+            .map(|_| {
+                if matches!(outcome, LineageAdmissionOutcome::Eligible(_)) {
+                    GraphRecoveryReferenceDispositionV1::Recognized
+                } else {
+                    GraphRecoveryReferenceDispositionV1::Rejected
+                }
+            })
+            .or(disposition);
+        (outcome, disposition)
     }
 
     fn recovery_reference_disposition(
@@ -160,10 +192,7 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
         arguments: &Value,
         active_root: Option<&str>,
     ) -> Option<GraphRecoveryReferenceDispositionV1> {
-        self.lineages
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .recovery_reference_disposition(tool_name, arguments, active_root)
+        self.published_reference_disposition(tool_name, arguments, active_root, None)
     }
 
     fn active_root_recovery_selector(
@@ -171,15 +200,21 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
         active_root: &str,
         action: temper_protocol_activity::GraphRecoveryActionV1,
     ) -> Option<OpaqueRecoverySelectorReference> {
-        let lineages = self
+        let reference = self
             .lineages
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        OpaqueRecoverySelectorReference::new(
-            lineages
-                .active_root_recovery_selector(active_root, action)?
-                .to_string(),
-        )
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active_root_recovery_selector(active_root, action)?
+            .to_string();
+        *self
+            .published_handoff
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PublishedRecoveryHandoff {
+            root_binding: active_root.to_string(),
+            action,
+            reference: reference.clone(),
+        });
+        OpaqueRecoverySelectorReference::new(reference)
     }
 
     fn resolve_source_target(&self, lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {

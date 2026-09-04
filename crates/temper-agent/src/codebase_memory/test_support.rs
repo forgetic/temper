@@ -43,7 +43,7 @@ state_path = f"{log_path}.state.json" if log_path else ""
 TOOLS = [
     {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, search_project_property: {"type": "string"}}, "required": ["query", search_project_property] if mode == "repo-schema" else ["query"]}},
     {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
-    {"name": "get_code_snippet", "description": "Read indexed source", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "path": {"type": "string"}}}},
+    {"name": "get_code_snippet", "description": "Read indexed source", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "qualified_name": {"type": "string"}, "include_neighbors": {"type": "boolean"}}, "required": ["qualified_name"]}},
     {"name": "search_graph", "description": "Search graph", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "name_pattern": {"type": "string"}, "project": {"type": "string"}}}},
     {"name": "trace_path", "description": "Trace graph calls", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}}},
     {"name": "list_projects", "description": "List projects", "inputSchema": {"type": "object", "properties": {}}},
@@ -226,6 +226,35 @@ for line in sys.stdin:
                 tool_result(request["id"], "exploration_closed", True)
             elif mode == "graph-systemic":
                 tool_result(request["id"], "provider protocol is unusable SECRET", True)
+            elif mode == "active-root-handoff" and name == "search_graph":
+                active = args.get("query") == "active routing implementation"
+                worker_rank = 7 if active else 5
+                prefix = "active" if active else "sibling"
+                results = []
+                for rank in range(1, 71):
+                    if rank < worker_rank:
+                        results.append({"label": "Module", "file_path": f"src/{prefix}_{rank}.rs"})
+                    else:
+                        symbol = "worker_slot" if rank == worker_rank else f"{prefix}_{rank}"
+                        results.append({
+                            "name": symbol,
+                            "qualified_name": symbol,
+                            "label": "Function",
+                            "file_path": "src/route.rs",
+                        })
+                payload = {"total": 70, "has_more": False, "results": results}
+                tool_result(request["id"], json.dumps(payload), structured=payload)
+            elif mode == "active-root-handoff" and name == "get_code_snippet":
+                if args.get("qualified_name") != "worker_slot":
+                    tool_result(request["id"], "invalid argument", True)
+                else:
+                    payload = {
+                        "name": "worker_slot",
+                        "qualified_name": "worker_slot",
+                        "file_path": "src/route.rs",
+                        "source": "fn worker_slot() {}",
+                    }
+                    tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode == "graph-errors" and args.get("query") == "invalid":
                 tool_result(request["id"], "invalid argument: query-local SECRET", True)
             elif mode == "graph-errors" and args.get("query") == "systemic":

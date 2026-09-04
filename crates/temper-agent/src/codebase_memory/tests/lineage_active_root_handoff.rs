@@ -245,18 +245,18 @@ fn run_active_root_handoff(reverse_completion: bool, exhaust_active_candidate: b
     assert_eq!(sibling_references.len(), 4);
 
     let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
-    let selected_candidate = registry
-        .active_root_recovery_selector(&active.root_binding, action)
-        .expect("the active root retains its rank-6 reference after sibling registration")
-        .as_public_selector()
-        .to_string();
-    assert_eq!(selected_candidate, active_references[3]);
     assert!(
         registry
             .active_root_recovery_selector(&sibling.root_binding, action)
             .is_some(),
         "a sibling candidate remains available but cannot authorize the active root",
     );
+    let selected_candidate = registry
+        .active_root_recovery_selector(&active.root_binding, action)
+        .expect("the active root retains its rank-6 reference after sibling registration")
+        .as_public_selector()
+        .to_string();
+    assert_eq!(selected_candidate, active_references[3]);
     if exhaust_active_candidate {
         let mut provider_input = source_input(&selected_candidate);
         let expanded = registry

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, GraphCorrelationToolV1, GraphCorrelationV1, GraphExplorationClosedV1,
-    ShellDiscoveryDispositionV1,
+    GraphRecoveryReferenceDispositionV1, ShellDiscoveryDispositionV1,
 };
 use tongs::model::{
     AssistantMessage, ContentBlock, Message, StopReason, ToolCall, UserContent, UserMessage,
@@ -437,6 +437,15 @@ impl AgentMachine {
                 pending.invocation_targets = admission;
             }
         }
+        let recovery_reference_correction =
+            calls
+                .iter()
+                .zip(&recovery_reference_dispositions)
+                .any(|(call, disposition)| {
+                    *disposition == Some(GraphRecoveryReferenceDispositionV1::Rejected)
+                        || self.invocation_rejections.contains_key(&call.id)
+                            && disposition.is_some()
+                });
         let mut active_handoff = None;
         let denials = if let Some(state) = self.decision_anchors.as_mut() {
             let denials = state.on_tool_batch_dispatched_with_closed_inputs(
@@ -449,7 +458,7 @@ impl AgentMachine {
             );
             let candidate_handoff = state.active_recovery_action();
             let guidance = state.take_model_guidance();
-            if !guidance.is_empty() {
+            if !guidance.is_empty() || recovery_reference_correction {
                 active_handoff = candidate_handoff;
             }
             self.decision_anchor_guidance.extend(guidance);
