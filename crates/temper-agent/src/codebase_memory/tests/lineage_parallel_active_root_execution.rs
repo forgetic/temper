@@ -1,3 +1,6 @@
+const PARALLEL_ACTIVE_PROVIDER_SELECTOR: &str =
+    "temper-v1-production.src.route.worker_slot";
+
 #[test]
 fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
     let server = crate::codebase_memory::tests::test_support::fake_server_script();
@@ -60,16 +63,6 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
             ]),
         );
         let search = registry.get("codebase_memory_search_graph").unwrap();
-        let active_call = dispatched_call(&roots, "active-root");
-        let active_output = search
-            .execute(&active_call.id, active_call.arguments, None)
-            .await
-            .unwrap();
-        let active_root = lineage(&active_output);
-        assert_eq!(
-            active_root.focused_test_discovery,
-            Some(FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned)
-        );
         let sibling_call = dispatched_call(&roots, "sibling-root");
         let sibling_output = search
             .execute(&sibling_call.id, sibling_call.arguments, None)
@@ -80,14 +73,144 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
             sibling_root.focused_test_discovery,
             Some(FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned)
         );
+        let active_call = dispatched_call(&roots, "active-root");
+        let active_output = search
+            .execute(&active_call.id, active_call.arguments, None)
+            .await
+            .unwrap();
+        let active_root = lineage(&active_output);
+        assert_eq!(
+            active_root.focused_test_discovery,
+            Some(FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned)
+        );
         let sibling_references = references(&sibling_output);
+        let active_references = references(&active_output);
         assert!(complete_tool(&mut machine, "active-root", active_output, None).is_empty());
         let selected = complete_tool(&mut machine, "sibling-root", sibling_output, None);
         assert_ne!(active_root.root_binding, sibling_root.root_binding);
         let handoff = active_handoff(&selected);
         let active_reference = handoff_reference(handoff).to_string();
+        let alternate_reference = active_references
+            .iter()
+            .find(|reference| *reference != &active_reference)
+            .expect("the projected active root retains an alternate")
+            .clone();
         assert!(!handoff.contains("decision_evidence_kind"));
         assert!(!sibling_references.contains(&active_reference));
+
+        let fabricated = "temper-recovery-selector:00000000-0000-4000-8000-000000000099";
+        let negative_calls = [
+            (
+                "sibling",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name": sibling_references[0]}),
+            ),
+            (
+                "raw",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name":"temper-v1-production::src::route::worker_slot"}),
+            ),
+            (
+                "alternate",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name": alternate_reference}),
+            ),
+            (
+                "ambiguous",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name": PARALLEL_ACTIVE_PROVIDER_SELECTOR}),
+            ),
+            (
+                "wrong-tool",
+                "codebase_memory_trace_path",
+                serde_json::json!({"function_name": active_reference}),
+            ),
+            (
+                "wrong-purpose",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": active_reference,
+                    "decision_evidence_kind": "caller"
+                }),
+            ),
+            (
+                "fabricated",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name": fabricated}),
+            ),
+        ];
+        let rejected = complete_llm(
+            &mut machine,
+            assistant(
+                negative_calls
+                    .iter()
+                    .map(|(id, tool, arguments)| (*id, *tool, arguments.clone()))
+                    .collect(),
+            ),
+        );
+        let mut failures = Vec::new();
+        for (id, tool_name, _) in &negative_calls {
+            if let Some(failure) = maybe_local_failure(&rejected, id) {
+                failures.push((*id, failed_output(), failure));
+                continue;
+            }
+            let call = dispatched_call(&rejected, id);
+            let output = registry
+                .get(tool_name)
+                .expect("negative graph wrapper")
+                .execute(&call.id, call.arguments, None)
+                .await
+                .unwrap();
+            assert!(output.is_error, "negative selector {id} escaped its wrapper");
+            failures.push((
+                *id,
+                output,
+                ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::InvalidModelInput),
+            ));
+        }
+        let mut corrected = Vec::new();
+        for (id, output, failure) in failures {
+            corrected.extend(complete_tool(&mut machine, id, output, Some(failure)));
+        }
+        assert_eq!(
+            handoff_reference(active_handoff(&corrected)),
+            active_reference
+        );
+        assert!(
+            crate::codebase_memory::tests::test_support::calls_named(
+                &log_path,
+                "get_code_snippet"
+            )
+            .is_empty()
+        );
+
+        assert!(
+            crate::codebase_memory::tests::test_support::calls_named(&log_path, "trace_path")
+                .is_empty()
+        );
+
+        let malformed = complete_llm(
+            &mut machine,
+            assistant(vec![(
+                "malformed",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": active_reference,
+                    "function_name": "worker_slot"
+                }),
+            )]),
+        );
+        let malformed_failure = local_failure(&malformed, "malformed");
+        let corrected = complete_tool(
+            &mut machine,
+            "malformed",
+            failed_output(),
+            Some(malformed_failure),
+        );
+        assert_eq!(
+            handoff_reference(active_handoff(&corrected)),
+            active_reference
+        );
 
         let admitted = complete_llm(
             &mut machine,
@@ -142,7 +265,15 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
         assert_eq!(source_calls.len(), 1);
         assert_eq!(
             source_calls[0]["arguments"]["qualified_name"],
-            ACTIVE_PROVIDER_SELECTOR
+            PARALLEL_ACTIVE_PROVIDER_SELECTOR
+        );
+        assert_eq!(source_calls[0]["arguments"].as_object().unwrap().len(), 2);
+        assert!(source_calls[0]["arguments"]["project"].is_string());
+        assert!(source_calls[0]["arguments"].get("repo").is_none());
+        assert!(
+            source_calls[0]["arguments"]
+                .get("include_neighbors")
+                .is_none()
         );
         assert!(
             source_calls[0]["arguments"]
@@ -160,6 +291,55 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
             _ => false,
         }));
         assert!(!advanced.iter().any(|request| matches!(
+            request,
+            AgentRequest::Finished {
+                stop: AgentStop::DecisionAnchorRecoveryExhausted,
+                ..
+            }
+        )));
+
+        let stale = complete_llm(
+            &mut machine,
+            assistant(vec![(
+                "consumed-source",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({"qualified_name": active_reference}),
+            )]),
+        );
+        let (stale_output, stale_failure) =
+            if let Some(failure) = maybe_local_failure(&stale, "consumed-source") {
+                (failed_output(), failure)
+            } else {
+                let call = dispatched_call(&stale, "consumed-source");
+                let output = registry
+                    .get("codebase_memory_get_code_snippet")
+                    .unwrap()
+                    .execute(&call.id, call.arguments, None)
+                    .await
+                    .unwrap();
+                assert!(output.is_error);
+                (
+                    output,
+                    ToolFailureDiagnostic::codebase_memory(
+                        ToolFailureCategory::InvalidModelInput,
+                    ),
+                )
+            };
+        let stale_completed = complete_tool(
+            &mut machine,
+            "consumed-source",
+            stale_output,
+            Some(stale_failure),
+        );
+        assert_eq!(
+            crate::codebase_memory::tests::test_support::calls_named(
+                &log_path,
+                "get_code_snippet"
+            )
+            .len(),
+            1
+        );
+        assert!(!stale_completed.iter().any(|request| matches!(
             request,
             AgentRequest::Finished {
                 stop: AgentStop::DecisionAnchorRecoveryExhausted,

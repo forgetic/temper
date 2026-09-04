@@ -241,9 +241,12 @@ for line in sys.stdin:
                             else "sibling_worker_slot" if rank == worker_rank
                             else f"{prefix}_{rank}"
                         )
+                        qualified_name = symbol
+                        if mode == "active-root-overlap-handoff" and rank == worker_rank:
+                            qualified_name = f"temper-v1-production.src.route.{symbol}"
                         result = {
                             "name": symbol,
-                            "qualified_name": symbol,
+                            "qualified_name": qualified_name,
                             "label": "Function",
                             "file_path": "src/route.rs",
                         }
@@ -255,7 +258,7 @@ for line in sys.stdin:
                 tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode in ("active-root-handoff", "active-root-overlap-handoff") and name == "get_code_snippet":
                 symbol = args.get("qualified_name")
-                expected = ("worker_slot",) if mode == "active-root-overlap-handoff" else ("worker_slot", "sibling_worker_slot")
+                expected = ("temper-v1-production.src.route.worker_slot",) if mode == "active-root-overlap-handoff" else ("worker_slot", "sibling_worker_slot")
                 if symbol not in expected:
                     tool_result(request["id"], "invalid argument", True)
                 else:

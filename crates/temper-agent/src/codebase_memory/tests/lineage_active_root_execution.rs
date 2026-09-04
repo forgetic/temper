@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use temper_agent_core::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ToolCallDenial,
-    ToolFailureDiagnostic, ToolInvocationCatalog, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    ToolFailureCategory, ToolFailureDiagnostic, ToolInvocationCatalog,
+    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 use temper_agent_io::{EngineTime, Machine};
 use temper_protocol_activity::{
@@ -170,22 +171,27 @@ fn lineage(output: &ToolOutput) -> DecisionAnchorLineageV1 {
     .unwrap()
 }
 
+fn maybe_local_failure(
+    requests: &[AgentRequest],
+    id: &str,
+) -> Option<ToolFailureDiagnostic> {
+    requests.iter().find_map(|request| match request {
+        AgentRequest::RunTool {
+            call,
+            denial: Some(ToolCallDenial::GraphExplorationClosed(Some(details))),
+            ..
+        } if call.id == id => Some(ToolFailureDiagnostic::graph_exploration(details.clone())),
+        AgentRequest::RunTool {
+            call,
+            rejection: Some(failure),
+            ..
+        } if call.id == id => Some(failure.clone()),
+        _ => None,
+    })
+}
+
 fn local_failure(requests: &[AgentRequest], id: &str) -> ToolFailureDiagnostic {
-    requests
-        .iter()
-        .find_map(|request| match request {
-            AgentRequest::RunTool {
-                call,
-                denial: Some(ToolCallDenial::GraphExplorationClosed(Some(details))),
-                ..
-            } if call.id == id => Some(ToolFailureDiagnostic::graph_exploration(details.clone())),
-            AgentRequest::RunTool {
-                call,
-                rejection: Some(failure),
-                ..
-            } if call.id == id => Some(failure.clone()),
-            _ => None,
-        })
+    maybe_local_failure(requests, id)
         .unwrap_or_else(|| panic!("negative selector {id} is rejected locally"))
 }
 

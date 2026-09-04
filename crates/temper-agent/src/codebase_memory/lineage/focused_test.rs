@@ -173,6 +173,7 @@ pub(super) fn source_confirms_exact_test(
                 kind: selector.kind,
                 provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
                 value: selector.value.clone(),
+                provider_value: selector.value.clone(),
             })
     })
 }
@@ -359,6 +360,7 @@ fn collect_direct_exact_source_candidates(
         candidates.insert(Candidate {
             kind: DecisionAnchorTargetKindV1::QualifiedName,
             provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
+            provider_value: identity.clone(),
             value: identity,
         });
     }

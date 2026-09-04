@@ -172,25 +172,31 @@ impl DecisionAnchorLineages {
                     && !binding
                         .canonical_target_digests
                         .is_disjoint(&identity_digests))
-                .then_some(Candidate {
-                    kind: selector.kind,
-                    provider_kind: result_candidates
+                .then(|| {
+                    let candidate = result_candidates
                         .iter()
                         .filter(|candidate| {
                             candidate.kind == selector.kind && candidate.value == selector.value
                         })
-                        .min_by_key(|candidate| candidate.provider_kind != candidate.kind)
-                        .map(|candidate| candidate.provider_kind)
-                        .unwrap_or_else(|| {
-                            if selector.kind == DecisionAnchorTargetKindV1::QualifiedName
-                                && canonical_qualified_name(&selector.value).is_none()
-                            {
-                                DecisionAnchorTargetKindV1::FunctionName
-                            } else {
-                                selector.kind
-                            }
-                        }),
-                    value: selector.value.clone(),
+                        .min_by_key(|candidate| candidate.provider_kind != candidate.kind);
+                    Candidate {
+                        kind: selector.kind,
+                        provider_kind: candidate
+                            .map(|candidate| candidate.provider_kind)
+                            .unwrap_or_else(|| {
+                                if selector.kind == DecisionAnchorTargetKindV1::QualifiedName
+                                    && canonical_qualified_name(&selector.value).is_none()
+                                {
+                                    DecisionAnchorTargetKindV1::FunctionName
+                                } else {
+                                    selector.kind
+                                }
+                            }),
+                        value: selector.value.clone(),
+                        provider_value: candidate
+                            .map(|candidate| candidate.provider_value.clone())
+                            .unwrap_or_else(|| selector.value.clone()),
+                    }
                 })
             })
             .collect();

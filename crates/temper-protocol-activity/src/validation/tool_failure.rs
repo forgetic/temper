@@ -83,10 +83,13 @@ pub(super) fn validate_recovery_reference_start(
     disposition: GraphRecoveryReferenceDispositionV1,
     path: &str,
 ) -> Result<(), ActivityValidationError> {
-    if tool_name != "codebase_memory_trace_path" {
+    if !matches!(
+        tool_name,
+        "codebase_memory_trace_path" | "codebase_memory_get_code_snippet"
+    ) {
         return Err(invalid_event(
             path,
-            "is reserved for the trusted trace wrapper",
+            "is reserved for trusted recovery-reference wrappers",
         ));
     }
     if disposition == GraphRecoveryReferenceDispositionV1::Expanded {

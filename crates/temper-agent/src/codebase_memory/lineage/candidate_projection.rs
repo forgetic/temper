@@ -2,6 +2,154 @@
 
 use super::*;
 
+#[derive(Clone, Debug)]
+pub(super) struct Candidate {
+    pub(super) kind: DecisionAnchorTargetKindV1,
+    pub(super) provider_kind: DecisionAnchorTargetKindV1,
+    pub(super) value: String,
+    /// The exact provider spelling is not part of candidate identity.
+    pub(super) provider_value: String,
+}
+
+impl PartialEq for Candidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.provider_kind == other.provider_kind
+            && self.value == other.value
+    }
+}
+
+impl Eq for Candidate {}
+
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.kind, self.provider_kind, &self.value).cmp(&(
+            other.kind,
+            other.provider_kind,
+            &other.value,
+        ))
+    }
+}
+
+pub(super) fn insert_reference<C: CandidateCollection>(
+    candidates: &mut C,
+    value: &str,
+) -> Option<()> {
+    match canonical_qualified_name(value) {
+        Some(canonical) => insert_qualified(candidates, canonical, value.to_string()),
+        None => insert_function(
+            candidates,
+            canonical_function_name(value)?,
+            value.to_string(),
+        ),
+    }
+}
+
+pub(super) fn insert_qualified<C: CandidateCollection>(
+    candidates: &mut C,
+    value: String,
+    provider_value: String,
+) -> Option<()> {
+    let function = terminal_function_name(&value)?;
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        DecisionAnchorTargetKindV1::Pattern,
+        value.clone(),
+        provider_value.clone(),
+    )?;
+    // Pattern selectors commonly use the terminal symbol returned beside a
+    // provider-qualified identity. Retain that closed representation too;
+    // the registry's ambiguity handling prevents a shared terminal name from
+    // binding across distinct roots.
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        DecisionAnchorTargetKindV1::Pattern,
+        function.clone(),
+        provider_value.clone(),
+    )?;
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        value,
+        provider_value.clone(),
+    )?;
+    // A source-read wrapper accepts a short `qualified_name` selector. Keep
+    // the provider record's direct name as that closed representation too.
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        function.clone(),
+        provider_value.clone(),
+    )?;
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        DecisionAnchorTargetKindV1::FunctionName,
+        function,
+        provider_value,
+    )
+}
+
+pub(super) fn insert_function<C: CandidateCollection>(
+    candidates: &mut C,
+    value: String,
+    provider_value: String,
+) -> Option<()> {
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::FunctionName,
+        DecisionAnchorTargetKindV1::Pattern,
+        value.clone(),
+        provider_value.clone(),
+    )?;
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::FunctionName,
+        DecisionAnchorTargetKindV1::FunctionName,
+        value.clone(),
+        provider_value.clone(),
+    )?;
+    insert(
+        candidates,
+        DecisionAnchorTargetKindV1::FunctionName,
+        DecisionAnchorTargetKindV1::QualifiedName,
+        value,
+        provider_value,
+    )
+}
+
+fn insert<C: CandidateCollection>(
+    candidates: &mut C,
+    source_kind: DecisionAnchorTargetKindV1,
+    target_kind: DecisionAnchorTargetKindV1,
+    value: String,
+    provider_value: String,
+) -> Option<()> {
+    source_kind.can_carry_forward(target_kind).then_some(())?;
+    // A provider may report one identity through multiple approved fields
+    // (for example `qualified_name`, a terminal `name`, and a `symbol` list).
+    // They are equivalent representations of the same result, not ambiguous
+    // independently returned candidates. The registry still rejects a
+    // selector that later appears under a distinct root.
+    candidates.insert_candidate(Candidate {
+        kind: target_kind,
+        provider_kind: source_kind,
+        value,
+        provider_value,
+    });
+    Some(())
+}
+
 pub(super) struct ProviderCandidates {
     pub(super) candidates: BTreeSet<Candidate>,
     pub(super) provider_order: Vec<Candidate>,

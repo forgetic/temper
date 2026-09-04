@@ -225,7 +225,7 @@ impl DecisionAnchorLineages {
                     },
                     function,
                     Some(source_selector),
-                    Some(candidate.value.clone()),
+                    Some(candidate.provider_value.clone()),
                 )
             }
             RecoverySelectorPurpose::ImplementationTrace
@@ -249,7 +249,7 @@ impl DecisionAnchorLineages {
                     kind: DecisionAnchorTargetKindV1::QualifiedName,
                     value: qualified.unwrap_or(function),
                 };
-                (selector, candidate.value.clone(), None, None)
+                (selector, candidate.provider_value.clone(), None, None)
             }
         };
         let required_selector = if purpose == RecoverySelectorPurpose::ImplementationCandidate {
