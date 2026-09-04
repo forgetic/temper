@@ -88,13 +88,7 @@ impl DecisionAnchorLineages {
                 kind: candidate.kind,
                 value: candidate.value.clone(),
             };
-            let Some(Some(binding)) = self.selectors.get_mut(&selector) else {
-                continue;
-            };
-            if binding.root_binding != root {
-                continue;
-            }
-            match origin {
+            let mark = |binding: &mut SelectorBinding| match origin {
                 SelectorOrigin::ImplementationEvidenceResult { traversal_evidence } => {
                     let already_recorded = binding.implementation_evidence_result;
                     binding.implementation_evidence_result = true;
@@ -130,6 +124,18 @@ impl DecisionAnchorLineages {
                     binding.recovery_reference_required = false;
                 }
                 SelectorOrigin::FocusedTestResult => binding.focused_test_result = true,
+            };
+            let Some(binding) = self
+                .root_selectors
+                .get_mut(&(root.to_string(), selector.clone()))
+            else {
+                continue;
+            };
+            mark(binding);
+            if let Some(Some(binding)) = self.selectors.get_mut(&selector) {
+                if binding.root_binding == root {
+                    mark(binding);
+                }
             }
             marked += 1;
         }

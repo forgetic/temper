@@ -37,6 +37,7 @@ impl DecisionAnchorLineageRegistry {
             scope,
         }
     }
+    #[cfg(test)]
     pub(crate) fn record_with_evidence_kind(
         &self,
         correlation: &GraphCorrelationV1,
@@ -49,6 +50,32 @@ impl DecisionAnchorLineageRegistry {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .record_with_evidence_kind(correlation, input, typed_parts, decision_evidence_kind)?;
+        self.targets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .record_source(&self.scope, &lineage, input, typed_parts);
+        Some(lineage)
+    }
+
+    pub(crate) fn record_with_expanded_recovery(
+        &self,
+        correlation: &GraphCorrelationV1,
+        input: &Value,
+        typed_parts: Option<&[McpToolResultPart]>,
+        decision_evidence_kind: Option<DecisionEvidenceKindV1>,
+        expanded: Option<&ExpandedRecoverySelector>,
+    ) -> Option<DecisionAnchorLineageV1> {
+        let lineage = self
+            .lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .record_with_expanded_recovery(
+                correlation,
+                input,
+                typed_parts,
+                decision_evidence_kind,
+                expanded,
+            )?;
         self.targets
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -345,6 +372,11 @@ impl DecisionAnchorLineages {
             }
             None => None,
         };
+        let recovery_root = self
+            .recovery_selector(tool_name, input, evidence_purpose)
+            .ok()
+            .flatten()
+            .map(|(_, reference)| reference.root_binding.clone());
         if self
             .validate_recovery_selector(tool_name, input, evidence_purpose)
             .is_err()
@@ -354,17 +386,42 @@ impl DecisionAnchorLineages {
         let Some(selector) = self.selector_for_input(target_kind, input) else {
             return Ineligible(MalformedSelector);
         };
+        let binding = match recovery_root.as_ref() {
+            Some(root) => {
+                if active_root.is_some_and(|active_root| active_root != root) {
+                    return Ineligible(UnknownSelector);
+                }
+                match self.root_selectors.get(&(root.clone(), selector.clone())) {
+                    Some(binding) => binding.clone(),
+                    None => return Ineligible(UnknownSelector),
+                }
+            }
+            None => match self.selectors.get(&selector) {
+                Some(Some(binding)) => binding.clone(),
+                Some(None) => return Ineligible(AmbiguousSelector),
+                None => return Ineligible(UnknownSelector),
+            },
+        };
+        if active_root.is_some_and(|active_root| binding.root_binding != active_root) {
+            return Ineligible(UnknownSelector);
+        }
+        let used_recovery_reference = object[expected_field]
+            .as_str()
+            .is_some_and(|value| value.starts_with(super::RECOVERY_SELECTOR_REFERENCE_PREFIX));
+        if binding.recovery_reference_required && !used_recovery_reference {
+            return Ineligible(IncapableSelection);
+        }
+        let binding_root = binding.root_binding.clone();
+        let binding_target_digests = binding.canonical_target_digests.clone();
         if tool_kind == GraphCorrelationToolV1::TracePath && recovery_purpose.is_none() {
-            let readiness = self
-                .selectors
-                .get(&selector)
-                .and_then(Option::as_ref)
-                .filter(|binding| binding.implementation_evidence_result)
-                .map(|binding| binding.implementation_traversal_readiness);
-            let status = match readiness {
+            let status = match binding
+                .implementation_evidence_result
+                .then_some(binding.implementation_traversal_readiness)
+            {
                 Some(super::ImplementationTraversalReadiness::Partial) => {
                     self.transition_equivalent_readiness(
-                        &selector,
+                        &binding_root,
+                        &binding_target_digests,
                         super::ImplementationTraversalReadiness::Partial,
                         super::ImplementationTraversalReadiness::RecheckAvailable,
                     );
@@ -372,7 +429,8 @@ impl DecisionAnchorLineages {
                 }
                 Some(super::ImplementationTraversalReadiness::RecheckAvailable) => {
                     self.transition_equivalent_readiness(
-                        &selector,
+                        &binding_root,
+                        &binding_target_digests,
                         super::ImplementationTraversalReadiness::RecheckAvailable,
                         super::ImplementationTraversalReadiness::RecheckExhausted,
                     );
@@ -388,20 +446,6 @@ impl DecisionAnchorLineages {
                 return Ineligible(status);
             }
         }
-        let binding = match self.selectors.get(&selector) {
-            Some(Some(binding)) => binding,
-            Some(None) => return Ineligible(AmbiguousSelector),
-            None => return Ineligible(UnknownSelector),
-        };
-        if active_root.is_some_and(|active_root| binding.root_binding != active_root) {
-            return Ineligible(UnknownSelector);
-        }
-        let used_recovery_reference = object[expected_field]
-            .as_str()
-            .is_some_and(|value| value.starts_with(super::RECOVERY_SELECTOR_REFERENCE_PREFIX));
-        if binding.recovery_reference_required && !used_recovery_reference {
-            return Ineligible(IncapableSelection);
-        }
         let readiness_recheck = tool_kind == GraphCorrelationToolV1::GetCodeSnippet
             && evidence_purpose == Some(DecisionEvidenceKindV1::Implementation)
             && self.is_implementation_trace_reference(input);
@@ -411,14 +455,14 @@ impl DecisionAnchorLineages {
             {
                 return Ineligible(IncapableSelection);
             }
-            let root_binding = binding.root_binding.clone();
             self.transition_equivalent_readiness(
-                &selector,
+                &binding_root,
+                &binding_target_digests,
                 super::ImplementationTraversalReadiness::RecheckAvailable,
                 super::ImplementationTraversalReadiness::RecheckPending,
             );
             return EligibleLineageAdmission::implementation_traversal_readiness_recheck(
-                root_binding,
+                binding_root,
                 selector.kind,
             )
             .map(Eligible)
@@ -426,9 +470,8 @@ impl DecisionAnchorLineages {
         }
         if evidence_purpose == Some(DecisionEvidenceKindV1::Implementation)
             && !binding.implementation_evidence_result
-            && self.selectors.values().flatten().any(|candidate| {
-                candidate.root_binding == binding.root_binding
-                    && candidate.implementation_evidence_result
+            && self.root_selectors.values().any(|candidate| {
+                candidate.root_binding == binding_root && candidate.implementation_evidence_result
             })
         {
             return Ineligible(IncapableSelection);
@@ -487,20 +530,22 @@ impl DecisionAnchorLineages {
 
     fn transition_equivalent_readiness(
         &mut self,
-        selector: &super::Selector,
+        root_binding: &str,
+        target_digests: &std::collections::BTreeSet<String>,
         from: super::ImplementationTraversalReadiness,
         to: super::ImplementationTraversalReadiness,
     ) {
-        let Some(Some(binding)) = self.selectors.get(selector) else {
-            return;
-        };
-        let root_binding = binding.root_binding.clone();
-        let target_digests = binding.canonical_target_digests.clone();
         for binding in self.selectors.values_mut().flatten() {
             if binding.root_binding == root_binding
-                && !binding
-                    .canonical_target_digests
-                    .is_disjoint(&target_digests)
+                && !binding.canonical_target_digests.is_disjoint(target_digests)
+                && binding.implementation_traversal_readiness == from
+            {
+                binding.implementation_traversal_readiness = to;
+            }
+        }
+        for binding in self.root_selectors.values_mut() {
+            if binding.root_binding == root_binding
+                && !binding.canonical_target_digests.is_disjoint(target_digests)
                 && binding.implementation_traversal_readiness == from
             {
                 binding.implementation_traversal_readiness = to;
