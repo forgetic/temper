@@ -1,4 +1,4 @@
-//! Ephemeral provider validator for mapped decision-evidence convergence.
+//! Ephemeral provider validator for mapped post-correction authorization.
 //!
 //! Provider arguments, selectors, roots, source, and payloads remain temporary.
 //! Only closed tool order and checkpoint categories enter retained evidence.
@@ -18,7 +18,12 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         "search_graph",
         "search_graph",
         "get_code_snippet",
+        "get_code_snippet",
+        "get_code_snippet",
         "trace_path",
+        "get_code_snippet",
+        "get_code_snippet",
+        "get_code_snippet",
         "get_code_snippet",
         "get_code_snippet",
     ];
@@ -27,10 +32,13 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         .map(|call| call.name.as_str())
         .collect::<Vec<_>>()
         != expected_tools
-        || calls.iter().any(|call| call.is_error)
+        || calls
+            .iter()
+            .enumerate()
+            .any(|(index, call)| call.is_error != (index == 6))
     {
         return Err(
-            "decision-evidence convergence requires six ordered successful graph results and no locally denied provider invocation"
+            "post-correction authorization requires ten ordered successful graph results and one controlled unavailable-source rejection"
                 .into(),
         );
     }
@@ -46,35 +54,38 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         .get("name")
         .and_then(JsonValue::as_str)
         .filter(|name| name.starts_with("temper-v1-"))
-        .ok_or("decision-evidence convergence did not use a stable provider identity")?;
+        .ok_or("post-correction authorization did not use a stable provider identity")?;
     let confirmed = confirmed_project_from_calls(calls, requested)?;
     if calls[3..].iter().any(|call| {
         call.arguments.get("project").and_then(JsonValue::as_str) != Some(confirmed.as_str())
     }) {
-        return Err("decision-evidence convergence lost its confirmed current-root binding".into());
+        return Err("post-correction authorization lost its confirmed current-root binding".into());
     }
 
     let tokens = convergence_tokens(mcp)?;
-    let implementation = token(&tokens, "implementation")?;
+    let model = token(&tokens, "model")?;
+    let route = token(&tokens, "implementation")?;
     let caller = token(&tokens, "caller")?;
-    let sibling_test = token(&tokens, "behavioral_test")?;
+    let focused_test = token(&tokens, "behavioral_test")?;
     let root_queries = calls[3..5]
         .iter()
         .filter_map(|call| call.arguments.get("query").and_then(JsonValue::as_str))
         .collect::<std::collections::BTreeSet<_>>();
     if root_queries
         != std::collections::BTreeSet::from([
-            "focused alias retry behavior",
-            "routing implementation affinity",
+            "focused routing regression",
+            "routing implementation authority",
         ])
     {
-        return Err("decision-evidence convergence omitted an independent root".into());
+        return Err("post-correction authorization omitted an independent root".into());
     }
     let expected_arguments = [
-        (5, "qualified_name", implementation),
-        (6, "function_name", terminal_name(implementation)?),
-        (7, "qualified_name", caller),
-        (8, "qualified_name", terminal_name(sibling_test)?),
+        (5, "qualified_name", model),
+        (7, "qualified_name", model),
+        (8, "function_name", terminal_name(model)?),
+        (9, "qualified_name", caller),
+        (10, "qualified_name", focused_test),
+        (13, "qualified_name", route),
     ];
     if expected_arguments.iter().any(|(index, field, expected)| {
         calls[*index]
@@ -83,16 +94,52 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
             .and_then(JsonValue::as_str)
             != Some(*expected)
     }) {
-        return Err("decision-evidence convergence did not consume its returned selectors".into());
+        return Err(
+            "post-correction authorization did not consume its presented opaque selectors".into(),
+        );
+    }
+    if calls[8].arguments.get("mode").and_then(JsonValue::as_str) != Some("calls")
+        || calls[8]
+            .arguments
+            .get("direction")
+            .and_then(JsonValue::as_str)
+            != Some("inbound")
+        || calls[8]
+            .arguments
+            .get("include_tests")
+            .and_then(JsonValue::as_bool)
+            != Some(false)
+    {
+        return Err(
+            "post-correction authorization omitted the bounded implementation trace".into(),
+        );
+    }
+    let correction_previews = calls[11..13]
+        .iter()
+        .filter_map(|call| {
+            call.arguments
+                .get("qualified_name")
+                .and_then(JsonValue::as_str)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if correction_previews != std::collections::BTreeSet::from([caller, route]) {
+        return Err(
+            "post-correction authorization did not inspect both presented corrections".into(),
+        );
     }
 
     let expected_events = [
         "served_selection_root",
         "served_selection_root",
-        "served_selection_active_source",
-        "served_selection_active_trace",
-        "served_selection_active_source",
+        "served_selection_provisional_preview",
+        "",
+        "served_selection_provisional_source",
+        "served_selection_correction_trace",
+        "served_selection_caller_source",
         "served_selection_focused_source",
+        "served_selection_correction_preview",
+        "served_selection_correction_preview",
+        "served_selection_corrected_source",
     ];
     if calls[3..]
         .iter()
@@ -100,7 +147,7 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         .collect::<Vec<_>>()
         != expected_events
     {
-        return Err("decision-evidence convergence omitted a closed forest checkpoint".into());
+        return Err("post-correction authorization omitted a closed transition checkpoint".into());
     }
 
     validate_stable_rebind_contract(mcp, calls, requested)
@@ -108,14 +155,14 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
 
 fn convergence_tokens(mcp: &FakeMcpServer) -> Result<serde_json::Map<String, JsonValue>, String> {
     let raw = fs::read_to_string(&mcp.state_path)
-        .map_err(|_| "decision-evidence convergence state was unavailable".to_string())?;
+        .map_err(|_| "post-correction authorization state was unavailable".to_string())?;
     let state: JsonValue = serde_json::from_str(&raw)
-        .map_err(|_| "decision-evidence convergence state was malformed".to_string())?;
+        .map_err(|_| "post-correction authorization state was malformed".to_string())?;
     state
         .get("graph_convergence_tokens")
         .and_then(JsonValue::as_object)
         .cloned()
-        .ok_or("decision-evidence convergence omitted transient selectors".to_string())
+        .ok_or("post-correction authorization omitted transient selectors".to_string())
 }
 
 fn token<'a>(
@@ -125,7 +172,7 @@ fn token<'a>(
     tokens
         .get(name)
         .and_then(JsonValue::as_str)
-        .ok_or("decision-evidence convergence omitted a transient selector".to_string())
+        .ok_or("post-correction authorization omitted a transient selector".to_string())
 }
 
 fn terminal_name(qualified: &str) -> Result<&str, String> {
@@ -133,5 +180,5 @@ fn terminal_name(qualified: &str) -> Result<&str, String> {
         .rsplit_once("::")
         .map(|(_, terminal)| terminal)
         .filter(|terminal| !terminal.is_empty())
-        .ok_or("decision-evidence convergence selector was not transformable".to_string())
+        .ok_or("post-correction authorization selector was not transformable".to_string())
 }

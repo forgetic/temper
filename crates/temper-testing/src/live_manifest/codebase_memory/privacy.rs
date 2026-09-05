@@ -84,7 +84,7 @@ mod tests {
             }),
             delay_ms: None,
             is_error: false,
-            fixture_event: Some("served_selection_active_source".to_string()),
+            fixture_event: Some("served_selection_corrected_source".to_string()),
         }];
 
         let path = write_privacy_safe_mcp_log(&mcp, &calls).expect("privacy-safe log");
@@ -92,7 +92,7 @@ mod tests {
         assert_eq!(
             retained,
             concat!(
-                "{\"checkpoint\":\"served_selection_active_source\",",
+                "{\"checkpoint\":\"served_selection_corrected_source\",",
                 "\"is_error\":false,\"sequence\":1,",
                 "\"tool\":\"get_code_snippet\"}\n"
             )

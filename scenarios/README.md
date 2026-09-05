@@ -299,27 +299,29 @@ credentials, arguments, host output, and diagnostic traces remain ephemeral.
 The routing-repair benchmark corpus and all historical scenario mappings remain
 unchanged.
 
-### Mapped live decision-evidence convergence mapping
+### Mapped live post-correction authorization mapping
 
 `mapped-live-exact-source-selection` is the dedicated active mapping for feature
-`ai/temper#1210` and plan `ai/temper#1211` on
-`agent/pr-for-feature-1210`. Its `introduced_by = "#1144"` provenance and the
-historical feature `ai/temper#1151`, plan `ai/temper#1152`, and source branch
-`agent/pr-for-feature-1151` remain audit metadata. An early ordinary read of
-`repo/src/route.rs` has no retroactive authority. Separate routing and
-focused-test roots then reproduce incomplete live evidence before one immutable
-recovery batch admits only the active-root implementation and trace; cross-root,
-broad, malformed, denied, and failed siblings remain local and receive no
-credit. Later provider-derived caller and separate focused-test source consumers
-complete the retained implementation/caller/focused-test forest.
-Post-completion graph detours stay local, a direct patch is denied without a workspace effect, and exactly one
-post-source exact read authorizes exactly one matching mutation. Aggregate
-evidence retains only privacy-safe typed ordering, closed recovery and policy
-facts, the declared target, binding, and gate outcomes. Runtime prompts,
-selectors, provider output, source, roots, credentials, arguments, host output,
-local paths, and generated traces remain ephemeral. Trusted unavailable and
-disabled conventional controls remain observable through the unchanged routing
-harness, verifier, and historical mapped coverage.
+`ai/temper#1263` and plan `ai/temper#1264` on
+`agent/pr-for-feature-1263`. Its `introduced_by = "#1144"` provenance, the
+prior `ai/temper#1210` / `ai/temper#1211` mapping and source branch
+`agent/pr-for-feature-1210`, and the earlier `ai/temper#1151` /
+`ai/temper#1152` mapping with source branch `agent/pr-for-feature-1151` remain
+unchanged. Distinct implementation/caller
+and focused-test roots establish provisional `src/model.rs` authority before a
+provider-derived trace supports `src/route.rs::worker_slot` as a correction.
+After the retained forest converges and graph exploration closes, an exact read
+is denied until every presented correction candidate is inspected in one
+bounded checkpoint. A later explicit decision replaces provisional authority,
+retires the correction handoff, and leaves sibling-root, broad, malformed,
+unpresented, unrelated, old, and stale activity local or denied. Exactly one
+still-later `repo/src/route.rs` read authorizes exactly one matching mutation.
+Aggregate evidence retains only privacy-safe typed ordering, closed correction
+and policy facts, checkpoint counts, binding, and gate outcomes. Runtime
+prompts, selectors, provider output, source, roots, credentials, arguments,
+host output, local paths, and generated traces remain ephemeral. The routing
+benchmark corpus, controls, verifier, thresholds, provider/model settings, and
+acceptance budgets remain frozen.
 
 ### Mapped live denied-shell classification mapping
 

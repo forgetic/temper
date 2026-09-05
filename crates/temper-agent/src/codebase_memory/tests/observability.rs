@@ -328,7 +328,7 @@ fn mcp_results_project_only_closed_focused_test_discovery_outcomes() {
         PRIVATE_QUERY,
     )
     .expect("complete graph query");
-    let lineage = DecisionAnchorLineageV1::new_with_metadata(
+    let mut lineage = DecisionAnchorLineageV1::new_with_metadata(
         "00000000-0000-4000-8000-000000000002".to_string(),
         DecisionAnchorLineageStageV1::CarryForward,
         DecisionAnchorTargetKindV1::GraphQuery,
@@ -338,6 +338,8 @@ fn mcp_results_project_only_closed_focused_test_discovery_outcomes() {
         Some(FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned),
     )
     .expect("focused-test discovery lineage");
+    lineage.implementation_correction_available = true;
+    lineage.implementation_authority_corrected = true;
     let events = capture(|| {
         emit_mcp_tool_result(McpToolResult {
             tool_name: "codebase_memory_search_graph",
@@ -359,6 +361,14 @@ fn mcp_results_project_only_closed_focused_test_discovery_outcomes() {
     assert_eq!(
         result.fields["graph.lineage.focused_test_discovery"],
         "eligible_selector_returned"
+    );
+    assert_eq!(
+        result.fields["graph.lineage.implementation_correction_available"],
+        "true"
+    );
+    assert_eq!(
+        result.fields["graph.lineage.implementation_authority_corrected"],
+        "true"
     );
     let rendered = format!("{result:#?}");
     assert!(!rendered.contains(PRIVATE_QUERY));

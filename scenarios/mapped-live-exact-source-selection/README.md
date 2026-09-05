@@ -1,92 +1,101 @@
-# Mapped live decision-evidence convergence
+# Mapped live post-correction authorization
 
-This checked-in scenario is the dedicated mapping for feature `ai/temper#1210`
-and plan `ai/temper#1211` on `agent/pr-for-feature-1210`. It updates the
-`mapped-live-exact-source-selection` scenario in place and retains
-`introduced_by = "#1144"`. The prior feature `ai/temper#1151`, plan
-`ai/temper#1152`, and source branch `agent/pr-for-feature-1151` remain
-historical audit metadata; the focused-test and decision-gap scenarios also
-remain unchanged.
+This checked-in scenario is the dedicated mapping for feature `ai/temper#1263`
+and plan `ai/temper#1264` on `agent/pr-for-feature-1263`. It updates
+`mapped-live-exact-source-selection` in place while retaining
+`introduced_by = "#1144"`. Feature `ai/temper#1210`, plan `ai/temper#1211`,
+and source branch `agent/pr-for-feature-1210` remain historical audit metadata,
+as do the earlier `ai/temper#1151` / `ai/temper#1152` mapping and
+`agent/pr-for-feature-1151` source branch.
 
 ## Live contract
 
 A real Forgejo instance, host Actions runner, standalone Temper process, Jig
-engineer, and deterministic current-root provider perform one minimal repair
-only after complete retained decision evidence.
-The enabled path first discovers separate routing and focused-test roots in one
-immutable batch, then reads `repo/src/route.rs` before complete source evidence.
-That early exact read has no retroactive selection or mutation authority. They
-begin with every required evidence kind absent. One immutable recovery batch
-combines the admitted active-root implementation source with a cross-root
-caller read, an irrelevant broad search, a malformed selector, and a failed
-duplicate implementation attempt. Those four failed calls remain local, share
-the same pre-batch diagnostic, spend no allowance, and earn no evidence credit. The implementation
-source alone reaches the provider and leaves `trace`, `caller`, and
-`focused_test` while preserving four recovery slots.
+engineer, and deterministic current-root provider reproduce the repetition-001
+shape with separate implementation/caller and focused-test roots. The routing
+root presents bounded candidates in provider order. A source-only preview and a
+later explicit implementation call establish provisional `src/model.rs`
+authority. Sibling-root, broad, malformed, and unrelated calls in the immutable
+selection batch remain local. One unpresented unavailable exact source reaches
+the deterministic provider and is rejected. All five spend no recovery
+allowance and receive no evidence credit.
 
-A later batch consumes the provider-derived active-root trace while a duplicate
-implementation source is denied from the same immutable snapshot. The trace
-leaves caller and focused-test evidence missing with allowance three. Separate
-later turns consume the provider-derived caller selector on the routing root and
-the focused-test selector on the independent test root. Those results complete
-the retained root forest. After completion, broad, irrelevant, and selectorless
-graph activity is also denied locally. Provider counts prove that cross-root,
-irrelevant, malformed, denied, failed, duplicate, and post-completion activity
-did not reach MCP or replace the complete typed chain.
+A later provider-derived trace of the provisional model returns the caller and
+supports `src/route.rs::worker_slot` as a correction. Provider-derived caller
+and separate-root focused-test sources complete the retained forest and close
+graph exploration. Broad, unrelated, and selectorless graph activity remains
+local after closure without discarding the correction handoff. An ordinary read
+of the provisional model target is denied with the closed
+`correction_inspection_required` policy reason.
 
-The direct route patch is then denied with the closed `policy_denial` /
-`policy_precondition` outcome because the only route read happened too early.
-The denial has no workspace effect. Exactly one later ordinary read of
-`repo/src/route.rs` supplies the required `selection` mode and authorizes the
-matching one-file patch. Focused host validation, the submission gate, real
-Actions success, merge, and issue closure complete the run.
-
-Trusted provider unavailability still fails once and releases productive
-conventional fallback without an immediate retry through the frozen routing
-harness. Disabled mode remains the unchanged honest conventional-discovery
-control and synthesizes no graph evidence. The mapped enabled scenario does not
-special-case the benchmark transcript or weaken either control.
+The engineer then inspects both presented correction candidates in one bounded
+checkpoint without an evidence purpose. In a later turn it explicitly selects
+the inspected route candidate as implementation evidence. That successful
+correction atomically replaces model authority and retires the correction
+handoff. Reuse of the selected and unchosen references stays local; attempted
+old-model and unrelated mutations are denied without workspace effects. Graph
+exploration remains closed. Exactly one later ordinary read of
+`repo/src/route.rs` authorizes exactly one matching one-file route patch.
+Focused host validation, the submission gate, real Actions success, merge, and
+issue closure complete the run.
 
 ## Privacy boundary
 
 Checked-in declarations and retained aggregate evidence contain only safe tool
-counts, typed lineage kinds and stages, closed recovery and policy categories,
-ordering, the declared exact selection target, current-root binding facts, and
-gate outcomes. Runtime prompts, provider selectors and payloads, source text,
-roots, credentials, mutation arguments, host output, local paths, and generated
-traces remain ephemeral. Generated runtime evidence must not be committed.
+counts, checkpoint categories, V1 lineage kinds and correction flags, closed
+policy reasons, ordering, the declared exact target, current-root binding facts,
+and gate outcomes. Runtime prompts, provider selectors and payloads, source
+text, roots, credentials, mutation arguments, host output, local paths, and
+generated traces remain ephemeral. Generated runtime evidence must not be
+committed.
 
 ## Validation
 
-From the exact assembled #1210 feature head, run the focused product and
-scenario checks before the live run:
+From the exact assembled #1263 feature head, run the focused product and
+scenario checks before the live scenario:
 
 ```sh
-cargo test -p temper-agent-core every_successful_incomplete_kind_matrix
-cargo test -p temper-agent-core rejected_failed_cross_root_broad_and_irrelevant
-cargo test -p temper-agent --test jig_decision_chain_bypasses
+cargo test -p temper-agent two_root_model_correction
+cargo test -p temper-agent-core decision_anchor_authority_correction
+cargo test -p temper-worker deterministic_policy_terminal_becomes_non_retryable_policy_activity
 cargo test -p temper-testing exact_source_selection
+cargo dev-benchmark-harness
 cargo dev-scenario-check
 ./.temper/pre-pr
 cargo dev-scenario-run scenarios/mapped-live-exact-source-selection
 cargo dev-scenario-validate-feature \
-  --feature ai/temper#1210 \
+  --feature ai/temper#1263 \
   --landing-base origin/main \
-  --source-branch agent/pr-for-feature-1210 \
+  --source-branch agent/pr-for-feature-1263 \
   --pr <aggregate-pr> \
   --sha "$(git rev-parse HEAD)" \
-  --output-dir target/focused-validation
+  --output-dir target/focused-validation-1263
 ```
 
-Keep production landing held until exact-head feature validation succeeds.
-External acceptance must use the unchanged routing benchmark and verifier in
-this order: one wholly fresh enabled smoke, five fresh enabled repetitions,
-five fresh disabled repetitions, five fresh forced-unavailable repetitions,
-and exactly one verifier invocation. Freeze each root before starting the next
-condition. Do not reuse #1203 artifacts, selectively rerun, reorder conditions,
-or continue after a failed condition.
+Collect exact-head validation only from the final aggregate feature head. Do
+not resume the broader #1210 acceptance matrix and do not address repetition
+005.
 
-The final report must use only privacy-safe aggregate evidence and report the
-unchanged `enabled_decision_evidence`, byte-exact patch, host validation,
-relevance, improvement, unavailable retry, disabled control, and privacy gates.
-It must not publish individual model paths or diagnostic artifacts.
+For external live reproduction, use the unchanged routing benchmark, provider,
+model, expected patch, thresholds, and budgets. Produce one wholly fresh
+enabled repetition in a new output root and keep all generated evidence
+untracked:
+
+```sh
+TEMPER_BENCHMARK_LIVE=1 cargo run -p temper-benchmark-cli -- run \
+  --benchmark benchmarks/agent-sessions/codebase-memory-routing-repair/benchmark.toml \
+  --mode live \
+  --condition codebase-memory-enabled \
+  --agent-bin target/debug/temper-agent \
+  --config /srv/data/git/runner/.config/temper/config.toml \
+  --secrets /srv/data/git/runner/.config/temper/credentials.toml \
+  --pool engineers \
+  --repetitions 1 \
+  --output-dir target/live-reproduction-1263-enabled
+```
+
+The report may include the exact-head SHA, commands, scenario outcome, the
+successful corrected-route transition, and privacy-safe aggregate checkpoint
+counts. It must not publish an individual model path, selector, root, prompt,
+source payload, mutation argument, host output, credential, or diagnostic
+artifact.
