@@ -69,6 +69,8 @@ pub(super) struct RecoverySelectorReference {
     pub(super) source_selector: Option<Selector>,
     pub(super) source_provider_value: Option<String>,
     pub(super) state: RecoverySelectorState,
+    /// Bounded inspection lifecycle, independent from selection authority.
+    pub(super) previewed: bool,
     pub(super) presented: bool,
 }
 
@@ -270,6 +272,7 @@ impl DecisionAnchorLineages {
                 source_selector,
                 source_provider_value,
                 state: RecoverySelectorState::Available,
+                previewed: false,
                 presented: false,
             })
     }
@@ -356,14 +359,29 @@ impl DecisionAnchorLineages {
         .ok_or(())
     }
 
+    #[cfg(test)]
     pub(in crate::codebase_memory) fn expand_recovery_selector(
         &mut self,
         tool_name: &str,
         input: &mut Value,
         evidence_kind: Option<DecisionEvidenceKindV1>,
     ) -> Result<Option<ExpandedRecoverySelector>, ()> {
-        let Some((field, reference)) = self.recovery_selector(tool_name, input, evidence_kind)?
-        else {
+        self.expand_recovery_selector_with_preview(tool_name, input, evidence_kind, false)
+    }
+
+    pub(in crate::codebase_memory) fn expand_recovery_selector_with_preview(
+        &mut self,
+        tool_name: &str,
+        input: &mut Value,
+        evidence_kind: Option<DecisionEvidenceKindV1>,
+        candidate_preview: bool,
+    ) -> Result<Option<ExpandedRecoverySelector>, ()> {
+        let selected = if candidate_preview {
+            self.implementation_preview_selector(tool_name, input)?
+        } else {
+            self.recovery_selector(tool_name, input, evidence_kind)?
+        };
+        let Some((field, reference)) = selected else {
             return Ok(None);
         };
         let kind = match field {
@@ -385,7 +403,7 @@ impl DecisionAnchorLineages {
             .ok_or(())?;
         if is_trace_reference {
             reference.state = RecoverySelectorState::Consumed;
-        } else if reference.purpose.is_source_candidate() {
+        } else if reference.purpose.is_source_candidate() && !candidate_preview {
             if reference.state != RecoverySelectorState::Available {
                 return Err(());
             }
@@ -396,6 +414,7 @@ impl DecisionAnchorLineages {
             reference: public_reference,
             root_binding,
             decision_evidence_kind: evidence_kind,
+            candidate_preview,
         }))
     }
 
@@ -404,6 +423,9 @@ impl DecisionAnchorLineages {
         expanded: &ExpandedRecoverySelector,
         preserve_alternatives: bool,
     ) -> Option<CandidateRecovery> {
+        if expanded.candidate_preview {
+            return None;
+        }
         let candidate = self
             .recovery_reference_selectors
             .get(&expanded.reference)

@@ -125,6 +125,11 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
                 published,
             );
         }
+        if let Some(preview) =
+            self.published_implementation_preview_admission(tool_name, arguments, active_root)
+        {
+            return (LineageAdmissionOutcome::Eligible(preview), published);
+        }
         if let Some(raw_admission) =
             self.resolve_published_raw_admission(tool_name, arguments, active_root)
         {

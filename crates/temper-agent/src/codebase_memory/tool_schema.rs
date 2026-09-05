@@ -71,7 +71,7 @@ pub(super) fn scoped_parameters(
                     json!({
                         "type": "string",
                         "enum": ["implementation", "caller", "focused_test"],
-                        "description": "Explicit closed decision-evidence purpose for this source read. Temper removes this wrapper-owned field before the MCP request.",
+                        "description": "Explicit closed decision-evidence purpose for this source read. Temper removes this wrapper-owned field before the MCP request. When an active-root handoff offers multiple implementation candidates, omit this field only for bounded source preview and set it to implementation only when explicitly committing one candidate.",
                     }),
                 );
             }

@@ -48,6 +48,8 @@ impl DecisionAnchorLineageRegistry {
         if requires_opaque_choice {
             return Err(());
         }
+        let candidate_preview =
+            self.is_published_implementation_preview(tool_name, input, evidence_kind);
         let mut effective_evidence_kind = evidence_kind;
         let canonicalized_raw = if let Some(canonical) =
             self.canonical_published_raw_selector(tool_name, input, None, evidence_kind)?
@@ -58,7 +60,7 @@ impl DecisionAnchorLineageRegistry {
         } else {
             false
         };
-        if !canonicalized_raw {
+        if !canonicalized_raw && !candidate_preview {
             effective_evidence_kind = effective_evidence_kind.or_else(|| {
                 self.published_source_evidence_kind(tool_name, input, None, effective_evidence_kind)
             });
@@ -76,11 +78,17 @@ impl DecisionAnchorLineageRegistry {
             .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .expand_recovery_selector(tool_name, input, effective_evidence_kind)?;
+            .expand_recovery_selector_with_preview(
+                tool_name,
+                input,
+                effective_evidence_kind,
+                candidate_preview,
+            )?;
         if let Some(object) = input.as_object_mut() {
             object.remove("decision_evidence_kind");
         }
-        Ok(expanded.map(|expanded| expanded.with_evidence_kind(effective_evidence_kind)))
+        Ok(expanded
+            .map(|expanded| expanded.with_purpose(effective_evidence_kind, candidate_preview)))
     }
 
     pub(crate) fn complete_candidate_reference(
@@ -88,6 +96,9 @@ impl DecisionAnchorLineageRegistry {
         expanded: &ExpandedRecoverySelector,
         preserve_alternatives: bool,
     ) -> Option<CandidateRecovery> {
+        if expanded.candidate_preview {
+            return None;
+        }
         let result = self
             .lineages
             .lock()
@@ -104,6 +115,7 @@ pub(in crate::codebase_memory) struct ExpandedRecoverySelector {
     pub(super) reference: String,
     pub(super) root_binding: String,
     pub(super) decision_evidence_kind: Option<DecisionEvidenceKindV1>,
+    pub(super) candidate_preview: bool,
 }
 
 impl ExpandedRecoverySelector {
@@ -111,11 +123,13 @@ impl ExpandedRecoverySelector {
         &self.root_binding
     }
 
-    pub(super) fn with_evidence_kind(
+    pub(super) fn with_purpose(
         mut self,
         decision_evidence_kind: Option<DecisionEvidenceKindV1>,
+        candidate_preview: bool,
     ) -> Self {
         self.decision_evidence_kind = decision_evidence_kind;
+        self.candidate_preview = candidate_preview;
         self
     }
 
@@ -139,6 +153,7 @@ impl DecisionAnchorLineages {
             typed_parts,
             decision_evidence_kind,
             expanded.map(ExpandedRecoverySelector::root_binding),
+            expanded.is_some_and(|expanded| expanded.candidate_preview),
         )
     }
 }

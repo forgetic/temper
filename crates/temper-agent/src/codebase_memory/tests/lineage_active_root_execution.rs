@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use temper_agent_core::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, InvocationTargetAdmission,
-    TargetAdmissionOutcome, TargetAdmissionStatus, ToolCallDenial, ToolFailureCategory,
+    LineageAdmissionOutcome, TargetAdmissionOutcome, TargetAdmissionStatus, ToolCallDenial, ToolFailureCategory,
     ToolFailureDiagnostic, ToolInvocationCatalog, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 use temper_agent_io::{EngineTime, Machine};
@@ -484,7 +484,10 @@ fn run_parallel_forest_candidate_menu(reverse_completion: bool) {
             assistant(vec![(
                 "selected-active",
                 "codebase_memory_get_code_snippet",
-                serde_json::json!({"qualified_name": active_reference}),
+                serde_json::json!({
+                    "qualified_name": active_reference,
+                    "decision_evidence_kind": "implementation"
+                }),
             )]),
         );
         assert!(selected_source.iter().any(|request| matches!(
