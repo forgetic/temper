@@ -21,7 +21,7 @@ uses = "manifest"
 feature = "ai/temper#1263"
 plan = "ai/temper#1264"
 source_branch = "agent/pr-for-feature-1263"
-change = "updated"
+change = "new"
 
 [feature_contract]
 claim = "After a complete retained two-root forest closes graph exploration, bounded inspection and a later explicit correction replace provisional src/model.rs authority with provider-supported src/route.rs::worker_slot authority; only a still-later exact ordinary route read authorizes one matching mutation."
