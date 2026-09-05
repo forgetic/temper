@@ -281,14 +281,22 @@ for line in sys.stdin:
                 tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode in ("active-root-handoff", "active-root-overlap-handoff") and name == "get_code_snippet":
                 symbol = args.get("qualified_name")
-                expected = ("temper-v1-production.src.route.worker_slot",) if mode == "active-root-overlap-handoff" else ("worker_slot", "sibling_worker_slot")
+                expected = (
+                    "temper-v1-production.src.model.affinity_topic",
+                    "temper-v1-production.src.route.worker_slot",
+                ) if mode == "active-root-overlap-handoff" else ("worker_slot", "sibling_worker_slot")
                 if symbol not in expected:
                     tool_result(request["id"], "invalid argument", True)
                 else:
+                    file_path = (
+                        "src/model.rs"
+                        if symbol == "temper-v1-production.src.model.affinity_topic"
+                        else "src/route.rs"
+                    )
                     payload = {
                         "name": symbol,
                         "qualified_name": symbol,
-                        "file_path": "src/route.rs",
+                        "file_path": file_path,
                         "source": f"fn {symbol}() {{}}",
                     }
                     tool_result(request["id"], json.dumps(payload), structured=payload)
