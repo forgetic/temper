@@ -1,7 +1,7 @@
 schema = "temper.scenario.v1"
 name = "mapped-live-exact-source-selection"
 status = "active"
-intent = "Validate feature #1210's deterministic root-local decision-evidence convergence before one post-source exact read and matching minimal mutation."
+intent = "Validate feature #1263's reachable post-convergence correction from provisional model authority to one exact route read and matching minimal mutation."
 introduced_by = "#1144"
 owner_area = "agent-tools"
 stability = "provisional"
@@ -13,19 +13,21 @@ extends = "scenarios/mapped-live-focused-test-source-relevance"
 [runner]
 uses = "manifest"
 
-# Historical mapping audit: feature ai/temper#1151, plan ai/temper#1152, and
-# source branch agent/pr-for-feature-1151. The introduced_by provenance is unchanged.
+# Historical mapping audit: feature ai/temper#1210, plan ai/temper#1211, and
+# source branch agent/pr-for-feature-1210; before that, feature ai/temper#1151,
+# plan ai/temper#1152, and source branch agent/pr-for-feature-1151. The
+# introduced_by provenance is unchanged.
 [validation]
-feature = "ai/temper#1210"
-plan = "ai/temper#1211"
-source_branch = "agent/pr-for-feature-1210"
-change = "new"
+feature = "ai/temper#1263"
+plan = "ai/temper#1264"
+source_branch = "agent/pr-for-feature-1263"
+change = "updated"
 
 [feature_contract]
-claim = "Enabled mutation authority requires one retained root-coherent forest containing implementation, caller, and focused_test source evidence; incomplete, cross-root, irrelevant, malformed, denied, and failed activity receives no credit, and only one exact ordinary read after completion authorizes the matching mutation."
-stimulus = "Run one live engineer repair with distinct routing and focused-test roots produced in one batch, an early route read, one immutable mixed recovery batch that admits the implementation source, one provider-derived active-root trace, later caller and separate focused-test source consumers, post-completion detours, a denied direct patch, and one post-source exact read."
-observable = "Six successful V1-correlated and V1-lineaged graph results; two retained roots; four same-snapshot non-credit denials; implementation progress leaves four recovery slots; trace progress leaves caller and focused-test evidence; typed implementation/caller sources plus a separate focused-test source; three post-completion local denials; one policy-precondition mutation denial; one authoritative exact read; one matching one-file mutation; host validation; Actions success; merge; and source closure."
-assertion = "Only the active-root implementation and trace, the later caller source, and the separate focused-test root source contribute evidence and complete the retained forest; broad, malformed, selectorless, cross-root, denied, failed, duplicate, and post-completion activity never reaches the provider, spends allowance, or contributes evidence; the early read and denied patch create no authority; exactly one later route read authorizes exactly one minimal patch."
+claim = "After a complete retained two-root forest closes graph exploration, bounded inspection and a later explicit correction replace provisional src/model.rs authority with provider-supported src/route.rs::worker_slot authority; only a still-later exact ordinary route read authorizes one matching mutation."
+stimulus = "Run repetition 001's live engineer repair with distinct implementation/caller and focused-test roots, preview and commit provisional model authority, consume the model trace plus caller and focused-test sources, close graph exploration, deny a premature provisional read, inspect every presented correction candidate in one bounded checkpoint, choose the route in a later turn, challenge retired state, then read and repair repo/src/route.rs."
+observable = "Ten successful V1-correlated and V1-lineaged graph results plus one controlled unavailable-source rejection; two retained roots; four same-snapshot local initial denials; provisional model implementation evidence; one correction-supporting trace; complete caller/focused-test evidence; graph closure; one correction-inspection read denial; two bounded previews; one later corrected implementation result; stale correction and old-target denials; one authoritative route read; one matching one-file mutation; host validation; Actions success; merge; and source closure."
+assertion = "Sibling-root, broad, malformed, unrelated, old, and stale activity never reaches the provider or gains authority; one unpresented unavailable exact source is rejected by the provider and gains no authority; graph closure survives correction inspection; successful correction atomically retires provisional model authority and its handoff; exactly one later repo/src/route.rs read authorizes exactly one byte-matching route patch; retained evidence exposes only closed typed and aggregate facts."
 runtime_budget_seconds = 600
 jig_script_path = "jig/mapped-live-exact-source-selection.json"
 
@@ -47,7 +49,7 @@ ci_target = ".forgejo/workflows/ci.yml"
 id = "source"
 repo = "service"
 kind = "code"
-title = "Require complete retained decision evidence before route mutation"
+title = "Correct provisional model authority before route mutation"
 body = "config/source-issue.md"
 author = "site_admin"
 labels = ["code", "ready"]
@@ -112,10 +114,10 @@ after = "temper.launch_standalone"
 id = "wait-for-convergence"
 action = "workflow.wait_convergence"
 strategy = "codebase-memory"
-until = "the engineer recovers a complete retained root-coherent implementation/caller/focused-test forest, observes that all non-credit activity stays local, receives one direct-patch precondition denial, performs one post-source exact route read, applies the matching repair, passes host validation and Actions, merges the PR, and closes the source issue"
+until = "the engineer converges a two-root forest, closes graph exploration, inspects every bounded correction candidate, later corrects provisional model authority to worker_slot, proves old and stale authority remains denied, performs one exact route read, applies one route repair, passes host validation and Actions, merges the PR, and closes the source issue"
 
 [expect]
-outcome = "The mapped live run deterministically completes the retained decision-evidence forest, denies every non-credit detour and early authority path, and converges through one post-source exact read and one privacy-safe repair."
+outcome = "The mapped live repetition 001 path deterministically replaces provisional model authority after graph closure and reaches exactly one privacy-safe route mutation through one later exact read."
 merged_pull_requests = 1
 closed_parent_issues = 1
 
@@ -150,64 +152,50 @@ fields."index.outcome" = "completed"
 
 [[expect.events]]
 required = true
-id = "early-route-read-has-no-retroactive-authority"
-event = "tool.end"
-fields.tool = "read"
-fields.id = "early-route-read-before-complete-evidence"
-
-[[expect.events]]
-required = true
-id = "cross-root-caller-is-noncredit"
+id = "sibling-root-call-remains-local"
 event = "tool.error"
 fields.tool = "codebase_memory_get_code_snippet"
-fields.id = "recovery-cross-root-caller-denied"
+fields.id = "initial-sibling-root-caller-denied"
 fields."tool.failure.category" = "graph_lifecycle_denial"
 fields."tool.failure.reason" = "decision_evidence_incomplete"
-fields."tool.failure.conventional_fallback" = false
-fields."tool.failure.graph.missing_evidence" = "trace,implementation,caller,focused_test"
-fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
 fields."tool.failure.graph.remaining_allowance" = 4
 
 [[expect.events]]
 required = true
-id = "irrelevant-broad-call-is-noncredit"
+id = "broad-call-remains-local"
 event = "tool.error"
 fields.tool = "codebase_memory_search_graph"
-fields.id = "recovery-irrelevant-broad-denied"
-fields."tool.failure.category" = "graph_lifecycle_denial"
+fields.id = "initial-broad-search-denied"
 fields."tool.failure.reason" = "decision_evidence_incomplete"
-fields."tool.failure.conventional_fallback" = false
-fields."tool.failure.graph.missing_evidence" = "trace,implementation,caller,focused_test"
-fields."tool.failure.graph.remaining_allowance" = 4
 
 [[expect.events]]
 required = true
-id = "malformed-selector-is-noncredit"
+id = "malformed-call-remains-local"
 event = "tool.error"
 fields.tool = "codebase_memory_trace_path"
-fields.id = "recovery-malformed-selector-denied"
-fields."tool.failure.category" = "graph_lifecycle_denial"
+fields.id = "initial-malformed-selector-denied"
 fields."tool.failure.reason" = "decision_evidence_incomplete"
-fields."tool.failure.conventional_fallback" = false
-fields."tool.failure.graph.missing_evidence" = "trace,implementation,caller,focused_test"
-fields."tool.failure.graph.remaining_allowance" = 4
 
 [[expect.events]]
 required = true
-id = "implementation-progress-keeps-trace-caller-and-test-missing"
+id = "unpresented-call-is-rejected"
 event = "tool.error"
 fields.tool = "codebase_memory_get_code_snippet"
-fields.id = "recovery-satisfied-implementation-denied"
-fields."tool.failure.category" = "graph_lifecycle_denial"
-fields."tool.failure.reason" = "decision_evidence_incomplete"
-fields."tool.failure.conventional_fallback" = false
-fields."tool.failure.graph.missing_evidence" = "trace,caller,focused_test"
-fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
-fields."tool.failure.graph.remaining_allowance" = 4
+fields.id = "initial-unpresented-selector-denied"
+fields."tool.failure.category" = "invalid_model_input"
+fields."tool.failure.reason" = "invalid_model_input"
 
 [[expect.events]]
 required = true
-id = "active-root-implementation-source-is-typed"
+id = "unrelated-call-remains-local"
+event = "tool.error"
+fields.tool = "codebase_memory_trace_path"
+fields.id = "initial-unrelated-wrong-tool-denied"
+fields."tool.failure.reason" = "decision_evidence_incomplete"
+
+[[expect.events]]
+required = true
+id = "provisional-model-source-is-typed"
 event = "mcp.tool.result"
 fields."mcp.tool" = "get_code_snippet"
 fields.is_error = false
@@ -216,11 +204,18 @@ fields."graph.lineage.decision_evidence_kind" = "implementation"
 
 [[expect.events]]
 required = true
+id = "trace-publishes-correction-support"
+event = "mcp.tool.result"
+fields."mcp.tool" = "trace_path"
+fields.is_error = false
+fields."graph.lineage.implementation_correction_available" = true
+
+[[expect.events]]
+required = true
 id = "active-root-caller-source-is-typed"
 event = "mcp.tool.result"
 fields."mcp.tool" = "get_code_snippet"
 fields.is_error = false
-fields."graph.lineage.stage" = "carry_forward"
 fields."graph.lineage.decision_evidence_kind" = "caller"
 
 [[expect.events]]
@@ -229,62 +224,118 @@ id = "separate-root-focused-test-source-is-typed"
 event = "mcp.tool.result"
 fields."mcp.tool" = "get_code_snippet"
 fields.is_error = false
-fields."graph.lineage.complete" = true
-fields."graph.lineage.stage" = "carry_forward"
 fields."graph.lineage.decision_evidence_kind" = "focused_test"
 
 [[expect.events]]
 required = true
-id = "direct-mutation-is-denied-before-post-source-read"
+id = "provisional-read-requires-inspection"
 event = "tool.error"
-fields.tool = "apply_patch"
-fields.id = "patch-route-before-post-source-read"
+fields.tool = "read"
+fields.id = "read-provisional-model-before-inspection"
 fields.duration_ms = 0
 fields."tool.failure.category" = "policy_denial"
-fields."tool.failure.reason" = "policy_precondition"
+fields."tool.failure.reason" = "correction_inspection_required"
 fields."tool.failure.retry_disposition" = "satisfy_policy"
 fields."tool.failure.retryable" = false
 fields."tool.failure.conventional_fallback" = false
 
 [[expect.events]]
 required = true
-id = "post-source-exact-route-read-completes"
+id = "later-route-correction-replaces-authority"
+event = "mcp.tool.result"
+fields."mcp.tool" = "get_code_snippet"
+fields.is_error = false
+fields."graph.lineage.decision_evidence_kind" = "implementation"
+fields."graph.lineage.implementation_authority_corrected" = true
+
+[[expect.events]]
+required = true
+id = "selected-correction-reference-is-retired"
+event = "tool.error"
+fields.tool = "codebase_memory_get_code_snippet"
+fields.id = "stale-selected-correction-denied"
+
+[[expect.events]]
+required = true
+id = "unchosen-correction-reference-is-retired"
+event = "tool.error"
+fields.tool = "codebase_memory_get_code_snippet"
+fields.id = "stale-unchosen-correction-denied"
+
+[[expect.events]]
+required = true
+id = "old-model-authority-is-retired"
+event = "tool.error"
+fields.tool = "write"
+fields.id = "old-model-authority-mutation-denied"
+fields.duration_ms = 0
+fields."tool.failure.category" = "policy_denial"
+fields."tool.failure.reason" = "policy_precondition"
+
+[[expect.events]]
+required = true
+id = "unrelated-mutation-is-denied"
+event = "tool.error"
+fields.tool = "write"
+fields.id = "unrelated-mutation-denied"
+fields.duration_ms = 0
+fields."tool.failure.category" = "policy_denial"
+fields."tool.failure.reason" = "policy_precondition"
+
+[[expect.events]]
+required = true
+id = "corrected-route-exact-read-completes"
 event = "tool.end"
 fields.tool = "read"
-fields.id = "read-route-after-complete-source-evidence"
+fields.id = "read-exact-corrected-route"
+
+[[expect.events]]
+required = true
+id = "graph-remains-closed-after-correction"
+event = "tool.error"
+fields.tool = "codebase_memory_search_graph"
+fields.id = "post-decision-graph-remains-closed"
+fields.duration_ms = 0
+fields."tool.failure.category" = "graph_lifecycle_denial"
+fields."tool.failure.reason" = "exploration_closed"
+fields."tool.failure.graph.reason" = "completed"
 
 [[expect.sequence]]
 required = true
-id = "incomplete-forest-recovers-before-exact-selection-and-repair"
+id = "closed-forest-corrects-before-exact-read-and-repair"
 scope = "source_artifact"
 events = [
   { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "root" } },
-  { event = "tool.end", fields = { tool = "read", id = "early-route-read-before-complete-evidence" } },
-  { event = "tool.error", fields = { id = "recovery-cross-root-caller-denied", "tool.failure.graph.missing_evidence" = "trace,implementation,caller,focused_test" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "implementation" } },
-  { event = "tool.error", fields = { id = "recovery-satisfied-implementation-denied", "tool.failure.graph.missing_evidence" = "trace,caller,focused_test", "tool.failure.graph.remaining_allowance" = 4 } },
-  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.implementation_correction_available" = true } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "caller" } },
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "focused_test" } },
-  { event = "tool.error", fields = { tool = "apply_patch", id = "patch-route-before-post-source-read", "tool.failure.reason" = "policy_precondition" } },
-  { event = "tool.end", fields = { tool = "read", id = "read-route-after-complete-source-evidence" } },
-  { event = "tool.end", fields = { tool = "apply_patch", id = "patch-route-after-complete-source-evidence" } },
-  { event = "tool.end", fields = { tool = "bash", id = "validate-converged-repair" } },
-  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-converged-repair" } },
+  { event = "tool.error", fields = { id = "post-convergence-unrelated-search-denied", "tool.failure.reason" = "exploration_closed" } },
+  { event = "tool.error", fields = { id = "read-provisional-model-before-inspection", "tool.failure.reason" = "correction_inspection_required" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.implementation_authority_corrected" = true } },
+  { event = "tool.error", fields = { id = "stale-selected-correction-denied" } },
+  { event = "tool.error", fields = { id = "old-model-authority-mutation-denied", "tool.failure.reason" = "policy_precondition" } },
+  { event = "tool.error", fields = { id = "post-decision-graph-remains-closed", "tool.failure.reason" = "exploration_closed", "tool.failure.graph.reason" = "completed" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-exact-corrected-route" } },
+  { event = "tool.end", fields = { tool = "apply_patch", id = "patch-corrected-route" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-corrected-route-repair" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-corrected-route-repair" } },
   { event = "workspace.diff.produced", fields = { changed_count = 1 } },
 ]
 
 [[expect.count]]
 required = true
-id = "six-successful-complete-v1-graph-results"
+id = "ten-successful-complete-v1-graph-results"
 event = "mcp.tool.result"
 fields.is_error = false
 fields."graph.correlation.complete" = true
 fields."graph.correlation.version" = 1
 fields."graph.lineage.complete" = true
 fields."graph.lineage.version" = 1
-exactly = 6
+exactly = 10
 
 [[expect.count]]
 required = true
@@ -296,24 +347,24 @@ exactly = 2
 
 [[expect.count]]
 required = true
-id = "two-provider-roots-despite-local-broad-detours"
+id = "two-provider-roots-despite-local-detours"
 event = "mcp.tool.called"
 fields."mcp.tool" = "search_graph"
 exactly = 2
 
 [[expect.count]]
 required = true
-id = "one-provider-trace-despite-malformed-detour"
+id = "one-provider-correction-trace"
 event = "mcp.tool.called"
 fields."mcp.tool" = "trace_path"
 exactly = 1
 
 [[expect.count]]
 required = true
-id = "three-provider-sources-with-cross-root-and-selectorless-calls-local"
+id = "eight-provider-sources-with-one-controlled-rejection"
 event = "mcp.tool.called"
 fields."mcp.tool" = "get_code_snippet"
-exactly = 3
+exactly = 8
 
 [[expect.count]]
 required = true
@@ -324,7 +375,7 @@ exactly = 0
 
 [[expect.count]]
 required = true
-id = "four-failed-noncredit-recovery-attempts-share-snapshot"
+id = "four-local-initial-noncredit-attempts-share-snapshot"
 event = "tool.error"
 fields."tool.failure.reason" = "decision_evidence_incomplete"
 fields."tool.failure.graph.missing_evidence" = "trace,implementation,caller,focused_test"
@@ -334,43 +385,25 @@ exactly = 4
 
 [[expect.count]]
 required = true
-id = "one-satisfied-implementation-local-denial-after-progress"
+id = "one-correction-inspection-read-denial"
 event = "tool.error"
-fields."tool.failure.reason" = "decision_evidence_incomplete"
-fields."tool.failure.graph.missing_evidence" = "trace,caller,focused_test"
-fields."tool.failure.graph.remaining_allowance" = 4
+fields."tool.failure.reason" = "correction_inspection_required"
 exactly = 1
 
 [[expect.count]]
 required = true
-id = "three-post-completion-local-denials"
-event = "tool.error"
-fields."tool.failure.reason" = "exploration_closed"
-fields."tool.failure.graph.reason" = "completed"
-exactly = 3
+id = "one-corrected-implementation-authority"
+event = "mcp.tool.result"
+fields.is_error = false
+fields."graph.lineage.implementation_authority_corrected" = true
+exactly = 1
 
 [[expect.count]]
 required = true
-id = "one-early-route-read-without-authority"
+id = "one-authoritative-corrected-route-read"
 event = "tool.end"
 fields.tool = "read"
-fields.id = "early-route-read-before-complete-evidence"
-exactly = 1
-
-[[expect.count]]
-required = true
-id = "one-direct-mutation-policy-denial"
-event = "tool.error"
-fields.tool = "apply_patch"
-fields."tool.failure.reason" = "policy_precondition"
-exactly = 1
-
-[[expect.count]]
-required = true
-id = "one-authoritative-post-source-exact-read"
-event = "tool.end"
-fields.tool = "read"
-fields.id = "read-route-after-complete-source-evidence"
+fields.id = "read-exact-corrected-route"
 exactly = 1
 
 [[expect.count]]
@@ -394,7 +427,7 @@ fields.tool = "submit_for_pr"
 exactly = 1
 
 [expect.effective_configuration]
-id = "rapid-decision-evidence-convergence-cadence"
+id = "post-correction-authorization-cadence"
 ci_poll_cadence_secs = 1
 poll_cadence_secs = 1
 mechanical_cadence_secs = 1
@@ -408,7 +441,7 @@ model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_se
 model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
 default_project = "acme/repo"
 actual_project = "normalized-temper-v1-<stable-provider-key>"
-graph_consumption_profile = "feature #1210/#1211; two immutable routing and focused-test roots; early exact read without authority; mixed active implementation plus cross-root, broad, malformed, duplicate, denied, and failed non-credit attempts; one provider-derived active-root trace; later provider-derived caller and separate-root focused_test source completion; local duplicate and post-completion detours; one direct patch denial; one post-source exact read; one matching mutation; privacy-safe typed ordering and closed policy facts"
+graph_consumption_profile = "feature #1263/#1264 repetition 001; distinct implementation/caller and focused-test roots; provisional src/model.rs candidate preview and implementation commit; provider-supported src/route.rs::worker_slot correction; complete retained forest and graph closure; bounded correction inspection; later correction decision; retired old and stale authority; one later exact repo/src/route.rs read; one matching route mutation; privacy-safe typed ordering and closed policy facts"
 global_inventory_forbidden = true
 
 [change_policy]
@@ -417,12 +450,12 @@ promotion_artifact = "checked-in"
 examples_changed = false
 fixture_paths_must_exist = true
 compatible_changes = [
-  "Tighten root-coherent recovery, non-credit denial, typed-source, exact-read ordering, privacy, count, or convergence assertions.",
+  "Tighten two-root correction inspection, retirement, exact-read ordering, privacy, count, or convergence assertions.",
   "Update generic privacy-safe observability without retaining selectors, roots, source, provider payloads, mutation arguments, or traces.",
 ]
 requires_new_scenario_or_major_update = [
-  "Allowing incomplete, cross-root, irrelevant, malformed, denied, failed, or selectorless activity to create evidence, selection, fallback, or mutation authority.",
-  "Allowing a pre-source, same-batch, wrong-target, failed, malformed, or ambiguous read to authorize mutation.",
+  "Allowing sibling-root, broad, malformed, unpresented, unrelated, old, stale, denied, or failed activity to create evidence, selection, fallback, or mutation authority.",
+  "Allowing a provisional, pre-inspection, same-batch, wrong-target, failed, malformed, or ambiguous read to authorize mutation.",
   "Retaining raw prompts, selectors, roots, source, provider output, credentials, arguments, host-gate output, local paths, or diagnostic traces.",
   "Replacing the mandatory live Forgejo/Actions/standalone-Temper/Jig topology with a lower-level test.",
 ]

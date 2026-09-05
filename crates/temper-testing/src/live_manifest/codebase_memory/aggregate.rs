@@ -20,6 +20,10 @@ pub(super) fn is_current_root_source_checkpoint(checkpoint: Option<&str>) -> boo
                 | "served_selection_caller_source"
                 | "served_selection_focused_source"
                 | "served_selection_active_source"
+                | "served_selection_provisional_preview"
+                | "served_selection_provisional_source"
+                | "served_selection_correction_preview"
+                | "served_selection_corrected_source"
         )
     )
 }
@@ -56,9 +60,13 @@ pub(super) fn privacy_safe_checkpoints(
         ],
         Some("mapped-live-exact-source-selection") => &[
             "served_selection_root",
-            "served_selection_active_trace",
-            "served_selection_active_source",
+            "served_selection_provisional_preview",
+            "served_selection_provisional_source",
+            "served_selection_correction_trace",
+            "served_selection_caller_source",
             "served_selection_focused_source",
+            "served_selection_correction_preview",
+            "served_selection_corrected_source",
         ],
         Some("mapped-live-focused-test-source-relevance") => &[
             "served_focus_root",

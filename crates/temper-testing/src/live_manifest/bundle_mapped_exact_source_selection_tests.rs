@@ -5,9 +5,9 @@ use std::time::Duration;
 use super::*;
 
 #[test]
-fn exact_source_selection_maps_feature_1210_and_retains_1151_audit() {
+fn exact_source_selection_maps_feature_1263_and_retains_prior_audit() {
     let scenario_path = scenarios_root().join("mapped-live-exact-source-selection");
-    let bundle = ScenarioBundle::load(&scenario_path).expect("decision-evidence bundle");
+    let bundle = ScenarioBundle::load(&scenario_path).expect("post-correction bundle");
     let mcp = bundle
         .execution
         .steps
@@ -43,13 +43,13 @@ fn exact_source_selection_maps_feature_1210_and_retains_1151_audit() {
         .as_ref()
         .and_then(|scenario| scenario.feature_mapping.as_ref())
         .expect("feature mapping");
-    assert_eq!(mapping.feature.to_string(), "ai/temper#1210");
+    assert_eq!(mapping.feature.to_string(), "ai/temper#1263");
     assert_eq!(
         mapping.plan.as_ref().map(ToString::to_string).as_deref(),
-        Some("ai/temper#1211")
+        Some("ai/temper#1264")
     );
-    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1210");
-    assert_eq!(mapping.change.as_str(), "new");
+    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1263");
+    assert_eq!(mapping.change.as_str(), "updated");
 
     let manifest = fs::read_to_string(scenario_path.join("scenario.toml")).expect("manifest");
     let readme = fs::read_to_string(scenario_path.join("README.md")).expect("README");
@@ -57,22 +57,28 @@ fn exact_source_selection_maps_feature_1210_and_retains_1151_audit() {
     let jig = fs::read_to_string(bundle.jig_script_path()).expect("Jig");
     for expected in [
         "introduced_by = \"#1144\"",
-        "six-successful-complete-v1-graph-results",
+        "ten-successful-complete-v1-graph-results",
         "two-retained-independent-roots",
-        "four-failed-noncredit-recovery-attempts-share-snapshot",
-        "recovery-cross-root-caller-denied",
-        "recovery-irrelevant-broad-denied",
-        "recovery-malformed-selector-denied",
-        "recovery-satisfied-implementation-denied",
-        "graph.lineage.decision_evidence_kind",
-        "patch-route-before-post-source-read",
-        "read-route-after-complete-source-evidence",
+        "four-local-initial-noncredit-attempts-share-snapshot",
+        "initial-sibling-root-caller-denied",
+        "initial-broad-search-denied",
+        "initial-malformed-selector-denied",
+        "initial-unpresented-selector-denied",
+        "read-provisional-model-before-inspection",
+        "graph.lineage.implementation_correction_available",
+        "graph.lineage.implementation_authority_corrected",
+        "stale-selected-correction-denied",
+        "old-model-authority-mutation-denied",
+        "read-exact-corrected-route",
         "one-matching-minimal-mutation",
         "one-workspace-diff-after-authorized-mutation",
     ] {
         assert!(manifest.contains(expected), "manifest omitted {expected}");
     }
     for historical in [
+        "ai/temper#1210",
+        "ai/temper#1211",
+        "agent/pr-for-feature-1210",
         "ai/temper#1151",
         "ai/temper#1152",
         "agent/pr-for-feature-1151",
@@ -92,27 +98,24 @@ fn exact_source_selection_maps_feature_1210_and_retains_1151_audit() {
     }
     for expected in [
         "Privacy boundary",
-        "complete retained decision evidence",
-        "cross-root",
-        "irrelevant",
-        "malformed",
-        "failed",
+        "provisional `src/model.rs`",
+        "src/route.rs::worker_slot",
+        "correction_inspection_required",
         "repo/src/route.rs",
-        "one wholly fresh enabled smoke",
-        "five fresh enabled repetitions",
-        "five fresh disabled repetitions",
-        "five fresh forced-unavailable repetitions",
-        "exactly one verifier invocation",
-        "enabled_decision_evidence",
-        "Do not reuse #1203 artifacts",
+        "cargo dev-benchmark-harness",
+        "cargo dev-scenario-check",
+        "cargo dev-scenario-run",
+        "broader #1210 acceptance matrix",
+        "do not address repetition",
+        "one wholly fresh",
     ] {
         assert!(readme.contains(expected), "README omitted {expected}");
     }
     assert!(
-        corpus_readme.contains("Mapped live decision-evidence convergence mapping"),
+        corpus_readme.contains("Mapped live post-correction authorization mapping"),
         "corpus README omitted the updated mapping"
     );
-    assert!(jig.contains("mapped-live-decision-evidence-convergence-runtime"));
+    assert!(jig.contains("mapped-live-post-correction-authorization-runtime"));
     for forbidden in [
         "crate::",
         "opaque-",
@@ -124,6 +127,7 @@ fn exact_source_selection_maps_feature_1210_and_retains_1151_audit() {
         assert!(!jig.contains(forbidden), "Jig retained {forbidden}");
     }
     assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
+    assert!(bundle.repo.seed_path.join("src/model.rs").is_file());
     assert!(bundle.repo.seed_path.join("src/route.rs").is_file());
     assert!(bundle.repo.seed_path.join("tests/alias_retry.rs").is_file());
 }

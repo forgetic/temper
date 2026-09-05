@@ -685,6 +685,12 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         .and_then(|lineage| lineage.decision_evidence_kind)
         .map(decision_evidence_kind)
         .unwrap_or("");
+    let implementation_correction_available = ev
+        .decision_anchor_lineage
+        .is_some_and(|lineage| lineage.implementation_correction_available);
+    let implementation_authority_corrected = ev
+        .decision_anchor_lineage
+        .is_some_and(|lineage| lineage.implementation_authority_corrected);
     let (lineage_version, lineage_stage, lineage_result_target_kind_count) = ev
         .decision_anchor_lineage
         .map(|lineage| {
@@ -718,6 +724,8 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         graph.lineage.result_target_kind_count = lineage_result_target_kind_count,
         graph.lineage.decision_evidence_kind = lineage_evidence_kind,
         graph.lineage.focused_test_discovery = focused_test_discovery,
+        graph.lineage.implementation_correction_available = implementation_correction_available,
+        graph.lineage.implementation_authority_corrected = implementation_authority_corrected,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,

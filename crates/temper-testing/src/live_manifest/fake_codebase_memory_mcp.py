@@ -20,6 +20,7 @@ TYPED_LINEAGE_STAGE = 0
 MAPPED_GRAPH_STAGE = 0
 GRAPH_CONVERGENCE_STAGE = 0
 DECISION_GAP_RECOVERY_STAGE = 0
+DECISION_GAP_CORRECTION_PREVIEWS = set()
 FOCUSED_RELEVANCE_STAGE = 0
 RESULT_DRIVEN_TOKENS = {
     name: "opaque-" + uuid.uuid4().hex
@@ -47,10 +48,13 @@ MAPPED_GRAPH_TOKENS = (
 GRAPH_CONVERGENCE_TOKENS = {
     "preflight": "crate::fixture::preflight_" + uuid.uuid4().hex + "::probe_slot",
     "unavailable": "crate::fixture::unavailable_" + uuid.uuid4().hex,
+    "model": "crate::fixture::model_" + uuid.uuid4().hex + "::affinity_topic",
     "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
     "caller": "crate::fixture::delivery_" + uuid.uuid4().hex + "::worker_for",
     "behavioral_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::alias_retry_stays_on_worker",
     "active_behavioral_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::ordinary_retry_keeps_topic_affinity",
+    "unrelated": "crate::fixture::metrics_" + uuid.uuid4().hex + "::retry_count",
+    "unpresented": "crate::fixture::storage_" + uuid.uuid4().hex + "::retry_record",
 }
 FOCUSED_RELEVANCE_TOKENS = {
     "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
@@ -391,6 +395,23 @@ def decision_gap_recovery_step(expected_stage, expected_value, actual_value):
     return True
 
 
+def decision_gap_correction_preview(qualified_name):
+    global DECISION_GAP_RECOVERY_STAGE
+    candidates = {
+        GRAPH_CONVERGENCE_TOKENS["implementation"],
+        GRAPH_CONVERGENCE_TOKENS["caller"],
+    }
+    if (
+        DECISION_GAP_RECOVERY_STAGE not in (7, 8)
+        or qualified_name not in candidates
+        or qualified_name in DECISION_GAP_CORRECTION_PREVIEWS
+    ):
+        return False
+    DECISION_GAP_CORRECTION_PREVIEWS.add(qualified_name)
+    DECISION_GAP_RECOVERY_STAGE += 1
+    return True
+
+
 def focused_relevance_step(expected_stage, expected_value, actual_value):
     global FOCUSED_RELEVANCE_STAGE
     if not is_focused_relevance_profile():
@@ -576,20 +597,43 @@ for line in sys.stdin:
             if is_decision_gap_recovery_profile():
                 stage = DECISION_GAP_RECOVERY_STAGE
                 selection = is_exact_source_selection_profile()
-                if selection and stage == 2 and qualified_name == GRAPH_CONVERGENCE_TOKENS["implementation"]:
-                    source_path = "src/route.rs"
-                    event = "served_selection_active_source"
-                elif selection and stage == 4 and qualified_name == GRAPH_CONVERGENCE_TOKENS["caller"]:
+                if selection and stage in (2, 3) and qualified_name == GRAPH_CONVERGENCE_TOKENS["model"]:
+                    source_path = "src/model.rs"
+                    reported_path = "src/model.rs"
+                    event = (
+                        "served_selection_provisional_preview"
+                        if stage == 2
+                        else "served_selection_provisional_source"
+                    )
+                elif selection and stage == 5 and qualified_name == GRAPH_CONVERGENCE_TOKENS["caller"]:
                     source_path = "src/lib.rs"
-                    event = "served_selection_active_source"
-                elif selection and stage == 5 and qualified_name in (
+                    reported_path = source_path
+                    event = "served_selection_caller_source"
+                elif selection and stage == 6 and qualified_name in (
                     GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
                     terminal_function_name(GRAPH_CONVERGENCE_TOKENS["behavioral_test"]),
                 ):
                     source_path = "tests/alias_retry.rs"
+                    reported_path = source_path
                     event = "served_selection_focused_source"
+                elif selection and stage in (7, 8) and qualified_name in (
+                    GRAPH_CONVERGENCE_TOKENS["implementation"],
+                    GRAPH_CONVERGENCE_TOKENS["caller"],
+                ):
+                    source_path = (
+                        "src/route.rs"
+                        if qualified_name == GRAPH_CONVERGENCE_TOKENS["implementation"]
+                        else "src/lib.rs"
+                    )
+                    reported_path = source_path
+                    event = "served_selection_correction_preview"
+                elif selection and stage == 9 and qualified_name == GRAPH_CONVERGENCE_TOKENS["implementation"]:
+                    source_path = "src/route.rs"
+                    reported_path = source_path
+                    event = "served_selection_corrected_source"
                 elif not selection and stage in (2, 3) and qualified_name == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]:
                     source_path = "tests/alias_retry.rs"
+                    reported_path = source_path
                     event = "served_gap_sibling_source"
                 elif not selection and stage in (5, 6, 7) and qualified_name in (
                     GRAPH_CONVERGENCE_TOKENS["caller"],
@@ -600,13 +644,16 @@ for line in sys.stdin:
                         if qualified_name == GRAPH_CONVERGENCE_TOKENS["caller"]
                         else "tests/alias_retry.rs"
                     )
+                    reported_path = source_path
                     event = "served_gap_active_source"
                 else:
                     source_path = None
+                    reported_path = None
                     event = None
-                stage_valid = (
-                    source_path is not None
-                    and decision_gap_recovery_step(stage, qualified_name, qualified_name)
+                stage_valid = source_path is not None and (
+                    decision_gap_correction_preview(qualified_name)
+                    if selection and stage in (7, 8)
+                    else decision_gap_recovery_step(stage, qualified_name, qualified_name)
                 )
                 source = current_root_source(project, source_path) if stage_valid else None
                 if source is None:
@@ -616,7 +663,7 @@ for line in sys.stdin:
                     payload = {
                         "name": terminal_function_name(qualified_name),
                         "qualified_name": qualified_name,
-                        "file_path": source_path,
+                        "file_path": reported_path,
                         "source": source,
                         "binding": "current_prepared_checkout",
                     }
@@ -1072,26 +1119,42 @@ for line in sys.stdin:
                 continue
             if is_decision_gap_recovery_profile():
                 project = arguments.get("project", "")
-                expected = terminal_function_name(GRAPH_CONVERGENCE_TOKENS["implementation"])
-                expected_stage = 3 if is_exact_source_selection_profile() else 4
+                selection = is_exact_source_selection_profile()
+                expected = terminal_function_name(
+                    GRAPH_CONVERGENCE_TOKENS["model"]
+                    if selection
+                    else GRAPH_CONVERGENCE_TOKENS["implementation"]
+                )
                 successful = (
                     current_root_source(project, "src/route.rs") is not None
                     and decision_gap_recovery_step(
-                        expected_stage, expected, arguments.get("function_name", "")
+                        4, expected, arguments.get("function_name", "")
                     )
+                )
+                selected = (
+                    [
+                        GRAPH_CONVERGENCE_TOKENS["implementation"],
+                        GRAPH_CONVERGENCE_TOKENS["caller"],
+                    ]
+                    if selection
+                    else [GRAPH_CONVERGENCE_TOKENS["caller"]]
                 )
                 payload = {
                     "function": {
                         "name": expected,
-                        "qualifiedName": GRAPH_CONVERGENCE_TOKENS["implementation"],
+                        "qualifiedName": (
+                            GRAPH_CONVERGENCE_TOKENS["model"]
+                            if selection
+                            else GRAPH_CONVERGENCE_TOKENS["implementation"]
+                        ),
                     },
-                    "callers": [{
-                        "name": terminal_function_name(GRAPH_CONVERGENCE_TOKENS["caller"]),
-                        "qualified_name": GRAPH_CONVERGENCE_TOKENS["caller"],
-                    }],
-                    "related_sources": [{
-                        "qualifiedName": GRAPH_CONVERGENCE_TOKENS["caller"],
-                    }],
+                    "callers": [
+                        {
+                            "name": terminal_function_name(token),
+                            "qualified_name": token,
+                        }
+                        for token in selected
+                    ],
                 }
                 log_tool(
                     name,
@@ -1099,8 +1162,8 @@ for line in sys.stdin:
                     is_error=not successful,
                     fixture_event=(
                         (
-                            "served_selection_active_trace"
-                            if is_exact_source_selection_profile()
+                            "served_selection_correction_trace"
+                            if selection
                             else "served_gap_active_trace"
                         )
                         if successful
@@ -1306,11 +1369,14 @@ for line in sys.stdin:
                 stage = DECISION_GAP_RECOVERY_STAGE
                 query = arguments.get("query", "")
                 query_results = {
-                    "routing implementation affinity": [
-                        GRAPH_CONVERGENCE_TOKENS["implementation"],
+                    "routing implementation authority": [
+                        GRAPH_CONVERGENCE_TOKENS["model"],
                         GRAPH_CONVERGENCE_TOKENS["caller"],
+                        GRAPH_CONVERGENCE_TOKENS["implementation"],
+                        GRAPH_CONVERGENCE_TOKENS["unrelated"],
+                        GRAPH_CONVERGENCE_TOKENS["unpresented"],
                     ],
-                    "focused alias retry behavior": [
+                    "focused routing regression": [
                         GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
                     ],
                 }
@@ -1329,8 +1395,13 @@ for line in sys.stdin:
                     tokens = selected or []
                 else:
                     queries = {
-                        0: ("routing implementation affinity", query_results["routing implementation affinity"]),
-                        1: ("focused alias retry behavior", query_results["focused alias retry behavior"]),
+                        0: ("routing implementation affinity", [
+                            GRAPH_CONVERGENCE_TOKENS["implementation"],
+                            GRAPH_CONVERGENCE_TOKENS["caller"],
+                        ]),
+                        1: ("focused alias retry behavior", [
+                            GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
+                        ]),
                     }
                     selected = queries.get(stage)
                     successful = (
@@ -1348,7 +1419,11 @@ for line in sys.stdin:
                                 "file_path": (
                                     "tests/alias_retry.rs"
                                     if token == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]
-                                    else "src/route.rs"
+                                    else (
+                                        "src/model.rs"
+                                        if token == GRAPH_CONVERGENCE_TOKENS["model"]
+                                        else "src/route.rs"
+                                    )
                                 ),
                                 "is_test": token == GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
                             }
