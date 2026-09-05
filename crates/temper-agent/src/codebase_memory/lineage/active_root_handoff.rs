@@ -46,11 +46,23 @@ impl DecisionAnchorLineages {
                 } else {
                     format!("{}_{}", key.purpose.label(), index + 1)
                 };
-                references.push(format!("{label}={reference}"));
+                let provider_order = self
+                    .recovery_reference_selectors
+                    .get(reference)
+                    .map(|selector| selector.provider_result_order)
+                    .unwrap_or_default();
+                references.push(
+                    if key.purpose == RecoverySelectorPurpose::ImplementationCandidate {
+                        format!("{label}={reference} (provider_result_order={provider_order})")
+                    } else {
+                        format!("{label}={reference}")
+                    },
+                );
             }
         }
         for labeled in &references {
             if let Some((_, reference)) = labeled.split_once('=') {
+                let reference = reference.split_whitespace().next().unwrap_or(reference);
                 if let Some(selector) = self.recovery_reference_selectors.get_mut(reference) {
                     selector.presented = true;
                 }
@@ -64,11 +76,11 @@ impl DecisionAnchorLineages {
         })
     }
 
-    pub(in crate::codebase_memory) fn active_root_recovery_selector(
+    pub(in crate::codebase_memory) fn active_root_recovery_selectors(
         &self,
         root_binding: &str,
         action: GraphRecoveryActionV1,
-    ) -> Option<&str> {
+    ) -> Vec<&str> {
         let purposes = if action
             == GraphRecoveryActionV1::for_evidence(
                 temper_protocol_activity::GraphRecoveryEvidenceKindV1::Implementation,
@@ -98,15 +110,19 @@ impl DecisionAnchorLineages {
         } else if action == GraphRecoveryActionV1::focused_test_traversal() {
             vec![RecoverySelectorPurpose::CallerTestTraversal]
         } else {
-            return None;
+            return Vec::new();
         };
         for purpose in purposes {
             let key = RecoverySelectorKey {
                 root_binding: root_binding.to_string(),
                 purpose,
             };
-            if let Some(reference) = self.recovery_references.get(&key).and_then(|references| {
-                references.iter().find(|reference| {
+            let references = self
+                .recovery_references
+                .get(&key)
+                .into_iter()
+                .flatten()
+                .filter(|reference| {
                     self.recovery_reference_selectors
                         .get(*reference)
                         .is_some_and(|selector| {
@@ -120,11 +136,37 @@ impl DecisionAnchorLineages {
                                 )
                         })
                 })
-            }) {
-                return Some(reference.as_str());
+                .take(MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE)
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            if !references.is_empty() {
+                return references;
             }
         }
-        None
+        Vec::new()
+    }
+
+    #[cfg(test)]
+    pub(in crate::codebase_memory) fn unpresented_implementation_recovery_selector_for_test(
+        &self,
+        root_binding: &str,
+    ) -> Option<&str> {
+        let key = RecoverySelectorKey {
+            root_binding: root_binding.to_string(),
+            purpose: RecoverySelectorPurpose::ImplementationCandidate,
+        };
+        self.recovery_references
+            .get(&key)?
+            .iter()
+            .skip(MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE)
+            .find(|reference| {
+                self.recovery_reference_selectors
+                    .get(*reference)
+                    .is_some_and(|selector| {
+                        selector.state == RecoverySelectorState::Available && !selector.presented
+                    })
+            })
+            .map(String::as_str)
     }
 
     fn recovery_action_is_admissible(

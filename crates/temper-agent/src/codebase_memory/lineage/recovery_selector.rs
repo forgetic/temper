@@ -64,6 +64,8 @@ pub(super) struct RecoverySelectorReference {
     pub(super) purpose: RecoverySelectorPurpose,
     pub(super) selector: Selector,
     pub(super) provider_value: String,
+    /// Stable order of the provider result mapped to this opaque identity.
+    pub(super) provider_result_order: usize,
     pub(super) source_selector: Option<Selector>,
     pub(super) source_provider_value: Option<String>,
     pub(super) state: RecoverySelectorState,
@@ -264,6 +266,7 @@ impl DecisionAnchorLineages {
                 purpose,
                 selector,
                 provider_value,
+                provider_result_order: candidate.provider_result_order,
                 source_selector,
                 source_provider_value,
                 state: RecoverySelectorState::Available,
@@ -469,7 +472,18 @@ impl DecisionAnchorLineages {
                     } else {
                         format!("{}_{}", key.purpose.label(), index + 1)
                     };
-                    format!("{label}={reference}")
+                    let provider_order = self
+                        .recovery_reference_selectors
+                        .get(reference)
+                        .map(|selector| selector.provider_result_order)
+                        .unwrap_or_default();
+                    if key.purpose == RecoverySelectorPurpose::ImplementationCandidate {
+                        format!(
+                            "{label}={reference} (provider_result_order={provider_order})"
+                        )
+                    } else {
+                        format!("{label}={reference}")
+                    }
                 })
                 .collect::<Vec<_>>();
             format!(

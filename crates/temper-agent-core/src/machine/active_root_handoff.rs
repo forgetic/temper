@@ -65,11 +65,11 @@ impl AgentMachine {
         selection: Option<(String, GraphRecoveryActionV1)>,
     ) {
         self.decision_anchor_active_handoff = selection.and_then(|(active_root, action)| {
-            let selector = self
+            let selectors = self
                 .lineage_admission
                 .as_ref()?
-                .active_root_recovery_selector(&active_root, action)?;
-            active_root_selector_handoff(action, &selector)
+                .active_root_recovery_selectors(&active_root, action);
+            active_root_selector_handoff(action, &selectors)
         });
     }
 }

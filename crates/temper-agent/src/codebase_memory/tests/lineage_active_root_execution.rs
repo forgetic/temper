@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use temper_agent_core::{
-    AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ToolCallDenial,
-    ToolFailureCategory, ToolFailureDiagnostic, ToolInvocationCatalog,
-    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, InvocationTargetAdmission,
+    TargetAdmissionOutcome, TargetAdmissionStatus, ToolCallDenial, ToolFailureCategory,
+    ToolFailureDiagnostic, ToolInvocationCatalog, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
 };
 use temper_agent_io::{EngineTime, Machine};
 use temper_protocol_activity::{
@@ -138,13 +138,15 @@ fn active_handoff(requests: &[AgentRequest]) -> &str {
         .expect("a fresh active-root handoff is the final correction")
 }
 
-fn handoff_reference(handoff: &str) -> &str {
+fn handoff_references(handoff: &str) -> Vec<String> {
     handoff
-        .split_once("\"qualified_name\":\"")
-        .and_then(|(_, value)| value.split_once('"'))
-        .map(|(reference, _)| reference)
-        .filter(|reference| reference.starts_with(REFERENCE_PREFIX))
-        .expect("opaque qualified-name reference")
+        .split([',', '.', ' ', ']', '['])
+        .filter_map(|part| part.split_once('='))
+        .filter(|(label, value)| {
+            label.starts_with("candidate_") && value.starts_with(REFERENCE_PREFIX)
+        })
+        .map(|(_, value)| value.to_string())
+        .collect()
 }
 
 fn references(output: &ToolOutput) -> Vec<String> {
@@ -203,7 +205,7 @@ fn failed_output() -> ToolOutput {
     }
 }
 
-fn run_parallel_forest_raw_selection(reverse_completion: bool) {
+fn run_parallel_forest_candidate_menu(reverse_completion: bool) {
     let server = crate::codebase_memory::tests::test_support::fake_server_script();
     let workspace = tempfile::tempdir().unwrap();
     let log_path = workspace.path().join("mcp.log");
@@ -315,8 +317,8 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
             Some(ToolFailureDiagnostic::policy_denial()),
         );
         let handoff = active_handoff(&selected);
-        let active_reference = handoff_reference(handoff).to_string();
-        assert_eq!(active_reference, active_references[0]);
+        assert_eq!(handoff_references(handoff), active_references);
+        let active_reference = active_references[0].clone();
         assert!(!sibling_references.contains(&active_reference));
         for private in [
             "worker_slot",
@@ -363,13 +365,12 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
             Some(raw_failure),
         );
         let correction = active_handoff(&correction);
-        assert_eq!(handoff_reference(correction), active_reference);
-        assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 1);
+        assert_eq!(handoff_references(correction), active_references);
+        assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 4);
         assert!(correction.contains("codebase_memory_get_code_snippet"));
         assert!(correction.contains("selector field=qualified_name"));
         assert!(!correction.contains("worker_slot"));
         assert!(!correction.contains(&sibling_references[0]));
-        assert!(!correction.contains(&active_references[1]));
         assert!(!correction.contains("include_neighbors"));
         assert!(!correction.contains("decision_anchor_recovery_exhausted"));
 
@@ -402,17 +403,11 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
             Some(wrong_failure),
         );
         let correction = active_handoff(&correction);
-        assert_eq!(handoff_reference(correction), active_reference);
-        assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 1);
+        assert_eq!(handoff_references(correction), active_references);
+        assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 4);
 
         let fabricated = "temper-recovery-selector:00000000-0000-4000-8000-000000000099";
-        let alternate_reference = active_references[1].clone();
         let negatives = [
-            (
-                "alternate-reference",
-                "codebase_memory_get_code_snippet",
-                serde_json::json!({"qualified_name":alternate_reference,"decision_evidence_kind":"implementation"}),
-            ),
             (
                 "normalized-not-exact",
                 "codebase_memory_get_code_snippet",
@@ -462,8 +457,8 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
             ));
         }
         let correction = active_handoff(&correction);
-        assert_eq!(handoff_reference(correction), active_reference);
-        assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 1);
+        assert_eq!(handoff_references(correction), active_references);
+        assert_eq!(correction.matches(REFERENCE_PREFIX).count(), 4);
         for private in [
             fabricated,
             ACTIVE_PROVIDER_SELECTOR,
@@ -484,17 +479,25 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
             .is_empty()
         );
 
-        let sibling_exact = complete_llm(
+        let selected_source = complete_llm(
             &mut machine,
             assistant(vec![(
-                "exact-sibling",
+                "selected-active",
                 "codebase_memory_get_code_snippet",
-                serde_json::json!({
-                    "qualified_name": SIBLING_PROVIDER_SELECTOR
-                }),
+                serde_json::json!({"qualified_name": active_reference}),
             )]),
         );
-        let sibling_call = sibling_exact
+        assert!(selected_source.iter().any(|request| matches!(
+            request,
+            AgentRequest::Emit(AgentEvent::ToolStart {
+                id,
+                recovery_reference_disposition: Some(
+                    GraphRecoveryReferenceDispositionV1::Recognized
+                ),
+                ..
+            }) if id == "selected-active"
+        )));
+        let selected_call = selected_source
             .iter()
             .find_map(|request| match request {
                 AgentRequest::RunTool {
@@ -502,76 +505,15 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
                     denial: None,
                     rejection: None,
                     ..
-                } if call.id == "exact-sibling" => Some(call.clone()),
+                } if call.id == "selected-active" => Some(call.clone()),
                 _ => None,
             })
-            .expect("the non-published root is atomically selected by its exact raw value");
+            .expect("the selected active-root candidate reaches the provider");
         let source = registry
             .get("codebase_memory_get_code_snippet")
             .unwrap();
-        let sibling_source_output = source
-            .execute(&sibling_call.id, sibling_call.arguments, None)
-            .await
-            .unwrap();
-        assert!(!sibling_source_output.is_error);
-        let sibling_source_lineage = lineage(&sibling_source_output);
-        assert_eq!(sibling_source_lineage.root_binding, sibling_root.root_binding);
-        assert_eq!(
-            sibling_source_lineage.decision_evidence_kind,
-            Some(DecisionEvidenceKindV1::Implementation)
-        );
-        assert_eq!(
-            crate::codebase_memory::tests::test_support::calls_named(
-                &log_path,
-                "get_code_snippet"
-            )
-            .len(),
-            1
-        );
-        let sibling_advanced =
-            complete_tool(&mut machine, "exact-sibling", sibling_source_output, None);
-        assert!(sibling_advanced.iter().any(|request| match request {
-            AgentRequest::CallLlm { messages, .. } => messages.iter().any(|message| matches!(
-                message,
-                Message::User(message) if matches!(&message.content, UserContent::Text(text)
-                    if text.contains("accepted evidence=[implementation]"))
-            )),
-            _ => false,
-        }));
-
-        let exact = complete_llm(
-            &mut machine,
-            assistant(vec![(
-                "exact-active",
-                "codebase_memory_get_code_snippet",
-                serde_json::json!({
-                    "qualified_name": ACTIVE_PROVIDER_SELECTOR
-                }),
-            )]),
-        );
-        let exact_disposition = exact.iter().find_map(|request| match request {
-            AgentRequest::Emit(AgentEvent::ToolStart {
-                id,
-                recovery_reference_disposition,
-                ..
-            }) if id == "exact-active" => Some(*recovery_reference_disposition),
-            _ => None,
-        });
-        assert_eq!(exact_disposition, Some(None));
-        let exact_call = exact
-            .iter()
-            .find_map(|request| match request {
-                AgentRequest::RunTool {
-                    call,
-                    denial: None,
-                    rejection: None,
-                    ..
-                } if call.id == "exact-active" => Some(call.clone()),
-                _ => None,
-            })
-            .expect("the exact published handoff reaches the provider");
         let source_output = source
-            .execute(&exact_call.id, exact_call.arguments, None)
+            .execute(&selected_call.id, selected_call.arguments, None)
             .await
             .unwrap();
         assert!(!source_output.is_error);
@@ -590,28 +532,16 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
             &log_path,
             "get_code_snippet",
         );
-        assert_eq!(source_calls.len(), 2);
+        assert_eq!(source_calls.len(), 1);
         assert_eq!(
-            source_calls
-                .iter()
-                .filter(|call| {
-                    call["arguments"]["qualified_name"] == SIBLING_PROVIDER_SELECTOR
-                })
-                .count(),
-            1
+            source_calls[0]["arguments"]["qualified_name"],
+            ACTIVE_PROVIDER_SELECTOR
         );
-        assert_eq!(
-            source_calls
-                .iter()
-                .filter(|call| call["arguments"]["qualified_name"] == ACTIVE_PROVIDER_SELECTOR)
-                .count(),
-            1
-        );
-        assert!(source_calls.iter().all(|call| call["arguments"]
+        assert!(source_calls[0]["arguments"]
             .get("decision_evidence_kind")
-            .is_none()));
+            .is_none());
 
-        let advanced = complete_tool(&mut machine, "exact-active", source_output, None);
+        let advanced = complete_tool(&mut machine, "selected-active", source_output, None);
         assert!(advanced.iter().any(|request| match request {
             AgentRequest::CallLlm { messages, .. } => messages.iter().any(|message| matches!(
                 message,
@@ -658,7 +588,7 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
                 "stale",
                 "codebase_memory_get_code_snippet",
                 serde_json::json!({
-                    "qualified_name": ACTIVE_PROVIDER_SELECTOR,
+                    "qualified_name": active_reference,
                     "decision_evidence_kind": "implementation"
                 }),
             )]),
@@ -676,7 +606,7 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
                 "get_code_snippet"
             )
             .len(),
-            2
+            1
         );
         assert!(!stale_done.iter().any(|request| matches!(
             request,
@@ -689,11 +619,11 @@ fn run_parallel_forest_raw_selection(reverse_completion: bool) {
 }
 
 #[test]
-fn parallel_forest_raw_selection_is_stable_in_request_order_completion() {
-    run_parallel_forest_raw_selection(false);
+fn parallel_forest_candidate_menu_is_stable_in_request_order_completion() {
+    run_parallel_forest_candidate_menu(false);
 }
 
 #[test]
-fn parallel_forest_raw_selection_is_stable_in_reverse_completion() {
-    run_parallel_forest_raw_selection(true);
+fn parallel_forest_candidate_menu_is_stable_in_reverse_completion() {
+    run_parallel_forest_candidate_menu(true);
 }

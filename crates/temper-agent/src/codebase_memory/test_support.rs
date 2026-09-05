@@ -231,8 +231,34 @@ for line in sys.stdin:
                 worker_rank = 7 if active else 5
                 prefix = "active" if active else "sibling"
                 results = []
-                for rank in range(1, 71):
-                    if rank < worker_rank:
+                result_count = 10 if mode == "active-root-overlap-handoff" and active else 70
+                for rank in range(1, result_count + 1):
+                    if mode == "active-root-overlap-handoff" and active:
+                        if rank == 1:
+                            symbol = "affinity_topic"
+                            qualified_name = "temper-v1-production.src.model.affinity_topic"
+                        elif 2 <= rank <= 6:
+                            symbol = f"test_affinity_{rank}"
+                            qualified_name = f"temper-v1-production.tests.route.{symbol}"
+                        elif rank == 7:
+                            symbol = "worker_for"
+                            qualified_name = "temper-v1-production.src.route.worker_for"
+                        elif rank == 8:
+                            symbol = "worker_slot"
+                            qualified_name = "temper-v1-production.src.route.worker_slot"
+                        else:
+                            symbol = f"active_{rank}"
+                            qualified_name = f"temper-v1-production.src.route.{symbol}"
+                        result = {
+                            "name": symbol,
+                            "qualified_name": qualified_name,
+                            "label": "Function",
+                            "file_path": "tests/route.rs" if 2 <= rank <= 6 else "src/route.rs",
+                        }
+                        if 2 <= rank <= 6:
+                            result["is_test"] = True
+                        results.append(result)
+                    elif rank < worker_rank:
                         results.append({"label": "Module", "file_path": f"src/{prefix}_{rank}.rs"})
                     else:
                         symbol = (
@@ -250,11 +276,8 @@ for line in sys.stdin:
                             "label": "Function",
                             "file_path": "src/route.rs",
                         }
-                        if mode == "active-root-overlap-handoff" and rank == 70:
-                            result["is_test"] = True
-                            result["file_path"] = "tests/route.rs"
                         results.append(result)
-                payload = {"total": 70, "has_more": False, "results": results}
+                payload = {"total": result_count, "has_more": False, "results": results}
                 tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode in ("active-root-handoff", "active-root-overlap-handoff") and name == "get_code_snippet":
                 symbol = args.get("qualified_name")

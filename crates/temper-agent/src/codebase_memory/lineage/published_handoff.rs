@@ -16,7 +16,8 @@ use super::{
 pub(super) struct PublishedRecoveryHandoff {
     pub(super) root_binding: String,
     pub(super) action: GraphRecoveryActionV1,
-    pub(super) reference: String,
+    pub(super) references: Vec<String>,
+    pub(super) selected_reference: Option<String>,
 }
 
 pub(super) struct CanonicalPublishedRawSelector {
@@ -50,14 +51,59 @@ impl DecisionAnchorLineageRegistry {
                 handoff.action.is_valid()
                     && handoff.action.tool.public_name() == tool_name
                     && active_root.is_none_or(|root| root == handoff.root_binding)
-                    && references[0] == handoff.reference
-                    && action_matches(handoff.action, &handoff.reference, arguments, evidence_kind)
+                    && handoff
+                        .references
+                        .iter()
+                        .any(|reference| reference == references[0])
+                    && handoff
+                        .selected_reference
+                        .as_ref()
+                        .is_none_or(|selected| selected == references[0])
+                    && action_matches(handoff.action, references[0], arguments, evidence_kind)
             });
         Some(if recognized {
             GraphRecoveryReferenceDispositionV1::Recognized
         } else {
             GraphRecoveryReferenceDispositionV1::Rejected
         })
+    }
+
+    pub(super) fn select_published_reference(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> bool {
+        let Some(reference) = arguments.as_object().and_then(|object| {
+            let references = object
+                .values()
+                .filter_map(Value::as_str)
+                .filter(|value| value.starts_with(RECOVERY_SELECTOR_REFERENCE_PREFIX))
+                .collect::<Vec<_>>();
+            (references.len() == 1).then_some(references[0])
+        }) else {
+            return false;
+        };
+        let mut handoff = self
+            .published_handoff
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(handoff) = handoff.as_mut() else {
+            return false;
+        };
+        if handoff.selected_reference.is_some()
+            || !handoff
+                .references
+                .iter()
+                .any(|candidate| candidate == reference)
+            || handoff.action.tool.public_name() != tool_name
+            || active_root.is_some_and(|root| root != handoff.root_binding)
+            || !action_matches(handoff.action, reference, arguments, None)
+        {
+            return false;
+        }
+        handoff.selected_reference = Some(reference.to_string());
+        true
     }
 
     /// Infers the source purpose only for the exact opaque source handoff
@@ -97,8 +143,15 @@ impl DecisionAnchorLineageRegistry {
             && handoff.action.selector_kind == DecisionAnchorTargetKindV1::QualifiedName
             && handoff.action.tool.public_name() == tool_name
             && active_root.is_none_or(|root| root == handoff.root_binding)
-            && references[0] == handoff.reference
-            && action_matches(handoff.action, &handoff.reference, arguments, evidence_kind))
+            && handoff
+                .references
+                .iter()
+                .any(|reference| reference == references[0])
+            && handoff
+                .selected_reference
+                .as_ref()
+                .is_none_or(|selected| selected == references[0])
+            && action_matches(handoff.action, references[0], arguments, evidence_kind))
         .then_some(kind)
     }
 
@@ -129,7 +182,8 @@ impl DecisionAnchorLineageRegistry {
             .published_handoff
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .is_none()
+            .as_ref()
+            .is_none_or(|handoff| handoff.selected_reference.is_none())
         {
             return Ok(None);
         }
@@ -163,6 +217,19 @@ impl DecisionAnchorLineageRegistry {
         LineageAdmissionOutcome,
         Option<GraphRecoveryReferenceDispositionV1>,
     )> {
+        let handoff_guard = self
+            .published_handoff
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(published_handoff) = handoff_guard.as_ref() else {
+            return None;
+        };
+        if published_handoff.references.len() > 1
+            && arguments.get("decision_evidence_kind").is_none()
+        {
+            return None;
+        }
+        drop(handoff_guard);
         let selected = {
             let lineages = self
                 .lineages
@@ -208,7 +275,8 @@ impl DecisionAnchorLineageRegistry {
                     Some(PublishedRecoveryHandoff {
                         root_binding: selected.root_binding,
                         action: selected.action,
-                        reference: selected.reference,
+                        references: vec![selected.reference.clone()],
+                        selected_reference: Some(selected.reference),
                     });
                 let admission = if selects_different_root {
                     admission.with_forest_root_selection()
@@ -231,7 +299,7 @@ impl DecisionAnchorLineageRegistry {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if handoff
             .as_ref()
-            .is_some_and(|handoff| handoff.reference == expanded.reference)
+            .is_some_and(|handoff| handoff.selected_reference.as_ref() == Some(&expanded.reference))
         {
             *handoff = None;
         }
@@ -263,12 +331,22 @@ fn action_matches(
     }
     match (action.tool, action.selector_kind) {
         (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => {
-            let declared = evidence_kind.or_else(|| {
-                object
-                    .get("decision_evidence_kind")
-                    .cloned()
-                    .and_then(|value| serde_json::from_value(value).ok())
-            });
+            let input_kind = match object.get("decision_evidence_kind") {
+                Some(value) => {
+                    match serde_json::from_value::<DecisionEvidenceKindV1>(value.clone()) {
+                        Ok(kind) => Some(kind),
+                        Err(_) => return false,
+                    }
+                }
+                None => None,
+            };
+            if evidence_kind
+                .zip(input_kind)
+                .is_some_and(|(inferred, declared)| inferred != declared)
+            {
+                return false;
+            }
+            let declared = evidence_kind.or(input_kind);
             object.get("qualified_name").and_then(Value::as_str) == Some(reference)
                 && declared.is_none_or(|kind: DecisionEvidenceKindV1| {
                     matches!(

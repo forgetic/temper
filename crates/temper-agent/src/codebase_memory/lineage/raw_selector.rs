@@ -285,6 +285,7 @@ mod tests {
                 value: "worker_slot".to_string(),
             },
             provider_value: "worker_slot".to_string(),
+            provider_result_order: 1,
             source_selector: Some(Selector {
                 kind: DecisionAnchorTargetKindV1::QualifiedName,
                 value: "temper_v1_private::src::route::worker_slot".to_string(),

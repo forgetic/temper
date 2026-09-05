@@ -14,8 +14,8 @@ use temper_protocol_activity::{
 };
 
 use super::{
-    CandidateRecovery, DecisionAnchorLineages, ExpandedRecoverySelector,
-    published_handoff::PublishedRecoveryHandoff, target::WorkspaceTargetRegistry,
+    DecisionAnchorLineages, ExpandedRecoverySelector, published_handoff::PublishedRecoveryHandoff,
+    target::WorkspaceTargetRegistry,
 };
 use crate::codebase_memory::scope::WorkspaceScope;
 use crate::mcp::McpToolResultPart;
@@ -84,71 +84,6 @@ impl DecisionAnchorLineageRegistry {
             .record_source(&self.scope, &lineage, input, typed_parts);
         Some(lineage)
     }
-
-    pub(crate) fn recovery_selector_guidance(
-        &self,
-        lineage: &DecisionAnchorLineageV1,
-    ) -> Option<String> {
-        self.lineages
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .recovery_selector_guidance(&lineage.root_binding)
-    }
-
-    pub(crate) fn expand_recovery_selector(
-        &self,
-        tool_name: &str,
-        input: &mut Value,
-        evidence_kind: Option<DecisionEvidenceKindV1>,
-    ) -> Result<Option<ExpandedRecoverySelector>, ()> {
-        let mut effective_evidence_kind = evidence_kind;
-        let canonicalized_raw = if let Some(canonical) =
-            self.canonical_published_raw_selector(tool_name, input, None, evidence_kind)?
-        {
-            *input = canonical.arguments;
-            effective_evidence_kind = canonical.evidence_kind;
-            true
-        } else {
-            false
-        };
-        if !canonicalized_raw {
-            effective_evidence_kind = effective_evidence_kind.or_else(|| {
-                self.published_source_evidence_kind(tool_name, input, None, effective_evidence_kind)
-            });
-        }
-        if !canonicalized_raw
-            && self
-                .published_reference_disposition(tool_name, input, None, effective_evidence_kind)
-                .is_some_and(|disposition| {
-                    disposition != GraphRecoveryReferenceDispositionV1::Recognized
-                })
-        {
-            return Err(());
-        }
-        let expanded = self
-            .lineages
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .expand_recovery_selector(tool_name, input, effective_evidence_kind)?;
-        if let Some(object) = input.as_object_mut() {
-            object.remove("decision_evidence_kind");
-        }
-        Ok(expanded.map(|expanded| expanded.with_evidence_kind(effective_evidence_kind)))
-    }
-
-    pub(crate) fn complete_candidate_reference(
-        &self,
-        expanded: &ExpandedRecoverySelector,
-        preserve_alternatives: bool,
-    ) -> Option<CandidateRecovery> {
-        let result = self
-            .lineages
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .complete_candidate_reference(expanded, preserve_alternatives);
-        self.clear_completed_handoff(expanded);
-        result
-    }
 }
 
 impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
@@ -202,6 +137,15 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .resolve_for_active_root_with_recovery(tool_name, arguments, active_root);
+        if published == Some(GraphRecoveryReferenceDispositionV1::Recognized)
+            && matches!(outcome, LineageAdmissionOutcome::Eligible(_))
+            && !self.select_published_reference(tool_name, arguments, active_root)
+        {
+            return (
+                LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector),
+                Some(GraphRecoveryReferenceDispositionV1::Rejected),
+            );
+        }
         let disposition = published
             .map(|_| {
                 if matches!(outcome, LineageAdmissionOutcome::Eligible(_)) {
@@ -223,26 +167,47 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
         self.published_reference_disposition(tool_name, arguments, active_root, None)
     }
 
-    fn active_root_recovery_selector(
+    fn active_root_recovery_selectors(
         &self,
         active_root: &str,
         action: temper_protocol_activity::GraphRecoveryActionV1,
-    ) -> Option<OpaqueRecoverySelectorReference> {
-        let reference = self
+    ) -> Vec<OpaqueRecoverySelectorReference> {
+        let references = self
             .lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .active_root_recovery_selector(active_root, action)?
-            .to_string();
-        *self
+            .active_root_recovery_selectors(active_root, action)
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if references.is_empty() {
+            return Vec::new();
+        }
+        let mut published_handoff = self
             .published_handoff
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PublishedRecoveryHandoff {
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let selected_reference = published_handoff
+            .as_ref()
+            .filter(|handoff| {
+                handoff.root_binding == active_root
+                    && handoff.action == action
+                    && handoff.selected_reference.as_ref().is_some_and(|selected| {
+                        references.iter().any(|reference| reference == selected)
+                    })
+            })
+            .and_then(|handoff| handoff.selected_reference.clone());
+        *published_handoff = Some(PublishedRecoveryHandoff {
             root_binding: active_root.to_string(),
             action,
-            reference: reference.clone(),
+            references: references.clone(),
+            selected_reference,
         });
-        OpaqueRecoverySelectorReference::new(reference)
+        drop(published_handoff);
+        references
+            .into_iter()
+            .filter_map(OpaqueRecoverySelectorReference::new)
+            .collect()
     }
 
     fn resolve_source_target(&self, lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {

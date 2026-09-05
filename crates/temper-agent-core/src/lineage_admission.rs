@@ -78,6 +78,22 @@ pub trait LineageAdmissionResolver: Send + Sync {
         None
     }
 
+    /// Returns the bounded model-safe selector menu for the machine-selected
+    /// active-root action. The model must copy exactly one member into the
+    /// action's public selector field; none is authoritative before that call.
+    ///
+    /// The singular hook remains the compatibility default for resolvers that
+    /// can expose only one continuation.
+    fn active_root_recovery_selectors(
+        &self,
+        active_root: &str,
+        action: GraphRecoveryActionV1,
+    ) -> Vec<OpaqueRecoverySelectorReference> {
+        self.active_root_recovery_selector(active_root, action)
+            .into_iter()
+            .collect()
+    }
+
     fn resolve_source_target(&self, _lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
         TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
     }
