@@ -413,6 +413,24 @@ impl DecisionAnchorLineageRegistry {
             *handoff = None;
         }
     }
+
+    pub(super) fn retire_published_handoff(&self) {
+        let retired = self
+            .published_handoff
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let Some(retired) = retired else {
+            return;
+        };
+        if retired.action != GraphRecoveryActionV1::implementation_authority_correction() {
+            return;
+        }
+        self.lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retire_implementation_correction(&retired.root_binding);
+    }
 }
 
 impl PublishedRecoveryHandoff {

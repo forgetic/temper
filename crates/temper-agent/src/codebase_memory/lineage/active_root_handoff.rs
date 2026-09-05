@@ -151,7 +151,9 @@ impl DecisionAnchorLineages {
                         .filter(|reference| {
                             self.recovery_reference_selectors
                                 .get(**reference)
-                                .is_some_and(|candidate| !candidate.previewed)
+                                .is_some_and(|candidate| {
+                                    !candidate.previewed && !candidate.preview_pending
+                                })
                         })
                         .copied()
                         .collect::<Vec<_>>();

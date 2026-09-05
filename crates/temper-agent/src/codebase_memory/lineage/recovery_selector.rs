@@ -78,6 +78,8 @@ pub(super) struct RecoverySelectorReference {
     /// A provisional alternative becomes actionable only when its selected
     /// implementation's typed traversal returns the same identity.
     pub(super) correction_supported: bool,
+    /// Pending dispatch is distinct from a successfully settled preview.
+    pub(super) preview_pending: bool,
     /// Bounded inspection lifecycle, independent from selection authority.
     pub(super) previewed: bool,
     pub(super) presented: bool,
@@ -287,6 +289,7 @@ impl DecisionAnchorLineages {
                 source_provider_value,
                 state: RecoverySelectorState::Available,
                 correction_supported: purpose != RecoverySelectorPurpose::ImplementationCorrection,
+                preview_pending: false,
                 previewed: false,
                 presented: false,
             })

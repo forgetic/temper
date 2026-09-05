@@ -41,6 +41,10 @@ impl SourceEvidence {
         self.implementation_correction_available |= available;
     }
 
+    pub(super) fn retain_provisional_implementation_authority(&mut self) {
+        self.implementation_correction_available = false;
+    }
+
     pub(super) fn mark_implementation_authority_corrected(&mut self) {
         self.implementation_correction_available = false;
         self.implementation_authority_corrected = true;

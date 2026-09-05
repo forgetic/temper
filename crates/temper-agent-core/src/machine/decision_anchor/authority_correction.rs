@@ -22,7 +22,9 @@ impl DecisionAnchorState {
                     })
             });
             if !successful {
-                return self.enter_incomplete_enabled(anchors.active_evidence());
+                self.phase = Some(AnchorPhase::EnabledComplete(anchors));
+                self.exploration = ExplorationStatus::EnabledComplete;
+                return DecisionAnchorTransition::Unchanged;
             }
             if let Some(finished) = previews
                 .iter()
@@ -63,6 +65,7 @@ impl DecisionAnchorState {
                     if let Some(anchor) = anchors.roots.get_mut(&root) {
                         anchor.evidence.mark_implementation_authority_corrected();
                     }
+                    self.implementation_correction_inspection_completed = false;
                     self.mark_accepted(finished.id, AcceptedEvidence::ImplementationCorrection);
                 }
             }

@@ -56,6 +56,19 @@ impl DecisionAnchorLineages {
                 })
             })
     }
+
+    pub(super) fn retire_implementation_correction(&mut self, root_binding: &str) {
+        let key = RecoverySelectorKey {
+            root_binding: root_binding.to_string(),
+            purpose: RecoverySelectorPurpose::ImplementationCorrection,
+        };
+        if let Some(references) = self.recovery_references.remove(&key) {
+            for reference in references {
+                self.recovery_reference_selectors.remove(&reference);
+            }
+        }
+        self.provisional_implementation_roots.remove(root_binding);
+    }
 }
 
 pub(super) fn provider_trace_implementation_candidates(

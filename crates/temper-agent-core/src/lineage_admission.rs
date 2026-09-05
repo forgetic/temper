@@ -94,6 +94,22 @@ pub trait LineageAdmissionResolver: Send + Sync {
             .collect()
     }
 
+    /// Settles one wrapper-local candidate preview reservation at the same
+    /// batch boundary as core policy. Implementations must ignore calls which
+    /// do not own a pending preview reservation.
+    fn settle_recovery_preview(
+        &self,
+        _tool_name: &str,
+        _arguments: &Value,
+        _active_root: Option<&str>,
+        _succeeded: bool,
+    ) {
+    }
+
+    /// Retires the wrapper-local handoff after core policy has selected an
+    /// authority outcome. No raw selector or target crosses this boundary.
+    fn retire_recovery_handoff(&self) {}
+
     fn resolve_source_target(&self, _lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
         TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
     }

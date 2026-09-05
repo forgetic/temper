@@ -228,6 +228,20 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
             .collect()
     }
 
+    fn settle_recovery_preview(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+        succeeded: bool,
+    ) {
+        self.settle_published_recovery_preview(tool_name, arguments, active_root, succeeded);
+    }
+
+    fn retire_recovery_handoff(&self) {
+        self.retire_published_handoff();
+    }
+
     fn resolve_source_target(&self, lineage: &DecisionAnchorLineageV1) -> TargetAdmissionOutcome {
         self.targets
             .lock()

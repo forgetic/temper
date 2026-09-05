@@ -99,6 +99,44 @@ fn complete_correction_inspection(state: &mut DecisionAnchorState, turn: usize) 
 }
 
 #[test]
+fn failed_correction_inspection_remains_reachable_until_a_successful_retry() {
+    let mut state = complete_state_with_correction();
+    let preview = call("failed-inspection", "codebase_memory_get_code_snippet");
+    let admission = LineageAdmissionOutcome::Eligible(
+        EligibleLineageAdmission::implementation_authority_correction(ROOT.to_string(), true)
+            .unwrap()
+            .with_implementation_correction_inspection_complete(),
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(&preview, 5, Some(&admission)),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "failed-inspection",
+            "codebase_memory_get_code_snippet",
+            &failure_output("transport"),
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+    assert_eq!(
+        state.active_recovery_action().map(|(_, action)| action),
+        Some(GraphRecoveryActionV1::implementation_authority_correction()),
+        "a failed preview cannot close the bounded correction substate",
+    );
+
+    complete_correction_inspection(&mut state, 6);
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("retained-read", "read"),
+            7,
+            Some(&read_target(TARGET_A)),
+        ),
+        None,
+    );
+}
+
+#[test]
 fn correction_inspection_is_required_before_retaining_or_correcting_authority() {
     let correction_call = source_call("correction", DecisionEvidenceKindV1::Implementation);
     let correction_admission = LineageAdmissionOutcome::Eligible(
@@ -159,10 +197,21 @@ fn ordinary_read_and_same_batch_read_close_correction_after_inspection() {
         None,
     );
     assert_eq!(after_read.active_recovery_action(), None);
+    after_read.on_tool_finished("ordinary-read", "read", &successful_read());
+    assert_eq!(
+        after_read.on_tool_dispatched_with_targets(
+            &call("retained-mutation", "write"),
+            7,
+            Some(&mutation_targets(vec![TargetAdmissionOutcome::Eligible(
+                exact_target(TARGET_A),
+            )])),
+        ),
+        None,
+    );
     assert_eq!(
         after_read.on_tool_dispatched_with_admission(
             &correction_call,
-            7,
+            8,
             Some(&correction_admission),
         ),
         completed_graph_denial(),

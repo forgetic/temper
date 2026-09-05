@@ -301,6 +301,7 @@ mod tests {
             source_provider_value: Some(RAW.to_string()),
             state: RecoverySelectorState::Available,
             correction_supported: true,
+            preview_pending: false,
             previewed: false,
             presented: true,
         }

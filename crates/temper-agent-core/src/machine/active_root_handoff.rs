@@ -9,8 +9,10 @@ use tongs::model::{AssistantMessage, ToolCall};
 
 use crate::LineageAdmissionOutcome;
 
+use super::batching::PendingTool;
 use super::core::{AgentMachine, extract_tool_calls};
 use super::decision_anchor::active_root_selector_handoff;
+use super::protocol::ToolCallDenial;
 
 impl AgentMachine {
     pub(super) fn capture_recovery_reference_dispositions(&mut self, assistant: &AssistantMessage) {
@@ -60,10 +62,61 @@ impl AgentMachine {
             .collect()
     }
 
+    pub(super) fn settle_denied_recovery_previews(
+        &self,
+        calls: &[ToolCall],
+        denials: &[Option<ToolCallDenial>],
+    ) {
+        let active_root = self
+            .decision_anchors
+            .as_ref()
+            .and_then(|state| state.active_root_binding());
+        let Some(admission) = self.lineage_admission.as_ref() else {
+            return;
+        };
+        for (call, denial) in calls.iter().zip(denials) {
+            if denial.is_some() || self.invocation_rejections.contains_key(&call.id) {
+                admission.settle_recovery_preview(&call.name, &call.arguments, active_root, false);
+            }
+        }
+    }
+
+    pub(super) fn settle_completed_recovery_previews(&self, batch: &[PendingTool]) {
+        let active_root = self
+            .decision_anchors
+            .as_ref()
+            .and_then(|state| state.active_root_binding());
+        let Some(admission) = self.lineage_admission.as_ref() else {
+            return;
+        };
+        for pending in batch {
+            let succeeded = pending.source_target.is_some()
+                && pending
+                    .output
+                    .as_ref()
+                    .is_some_and(|output| !output.is_error)
+                && pending.failure.is_none()
+                && !self.invocation_rejections.contains_key(&pending.call.id);
+            admission.settle_recovery_preview(
+                &pending.call.name,
+                &pending.call.arguments,
+                active_root,
+                succeeded,
+            );
+        }
+    }
+
     pub(super) fn refresh_active_root_handoff(
         &mut self,
         selection: Option<(String, GraphRecoveryActionV1)>,
     ) {
+        if selection.is_none() {
+            if let Some(admission) = self.lineage_admission.as_ref() {
+                admission.retire_recovery_handoff();
+            }
+            self.decision_anchor_active_handoff = None;
+            return;
+        }
         self.decision_anchor_active_handoff = selection.and_then(|(active_root, action)| {
             let selectors = self
                 .lineage_admission

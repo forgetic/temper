@@ -6,6 +6,24 @@ use super::{AgentMachine, Phase};
 use crate::machine::{BatchGeneration, OperationGeneration};
 
 impl AgentMachine {
+    pub(super) fn next_operation_generation(&mut self) -> OperationGeneration {
+        let generation = self.next_operation_generation;
+        self.next_operation_generation = self
+            .next_operation_generation
+            .checked_add(1)
+            .expect("agent operation generation exhausted");
+        generation
+    }
+
+    pub(super) fn next_batch_generation(&mut self) -> BatchGeneration {
+        let generation = self.next_batch_generation;
+        self.next_batch_generation = self
+            .next_batch_generation
+            .checked_add(1)
+            .expect("agent batch generation exhausted");
+        generation
+    }
+
     /// The current conversation (test/observability accessor).
     pub fn messages(&self) -> &[Message] {
         &self.messages

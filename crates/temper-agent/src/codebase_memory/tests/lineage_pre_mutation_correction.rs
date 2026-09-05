@@ -261,6 +261,8 @@ fn run_implementation_correction_inspection(
             Some(premature_failure),
         );
 
+        fail_correction_preview(&mut machine, &correction_references);
+
         let correction_previews = complete_llm(
             &mut machine,
             assistant(
@@ -281,6 +283,13 @@ fn run_implementation_correction_inspection(
                     .collect(),
             ),
         );
+        for id in ["correction-preview-one", "correction-preview-two"] {
+            assert!(correction_previews.iter().any(|request| matches!(
+                request,
+                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
+                    if call.id == id
+            )));
+        }
         let mut preview_results = Vec::new();
         for id in ["correction-preview-one", "correction-preview-two"] {
             let call = dispatched_call(&correction_previews, id);
@@ -346,6 +355,15 @@ fn run_implementation_correction_inspection(
                     }),
                 )]),
             );
+            assert!(stale_correction.iter().any(|request| matches!(
+                request,
+                AgentRequest::Emit(AgentEvent::ToolStart {
+                    recovery_reference_disposition: Some(
+                        GraphRecoveryReferenceDispositionV1::Rejected
+                    ),
+                    ..
+                })
+            )));
             let stale_failure = local_failure(&stale_correction, "correction-after-retain");
             let _ = complete_tool(
                 &mut machine,

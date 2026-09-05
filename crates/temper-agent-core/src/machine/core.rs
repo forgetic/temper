@@ -79,7 +79,7 @@ pub struct AgentMachine {
     /// Final registry-derived definitions, aliases, schemas, and effects.
     invocation_catalog: Arc<ToolInvocationCatalog>,
     /// Typed local failures for calls scrubbed by the invocation boundary.
-    invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
+    pub(super) invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
     /// Content-free traversal kinds whose required selector was unusable
     /// before invocation scrubbing.
     incomplete_graph_selectors: BTreeMap<String, GraphCorrelationToolV1>,
@@ -129,9 +129,9 @@ pub struct AgentMachine {
     /// Steering messages to inject at the next turn boundary.
     queued_steering: Vec<Message>,
     /// Next never-reused shell operation identity.
-    next_operation_generation: OperationGeneration,
+    pub(super) next_operation_generation: OperationGeneration,
     /// Next never-reused parallel tool-batch identity. Model calls use zero.
-    next_batch_generation: BatchGeneration,
+    pub(super) next_batch_generation: BatchGeneration,
     /// Model operation currently allowed to settle.
     active_llm: Option<OperationGeneration>,
     /// Tool batch currently allowed to settle, including duplicate detection.
@@ -249,24 +249,6 @@ impl AgentMachine {
                 model_failure: self.model_failure.take(),
             },
         ]
-    }
-
-    fn next_operation_generation(&mut self) -> OperationGeneration {
-        let generation = self.next_operation_generation;
-        self.next_operation_generation = self
-            .next_operation_generation
-            .checked_add(1)
-            .expect("agent operation generation exhausted");
-        generation
-    }
-
-    fn next_batch_generation(&mut self) -> BatchGeneration {
-        let generation = self.next_batch_generation;
-        self.next_batch_generation = self
-            .next_batch_generation
-            .checked_add(1)
-            .expect("agent batch generation exhausted");
-        generation
     }
 
     /// Begin the next model turn: inject any queued steering, then call the LLM.
@@ -480,6 +462,7 @@ impl AgentMachine {
         if active_handoff.is_some() {
             self.refresh_active_root_handoff(active_handoff);
         }
+        self.settle_denied_recovery_previews(&calls, &denials);
         for ((call, denial), recovery_reference_disposition) in calls
             .into_iter()
             .zip(denials)
@@ -636,6 +619,7 @@ impl AgentMachine {
         // than on each transport completion, so a parallel graph batch always
         // sees complete results in its original dispatch order.
         if let Some(batch) = self.pending_batches.pop_front() {
+            self.settle_completed_recovery_previews(&batch);
             let active_handoff = if let Some(state) = self.decision_anchors.as_mut() {
                 let completed = batch
                     .iter()

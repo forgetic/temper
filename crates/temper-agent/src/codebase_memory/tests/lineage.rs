@@ -725,6 +725,7 @@ mod tests {
         include!("lineage_parallel_active_root_execution.rs");
         include!("lineage_parallel_active_root_execution_tests.rs");
         include!("lineage_authority_correction_support.rs");
+        include!("lineage_correction_preview_failure.rs");
         include!("lineage_pre_mutation_correction.rs");
     }
 

@@ -181,6 +181,7 @@ impl DecisionAnchorState {
                 self.conventional_read_authorities.push(target);
             }
         }
+        let mut settled_roots = BTreeSet::new();
         for (id, name, output, _, succeeded) in completed {
             let Some(call_key) = GraphCorrelationV1::target_digest(id) else {
                 continue;
@@ -202,6 +203,7 @@ impl DecisionAnchorState {
                 if !still_current {
                     continue;
                 }
+                let settled_root = source.root_binding.clone();
                 if let Some(existing) = self.exact_read_authorities.iter_mut().find(|authority| {
                     authority.root_binding == source.root_binding
                         && authority.target.matches(&source.target)
@@ -221,8 +223,31 @@ impl DecisionAnchorState {
                         read_dispatched_after_batch: pending.dispatched_after_batch,
                     });
                 }
+                settled_roots.insert(settled_root);
             }
         }
+        if settled_roots.is_empty() {
+            return;
+        }
+        if let Some(AnchorPhase::EnabledComplete(anchors)) = self.phase.as_mut() {
+            for root in &settled_roots {
+                if let Some(anchor) = anchors.roots.get_mut(root) {
+                    anchor
+                        .evidence
+                        .retain_provisional_implementation_authority();
+                }
+            }
+        }
+        self.source_authorities
+            .retain(|source| !settled_roots.contains(&source.root_binding));
+        self.pending_exact_reads.retain(|_, pending| {
+            pending
+                .sources
+                .iter()
+                .all(|source| !settled_roots.contains(&source.root_binding))
+        });
+        self.implementation_correction_attempted = true;
+        self.implementation_correction_inspection_completed = false;
     }
 
     fn mutation_targets_authorized(
