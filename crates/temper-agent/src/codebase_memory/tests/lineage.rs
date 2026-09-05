@@ -727,6 +727,8 @@ mod tests {
         include!("lineage_authority_correction_support.rs");
         include!("lineage_correction_preview_failure.rs");
         include!("lineage_pre_mutation_correction.rs");
+        include!("lineage_two_root_correction_support.rs");
+        include!("lineage_two_root_correction.rs");
     }
 
     mod candidates {
