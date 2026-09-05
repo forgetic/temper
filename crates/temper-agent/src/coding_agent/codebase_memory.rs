@@ -149,11 +149,15 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          do not lead with a name pattern or identifier token. Narrow with identifiers returned by that\n\
          semantic result only afterward. An implementation-purpose result may over-return caller- or\n\
          test-shaped candidates. Reuse its exact implementation candidate, but never credit those later\n\
-         evidence kinds through direct source reads. Consume the selected implementation source first;\n\
-         only then traverse inbound calls from that exact implementation in a later turn. Admit caller\n\
-         source only from an exact identity returned by that traversal. Among returned implementation\n\
-         candidates, favor the one whose result context matches the requested behavior, then use the\n\
-         shortest provider-derived refinement needed for the decision. Consume the exact behaviorally\n\
+         evidence kinds through direct source reads. When the active-root handoff presents multiple\n\
+         implementation candidates, follow its bounded preview/commit protocol: inspect only presented\n\
+         candidates without an evidence purpose, compare their source, then explicitly commit exactly one\n\
+         candidate with the implementation purpose in a later turn. A preview never earns evidence or\n\
+         ordinary read/mutation authority. Choose the behaviorally relevant implementation candidate and\n\
+         consume its exact source first; only then traverse inbound calls from that exact implementation in a later turn.\n\
+         Admit caller source only from an exact identity returned by that traversal. Among\n\
+         returned implementation candidates, favor the one whose result context matches the requested\n\
+         behavior, then use the shortest provider-derived refinement needed for the decision. Consume the\n\
          relevant caller source; do not choose an outer wrapper or incidental caller merely because it can\n\
          carry a caller evidence label.\n\
          Only the selected-implementation traversal's provider-returned caller identities are eligible\n\
@@ -371,7 +375,13 @@ for line in sys.stdin:
             "semantic result only afterward",
             "implementation-purpose result may over-return caller- or",
             "never credit those later",
-            "Consume the selected implementation source first",
+            "active-root handoff presents multiple",
+            "bounded preview/commit protocol",
+            "candidates without an evidence purpose",
+            "explicitly commit exactly one",
+            "preview never earns evidence or",
+            "ordinary read/mutation authority",
+            "consume its exact source first",
             "traverse inbound calls from that exact implementation in a later turn",
             "Admit caller",
             "source only from an exact identity returned by that traversal",

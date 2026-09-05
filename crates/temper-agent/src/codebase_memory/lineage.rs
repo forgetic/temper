@@ -19,6 +19,7 @@ const MAX_RESULT_TARGETS: usize = 64;
 
 mod active_root_handoff;
 mod admission;
+mod candidate_preview;
 mod candidate_projection;
 mod exact_narrowing;
 mod focused_test;
@@ -119,6 +120,7 @@ impl DecisionAnchorLineages {
             typed_parts,
             decision_evidence_kind,
             None,
+            false,
         )
     }
 
@@ -129,6 +131,7 @@ impl DecisionAnchorLineages {
         typed_parts: Option<&[McpToolResultPart]>,
         decision_evidence_kind: Option<DecisionEvidenceKindV1>,
         recovery_root: Option<&str>,
+        candidate_preview: bool,
     ) -> Option<DecisionAnchorLineageV1> {
         if !correlation.is_valid() {
             return None;
@@ -213,17 +216,27 @@ impl DecisionAnchorLineages {
         let FocusedTestDiscovery {
             candidates: focused_tests,
             outcome: mut focused_test_discovery,
-        } = focused_test_discovery(
-            correlation,
-            input,
-            selector_binding
-                .as_ref()
-                .is_some_and(|binding| binding.caller_evidence_result),
-            typed_parts,
-        );
+        } = if candidate_preview {
+            FocusedTestDiscovery {
+                candidates: None,
+                outcome: None,
+            }
+        } else {
+            focused_test_discovery(
+                correlation,
+                input,
+                selector_binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.caller_evidence_result),
+                typed_parts,
+            )
+        };
 
         let mut marked_focused_tests = None;
-        let result_target_kinds = match provider_candidates(typed_parts) {
+        let provider_candidates = (!candidate_preview)
+            .then(|| provider_candidates(typed_parts))
+            .flatten();
+        let result_target_kinds = match provider_candidates {
             Some(provider_candidates) => {
                 let mut candidates = provider_candidates.candidates;
                 if let Some(focused_tests) = focused_tests.as_ref() {

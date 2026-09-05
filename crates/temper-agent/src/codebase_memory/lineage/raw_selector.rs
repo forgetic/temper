@@ -292,6 +292,7 @@ mod tests {
             }),
             source_provider_value: Some(RAW.to_string()),
             state: RecoverySelectorState::Available,
+            previewed: false,
             presented: true,
         }
     }

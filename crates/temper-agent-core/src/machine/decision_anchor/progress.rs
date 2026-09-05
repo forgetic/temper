@@ -386,7 +386,13 @@ pub(in crate::machine) fn active_root_selector_handoff(
             (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => {
                 (
                     "qualified_name",
-                    format!("{{\"qualified_name\":\"{reference}\"}}"),
+                    if action.evidence_kind == GraphRecoveryEvidenceKindV1::Implementation {
+                        format!(
+                            "{{\"qualified_name\":\"{reference}\",\"decision_evidence_kind\":\"implementation\"}}"
+                        )
+                    } else {
+                        format!("{{\"qualified_name\":\"{reference}\"}}")
+                    },
                 )
             }
             (GraphCorrelationToolV1::TracePath, DecisionAnchorTargetKindV1::FunctionName) => (
@@ -419,14 +425,19 @@ pub(in crate::machine) fn active_root_selector_handoff(
         .map(|(index, reference)| format!("candidate_{}={reference}", index + 1))
         .collect::<Vec<_>>()
         .join(", ");
-    let arguments = if action.tool == GraphCorrelationToolV1::GetCodeSnippet {
-        "{\"qualified_name\":\"<copy exactly one candidate reference>\"}".to_string()
-    } else {
-        format!(
-            "{{\"function_name\":\"<copy exactly one candidate reference>\",\"mode\":\"calls\",\"direction\":\"inbound\",\"include_tests\":{}}}",
-            action.include_tests,
-        )
-    };
+    if action.tool == GraphCorrelationToolV1::GetCodeSnippet
+        && action.evidence_kind == GraphRecoveryEvidenceKindV1::Implementation
+    {
+        return Some(format!(
+            "[Active-root selector handoff: bounded candidate inspection call=[{} arguments={{\"qualified_name\":\"<copy one candidate reference>\"}}]; explicit commit call=[{} arguments={{\"qualified_name\":\"<copy exactly one candidate reference>\",\"decision_evidence_kind\":\"implementation\"}}]; selector field=qualified_name; current-active-root candidate references=[{options}]; inspect one or more distinct presented candidates at most once each within the existing recovery allowance and without decision_evidence_kind, then choose and explicitly commit exactly one presented reference in a later model turn; previews provide source context only and grant no evidence, selection state, ordinary read, or mutation authority; every unchosen, sibling, unpresented, raw, fabricated, stale, wrong-tool, wrong-field, and wrong-purpose value remains non-actionable.]",
+            action.tool.public_name(),
+            action.tool.public_name(),
+        ));
+    }
+    let arguments = format!(
+        "{{\"function_name\":\"<copy exactly one candidate reference>\",\"mode\":\"calls\",\"direction\":\"inbound\",\"include_tests\":{}}}",
+        action.include_tests,
+    );
     Some(format!(
         "[Active-root selector handoff: required next call=[{} arguments={}]; selector field={selector_field}; current-active-root candidate references=[{options}]; choose and copy exactly one presented opaque reference into the selector field; that reference alone becomes authoritative and every unchosen, sibling, raw, or fabricated value remains non-actionable; issue exactly one call in the next model turn.]",
         action.tool.public_name(),

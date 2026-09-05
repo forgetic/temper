@@ -330,6 +330,21 @@ impl EligibleLineageAdmission {
         })
     }
 
+    /// Admits a bounded source preview without attaching a decision-evidence
+    /// purpose. Preview results therefore cannot advance evidence or authorize
+    /// their filesystem target.
+    pub fn implementation_candidate_preview(root_binding: String) -> Option<Self> {
+        Some(Self {
+            root_binding: OpaqueLineageRootBinding::new(root_binding)?,
+            selector_kind: DecisionAnchorTargetKindV1::QualifiedName,
+            tool_kind: GraphCorrelationToolV1::GetCodeSnippet,
+            evidence_purpose: None,
+            recovery_purpose: None,
+            traversal_readiness_recheck: false,
+            forest_root_selection: false,
+        })
+    }
+
     pub fn focused_test_traversal(
         root_binding: String,
         selector_kind: DecisionAnchorTargetKindV1,

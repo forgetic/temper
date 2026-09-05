@@ -1,10 +1,5 @@
-const PARALLEL_ACTIVE_PROVIDER_SELECTOR: &str =
-    "temper-v1-production.src.route.worker_slot";
-const PARALLEL_FIRST_PROVIDER_SELECTOR: &str =
-    "temper-v1-production.src.model.affinity_topic";
-
 fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
-    reverse_candidate_order: bool,
+    reverse_preview_completion: bool,
 ) {
     let server = crate::codebase_memory::tests::test_support::fake_server_script();
     let workspace = tempfile::tempdir().unwrap();
@@ -114,25 +109,14 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
         assert_eq!(presented_handoff, active_references);
         let active_reference = active_references[2].clone();
         let first_reference = active_references[0].clone();
-        let (winner_reference, winner_provider_selector, winner_path, loser_reference, loser_path) =
-            if reverse_candidate_order {
-                (
-                    &first_reference,
-                    PARALLEL_FIRST_PROVIDER_SELECTOR,
-                    "demo/src/model.rs",
-                    &active_reference,
-                    "demo/src/route.rs",
-                )
-            } else {
-                (
-                    &active_reference,
-                    PARALLEL_ACTIVE_PROVIDER_SELECTOR,
-                    "demo/src/route.rs",
-                    &first_reference,
-                    "demo/src/model.rs",
-                )
-            };
-        assert!(!handoff.contains("decision_evidence_kind"));
+        let winner_reference = &active_reference;
+        let winner_provider_selector = PARALLEL_ACTIVE_PROVIDER_SELECTOR;
+        let winner_path = "demo/src/route.rs";
+        let loser_reference = &first_reference;
+        let loser_path = "demo/src/model.rs";
+        assert!(handoff.contains("bounded candidate inspection call"));
+        assert!(handoff.contains("explicit commit call"));
+        assert!(handoff.contains("decision_evidence_kind"));
         assert!(!sibling_references.contains(&active_reference));
 
         let fabricated = "temper-recovery-selector:00000000-0000-4000-8000-000000000099";
@@ -244,89 +228,64 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
             active_references
         );
 
-        let admitted = complete_llm(
+        let previews = complete_llm(
             &mut machine,
             assistant(vec![
                 (
-                    "winning-source",
-                    "codebase_memory_get_code_snippet",
-                    serde_json::json!({"qualified_name": winner_reference}),
-                ),
-                (
-                    "losing-source",
+                    "wrong-preview",
                     "codebase_memory_get_code_snippet",
                     serde_json::json!({"qualified_name": loser_reference}),
                 ),
+                (
+                    "chosen-preview",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({"qualified_name": winner_reference}),
+                ),
             ]),
         );
-        assert!(admitted.iter().any(|request| matches!(
-            request,
-            AgentRequest::Emit(AgentEvent::ToolStart {
-                id,
-                recovery_reference_disposition: Some(
-                    GraphRecoveryReferenceDispositionV1::Recognized
-                ),
-                ..
-            }) if id == "winning-source"
-        )));
-        let losing_dispatch = admitted
-            .iter()
-            .find_map(|request| match request {
-                AgentRequest::RunTool {
-                    call,
-                    denial,
-                    rejection,
+        for id in ["wrong-preview", "chosen-preview"] {
+            assert!(previews.iter().any(|request| matches!(
+                request,
+                AgentRequest::Emit(AgentEvent::ToolStart {
+                    id: emitted_id,
+                    recovery_reference_disposition: Some(
+                        GraphRecoveryReferenceDispositionV1::Recognized
+                    ),
                     ..
-                } if call.id == "losing-source" => {
-                    Some((denial.is_some(), rejection.is_some()))
-                }
-                _ => None,
-            })
-            .expect("the losing candidate has a closed local dispatch");
-        assert_eq!(
-            losing_dispatch,
-            (false, false),
-            "the read-safe losing wrapper must run only to reject before expansion",
-        );
-        assert!(admitted.iter().any(|request| matches!(
-            request,
-            AgentRequest::Emit(AgentEvent::ToolStart {
-                id,
-                recovery_reference_disposition: Some(
-                    GraphRecoveryReferenceDispositionV1::Rejected
-                ),
-                ..
-            }) if id == "losing-source"
-        )));
-        let source_call = admitted
-            .iter()
-            .find_map(|request| match request {
+                }) if emitted_id == id
+            )));
+            assert!(previews.iter().any(|request| matches!(
+                request,
                 AgentRequest::RunTool {
                     call,
                     denial: None,
                     rejection: None,
                     ..
-                } if call.id == "winning-source" => Some(call.clone()),
-                _ => None,
-            })
-            .expect("exactly one presented candidate reaches the provider");
-        let losing_call = dispatched_call(&admitted, "losing-source");
+                } if call.id == id
+            )));
+        }
+        let wrong_preview_call = dispatched_call(&previews, "wrong-preview");
+        let chosen_preview_call = dispatched_call(&previews, "chosen-preview");
         let source = registry
             .get("codebase_memory_get_code_snippet")
             .unwrap();
-        let (source_output, denied_output) = if reverse_candidate_order {
-            let source_output = source
-                .execute(&source_call.id, source_call.arguments, None)
+        let (chosen_preview_output, wrong_preview_output) = if reverse_preview_completion {
+            let chosen = source
+                .execute(
+                    &chosen_preview_call.id,
+                    chosen_preview_call.arguments,
+                    None,
+                )
                 .await
                 .unwrap();
-            let denied_output = source
-                .execute(&losing_call.id, losing_call.arguments, None)
+            let wrong = source
+                .execute(&wrong_preview_call.id, wrong_preview_call.arguments, None)
                 .await
                 .unwrap();
-            (source_output, denied_output)
+            (chosen, wrong)
         } else {
-            let denied_output = source
-                .execute(&losing_call.id, losing_call.arguments, None)
+            let wrong = source
+                .execute(&wrong_preview_call.id, wrong_preview_call.arguments, None)
                 .await
                 .unwrap();
             assert_eq!(
@@ -336,17 +295,184 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
                     Some(&active_root.root_binding),
                 ),
                 Some(GraphRecoveryReferenceDispositionV1::Recognized),
-                "the losing wrapper cannot poison the selected reference",
+                "the wrong preview cannot poison the later chosen candidate",
             );
-            let source_output = source
-                .execute(&source_call.id, source_call.arguments, None)
+            let chosen = source
+                .execute(
+                    &chosen_preview_call.id,
+                    chosen_preview_call.arguments,
+                    None,
+                )
                 .await
                 .unwrap();
-            (source_output, denied_output)
+            (chosen, wrong)
         };
-        assert!(denied_output.is_error);
-        let losing_failure =
-            ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::InvalidModelInput);
+        assert!(!wrong_preview_output.is_error);
+        assert!(!chosen_preview_output.is_error);
+        assert!(
+            crate::codebase_memory::tests::test_support::output_text(&wrong_preview_output)
+                .contains(PARALLEL_FIRST_PROVIDER_SELECTOR)
+        );
+        assert!(
+            crate::codebase_memory::tests::test_support::output_text(&chosen_preview_output)
+                .contains(PARALLEL_ACTIVE_PROVIDER_SELECTOR)
+        );
+        let (repeated_preview, repeated_disposition) =
+            admission.resolve_for_active_root_with_recovery(
+                "codebase_memory_get_code_snippet",
+                &serde_json::json!({"qualified_name": loser_reference}),
+                Some(&active_root.root_binding),
+            );
+        assert!(matches!(
+            repeated_preview,
+            LineageAdmissionOutcome::Ineligible(_)
+        ));
+        assert_eq!(
+            repeated_disposition,
+            Some(GraphRecoveryReferenceDispositionV1::Rejected),
+            "each visible candidate has at most one bounded preview",
+        );
+        assert_eq!(
+            admission.recovery_reference_disposition(
+                "codebase_memory_get_code_snippet",
+                &serde_json::json!({
+                    "qualified_name": winner_reference,
+                    "decision_evidence_kind": "implementation",
+                }),
+                Some(&active_root.root_binding),
+            ),
+            Some(GraphRecoveryReferenceDispositionV1::Recognized),
+            "rejecting a repeated preview cannot poison the explicit commit",
+        );
+        for (preview, path) in [
+            (&wrong_preview_output, loser_path),
+            (&chosen_preview_output, winner_path),
+        ] {
+            let preview_lineage = lineage(preview);
+            assert_eq!(preview_lineage.root_binding, active_root.root_binding);
+            assert_eq!(preview_lineage.decision_evidence_kind, None);
+            assert_eq!(
+                admission.resolve_source_target(&preview_lineage),
+                TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget),
+                "a preview cannot authorize its source target",
+            );
+            assert_eq!(
+                admission.resolve_invocation_targets(
+                    "write",
+                    &serde_json::json!({"path": path, "content": "changed"}),
+                ),
+                InvocationTargetAdmission::Mutation(vec![TargetAdmissionOutcome::Ineligible(
+                    TargetAdmissionStatus::UnknownTarget,
+                )]),
+                "a preview cannot authorize mutation",
+            );
+        }
+        let preview_details = serde_json::to_string(&[
+            wrong_preview_output.details.as_ref(),
+            chosen_preview_output.details.as_ref(),
+        ])
+        .unwrap();
+        for private in [
+            PARALLEL_FIRST_PROVIDER_SELECTOR,
+            PARALLEL_ACTIVE_PROVIDER_SELECTOR,
+            "src/model.rs",
+            "src/route.rs",
+            "fn temper-v1-production",
+        ] {
+            assert!(!preview_details.contains(private));
+        }
+        let after_previews = if reverse_preview_completion {
+            assert!(complete_tool(
+                &mut machine,
+                "chosen-preview",
+                chosen_preview_output,
+                None,
+            )
+            .is_empty());
+            complete_tool(
+                &mut machine,
+                "wrong-preview",
+                wrong_preview_output,
+                None,
+            )
+        } else {
+            assert!(complete_tool(
+                &mut machine,
+                "wrong-preview",
+                wrong_preview_output,
+                None,
+            )
+            .is_empty());
+            complete_tool(
+                &mut machine,
+                "chosen-preview",
+                chosen_preview_output,
+                None,
+            )
+        };
+        let handoff_after_previews = active_handoff(&after_previews);
+        assert_eq!(
+            handoff_references(handoff_after_previews),
+            active_references,
+        );
+        assert!(handoff_after_previews.contains("explicit commit call"));
+        assert!(handoff_after_previews.contains("decision_evidence_kind"));
+        assert_eq!(
+            crate::codebase_memory::tests::test_support::calls_named(
+                &log_path,
+                "get_code_snippet",
+            )
+            .len(),
+            2,
+        );
+        let preview_calls = crate::codebase_memory::tests::test_support::calls_named(
+            &log_path,
+            "get_code_snippet",
+        );
+        assert!(preview_calls.iter().any(|call| {
+            call["arguments"]["qualified_name"] == PARALLEL_FIRST_PROVIDER_SELECTOR
+        }));
+        assert!(preview_calls.iter().any(|call| {
+            call["arguments"]["qualified_name"] == PARALLEL_ACTIVE_PROVIDER_SELECTOR
+        }));
+
+        let committed = complete_llm(
+            &mut machine,
+            assistant(vec![(
+                "committed-source",
+                "codebase_memory_get_code_snippet",
+                serde_json::json!({
+                    "qualified_name": winner_reference,
+                    "decision_evidence_kind": "implementation",
+                }),
+            )]),
+        );
+        assert!(committed.iter().any(|request| matches!(
+            request,
+            AgentRequest::Emit(AgentEvent::ToolStart {
+                id,
+                recovery_reference_disposition: Some(
+                    GraphRecoveryReferenceDispositionV1::Recognized
+                ),
+                ..
+            }) if id == "committed-source"
+        )));
+        let source_call = committed
+            .iter()
+            .find_map(|request| match request {
+                AgentRequest::RunTool {
+                    call,
+                    denial: None,
+                    rejection: None,
+                    ..
+                } if call.id == "committed-source" => Some(call.clone()),
+                _ => None,
+            })
+            .expect("the explicit worker_slot commit reaches the provider");
+        let source_output = source
+            .execute(&source_call.id, source_call.arguments, None)
+            .await
+            .unwrap();
         assert!(!source_output.is_error);
         let source_lineage = lineage(&source_output);
         assert_eq!(source_lineage.root_binding, active_root.root_binding);
@@ -357,7 +483,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
         let TargetAdmissionOutcome::Eligible(source_target) =
             admission.resolve_source_target(&source_lineage)
         else {
-            panic!("the selected provider source has an exact ordinary target");
+            panic!("the explicitly committed provider source has an exact ordinary target");
         };
         let InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(read_target)) =
             admission.resolve_invocation_targets(
@@ -365,7 +491,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
                 &serde_json::json!({"path": winner_path}),
             )
         else {
-            panic!("the selected source authorizes its exact ordinary read");
+            panic!("the committed source authorizes its exact ordinary read");
         };
         assert!(source_target.matches(&read_target));
         let InvocationTargetAdmission::Mutation(mutation_targets) =
@@ -374,7 +500,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
                 &serde_json::json!({"path": winner_path, "content": "changed"}),
             )
         else {
-            panic!("the selected source authorizes its exact ordinary mutation target");
+            panic!("the committed source authorizes its exact ordinary mutation target");
         };
         assert!(matches!(
             mutation_targets.as_slice(),
@@ -388,51 +514,22 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
             InvocationTargetAdmission::Mutation(vec![TargetAdmissionOutcome::Ineligible(
                 TargetAdmissionStatus::UnknownTarget,
             )]),
-            "the losing same-batch candidate receives no mutation target authority",
+            "the wrong preview receives no mutation target authority",
         );
         let source_calls = crate::codebase_memory::tests::test_support::calls_named(
             &log_path,
             "get_code_snippet",
         );
-        assert_eq!(source_calls.len(), 1);
+        assert_eq!(source_calls.len(), 3);
         assert_eq!(
-            source_calls[0]["arguments"]["qualified_name"],
+            source_calls.last().unwrap()["arguments"]["qualified_name"],
             winner_provider_selector
         );
-        assert_eq!(source_calls[0]["arguments"].as_object().unwrap().len(), 2);
-        assert!(source_calls[0]["arguments"]["project"].is_string());
-        assert!(source_calls[0]["arguments"].get("repo").is_none());
-        assert!(
-            source_calls[0]["arguments"]
-                .get("include_neighbors")
-                .is_none()
-        );
-        assert!(
-            source_calls[0]["arguments"]
-                .get("decision_evidence_kind")
-                .is_none()
-        );
+        assert!(source_calls.iter().all(|call| {
+            call["arguments"].get("decision_evidence_kind").is_none()
+        }));
 
-        let advanced = if reverse_candidate_order {
-            assert!(
-                complete_tool(&mut machine, "winning-source", source_output, None).is_empty()
-            );
-            complete_tool(
-                &mut machine,
-                "losing-source",
-                denied_output,
-                Some(losing_failure),
-            )
-        } else {
-            assert!(complete_tool(
-                &mut machine,
-                "losing-source",
-                denied_output,
-                Some(losing_failure),
-            )
-            .is_empty());
-            complete_tool(&mut machine, "winning-source", source_output, None)
-        };
+        let advanced = complete_tool(&mut machine, "committed-source", source_output, None);
         assert!(advanced.iter().any(|request| match request {
             AgentRequest::CallLlm { messages, .. } => messages.iter().any(|message| matches!(
                 message,
@@ -498,7 +595,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
                 "get_code_snippet"
             )
             .len(),
-            1
+            3
         );
         assert!(!stale_completed.iter().any(|request| matches!(
             request,
@@ -508,14 +605,4 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
             }
         )));
     });
-}
-
-#[test]
-fn same_batch_candidate_selection_is_transactional_when_loser_finishes_first() {
-    run_parallel_overlapping_roots_execute_same_batch_candidate_selection(false);
-}
-
-#[test]
-fn same_batch_candidate_selection_is_transactional_when_winner_finishes_first_and_order_reverses() {
-    run_parallel_overlapping_roots_execute_same_batch_candidate_selection(true);
 }

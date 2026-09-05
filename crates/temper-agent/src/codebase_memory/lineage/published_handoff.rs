@@ -1,7 +1,9 @@
 //! Publication-time authorization for the one active-root selector handoff.
 
 use serde_json::Value;
-use temper_agent_core::{LineageAdmissionOutcome, LineageAdmissionStatus};
+use temper_agent_core::{
+    EligibleLineageAdmission, LineageAdmissionOutcome, LineageAdmissionStatus,
+};
 use temper_protocol_activity::{
     DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, GraphCorrelationToolV1,
     GraphRecoveryActionV1, GraphRecoveryEvidenceKindV1, GraphRecoveryReferenceDispositionV1,
@@ -66,6 +68,51 @@ impl DecisionAnchorLineageRegistry {
         } else {
             GraphRecoveryReferenceDispositionV1::Rejected
         })
+    }
+
+    pub(super) fn published_implementation_preview_admission(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> Option<EligibleLineageAdmission> {
+        let (root_binding, reference) = {
+            let handoff = self
+                .published_handoff
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let handoff = handoff.as_ref()?;
+            let reference = handoff
+                .references
+                .iter()
+                .find(|reference| {
+                    handoff.is_implementation_preview(tool_name, arguments, active_root, None)
+                        && action_matches(handoff.action, reference, arguments, None)
+                })?
+                .clone();
+            (handoff.root_binding.clone(), reference)
+        };
+        self.lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .admit_implementation_preview(&root_binding, &reference)
+            .then(|| EligibleLineageAdmission::implementation_candidate_preview(root_binding))
+            .flatten()
+    }
+
+    pub(super) fn is_published_implementation_preview(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        evidence_kind: Option<DecisionEvidenceKindV1>,
+    ) -> bool {
+        self.published_handoff
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|handoff| {
+                handoff.is_implementation_preview(tool_name, arguments, None, evidence_kind)
+            })
     }
 
     pub(super) fn select_published_reference(
@@ -137,6 +184,12 @@ impl DecisionAnchorLineageRegistry {
                 return None;
             }
         };
+        if kind == DecisionEvidenceKindV1::Implementation
+            && evidence_kind.is_none()
+            && arguments.get("decision_evidence_kind").is_none()
+        {
+            return None;
+        }
         (references.len() == 1
             && handoff.action.is_valid()
             && handoff.action.tool == GraphCorrelationToolV1::GetCodeSnippet
@@ -303,6 +356,28 @@ impl DecisionAnchorLineageRegistry {
         {
             *handoff = None;
         }
+    }
+}
+
+impl PublishedRecoveryHandoff {
+    fn is_implementation_preview(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+        evidence_kind: Option<DecisionEvidenceKindV1>,
+    ) -> bool {
+        self.action
+            == GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation)
+            && self.action.tool.public_name() == tool_name
+            && self.selected_reference.is_none()
+            && active_root.is_none_or(|root| root == self.root_binding)
+            && evidence_kind.is_none()
+            && arguments.get("decision_evidence_kind").is_none()
+            && self
+                .references
+                .iter()
+                .any(|reference| action_matches(self.action, reference, arguments, None))
     }
 }
 
