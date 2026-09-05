@@ -9,6 +9,7 @@ pub(super) enum AcceptedEvidence {
     Root,
     Trace,
     Implementation,
+    ImplementationCorrection,
     Caller,
     FocusedTestRoute,
     FocusedTest,
@@ -153,9 +154,21 @@ impl DecisionAnchorState {
                 recovery.anchors.roots.get(&recovery.active_root)?,
                 recovery.route,
             ),
-            AnchorPhase::EnabledComplete(_)
-            | AnchorPhase::EnabledIncomplete(_)
-            | AnchorPhase::ProviderUnavailable => return None,
+            AnchorPhase::EnabledComplete(anchors) => {
+                let (binding, active) = anchors.implementation_root()?;
+                if self.implementation_correction_attempted
+                    || self.implementation_authority_exercised
+                    || !active.evidence.implementation_correction_available
+                    || active.evidence.implementation_authority_corrected
+                {
+                    return None;
+                }
+                return Some((
+                    binding.clone(),
+                    GraphRecoveryActionV1::implementation_authority_correction(),
+                ));
+            }
+            AnchorPhase::EnabledIncomplete(_) | AnchorPhase::ProviderUnavailable => return None,
         };
         self.handoff_override
             .or_else(|| {
@@ -189,15 +202,30 @@ impl DecisionAnchorState {
             Some(AnchorPhase::EnabledComplete(anchors)) => anchors
                 .implementation_root()
                 .map(|(binding, active)| {
-                    GuidanceSnapshot::from_active(
+                    let correction_available = active.evidence.implementation_correction_available
+                        && !active.evidence.implementation_authority_corrected
+                        && !self.implementation_correction_attempted
+                        && !self.implementation_authority_exercised;
+                    let mut snapshot = GuidanceSnapshot::from_active(
                         binding,
                         active,
                         RecoveryRoute::Implementation,
                         Vec::new(),
-                        "complete",
+                        if correction_available {
+                            "pre_mutation_correction"
+                        } else {
+                            "complete"
+                        },
                         None,
-                        true,
-                    )
+                        !correction_available,
+                    );
+                    if correction_available {
+                        snapshot.next_actions = vec![
+                            GraphRecoveryActionV1::implementation_authority_correction()
+                                .model_label(),
+                        ];
+                    }
+                    snapshot
                 })
                 .unwrap_or_else(GuidanceSnapshot::empty),
             Some(AnchorPhase::Recovery(recovery)) => recovery
@@ -312,6 +340,7 @@ impl GuidanceSnapshot {
                 AcceptedEvidence::Root => "root",
                 AcceptedEvidence::Trace => "trace",
                 AcceptedEvidence::Implementation => "implementation",
+                AcceptedEvidence::ImplementationCorrection => "implementation_authority_correction",
                 AcceptedEvidence::Caller => "caller",
                 AcceptedEvidence::FocusedTestRoute => "focused_test_route",
                 AcceptedEvidence::FocusedTest => "focused_test",
@@ -328,7 +357,12 @@ impl GuidanceSnapshot {
         let remaining = self
             .remaining
             .map_or_else(|| "n/a".to_string(), |remaining| remaining.to_string());
-        let required_next_stage = if self.next_actions.len() == 1 && !self.complete {
+        let required_next_stage = if self.lifecycle == "pre_mutation_correction" {
+            format!(
+                "; optional pre-mutation correction stage=[{}]; use it only when retained caller and focused-test evidence show a presented candidate better explains the requested failure, otherwise proceed to the ordinary exact read",
+                self.next_actions[0],
+            )
+        } else if self.next_actions.len() == 1 && !self.complete {
             format!(
                 "; required next stage=[{}]; issue exactly this one action in the next model turn",
                 self.next_actions[0],
@@ -352,6 +386,8 @@ impl GuidanceSnapshot {
         };
         let completion = if self.complete {
             "; graph exploration=closed; perform one successful ordinary exact read of the selected workspace target now, then make only the matching minimal mutation"
+        } else if self.lifecycle == "pre_mutation_correction" {
+            "; complete typed evidence retained; if a presented typed candidate better explains the focused failure, inspect it and explicitly replace the provisional implementation target before any ordinary read or mutation; otherwise perform the ordinary exact read of the provisional target"
         } else if self.lifecycle == "exhausted" {
             "; no compatible provider-derived action remains; stop without a product"
         } else {
@@ -379,6 +415,19 @@ pub(in crate::machine) fn active_root_selector_handoff(
         .collect::<Vec<_>>();
     if references.iter().copied().collect::<BTreeSet<_>>().len() != selectors.len() {
         return None;
+    }
+    if action == GraphRecoveryActionV1::implementation_authority_correction() {
+        let options = references
+            .iter()
+            .enumerate()
+            .map(|(index, reference)| format!("candidate_{}={reference}", index + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Some(format!(
+            "[Active-root selector handoff: bounded pre-mutation implementation correction preview=[{} arguments={{\"qualified_name\":\"<copy one candidate reference>\"}}]; explicit correction call=[{} arguments={{\"qualified_name\":\"<copy exactly one candidate reference>\",\"decision_evidence_kind\":\"implementation\"}}]; selector field=qualified_name; typed current-root correction candidates=[{options}]; inspect each presented candidate at most once and, only if its source and the retained caller/focused-test evidence show it better explains the requested failure, issue at most one explicit correction in a later model turn before any ordinary read or mutation; otherwise proceed to the ordinary exact read, which closes correction. A successful correction atomically replaces provisional implementation authority, while every unchosen, sibling-root, unpresented, raw, fabricated, stale, consumed, malformed, wrong-tool, wrong-field, and wrong-purpose value remains non-actionable.]",
+            action.tool.public_name(),
+            action.tool.public_name(),
+        ));
     }
     if references.len() == 1 {
         let reference = references[0];
@@ -434,10 +483,17 @@ pub(in crate::machine) fn active_root_selector_handoff(
             action.tool.public_name(),
         ));
     }
-    let arguments = format!(
-        "{{\"function_name\":\"<copy exactly one candidate reference>\",\"mode\":\"calls\",\"direction\":\"inbound\",\"include_tests\":{}}}",
-        action.include_tests,
-    );
+    let arguments = match action.tool {
+        GraphCorrelationToolV1::GetCodeSnippet => format!(
+            "{{\"qualified_name\":\"<copy exactly one candidate reference>\",\"decision_evidence_kind\":\"{}\"}}",
+            action.evidence_kind.as_str(),
+        ),
+        GraphCorrelationToolV1::TracePath => format!(
+            "{{\"function_name\":\"<copy exactly one candidate reference>\",\"mode\":\"calls\",\"direction\":\"inbound\",\"include_tests\":{}}}",
+            action.include_tests,
+        ),
+        GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => return None,
+    };
     Some(format!(
         "[Active-root selector handoff: required next call=[{} arguments={}]; selector field={selector_field}; current-active-root candidate references=[{options}]; choose and copy exactly one presented opaque reference into the selector field; that reference alone becomes authoritative and every unchosen, sibling, raw, or fabricated value remains non-actionable; issue exactly one call in the next model turn.]",
         action.tool.public_name(),

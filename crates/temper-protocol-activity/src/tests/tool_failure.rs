@@ -486,6 +486,8 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
         decision_evidence_kind: None,
         caller_discovery: None,
         focused_test_discovery: None,
+        implementation_correction_available: false,
+        implementation_authority_corrected: false,
     });
     assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
     event.event.sanitize_graph_correlation();

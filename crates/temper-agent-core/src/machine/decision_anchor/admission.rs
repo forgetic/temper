@@ -105,6 +105,23 @@ impl DecisionAnchorState {
         let forest_selection_conflict = forest_selection.is_err();
         let forest_selection = forest_selection.ok().flatten();
         let snapshot = self.staged_admission_snapshot(forest_selection.as_ref());
+        let batch_has_exact_read = invocation_targets.iter().any(|target| {
+            matches!(
+                target,
+                Some(InvocationTargetAdmission::Read(
+                    TargetAdmissionOutcome::Eligible(_)
+                ))
+            )
+        });
+        let batch_has_correction_preview = admissions.iter().any(|admission| {
+            matches!(
+                admission,
+                Some(LineageAdmissionOutcome::Eligible(admission))
+                    if admission.is_implementation_authority_correction()
+                        && admission.is_implementation_candidate_preview()
+            )
+        });
+        let mut correction_commit_selected = false;
         let mut selected = BTreeSet::new();
         let mut admitted_actions = Vec::new();
         let mut admitted_count = 0u8;
@@ -192,6 +209,20 @@ impl DecisionAnchorState {
                     .is_some_and(|identity| self.rejected_recovery_tuples.contains(&identity));
                 let readiness_recheck =
                     eligible.is_some_and(EligibleLineageAdmission::is_traversal_readiness_recheck);
+                let correction =
+                    eligible.filter(|admission| admission.is_implementation_authority_correction());
+                let correction_preview = correction
+                    .is_some_and(EligibleLineageAdmission::is_implementation_candidate_preview);
+                let correction_admissible = correction.is_some_and(|admission| {
+                    !batch_has_exact_read
+                        && (!batch_has_correction_preview || correction_preview)
+                        && (correction_preview || !correction_commit_selected)
+                        && call_key.is_some()
+                        && admitted_root.as_deref().is_some_and(|root| {
+                            admission.matches_root(root)
+                                && self.implementation_correction_is_available(root)
+                        })
+                });
 
                 // A traversal is meaningful only for the staged active root.
                 // A selector owned by a retained sibling or by no root must be
@@ -218,7 +249,8 @@ impl DecisionAnchorState {
                                 && snapshot.missing.contains(&DecisionGap::Trace)
                                 && admitted_root.as_deref() == Some(snapshot.active_root.as_str())
                         });
-                    let admissible = readiness_recheck_admissible
+                    let admissible = correction_admissible
+                        || readiness_recheck_admissible
                         || snapshot.as_ref().is_some_and(|snapshot| {
                             !already_rejected
                                 && !(forest_selection_conflict
@@ -242,13 +274,21 @@ impl DecisionAnchorState {
                                 })
                         });
                     if admissible {
-                        let gap = recovery_gap.expect("admissible recovery has a purpose");
-                        selected.insert(gap);
-                        if !readiness_recheck_admissible {
-                            admitted_actions.push(
-                                recovery_action.expect("admissible recovery has a closed action"),
-                            );
-                            admitted_count = admitted_count.saturating_add(1);
+                        if correction_admissible {
+                            if !correction_preview {
+                                correction_commit_selected = true;
+                                self.implementation_correction_attempted = true;
+                            }
+                        } else {
+                            let gap = recovery_gap.expect("admissible recovery has a purpose");
+                            selected.insert(gap);
+                            if !readiness_recheck_admissible {
+                                admitted_actions.push(
+                                    recovery_action
+                                        .expect("admissible recovery has a closed action"),
+                                );
+                                admitted_count = admitted_count.saturating_add(1);
+                            }
                         }
                     } else {
                         denial = Some(snapshot.as_ref().map_or_else(
@@ -361,6 +401,19 @@ impl DecisionAnchorState {
         )
         .pop()
         .flatten()
+    }
+
+    fn implementation_correction_is_available(&self, root: &str) -> bool {
+        if self.implementation_correction_attempted || self.implementation_authority_exercised {
+            return false;
+        }
+        let Some(AnchorPhase::EnabledComplete(anchors)) = self.phase.as_ref() else {
+            return false;
+        };
+        anchors.roots.get(root).is_some_and(|anchor| {
+            anchor.evidence.implementation_correction_available
+                && !anchor.evidence.implementation_authority_corrected
+        })
     }
 
     pub(super) fn root_matching_admission(
@@ -546,54 +599,5 @@ impl RecoveryTupleIdentity {
         hash_recovery_identity_part(&mut digest, action.model_label().as_bytes());
         hash_recovery_identity_part(&mut digest, selector.as_bytes());
         Some(Self(digest.finalize().into()))
-    }
-}
-
-impl DecisionGap {
-    pub(super) fn recovery_kind(self) -> GraphRecoveryEvidenceKindV1 {
-        match self {
-            Self::Trace => GraphRecoveryEvidenceKindV1::Trace,
-            Self::Evidence(DecisionEvidenceKindV1::Implementation) => {
-                GraphRecoveryEvidenceKindV1::Implementation
-            }
-            Self::Evidence(DecisionEvidenceKindV1::Caller) => GraphRecoveryEvidenceKindV1::Caller,
-            Self::Evidence(DecisionEvidenceKindV1::FocusedTest) => {
-                GraphRecoveryEvidenceKindV1::FocusedTest
-            }
-        }
-    }
-
-    pub(super) fn recovery_action_for_admission(
-        admission: &EligibleLineageAdmission,
-    ) -> Option<GraphRecoveryActionV1> {
-        if admission.recovery_purpose() == Some(DecisionEvidenceKindV1::FocusedTest) {
-            return match admission.tool_kind() {
-                GraphCorrelationToolV1::TracePath => {
-                    Some(GraphRecoveryActionV1::focused_test_traversal())
-                }
-                GraphCorrelationToolV1::SearchGraph => {
-                    Some(GraphRecoveryActionV1::focused_test_semantic_fallback())
-                }
-                GraphCorrelationToolV1::SearchCode | GraphCorrelationToolV1::GetCodeSnippet => None,
-            };
-        }
-        DecisionGap::from_admission(admission)
-            .map(|gap| GraphRecoveryActionV1::for_evidence(gap.recovery_kind()))
-    }
-
-    fn recovery_action_for_call(call: &ToolCall) -> Option<GraphRecoveryActionV1> {
-        if call.name == GraphCorrelationToolV1::SearchGraph.public_name()
-            && call.arguments.get("query").is_some()
-        {
-            return Some(GraphRecoveryActionV1::focused_test_semantic_fallback());
-        }
-        let gap = DecisionGap::from_call(call)?;
-        if call.name == GraphCorrelationToolV1::TracePath.public_name()
-            && gap == DecisionGap::Evidence(DecisionEvidenceKindV1::FocusedTest)
-        {
-            Some(GraphRecoveryActionV1::focused_test_traversal())
-        } else {
-            Some(GraphRecoveryActionV1::for_evidence(gap.recovery_kind()))
-        }
     }
 }

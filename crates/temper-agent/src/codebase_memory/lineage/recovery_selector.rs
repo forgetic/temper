@@ -9,6 +9,7 @@ pub(super) const MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE: usize = 4;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum RecoverySelectorPurpose {
     ImplementationCandidate,
+    ImplementationCorrection,
     ImplementationTrace,
     CallerSource,
     CallerTestTraversal,
@@ -19,6 +20,7 @@ impl RecoverySelectorPurpose {
     pub(super) const fn label(self) -> &'static str {
         match self {
             Self::ImplementationCandidate => "implementation_candidate",
+            Self::ImplementationCorrection => "implementation_correction",
             Self::ImplementationTrace => "implementation_evidence_result",
             Self::CallerSource => "caller_traversal_result",
             Self::CallerTestTraversal => "caller_evidence_result",
@@ -29,6 +31,7 @@ impl RecoverySelectorPurpose {
     pub(super) const fn selector_kind(self) -> DecisionAnchorTargetKindV1 {
         match self {
             Self::ImplementationCandidate
+            | Self::ImplementationCorrection
             | Self::ImplementationTrace
             | Self::CallerTestTraversal => DecisionAnchorTargetKindV1::FunctionName,
             Self::CallerSource | Self::FocusedTestSource => {
@@ -37,10 +40,13 @@ impl RecoverySelectorPurpose {
         }
     }
 
-    const fn is_source_candidate(self) -> bool {
+    pub(super) const fn is_source_candidate(self) -> bool {
         matches!(
             self,
-            Self::ImplementationCandidate | Self::CallerSource | Self::FocusedTestSource
+            Self::ImplementationCandidate
+                | Self::ImplementationCorrection
+                | Self::CallerSource
+                | Self::FocusedTestSource
         )
     }
 }
@@ -69,6 +75,9 @@ pub(super) struct RecoverySelectorReference {
     pub(super) source_selector: Option<Selector>,
     pub(super) source_provider_value: Option<String>,
     pub(super) state: RecoverySelectorState,
+    /// A provisional alternative becomes actionable only when its selected
+    /// implementation's typed traversal returns the same identity.
+    pub(super) correction_supported: bool,
     /// Bounded inspection lifecycle, independent from selection authority.
     pub(super) previewed: bool,
     pub(super) presented: bool,
@@ -216,7 +225,8 @@ impl DecisionAnchorLineages {
         let qualified = canonical_qualified_name(&candidate.value);
         let function = canonical_function_name(&candidate.value)?;
         let (selector, provider_value, source_selector, source_provider_value) = match purpose {
-            RecoverySelectorPurpose::ImplementationCandidate => {
+            RecoverySelectorPurpose::ImplementationCandidate
+            | RecoverySelectorPurpose::ImplementationCorrection => {
                 let source_value = qualified.clone().unwrap_or_else(|| function.clone());
                 let source_selector = Selector {
                     kind: DecisionAnchorTargetKindV1::QualifiedName,
@@ -256,7 +266,11 @@ impl DecisionAnchorLineages {
                 (selector, candidate.provider_value.clone(), None, None)
             }
         };
-        let required_selector = if purpose == RecoverySelectorPurpose::ImplementationCandidate {
+        let required_selector = if matches!(
+            purpose,
+            RecoverySelectorPurpose::ImplementationCandidate
+                | RecoverySelectorPurpose::ImplementationCorrection
+        ) {
             source_selector.as_ref()?
         } else {
             &selector
@@ -272,6 +286,7 @@ impl DecisionAnchorLineages {
                 source_selector,
                 source_provider_value,
                 state: RecoverySelectorState::Available,
+                correction_supported: purpose != RecoverySelectorPurpose::ImplementationCorrection,
                 previewed: false,
                 presented: false,
             })
@@ -397,6 +412,8 @@ impl DecisionAnchorLineages {
             return Err(());
         }
         let root_binding = reference.root_binding.clone();
+        let implementation_authority_correction =
+            reference.purpose == RecoverySelectorPurpose::ImplementationCorrection;
         let reference = self
             .recovery_reference_selectors
             .get_mut(&public_reference)
@@ -415,108 +432,8 @@ impl DecisionAnchorLineages {
             root_binding,
             decision_evidence_kind: evidence_kind,
             candidate_preview,
+            implementation_authority_correction,
         }))
-    }
-
-    pub(in crate::codebase_memory) fn complete_candidate_reference(
-        &mut self,
-        expanded: &ExpandedRecoverySelector,
-        preserve_alternatives: bool,
-    ) -> Option<CandidateRecovery> {
-        if expanded.candidate_preview {
-            return None;
-        }
-        let candidate = self
-            .recovery_reference_selectors
-            .get(&expanded.reference)
-            .filter(|reference| reference.purpose.is_source_candidate())?;
-        let key = RecoverySelectorKey {
-            root_binding: candidate.root_binding.clone(),
-            purpose: candidate.purpose,
-        };
-        self.recovery_reference_selectors
-            .remove(&expanded.reference);
-        if preserve_alternatives {
-            let remove_key = self
-                .recovery_references
-                .get_mut(&key)
-                .is_some_and(|references| {
-                    references.retain(|reference| reference != &expanded.reference);
-                    references.is_empty()
-                });
-            if remove_key {
-                self.recovery_references.remove(&key);
-            }
-        } else if let Some(references) = self.recovery_references.remove(&key) {
-            for reference in references {
-                self.recovery_reference_selectors.remove(&reference);
-            }
-        }
-        let has_alternative = self
-            .recovery_references
-            .get(&key)
-            .is_some_and(|references| {
-                references.iter().any(|reference| {
-                    self.recovery_reference_selectors
-                        .get(reference)
-                        .is_some_and(|reference| {
-                            reference.state == RecoverySelectorState::Available
-                        })
-                })
-            });
-        let guidance = has_alternative.then(|| {
-            let references = self
-                .recovery_references
-                .get(&key)
-                .into_iter()
-                .flatten()
-                .filter(|reference| {
-                    self.recovery_reference_selectors
-                        .get(*reference)
-                        .is_some_and(|reference| {
-                            reference.state == RecoverySelectorState::Available
-                        })
-                })
-                .take(MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE)
-                .cloned()
-                .collect::<Vec<_>>();
-            for reference in &references {
-                if let Some(selector) = self.recovery_reference_selectors.get_mut(reference) {
-                    selector.presented = true;
-                }
-            }
-            let labels = references
-                .iter()
-                .enumerate()
-                .map(|(index, reference)| {
-                    let label = if references.len() == 1 {
-                        key.purpose.label().to_string()
-                    } else {
-                        format!("{}_{}", key.purpose.label(), index + 1)
-                    };
-                    let provider_order = self
-                        .recovery_reference_selectors
-                        .get(reference)
-                        .map(|selector| selector.provider_result_order)
-                        .unwrap_or_default();
-                    if key.purpose == RecoverySelectorPurpose::ImplementationCandidate {
-                        format!(
-                            "{label}={reference} (provider_result_order={provider_order})"
-                        )
-                    } else {
-                        format!("{label}={reference}")
-                    }
-                })
-                .collect::<Vec<_>>();
-            format!(
-                "[Candidate recovery: selected current-root candidate missed; no evidence or conventional mutation authority was earned; remaining compatible references: {}. Copy one reference exactly into the same selector field in a later model turn.]",
-                labels.join(", ")
-            )
-        });
-        Some(CandidateRecovery {
-            guidance,
-            has_alternative,
-        })
     }
 
     pub(super) fn is_implementation_trace_reference(&self, input: &Value) -> bool {
@@ -585,6 +502,7 @@ impl DecisionAnchorLineages {
                 Some(DecisionEvidenceKindV1::Implementation) => matches!(
                     reference.purpose,
                     RecoverySelectorPurpose::ImplementationCandidate
+                        | RecoverySelectorPurpose::ImplementationCorrection
                         | RecoverySelectorPurpose::ImplementationTrace
                 ),
                 Some(DecisionEvidenceKindV1::Caller) => {
@@ -601,6 +519,7 @@ impl DecisionAnchorLineages {
         };
         (purpose_matches
             && reference.presented
+            && reference.correction_supported
             && reference.selector(expected_selector_kind).is_some()
             && reference.state != RecoverySelectorState::Consumed)
             .then_some(Some((field, reference)))

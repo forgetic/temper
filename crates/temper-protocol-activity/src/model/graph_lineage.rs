@@ -137,6 +137,14 @@ pub struct DecisionAnchorLineageV1 {
     /// Closed aggregate result of focused-test selector discovery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focused_test_discovery: Option<FocusedTestDiscoveryOutcomeV1>,
+    /// A typed traversal exposed a bounded replacement for a provisional
+    /// implementation selection on this root.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub implementation_correction_available: bool,
+    /// This implementation source atomically replaces the root's provisional
+    /// implementation authority.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub implementation_authority_corrected: bool,
 }
 
 impl DecisionAnchorLineageV1 {
@@ -283,7 +291,22 @@ impl DecisionAnchorLineageV1 {
             decision_evidence_kind,
             caller_discovery,
             focused_test_discovery,
+            implementation_correction_available: false,
+            implementation_authority_corrected: false,
         })
+    }
+
+    /// Marks a carry-forward trace which returned one eligible correction.
+    pub fn with_implementation_correction_available(mut self) -> Option<Self> {
+        self.implementation_correction_available = true;
+        self.is_valid().then_some(self)
+    }
+
+    /// Marks the one source result which replaces provisional implementation
+    /// authority. The exact identities remain wrapper-local.
+    pub fn with_implementation_authority_correction(mut self) -> Option<Self> {
+        self.implementation_authority_corrected = true;
+        self.is_valid().then_some(self)
     }
 
     /// Rejects unknown versions, malformed opaque bindings, duplicate or
@@ -321,6 +344,15 @@ impl DecisionAnchorLineageV1 {
                     DecisionAnchorTargetKindV1::GraphQuery
                         | DecisionAnchorTargetKindV1::FunctionName
                 ))
+            && (!self.implementation_correction_available
+                || self.stage == DecisionAnchorLineageStageV1::CarryForward
+                    && self.target_kind == DecisionAnchorTargetKindV1::FunctionName
+                    && self.decision_evidence_kind.is_none())
+            && (!self.implementation_authority_corrected
+                || self.stage == DecisionAnchorLineageStageV1::CarryForward
+                    && self.target_kind == DecisionAnchorTargetKindV1::QualifiedName
+                    && self.decision_evidence_kind == Some(DecisionEvidenceKindV1::Implementation)
+                    && !self.implementation_correction_available)
     }
 
     /// Checks both the standalone contract and the existing closed V1 graph
@@ -342,4 +374,8 @@ fn valid_root_binding(value: &str) -> bool {
                     && byte.is_ascii_hexdigit()
                     && !byte.is_ascii_uppercase()
         })
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }

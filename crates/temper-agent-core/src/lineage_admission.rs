@@ -241,6 +241,8 @@ pub struct EligibleLineageAdmission {
     recovery_purpose: Option<DecisionEvidenceKindV1>,
     traversal_readiness_recheck: bool,
     forest_root_selection: bool,
+    implementation_candidate_preview: bool,
+    implementation_authority_correction: bool,
 }
 
 impl EligibleLineageAdmission {
@@ -274,6 +276,8 @@ impl EligibleLineageAdmission {
             recovery_purpose: None,
             traversal_readiness_recheck: false,
             forest_root_selection: false,
+            implementation_candidate_preview: false,
+            implementation_authority_correction: false,
         })
     }
 
@@ -295,6 +299,8 @@ impl EligibleLineageAdmission {
             recovery_purpose: None,
             traversal_readiness_recheck: false,
             forest_root_selection: false,
+            implementation_candidate_preview: false,
+            implementation_authority_correction: false,
         })
     }
 
@@ -311,6 +317,8 @@ impl EligibleLineageAdmission {
             recovery_purpose: None,
             traversal_readiness_recheck: false,
             forest_root_selection: false,
+            implementation_candidate_preview: false,
+            implementation_authority_correction: false,
         })
     }
 
@@ -327,6 +335,8 @@ impl EligibleLineageAdmission {
             recovery_purpose: None,
             traversal_readiness_recheck: true,
             forest_root_selection: false,
+            implementation_candidate_preview: false,
+            implementation_authority_correction: false,
         })
     }
 
@@ -342,6 +352,27 @@ impl EligibleLineageAdmission {
             recovery_purpose: None,
             traversal_readiness_recheck: false,
             forest_root_selection: false,
+            implementation_candidate_preview: true,
+            implementation_authority_correction: false,
+        })
+    }
+
+    /// Admits a preview or the one explicit correction commit selected from a
+    /// typed traversal of the provisional implementation.
+    pub fn implementation_authority_correction(
+        root_binding: String,
+        preview: bool,
+    ) -> Option<Self> {
+        Some(Self {
+            root_binding: OpaqueLineageRootBinding::new(root_binding)?,
+            selector_kind: DecisionAnchorTargetKindV1::QualifiedName,
+            tool_kind: GraphCorrelationToolV1::GetCodeSnippet,
+            evidence_purpose: (!preview).then_some(DecisionEvidenceKindV1::Implementation),
+            recovery_purpose: None,
+            traversal_readiness_recheck: false,
+            forest_root_selection: false,
+            implementation_candidate_preview: preview,
+            implementation_authority_correction: true,
         })
     }
 
@@ -358,6 +389,8 @@ impl EligibleLineageAdmission {
             recovery_purpose: Some(DecisionEvidenceKindV1::FocusedTest),
             traversal_readiness_recheck: false,
             forest_root_selection: false,
+            implementation_candidate_preview: false,
+            implementation_authority_correction: false,
         })
     }
 
@@ -374,6 +407,8 @@ impl EligibleLineageAdmission {
             recovery_purpose: Some(DecisionEvidenceKindV1::FocusedTest),
             traversal_readiness_recheck: false,
             forest_root_selection: false,
+            implementation_candidate_preview: false,
+            implementation_authority_correction: false,
         })
     }
 
@@ -404,6 +439,14 @@ impl EligibleLineageAdmission {
         self.traversal_readiness_recheck
     }
 
+    pub const fn is_implementation_candidate_preview(&self) -> bool {
+        self.implementation_candidate_preview
+    }
+
+    pub const fn is_implementation_authority_correction(&self) -> bool {
+        self.implementation_authority_correction
+    }
+
     pub const fn selects_forest_root(&self) -> bool {
         self.forest_root_selection
     }
@@ -427,6 +470,14 @@ impl fmt::Debug for EligibleLineageAdmission {
             .field(
                 "traversal_readiness_recheck",
                 &self.traversal_readiness_recheck,
+            )
+            .field(
+                "implementation_candidate_preview",
+                &self.implementation_candidate_preview,
+            )
+            .field(
+                "implementation_authority_correction",
+                &self.implementation_authority_correction,
             )
             .field("forest_root_selection", &self.forest_root_selection)
             .finish()

@@ -10,7 +10,9 @@ impl DecisionAnchorLineages {
     ) -> Option<String> {
         let mut references = Vec::new();
         for (key, purpose_references) in &self.recovery_references {
-            if key.root_binding != root_binding {
+            if key.root_binding != root_binding
+                || key.purpose == RecoverySelectorPurpose::ImplementationCorrection
+            {
                 continue;
             }
             let available = purpose_references
@@ -81,10 +83,13 @@ impl DecisionAnchorLineages {
         root_binding: &str,
         action: GraphRecoveryActionV1,
     ) -> Vec<&str> {
-        let purposes = if action
+        let purposes = if action == GraphRecoveryActionV1::implementation_authority_correction() {
+            vec![RecoverySelectorPurpose::ImplementationCorrection]
+        } else if action
             == GraphRecoveryActionV1::for_evidence(
                 temper_protocol_activity::GraphRecoveryEvidenceKindV1::Implementation,
-            ) {
+            )
+        {
             vec![
                 RecoverySelectorPurpose::ImplementationCandidate,
                 RecoverySelectorPurpose::ImplementationTrace,
@@ -128,6 +133,7 @@ impl DecisionAnchorLineages {
                         .is_some_and(|selector| {
                             selector.state == RecoverySelectorState::Available
                                 && selector.presented
+                                && selector.correction_supported
                                 && selector.selector(action.selector_kind).is_some()
                                 && self.recovery_action_is_admissible(
                                     root_binding,
@@ -175,6 +181,18 @@ impl DecisionAnchorLineages {
         action: GraphRecoveryActionV1,
         reference: &str,
     ) -> bool {
+        if action == GraphRecoveryActionV1::implementation_authority_correction() {
+            return self
+                .recovery_reference_selectors
+                .get(reference)
+                .is_some_and(|candidate| {
+                    candidate.root_binding == root_binding
+                        && candidate.purpose == RecoverySelectorPurpose::ImplementationCorrection
+                        && candidate.correction_supported
+                        && candidate.presented
+                        && candidate.state == RecoverySelectorState::Available
+                });
+        }
         let Some(arguments) = recovery_action_arguments(action, reference) else {
             return false;
         };

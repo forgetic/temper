@@ -51,6 +51,14 @@ impl RecoverySelectorPurpose {
                     Self::ImplementationCandidate | Self::ImplementationTrace => {
                         DecisionEvidenceKindV1::Implementation
                     }
+                    Self::ImplementationCorrection => {
+                        return declared
+                            .is_none_or(|kind| kind == DecisionEvidenceKindV1::Implementation)
+                            .then_some((
+                                GraphRecoveryActionV1::implementation_authority_correction(),
+                                Some(DecisionEvidenceKindV1::Implementation),
+                            ));
+                    }
                     Self::CallerSource => DecisionEvidenceKindV1::Caller,
                     Self::FocusedTestSource => DecisionEvidenceKindV1::FocusedTest,
                     Self::CallerTestTraversal => return None,
@@ -292,6 +300,7 @@ mod tests {
             }),
             source_provider_value: Some(RAW.to_string()),
             state: RecoverySelectorState::Available,
+            correction_supported: true,
             previewed: false,
             presented: true,
         }

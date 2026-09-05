@@ -130,6 +130,19 @@ impl LineageAdmissionResolver for DecisionAnchorLineageRegistry {
         {
             return (LineageAdmissionOutcome::Eligible(preview), published);
         }
+        if let Some(correction) =
+            self.published_implementation_correction_admission(tool_name, arguments, active_root)
+        {
+            if published == Some(GraphRecoveryReferenceDispositionV1::Recognized)
+                && self.select_published_reference(tool_name, arguments, active_root)
+            {
+                return (LineageAdmissionOutcome::Eligible(correction), published);
+            }
+            return (
+                LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector),
+                Some(GraphRecoveryReferenceDispositionV1::Rejected),
+            );
+        }
         if let Some(raw_admission) =
             self.resolve_published_raw_admission(tool_name, arguments, active_root)
         {

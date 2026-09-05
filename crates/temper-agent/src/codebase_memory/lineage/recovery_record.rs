@@ -116,6 +116,7 @@ pub(in crate::codebase_memory) struct ExpandedRecoverySelector {
     pub(super) root_binding: String,
     pub(super) decision_evidence_kind: Option<DecisionEvidenceKindV1>,
     pub(super) candidate_preview: bool,
+    pub(super) implementation_authority_correction: bool,
 }
 
 impl ExpandedRecoverySelector {
@@ -154,6 +155,9 @@ impl DecisionAnchorLineages {
             decision_evidence_kind,
             expanded.map(ExpandedRecoverySelector::root_binding),
             expanded.is_some_and(|expanded| expanded.candidate_preview),
+            expanded.is_some_and(|expanded| {
+                expanded.implementation_authority_correction && !expanded.candidate_preview
+            }),
         )
     }
 }

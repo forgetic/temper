@@ -19,10 +19,12 @@ const MAX_RESULT_TARGETS: usize = 64;
 
 mod active_root_handoff;
 mod admission;
+mod candidate_completion;
 mod candidate_preview;
 mod candidate_projection;
 mod exact_narrowing;
 mod focused_test;
+mod implementation_correction;
 mod published_handoff;
 mod raw_selector;
 mod recovery_record;
@@ -37,6 +39,7 @@ use candidate_projection::{
 };
 use exact_narrowing::{ExactGraphSelector, PendingExactGraphNarrowing};
 use focused_test::{FocusedTestDiscovery, SelectorOrigin, focused_test_discovery};
+use implementation_correction::provider_trace_implementation_candidates;
 use recovery_record::ExpandedRecoverySelector;
 use recovery_selector::{
     CandidateRecovery, RECOVERY_SELECTOR_REFERENCE_PREFIX, RecoverySelectorKey,
@@ -61,6 +64,8 @@ pub(super) struct DecisionAnchorLineages {
     exact_graph_selectors: BTreeMap<ExactGraphSelector, BTreeMap<String, Option<BTreeSet<String>>>>,
     pending_exact_graph_narrowings:
         BTreeMap<ExactGraphSelector, Option<PendingExactGraphNarrowing>>,
+    provisional_implementation_roots: BTreeSet<String>,
+    corrected_implementation_roots: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -121,6 +126,7 @@ impl DecisionAnchorLineages {
             decision_evidence_kind,
             None,
             false,
+            false,
         )
     }
 
@@ -132,6 +138,7 @@ impl DecisionAnchorLineages {
         decision_evidence_kind: Option<DecisionEvidenceKindV1>,
         recovery_root: Option<&str>,
         candidate_preview: bool,
+        implementation_authority_correction: bool,
     ) -> Option<DecisionAnchorLineageV1> {
         if !correlation.is_valid() {
             return None;
@@ -163,12 +170,19 @@ impl DecisionAnchorLineages {
                         None => self.selectors.get(selector).cloned().flatten(),
                     })
             });
-        let admitted_evidence_kind = self.admitted_evidence_kind(
-            decision_evidence_kind,
-            input_selector.as_ref(),
-            selector_binding.as_ref(),
-            typed_parts,
-        );
+        let admitted_evidence_kind = if implementation_authority_correction
+            && decision_evidence_kind == Some(DecisionEvidenceKindV1::Implementation)
+            && selector_binding.is_some()
+        {
+            decision_evidence_kind
+        } else {
+            self.admitted_evidence_kind(
+                decision_evidence_kind,
+                input_selector.as_ref(),
+                selector_binding.as_ref(),
+                typed_parts,
+            )
+        };
         let matched_root = selector_binding
             .as_ref()
             .map(|binding| binding.root_binding.clone());
@@ -205,6 +219,12 @@ impl DecisionAnchorLineages {
         let caller_candidates = is_caller_traversal
             .then(|| provider_caller_candidates(typed_parts))
             .flatten();
+        let implementation_correction_candidates = selector_binding
+            .as_ref()
+            .is_some_and(|binding| binding.implementation_evidence_result)
+            .then(|| provider_trace_implementation_candidates(input, typed_parts))
+            .flatten();
+        let mut implementation_correction_available = false;
         let mut caller_discovery = caller_candidates.as_ref().map(|candidates| {
             if candidates.is_empty() {
                 CallerDiscoveryOutcomeV1::NoEligibleSelector
@@ -277,6 +297,9 @@ impl DecisionAnchorLineages {
                     }
                 }
                 if admitted_evidence_kind == Some(DecisionEvidenceKindV1::Implementation) {
+                    if implementation_authority_correction {
+                        self.clear_implementation_selection(&root_binding);
+                    }
                     let traversal_evidence = implementation_traversal_evidence(typed_parts);
                     let trace_provider_value =
                         provider_function_name_for_source(typed_parts, input);
@@ -309,6 +332,10 @@ impl DecisionAnchorLineages {
                         caller_discovery = Some(CallerDiscoveryOutcomeV1::NoEligibleSelector);
                     }
                 }
+                if let Some(candidates) = implementation_correction_candidates {
+                    implementation_correction_available =
+                        self.activate_implementation_corrections(&root_binding, &candidates);
+                }
                 if let Some(focused_tests) = focused_tests.as_ref() {
                     marked_focused_tests = Some(self.mark_candidates(
                         &root_binding,
@@ -330,7 +357,7 @@ impl DecisionAnchorLineages {
             marked_focused_tests,
             focused_test_discovery,
         );
-        DecisionAnchorLineageV1::new_with_route_metadata(
+        let mut lineage = DecisionAnchorLineageV1::new_with_route_metadata(
             root_binding,
             stage,
             target_kind,
@@ -339,7 +366,14 @@ impl DecisionAnchorLineages {
             admitted_evidence_kind,
             caller_discovery,
             focused_test_discovery,
-        )
+        )?;
+        if implementation_correction_available {
+            lineage = lineage.with_implementation_correction_available()?;
+        }
+        if implementation_authority_correction {
+            lineage = lineage.with_implementation_authority_correction()?;
+        }
+        Some(lineage)
     }
 }
 

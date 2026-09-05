@@ -76,7 +76,7 @@ impl DecisionAnchorLineageRegistry {
         arguments: &Value,
         active_root: Option<&str>,
     ) -> Option<EligibleLineageAdmission> {
-        let (root_binding, reference) = {
+        let (root_binding, reference, correction) = {
             let handoff = self
                 .published_handoff
                 .lock()
@@ -90,14 +90,52 @@ impl DecisionAnchorLineageRegistry {
                         && action_matches(handoff.action, reference, arguments, None)
                 })?
                 .clone();
-            (handoff.root_binding.clone(), reference)
+            (
+                handoff.root_binding.clone(),
+                reference,
+                handoff.action == GraphRecoveryActionV1::implementation_authority_correction(),
+            )
         };
         self.lineages
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .admit_implementation_preview(&root_binding, &reference)
-            .then(|| EligibleLineageAdmission::implementation_candidate_preview(root_binding))
+            .then(|| {
+                if correction {
+                    EligibleLineageAdmission::implementation_authority_correction(
+                        root_binding,
+                        true,
+                    )
+                } else {
+                    EligibleLineageAdmission::implementation_candidate_preview(root_binding)
+                }
+            })
             .flatten()
+    }
+
+    pub(super) fn published_implementation_correction_admission(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        active_root: Option<&str>,
+    ) -> Option<EligibleLineageAdmission> {
+        let root_binding = {
+            let handoff = self
+                .published_handoff
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let handoff = handoff.as_ref()?;
+            (handoff.action == GraphRecoveryActionV1::implementation_authority_correction()
+                && handoff.action.tool.public_name() == tool_name
+                && active_root.is_none_or(|root| root == handoff.root_binding)
+                && arguments.get("decision_evidence_kind").is_some()
+                && handoff
+                    .references
+                    .iter()
+                    .any(|reference| action_matches(handoff.action, reference, arguments, None)))
+            .then(|| handoff.root_binding.clone())?
+        };
+        EligibleLineageAdmission::implementation_authority_correction(root_binding, false)
     }
 
     pub(super) fn is_published_implementation_preview(
@@ -367,9 +405,14 @@ impl PublishedRecoveryHandoff {
         active_root: Option<&str>,
         evidence_kind: Option<DecisionEvidenceKindV1>,
     ) -> bool {
-        self.action
-            == GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation)
-            && self.action.tool.public_name() == tool_name
+        matches!(
+            self.action,
+            action if action
+                == GraphRecoveryActionV1::for_evidence(
+                    GraphRecoveryEvidenceKindV1::Implementation,
+                )
+                || action == GraphRecoveryActionV1::implementation_authority_correction()
+        ) && self.action.tool.public_name() == tool_name
             && self.selected_reference.is_none()
             && active_root.is_none_or(|root| root == self.root_binding)
             && evidence_kind.is_none()

@@ -254,6 +254,8 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
     assert!(!debug.contains(TARGET_B));
 }
 
+include!("decision_anchor_authority_correction.rs");
+
 #[test]
 fn initial_provider_unavailability_requires_a_fresh_matching_conventional_read() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();

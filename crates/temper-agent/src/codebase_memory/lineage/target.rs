@@ -58,6 +58,10 @@ impl WorkspaceTargetRegistry {
             .and_then(|path| canonical_source_path(scope, input, &path))
             .map(|path| self.identity_for_source(path))
             .unwrap_or_else(TargetAdmissionOutcome::Ineligible);
+        if lineage.implementation_authority_corrected {
+            self.sources.insert(key, outcome);
+            return;
+        }
         match self.sources.get(&key) {
             None => {
                 self.sources.insert(key, outcome);
