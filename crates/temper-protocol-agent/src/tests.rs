@@ -344,12 +344,63 @@ fn first_party_terminal_output_is_closed_bounded_and_validated() {
 }
 
 #[test]
+fn policy_terminal_output_is_closed_and_unambiguous() {
+    let output = AgentTerminalOutputV1::decision_anchor_recovery_exhausted();
+    output.validate().expect("policy terminal output validates");
+    let value = serde_json::to_value(output).expect("policy terminal output serializes");
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "protocol_version": AGENT_TERMINAL_PROTOCOL_VERSION,
+            "policy_failure": {"reason": "decision_anchor_recovery_exhausted"}
+        })
+    );
+    let decoded: AgentTerminalOutputV1 =
+        serde_json::from_value(value).expect("policy terminal output round trips");
+    assert_eq!(
+        decoded.policy_failure.unwrap().reason,
+        AgentPolicyFailureReasonV1::DecisionAnchorRecoveryExhausted
+    );
+
+    assert!(
+        serde_json::from_value::<AgentTerminalOutputV1>(serde_json::json!({
+            "protocol_version": 1,
+            "policy_failure": {"reason": "provider_text"}
+        }))
+        .is_err(),
+        "the policy reason vocabulary is closed"
+    );
+    assert!(
+        serde_json::from_value::<AgentTerminalOutputV1>(serde_json::json!({
+            "protocol_version": 1,
+            "policy_failure": {
+                "reason": "decision_anchor_recovery_exhausted",
+                "stderr": "secret"
+            }
+        }))
+        .is_err(),
+        "the policy failure shape is closed"
+    );
+}
+
+#[test]
+fn terminal_output_requires_exactly_one_failure() {
+    let neither: AgentTerminalOutputV1 =
+        serde_json::from_value(serde_json::json!({"protocol_version": 1})).unwrap();
+    assert!(neither.validate().is_err());
+
+    let mut both = AgentTerminalOutputV1::decision_anchor_recovery_exhausted();
+    both.model_failure = AgentTerminalOutputV1::model_failure(test_model_failure()).model_failure;
+    assert!(both.validate().is_err());
+}
+
+#[test]
 fn terminal_output_rejects_unsafe_provider_content() {
     use temper_protocol_activity::{ModelFailureCategoryV1, ModelFailureV1};
 
     let output = AgentTerminalOutputV1 {
         protocol_version: AGENT_TERMINAL_PROTOCOL_VERSION,
-        model_failure: ModelFailureV1 {
+        model_failure: Some(ModelFailureV1 {
             provider: "openai-codex".to_string(),
             model: "gpt-safe".to_string(),
             category: ModelFailureCategoryV1::Provider,
@@ -364,9 +415,29 @@ fn terminal_output_rejects_unsafe_provider_content() {
             provider_error_code: None,
             message: "authorization: Bearer SECRET-SENTINEL-748".to_string(),
             detail_redacted: false,
-        },
+        }),
+        policy_failure: None,
     };
     assert!(output.validate().is_err());
+}
+
+fn test_model_failure() -> temper_protocol_activity::ModelFailureV1 {
+    temper_protocol_activity::ModelFailureV1 {
+        provider: "provider".to_string(),
+        model: "model".to_string(),
+        category: temper_protocol_activity::ModelFailureCategoryV1::RateLimit,
+        disposition: temper_protocol_activity::ModelFailureDispositionV1::Retryable,
+        boundary: temper_protocol_activity::ModelFailureBoundaryV1::Http,
+        event_kind: temper_protocol_activity::ModelFailureEventKindV1::HttpResponse,
+        status_present: true,
+        code_present: true,
+        retryable: true,
+        http_status: Some(429),
+        provider_request_id: None,
+        provider_error_code: Some("rate_limit".to_string()),
+        message: "Provider rate limit reached.".to_string(),
+        detail_redacted: false,
+    }
 }
 
 #[test]

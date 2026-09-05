@@ -5,7 +5,15 @@ use std::path::Path;
 use temper_protocol_activity::{
     MAX_OPERATOR_TRANSCRIPT_BYTES, MAX_OPERATOR_TRANSCRIPT_RECORDS, OperatorTranscriptToolResultV1,
 };
-use temper_protocol_agent::{AgentTerminalOutputV1, MAX_AGENT_TERMINAL_OUTPUT_BYTES};
+use temper_protocol_agent::{
+    AgentPolicyFailureV1, AgentTerminalOutputV1, MAX_AGENT_TERMINAL_OUTPUT_BYTES,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum FirstPartyTerminalFailure {
+    Model(temper_protocol_activity::ModelFailureV1),
+    Policy(AgentPolicyFailureV1),
+}
 
 pub(super) fn read_operator_transcript(path: Option<&Path>) -> Vec<OperatorTranscriptToolResultV1> {
     let Some(path) = path else {
@@ -41,10 +49,10 @@ pub(super) fn read_operator_transcript(path: Option<&Path>) -> Vec<OperatorTrans
     records
 }
 
-pub(super) fn first_party_terminal_model_failure(
+pub(super) fn first_party_terminal_failure(
     first_party: bool,
     path: &Path,
-) -> Option<temper_protocol_activity::ModelFailureV1> {
+) -> Option<FirstPartyTerminalFailure> {
     if !first_party {
         return None;
     }
@@ -55,8 +63,14 @@ pub(super) fn first_party_terminal_model_failure(
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    let mut output: AgentTerminalOutputV1 = serde_json::from_slice(&bytes).ok()?;
+    let output: AgentTerminalOutputV1 = serde_json::from_slice(&bytes).ok()?;
     output.validate().ok()?;
-    output.model_failure.normalize();
-    Some(output.model_failure)
+    match (output.model_failure, output.policy_failure) {
+        (Some(mut failure), None) => {
+            failure.normalize();
+            Some(FirstPartyTerminalFailure::Model(failure))
+        }
+        (None, Some(failure)) => Some(FirstPartyTerminalFailure::Policy(failure)),
+        _ => None,
+    }
 }

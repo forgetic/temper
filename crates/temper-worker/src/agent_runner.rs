@@ -23,7 +23,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use temper_protocol_activity::ModelFailureV1;
+use temper_protocol_activity::{FailureCodeV1, ModelFailureV1};
 use temper_protocol_agent::{
     AGENT_LIFECYCLE_PROTOCOL_VERSION, AgentLifecycleEventV1, AgentLifecycleFrameV1,
     AgentLifecycleScopeV1, WorkspaceContext,
@@ -282,6 +282,8 @@ pub struct AgentRunError {
     pub message: String,
     /// Canonical model diagnostic retained independently of activity tracing.
     pub model_failure: Option<ModelFailureV1>,
+    /// Host-authoritative code used for the synthetic terminal activity event.
+    pub failure_code: FailureCodeV1,
 }
 
 impl AgentRunError {
@@ -290,6 +292,7 @@ impl AgentRunError {
             class,
             message: message.into(),
             model_failure: None,
+            failure_code: FailureCodeV1::ChildProcess,
         }
     }
 
@@ -297,6 +300,12 @@ impl AgentRunError {
     pub fn with_model_failure(mut self, mut model_failure: ModelFailureV1) -> Self {
         model_failure.normalize();
         self.model_failure = Some(model_failure);
+        self
+    }
+
+    /// Attaches a trusted terminal activity classification.
+    pub fn with_failure_code(mut self, failure_code: FailureCodeV1) -> Self {
+        self.failure_code = failure_code;
         self
     }
 
