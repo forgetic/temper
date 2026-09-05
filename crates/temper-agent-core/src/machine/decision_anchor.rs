@@ -141,7 +141,7 @@ struct GapRecovery {
     active_root: String,
     route: RecoveryRoute,
     remaining: u8,
-    exhausted_roots: BTreeSet<String>,
+    exhausted_routes: BTreeSet<(String, RecoveryRoute)>,
     remaining_pivots: usize,
 }
 

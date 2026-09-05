@@ -55,6 +55,7 @@ pub(super) fn privacy_safe_checkpoints(
         Some("mapped-live-decision-gap-recovery") => &[
             "served_gap_root",
             "served_gap_sibling_source",
+            "served_gap_exhausted_implementation_trace",
             "served_gap_active_trace",
             "served_gap_active_source",
         ],

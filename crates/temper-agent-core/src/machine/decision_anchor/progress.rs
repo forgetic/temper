@@ -159,11 +159,20 @@ impl DecisionAnchorState {
                 let (binding, route) = recovery.anchors.active_selection(&BTreeSet::new())?;
                 (binding, recovery.anchors.roots.get(binding)?, route)
             }
-            AnchorPhase::GapRecovery(recovery) => (
-                &recovery.active_root,
-                recovery.anchors.roots.get(&recovery.active_root)?,
-                recovery.route,
-            ),
+            AnchorPhase::GapRecovery(recovery) => {
+                if recovery.remaining == 0
+                    || recovery
+                        .exhausted_routes
+                        .contains(&(recovery.active_root.clone(), recovery.route))
+                {
+                    return None;
+                }
+                (
+                    &recovery.active_root,
+                    recovery.anchors.roots.get(&recovery.active_root)?,
+                    recovery.route,
+                )
+            }
             AnchorPhase::EnabledComplete(anchors) => {
                 let (binding, active) = anchors.implementation_root()?;
                 if self.implementation_correction_attempted

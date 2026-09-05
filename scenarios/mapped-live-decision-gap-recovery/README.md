@@ -1,11 +1,12 @@
 # Mapped live decision-gap recovery
 
-This active checked-in scenario maps feature `ai/temper#1091` and plan
-`ai/temper#1092` on `agent/pr-for-feature-1091`. It updates the scenario in place
-without changing its `introduced_by = "#1075"` provenance. The former feature
-`ai/temper#1069`, plan `ai/temper#1070`, and source branch
-`agent/pr-for-feature-1069` remain explicit historical audit metadata for the
-original decision-gap contract. The historical `mapped-live-graph-consumption`,
+This active checked-in scenario maps the self-contained feature and plan
+`ai/temper#1275` on
+`agent/pr-for-feature-1275`. It updates the scenario in place without changing
+its `introduced_by = "#1075"` provenance. Feature `ai/temper#1091`, plan
+`ai/temper#1092`, and source branch `agent/pr-for-feature-1091`, plus the former
+feature `ai/temper#1069`, plan `ai/temper#1070`, and source branch
+`agent/pr-for-feature-1069`, remain explicit historical audit metadata. The historical `mapped-live-graph-consumption`,
 `mapped-live-graph-convergence`, and `mapped-live-ordinary-tool-convergence`
 mappings also keep their original feature, plan, and branch identities.
 
@@ -13,32 +14,29 @@ mappings also keep their original feature, plan, and branch identities.
 
 A real Forgejo instance, host Actions runner, standalone Temper process, Jig
 engineer, and deterministic current-root provider perform one minimal
-retry-affinity repair. Stable call order selects the routing root as active while
-a second typed root owns focused behavior. The first root also precedes one
+retry-affinity repair. Stable call order selects the first root as active while
+a second typed root remains available for a route pivot. The first root also precedes one
 same-turn shell barrier, which is denied without execution and retains #1082's
 closed `excluded_never_executed_local_policy_denial` classification.
 
-Two focused-test reads bound to the behavioral sibling reach the provider on
-separate turns. They exhaust normal exploration but cannot advance or outrank
-the active routing root. The next model turn submits one immutable mixed
-recovery batch: cross-root caller and focused-test reads surround a compatible
-active-root trace. Both cross-root calls are denied locally from the same
-pre-batch snapshot, without MCP invocation or allowance spend. Only the trace
-reaches MCP, changing the diagnostic from
-`trace,implementation,caller,focused_test` with allowance four to
-`implementation,caller,focused_test` with allowance three.
+One cross-root probe remains local without allowance spend and surfaces the
+four-allowance recovery guidance. The next immutable recovery batch admits
+first-root implementation evidence while cross-root caller and focused-test
+attempts remain local without allowance spend. Its next trace returns no eligible caller, exhausting only that root's
+implementation route. Recovery pivots to the second root, where implementation,
+an eligible caller trace, and exact caller source consume three calls. With one
+allowance left, the first root remains eligible as the independent focused-test
+route. Its exact test source completes the forest instead of producing
+`decision_anchor_recovery_exhausted`.
 
-A later active-root batch admits one implementation, caller, and focused-test
-source while denying an already-satisfied trace from the same immutable
-snapshot. Batch settlement is independent of provider completion order. The
-three admitted calls consume the three remaining slots and complete the chain.
-Three subsequent graph attempts remain local; conventional classified shell and
-source reads, exactly one patch, host submission, Actions, merge, and source
-closure remain available.
+Three subsequent graph attempts remain local. The matching patch and an
+unrelated mutation are denied before an exact ordinary route read. Conventional
+classified shell discovery, that exact source read, exactly one matching patch,
+host submission, Actions, merge, and source closure remain available.
 
 The ephemeral validator checks eight successful provider reads in the exact
-root/sibling/trace groups and accepts every completion order for the final three
-active-root sources. It also checks the no-compatible-action variant: the actual
+root/route-pivot groups and proves that locally denied calls never reach MCP. It
+also checks the no-compatible-action variant: the actual
 remaining implementation, caller, and focused-test kinds terminate with zero
 allowance, no compatible action, `stop_without_product`, and no landable result
 or repeated denial loop. The scripted patch, host validation command, and process
@@ -57,7 +55,7 @@ committed.
 
 ## Validation
 
-From the exact assembled #1091 feature head, first run the preserved mappings
+From the exact assembled #1275 feature head, first run the preserved mappings
 and this strengthened mapping separately:
 
 ```sh
@@ -66,13 +64,14 @@ cargo dev-scenario-run scenarios/mapped-live-graph-consumption
 cargo dev-scenario-run scenarios/mapped-live-graph-convergence
 cargo dev-scenario-run scenarios/mapped-live-ordinary-tool-convergence
 cargo dev-scenario-run scenarios/mapped-live-decision-gap-recovery
+cargo dev-scenario-run scenarios/mapped-live-exact-source-selection
 cargo dev-scenario-validate-feature \
-  --feature ai/temper#1091 \
+  --feature ai/temper#1275 \
   --landing-base origin/main \
-  --source-branch agent/pr-for-feature-1091 \
+  --source-branch agent/pr-for-feature-1275 \
   --pr <scenario-pr-number> \
   --sha "$(git rev-parse HEAD)" \
-  --output-dir target/focused-validation
+  --output-dir target/focused-validation-1275
 ```
 
 Then freeze the unchanged

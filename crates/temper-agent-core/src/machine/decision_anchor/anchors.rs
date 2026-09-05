@@ -231,9 +231,9 @@ impl AnchorForest {
 
     pub(super) fn recovery_selection_excluding(
         &self,
-        exhausted_roots: &BTreeSet<String>,
+        exhausted_routes: &BTreeSet<(String, RecoveryRoute)>,
     ) -> Option<(String, RecoveryRoute)> {
-        self.active_selection(exhausted_roots)
+        self.active_selection(exhausted_routes)
             .map(|(binding, route)| (binding.clone(), route))
     }
 
@@ -274,12 +274,12 @@ impl AnchorForest {
 
     pub(super) fn active_selection(
         &self,
-        exhausted_roots: &BTreeSet<String>,
+        exhausted_routes: &BTreeSet<(String, RecoveryRoute)>,
     ) -> Option<(&String, RecoveryRoute)> {
         if let Some((binding, _)) = self
             .ranked_implementation_roots()
             .find(|(binding, root)| {
-                !exhausted_roots.contains(binding.as_str())
+                !exhausted_routes.contains(&(binding.to_string(), RecoveryRoute::Implementation))
                     && (!root
                         .evidence
                         .compatible_actions(root, RecoveryRoute::Implementation)
@@ -297,7 +297,7 @@ impl AnchorForest {
         }
         self.ranked_focused_test_roots(implementation_binding)
             .find(|(binding, root)| {
-                !exhausted_roots.contains(binding.as_str())
+                !exhausted_routes.contains(&(binding.to_string(), RecoveryRoute::FocusedTest))
                     && !root.evidence.focused_test_is_complete()
                     && !root
                         .evidence
