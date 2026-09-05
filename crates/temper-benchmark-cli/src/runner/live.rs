@@ -17,13 +17,13 @@ use temper_worker_service::{
 
 use super::redaction::SecretRedactor;
 use super::{
-    BenchmarkRunError, CompletedRepetition, finalize_repetition, reject_output_inside_fixture,
-    validate_agent_binary, write_bytes, write_json,
+    BenchmarkRunError, CompletedRepetition, finalize_repetition, prepare_direct_workspace,
+    reject_output_inside_fixture, validate_agent_binary, write_bytes, write_json,
 };
 use crate::{
     BenchmarkAggregateV1, BenchmarkArtifactLayout, BenchmarkConditionV1, BenchmarkModeV1,
     ResolvedBenchmarkManifest, aggregate_run_summaries, load_benchmark_manifest,
-    prepare_benchmark_workspace, render_aggregate_markdown,
+    render_aggregate_markdown,
 };
 
 /// Deliberate process-level opt-in required before any live input is touched.
@@ -239,7 +239,7 @@ fn run_live_repetition(
     repetition: u32,
     condition: Option<BenchmarkConditionV1>,
 ) -> Result<CompletedRepetition, BenchmarkRunError> {
-    let workspace = prepare_benchmark_workspace(manifest, repetition)?;
+    let workspace = prepare_direct_workspace(manifest, repetition)?;
     let paths = layout.snapshot_inputs(repetition, manifest, &workspace)?;
     let collector = TraceCollector::new(WorkerAgentTraceConfig {
         policy: runtime.trace_policy.clone(),

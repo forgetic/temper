@@ -364,10 +364,10 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
 
     match cli_condition {
         "codebase-memory-enabled" => {
-            expect_exact(&run, "/metrics/turns", 16)?;
-            expect_exact(&run, "/metrics/graph/calls", 13)?;
+            expect_exact(&run, "/metrics/turns", 17)?;
+            expect_exact(&run, "/metrics/graph/calls", 14)?;
             expect_exact(&run, "/metrics/graph/succeeded", 8)?;
-            expect_exact(&run, "/metrics/graph/failed", 5)?;
+            expect_exact(&run, "/metrics/graph/failed", 6)?;
             expect_exact(&run, "/metrics/graph/relevant_results", 8)?;
             expect_exact(&run, "/metrics/graph/irrelevant_successes", 0)?;
             expect_exact(&run, "/metrics/graph/relevance_coverage/observed", 8)?;
@@ -387,12 +387,12 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             expect_exact(
                 &run,
                 "/metrics/graph/failures_by_category/graph_lifecycle_denial",
-                5,
+                6,
             )?;
             expect_exact(
                 &run,
                 "/metrics/graph/failures_by_reason/decision_evidence_incomplete",
-                2,
+                3,
             )?;
             expect_exact(
                 &run,
@@ -404,29 +404,36 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
                 "/metrics/tools/by_name/codebase_memory_search_graph/calls",
                 3,
             )?;
-            expect_exact(
-                &run,
-                "/metrics/tools/by_name/codebase_memory_search_code/calls",
-                4,
-            )?;
+            expect_absent(&run, "/metrics/tools/by_name/codebase_memory_search_code")?;
             expect_exact(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_trace_path/calls",
-                1,
+                2,
             )?;
             expect_exact(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_get_code_snippet/calls",
-                3,
+                8,
             )?;
             expect_exact(
                 &run,
                 "/metrics/tools/by_name/codebase_memory_get_architecture/calls",
-                2,
+                1,
             )?;
+            expect_exact(&run, "/metrics/tools/by_name/read/calls", 2)?;
+            expect_exact(&run, "/metrics/tools/by_name/apply_patch/calls", 2)?;
+            expect_exact(&run, "/metrics/tools/by_name/apply_patch/succeeded", 1)?;
+            expect_exact(&run, "/metrics/tools/by_name/apply_patch/failed", 1)?;
+            expect_exact(
+                &run,
+                "/metrics/tools/ordinary/failures_by_category/policy_denial",
+                1,
+            )?;
+            expect_exact(&run, "/metrics/structure/mutations", 1)?;
             benchmark::verify_safe_converged_decision_evidence(&run)?;
             let trace = fs::read_to_string(repetition.join("trace.export.jsonl"))
                 .map_err(|error| format!("read controlled trace: {error}"))?;
+            benchmark::verify_post_source_exact_read_recovery(&trace)?;
             benchmark::verify_typed_graph_correlation_records(&trace)?;
             benchmark::verify_decision_gap_recovery(&trace)?;
             benchmark::verify_provider_invocations(&trace)?;
@@ -447,6 +454,8 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             for symbol in [
                 "alias_retries_stay_on_the_original_ordered_worker",
                 "DeliveryRouter::worker_for",
+                "public_facade_keeps_operational_helpers_cohesive",
+                "worker_slot",
             ] {
                 if !benchmark::trace_has_confirmed_current_root_source(&trace, symbol) {
                     return Err(format!(

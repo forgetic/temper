@@ -24,9 +24,13 @@ const FAKE_MCP_DESCRIPTION_SENTINEL: &str = "FAKE-MCP-DESCRIPTION-SENTINEL-384";
 fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     let checkout = TempCheckout::new("jig-codebase-memory-tool-call");
     checkout.init_git();
+    let notes_path = checkout.repo_path().join("MEMORY_NOTES.md");
+    fs::write(&notes_path, "pending exact read\n").expect("seed exact-read target");
+    checkout.git(&["add", "MEMORY_NOTES.md"]);
+    checkout.git(&["commit", "-m", "seed exact-read target"]);
 
     let observed_memory_result = Arc::new(AtomicUsize::new(0));
-    let fake = codebase_memory_agent_fake(Arc::clone(&observed_memory_result));
+    let fake = codebase_memory_agent_fake(Arc::clone(&observed_memory_result), notes_path);
     let provider = ProviderConfig::new(
         "jig-openai-compatible",
         "jig-codebase-memory-tool-call",
@@ -45,7 +49,7 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
             &provider,
             &context,
             &cwd,
-            8,
+            10,
             None,
             Some(&tool_config),
         )
@@ -84,6 +88,11 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "first request should include prompt guidance only because tools registered"
     );
     for expected in [
+        "use a targeted repository-index",
+        "query before any shell inventory",
+        "Do not precede graph-based source selection with a compound",
+        "keep repository status, validation, and other operational checks as separate",
+        "calls after selection",
         "Use them early for non-trivial tasks, but choose the narrowest useful query",
         "- concrete defects: begin with a targeted symbol or code search tied to the reported",
         "then use call/path tracing and read exact source snippets as",
@@ -96,6 +105,27 @@ fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
         "A `Decision anchor` explicitly marks a bounded successful targeted",
         "select from that provider result, not unrelated discovery",
         "truncated or ambiguous output",
+        "derive query",
+        "requested behavior and intended repair",
+        "task-semantic graph query that describes the behavior",
+        "do not lead with a name pattern or identifier token",
+        "shortest provider-derived refinement",
+        "bounded preview/commit protocol",
+        "explicitly commit exactly one",
+        "preview never earns evidence",
+        "consume its exact source first",
+        "exact identity returned by that traversal",
+        "selected-implementation traversal's provider-returned caller identities",
+        "complete empty inbound trace settles that selected symbol's graph-caller relationship",
+        "do not manufacture caller evidence by rereading the traced symbol as its own caller",
+        "Initial discovery may establish independent implementation and focused-test roots",
+        "every dependent selector must come from its own provider result",
+        "Focused-test evidence follows a separately admitted root",
+        "Never move focused-test evidence onto the implementation root",
+        "derive a recovery selector from task text",
+        "provider-derived and on the root that produced it",
+        "never repeat the denied tool/selector/evidence-kind tuple",
+        "retained forest",
         "smallest semantic diff",
     ] {
         assert!(
@@ -226,59 +256,53 @@ fn jig_agent_uses_conventional_discovery_when_codebase_memory_is_unavailable() {
     );
 }
 
-fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeLlm {
+fn codebase_memory_agent_fake(
+    observed_memory_result: Arc<AtomicUsize>,
+    notes_path: PathBuf,
+) -> FakeLlm {
     FakeLlm::start(Script::rule(move |view| match view.prior_tool_results {
         0 => Reply {
-            turns: vec![Turn::ToolCall {
-                id: "call_memory_search".to_string(),
-                name: "codebase_memory_search_code".to_string(),
-                args: serde_json::json!({ "query": "WidgetService", "pattern": "WidgetService" }),
-            }],
+            turns: vec![
+                Turn::ToolCall {
+                    id: "call_memory_search".to_string(),
+                    name: "codebase_memory_search_code".to_string(),
+                    args: serde_json::json!({ "query": "WidgetService", "pattern": "WidgetService" }),
+                },
+                Turn::ToolCall {
+                    id: "call_memory_focused_root".to_string(),
+                    name: "codebase_memory_search_graph".to_string(),
+                    args: serde_json::json!({ "query": "widget service notes behavior" }),
+                },
+            ],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
         },
-        1 => {
+        2 => {
             let saw_memory_result = view.messages.iter().any(|message| {
                 message.role == "tool" && message.content.contains("FAKE_MCP_SEARCH_RESULT")
             });
-            assert!(
-                saw_memory_result
-                    && view.messages.iter().any(|message| {
-                        message.role == "tool"
-                            && message.content.contains("[Decision anchor: This complete typed graph result")
-                    }),
-                "fake LLM did not receive the anchored codebase-memory MCP result"
-            );
+            assert!(saw_memory_result, "fake LLM did not receive the implementation root");
             observed_memory_result.fetch_add(1, Ordering::SeqCst);
             Reply {
                 turns: vec![Turn::ToolCall {
-                    id: "call_trace_memory_caller".to_string(),
-                    name: "codebase_memory_trace_path".to_string(),
-                    args: serde_json::json!({ "function_name": "crate::WidgetService" }),
+                    id: "call_read_memory_implementation".to_string(),
+                    name: "codebase_memory_get_code_snippet".to_string(),
+                    args: serde_json::json!({
+                        "qualified_name": "crate::WidgetService",
+                        "decision_evidence_kind": "implementation"
+                    }),
                 }],
                 usage: Default::default(),
                 stop: StopReason::ToolCalls,
             }
         }
-        2 => Reply {
-            turns: vec![Turn::ToolCall {
-                id: "call_read_memory_implementation".to_string(),
-                name: "codebase_memory_get_code_snippet".to_string(),
-                args: serde_json::json!({
-                    "qualified_name": "crate::WidgetService",
-                    "decision_evidence_kind": "implementation"
-                }),
-            }],
-            usage: Default::default(),
-            stop: StopReason::ToolCalls,
-        },
         3 => Reply {
             turns: vec![Turn::ToolCall {
-                id: "call_read_memory_caller".to_string(),
-                name: "codebase_memory_get_code_snippet".to_string(),
+                id: "call_trace_memory_caller".to_string(),
+                name: "codebase_memory_trace_path".to_string(),
                 args: serde_json::json!({
-                    "qualified_name": "crate::WidgetService",
-                    "decision_evidence_kind": "caller"
+                    "function_name": "crate::WidgetService",
+                    "direction": "inbound"
                 }),
             }],
             usage: Default::default(),
@@ -286,17 +310,56 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
         },
         4 => Reply {
             turns: vec![Turn::ToolCall {
-                id: "call_read_memory_behavior".to_string(),
+                id: "call_read_memory_caller".to_string(),
                 name: "codebase_memory_get_code_snippet".to_string(),
                 args: serde_json::json!({
-                    "qualified_name": "crate::WidgetService",
-                    "decision_evidence_kind": "focused_test"
+                    "qualified_name": "crate::WidgetCaller",
+                    "decision_evidence_kind": "caller"
                 }),
             }],
             usage: Default::default(),
             stop: StopReason::ToolCalls,
         },
         5 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_read_memory_behavior".to_string(),
+                name: "codebase_memory_get_code_snippet".to_string(),
+                args: serde_json::json!({
+                    "qualified_name": "crate::WidgetTest",
+                    "decision_evidence_kind": "focused_test"
+                }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        6 => Reply {
+            turns: vec![Turn::ToolCall {
+                id: "call_premature_write_memory_notes".to_string(),
+                name: "write".to_string(),
+                args: serde_json::json!({
+                    "path": "demo/MEMORY_NOTES.md",
+                    "content": "must remain blocked\n"
+                }),
+            }],
+            usage: Default::default(),
+            stop: StopReason::ToolCalls,
+        },
+        7 => {
+            assert_eq!(
+                fs::read_to_string(&notes_path).expect("premature mutation target"),
+                "pending exact read\n",
+            );
+            Reply {
+                turns: vec![Turn::ToolCall {
+                    id: "call_read_memory_notes".to_string(),
+                    name: "read".to_string(),
+                    args: serde_json::json!({"path": "demo/MEMORY_NOTES.md"}),
+                }],
+                usage: Default::default(),
+                stop: StopReason::ToolCalls,
+            }
+        }
+        8 => Reply {
             turns: vec![Turn::ToolCall {
                 id: "call_write_memory_notes".to_string(),
                 name: "write".to_string(),
@@ -309,7 +372,7 @@ fn codebase_memory_agent_fake(observed_memory_result: Arc<AtomicUsize>) -> FakeL
             stop: StopReason::ToolCalls,
         },
         _ => Reply::text(
-            r#"{"summary":"Consumed codebase memory source evidence before writing MEMORY_NOTES.md."}"#,
+            r#"{"summary":"Consumed independent codebase memory implementation/caller and focused-test roots before the exact read."}"#,
         ),
     }))
     .expect("start codebase-memory fake LLM")
@@ -324,8 +387,9 @@ import json
 import sys
 
 TOOLS = [
+    {"name": "search_graph", "description": "Semantic graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
     {"name": "search_code", "description": "FAKE-MCP-DESCRIPTION-SENTINEL-384", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "pattern": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
-    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["function_name"]}},
+    {"name": "trace_path", "description": "Targeted caller trace", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}, "project": {"type": "string"}}, "required": ["function_name"]}},
     {"name": "get_code_snippet", "description": "Targeted source read", "inputSchema": {"type": "object", "properties": {"qualified_name": {"type": "string"}, "project": {"type": "string"}}, "required": ["qualified_name"]}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "index_repository", "description": "Stable repository upsert", "inputSchema": {"type": "object", "properties": {"repo_path": {"type": "string"}, "name": {"type": "string"}}, "required": ["repo_path"]}},
@@ -352,8 +416,21 @@ for line in sys.stdin:
         args = params.get("arguments") or {}
         if name == "index_status":
             text = json.dumps({"project": args.get("project", ""), "status": "fresh"})
-        else:
+        elif name == "search_code":
             text = json.dumps({"results": [{"qualified_name": "crate::WidgetService", "summary": "FAKE_MCP_SEARCH_RESULT"}]})
+        elif name == "search_graph" and args.get("query") == "widget service notes behavior":
+            text = json.dumps({"results": [{"qualified_name": "crate::WidgetTest", "is_test": True}]})
+        elif name == "trace_path" and args.get("function_name") == "crate::WidgetService":
+            text = json.dumps({"function": {"qualified_name": "crate::WidgetService"}, "callers": [{"qualified_name": "crate::WidgetCaller"}]})
+        elif name == "trace_path" and args.get("function_name") == "crate::WidgetCaller":
+            text = json.dumps({"function": {"qualified_name": "crate::WidgetCaller"}, "callers": [{"qualified_name": "crate::WidgetTest", "is_test": True}]})
+        elif name == "get_code_snippet":
+            payload = {"qualified_name": args.get("qualified_name"), "file_path": "MEMORY_NOTES.md", "source": "typed source"}
+            if args.get("qualified_name") == "crate::WidgetTest":
+                payload["is_test"] = True
+            text = json.dumps(payload)
+        else:
+            raise AssertionError("unexpected tool call " + str(params))
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"content": [{"type": "text", "text": text}], "isError": False}})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "unknown method"}})

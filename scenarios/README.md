@@ -32,7 +32,9 @@ runner:
   `provider-neutral-anchor-lineage`, `mapped-live-graph-consumption`,
   `mapped-live-denied-shell-classification`,
   `mapped-live-ordinary-tool-convergence`, `mapped-live-graph-convergence`,
-  `mapped-live-decision-gap-recovery`, `model-failure-recovery`,
+  `mapped-live-decision-gap-recovery`,
+  `mapped-live-focused-test-source-relevance`,
+  `mapped-live-exact-source-selection`, `model-failure-recovery`,
   `plan-centric-feature-branch`,
   `history-independent-terminal-recovery`,
   `implicit-live-scenario-cli`, and `target-ux-e2e` scenarios declare
@@ -255,21 +257,69 @@ benchmark are unchanged.
 
 ### Mapped live decision-gap recovery mapping
 
-`mapped-live-decision-gap-recovery` is the sole active mapping for
-`ai/temper#1069` and `ai/temper#1070` on `agent/pr-for-feature-1069`. Its live
-agent completes implementation, trace, and focused-test evidence, then exhausts
-normal exploration with two non-progressing duplicate refinements while caller
-evidence remains missing. Broad and duplicate recovery calls retain the exact
-closed missing-kind, permitted-action, and allowance fields and are denied
-locally. One typed current-root caller source reaches the provider, completes
-the chain, and permits the exact repair, host submission, Actions, merge, and
-source closure. The temporary validator also requires recovery exhaustion to
-retain `stop_without_product` with zero allowance. Aggregate evidence is limited
-to closed counts, types, lifecycle fields, binding facts, checkpoint categories,
-and gate outcomes; provider output, selectors, source, prompts, commands,
-credentials, paths, host-gate output, and diagnostic traces remain ephemeral.
-The historical graph-consumption, graph-convergence, and ordinary-tool-
-convergence mappings retain their original identities and contracts.
+`mapped-live-decision-gap-recovery` is the sole active mapping for feature
+`ai/temper#1091` and plan `ai/temper#1092` on
+`agent/pr-for-feature-1091`. This updates the scenario in place without changing
+its `introduced_by = "#1075"` provenance. The former feature
+`ai/temper#1069`, plan `ai/temper#1070`, and source branch
+`agent/pr-for-feature-1069` remain historical audit metadata for the original
+decision-gap contract. Distinct routing and behavioral roots exhaust normal
+exploration through two sibling focused-test reads. In one immutable
+recovery batch, cross-root caller and focused-test reads remain local while only
+the compatible active-root trace reaches the provider. Trace progress reports
+the actual remaining implementation, caller, and focused-test kinds with
+allowance three; a later completion-order-independent active-root source batch
+finishes the chain while a satisfied trace stays local. The scenario also
+retains one #1082 classified shell denial, three post-completion local denials,
+one exact repair, host submission, Actions, merge, and source closure. Its
+no-compatible-action variant requires one terminal `stop_without_product` state
+with no landable result or denial loop. Aggregate evidence is limited to closed
+counts, types, lifecycle fields, binding facts, shell disposition, approved
+checkpoint categories, and gate outcomes; provider output, selectors, roots,
+source, prompts, commands, arguments, credentials, paths, host-gate output, and
+diagnostic traces remain ephemeral. The historical graph-consumption,
+graph-convergence, and ordinary-tool-convergence mappings retain their original
+identities and contracts.
+
+### Mapped live focused-test source relevance mapping
+
+`mapped-live-focused-test-source-relevance` is the dedicated active mapping for
+feature `ai/temper#1130` and plan `ai/temper#1131` on
+`agent/pr-for-feature-1130`. It inherits the #1091 retry-affinity topology while
+preserving that historical mapping. One current-root implementation/caller chain
+reaches a complete empty focused-test traversal, then one semantic fallback on
+the same root reports the closed eligible-selector outcome. A mismatched typed
+source attempt remains local; the later exact source consumer carries the
+`focused_test` kind and precedes one exact repair, host validation, Actions,
+merge, and source closure. Aggregate evidence retains only safe counts, closed
+checkpoint and denial categories, correlation/lineage completeness, carry-
+forward stage, discovery outcome, decision kind, ordering, binding, and gate
+facts. Runtime prompts, selectors, roots, source, paths, provider output,
+credentials, arguments, host output, and diagnostic traces remain ephemeral.
+The routing-repair benchmark corpus and all historical scenario mappings remain
+unchanged.
+
+### Mapped live decision-evidence convergence mapping
+
+`mapped-live-exact-source-selection` is the dedicated active mapping for feature
+`ai/temper#1210` and plan `ai/temper#1211` on
+`agent/pr-for-feature-1210`. Its `introduced_by = "#1144"` provenance and the
+historical feature `ai/temper#1151`, plan `ai/temper#1152`, and source branch
+`agent/pr-for-feature-1151` remain audit metadata. An early ordinary read of
+`repo/src/route.rs` has no retroactive authority. Separate routing and
+focused-test roots then reproduce incomplete live evidence before one immutable
+recovery batch admits only the active-root implementation and trace; cross-root,
+broad, malformed, denied, and failed siblings remain local and receive no
+credit. Later provider-derived caller and separate focused-test source consumers
+complete the retained implementation/caller/focused-test forest.
+Post-completion graph detours stay local, a direct patch is denied without a workspace effect, and exactly one
+post-source exact read authorizes exactly one matching mutation. Aggregate
+evidence retains only privacy-safe typed ordering, closed recovery and policy
+facts, the declared target, binding, and gate outcomes. Runtime prompts,
+selectors, provider output, source, roots, credentials, arguments, host output,
+local paths, and generated traces remain ephemeral. Trusted unavailable and
+disabled conventional controls remain observable through the unchanged routing
+harness, verifier, and historical mapped coverage.
 
 ### Mapped live denied-shell classification mapping
 

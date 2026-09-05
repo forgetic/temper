@@ -64,7 +64,7 @@ kind = "implementation"
 [graph_decision_targets.producer]
 tool = "get_code_snippet"
 target_kind = "qualified_name"
-target = "DeliveryRouter::worker_for"
+target = "worker_slot"
 
 [condition_profile]
 kind = "codebase_memory"

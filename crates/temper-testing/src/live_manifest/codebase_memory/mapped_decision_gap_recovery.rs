@@ -1,9 +1,12 @@
-//! Ephemeral validator for feature #1069's decision-gap recovery scenario.
+//! Ephemeral validator for #1069's mapped recovery and #1091's root-coherent
+//! strengthening.
 //!
-//! Provider arguments, values, and source stay in temporary state. Only the
-//! closed call order and checkpoint categories cross into scenario evidence.
+//! Provider arguments, selectors, roots, values, source, and diagnostics stay
+//! in temporary state. Only closed tool order and checkpoint categories cross
+//! into scenario evidence.
 
 use std::fs;
+use std::path::Path;
 
 use serde_json::Value as JsonValue;
 use temper_protocol_activity::{
@@ -14,6 +17,8 @@ use temper_protocol_activity::{
 use super::stable_rebind::{confirmed_project_from_calls, validate_stable_rebind_contract};
 use super::{FakeMcpServer, McpToolCallEvidence};
 
+const DENIED_PROCESS_CANARY: &str = ".git/decision-gap-denied-shell-canary";
+
 pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Result<(), String> {
     let expected_tools = [
         "index_status",
@@ -21,11 +26,11 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         "index_status",
         "search_graph",
         "search_graph",
-        "search_code",
+        "get_code_snippet",
+        "get_code_snippet",
         "trace_path",
         "get_code_snippet",
-        "search_code",
-        "search_code",
+        "get_code_snippet",
         "get_code_snippet",
     ];
     if calls
@@ -36,7 +41,7 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         || calls.iter().any(|call| call.is_error)
     {
         return Err(
-            "decision-gap fixture requires eight successful provider reads and no locally denied provider invocation"
+            "decision-gap fixture requires eight successful root-coherent provider reads and no locally denied provider invocation"
                 .into(),
         );
     }
@@ -63,17 +68,15 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     let tokens = recovery_tokens(mcp)?;
     let implementation = token(&tokens, "implementation")?;
     let caller = token(&tokens, "caller")?;
-    let focused_test = token(&tokens, "behavioral_test")?;
+    let sibling_test = token(&tokens, "behavioral_test")?;
+    let active_test = token(&tokens, "active_behavioral_test")?;
     let implementation_short = terminal_name(implementation)?;
     let expected_arguments = [
         (3, "query", "routing implementation affinity"),
         (4, "query", "focused alias retry behavior"),
-        (5, "pattern", implementation_short),
-        (6, "function_name", implementation_short),
-        (7, "qualified_name", focused_test),
-        (8, "pattern", implementation_short),
-        (9, "pattern", implementation_short),
-        (10, "qualified_name", caller),
+        (5, "qualified_name", sibling_test),
+        (6, "qualified_name", sibling_test),
+        (7, "function_name", implementation_short),
     ];
     if expected_arguments.iter().any(|(index, field, expected)| {
         calls[*index]
@@ -82,20 +85,35 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
             .and_then(JsonValue::as_str)
             != Some(*expected)
     }) {
+        return Err("decision-gap fixture did not consume its transient root selections".into());
+    }
+    let mut active_sources = calls[8..]
+        .iter()
+        .filter_map(|call| {
+            call.arguments
+                .get("qualified_name")
+                .and_then(JsonValue::as_str)
+        })
+        .collect::<Vec<_>>();
+    active_sources.sort_unstable();
+    let mut expected_active_sources = vec![caller, caller, active_test];
+    expected_active_sources.sort_unstable();
+    if active_sources != expected_active_sources {
         return Err(
-            "decision-gap fixture did not consume its transient provider selections".into(),
+            "completion-order-independent active-root batch omitted a declared source purpose"
+                .into(),
         );
     }
 
     let expected_events = [
         "served_gap_root",
         "served_gap_root",
-        "served_gap_refinement",
-        "served_gap_trace",
-        "served_gap_source",
-        "served_gap_duplicate",
-        "served_gap_duplicate",
-        "served_gap_recovery_source",
+        "served_gap_sibling_source",
+        "served_gap_sibling_source",
+        "served_gap_active_trace",
+        "served_gap_active_source",
+        "served_gap_active_source",
+        "served_gap_active_source",
     ];
     if calls[3..]
         .iter()
@@ -103,28 +121,59 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         .collect::<Vec<_>>()
         != expected_events
     {
-        return Err("decision-gap fixture omitted a closed aggregate checkpoint".into());
+        return Err("decision-gap fixture omitted a closed root-coherence checkpoint".into());
     }
 
-    validate_safe_stop_contract()?;
+    validate_no_compatible_action_contract()?;
+    validate_denied_shell_canary(mcp)?;
     validate_stable_rebind_contract(mcp, calls, requested)
 }
 
-fn validate_safe_stop_contract() -> Result<(), String> {
-    let details = GraphExplorationClosedV1::exhausted([GraphRecoveryEvidenceKindV1::Caller])
-        .ok_or("safe-stop details were not constructible")?;
+fn validate_no_compatible_action_contract() -> Result<(), String> {
+    let remaining = [
+        GraphRecoveryEvidenceKindV1::Implementation,
+        GraphRecoveryEvidenceKindV1::Caller,
+        GraphRecoveryEvidenceKindV1::FocusedTest,
+    ];
+    let details = GraphExplorationClosedV1::exhausted(remaining)
+        .ok_or("no-compatible-action details were not constructible")?;
     let no_product = temper_agent::CodingAgentError::DecisionAnchorRecoveryExhausted.to_string();
     if details.reason != GraphExplorationClosedReasonV1::RecoveryExhausted
-        || details.missing_evidence != [GraphRecoveryEvidenceKindV1::Caller]
+        || details.missing_evidence != remaining
         || details.permitted_action != GraphRecoveryPermittedActionV1::StopWithoutProduct
         || details.remaining_allowance != 0
+        || !details.compatible_actions.is_empty()
         || details.model_message()
-            != "decision-evidence recovery exhausted; missing evidence: [caller]; permitted action: stop_without_product; remaining allowance: 0"
+            != "decision-evidence recovery exhausted; missing evidence: [implementation, caller, focused_test]; permitted action: stop_without_product; remaining allowance: 0"
         || !no_product.contains("nothing to land")
     {
         return Err(
-            "recovery exhaustion did not retain the mandatory safe no-product contract".into(),
+            "no-compatible-action recovery did not terminate once with the mandatory safe no-product contract"
+                .into(),
         );
+    }
+    Ok(())
+}
+
+fn validate_denied_shell_canary(mcp: &FakeMcpServer) -> Result<(), String> {
+    let raw = fs::read_to_string(&mcp.state_path)
+        .map_err(|_| "decision-gap fixture state was unavailable".to_string())?;
+    let state: JsonValue = serde_json::from_str(&raw)
+        .map_err(|_| "decision-gap fixture state was malformed".to_string())?;
+    let projects = state
+        .get("projects")
+        .and_then(JsonValue::as_object)
+        .ok_or("decision-gap fixture omitted current-root state")?;
+    let bindings = projects.values().collect::<Vec<_>>();
+    let [binding] = bindings.as_slice() else {
+        return Err("decision-gap fixture did not retain exactly one current-root binding".into());
+    };
+    let root = binding
+        .get("repo_path")
+        .and_then(JsonValue::as_str)
+        .ok_or("decision-gap fixture omitted its temporary current-root path")?;
+    if Path::new(root).join(DENIED_PROCESS_CANARY).exists() {
+        return Err("locally denied shell invocation reached process execution".into());
     }
     Ok(())
 }

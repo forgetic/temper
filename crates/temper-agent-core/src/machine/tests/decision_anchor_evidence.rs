@@ -1,9 +1,22 @@
-// Typed evidence completion and mutation-gating regressions.
+// Typed evidence ordering and mutation-gating regressions.
 
 use super::*;
+use crate::{EligibleLineageAdmission, LineageAdmissionOutcome, LineageAdmissionStatus};
+
+fn source_admission(kind: DecisionEvidenceKindV1) -> LineageAdmissionOutcome {
+    LineageAdmissionOutcome::Eligible(
+        EligibleLineageAdmission::new(
+            ROOT.to_string(),
+            DecisionAnchorTargetKindV1::QualifiedName,
+            GraphCorrelationToolV1::GetCodeSnippet,
+            Some(kind),
+        )
+        .unwrap(),
+    )
+}
 
 #[test]
-fn direct_trace_and_typed_current_root_sources_complete_without_search_code() {
+fn over_returned_later_kinds_cannot_bypass_the_implementation_route() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
     finish(
@@ -13,194 +26,16 @@ fn direct_trace_and_typed_current_root_sources_complete_without_search_code() {
         ROOT,
         DecisionAnchorLineageStageV1::Root,
     );
+    state.take_model_guidance();
 
-    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
-    state.on_tool_dispatched(
-        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
-        1,
-    );
-    state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 1);
-    state.on_tool_dispatched(
-        &source_call("behavior", DecisionEvidenceKindV1::FocusedTest),
-        1,
-    );
-    let trace = output(
-        "codebase_memory_trace_path",
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-    );
-    let implementation = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::Implementation,
-    );
-    let caller = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::Caller,
-    );
-    let behavior = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::FocusedTest,
-    );
+    let implementation = source_call("implementation", DecisionEvidenceKindV1::Implementation);
     assert_eq!(
-        state.on_tool_batch_finished(&[
-            (
-                "implementation",
-                "codebase_memory_get_code_snippet",
-                &implementation,
-            ),
-            ("trace", "codebase_memory_trace_path", &trace),
-            ("caller", "codebase_memory_get_code_snippet", &caller),
-            ("behavior", "codebase_memory_get_code_snippet", &behavior),
-        ]),
-        DecisionAnchorTransition::Converged,
-    );
-    assert!(
-        !state.blocks_mutation("write"),
-        "the trace and every typed current-root source purpose complete evidence"
-    );
-}
-
-#[test]
-fn parallel_sources_then_trace_batch_completes_the_same_evidence_set() {
-    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
-    finish(
-        &mut state,
-        "root",
-        "codebase_memory_search_graph",
-        ROOT,
-        DecisionAnchorLineageStageV1::Root,
-    );
-
-    // Pre-trace snippets use the same settled pre-batch root as trace-first batches.
-    state.on_tool_dispatched(
-        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
-        1,
-    );
-    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
-    state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 1);
-    state.on_tool_dispatched(
-        &source_call("behavior", DecisionEvidenceKindV1::FocusedTest),
-        1,
-    );
-    let implementation = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::Implementation,
-    );
-    let trace = output(
-        "codebase_memory_trace_path",
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-    );
-    let caller = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::Caller,
-    );
-    let behavior = output_with_evidence(
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-        DecisionEvidenceKindV1::FocusedTest,
-    );
-    assert_eq!(
-        state.on_tool_batch_finished(&[
-            (
-                "implementation",
-                "codebase_memory_get_code_snippet",
-                &implementation,
-            ),
-            ("trace", "codebase_memory_trace_path", &trace),
-            ("caller", "codebase_memory_get_code_snippet", &caller),
-            ("behavior", "codebase_memory_get_code_snippet", &behavior),
-        ]),
-        DecisionAnchorTransition::Converged,
-    );
-    assert!(
-        !state.blocks_mutation("write"),
-        "sibling dispatch order cannot change complete current-root evidence"
-    );
-}
-
-#[test]
-fn root_producer_and_same_turn_dependents_stay_ineligible() {
-    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
-    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 0);
-    state.on_tool_dispatched(&call("source-one", "codebase_memory_get_code_snippet"), 0);
-    state.on_tool_dispatched(&call("source-two", "codebase_memory_get_code_snippet"), 0);
-    let root = output(
-        "codebase_memory_search_graph",
-        ROOT,
-        DecisionAnchorLineageStageV1::Root,
-    );
-    let trace = output(
-        "codebase_memory_trace_path",
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-    );
-    let source_one = output(
-        "codebase_memory_get_code_snippet",
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-    );
-    let source_two = output(
-        "codebase_memory_get_code_snippet",
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-    );
-    state.on_tool_batch_finished(&[
-        (
-            "source-two",
-            "codebase_memory_get_code_snippet",
-            &source_two,
+        state.on_tool_dispatched_with_admission(
+            &implementation,
+            1,
+            Some(&source_admission(DecisionEvidenceKindV1::Implementation)),
         ),
-        ("trace", "codebase_memory_trace_path", &trace),
-        ("root", "codebase_memory_search_graph", &root),
-        (
-            "source-one",
-            "codebase_memory_get_code_snippet",
-            &source_one,
-        ),
-    ]);
-    assert!(
-        state.blocks_mutation("write"),
-        "the root must be consumed by a later model turn"
-    );
-}
-
-#[test]
-fn blocks_until_a_later_root_bound_trace_and_all_typed_sources_complete() {
-    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
-    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
-    finish(
-        &mut state,
-        "root",
-        "codebase_memory_search_graph",
-        ROOT,
-        DecisionAnchorLineageStageV1::Root,
-    );
-    assert!(state.blocks_mutation("write"));
-    assert_eq!(
-        state.on_tool_dispatched(&call("blocked-write", "write"), 1),
-        Some(ToolCallDenial::DecisionAnchorMutation),
-        "mutation remains locally denied while current-root evidence is incomplete"
-    );
-
-    state.on_tool_dispatched(&call("trace", "codebase_memory_trace_path"), 1);
-    finish(
-        &mut state,
-        "trace",
-        "codebase_memory_trace_path",
-        ROOT,
-        DecisionAnchorLineageStageV1::CarryForward,
-    );
-    state.on_tool_dispatched(
-        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
-        2,
+        None,
     );
     finish_with_evidence(
         &mut state,
@@ -208,20 +43,126 @@ fn blocks_until_a_later_root_bound_trace_and_all_typed_sources_complete() {
         ROOT,
         DecisionEvidenceKindV1::Implementation,
     );
-    assert!(
-        state.blocks_mutation("write"),
-        "one typed source purpose is incomplete"
-    );
-    state.on_tool_dispatched(&source_call("caller", DecisionEvidenceKindV1::Caller), 3);
-    finish_with_evidence(&mut state, "caller", ROOT, DecisionEvidenceKindV1::Caller);
+    state.take_model_guidance();
+
+    for (id, kind) in [
+        ("early-caller", DecisionEvidenceKindV1::Caller),
+        ("early-test", DecisionEvidenceKindV1::FocusedTest),
+    ] {
+        let attempted = source_call(id, kind);
+        assert!(
+            state
+                .on_tool_dispatched_with_admission(
+                    &attempted,
+                    2,
+                    Some(&LineageAdmissionOutcome::Ineligible(
+                        LineageAdmissionStatus::IncapableSelection,
+                    )),
+                )
+                .is_some(),
+            "{kind:?} cannot bypass the inbound caller stage",
+        );
+        let guidance = state.take_model_guidance();
+        assert!(guidance.iter().all(|message| {
+            message.contains("trace_path/function_name/trace")
+                || message.contains("stop without a product")
+        }));
+    }
     assert!(state.blocks_mutation("write"));
-    state.on_tool_dispatched(&source_call("test", DecisionEvidenceKindV1::FocusedTest), 4);
+}
+
+#[test]
+fn empty_selected_implementation_caller_traversal_stops_incomplete() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    state.on_tool_finished(
+        "root",
+        "codebase_memory_search_graph",
+        &output_with_kinds(
+            "codebase_memory_search_graph",
+            ROOT,
+            DecisionAnchorLineageStageV1::Root,
+            &[
+                DecisionAnchorTargetKindV1::FunctionName,
+                DecisionAnchorTargetKindV1::QualifiedName,
+            ],
+        ),
+    );
+    state.on_tool_dispatched(
+        &source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        1,
+    );
     finish_with_evidence(
         &mut state,
-        "test",
+        "implementation",
         ROOT,
-        DecisionEvidenceKindV1::FocusedTest,
+        DecisionEvidenceKindV1::Implementation,
+    );
+    state.on_tool_dispatched(&call("empty-callers", "codebase_memory_trace_path"), 2);
+    assert_eq!(
+        state.on_tool_finished(
+            "empty-callers",
+            "codebase_memory_trace_path",
+            &output_with_caller_discovery(
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+                CallerDiscoveryOutcomeV1::NoEligibleSelector,
+            ),
+        ),
+        DecisionAnchorTransition::EnabledEvidenceIncomplete,
+    );
+    assert_eq!(
+        state.on_tool_dispatched(&call("retry", "codebase_memory_trace_path"), 3),
+        exhausted_graph_denial([
+            GraphRecoveryEvidenceKindV1::Caller,
+            GraphRecoveryEvidenceKindV1::FocusedTest,
+        ]),
+    );
+}
+
+#[test]
+fn one_batch_admits_only_the_first_provider_derived_stage() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    state.on_tool_dispatched(&call("root", "codebase_memory_search_graph"), 0);
+    finish(
+        &mut state,
+        "root",
+        "codebase_memory_search_graph",
+        ROOT,
+        DecisionAnchorLineageStageV1::Root,
     );
 
-    assert!(!state.blocks_mutation("write"));
+    let calls = [
+        source_call("implementation", DecisionEvidenceKindV1::Implementation),
+        call("trace", "codebase_memory_trace_path"),
+        source_call("caller", DecisionEvidenceKindV1::Caller),
+    ];
+    let denials = state.on_tool_batch_dispatched_with_admissions(
+        &calls,
+        1,
+        &[
+            Some(source_admission(DecisionEvidenceKindV1::Implementation)),
+            Some(LineageAdmissionOutcome::Ineligible(
+                LineageAdmissionStatus::IncapableSelection,
+            )),
+            Some(LineageAdmissionOutcome::Ineligible(
+                LineageAdmissionStatus::IncapableSelection,
+            )),
+        ],
+    );
+    assert_eq!(denials[0], None);
+    assert!(denials[1].is_some());
+    assert!(denials[2].is_some());
+    assert_eq!(
+        finish_with_evidence(
+            &mut state,
+            "implementation",
+            ROOT,
+            DecisionEvidenceKindV1::Implementation,
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+    assert_eq!(state.recovery_details(), None);
 }
+
+include!("decision_anchor_staged_guidance.rs");

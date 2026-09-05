@@ -49,6 +49,7 @@ fn shell_preview_and_complete_diagnostic_evidence_follow_capture_mode() {
             arg_preview: Some(PREVIEW.to_string()),
             diagnostic_arguments: Some(DiagnosticToolArguments::new(COMPLETE.to_string())),
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         });
 
         let frames = recorder.0.lock().expect("frames");
@@ -121,6 +122,7 @@ fn denied_shell_disposition_survives_every_capture_mode_without_private_argument
                 r#"{{"command":"{private}","argv":["PRIVATE-ARGV"]}}"#
             ))),
             shell_discovery_disposition: Some(disposition),
+            recovery_reference_disposition: None,
         });
 
         let frames = recorder.0.lock().expect("frames");
@@ -174,6 +176,7 @@ fn diagnostic_shell_evidence_is_omitted_instead_of_truncated_to_policy() {
             r#"{"command":"cargo test -p temper-agent --all-targets"}"#.to_string(),
         )),
         shell_discovery_disposition: None,
+        recovery_reference_disposition: None,
     });
 
     let frames = recorder.0.lock().expect("frames");

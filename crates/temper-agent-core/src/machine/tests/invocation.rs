@@ -7,6 +7,8 @@
 //! native filesystem keys.
 
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use temper_agent_io::{EngineTime, Machine};
@@ -17,9 +19,50 @@ use super::common::{
     complete, llm_responded, run_tools, tool_failed, tool_finished, tool_output, user,
 };
 use crate::machine::{
-    AgentEvent, AgentMachine, AgentRequest, ToolFailureDiagnostic, ToolFailureReason,
+    AgentEvent, AgentMachine, AgentRequest, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, ToolCallDenial, ToolFailureDiagnostic, ToolFailureReason,
 };
-use crate::{REJECTED_TOOL_NAME, ToolInvocationCatalog};
+use crate::{
+    InvocationTargetAdmission, LineageAdmissionOutcome, LineageAdmissionResolver,
+    LineageAdmissionStatus, REJECTED_TOOL_NAME, TargetAdmissionOutcome, TargetAdmissionStatus,
+    ToolInvocationCatalog,
+};
+
+#[derive(Default)]
+struct CountingAdmission {
+    graph: AtomicUsize,
+    targets: AtomicUsize,
+    sources: AtomicUsize,
+    canonical_targets: Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl LineageAdmissionResolver for CountingAdmission {
+    fn resolve(&self, _tool_name: &str, _arguments: &serde_json::Value) -> LineageAdmissionOutcome {
+        self.graph.fetch_add(1, Ordering::SeqCst);
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::UnknownSelector)
+    }
+
+    fn resolve_source_target(
+        &self,
+        _lineage: &temper_protocol_activity::DecisionAnchorLineageV1,
+    ) -> TargetAdmissionOutcome {
+        self.sources.fetch_add(1, Ordering::SeqCst);
+        TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)
+    }
+
+    fn resolve_invocation_targets(
+        &self,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> InvocationTargetAdmission {
+        self.targets.fetch_add(1, Ordering::SeqCst);
+        self.canonical_targets
+            .lock()
+            .unwrap()
+            .push((tool_name.to_string(), arguments.clone()));
+        InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnknownTarget)
+    }
+}
 
 struct ContractTool {
     name: &'static str,
@@ -98,6 +141,30 @@ fn catalog(names: &[&'static str]) -> Arc<ToolInvocationCatalog> {
                     }),
                     ToolEffects::read(),
                 ),
+                "codebase_memory_get_code_snippet" => (
+                    serde_json::json!({
+                        "type":"object",
+                        "properties":{
+                            "qualified_name":{"type":"string"},
+                            "decision_evidence_kind":{
+                                "type":"string",
+                                "enum":["implementation", "caller", "focused_test"]
+                            }
+                        },
+                        "required":["qualified_name", "decision_evidence_kind"]
+                    }),
+                    ToolEffects::read(),
+                ),
+                "codebase_memory_trace_path" => (
+                    serde_json::json!({
+                        "type":"object",
+                        "properties":{
+                            "function_name":{"type":"string"},
+                            "direction":{"type":"string"}
+                        }
+                    }),
+                    ToolEffects::read(),
+                ),
                 other => panic!("unsupported fixture tool {other}"),
             };
             Box::new(ContractTool {
@@ -149,6 +216,41 @@ fn dispatched(requests: &[AgentRequest]) -> (&ToolCall, Option<&crate::ToolFailu
             _ => None,
         })
         .expect("one dispatched call")
+}
+
+#[test]
+fn canonical_graph_call_queries_run_local_admission_before_dispatch() {
+    let admission = Arc::new(CountingAdmission::default());
+    let mut machine = machine(catalog(&["codebase_memory_search_graph"]))
+        .with_lineage_admission(admission.clone());
+    let _ = machine.on_start(EngineTime::ZERO);
+    let requests = complete(
+        &mut machine,
+        llm_responded(assistant(
+            "openai-responses",
+            vec![(
+                "call",
+                "codebase_memory_search_graph",
+                serde_json::json!({"query":"private selector remains wrapper-local"}),
+            )],
+        )),
+    );
+    assert_eq!(admission.graph.load(Ordering::SeqCst), 1);
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, AgentRequest::RunTool { .. }))
+    );
+}
+
+mod incomplete_graph_selector {
+    use super::*;
+    include!("invocation/incomplete_graph_selector.rs");
+}
+
+mod target_admission {
+    use super::*;
+    include!("invocation_target_admission.rs");
 }
 
 #[test]

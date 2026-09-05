@@ -5,7 +5,7 @@ use crate::codebase_memory::{
 use std::path::Path;
 use std::time::Duration;
 
-use temper_agent_core::AgentContainmentContext;
+use temper_agent_core::{AgentContainmentContext, LineageAdmissionHandle};
 use temper_protocol_agent::{AgentToolConfig, WorkspaceContext};
 use tongs::tools::ToolRegistry;
 
@@ -19,6 +19,7 @@ pub(super) struct PreparedCodebaseMemoryTools {
 pub(super) struct PreparedCodebaseMemoryGuidance {
     prompt_section: Option<String>,
     registered_safe_names: Vec<String>,
+    lineage_admission: Option<LineageAdmissionHandle>,
 }
 
 impl PreparedCodebaseMemoryTools {
@@ -29,10 +30,12 @@ impl PreparedCodebaseMemoryTools {
         registry: &mut ToolRegistry,
     ) -> PreparedCodebaseMemoryGuidance {
         let registered_safe_names = self.toolset.registered_tool_names().to_vec();
+        let lineage_admission = self.toolset.lineage_admission();
         self.toolset.append_to_registry(registry);
         PreparedCodebaseMemoryGuidance {
             prompt_section: self.prompt_section,
             registered_safe_names,
+            lineage_admission,
         }
     }
 }
@@ -50,6 +53,10 @@ impl PreparedCodebaseMemoryGuidance {
         } else {
             None
         }
+    }
+
+    pub(super) fn lineage_admission(&self) -> Option<LineageAdmissionHandle> {
+        self.lineage_admission.clone()
     }
 }
 
@@ -124,7 +131,10 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
     Some(format!(
         "\nCODEBASE MEMORY:\n\
          You have repository-index tools for architecture, symbol search, code search,\n\
-         and call/impact tracing.\n\n\
+         and call/impact tracing. For work that needs code discovery, use a targeted repository-index\n\
+         query before any shell inventory. Do not precede graph-based source selection with a compound\n\
+         shell inventory; keep repository status, validation, and other operational checks as separate\n\
+         calls after selection.\n\n\
          When work requires implementation selection, caller/data-flow understanding, or\n\
          behavioral preservation, use every successful targeted graph result as a decision\n\
          checkpoint: consume it with the work-item requirements before selecting a dependent\n\
@@ -133,17 +143,62 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          current-root result; select from that provider result, not unrelated discovery. It is\n\
          absent for failures, unavailable tools, and truncated or ambiguous output. A generic decision-anchor\n\
          recovery message means a successful result was unconsumable: make a bounded later targeted\n\
-         correction or stop without a product. Failures and unavailable tools retain conventional\n\
-         discovery as the fallback. Keep genuinely independent discovery parallel. A call that\n\
+         correction or stop without a product. Before selecting the initial graph route, derive query\n\
+         terms from the requested behavior and intended repair. If the work item also names an incidental\n\
+         field, accessor, or symbol, begin with a task-semantic graph query that describes the behavior;\n\
+         do not lead with a name pattern or identifier token. Narrow with identifiers returned by that\n\
+         semantic result only afterward. An implementation-purpose result may over-return caller- or\n\
+         test-shaped candidates. Reuse its exact implementation candidate, but never credit those later\n\
+         evidence kinds through direct source reads. When the active-root handoff presents multiple\n\
+         implementation candidates, follow its bounded preview/commit protocol: inspect only presented\n\
+         candidates without an evidence purpose, compare their source, then explicitly commit exactly one\n\
+         candidate with the implementation purpose in a later turn. A preview never earns evidence or\n\
+         ordinary read/mutation authority. An implementation source committed before caller and focused-test\n\
+         convergence remains provisional. If its typed traversal later produces the bounded pre-mutation\n\
+         implementation-correction handoff, inspect every bounded presented alternative exactly once before\n\
+         implementation authority becomes final. After those previews complete in either order, explicitly\n\
+         correct at most once when one inspected candidate better explains the retained caller/focused-test\n\
+         evidence, or retain the provisional target with its exact ordinary read. Correction, exact read, and\n\
+         mutation remain blocked during the inspection checkpoint. A correction atomically replaces rather than\n\
+         accumulates implementation authority; after it succeeds, the old target and every unchosen candidate\n\
+         remain non-actionable. Choose the behaviorally relevant implementation candidate and\n\
+         consume its exact source first; only then traverse inbound calls from that exact implementation in a later turn.\n\
+         Admit caller source only from an exact identity returned by that traversal. Among\n\
+         returned implementation candidates, favor the one whose result context matches the requested\n\
+         behavior, then use the shortest provider-derived refinement needed for the decision. Consume the\n\
+         relevant caller source; do not choose an outer wrapper or incidental caller merely because it can\n\
+         carry a caller evidence label.\n\
+         Only the selected-implementation traversal's provider-returned caller identities are eligible\n\
+         later-turn caller/model selectors. A\n\
+         complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
+         manufacture caller evidence by rereading the traced symbol as its own caller. Initial discovery may\n\
+         establish independent implementation and focused-test roots in parallel, but every dependent selector\n\
+         must come from its own provider result. Focused-test evidence follows a separately admitted root:\n\
+         consume only an exact test identity returned by that root in a later turn, and keep its exact source\n\
+         lineage on that root. Never move focused-test evidence onto the implementation root, derive a recovery\n\
+         selector from task text, source, diagnostics, or another root, or issue an unlisted semantic search or\n\
+         caller-to-test traversal. If no provider-derived focused-test action remains, follow the closed\n\
+         stop-without-product guidance without retrying or inventing a selector.\n\
+         After a local\n\
+         decision-evidence denial, follow only the compatible recovery menu and never repeat the denied\n\
+         tool/selector/evidence-kind tuple. Do not batch speculative snippets with a producer, and do not\n\
+         issue a source consumer until a later turn has received its producer's typed result. When\n\
+         multiple typed routes could fill a decision gap, favor the route whose producer query, returned\n\
+         implementation, and consumer chain are semantically connected to the requested behavior; an\n\
+         evidence-kind declaration alone does not make an incidental route preferable. Keep every source\n\
+         selector provider-derived and on the root that produced it. Successful enabled activity never\n\
+         releases conventional mutation authority: follow bounded compatible recovery or stop without a\n\
+         product. Trusted systemic unavailability remains a distinct one-failure, non-retrying conventional\n\
+         fallback. Keep genuinely independent discovery parallel. A call that\n\
          consumes the current result must be in a later model turn; later evidence calls whose\n\
          selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
-         source evidence covers the selected current-root implementation, its caller/model,\n\
-         and focused behavioral tests, sufficient to justify the smallest semantic diff. Bound later\n\
-         independent roots and do not repeat successful discovery that adds no typed evidence. Once a\n\
-         current-root trace and sufficient implementation/caller/test source evidence complete the\n\
-         decision chain, stop codebase-memory exploration, obey convergence or exploration-closed\n\
-         messages, use conventional reads for any remaining verification, and produce the smallest\n\
-         role-appropriate product.\n\n\
+         source evidence covers the selected implementation and its inbound caller on one root plus the\n\
+         focused behavioral test on its own retained root, sufficient to justify the smallest semantic diff.\n\
+         Bound later independent roots, pivots, readiness rechecks, and rejected selector tuples; repeated,\n\
+         broad, malformed, irrelevant, or cross-root attempts add no evidence and cannot reopen exploration.\n\
+         Once the retained forest contains the complete implementation/caller and focused-test lineages, stop\n\
+         codebase-memory exploration, obey convergence or exploration-closed messages, use conventional reads\n\
+         for any remaining verification, and produce the smallest role-appropriate product.\n\n\
          Use them early for non-trivial tasks, but choose the narrowest useful query:\n\
          - concrete defects: begin with a targeted symbol or code search tied to the reported\n\
            symptom, file, or area; then use call/path tracing and read exact source snippets as\n\
@@ -304,6 +359,11 @@ for line in sys.stdin:
         .expect("registered tool renders prompt section");
 
         for expected in [
+            "use a targeted repository-index",
+            "query before any shell inventory",
+            "Do not precede graph-based source selection with a compound",
+            "keep repository status, validation, and other operational checks as separate",
+            "calls after selection",
             "implementation selection, caller/data-flow understanding, or",
             "use every successful targeted graph result as a decision",
             "checkpoint: consume it with the work-item requirements",
@@ -314,15 +374,83 @@ for line in sys.stdin:
             "current-root result; select from that provider result, not unrelated discovery.",
             "absent for failures, unavailable tools, and truncated or ambiguous output.",
             "Keep genuinely independent discovery parallel",
+            "derive query",
+            "terms from the requested behavior and intended repair",
+            "also names an incidental",
+            "begin with a task-semantic graph query that describes the behavior",
+            "do not lead with a name pattern or identifier token",
+            "Narrow with identifiers returned by that",
+            "semantic result only afterward",
+            "implementation-purpose result may over-return caller- or",
+            "never credit those later",
+            "active-root handoff presents multiple",
+            "bounded preview/commit protocol",
+            "candidates without an evidence purpose",
+            "explicitly commit exactly one",
+            "preview never earns evidence or",
+            "ordinary read/mutation authority",
+            "committed before caller and focused-test",
+            "convergence remains provisional",
+            "bounded pre-mutation",
+            "implementation-correction handoff",
+            "inspect every bounded presented alternative exactly once",
+            "atomically replaces rather than",
+            "old target and every unchosen candidate",
+            "remain non-actionable",
+            "consume its exact source first",
+            "traverse inbound calls from that exact implementation in a later turn",
+            "Admit caller",
+            "source only from an exact identity returned by that traversal",
+            "shortest provider-derived refinement",
+            "relevant caller source",
+            "outer wrapper or incidental caller merely because it can",
+            "carry a caller evidence label",
+            "Only the selected-implementation traversal's provider-returned caller identities",
+            "later-turn caller/model selectors",
+            "complete empty inbound trace settles that selected symbol's graph-caller relationship",
+            "manufacture caller evidence by rereading the traced symbol as its own caller",
+            "Initial discovery may",
+            "independent implementation and focused-test roots",
+            "every dependent selector",
+            "must come from its own provider result",
+            "Focused-test evidence follows a separately admitted root",
+            "exact test identity returned by that root in a later turn",
+            "keep its exact source",
+            "lineage on that root",
+            "Never move focused-test evidence onto the implementation root",
+            "derive a recovery",
+            "selector from task text",
+            "unlisted semantic search or",
+            "caller-to-test traversal",
+            "no provider-derived focused-test action remains",
+            "stop-without-product guidance",
+            "without retrying or inventing a selector",
+            "follow only the compatible recovery menu",
+            "tool/selector/evidence-kind tuple",
+            "Do not batch speculative snippets with a producer",
+            "issue a source consumer until a later turn has received its producer's typed result",
+            "multiple typed routes could fill a decision gap",
+            "whose producer query, returned",
+            "implementation, and consumer chain are semantically connected to the requested behavior",
+            "requested behavior; an",
+            "evidence-kind declaration alone does not make an incidental route",
+            "preferable",
+            "Keep every source",
+            "selector provider-derived and on the root that produced it",
+            "Successful enabled activity never",
+            "Trusted systemic unavailability remains a distinct",
             "Do not mutate until consumed",
-            "selected current-root implementation, its caller/model",
-            "focused behavioral tests",
+            "selected implementation and its inbound caller on one root",
+            "focused behavioral test on its own retained root",
             "smallest semantic diff",
-            "Bound later",
-            "do not repeat successful discovery that adds no typed evidence",
-            "stop codebase-memory exploration",
+            "pivots, readiness rechecks, and rejected selector tuples",
+            "cannot reopen exploration",
+            "retained forest",
+            "stop",
+            "codebase-memory exploration",
             "convergence or exploration-closed",
-            "messages, use conventional reads for any remaining verification",
+            "use conventional reads",
+            "for any remaining verification",
             "role-appropriate product",
         ] {
             assert!(prompt.contains(expected), "prompt omitted {expected:?}");
@@ -358,6 +486,7 @@ for line in sys.stdin:
                 .expect("absent config is ok");
             assert!(absent.prompt_section.is_none());
             assert!(absent.toolset.registered_tool_names().is_empty());
+            assert!(absent.toolset.lineage_admission().is_none());
 
             let role_mismatch = config(&dir, CodebaseMemoryMode::Required, vec!["reviewer"]);
             let mismatch = prepare_codebase_memory_tools(
@@ -392,6 +521,7 @@ for line in sys.stdin:
                 .prompt_section
                 .clone()
                 .expect("registered tools produce prompt section");
+            assert!(prepared.toolset.lineage_admission().is_some());
             for expected in [
                 "CODEBASE MEMORY",
                 "repository-index tools for architecture, symbol search, code search",
@@ -436,6 +566,10 @@ for line in sys.stdin:
             let empty_registry = tongs::tools::ToolRegistry::new();
             let mut registry = tongs::tools::ToolRegistry::new();
             let guidance = prepared.append_to_registry(&mut registry);
+            assert!(
+                guidance.lineage_admission().is_some(),
+                "the finalized codebase-memory composition retains its run-local admission handle"
+            );
             assert!(
                 guidance
                     .prompt_section_for_registry(&empty_registry)

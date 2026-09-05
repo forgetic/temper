@@ -52,6 +52,16 @@ fn source_evidence_schema_and_lineage_are_closed_and_provider_private() {
             source_parameters["properties"]["decision_evidence_kind"]["enum"],
             json!(["implementation", "caller", "focused_test"])
         );
+        assert!(
+            !source_parameters["required"]
+                .as_array()
+                .is_some_and(|required| {
+                    required
+                        .iter()
+                        .any(|field| field == "decision_evidence_kind")
+                }),
+            "exact retained candidates may infer the wrapper-owned source purpose"
+        );
         for name in [
             "codebase_memory_search_graph",
             "codebase_memory_search_code",
@@ -93,7 +103,7 @@ fn source_evidence_schema_and_lineage_are_closed_and_provider_private() {
                 "declared",
                 json!({
                     "qualified_name": "crate::engine::run",
-                    "decision_evidence_kind": "caller",
+                    "decision_evidence_kind": "implementation",
                     "path": PRIVATE_ARGUMENT,
                     "purpose": "focused_test"
                 }),
@@ -108,7 +118,7 @@ fn source_evidence_schema_and_lineage_are_closed_and_provider_private() {
         );
         assert_eq!(
             declared_lineage.decision_evidence_kind,
-            Some(DecisionEvidenceKindV1::Caller)
+            Some(DecisionEvidenceKindV1::Implementation)
         );
         let calls = calls_named(&log_path, "get_code_snippet");
         assert_eq!(calls.len(), 1);

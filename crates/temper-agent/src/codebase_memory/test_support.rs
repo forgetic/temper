@@ -43,9 +43,9 @@ state_path = f"{log_path}.state.json" if log_path else ""
 TOOLS = [
     {"name": "search_code", "description": "Search indexed code", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, search_project_property: {"type": "string"}}, "required": ["query", search_project_property] if mode == "repo-schema" else ["query"]}},
     {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
-    {"name": "get_code_snippet", "description": "Read indexed source", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "path": {"type": "string"}}}},
+    {"name": "get_code_snippet", "description": "Read indexed source", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "qualified_name": {"type": "string"}, "include_neighbors": {"type": "boolean"}}, "required": ["qualified_name"]}},
     {"name": "search_graph", "description": "Search graph", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "name_pattern": {"type": "string"}, "project": {"type": "string"}}}},
-    {"name": "trace_path", "description": "Trace graph calls", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}}},
+    {"name": "trace_path", "description": "Trace graph calls", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}}}},
     {"name": "list_projects", "description": "List projects", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "detect_changes", "description": "Detect changes", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
@@ -226,6 +226,133 @@ for line in sys.stdin:
                 tool_result(request["id"], "exploration_closed", True)
             elif mode == "graph-systemic":
                 tool_result(request["id"], "provider protocol is unusable SECRET", True)
+            elif mode in ("active-root-handoff", "active-root-overlap-handoff") and name == "search_graph":
+                active = args.get("query") == "active routing implementation"
+                worker_rank = 7 if active else 5
+                prefix = "active" if active else "sibling"
+                results = []
+                result_count = 10 if mode == "active-root-overlap-handoff" and active else 70
+                for rank in range(1, result_count + 1):
+                    if mode == "active-root-overlap-handoff" and active:
+                        if rank == 1:
+                            symbol = "affinity_topic"
+                            qualified_name = "temper-v1-production.src.model.affinity_topic"
+                        elif 2 <= rank <= 6:
+                            symbol = f"test_affinity_{rank}"
+                            qualified_name = f"temper-v1-production.tests.route.{symbol}"
+                        elif rank == 7:
+                            symbol = "worker_for"
+                            qualified_name = "temper-v1-production.src.route.worker_for"
+                        elif rank == 8:
+                            symbol = "worker_slot"
+                            qualified_name = "temper-v1-production.src.route.worker_slot"
+                        else:
+                            symbol = f"active_{rank}"
+                            qualified_name = f"temper-v1-production.src.route.{symbol}"
+                        result = {
+                            "name": symbol,
+                            "qualified_name": qualified_name,
+                            "label": "Function",
+                            "file_path": "tests/route.rs" if 2 <= rank <= 6 else "src/route.rs",
+                        }
+                        if 2 <= rank <= 6:
+                            result["is_test"] = True
+                        results.append(result)
+                    elif rank < worker_rank:
+                        results.append({"label": "Module", "file_path": f"src/{prefix}_{rank}.rs"})
+                    else:
+                        symbol = (
+                            "worker_slot" if active and rank == worker_rank
+                            else "worker_slot" if mode == "active-root-overlap-handoff" and rank == worker_rank
+                            else "sibling_worker_slot" if rank == worker_rank
+                            else f"{prefix}_{rank}"
+                        )
+                        qualified_name = symbol
+                        if mode == "active-root-overlap-handoff" and rank == worker_rank:
+                            qualified_name = f"temper-v1-production.src.route.{symbol}"
+                        result = {
+                            "name": symbol,
+                            "qualified_name": qualified_name,
+                            "label": "Function",
+                            "file_path": "src/route.rs",
+                        }
+                        results.append(result)
+                payload = {"total": result_count, "has_more": False, "results": results}
+                tool_result(request["id"], json.dumps(payload), structured=payload)
+            elif mode == "active-root-overlap-handoff" and name == "trace_path":
+                symbol = args.get("function_name")
+                if symbol in ("affinity_topic", "worker_slot"):
+                    callers = [
+                        {
+                            "name": "worker_slot",
+                            "qualified_name": "temper-v1-production.src.route.worker_slot",
+                        },
+                        {
+                            "name": "worker_for",
+                            "qualified_name": "temper-v1-production.src.route.worker_for",
+                        },
+                    ] if symbol == "affinity_topic" else [
+                        {
+                            "name": "worker_for",
+                            "qualified_name": "temper-v1-production.src.route.worker_for",
+                        },
+                        {
+                            "name": "affinity_topic",
+                            "qualified_name": "temper-v1-production.src.model.affinity_topic",
+                        },
+                    ]
+                    payload = {
+                        "function": {
+                            "name": symbol,
+                            "qualified_name": f"temper-v1-production.src.{'model' if symbol == 'affinity_topic' else 'route'}.{symbol}",
+                        },
+                        "callers": callers,
+                    }
+                    tool_result(request["id"], json.dumps(payload), structured=payload)
+                else:
+                    tool_result(request["id"], "invalid argument", True)
+            elif mode in ("active-root-handoff", "active-root-overlap-handoff") and name == "get_code_snippet":
+                symbol = args.get("qualified_name")
+                expected = (
+                    "temper-v1-production.src.model.affinity_topic",
+                    "temper-v1-production.src.route.worker_slot",
+                    "temper-v1-production.src.route.worker_for",
+                    "temper-v1-production.tests.route.test_affinity_2",
+                    "temper-v1-production.tests.route.test_affinity_3",
+                    "temper-v1-production.tests.route.test_affinity_4",
+                    "temper-v1-production.tests.route.test_affinity_5",
+                    "temper-v1-production.tests.route.test_affinity_6",
+                    "test_affinity_2",
+                    "test_affinity_3",
+                    "test_affinity_4",
+                    "test_affinity_5",
+                    "test_affinity_6",
+                ) if mode == "active-root-overlap-handoff" else ("worker_slot", "sibling_worker_slot")
+                if symbol not in expected:
+                    tool_result(request["id"], "invalid argument", True)
+                else:
+                    test_symbol = symbol.startswith("test_affinity_")
+                    qualified_symbol = (
+                        f"temper-v1-production.tests.route.{symbol}"
+                        if test_symbol
+                        else symbol
+                    )
+                    file_path = (
+                        "src/model.rs"
+                        if symbol == "temper-v1-production.src.model.affinity_topic"
+                        else "tests/route.rs"
+                        if test_symbol or ".tests." in symbol
+                        else "src/route.rs"
+                    )
+                    payload = {
+                        "name": symbol,
+                        "qualified_name": qualified_symbol,
+                        "file_path": file_path,
+                        "source": f"fn {symbol}() {{}}",
+                    }
+                    if test_symbol or ".tests." in symbol:
+                        payload["is_test"] = True
+                    tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode == "graph-errors" and args.get("query") == "invalid":
                 tool_result(request["id"], "invalid argument: query-local SECRET", True)
             elif mode == "graph-errors" and args.get("query") == "systemic":
@@ -250,7 +377,7 @@ for line in sys.stdin:
                     "MODEL-VISIBLE-TYPED-RESULT symbol=run",
                     structured={
                         "results": [
-                            {"results": [{"symbol": "run"}]},
+                            {"results": [{"symbol": "run"}, {"qualified_name": "crate::engine::behavior", "is_test": True}]},
                             {"callers": [{"qualifiedName": "crate::engine::caller"}]},
                             {"related_source_references": [{"qualified_name": "crate::engine::source"}]},
                             {"source_metadata": {

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "tool_failure/recovery_reference.rs"]
+mod recovery_reference;
+
 fn diagnostic(category: ToolFailureCategoryV1) -> ToolFailureDiagnosticV1 {
     ToolFailureDiagnosticV1::new(category)
 }
@@ -67,8 +70,7 @@ fn tool_failure_wire_redacts_forged_and_oversized_messages_deterministically() {
         parsed.message,
         ToolFailureCategoryV1::ProcessExit.safe_message()
     );
-    assert!(!parsed.retryable);
-    assert!(parsed.fallback_to_conventional_discovery);
+    assert!(!parsed.retryable && parsed.fallback_to_conventional_discovery);
     assert!(parsed.message.len() <= MAX_TOOL_FAILURE_MESSAGE_BYTES);
     assert!(!format!("{forged:?} {parsed:?}").contains(SECRET));
 }
@@ -94,6 +96,14 @@ fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
             GraphRecoveryEvidenceKindV1::FocusedTest,
         ]
     );
+    assert_eq!(
+        details.compatible_actions,
+        [
+            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Trace),
+            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Caller),
+            GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::FocusedTest),
+        ]
+    );
     let diagnostic = ToolFailureDiagnosticV1::with_graph_exploration(details.clone());
     assert_eq!(
         diagnostic.reason,
@@ -109,6 +119,9 @@ fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
 
     let encoded = serde_json::to_string(&diagnostic).unwrap();
     assert!(encoded.contains(r#""permitted_action":"targeted_current_root_graph_call""#));
+    assert!(encoded.contains(r#""selector_kind":"function_name""#));
+    assert!(encoded.contains(r#""selector_kind":"qualified_name""#));
+    assert!(!encoded.contains("root_binding"));
     assert!(!encoded.contains(SECRET));
     assert_eq!(
         serde_json::from_str::<ToolFailureDiagnosticV1>(&encoded).unwrap(),
@@ -118,6 +131,11 @@ fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
     malformed["graph_exploration"]["missing_evidence"] =
         serde_json::json!(["focused_test", "trace"]);
     assert!(serde_json::from_value::<ToolFailureDiagnosticV1>(malformed).is_err());
+
+    let mut forged_action: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    forged_action["graph_exploration"]["compatible_actions"][0]["selector_kind"] =
+        serde_json::json!(SECRET);
+    assert!(serde_json::from_value::<ToolFailureDiagnosticV1>(forged_action).is_err());
 
     let mut event = usage_event(1);
     event.event = AgentActivityEventV1::ToolFinished(ToolFinishedV1 {
@@ -130,6 +148,7 @@ fn graph_recovery_details_round_trip_with_sorted_kinds_and_no_private_inputs() {
         codebase_memory_timing: None,
         graph_correlation: None,
         decision_anchor_lineage: None,
+        recovery_reference_disposition: None,
     });
     event.validate().expect("closed recovery details validate");
 
@@ -353,18 +372,6 @@ fn malformed_or_untrusted_shell_dispositions_fail_closed() {
 }
 
 #[test]
-fn legacy_tool_start_without_disposition_remains_readable() {
-    let legacy = serde_json::json!({
-        "call_id": "legacy-bash",
-        "name": "bash"
-    });
-    let parsed: ToolStartedV1 = serde_json::from_value(legacy.clone()).unwrap();
-    assert_eq!(parsed.arguments, None);
-    assert_eq!(parsed.shell_discovery_disposition, None);
-    assert_eq!(serde_json::to_value(parsed).unwrap(), legacy);
-}
-
-#[test]
 fn graph_correlation_fingerprints_closed_targets_without_retaining_raw_arguments() {
     const SECRET: &str = "Authorization: Bearer GRAPH-CORRELATION-SECRET";
     let correlation = GraphCorrelationV1::new(
@@ -409,6 +416,7 @@ fn graph_correlation_fingerprints_closed_targets_without_retaining_raw_arguments
         codebase_memory_timing: None,
         graph_correlation: Some(correlation),
         decision_anchor_lineage: None,
+        recovery_reference_disposition: None,
     });
     event.validate().expect("closed correlation validates");
     let export = TraceExportRecordV1::event(event.clone());
@@ -457,6 +465,7 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
             [DecisionAnchorTargetKindV1::Pattern],
             [GraphCorrelationV1::target_digest("forged-root").unwrap()],
         ),
+        recovery_reference_disposition: None,
     });
     assert_eq!(
         event.validate(),
@@ -475,6 +484,10 @@ fn malformed_or_unbound_lineage_is_rejected_and_sanitized() {
         result_target_kinds: vec![DecisionAnchorTargetKindV1::Pattern],
         canonical_target_digests: vec![GraphCorrelationV1::target_digest("forged-root").unwrap()],
         decision_evidence_kind: None,
+        caller_discovery: None,
+        focused_test_discovery: None,
+        implementation_correction_available: false,
+        implementation_authority_corrected: false,
     });
     assert_code(event.validate(), ActivityValidationCode::InvalidEvent);
     event.event.sanitize_graph_correlation();
@@ -537,6 +550,7 @@ fn decision_evidence_is_closed_source_only_and_privacy_safe() {
         codebase_memory_timing: None,
         graph_correlation: Some(source),
         decision_anchor_lineage: Some(lineage),
+        recovery_reference_disposition: None,
     });
     event.validate().expect("closed source evidence validates");
     let activity = serde_json::to_string(&event).unwrap();
@@ -560,6 +574,7 @@ fn ordinary_tool_failures_validate_without_result_content() {
         codebase_memory_timing: None,
         graph_correlation: None,
         decision_anchor_lineage: None,
+        recovery_reference_disposition: None,
     });
     event.validate().expect("ordinary typed failure validates");
 
@@ -589,6 +604,7 @@ fn tool_failures_validate_only_on_non_success_boundaries() {
         }),
         graph_correlation: None,
         decision_anchor_lineage: None,
+        recovery_reference_disposition: None,
     });
     event.validate().expect("failed tool diagnostic validates");
 

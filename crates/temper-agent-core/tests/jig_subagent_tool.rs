@@ -90,6 +90,7 @@ fn parent_agent_delegates_to_a_sub_agent() {
             tools: ToolRegistry::from_tools(vec![create_read_tool(&checkout_path)]),
             max_iterations: 4,
             operation_limits: temper_agent_core::AgentOperationLimits::default(),
+            lineage_admission: None,
             provider,
             stream_options: StreamOptions {
                 api_key: Some("sk-jig-test".to_string()),
@@ -130,6 +131,7 @@ fn parent_agent_delegates_to_a_sub_agent() {
                 tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
                 max_iterations: 4,
                 operation_limits: temper_agent_core::AgentOperationLimits::default(),
+                lineage_admission: None,
                 provider: parent_provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),
@@ -270,6 +272,7 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
             tools: ToolRegistry::from_tools(vec![create_read_tool(&checkout_path)]),
             max_iterations: 4,
             operation_limits: temper_agent_core::AgentOperationLimits::default(),
+            lineage_admission: None,
             provider,
             stream_options: StreamOptions {
                 api_key: Some("sk-jig-test".to_string()),
@@ -304,6 +307,7 @@ fn parent_fans_out_two_sub_agents_in_one_batch() {
                 tools: ToolRegistry::from_tools(vec![Box::new(investigate)]),
                 max_iterations: 4,
                 operation_limits: temper_agent_core::AgentOperationLimits::default(),
+                lineage_admission: None,
                 provider: parent_provider,
                 stream_options: StreamOptions {
                     api_key: Some("sk-jig-test".to_string()),
@@ -365,6 +369,7 @@ fn nested_budget_exhaustion_is_a_failed_tool_result() {
             tools: ToolRegistry::new(),
             max_iterations: 0,
             operation_limits: temper_agent_core::AgentOperationLimits::default(),
+            lineage_admission: None,
             provider,
             stream_options: StreamOptions {
                 api_key: Some("sk-jig-test".to_string()),

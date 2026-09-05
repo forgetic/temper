@@ -446,6 +446,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
         tools,
         max_iterations,
         operation_limits,
+        lineage_admission: codebase_memory_guidance.lineage_admission(),
         provider,
         stream_options,
     };

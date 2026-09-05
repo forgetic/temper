@@ -187,10 +187,15 @@ def confirmed_graph_read(project, tool):
 def current_root_source(project, qualified_name):
     snippet = {
         "DeliveryAttempt": ("src/model.rs", "DeliveryRouter::worker_for"),
-        "DeliveryRouter::worker_for": ("src/delivery.rs", "repo/src/route.rs"),
+        "worker_slot": ("src/route.rs", "DeliveryRouter::worker_for"),
+        "DeliveryRouter::worker_for": ("src/delivery.rs", "worker_slot"),
         "alias_retries_stay_on_the_original_ordered_worker": (
             "tests/alias_retry.rs",
             "repo/tests/alias_retry.rs",
+        ),
+        "public_facade_keeps_operational_helpers_cohesive": (
+            "tests/public_api.rs",
+            "repo/tests/public_api.rs",
         ),
     }.get(qualified_name)
     graph_read = confirmed_graph_read(project, "get_code_snippet")
@@ -208,6 +213,7 @@ def current_root_source(project, qualified_name):
     return identity | {
         "source_root": "confirmed_current_root",
         "source_path": relative_path,
+        "file_path": relative_path,
         "qualified_name": qualified_name,
         "related_qualified_name": related_qualified_name,
         "source": source,
@@ -328,7 +334,7 @@ for line in sys.stdin:
                             "file_path": "tests/alias_retry.rs",
                         }
                     ]
-                else:
+                elif query == "aliased delivery retry worker affinity":
                     results = [
                         {
                             "qualified_name": "worker_slot",
@@ -338,7 +344,13 @@ for line in sys.stdin:
                             "qualified_name": "DeliveryRouter::worker_for",
                             "file_path": "src/delivery.rs",
                         },
+                        {
+                            "qualified_name": "public_facade_keeps_operational_helpers_cohesive",
+                            "file_path": "tests/public_api.rs",
+                        },
                     ]
+                else:
+                    results = []
                 tool_result(
                     request_id,
                     json.dumps(

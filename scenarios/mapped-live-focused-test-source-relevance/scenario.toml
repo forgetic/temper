@@ -1,0 +1,315 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-focused-test-source-relevance"
+status = "active"
+intent = "Validate feature #1130's privacy-safe preservation of a same-root focused-test fallback through its exact typed source consumer."
+introduced_by = "#1134"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/mapped-live-decision-gap-recovery"
+
+[runner]
+uses = "manifest"
+
+[validation]
+feature = "ai/temper#1130"
+plan = "ai/temper#1131"
+source_branch = "agent/pr-for-feature-1130"
+change = "new"
+
+[feature_contract]
+claim = "An eligible focused-test selector produced by the same-root semantic fallback remains relevant only when a later exact source read carries complete carry-forward lineage and the explicit focused_test kind."
+stimulus = "Run one live engineer repair through an implementation and caller chain, an empty focused-test traversal, one same-root semantic fallback, one locally denied mismatched typed confirmation, and the exact typed test-source consumer."
+observable = "Closed focused-test discovery outcome, lineage stage and completeness, decision kind, source-consumption ordering, provider-free mismatch denial, bounded tool counts, one exact repair, host validation, Actions success, merge, and issue closure."
+assertion = "The fallback reports eligible_selector_returned on the active root before one exact focused_test source succeeds; a mismatched typed selector remains local and cannot authorize mutation; implementation, caller, and focused-test kinds precede one exact repair and convergence."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-focused-test-source-relevance.json"
+
+[workflow]
+name = "codebase-memory-agent"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/demo"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Preserve focused-test source relevance after semantic fallback"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the demo repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "start-fake-codebase-memory-mcp"
+action = "mcp.fake_codebase_memory.start"
+project = "actual-demo-project"
+lifecycle_profile = "mapped-live-focused-test-source-relevance"
+advertises_safe_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status"]
+advertises_hidden_tools = ["index_repository", "delete_project"]
+readiness_delay_ms = 750
+
+[[steps]]
+id = "configure-codebase-memory-tools"
+action = "agent.tools.configure"
+role = "engineer"
+tool = "codebase_memory"
+mode = "required"
+index = "background"
+tool_timeout_secs = 2
+server = "$step:start-fake-codebase-memory-mcp"
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+role = "engineer"
+script_path = "jig/mapped-live-focused-test-source-relevance.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-demo-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-source-issue"
+action = "issue.seed"
+issue_id = "source"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-convergence"
+action = "workflow.wait_convergence"
+strategy = "codebase-memory"
+until = "the engineer consumes implementation and caller evidence, takes one eligible same-root focused-test fallback, rejects a mismatched typed confirmation locally, consumes the exact typed test source, applies one exact repair, passes host validation and Actions, merges the PR, and closes the source issue"
+
+[expect]
+outcome = "The live fallback-to-source edge preserves closed eligible discovery, carry-forward lineage, focused_test typing, ordering, and exact source consumption while the mismatched variant fails closed and the one-file repair converges."
+merged_pull_requests = 1
+closed_parent_issues = 1
+
+[[expect.checks]]
+required = true
+id = "source-finalized"
+artifact = "issue:source"
+state = "closed"
+labels = ["code"]
+
+[[expect.checks]]
+required = true
+id = "implementation-pr-landed"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+required = true
+id = "default-branch-has-exact-engineer-diff"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.events]]
+required = true
+id = "current-root-rebind-completed"
+event = "codebase_memory.index.lifecycle"
+fields."index.mode" = "background"
+fields."index.outcome" = "completed"
+
+[[expect.events]]
+required = true
+id = "fallback-discovery-is-eligible-and-carry-forward"
+event = "mcp.tool.result"
+fields."mcp.tool" = "search_graph"
+fields.is_error = false
+fields."graph.correlation.complete" = true
+fields."graph.lineage.complete" = true
+fields."graph.lineage.stage" = "carry_forward"
+fields."graph.lineage.focused_test_discovery" = "eligible_selector_returned"
+
+[[expect.events]]
+required = true
+id = "mismatched-typed-confirmation-fails-closed"
+event = "tool.error"
+fields.tool = "codebase_memory_get_code_snippet"
+fields.id = "focused-relevance-mismatched-confirmation-denied"
+fields."tool.failure.category" = "graph_lifecycle_denial"
+fields."tool.failure.reason" = "decision_evidence_incomplete"
+fields."tool.failure.retryable" = false
+fields."tool.failure.conventional_fallback" = false
+fields."tool.failure.graph.missing_evidence" = "focused_test"
+fields."tool.failure.graph.permitted_action" = "targeted_current_root_graph_call"
+
+[[expect.events]]
+required = true
+id = "implementation-source-is-typed"
+event = "mcp.tool.result"
+fields."mcp.tool" = "get_code_snippet"
+fields.is_error = false
+fields."graph.lineage.stage" = "carry_forward"
+fields."graph.lineage.decision_evidence_kind" = "implementation"
+
+[[expect.events]]
+required = true
+id = "caller-source-is-typed"
+event = "mcp.tool.result"
+fields."mcp.tool" = "get_code_snippet"
+fields.is_error = false
+fields."graph.lineage.stage" = "carry_forward"
+fields."graph.lineage.decision_evidence_kind" = "caller"
+
+[[expect.events]]
+required = true
+id = "exact-focused-test-source-is-typed"
+event = "mcp.tool.result"
+fields."mcp.tool" = "get_code_snippet"
+fields.is_error = false
+fields."graph.lineage.complete" = true
+fields."graph.lineage.stage" = "carry_forward"
+fields."graph.lineage.decision_evidence_kind" = "focused_test"
+
+[[expect.sequence]]
+required = true
+id = "eligible-fallback-precedes-exact-source-and-repair"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "implementation" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "caller" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.lineage.focused_test_discovery" = "no_eligible_selector" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.lineage.stage" = "carry_forward", "graph.lineage.focused_test_discovery" = "eligible_selector_returned" } },
+  { event = "tool.error", fields = { id = "focused-relevance-mismatched-confirmation-denied", "tool.failure.graph.missing_evidence" = "focused_test" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "tool.start", fields = { tool = "read", id = "read-route-after-focused-relevance" } },
+  { event = "tool.end", fields = { tool = "apply_patch", id = "patch-route-after-focused-relevance" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-focused-relevance-repair" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-focused-relevance-repair" } },
+  { event = "workspace.diff.produced", fields = { changed_count = 1 } },
+]
+
+[[expect.count]]
+required = true
+id = "nine-complete-v1-lineages"
+event = "mcp.tool.result"
+fields.is_error = false
+fields."graph.correlation.complete" = true
+fields."graph.correlation.version" = 1
+fields."graph.lineage.complete" = true
+fields."graph.lineage.version" = 1
+exactly = 9
+
+[[expect.count]]
+required = true
+id = "one-semantic-fallback"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_graph"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "three-code-searches"
+event = "mcp.tool.called"
+fields."mcp.tool" = "search_code"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "two-traces-including-empty-test-traversal"
+event = "mcp.tool.called"
+fields."mcp.tool" = "trace_path"
+exactly = 2
+
+[[expect.count]]
+required = true
+id = "three-exact-source-consumers-with-no-mismatch-provider-call"
+event = "mcp.tool.called"
+fields."mcp.tool" = "get_code_snippet"
+exactly = 3
+
+[[expect.count]]
+required = true
+id = "one-fail-closed-mismatched-confirmation"
+event = "tool.error"
+fields.id = "focused-relevance-mismatched-confirmation-denied"
+fields."tool.failure.reason" = "decision_evidence_incomplete"
+fields."tool.failure.graph.missing_evidence" = "focused_test"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-minimal-mutation"
+event = "tool.end"
+fields.tool = "apply_patch"
+exactly = 1
+
+[[expect.count]]
+required = true
+id = "one-host-submission"
+event = "tool.end"
+fields.tool = "submit_for_pr"
+exactly = 1
+
+[expect.effective_configuration]
+id = "rapid-focused-test-relevance-harness-cadence"
+ci_poll_cadence_secs = 1
+poll_cadence_secs = 1
+mechanical_cadence_secs = 1
+
+[codebase_memory]
+mode = "required"
+index = "background"
+readiness_delay_ms = 750
+fake_mcp_tools = ["search_graph", "search_code", "trace_path", "get_code_snippet", "list_projects", "index_status", "index_repository", "delete_project"]
+model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_search_code", "codebase_memory_trace_path", "codebase_memory_get_code_snippet", "codebase_memory_list_projects", "codebase_memory_index_status"]
+model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
+default_project = "acme/demo"
+actual_project = "normalized-temper-v1-<stable-provider-key>"
+graph_consumption_profile = "feature #1130/#1131; one current-root implementation/caller chain; one empty focused-test traversal; one eligible same-root semantic fallback; one local mismatched typed confirmation; one exact focused_test source consumer; privacy-safe lineage facts; exact repair and host gates"
+global_inventory_forbidden = true
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "checked-in"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Tighten closed fallback eligibility, carry-forward lineage, decision-kind, ordering, source-consumption, provider-count, privacy, or convergence assertions.",
+  "Update generic privacy-safe observability without retaining selectors, roots, source, provider payloads, or traces.",
+]
+requires_new_scenario_or_major_update = [
+  "Allowing a missing or mismatched typed confirmation to create focused-test evidence, reach the provider, or authorize mutation.",
+  "Allowing the fallback and exact source consumer to cross roots or execute out of order.",
+  "Retaining raw prompts, selectors, roots, source, provider output, credentials, host-gate output, or diagnostic traces.",
+  "Replacing the mandatory live Forgejo/Actions/standalone-Temper/Jig topology with a lower-level test.",
+]

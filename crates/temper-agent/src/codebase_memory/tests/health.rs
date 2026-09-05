@@ -16,6 +16,52 @@ fn category(output: &ToolOutput) -> Option<&str> {
 }
 
 #[test]
+fn application_candidate_misses_are_local_but_provider_outages_remain_systemic() {
+    for message in [
+        "No function found with qualified_name",
+        "selected source is unavailable",
+        "unknown symbol candidate",
+    ] {
+        assert_eq!(
+            classify_provider_failure(message),
+            ToolFailureCategory::InvalidModelInput,
+        );
+    }
+    for (message, expected) in [
+        (
+            "provider unavailable for source lookup",
+            ToolFailureCategory::ProviderProtocol,
+        ),
+        (
+            "source index unavailable",
+            ToolFailureCategory::IndexFailure,
+        ),
+        (
+            "provider process unavailable",
+            ToolFailureCategory::ProcessExit,
+        ),
+        (
+            "source transport unavailable",
+            ToolFailureCategory::Transport,
+        ),
+    ] {
+        let category = classify_provider_failure(message);
+        assert_eq!(category, expected);
+        assert!(
+            ToolFailureDiagnostic::codebase_memory(category).fallback_to_conventional_discovery
+        );
+    }
+    let candidate_miss =
+        ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::InvalidModelInput);
+    assert!(!candidate_miss.fallback_to_conventional_discovery);
+    assert!(
+        !candidate_miss
+            .model_message()
+            .contains("conventional discovery")
+    );
+}
+
+#[test]
 fn systemic_failure_opens_every_wrapper_and_a_new_toolset_resets_health() {
     let dir = fake_server_script();
     let workspace = tempfile::tempdir().expect("workspace");
