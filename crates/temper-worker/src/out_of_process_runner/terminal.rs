@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use temper_protocol_activity::FailureCodeV1;
-
 use crate::agent_runner::{AgentRunError, AgentRunOutput};
 use crate::executor::{JobCancellation, TerminalTraceBlocker};
 use crate::trace::{TraceCollector, TraceRun};
@@ -25,7 +23,7 @@ pub(super) async fn finish_and_flush(
     } else {
         match outcome {
             Ok(_) => trace.finish_success(None),
-            Err(error) => trace.finish_failure(FailureCodeV1::ChildProcess, error.class),
+            Err(error) => trace.finish_failure(error.failure_code, error.class),
         }
     };
     match terminal {

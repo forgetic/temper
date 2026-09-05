@@ -618,6 +618,9 @@ mod full_path_model_failure_tests;
 mod full_path_observation;
 
 #[cfg(test)]
+mod full_path_policy_failure_tests;
+
+#[cfg(test)]
 mod full_path_retry_tests;
 
 #[cfg(test)]

@@ -141,6 +141,7 @@ pub(super) async fn agent_failure_outcome(
         class,
         message,
         model_failure,
+        failure_code: _,
     } = error;
     if model_failure.is_some() && (!fence.is_open() || cancellation.is_cancelled()) {
         return cancelled_attempt();

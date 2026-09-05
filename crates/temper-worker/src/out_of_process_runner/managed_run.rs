@@ -9,7 +9,9 @@ use crate::executor::{
 use crate::managed_effect::JoinedBlocking;
 use crate::trace::ActivityEndpoint;
 
-use super::output_files::{first_party_terminal_model_failure, read_operator_transcript};
+use super::output_files::{
+    FirstPartyTerminalFailure, first_party_terminal_failure, read_operator_transcript,
+};
 use super::*;
 
 struct ForgeHostTask {
@@ -713,13 +715,22 @@ impl OutOfProcessRunner {
             Some(code) => {
                 let generic_message =
                     format!("agent command exited with status {code}; stderr tail: {stderr_tail}");
-                if let Some(model_failure) = first_party_terminal_model_failure(
+                match first_party_terminal_failure(
                     self.runtime_limits.is_some(),
                     &terminal_output_path,
                 ) {
-                    return Err(
-                        AgentRunError::transient(generic_message).with_model_failure(model_failure)
-                    );
+                    Some(FirstPartyTerminalFailure::Model(model_failure)) => {
+                        return Err(AgentRunError::transient(generic_message)
+                            .with_model_failure(model_failure));
+                    }
+                    Some(FirstPartyTerminalFailure::Policy(policy_failure)) => {
+                        return Err(AgentRunError::permanent(format!(
+                            "first-party agent terminal policy failure: {}",
+                            policy_failure.reason.as_str()
+                        ))
+                        .with_failure_code(temper_protocol_activity::FailureCodeV1::Policy));
+                    }
+                    None => {}
                 }
                 return Err(AgentRunError::transient(generic_message));
             }

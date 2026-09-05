@@ -104,20 +104,24 @@ fn write_result(result_path: &str, result: &WorkspaceResult) -> Result<(), Strin
         .map_err(|error| format!("write result file {result_path}: {error}"))
 }
 
-/// Writes only the closed, bounded first-party terminal carrier. Non-model
-/// failures intentionally leave no carrier for the worker to consume.
+/// Writes only closed, typed first-party terminal authority. All other errors
+/// intentionally leave no carrier for the worker to consume.
 fn write_terminal_failure(path: &str, error: &CodingAgentError) -> Result<(), String> {
-    let diagnostic = match error {
+    let output = match error {
         CodingAgentError::ModelFailure(diagnostic)
-        | CodingAgentError::ModelUnavailable { diagnostic, .. } => diagnostic,
+        | CodingAgentError::ModelUnavailable { diagnostic, .. } => {
+            AgentTerminalOutputV1::model_failure(protocol_model_failure(diagnostic.as_ref()))
+        }
+        CodingAgentError::DecisionAnchorRecoveryExhausted => {
+            AgentTerminalOutputV1::decision_anchor_recovery_exhausted()
+        }
         _ => return Ok(()),
     };
-    let output = AgentTerminalOutputV1::model_failure(protocol_model_failure(diagnostic.as_ref()));
     output
         .validate()
-        .map_err(|error| format!("validate terminal model failure: {error}"))?;
+        .map_err(|error| format!("validate terminal failure: {error}"))?;
     let bytes = serde_json::to_vec_pretty(&output)
-        .map_err(|error| format!("serialize terminal model failure: {error}"))?;
+        .map_err(|error| format!("serialize terminal failure: {error}"))?;
     std::fs::write(path, bytes)
         .map_err(|error| format!("write terminal output file {path}: {error}"))
 }
@@ -184,9 +188,10 @@ mod tests {
             serde_json::from_slice(&std::fs::read(path).expect("terminal output is readable"))
                 .expect("terminal output parses");
         output.validate().expect("terminal output validates");
-        assert_eq!(output.model_failure.provider, "openai-codex");
-        assert_eq!(output.model_failure.model, "gpt-test");
-        assert!(!output.model_failure.retryable);
+        let failure = output.model_failure.as_ref().expect("model failure");
+        assert_eq!(failure.provider, "openai-codex");
+        assert_eq!(failure.model, "gpt-test");
+        assert!(!failure.retryable);
         let wire = serde_json::to_string(&output).unwrap();
         for forbidden in ["prompt", "raw_response", "credentials", "stderr"] {
             assert!(
@@ -197,15 +202,57 @@ mod tests {
     }
 
     #[test]
-    fn non_model_error_does_not_create_terminal_carrier() {
+    fn decision_anchor_exhaustion_writes_only_the_typed_policy_reason() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("terminal.json");
         write_terminal_failure(
             path.to_str().unwrap(),
-            &CodingAgentError::BudgetExhausted { max_iterations: 7 },
+            &CodingAgentError::DecisionAnchorRecoveryExhausted,
         )
-        .expect("non-model failure is ignored");
-        assert!(!path.exists());
+        .expect("policy terminal output writes");
+
+        let output: AgentTerminalOutputV1 =
+            serde_json::from_slice(&std::fs::read(path).expect("terminal output is readable"))
+                .expect("terminal output parses");
+        output.validate().expect("terminal output validates");
+        assert_eq!(output.model_failure, None);
+        assert_eq!(
+            output.policy_failure.unwrap().reason.as_str(),
+            "decision_anchor_recovery_exhausted"
+        );
+        let wire = serde_json::to_string(&output).unwrap();
+        for forbidden in [
+            "provider",
+            "model",
+            "path",
+            "selector",
+            "argument",
+            "prompt",
+            "stderr",
+            "credential",
+        ] {
+            assert!(
+                !wire.contains(forbidden),
+                "policy carrier leaked {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn untyped_no_product_and_budget_errors_do_not_create_terminal_carriers() {
+        for (name, error) in [
+            (
+                "budget",
+                CodingAgentError::BudgetExhausted { max_iterations: 7 },
+            ),
+            ("no-product", CodingAgentError::NoProduct),
+        ] {
+            let temp = tempfile::tempdir().expect("tempdir");
+            let path = temp.path().join("terminal.json");
+            write_terminal_failure(path.to_str().unwrap(), &error)
+                .expect("untyped failure is ignored");
+            assert!(!path.exists(), "{name} unexpectedly wrote typed authority");
+        }
     }
 
     #[test]
