@@ -9,6 +9,7 @@ pub(super) enum AcceptedEvidence {
     Root,
     Trace,
     Implementation,
+    ImplementationCorrectionInspection,
     ImplementationCorrection,
     Caller,
     FocusedTestRoute,
@@ -132,6 +133,15 @@ impl DecisionAnchorState {
         self.model_guidance.push(guidance);
     }
 
+    pub(super) fn queue_correction_inspection_guidance(&mut self) {
+        let snapshot = self.guidance_snapshot();
+        self.model_guidance.push(snapshot.model_message(
+            ResultDisposition::NonProgress,
+            &BTreeSet::new(),
+            None,
+        ));
+    }
+
     pub(in crate::machine) fn take_model_guidance(&mut self) -> Vec<String> {
         self.handoff_override = None;
         std::mem::take(&mut self.model_guidance)
@@ -181,6 +191,18 @@ impl DecisionAnchorState {
             .map(|action| (binding.clone(), action))
     }
 
+    pub(in crate::machine) fn implementation_correction_decision_pending(&self) -> bool {
+        let Some(AnchorPhase::EnabledComplete(anchors)) = self.phase.as_ref() else {
+            return false;
+        };
+        anchors.implementation_root().is_some_and(|(_, active)| {
+            active.evidence.implementation_correction_available
+                && !active.evidence.implementation_authority_corrected
+                && !self.implementation_correction_attempted
+                && !self.implementation_authority_exercised
+        })
+    }
+
     fn guidance_snapshot(&self) -> GuidanceSnapshot {
         match self.phase.as_ref() {
             Some(AnchorPhase::Root(anchors)) | Some(AnchorPhase::Trail(anchors)) => anchors
@@ -211,8 +233,12 @@ impl DecisionAnchorState {
                         active,
                         RecoveryRoute::Implementation,
                         Vec::new(),
-                        if correction_available {
-                            "pre_mutation_correction"
+                        if correction_available
+                            && !self.implementation_correction_inspection_completed
+                        {
+                            "correction_inspection"
+                        } else if correction_available {
+                            "correction_decision"
                         } else {
                             "complete"
                         },
@@ -340,6 +366,9 @@ impl GuidanceSnapshot {
                 AcceptedEvidence::Root => "root",
                 AcceptedEvidence::Trace => "trace",
                 AcceptedEvidence::Implementation => "implementation",
+                AcceptedEvidence::ImplementationCorrectionInspection => {
+                    "implementation_correction_inspection"
+                }
                 AcceptedEvidence::ImplementationCorrection => "implementation_authority_correction",
                 AcceptedEvidence::Caller => "caller",
                 AcceptedEvidence::FocusedTestRoute => "focused_test_route",
@@ -357,9 +386,14 @@ impl GuidanceSnapshot {
         let remaining = self
             .remaining
             .map_or_else(|| "n/a".to_string(), |remaining| remaining.to_string());
-        let required_next_stage = if self.lifecycle == "pre_mutation_correction" {
+        let required_next_stage = if self.lifecycle == "correction_inspection" {
             format!(
-                "; optional pre-mutation correction stage=[{}]; use it only when retained caller and focused-test evidence show a presented candidate better explains the requested failure, otherwise proceed to the ordinary exact read",
+                "; required correction-inspection checkpoint=[{}]; inspect every candidate in the bounded handoff before choosing implementation authority",
+                self.next_actions[0],
+            )
+        } else if self.lifecycle == "correction_decision" {
+            format!(
+                "; required implementation-authority decision=[{} or retain provisional authority]; explicitly correct to one inspected candidate when it better explains the requested failure, otherwise retain with the ordinary exact read",
                 self.next_actions[0],
             )
         } else if self.next_actions.len() == 1 && !self.complete {
@@ -386,8 +420,10 @@ impl GuidanceSnapshot {
         };
         let completion = if self.complete {
             "; graph exploration=closed; perform one successful ordinary exact read of the selected workspace target now, then make only the matching minimal mutation"
-        } else if self.lifecycle == "pre_mutation_correction" {
-            "; complete typed evidence retained; if a presented typed candidate better explains the focused failure, inspect it and explicitly replace the provisional implementation target before any ordinary read or mutation; otherwise perform the ordinary exact read of the provisional target"
+        } else if self.lifecycle == "correction_inspection" {
+            "; complete typed evidence retained, but provisional implementation authority is not final; the exact ordinary read and mutation remain blocked until every bounded correction candidate is inspected in one checkpoint"
+        } else if self.lifecycle == "correction_decision" {
+            "; bounded correction inspection complete; in a later model turn explicitly correct to one inspected candidate or issue the provisional target's ordinary exact read to retain it; correction, exact read, and mutation cannot share the inspection batch"
         } else if self.lifecycle == "exhausted" {
             "; no compatible provider-derived action remains; stop without a product"
         } else {
@@ -424,7 +460,7 @@ pub(in crate::machine) fn active_root_selector_handoff(
             .collect::<Vec<_>>()
             .join(", ");
         return Some(format!(
-            "[Active-root selector handoff: bounded pre-mutation implementation correction preview=[{} arguments={{\"qualified_name\":\"<copy one candidate reference>\"}}]; explicit correction call=[{} arguments={{\"qualified_name\":\"<copy exactly one candidate reference>\",\"decision_evidence_kind\":\"implementation\"}}]; selector field=qualified_name; typed current-root correction candidates=[{options}]; inspect each presented candidate at most once and, only if its source and the retained caller/focused-test evidence show it better explains the requested failure, issue at most one explicit correction in a later model turn before any ordinary read or mutation; otherwise proceed to the ordinary exact read, which closes correction. A successful correction atomically replaces provisional implementation authority, while every unchosen, sibling-root, unpresented, raw, fabricated, stale, consumed, malformed, wrong-tool, wrong-field, and wrong-purpose value remains non-actionable.]",
+            "[Active-root selector handoff: required bounded implementation correction inspection=[{} arguments={{\"qualified_name\":\"<copy one candidate reference>\"}}]; explicit correction call=[{} arguments={{\"qualified_name\":\"<copy exactly one candidate reference>\",\"decision_evidence_kind\":\"implementation\"}}]; selector field=qualified_name; typed current-root correction candidates=[{options}]; inspect every presented candidate exactly once without decision_evidence_kind, in one bounded checkpoint whose parallel results may complete in either order. Do not issue an ordinary read, mutation, or correction in the inspection batch. After all preview results complete, make one explicit later-turn decision: correct at most once to one inspected candidate if it better explains the retained caller/focused-test evidence, or retain provisional authority with its exact ordinary read. A successful correction atomically replaces provisional implementation authority, while every unchosen, sibling-root, unpresented, raw, fabricated, stale, consumed, malformed, wrong-tool, wrong-field, and wrong-purpose value remains non-actionable.]",
             action.tool.public_name(),
             action.tool.public_name(),
         ));

@@ -69,8 +69,79 @@ fn complete_state_with_correction() -> DecisionAnchorState {
     state
 }
 
+fn complete_correction_inspection(state: &mut DecisionAnchorState, turn: usize) {
+    let preview = call("correction-inspection", "codebase_memory_get_code_snippet");
+    let admission = LineageAdmissionOutcome::Eligible(
+        EligibleLineageAdmission::implementation_authority_correction(ROOT.to_string(), true)
+            .unwrap()
+            .with_implementation_correction_inspection_complete(),
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(&preview, turn, Some(&admission)),
+        None,
+    );
+    assert_eq!(
+        state.on_tool_finished(
+            "correction-inspection",
+            "codebase_memory_get_code_snippet",
+            &output(
+                "codebase_memory_get_code_snippet",
+                ROOT,
+                DecisionAnchorLineageStageV1::CarryForward,
+            ),
+        ),
+        DecisionAnchorTransition::Unchanged,
+    );
+    assert_eq!(
+        state.active_recovery_action().map(|(_, action)| action),
+        Some(GraphRecoveryActionV1::implementation_authority_correction()),
+    );
+}
+
 #[test]
-fn ordinary_read_and_same_batch_read_close_pre_mutation_correction() {
+fn correction_inspection_is_required_before_retaining_or_correcting_authority() {
+    let correction_call = source_call("correction", DecisionEvidenceKindV1::Implementation);
+    let correction_admission = LineageAdmissionOutcome::Eligible(
+        EligibleLineageAdmission::implementation_authority_correction(ROOT.to_string(), false)
+            .unwrap(),
+    );
+    let mut state = complete_state_with_correction();
+
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("premature-read", "read"),
+            5,
+            Some(&read_target(TARGET_A)),
+        ),
+        Some(ToolCallDenial::DecisionAnchorCorrectionInspection),
+    );
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &correction_call,
+            6,
+            Some(&correction_admission),
+        ),
+        completed_graph_denial(),
+    );
+    assert_eq!(
+        state.active_recovery_action().map(|(_, action)| action),
+        Some(GraphRecoveryActionV1::implementation_authority_correction()),
+    );
+
+    complete_correction_inspection(&mut state, 7);
+    assert_eq!(
+        state.on_tool_dispatched_with_admission(
+            &correction_call,
+            8,
+            Some(&correction_admission),
+        ),
+        None,
+        "one inspected candidate may be selected as the atomic correction",
+    );
+}
+
+#[test]
+fn ordinary_read_and_same_batch_read_close_correction_after_inspection() {
     let correction_call = source_call("correction", DecisionEvidenceKindV1::Implementation);
     let correction_admission = LineageAdmissionOutcome::Eligible(
         EligibleLineageAdmission::implementation_authority_correction(ROOT.to_string(), false)
@@ -78,10 +149,11 @@ fn ordinary_read_and_same_batch_read_close_pre_mutation_correction() {
     );
 
     let mut after_read = complete_state_with_correction();
+    complete_correction_inspection(&mut after_read, 5);
     assert_eq!(
         after_read.on_tool_dispatched_with_targets(
             &call("ordinary-read", "read"),
-            5,
+            6,
             Some(&read_target(TARGET_A)),
         ),
         None,
@@ -90,18 +162,19 @@ fn ordinary_read_and_same_batch_read_close_pre_mutation_correction() {
     assert_eq!(
         after_read.on_tool_dispatched_with_admission(
             &correction_call,
-            6,
+            7,
             Some(&correction_admission),
         ),
         completed_graph_denial(),
-        "an exercised ordinary read closes correction before provider dispatch",
+        "an exercised ordinary read retains provisional authority and closes correction",
     );
 
     let mut same_batch = complete_state_with_correction();
+    complete_correction_inspection(&mut same_batch, 5);
     assert_eq!(
         same_batch.on_tool_batch_dispatched_with_admissions_and_targets(
             &[correction_call, call("same-batch-read", "read")],
-            5,
+            6,
             &[Some(correction_admission), None],
             &[None, Some(read_target(TARGET_A))],
         ),
@@ -110,4 +183,3 @@ fn ordinary_read_and_same_batch_read_close_pre_mutation_correction() {
     );
     assert_eq!(same_batch.active_recovery_action(), None);
 }
-

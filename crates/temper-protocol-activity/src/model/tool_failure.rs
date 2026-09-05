@@ -99,6 +99,7 @@ pub enum ToolFailureReasonV1 {
     UnknownTool,
     InvalidArguments,
     PolicyPrecondition,
+    CorrectionInspectionRequired,
     AccessDenied,
     ToolReportedFailure,
     ToolExecutionError,
@@ -126,6 +127,7 @@ impl ToolFailureReasonV1 {
             Self::UnknownTool => "unknown_tool",
             Self::InvalidArguments => "invalid_arguments",
             Self::PolicyPrecondition => "policy_precondition",
+            Self::CorrectionInspectionRequired => "correction_inspection_required",
             Self::AccessDenied => "access_denied",
             Self::ToolReportedFailure => "tool_reported_failure",
             Self::ToolExecutionError => "tool_execution_error",
@@ -156,6 +158,9 @@ impl ToolFailureReasonV1 {
             }
             Self::PolicyPrecondition => {
                 "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after either its qualifying graph source result has completed or conventional fallback has been released, then retry the mutation"
+            }
+            Self::CorrectionInspectionRequired => {
+                "ordinary exact read blocked: inspect every candidate in the bounded implementation-correction handoff without an evidence purpose, then explicitly retain the provisional target with its exact ordinary read or correct to one inspected candidate in a later model turn"
             }
             Self::AccessDenied => {
                 "tool execution was denied by policy; use only authorized resources or satisfy the required precondition"
@@ -209,7 +214,9 @@ impl ToolFailureReasonV1 {
             | Self::InvalidModelInput
             | Self::RepeatedNonRetryable
             | Self::RetryBudgetExhausted => ToolRetryDispositionV1::CorrectInvocation,
-            Self::PolicyPrecondition | Self::AccessDenied => ToolRetryDispositionV1::SatisfyPolicy,
+            Self::PolicyPrecondition | Self::CorrectionInspectionRequired | Self::AccessDenied => {
+                ToolRetryDispositionV1::SatisfyPolicy
+            }
             Self::ExplorationClosed
             | Self::ConfigurationStartup
             | Self::IndexFailure
@@ -247,7 +254,7 @@ impl ToolFailureReasonV1 {
                 Self::UnknownTool | Self::InvalidArguments
             ) | (
                 ToolFailureCategoryV1::PolicyDenial,
-                Self::PolicyPrecondition | Self::AccessDenied
+                Self::PolicyPrecondition | Self::CorrectionInspectionRequired | Self::AccessDenied
             ) | (
                 ToolFailureCategoryV1::ExecutionFailure,
                 Self::ToolReportedFailure | Self::ToolExecutionError

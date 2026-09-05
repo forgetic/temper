@@ -38,6 +38,9 @@ pub(super) fn map_tool_failure(value: ToolFailureDiagnostic) -> ToolFailureDiagn
         ToolFailureReason::UnknownTool => ToolFailureReasonV1::UnknownTool,
         ToolFailureReason::InvalidArguments => ToolFailureReasonV1::InvalidArguments,
         ToolFailureReason::PolicyPrecondition => ToolFailureReasonV1::PolicyPrecondition,
+        ToolFailureReason::CorrectionInspectionRequired => {
+            ToolFailureReasonV1::CorrectionInspectionRequired
+        }
         ToolFailureReason::AccessDenied => ToolFailureReasonV1::AccessDenied,
         ToolFailureReason::ToolReportedFailure => ToolFailureReasonV1::ToolReportedFailure,
         ToolFailureReason::ToolExecutionError => ToolFailureReasonV1::ToolExecutionError,

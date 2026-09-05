@@ -30,6 +30,7 @@ mod progress;
 mod settlement;
 mod source_evidence;
 
+use exact_read::SourceTargetAuthority;
 use output::{
     CandidateRecoveryDisposition, anchor_output, candidate_recovery_disposition,
     graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
@@ -44,6 +45,9 @@ use source_evidence::{DecisionGap, RecoveryRoute, SourceEvidence};
 pub const SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: &str = "temper_decision_anchor_lineage_v1";
 /// Fixed, model-visible explanation for a locally denied mutation.
 pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after either its qualifying graph source result has completed or conventional fallback has been released, then retry the mutation";
+/// Fixed, model-visible explanation for an exact read attempted before the
+/// bounded correction inspection has completed.
+pub const DECISION_ANCHOR_CORRECTION_INSPECTION_MESSAGE: &str = "ordinary exact read blocked: inspect every candidate in the bounded implementation-correction handoff without an evidence purpose, then explicitly retain the provisional target with its exact ordinary read or correct to one inspected candidate in a later model turn";
 /// Fixed, privacy-safe instruction queued exactly once when graph evidence is complete.
 pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration, use the ordinary read tool to read the exact workspace target selected by the qualifying graph source result, and only then mutate that matching target.";
 /// Fixed, privacy-safe result for graph calls denied after convergence or exhaustion.
@@ -87,6 +91,7 @@ pub(super) struct DecisionAnchorState {
     pending_conventional_reads: BTreeMap<String, EligibleWorkspaceTarget>,
     conventional_read_authorities: Vec<EligibleWorkspaceTarget>,
     implementation_correction_attempted: bool,
+    implementation_correction_inspection_completed: bool,
     implementation_authority_exercised: bool,
 }
 
@@ -140,15 +145,6 @@ struct GapRecovery {
     remaining_pivots: usize,
 }
 
-#[derive(Clone)]
-struct SourceTargetAuthority {
-    target: EligibleWorkspaceTarget,
-    root_binding: String,
-    completed_turn: usize,
-    completed_order: u64,
-    completed_batch: u64,
-}
-
 struct PendingExactRead {
     sources: Vec<SourceTargetAuthority>,
     dispatched_turn: usize,
@@ -174,6 +170,8 @@ struct PendingCodebaseCall {
     recovery_gap: Option<DecisionGap>,
     admitted_root: Option<String>,
     admission_checked: bool,
+    implementation_correction_preview: bool,
+    completes_implementation_correction_inspection: bool,
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -193,6 +191,7 @@ struct FinishedCodebaseCall<'a> {
     name: &'a str,
     output: &'a ToolOutput,
     source_target: Option<&'a TargetAdmissionOutcome>,
+    succeeded: bool,
 }
 
 struct AnchorOutput {
@@ -246,6 +245,7 @@ impl DecisionAnchorState {
             pending_conventional_reads: BTreeMap::new(),
             conventional_read_authorities: Vec::new(),
             implementation_correction_attempted: false,
+            implementation_correction_inspection_completed: false,
             implementation_authority_exercised: false,
         })
     }
@@ -372,7 +372,7 @@ impl DecisionAnchorState {
                 active_route_progressed |= selected_active_root.as_ref() == Some(root);
                 self.mark_route_progress(id);
             }
-            let mut accepted_source = false;
+            let mut accepted_source = None;
             match output.tool {
                 GraphCorrelationToolV1::TracePath
                     if call.recovery_gap
@@ -403,7 +403,7 @@ impl DecisionAnchorState {
                             anchor
                                 .evidence
                                 .record_decision_kinds([DecisionEvidenceKindV1::Implementation]);
-                            accepted_source = true;
+                            accepted_source = Some(DecisionEvidenceKindV1::Implementation);
                             self.mark_accepted(id, AcceptedEvidence::Implementation);
                         }
                         Some(DecisionEvidenceKindV1::Caller)
@@ -414,7 +414,7 @@ impl DecisionAnchorState {
                             anchor
                                 .evidence
                                 .record_decision_kinds([DecisionEvidenceKindV1::Caller]);
-                            accepted_source = true;
+                            accepted_source = Some(DecisionEvidenceKindV1::Caller);
                             self.mark_accepted(id, AcceptedEvidence::Caller);
                         }
                         Some(DecisionEvidenceKindV1::FocusedTest)
@@ -423,7 +423,7 @@ impl DecisionAnchorState {
                             anchor
                                 .evidence
                                 .record_decision_kinds([DecisionEvidenceKindV1::FocusedTest]);
-                            accepted_source = true;
+                            accepted_source = Some(DecisionEvidenceKindV1::FocusedTest);
                             self.mark_accepted(id, AcceptedEvidence::FocusedTest);
                         }
                         Some(_) | None => {}
@@ -463,8 +463,8 @@ impl DecisionAnchorState {
                         );
                 }
             }
-            if accepted_source {
-                self.record_source_authority(root, call, *source_target);
+            if let Some(evidence_kind) = accepted_source {
+                self.record_source_authority(root, call, evidence_kind, *source_target);
             }
             let root_progressed = anchor.evidence.progress_count() > before;
             evidence_progressed |= root_progressed;

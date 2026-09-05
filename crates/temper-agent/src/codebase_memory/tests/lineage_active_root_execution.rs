@@ -185,6 +185,11 @@ fn maybe_local_failure(
         } if call.id == id => Some(ToolFailureDiagnostic::graph_exploration(details.clone())),
         AgentRequest::RunTool {
             call,
+            denial: Some(ToolCallDenial::DecisionAnchorCorrectionInspection),
+            ..
+        } if call.id == id => Some(ToolFailureDiagnostic::correction_inspection_denial()),
+        AgentRequest::RunTool {
+            call,
             rejection: Some(failure),
             ..
         } if call.id == id => Some(failure.clone()),

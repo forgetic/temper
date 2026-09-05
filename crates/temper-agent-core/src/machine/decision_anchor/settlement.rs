@@ -14,7 +14,7 @@ impl DecisionAnchorState {
         self.settle_exact_reads(completed);
         let finished = completed
             .iter()
-            .filter_map(|(id, name, output, source_target, _)| {
+            .filter_map(|(id, name, output, source_target, succeeded)| {
                 let call_key = GraphCorrelationV1::target_digest(id)?;
                 self.calls
                     .remove(&call_key)
@@ -24,6 +24,7 @@ impl DecisionAnchorState {
                         name,
                         output,
                         source_target: *source_target,
+                        succeeded: *succeeded,
                     })
             })
             .collect::<Vec<_>>();

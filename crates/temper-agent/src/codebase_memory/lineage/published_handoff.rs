@@ -76,7 +76,7 @@ impl DecisionAnchorLineageRegistry {
         arguments: &Value,
         active_root: Option<&str>,
     ) -> Option<EligibleLineageAdmission> {
-        let (root_binding, reference, correction) = {
+        let (root_binding, reference, correction, references) = {
             let handoff = self
                 .published_handoff
                 .lock()
@@ -94,23 +94,29 @@ impl DecisionAnchorLineageRegistry {
                 handoff.root_binding.clone(),
                 reference,
                 handoff.action == GraphRecoveryActionV1::implementation_authority_correction(),
+                handoff.references.clone(),
             )
         };
-        self.lineages
+        let mut lineages = self
+            .lineages
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .admit_implementation_preview(&root_binding, &reference)
-            .then(|| {
-                if correction {
-                    EligibleLineageAdmission::implementation_authority_correction(
-                        root_binding,
-                        true,
-                    )
-                } else {
-                    EligibleLineageAdmission::implementation_candidate_preview(root_binding)
-                }
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !lineages.admit_implementation_preview(&root_binding, &reference) {
+            return None;
+        }
+        if correction {
+            let complete =
+                lineages.implementation_correction_previews_complete(&root_binding, &references);
+            let admission =
+                EligibleLineageAdmission::implementation_authority_correction(root_binding, true)?;
+            Some(if complete {
+                admission.with_implementation_correction_inspection_complete()
+            } else {
+                admission
             })
-            .flatten()
+        } else {
+            EligibleLineageAdmission::implementation_candidate_preview(root_binding)
+        }
     }
 
     pub(super) fn published_implementation_correction_admission(
@@ -119,22 +125,34 @@ impl DecisionAnchorLineageRegistry {
         arguments: &Value,
         active_root: Option<&str>,
     ) -> Option<EligibleLineageAdmission> {
-        let root_binding = {
+        let (root_binding, reference) = {
             let handoff = self
                 .published_handoff
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let handoff = handoff.as_ref()?;
-            (handoff.action == GraphRecoveryActionV1::implementation_authority_correction()
-                && handoff.action.tool.public_name() == tool_name
-                && active_root.is_none_or(|root| root == handoff.root_binding)
-                && arguments.get("decision_evidence_kind").is_some()
-                && handoff
-                    .references
-                    .iter()
-                    .any(|reference| action_matches(handoff.action, reference, arguments, None)))
-            .then(|| handoff.root_binding.clone())?
+            if handoff.action != GraphRecoveryActionV1::implementation_authority_correction()
+                || handoff.action.tool.public_name() != tool_name
+                || active_root.is_some_and(|root| root != handoff.root_binding)
+                || arguments.get("decision_evidence_kind").is_none()
+            {
+                return None;
+            }
+            let reference = handoff
+                .references
+                .iter()
+                .find(|reference| action_matches(handoff.action, reference, arguments, None))?
+                .clone();
+            (handoff.root_binding.clone(), reference)
         };
+        if !self
+            .lineages
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .implementation_correction_was_previewed(&root_binding, &reference)
+        {
+            return None;
+        }
         EligibleLineageAdmission::implementation_authority_correction(root_binding, false)
     }
 

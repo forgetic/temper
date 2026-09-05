@@ -203,7 +203,7 @@ impl DecisionAnchorState {
             })
             .collect::<Vec<_>>();
         for (id, call, expected, source_target) in accepted_sources {
-            self.record_source_authority(&active_root, call, source_target);
+            self.record_source_authority(&active_root, call, expected, source_target);
             self.mark_accepted(id, AcceptedEvidence::from(expected));
         }
         let active = anchors

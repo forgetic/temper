@@ -47,6 +47,44 @@ impl DecisionAnchorLineages {
         true
     }
 
+    pub(super) fn implementation_correction_previews_complete(
+        &self,
+        root_binding: &str,
+        references: &[String],
+    ) -> bool {
+        !references.is_empty()
+            && references.iter().all(|reference| {
+                self.recovery_reference_selectors
+                    .get(reference)
+                    .is_some_and(|candidate| {
+                        candidate.root_binding == root_binding
+                            && candidate.purpose
+                                == RecoverySelectorPurpose::ImplementationCorrection
+                            && candidate.correction_supported
+                            && candidate.presented
+                            && candidate.previewed
+                            && candidate.state == RecoverySelectorState::Available
+                    })
+            })
+    }
+
+    pub(super) fn implementation_correction_was_previewed(
+        &self,
+        root_binding: &str,
+        reference: &str,
+    ) -> bool {
+        self.recovery_reference_selectors
+            .get(reference)
+            .is_some_and(|candidate| {
+                candidate.root_binding == root_binding
+                    && candidate.purpose == RecoverySelectorPurpose::ImplementationCorrection
+                    && candidate.correction_supported
+                    && candidate.presented
+                    && candidate.previewed
+                    && candidate.state == RecoverySelectorState::Available
+            })
+    }
+
     pub(super) fn implementation_preview_selector<'a>(
         &'a self,
         tool_name: &str,
