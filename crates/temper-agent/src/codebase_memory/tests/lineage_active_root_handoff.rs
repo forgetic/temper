@@ -246,13 +246,15 @@ fn run_active_root_handoff(reverse_completion: bool, exhaust_active_candidate: b
 
     let action = GraphRecoveryActionV1::for_evidence(GraphRecoveryEvidenceKindV1::Implementation);
     assert!(
-        registry
-            .active_root_recovery_selector(&sibling.root_binding, action)
-            .is_some(),
+        !registry
+            .active_root_recovery_selectors(&sibling.root_binding, action)
+            .is_empty(),
         "a sibling candidate remains available but cannot authorize the active root",
     );
-    let selected_candidate = registry
-        .active_root_recovery_selector(&active.root_binding, action)
+    let selected_candidates =
+        registry.active_root_recovery_selectors(&active.root_binding, action);
+    let selected_candidate = selected_candidates
+        .first()
         .expect("the active root retains its rank-6 reference after sibling registration")
         .as_public_selector()
         .to_string();
@@ -272,8 +274,8 @@ fn run_active_root_handoff(reverse_completion: bool, exhaust_active_candidate: b
             .expect("the selected active candidate is closed");
         assert!(
             registry
-                .active_root_recovery_selector(&active.root_binding, action)
-                .is_none(),
+                .active_root_recovery_selectors(&active.root_binding, action)
+                .is_empty(),
             "incapable active alternates remain fail closed",
         );
     }

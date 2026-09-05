@@ -346,13 +346,23 @@ fn collect_result<C: CandidateCollection>(value: &Value, candidates: &mut C) -> 
     match value {
         Value::Array(values) => {
             for value in values {
+                candidates.begin_provider_result(provider_result_is_test(value)?);
                 collect_result_item(value, candidates)?;
             }
         }
-        Value::Object(values) => collect_result_record(values, candidates)?,
+        Value::Object(values) => {
+            candidates.classify_provider_result(provider_result_is_test(value)?);
+            collect_result_record(values, candidates)?;
+        }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => return None,
     }
     candidates.within_result_limit().then_some(())
+}
+
+fn provider_result_is_test(value: &Value) -> Option<bool> {
+    value.as_object().map_or(Some(false), |record| {
+        focused_test::provider_record_test_classification(record).map(|(_, is_test)| is_test)
+    })
 }
 
 fn collect_result_item<C: CandidateCollection>(value: &Value, candidates: &mut C) -> Option<()> {

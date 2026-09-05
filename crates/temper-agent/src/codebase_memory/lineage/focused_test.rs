@@ -174,6 +174,8 @@ pub(super) fn source_confirms_exact_test(
                 provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
                 value: selector.value.clone(),
                 provider_value: selector.value.clone(),
+                provider_result_order: 0,
+                provider_result_is_test: true,
             })
     })
 }
@@ -227,42 +229,9 @@ fn collect_focused_test_result(
             }
         }
         Value::Object(values) => {
-            let test_fields = ["is_test", "isTest"]
-                .into_iter()
-                .filter_map(|field| values.get(field))
-                .collect::<Vec<_>>();
-            let path_classifications = ["file_path", "filePath", "source_path", "sourcePath"]
-                .into_iter()
-                .filter_map(|field| values.get(field))
-                .map(|value| value.as_str().map(provider_classifies_test_path))
-                .collect::<Option<BTreeSet<_>>>()?;
-            let explicit_classification = if test_fields.is_empty() {
-                None
-            } else {
-                let classifications = test_fields
-                    .into_iter()
-                    .map(Value::as_bool)
-                    .collect::<Option<BTreeSet<_>>>()?;
-                if classifications.len() != 1 {
-                    return None;
-                }
-                classifications.first().copied()
-            };
-            let path_classification = if path_classifications.is_empty() {
-                None
-            } else {
-                if path_classifications.len() != 1 {
-                    return None;
-                }
-                path_classifications.first().copied()
-            };
-            if explicit_classification.is_some() || path_classification == Some(true) {
+            let (has_classification, is_test) = provider_record_test_classification(values)?;
+            if has_classification {
                 *has_test_classification = true;
-                let is_test =
-                    explicit_classification.unwrap_or(false) || path_classification == Some(true);
-                if explicit_classification == Some(false) && path_classification == Some(true) {
-                    return None;
-                }
                 if is_test {
                     collect_direct_symbol(values, candidates)?;
                     collect_direct_exact_source_candidates(values, exact_source_candidates)?;
@@ -303,6 +272,47 @@ fn collect_focused_test_result(
     }
     (candidates.len() <= MAX_RESULT_TARGETS && exact_source_candidates.len() <= MAX_RESULT_TARGETS)
         .then_some(())
+}
+
+pub(super) fn provider_record_test_classification(
+    values: &serde_json::Map<String, Value>,
+) -> Option<(bool, bool)> {
+    let test_fields = ["is_test", "isTest"]
+        .into_iter()
+        .filter_map(|field| values.get(field))
+        .collect::<Vec<_>>();
+    let path_classifications = ["file_path", "filePath", "source_path", "sourcePath"]
+        .into_iter()
+        .filter_map(|field| values.get(field))
+        .map(|value| value.as_str().map(provider_classifies_test_path))
+        .collect::<Option<BTreeSet<_>>>()?;
+    let explicit_classification = if test_fields.is_empty() {
+        None
+    } else {
+        let classifications = test_fields
+            .into_iter()
+            .map(Value::as_bool)
+            .collect::<Option<BTreeSet<_>>>()?;
+        if classifications.len() != 1 {
+            return None;
+        }
+        classifications.first().copied()
+    };
+    let path_classification = if path_classifications.is_empty() {
+        None
+    } else {
+        if path_classifications.len() != 1 {
+            return None;
+        }
+        path_classifications.first().copied()
+    };
+    if explicit_classification == Some(false) && path_classification == Some(true) {
+        return None;
+    }
+    Some((
+        explicit_classification.is_some() || path_classification == Some(true),
+        explicit_classification.unwrap_or(false) || path_classification == Some(true),
+    ))
 }
 
 fn provider_classifies_test_path(value: &str) -> bool {
@@ -362,6 +372,8 @@ fn collect_direct_exact_source_candidates(
             provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
             provider_value: identity.clone(),
             value: identity,
+            provider_result_order: 0,
+            provider_result_is_test: true,
         });
     }
     Some(())

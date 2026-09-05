@@ -103,14 +103,32 @@ fn oversized_search_graph_projects_provider_order_and_admits_the_exact_source_ch
         .map(|(_, value)| value.to_string())
         .collect::<Vec<_>>();
     assert_eq!(implementation_references.len(), 4);
-    let selected_reference = lineages
-        .active_root_recovery_selector(
-            &root.root_binding,
-            temper_protocol_activity::GraphRecoveryActionV1::for_evidence(
-                temper_protocol_activity::GraphRecoveryEvidenceKindV1::Implementation,
-            ),
-        )
-        .expect("the active root has one deterministic implementation continuation");
+    let unpresented_reference = lineages
+        .unpresented_implementation_recovery_selector_for_test(&root.root_binding)
+        .expect("the projected root retains candidates beyond the visible menu");
+    assert!(!guidance.contains(unpresented_reference));
+    assert_eq!(
+        lineages.resolve_for_active_root(
+            GraphCorrelationToolV1::GetCodeSnippet.public_name(),
+            &serde_json::json!({
+                "qualified_name": unpresented_reference,
+                "decision_evidence_kind": "implementation"
+            }),
+            Some(&root.root_binding),
+        ),
+        LineageAdmissionOutcome::Ineligible(LineageAdmissionStatus::MalformedSelector),
+        "an internally retained but unpresented provider reference remains fail closed",
+    );
+    let selected_references = lineages.active_root_recovery_selectors(
+        &root.root_binding,
+        temper_protocol_activity::GraphRecoveryActionV1::for_evidence(
+            temper_protocol_activity::GraphRecoveryEvidenceKindV1::Implementation,
+        ),
+    );
+    let selected_reference = selected_references
+        .first()
+        .copied()
+        .expect("the active root has bounded implementation continuations");
     assert_eq!(selected_reference, implementation_references[0]);
     for private in [
         "zeta_worker",
@@ -525,6 +543,7 @@ fn candidate_miss_keeps_only_root_local_alternatives_without_authority() {
     let retry_guidance = retry.guidance.expect("one root-local alternative remains");
     assert!(!retry_guidance.contains(&references[0]));
     assert!(retry_guidance.contains(&references[1]));
+    assert!(retry_guidance.contains("provider_result_order=2"));
 
     let second = expand(&mut lineages, &references[1]);
     let exhausted = lineages

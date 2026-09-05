@@ -6,18 +6,19 @@ pub(super) fn implementation_root_candidates(
     candidates: &[Candidate],
     focused_tests: Option<&BTreeSet<Candidate>>,
 ) -> Vec<Candidate> {
-    let Some(focused_tests) = focused_tests else {
-        return candidates.to_vec();
-    };
     candidates
         .iter()
+        .filter(|candidate| !candidate.provider_result_is_test)
         .filter(|candidate| {
-            let Some(candidate_digests) = canonical_target_digests(&candidate.value) else {
-                return false;
-            };
-            focused_tests.iter().all(|focused_test| {
-                canonical_target_digests(&focused_test.value)
-                    .is_none_or(|focused_digests| candidate_digests.is_disjoint(&focused_digests))
+            focused_tests.is_none_or(|focused_tests| {
+                let Some(candidate_digests) = canonical_target_digests(&candidate.value) else {
+                    return false;
+                };
+                focused_tests.iter().all(|focused_test| {
+                    canonical_target_digests(&focused_test.value).is_none_or(|focused_digests| {
+                        candidate_digests.is_disjoint(&focused_digests)
+                    })
+                })
             })
         })
         .cloned()
@@ -192,6 +193,11 @@ impl DecisionAnchorLineages {
                                     selector.kind
                                 }
                             }),
+                        provider_result_order: candidate
+                            .map(|candidate| candidate.provider_result_order)
+                            .unwrap_or_default(),
+                        provider_result_is_test: candidate
+                            .is_some_and(|candidate| candidate.provider_result_is_test),
                         value: selector.value.clone(),
                         provider_value: candidate
                             .map(|candidate| candidate.provider_value.clone())

@@ -137,7 +137,11 @@ fn independent_roots_reply(view: &RequestView) -> Reply {
                 serde_json::json!({"query": "renamed replay shard ownership regression"}),
             ),
         ]),
-        2 => source_reply("implementation", IMPLEMENTATION, "implementation"),
+        2 => source_reply(
+            "implementation",
+            &active_handoff_candidate(view, 1),
+            "implementation",
+        ),
         3 => tool_reply(
             "trace",
             "codebase_memory_trace_path",
@@ -242,6 +246,22 @@ fn messages_contain(view: &RequestView, needle: &str) -> bool {
     view.messages
         .iter()
         .any(|message| message.content.contains(needle))
+}
+
+fn active_handoff_candidate(view: &RequestView, index: usize) -> String {
+    let label = format!("candidate_{index}=");
+    view.messages
+        .iter()
+        .rev()
+        .find_map(|message| {
+            message
+                .content
+                .split_once(&label)
+                .and_then(|(_, value)| value.split([',', ']', ' ']).next())
+                .filter(|reference| reference.starts_with("temper-recovery-selector:"))
+                .map(str::to_string)
+        })
+        .expect("active-root candidate handoff")
 }
 
 fn seed_route_target(checkout: &TempCheckout) {

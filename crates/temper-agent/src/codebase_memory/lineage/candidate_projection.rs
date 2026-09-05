@@ -9,6 +9,10 @@ pub(super) struct Candidate {
     pub(super) value: String,
     /// The exact provider spelling is not part of candidate identity.
     pub(super) provider_value: String,
+    /// One-based traversal order of the containing provider result record.
+    pub(super) provider_result_order: usize,
+    /// Provider metadata classifies the containing result as test-only.
+    pub(super) provider_result_is_test: bool,
 }
 
 impl PartialEq for Candidate {
@@ -141,11 +145,14 @@ fn insert<C: CandidateCollection>(
     // They are equivalent representations of the same result, not ambiguous
     // independently returned candidates. The registry still rejects a
     // selector that later appears under a distinct root.
+    let provider_result_order = candidates.provider_result_order();
     candidates.insert_candidate(Candidate {
         kind: target_kind,
         provider_kind: source_kind,
         value,
         provider_value,
+        provider_result_order,
+        provider_result_is_test: candidates.provider_result_is_test(),
     });
     Some(())
 }
@@ -161,11 +168,21 @@ struct OrderedCandidateProjection {
     candidates: BTreeSet<Candidate>,
     provider_order: Vec<Candidate>,
     projected: bool,
+    provider_result_order: usize,
+    provider_result_is_test: bool,
 }
 
 pub(super) trait CandidateCollection {
     fn insert_candidate(&mut self, candidate: Candidate);
     fn within_result_limit(&self) -> bool;
+    fn begin_provider_result(&mut self, _is_test: bool) {}
+    fn classify_provider_result(&mut self, _is_test: bool) {}
+    fn provider_result_order(&self) -> usize {
+        0
+    }
+    fn provider_result_is_test(&self) -> bool {
+        false
+    }
 }
 
 impl CandidateCollection for BTreeMap<Candidate, u8> {
@@ -243,5 +260,22 @@ impl CandidateCollection for OrderedCandidateProjection {
 
     fn within_result_limit(&self) -> bool {
         true
+    }
+
+    fn begin_provider_result(&mut self, is_test: bool) {
+        self.provider_result_order += 1;
+        self.provider_result_is_test = is_test;
+    }
+
+    fn classify_provider_result(&mut self, is_test: bool) {
+        self.provider_result_is_test = is_test;
+    }
+
+    fn provider_result_order(&self) -> usize {
+        self.provider_result_order.max(1)
+    }
+
+    fn provider_result_is_test(&self) -> bool {
+        self.provider_result_is_test
     }
 }

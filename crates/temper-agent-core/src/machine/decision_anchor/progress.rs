@@ -366,28 +366,69 @@ impl GuidanceSnapshot {
 
 pub(in crate::machine) fn active_root_selector_handoff(
     action: GraphRecoveryActionV1,
-    selector: &OpaqueRecoverySelectorReference,
+    selectors: &[OpaqueRecoverySelectorReference],
 ) -> Option<String> {
-    if !action.is_valid() {
+    const MAX_SELECTOR_MENU: usize = 4;
+
+    if !action.is_valid() || selectors.is_empty() || selectors.len() > MAX_SELECTOR_MENU {
         return None;
     }
-    let reference = selector.as_public_selector();
-    let (selector_field, arguments) = match (action.tool, action.selector_kind) {
-        (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => (
-            "qualified_name",
-            format!("{{\"qualified_name\":\"{reference}\"}}"),
-        ),
-        (GraphCorrelationToolV1::TracePath, DecisionAnchorTargetKindV1::FunctionName) => (
-            "function_name",
-            format!(
-                "{{\"function_name\":\"{reference}\",\"mode\":\"calls\",\"direction\":\"inbound\",\"include_tests\":{}}}",
-                action.include_tests,
+    let references = selectors
+        .iter()
+        .map(OpaqueRecoverySelectorReference::as_public_selector)
+        .collect::<Vec<_>>();
+    if references.iter().copied().collect::<BTreeSet<_>>().len() != selectors.len() {
+        return None;
+    }
+    if references.len() == 1 {
+        let reference = references[0];
+        let (selector_field, arguments) = match (action.tool, action.selector_kind) {
+            (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => {
+                (
+                    "qualified_name",
+                    format!("{{\"qualified_name\":\"{reference}\"}}"),
+                )
+            }
+            (GraphCorrelationToolV1::TracePath, DecisionAnchorTargetKindV1::FunctionName) => (
+                "function_name",
+                format!(
+                    "{{\"function_name\":\"{reference}\",\"mode\":\"calls\",\"direction\":\"inbound\",\"include_tests\":{}}}",
+                    action.include_tests,
+                ),
             ),
-        ),
+            _ => return None,
+        };
+        return Some(format!(
+            "[Active-root selector handoff: required next call=[{} arguments={}]; selector field={selector_field}; exactly one active-root-bound opaque reference is authorized; provider-result-local sibling and alternate references are not actionable; issue exactly this one call in the next model turn.]",
+            action.tool.public_name(),
+            arguments,
+        ));
+    }
+    let selector_field = match (action.tool, action.selector_kind) {
+        (GraphCorrelationToolV1::GetCodeSnippet, DecisionAnchorTargetKindV1::QualifiedName) => {
+            "qualified_name"
+        }
+        (GraphCorrelationToolV1::TracePath, DecisionAnchorTargetKindV1::FunctionName) => {
+            "function_name"
+        }
         _ => return None,
     };
+    let options = references
+        .iter()
+        .enumerate()
+        .map(|(index, reference)| format!("candidate_{}={reference}", index + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let arguments = if action.tool == GraphCorrelationToolV1::GetCodeSnippet {
+        "{\"qualified_name\":\"<copy exactly one candidate reference>\"}".to_string()
+    } else {
+        format!(
+            "{{\"function_name\":\"<copy exactly one candidate reference>\",\"mode\":\"calls\",\"direction\":\"inbound\",\"include_tests\":{}}}",
+            action.include_tests,
+        )
+    };
     Some(format!(
-        "[Active-root selector handoff: required next call=[{} arguments={}]; selector field={selector_field}; exactly one active-root-bound opaque reference is authorized; provider-result-local sibling and alternate references are not actionable; issue exactly this one call in the next model turn.]",
+        "[Active-root selector handoff: required next call=[{} arguments={}]; selector field={selector_field}; current-active-root candidate references=[{options}]; choose and copy exactly one presented opaque reference into the selector field; that reference alone becomes authoritative and every unchosen, sibling, raw, or fabricated value remains non-actionable; issue exactly one call in the next model turn.]",
         action.tool.public_name(),
         arguments,
     ))
