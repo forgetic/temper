@@ -184,7 +184,6 @@ id = "denied-shell-completion-is-policy-precondition"
 event = "tool.error"
 fields.tool = "bash"
 fields.id = "denied-shell-process-canary"
-fields.duration_ms = 0
 fields."tool.failure.category" = "policy_denial"
 fields."tool.failure.reason" = "policy_precondition"
 fields."tool.failure.retryable" = false
@@ -256,7 +255,6 @@ id = "matching-mutation-is-denied-before-exact-read"
 event = "tool.error"
 fields.tool = "apply_patch"
 fields.id = "patch-before-exact-read-denied"
-fields.duration_ms = 0
 fields."tool.failure.category" = "policy_denial"
 fields."tool.failure.reason" = "policy_precondition"
 
@@ -266,7 +264,6 @@ id = "unrelated-mutation-remains-denied"
 event = "tool.error"
 fields.tool = "write"
 fields.id = "unrelated-mutation-denied"
-fields.duration_ms = 0
 fields."tool.failure.category" = "policy_denial"
 fields."tool.failure.reason" = "policy_precondition"
 
