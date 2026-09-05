@@ -276,9 +276,9 @@ impl AnchorForest {
         &self,
         exhausted_routes: &BTreeSet<(String, RecoveryRoute)>,
     ) -> Option<(&String, RecoveryRoute)> {
-        if let Some((binding, _)) = self
+        let mut implementation_candidates = self
             .ranked_implementation_roots()
-            .find(|(binding, root)| {
+            .filter(|(binding, root)| {
                 !exhausted_routes.contains(&(binding.to_string(), RecoveryRoute::Implementation))
                     && (!root
                         .evidence
@@ -286,7 +286,15 @@ impl AnchorForest {
                         .is_empty()
                         || root.evidence.implementation_is_complete())
             })
-            .filter(|(_, root)| !root.evidence.implementation_is_complete())
+            .collect::<Vec<_>>();
+        let preferred = implementation_candidates.iter().position(|(binding, _)| {
+            self.preserves_independent_focused_route(binding, exhausted_routes)
+        });
+        let implementation = preferred
+            .map(|index| implementation_candidates.remove(index))
+            .or_else(|| implementation_candidates.into_iter().next());
+        if let Some((binding, _)) =
+            implementation.filter(|(_, root)| !root.evidence.implementation_is_complete())
         {
             return Some((binding, RecoveryRoute::Implementation));
         }
@@ -297,7 +305,9 @@ impl AnchorForest {
         }
         self.ranked_focused_test_roots(implementation_binding)
             .find(|(binding, root)| {
-                !exhausted_routes.contains(&(binding.to_string(), RecoveryRoute::FocusedTest))
+                (self.roots.len() == 1 || binding.as_str() != implementation_binding)
+                    && !exhausted_routes
+                        .contains(&(binding.to_string(), RecoveryRoute::FocusedTest))
                     && !root.evidence.focused_test_is_complete()
                     && !root
                         .evidence
@@ -305,6 +315,23 @@ impl AnchorForest {
                         .is_empty()
             })
             .map(|(binding, _)| (binding, RecoveryRoute::FocusedTest))
+    }
+
+    fn preserves_independent_focused_route(
+        &self,
+        implementation_binding: &str,
+        exhausted_routes: &BTreeSet<(String, RecoveryRoute)>,
+    ) -> bool {
+        self.roots.len() == 1
+            || self.roots.iter().any(|(binding, root)| {
+                binding != implementation_binding
+                    && !exhausted_routes.contains(&(binding.clone(), RecoveryRoute::FocusedTest))
+                    && (root.evidence.focused_test_is_complete()
+                        || !root
+                            .evidence
+                            .compatible_actions(root, RecoveryRoute::FocusedTest)
+                            .is_empty())
+            })
     }
 
     pub(super) fn missing_kinds(

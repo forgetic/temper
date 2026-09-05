@@ -205,6 +205,79 @@ fn state_awaiting_final_focused_action() -> DecisionAnchorState {
 }
 
 #[test]
+fn implementation_selection_reserves_the_only_independent_focused_route() {
+    let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
+    for id in ["focused-capable-root", "implementation-only-root"] {
+        state.on_tool_dispatched(&call(id, "codebase_memory_search_graph"), 0);
+    }
+    let focused_capable = output_with_focused_test_discovery(
+        "codebase_memory_search_graph",
+        ROOT,
+        DecisionAnchorLineageStageV1::Root,
+        FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
+    );
+    let implementation_only = output_with_focused_test_discovery(
+        "codebase_memory_search_graph",
+        OTHER_ROOT,
+        DecisionAnchorLineageStageV1::Root,
+        FocusedTestDiscoveryOutcomeV1::NoEligibleSelector,
+    );
+    state.on_tool_batch_finished(&[
+        ("focused-capable-root", "codebase_memory_search_graph", &focused_capable),
+        (
+            "implementation-only-root",
+            "codebase_memory_search_graph",
+            &implementation_only,
+        ),
+    ]);
+    for (turn, id) in [(1, "broad-one"), (2, "broad-two")] {
+        state.on_tool_dispatched(&call(id, "codebase_memory_get_architecture"), turn);
+        state.on_tool_finished(id, "codebase_memory_get_architecture", &plain_success());
+    }
+
+    assert_exposed_action(
+        &state,
+        OTHER_ROOT,
+        GraphRecoveryEvidenceKindV1::Implementation,
+    );
+    recover_source(
+        &mut state,
+        "implementation",
+        OTHER_ROOT,
+        DecisionEvidenceKindV1::Implementation,
+        3,
+        None,
+    );
+    recover_trace(
+        &mut state,
+        "trace",
+        OTHER_ROOT,
+        4,
+        CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
+    );
+    recover_source(
+        &mut state,
+        "caller",
+        OTHER_ROOT,
+        DecisionEvidenceKindV1::Caller,
+        5,
+        None,
+    );
+    assert_exposed_action(&state, ROOT, GraphRecoveryEvidenceKindV1::FocusedTest);
+    assert_eq!(
+        recover_source(
+            &mut state,
+            "focused-test",
+            ROOT,
+            DecisionEvidenceKindV1::FocusedTest,
+            6,
+            None,
+        ),
+        DecisionAnchorTransition::EnabledEvidenceComplete,
+    );
+}
+
+#[test]
 fn every_exposed_recovery_action_advances_to_cross_root_completion() {
     let mut state = state_awaiting_final_focused_action();
     assert_eq!(
