@@ -211,6 +211,8 @@ pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1
 pub enum ToolCallDenial {
     /// A trusted anchor still lacks the required later source evidence.
     DecisionAnchorMutation,
+    /// The provisional implementation still requires its bounded inspection.
+    DecisionAnchorCorrectionInspection,
     /// Graph convergence or its non-progress budget closed graph exploration.
     /// Details are absent only for the legacy provider-unavailable fallback.
     GraphExplorationClosed(Option<GraphExplorationClosedV1>),

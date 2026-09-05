@@ -8,6 +8,33 @@ impl DecisionAnchorState {
         mut anchors: AnchorForest,
         finished: &[FinishedCodebaseCall<'_>],
     ) -> DecisionAnchorTransition {
+        let previews = finished
+            .iter()
+            .filter(|finished| finished.call.implementation_correction_preview)
+            .collect::<Vec<_>>();
+        if !previews.is_empty() {
+            let successful = previews.iter().all(|finished| {
+                finished.succeeded
+                    && !finished.output.is_error
+                    && anchor_output(finished.name, finished.output).is_some_and(|output| {
+                        finished.call.admitted_root.as_deref()
+                            == Some(output.lineage.root_binding.as_str())
+                    })
+            });
+            if !successful {
+                return self.enter_incomplete_enabled(anchors.active_evidence());
+            }
+            if let Some(finished) = previews
+                .iter()
+                .find(|finished| finished.call.completes_implementation_correction_inspection)
+            {
+                self.implementation_correction_inspection_completed = true;
+                self.mark_accepted(
+                    finished.id,
+                    AcceptedEvidence::ImplementationCorrectionInspection,
+                );
+            }
+        }
         let correction = finished.iter().find(|finished| {
             anchor_output(finished.name, finished.output).is_some_and(|output| {
                 output.lineage.implementation_authority_corrected
@@ -24,7 +51,10 @@ impl DecisionAnchorState {
                     anchor.evidence.implementation_correction_available
                         && !anchor.evidence.implementation_authority_corrected
                 });
-                if eligible && !self.implementation_authority_exercised {
+                if eligible
+                    && self.implementation_correction_inspection_completed
+                    && !self.implementation_authority_exercised
+                {
                     self.replace_implementation_source_authority(
                         &root,
                         &finished.call,

@@ -669,7 +669,8 @@ impl AgentMachine {
                         );
                     }
                     DecisionAnchorTransition::EnabledEvidenceComplete => {
-                        self.decision_anchor_complete = true;
+                        self.decision_anchor_complete =
+                            !state.implementation_correction_decision_pending();
                     }
                 }
                 let active_handoff = state.active_recovery_action();

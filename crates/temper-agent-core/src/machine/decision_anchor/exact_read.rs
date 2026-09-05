@@ -4,11 +4,22 @@ use super::*;
 
 const MAX_EXACT_TARGET_AUTHORITIES: usize = 64;
 
+#[derive(Clone)]
+pub(super) struct SourceTargetAuthority {
+    target: EligibleWorkspaceTarget,
+    root_binding: String,
+    evidence_kind: DecisionEvidenceKindV1,
+    completed_turn: usize,
+    completed_order: u64,
+    completed_batch: u64,
+}
+
 impl DecisionAnchorState {
     pub(super) fn record_source_authority(
         &mut self,
         root_binding: &str,
         call: &PendingCodebaseCall,
+        evidence_kind: DecisionEvidenceKindV1,
         outcome: Option<&TargetAdmissionOutcome>,
     ) {
         let Some(TargetAdmissionOutcome::Eligible(target)) = outcome else {
@@ -18,7 +29,9 @@ impl DecisionAnchorState {
             authority.root_binding != root_binding || !authority.target.matches(target)
         });
         if let Some(existing) = self.source_authorities.iter_mut().find(|authority| {
-            authority.root_binding == root_binding && authority.target.matches(target)
+            authority.root_binding == root_binding
+                && authority.evidence_kind == evidence_kind
+                && authority.target.matches(target)
         }) {
             existing.completed_turn = call.turn;
             existing.completed_order = call.order;
@@ -29,6 +42,7 @@ impl DecisionAnchorState {
             self.source_authorities.push(SourceTargetAuthority {
                 target: target.clone(),
                 root_binding: root_binding.to_string(),
+                evidence_kind,
                 completed_turn: call.turn,
                 completed_order: call.order,
                 completed_batch: self.settled_batches,
@@ -52,7 +66,42 @@ impl DecisionAnchorState {
         });
         self.exact_read_authorities
             .retain(|authority| authority.root_binding != root_binding);
-        self.record_source_authority(root_binding, call, outcome);
+        self.record_source_authority(
+            root_binding,
+            call,
+            DecisionEvidenceKindV1::Implementation,
+            outcome,
+        );
+    }
+
+    pub(super) fn correction_inspection_blocks_exact_read(
+        &self,
+        admission: Option<&InvocationTargetAdmission>,
+    ) -> bool {
+        if self.implementation_correction_inspection_completed {
+            return false;
+        }
+        let Some(AnchorPhase::EnabledComplete(anchors)) = self.phase.as_ref() else {
+            return false;
+        };
+        let Some((root_binding, implementation)) = anchors.implementation_root() else {
+            return false;
+        };
+        if !implementation.evidence.implementation_correction_available
+            || implementation.evidence.implementation_authority_corrected
+        {
+            return false;
+        }
+        let Some(InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(target))) =
+            admission
+        else {
+            return false;
+        };
+        self.source_authorities.iter().any(|source| {
+            source.root_binding == *root_binding
+                && source.evidence_kind == DecisionEvidenceKindV1::Implementation
+                && source.target.matches(target)
+        })
     }
 
     pub(super) fn register_exact_read(
@@ -87,6 +136,7 @@ impl DecisionAnchorState {
             .iter()
             .filter(|source| {
                 anchors.root_has_complete_evidence(&source.root_binding)
+                    && source.evidence_kind == DecisionEvidenceKindV1::Implementation
                     && source.target.matches(target)
                     && source.completed_batch <= self.settled_batches
                     && (turn > source.completed_turn

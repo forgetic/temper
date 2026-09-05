@@ -281,22 +281,32 @@ for line in sys.stdin:
                 tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode == "active-root-overlap-handoff" and name == "trace_path":
                 symbol = args.get("function_name")
-                if symbol == "affinity_topic":
-                    payload = {
-                        "function": {
+                if symbol in ("affinity_topic", "worker_slot"):
+                    callers = [
+                        {
+                            "name": "worker_slot",
+                            "qualified_name": "temper-v1-production.src.route.worker_slot",
+                        },
+                        {
+                            "name": "worker_for",
+                            "qualified_name": "temper-v1-production.src.route.worker_for",
+                        },
+                    ] if symbol == "affinity_topic" else [
+                        {
+                            "name": "worker_for",
+                            "qualified_name": "temper-v1-production.src.route.worker_for",
+                        },
+                        {
                             "name": "affinity_topic",
                             "qualified_name": "temper-v1-production.src.model.affinity_topic",
                         },
-                        "callers": [
-                            {
-                                "name": "worker_slot",
-                                "qualified_name": "temper-v1-production.src.route.worker_slot",
-                            },
-                            {
-                                "name": "worker_for",
-                                "qualified_name": "temper-v1-production.src.route.worker_for",
-                            },
-                        ],
+                    ]
+                    payload = {
+                        "function": {
+                            "name": symbol,
+                            "qualified_name": f"temper-v1-production.src.{'model' if symbol == 'affinity_topic' else 'route'}.{symbol}",
+                        },
+                        "callers": callers,
                     }
                     tool_result(request["id"], json.dumps(payload), structured=payload)
                 else:

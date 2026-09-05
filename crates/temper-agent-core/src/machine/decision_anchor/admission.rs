@@ -213,10 +213,18 @@ impl DecisionAnchorState {
                     eligible.filter(|admission| admission.is_implementation_authority_correction());
                 let correction_preview = correction
                     .is_some_and(EligibleLineageAdmission::is_implementation_candidate_preview);
+                let completes_correction_inspection = correction.is_some_and(|admission| {
+                    admission.completes_implementation_correction_inspection()
+                });
                 let correction_admissible = correction.is_some_and(|admission| {
                     !batch_has_exact_read
                         && (!batch_has_correction_preview || correction_preview)
                         && (correction_preview || !correction_commit_selected)
+                        && (if correction_preview {
+                            !self.implementation_correction_inspection_completed
+                        } else {
+                            self.implementation_correction_inspection_completed
+                        })
                         && call_key.is_some()
                         && admitted_root.as_deref().is_some_and(|root| {
                             admission.matches_root(root)
@@ -329,13 +337,22 @@ impl DecisionAnchorState {
                                 recovery_gap,
                                 admitted_root,
                                 admission_checked: admission.is_some(),
+                                implementation_correction_preview: correction_admissible
+                                    && correction_preview,
+                                completes_implementation_correction_inspection:
+                                    correction_admissible && completes_correction_inspection,
                             },
                         );
                     }
                 }
             }
             if denial.is_none() && call.name == "read" {
-                self.register_exact_read(call, turn, order, invocation_target.as_ref());
+                if self.correction_inspection_blocks_exact_read(invocation_target.as_ref()) {
+                    denial = Some(ToolCallDenial::DecisionAnchorCorrectionInspection);
+                    self.queue_correction_inspection_guidance();
+                } else {
+                    self.register_exact_read(call, turn, order, invocation_target.as_ref());
+                }
             }
             if denial.is_none()
                 && self.blocks_invocation_mutation(&call.name, invocation_target.as_ref())

@@ -155,9 +155,11 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          candidate with the implementation purpose in a later turn. A preview never earns evidence or\n\
          ordinary read/mutation authority. An implementation source committed before caller and focused-test\n\
          convergence remains provisional. If its typed traversal later produces the bounded pre-mutation\n\
-         implementation-correction handoff and retained caller/focused-test evidence shows another presented\n\
-         candidate better explains the requested failure, inspect only those candidates and explicitly correct\n\
-         at most once before any ordinary read or mutation; otherwise proceed to the exact ordinary read. That correction atomically replaces rather than\n\
+         implementation-correction handoff, inspect every bounded presented alternative exactly once before\n\
+         implementation authority becomes final. After those previews complete in either order, explicitly\n\
+         correct at most once when one inspected candidate better explains the retained caller/focused-test\n\
+         evidence, or retain the provisional target with its exact ordinary read. Correction, exact read, and\n\
+         mutation remain blocked during the inspection checkpoint. A correction atomically replaces rather than\n\
          accumulates implementation authority; after it succeeds, the old target and every unchosen candidate\n\
          remain non-actionable. Choose the behaviorally relevant implementation candidate and\n\
          consume its exact source first; only then traverse inbound calls from that exact implementation in a later turn.\n\
@@ -391,8 +393,7 @@ for line in sys.stdin:
             "convergence remains provisional",
             "bounded pre-mutation",
             "implementation-correction handoff",
-            "explicitly correct",
-            "at most once before any ordinary read or mutation",
+            "inspect every bounded presented alternative exactly once",
             "atomically replaces rather than",
             "old target and every unchosen candidate",
             "remain non-actionable",

@@ -1,64 +1,7 @@
-struct OrdinaryReadTool;
-
-#[async_trait]
-impl Tool for OrdinaryReadTool {
-    fn name(&self) -> &str {
-        "read"
-    }
-
-    fn description(&self) -> &str {
-        "test-only ordinary read"
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"]
-        })
-    }
-
-    fn effects(&self) -> ToolEffects {
-        ToolEffects::read()
-    }
-
-    async fn execute(
-        &self,
-        _: &str,
-        _: serde_json::Value,
-        _: Option<Box<dyn Fn(ToolUpdate) + Send + Sync>>,
-    ) -> tongs::Result<ToolOutput> {
-        unreachable!("the test completes ordinary reads directly")
-    }
-}
-
-fn opaque_references(text: &str) -> Vec<String> {
-    let mut references = Vec::new();
-    let mut remaining = text;
-    while let Some(index) = remaining.find(REFERENCE_PREFIX) {
-        let candidate = &remaining[index..];
-        let length = REFERENCE_PREFIX.len() + 36;
-        if candidate.len() < length {
-            break;
-        }
-        let reference = candidate[..length].to_string();
-        if !references.contains(&reference) {
-            references.push(reference);
-        }
-        remaining = &candidate[length..];
-    }
-    references
-}
-
-fn successful_output() -> ToolOutput {
-    ToolOutput {
-        content: Vec::new(),
-        details: None,
-        is_error: false,
-    }
-}
-
-fn run_pre_mutation_implementation_correction(reverse_preview_completion: bool) {
+fn run_implementation_correction_inspection(
+    reverse_preview_completion: bool,
+    retain_worker_slot: bool,
+) {
     let server = crate::codebase_memory::tests::test_support::fake_server_script();
     let workspace = tempfile::tempdir().unwrap();
     let log_path = workspace.path().join("mcp.log");
@@ -141,7 +84,7 @@ fn run_pre_mutation_implementation_correction(reverse_preview_completion: bool) 
             initial_references
         );
 
-        let provisional_reference = initial_references[0].clone();
+        let provisional_reference = initial_references[if retain_worker_slot { 2 } else { 0 }].clone();
         let preview_requests = complete_llm(
             &mut machine,
             assistant(vec![(
@@ -158,10 +101,13 @@ fn run_pre_mutation_implementation_correction(reverse_preview_completion: bool) 
             .execute(&preview_call.id, preview_call.arguments, None)
             .await
             .unwrap();
-        assert!(
-            crate::codebase_memory::tests::test_support::output_text(&preview_output)
-                .contains("affinity_topic")
-        );
+        let provisional_text =
+            crate::codebase_memory::tests::test_support::output_text(&preview_output);
+        assert!(provisional_text.contains(if retain_worker_slot {
+            "worker_slot"
+        } else {
+            "affinity_topic"
+        }));
         let preview_done = complete_tool(&mut machine, "preview-provisional", preview_output, None);
         assert!(active_handoff(&preview_done).contains("explicit commit call"));
 
@@ -269,14 +215,51 @@ fn run_pre_mutation_implementation_correction(reverse_preview_completion: bool) 
             .await
             .unwrap();
         let correction_handoff = complete_tool(&mut machine, "focused-source", focused_output, None);
+        assert!(correction_handoff.iter().all(|request| match request {
+            AgentRequest::CallLlm { messages, .. } => messages.iter().all(|message| {
+                !matches!(message, Message::User(message)
+                    if matches!(&message.content, UserContent::Text(text)
+                        if text.starts_with("graph exploration complete: stop codebase-memory")))
+            }),
+            _ => true,
+        }));
         let correction_text = active_handoff(&correction_handoff);
-        assert!(correction_text.contains("pre-mutation implementation correction"));
+        assert!(correction_text.contains("implementation correction inspection"));
         assert!(correction_text.contains("atomically replaces provisional"));
         let correction_references = handoff_references(correction_text);
         assert_eq!(correction_references.len(), 2);
         for private in ["affinity_topic", "worker_slot", "worker_for", "src/route.rs"] {
             assert!(!correction_text.contains(private));
         }
+
+        let provisional_path = if retain_worker_slot {
+            "demo/src/route.rs"
+        } else {
+            "demo/src/model.rs"
+        };
+        let premature_read = complete_llm(
+            &mut machine,
+            assistant(vec![(
+                "premature-provisional-read",
+                "read",
+                serde_json::json!({"path":provisional_path}),
+            )]),
+        );
+        assert!(premature_read.iter().any(|request| matches!(
+            request,
+            AgentRequest::RunTool {
+                call,
+                denial: Some(ToolCallDenial::DecisionAnchorCorrectionInspection),
+                ..
+            } if call.id == "premature-provisional-read"
+        )));
+        let premature_failure = local_failure(&premature_read, "premature-provisional-read");
+        let _ = complete_tool(
+            &mut machine,
+            "premature-provisional-read",
+            failed_output(),
+            Some(premature_failure),
+        );
 
         let correction_previews = complete_llm(
             &mut machine,
@@ -307,13 +290,17 @@ fn run_pre_mutation_implementation_correction(reverse_preview_completion: bool) 
                 .unwrap();
             preview_results.push((id, output));
         }
-        let selected_index = preview_results
-            .iter()
-            .position(|(_, output)| {
-                crate::codebase_memory::tests::test_support::output_text(output)
-                    .contains("worker_slot")
-            })
-            .expect("one typed correction preview is worker_slot");
+        let selected_index = if retain_worker_slot {
+            0
+        } else {
+            preview_results
+                .iter()
+                .position(|(_, output)| {
+                    crate::codebase_memory::tests::test_support::output_text(output)
+                        .contains("worker_slot")
+                })
+                .expect("one typed correction preview is worker_slot")
+        };
         let selected_reference = correction_references[selected_index].clone();
         if reverse_preview_completion {
             preview_results.reverse();
@@ -326,6 +313,111 @@ fn run_pre_mutation_implementation_correction(reverse_preview_completion: bool) 
             handoff_references(active_handoff(&after_previews)),
             correction_references
         );
+
+        if retain_worker_slot {
+            let retained_read = complete_llm(
+                &mut machine,
+                assistant(vec![(
+                    "retained-target-read",
+                    "read",
+                    serde_json::json!({"path":"demo/src/route.rs"}),
+                )]),
+            );
+            assert!(retained_read.iter().any(|request| matches!(
+                request,
+                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
+                    if call.id == "retained-target-read"
+            )));
+            let _ = complete_tool(
+                &mut machine,
+                "retained-target-read",
+                successful_output(),
+                None,
+            );
+
+            let stale_correction = complete_llm(
+                &mut machine,
+                assistant(vec![(
+                    "correction-after-retain",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({
+                        "qualified_name": correction_references[0],
+                        "decision_evidence_kind": "implementation",
+                    }),
+                )]),
+            );
+            let stale_failure = local_failure(&stale_correction, "correction-after-retain");
+            let _ = complete_tool(
+                &mut machine,
+                "correction-after-retain",
+                failed_output(),
+                Some(stale_failure),
+            );
+
+            let unchosen_read = complete_llm(
+                &mut machine,
+                assistant(vec![(
+                    "unchosen-target-read",
+                    "read",
+                    serde_json::json!({"path":"demo/src/model.rs"}),
+                )]),
+            );
+            let _ = complete_tool(
+                &mut machine,
+                "unchosen-target-read",
+                successful_output(),
+                None,
+            );
+            let unchosen_mutation = complete_llm(
+                &mut machine,
+                assistant(vec![(
+                    "unchosen-target-mutation",
+                    "write",
+                    serde_json::json!({"path":"demo/src/model.rs","content":"changed"}),
+                )]),
+            );
+            let unchosen_disposition = unchosen_mutation.iter().find_map(|request| match request {
+                AgentRequest::RunTool {
+                    call,
+                    denial,
+                    rejection,
+                    ..
+                } if call.id == "unchosen-target-mutation" => {
+                    Some((denial.clone(), rejection.clone()))
+                }
+                _ => None,
+            });
+            assert_eq!(
+                unchosen_disposition,
+                Some((Some(ToolCallDenial::DecisionAnchorMutation), None)),
+            );
+            let _ = complete_tool(
+                &mut machine,
+                "unchosen-target-mutation",
+                failed_output(),
+                Some(ToolFailureDiagnostic::policy_denial()),
+            );
+
+            let retained_mutation = complete_llm(
+                &mut machine,
+                assistant(vec![(
+                    "retained-target-mutation",
+                    "write",
+                    serde_json::json!({"path":"demo/src/route.rs","content":"changed"}),
+                )]),
+            );
+            assert!(retained_mutation.iter().any(|request| matches!(
+                request,
+                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
+                    if call.id == "retained-target-mutation"
+            )));
+            assert!(unchosen_read.iter().any(|request| matches!(
+                request,
+                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
+                    if call.id == "unchosen-target-read"
+            )));
+            return;
+        }
 
         let correction_requests = complete_llm(
             &mut machine,
@@ -481,11 +573,21 @@ fn run_pre_mutation_implementation_correction(reverse_preview_completion: bool) 
 }
 
 #[test]
-fn pre_mutation_correction_replaces_old_authority_when_first_preview_finishes_first() {
-    run_pre_mutation_implementation_correction(false);
+fn corrects_affinity_when_first_inspection_finishes_first() {
+    run_implementation_correction_inspection(false, false);
 }
 
 #[test]
-fn pre_mutation_correction_replaces_old_authority_when_preview_completion_reverses() {
-    run_pre_mutation_implementation_correction(true);
+fn corrects_affinity_when_inspection_completion_reverses() {
+    run_implementation_correction_inspection(true, false);
+}
+
+#[test]
+fn retains_worker_slot_when_first_inspection_finishes_first() {
+    run_implementation_correction_inspection(false, true);
+}
+
+#[test]
+fn retains_worker_slot_when_inspection_completion_reverses() {
+    run_implementation_correction_inspection(true, true);
 }

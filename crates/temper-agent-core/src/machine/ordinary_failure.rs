@@ -87,7 +87,10 @@ impl OrdinaryFailureCircuit {
         if failure.category == ToolFailureCategory::CircuitRedirect {
             return;
         }
-        if failure.reason == ToolFailureReason::PolicyPrecondition {
+        if matches!(
+            failure.reason,
+            ToolFailureReason::PolicyPrecondition | ToolFailureReason::CorrectionInspectionRequired
+        ) {
             self.remove(fingerprint);
             return;
         }

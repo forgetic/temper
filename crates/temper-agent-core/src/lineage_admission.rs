@@ -243,6 +243,7 @@ pub struct EligibleLineageAdmission {
     forest_root_selection: bool,
     implementation_candidate_preview: bool,
     implementation_authority_correction: bool,
+    implementation_correction_inspection_complete: bool,
 }
 
 impl EligibleLineageAdmission {
@@ -278,6 +279,7 @@ impl EligibleLineageAdmission {
             forest_root_selection: false,
             implementation_candidate_preview: false,
             implementation_authority_correction: false,
+            implementation_correction_inspection_complete: false,
         })
     }
 
@@ -301,6 +303,7 @@ impl EligibleLineageAdmission {
             forest_root_selection: false,
             implementation_candidate_preview: false,
             implementation_authority_correction: false,
+            implementation_correction_inspection_complete: false,
         })
     }
 
@@ -319,6 +322,7 @@ impl EligibleLineageAdmission {
             forest_root_selection: false,
             implementation_candidate_preview: false,
             implementation_authority_correction: false,
+            implementation_correction_inspection_complete: false,
         })
     }
 
@@ -337,6 +341,7 @@ impl EligibleLineageAdmission {
             forest_root_selection: false,
             implementation_candidate_preview: false,
             implementation_authority_correction: false,
+            implementation_correction_inspection_complete: false,
         })
     }
 
@@ -354,6 +359,7 @@ impl EligibleLineageAdmission {
             forest_root_selection: false,
             implementation_candidate_preview: true,
             implementation_authority_correction: false,
+            implementation_correction_inspection_complete: false,
         })
     }
 
@@ -373,7 +379,17 @@ impl EligibleLineageAdmission {
             forest_root_selection: false,
             implementation_candidate_preview: preview,
             implementation_authority_correction: true,
+            implementation_correction_inspection_complete: false,
         })
+    }
+
+    /// Marks the preview which completes inspection of the bounded correction
+    /// menu published for this root. The marker contains no selector identity.
+    pub fn with_implementation_correction_inspection_complete(mut self) -> Self {
+        if self.implementation_authority_correction && self.implementation_candidate_preview {
+            self.implementation_correction_inspection_complete = true;
+        }
+        self
     }
 
     pub fn focused_test_traversal(
@@ -391,6 +407,7 @@ impl EligibleLineageAdmission {
             forest_root_selection: false,
             implementation_candidate_preview: false,
             implementation_authority_correction: false,
+            implementation_correction_inspection_complete: false,
         })
     }
 
@@ -409,6 +426,7 @@ impl EligibleLineageAdmission {
             forest_root_selection: false,
             implementation_candidate_preview: false,
             implementation_authority_correction: false,
+            implementation_correction_inspection_complete: false,
         })
     }
 
@@ -447,6 +465,10 @@ impl EligibleLineageAdmission {
         self.implementation_authority_correction
     }
 
+    pub const fn completes_implementation_correction_inspection(&self) -> bool {
+        self.implementation_correction_inspection_complete
+    }
+
     pub const fn selects_forest_root(&self) -> bool {
         self.forest_root_selection
     }
@@ -478,6 +500,10 @@ impl fmt::Debug for EligibleLineageAdmission {
             .field(
                 "implementation_authority_correction",
                 &self.implementation_authority_correction,
+            )
+            .field(
+                "implementation_correction_inspection_complete",
+                &self.implementation_correction_inspection_complete,
             )
             .field("forest_root_selection", &self.forest_root_selection)
             .finish()

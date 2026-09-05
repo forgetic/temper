@@ -143,6 +143,28 @@ impl DecisionAnchorLineages {
                         })
                 })
                 .take(MAX_VISIBLE_RECOVERY_CANDIDATES_PER_PURPOSE)
+                .collect::<Vec<_>>();
+            let references =
+                if action == GraphRecoveryActionV1::implementation_authority_correction() {
+                    let unpreviewed = references
+                        .iter()
+                        .filter(|reference| {
+                            self.recovery_reference_selectors
+                                .get(**reference)
+                                .is_some_and(|candidate| !candidate.previewed)
+                        })
+                        .copied()
+                        .collect::<Vec<_>>();
+                    if unpreviewed.is_empty() {
+                        references
+                    } else {
+                        unpreviewed
+                    }
+                } else {
+                    references
+                };
+            let references = references
+                .into_iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>();
             if !references.is_empty() {

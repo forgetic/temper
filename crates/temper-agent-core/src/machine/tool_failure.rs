@@ -100,6 +100,7 @@ pub enum ToolFailureReason {
     UnknownTool,
     InvalidArguments,
     PolicyPrecondition,
+    CorrectionInspectionRequired,
     AccessDenied,
     ToolReportedFailure,
     ToolExecutionError,
@@ -127,6 +128,7 @@ impl ToolFailureReason {
             Self::UnknownTool => "unknown_tool",
             Self::InvalidArguments => "invalid_arguments",
             Self::PolicyPrecondition => "policy_precondition",
+            Self::CorrectionInspectionRequired => "correction_inspection_required",
             Self::AccessDenied => "access_denied",
             Self::ToolReportedFailure => "tool_reported_failure",
             Self::ToolExecutionError => "tool_execution_error",
@@ -157,6 +159,9 @@ impl ToolFailureReason {
             }
             Self::PolicyPrecondition => {
                 super::decision_anchor::DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE
+            }
+            Self::CorrectionInspectionRequired => {
+                super::decision_anchor::DECISION_ANCHOR_CORRECTION_INSPECTION_MESSAGE
             }
             Self::AccessDenied => {
                 "tool execution was denied by policy; use only authorized resources or satisfy the required precondition"
@@ -210,7 +215,9 @@ impl ToolFailureReason {
             | Self::InvalidModelInput
             | Self::RepeatedNonRetryable
             | Self::RetryBudgetExhausted => ToolRetryDisposition::CorrectInvocation,
-            Self::PolicyPrecondition | Self::AccessDenied => ToolRetryDisposition::SatisfyPolicy,
+            Self::PolicyPrecondition | Self::CorrectionInspectionRequired | Self::AccessDenied => {
+                ToolRetryDisposition::SatisfyPolicy
+            }
             Self::ExplorationClosed
             | Self::ConfigurationStartup
             | Self::IndexFailure
@@ -247,7 +254,7 @@ impl ToolFailureReason {
                 Self::UnknownTool | Self::InvalidArguments
             ) | (
                 ToolFailureCategory::PolicyDenial,
-                Self::PolicyPrecondition | Self::AccessDenied
+                Self::PolicyPrecondition | Self::CorrectionInspectionRequired | Self::AccessDenied
             ) | (
                 ToolFailureCategory::ExecutionFailure,
                 Self::ToolReportedFailure | Self::ToolExecutionError
@@ -389,6 +396,13 @@ impl ToolFailureDiagnostic {
         Self::new(
             ToolFailureCategory::PolicyDenial,
             ToolFailureReason::PolicyPrecondition,
+        )
+    }
+
+    pub fn correction_inspection_denial() -> Self {
+        Self::new(
+            ToolFailureCategory::PolicyDenial,
+            ToolFailureReason::CorrectionInspectionRequired,
         )
     }
 
