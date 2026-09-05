@@ -17,13 +17,36 @@ fn jig_agent_consumes_opaque_result_driven_evidence_before_mutation() {
         vec![
             DecisionStep::Discovery,
             DecisionStep::Refinement,
-            DecisionStep::Trace,
             DecisionStep::ImplementationSource,
+            DecisionStep::Trace,
             DecisionStep::CallerSource,
             DecisionStep::BehavioralTestSource,
             DecisionStep::Mutation,
             DecisionStep::Complete,
         ],
         "opaque provider results must drive later-turn dependent targets before mutation"
+    );
+}
+
+#[test]
+fn jig_agent_recovers_missing_caller_and_rejects_a_focused_test_detour() {
+    let run = run(DecisionCase::StagedDetourRecovery);
+    assert_eq!(run.mutation, Some("staged detours recovered\n".to_string()));
+    assert_eq!(
+        run.steps,
+        vec![
+            DecisionStep::Discovery,
+            DecisionStep::Refinement,
+            DecisionStep::ImplementationSource,
+            DecisionStep::Trace,
+            DecisionStep::CallerSourceDetour,
+            DecisionStep::CallerSource,
+            DecisionStep::FocusedTestDetour,
+            DecisionStep::BehavioralTestSource,
+            DecisionStep::SourceRead,
+            DecisionStep::Mutation,
+            DecisionStep::Complete,
+        ],
+        "local detours must preserve one exact implementation/caller/focused-test forest",
     );
 }

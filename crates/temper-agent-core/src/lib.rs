@@ -19,6 +19,7 @@ mod containment;
 #[cfg(test)]
 mod containment_tests;
 mod invocation;
+mod lineage_admission;
 pub mod machine;
 mod managed_bash;
 mod managed_fs;
@@ -31,6 +32,12 @@ pub use containment::AgentContainmentContext;
 pub use invocation::{
     InvocationCatalogError, REJECTED_TOOL_NAME, ToolInvocationCatalog, arguments_match,
 };
+pub use lineage_admission::{
+    EligibleLineageAdmission, EligibleWorkspaceTarget, InvocationTargetAdmission,
+    LineageAdmissionHandle, LineageAdmissionOutcome, LineageAdmissionResolver,
+    LineageAdmissionStatus, OpaqueRecoverySelectorReference, TargetAdmissionOutcome,
+    TargetAdmissionStatus,
+};
 pub use machine::{
     AgentCompletion, AgentEvent, AgentMachine, AgentRequest, AgentStop, ArgPreviewFn,
     BatchGeneration, CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE, CODEBASE_MEMORY_TOOL_PREFIX,
@@ -38,12 +45,14 @@ pub use machine::{
     DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE, DECISION_ANCHOR_RECOVERY_MESSAGE,
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
     DecisionEvidenceKindV1, DiagnosticToolArguments, GraphExplorationClosedReasonV1,
-    GraphExplorationClosedV1, GraphRecoveryEvidenceKindV1, GraphRecoveryPermittedActionV1,
-    ModelCallStatus, OperationGeneration, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
-    ShellDiscoveryDispositionStatusV1, ShellDiscoveryDispositionV1, StreamDelta, ToolCallDenial,
-    ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason,
-    ToolResultMetadata, ToolRetryDisposition, ToolStartPresentation, ToolStartPresentationFn,
+    GraphExplorationClosedV1, GraphRecoveryActionV1, GraphRecoveryEvidenceKindV1,
+    GraphRecoveryPermittedActionV1, ModelCallStatus, OperationGeneration,
+    SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY, SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY,
+    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY,
+    SAFE_TOOL_FAILURE_DETAIL_KEY, ShellDiscoveryDispositionStatusV1, ShellDiscoveryDispositionV1,
+    StreamDelta, ToolCallDenial, ToolCallStatus, ToolFailureCategory, ToolFailureDiagnostic,
+    ToolFailureReason, ToolResultMetadata, ToolRetryDisposition, ToolStartPresentation,
+    ToolStartPresentationFn,
 };
 pub use managed_bash::ManagedBashTool;
 pub use managed_fs::joined_filesystem_tool;

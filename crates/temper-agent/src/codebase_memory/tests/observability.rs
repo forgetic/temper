@@ -10,8 +10,8 @@ use temper_agent_core::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
 };
 use temper_protocol_activity::{
-    DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
-    GraphCorrelationV1,
+    DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1, GraphCorrelationTargetKindV1,
+    GraphCorrelationToolV1, GraphCorrelationV1,
 };
 use tracing::field::{Field, Visit};
 use tracing::subscriber::with_default;
@@ -315,6 +315,63 @@ fn mcp_results_project_only_complete_typed_correlation_facts() {
     );
     let rendered = format!("{result:#?}");
     assert!(!rendered.contains(DECLARED_TARGET));
+    assert!(!rendered.contains(&correlation.target_digest));
+    assert!(!rendered.contains(&lineage.root_binding));
+}
+
+#[test]
+fn mcp_results_project_only_closed_focused_test_discovery_outcomes() {
+    const PRIVATE_QUERY: &str = "private focused-test semantic query";
+    let correlation = GraphCorrelationV1::new(
+        GraphCorrelationToolV1::SearchGraph,
+        GraphCorrelationTargetKindV1::GraphQuery,
+        PRIVATE_QUERY,
+    )
+    .expect("complete graph query");
+    let mut lineage = DecisionAnchorLineageV1::new_with_metadata(
+        "00000000-0000-4000-8000-000000000002".to_string(),
+        DecisionAnchorLineageStageV1::CarryForward,
+        DecisionAnchorTargetKindV1::GraphQuery,
+        [DecisionAnchorTargetKindV1::QualifiedName],
+        [],
+        None,
+        Some(FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned),
+    )
+    .expect("focused-test discovery lineage");
+    lineage.implementation_correction_available = true;
+    lineage.implementation_authority_corrected = true;
+    let events = capture(|| {
+        emit_mcp_tool_result(McpToolResult {
+            tool_name: "codebase_memory_search_graph",
+            mcp_tool: "search_graph",
+            mcp_project: "normalized-safe-project",
+            is_error: false,
+            truncated: false,
+            result_preview: "<result omitted>",
+            readiness_wait_ms: 4,
+            graph_execution_ms: 7,
+            duration_ms: 11,
+            graph_correlation: Some(&correlation),
+            decision_anchor_lineage: Some(&lineage),
+        });
+    });
+
+    let result = event(&events, "mcp.tool.result", "mcp.tool", "search_graph");
+    assert_eq!(result.fields["graph.lineage.stage"], "carry_forward");
+    assert_eq!(
+        result.fields["graph.lineage.focused_test_discovery"],
+        "eligible_selector_returned"
+    );
+    assert_eq!(
+        result.fields["graph.lineage.implementation_correction_available"],
+        "true"
+    );
+    assert_eq!(
+        result.fields["graph.lineage.implementation_authority_corrected"],
+        "true"
+    );
+    let rendered = format!("{result:#?}");
+    assert!(!rendered.contains(PRIVATE_QUERY));
     assert!(!rendered.contains(&correlation.target_digest));
     assert!(!rendered.contains(&lineage.root_binding));
 }

@@ -8,12 +8,14 @@
 use super::super::lineage::*;
 use crate::mcp::McpToolResultPart;
 use serde_json::Value;
-use temper_agent_core::{DecisionAnchorLineageStageV1, DecisionAnchorTargetKindV1};
+use temper_agent_core::{
+    DecisionAnchorLineageStageV1, DecisionAnchorTargetKindV1, InvocationTargetAdmission,
+    LineageAdmissionOutcome, LineageAdmissionResolver, LineageAdmissionStatus,
+    TargetAdmissionOutcome, TargetAdmissionStatus,
+};
 use temper_protocol_activity::{
     GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
 };
-
-const MAX_RESULT_TARGETS: usize = 64;
 
 mod tests {
     use super::*;
@@ -392,20 +394,13 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_oversized_provider_records_do_not_create_carry_forwards() {
-        let mut cases = vec![
+    fn malformed_provider_records_do_not_create_carry_forwards() {
+        let cases = vec![
             serde_json::json!({"qualified_name": ["not a string"]}),
             serde_json::json!({"name":"unbound_display_name"}),
             serde_json::json!({"unknown_target":"crate::engine::run"}),
             serde_json::json!({"callers": "not a list"}),
         ];
-        cases.push(serde_json::json!({
-            "results": (0..=MAX_RESULT_TARGETS)
-                .map(|index| serde_json::json!({
-                    "qualified_name": format!("crate::engine::run_{index}"),
-                }))
-                .collect::<Vec<_>>(),
-        }));
         for result in cases {
             let mut lineages = DecisionAnchorLineages::default();
             let root_parts = text_parts(result);
@@ -527,6 +522,18 @@ mod tests {
             )
             .unwrap();
         assert!(!trace.result_target_kinds.is_empty());
+
+        let callee = lineages
+            .record(
+                &correlation(GraphCorrelationTargetKindV1::QualifiedName),
+                &serde_json::json!({
+                    "qualified_name": "temper-v1-hash.src.model.DeliveryAttempt.affinity_topic"
+                }),
+                Some(&structured_parts(serde_json::json!({}))),
+            )
+            .unwrap();
+        assert_eq!(callee.stage, DecisionAnchorLineageStageV1::CarryForward);
+        assert_eq!(callee.root_binding, trace.root_binding);
     }
 
     #[test]
@@ -662,6 +669,82 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_malformed_broad_and_unsupported_calls_are_closed_ineligible() {
+        let mut lineages = DecisionAnchorLineages::default();
+        for query in ["first", "second"] {
+            lineages
+                .record(
+                    &correlation(GraphCorrelationTargetKindV1::GraphQuery),
+                    &serde_json::json!({"query": query}),
+                    Some(&structured_parts(serde_json::json!({"symbol": "shared"}))),
+                )
+                .unwrap();
+        }
+
+        let cases = [
+            (
+                "codebase_memory_trace_path",
+                serde_json::json!({"function_name": "shared"}),
+                LineageAdmissionStatus::AmbiguousSelector,
+            ),
+            (
+                "codebase_memory_trace_path",
+                serde_json::json!({"function_name": "src/private.rs::shared()"}),
+                LineageAdmissionStatus::MalformedSelector,
+            ),
+            (
+                "codebase_memory_search_graph",
+                serde_json::json!({"query": "shared"}),
+                LineageAdmissionStatus::BroadSelector,
+            ),
+            (
+                "codebase_memory_get_architecture",
+                serde_json::json!({}),
+                LineageAdmissionStatus::UnsupportedTool,
+            ),
+        ];
+        for (tool, arguments, expected) in cases {
+            assert_eq!(
+                lineages.resolve(tool, &arguments),
+                LineageAdmissionOutcome::Ineligible(expected)
+            );
+        }
+    }
+
+    mod admission {
+        include!("lineage_admission.rs");
+    }
+
+    mod active_root_handoff {
+        use super::*;
+        include!("lineage_active_root_handoff.rs");
+    }
+
+    mod active_root_execution {
+        include!("lineage_active_root_execution.rs");
+        include!("lineage_parallel_active_root_execution.rs");
+        include!("lineage_parallel_active_root_execution_tests.rs");
+        include!("lineage_authority_correction_support.rs");
+        include!("lineage_correction_preview_failure.rs");
+        include!("lineage_pre_mutation_correction.rs");
+        include!("lineage_two_root_correction_support.rs");
+        include!("lineage_two_root_correction.rs");
+    }
+
+    mod candidates {
+        use super::*;
+        include!("lineage_candidates.rs");
+    }
+
+    mod exact_narrowing {
+        include!("lineage_exact_narrowing.rs");
+    }
+
+    mod focused_test_recovery {
+        include!("lineage_focused_test_recovery.rs");
+    }
+
+    #[test]
     fn duplicate_cross_root_candidates_become_ineligible() {
         let mut lineages = DecisionAnchorLineages::default();
         let first_parts = structured_parts(serde_json::json!({"symbol": "shared"}));
@@ -693,5 +776,10 @@ mod tests {
         assert_eq!(later.stage, DecisionAnchorLineageStageV1::Root);
         assert_ne!(later.root_binding, first.root_binding);
         assert_ne!(later.root_binding, second.root_binding);
+    }
+
+    mod target_admission {
+        use super::*;
+        include!("lineage_targets.rs");
     }
 }

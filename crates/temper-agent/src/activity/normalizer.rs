@@ -208,6 +208,7 @@ impl NormalizingEventSink {
                 arg_preview,
                 diagnostic_arguments,
                 shell_discovery_disposition,
+                recovery_reference_disposition,
             } => self.tool_started(
                 &state,
                 id,
@@ -215,6 +216,7 @@ impl NormalizingEventSink {
                 arg_preview,
                 diagnostic_arguments,
                 shell_discovery_disposition,
+                recovery_reference_disposition,
             ),
             AgentEvent::ToolEnd {
                 id,
@@ -474,6 +476,9 @@ impl NormalizingEventSink {
         arg_preview: Option<String>,
         diagnostic_arguments: Option<temper_agent_core::DiagnosticToolArguments>,
         shell_discovery_disposition: Option<temper_agent_core::ShellDiscoveryDispositionV1>,
+        recovery_reference_disposition: Option<
+            temper_protocol_activity::GraphRecoveryReferenceDispositionV1,
+        >,
     ) {
         let denied_shell = name == "bash"
             && shell_discovery_disposition.is_some_and(|disposition| disposition.is_valid());
@@ -515,6 +520,7 @@ impl NormalizingEventSink {
                 name,
                 arguments,
                 shell_discovery_disposition,
+                recovery_reference_disposition,
             }),
             human_arg_preview.as_deref(),
         );
@@ -563,6 +569,7 @@ impl NormalizingEventSink {
                 result,
                 failure: metadata.failure.map(map_tool_failure),
                 codebase_memory_timing: graph_timing(metadata.codebase_memory_timing),
+                recovery_reference_disposition: metadata.recovery_reference_disposition,
             }),
         );
     }

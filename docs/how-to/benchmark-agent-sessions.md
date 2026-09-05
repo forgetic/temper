@@ -237,6 +237,12 @@ evidence, and JSON/Markdown run summary. A manifest with an
 `expected_patch` also snapshots it as `expected.patch` and records the host-owned
 exact comparison in `validation.json`.
 
+Every direct repetition receives a fresh opaque agent-session identity. The
+same identity appears in its context snapshot, canonical trace events, and run
+summary. Acceptance compares context snapshots as typed `WorkspaceContext`
+values, so omitted defaults and their explicit values are equivalent while
+material context changes and missing or reused trial identities fail closed.
+
 Use repeated live runs with enough repetitions to expose variance before drawing
 behavioral or performance conclusions, then interpret min, p25, median, p75,
 and max together. Aggregate and comparison artifacts retain trial counts and

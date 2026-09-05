@@ -3,6 +3,15 @@
 use super::*;
 
 #[test]
+fn graph_disabled_sessions_do_not_install_decision_anchor_lifecycle() {
+    let disabled_effects = effects()
+        .into_iter()
+        .filter(|(name, _)| !name.starts_with("codebase_memory_"))
+        .collect::<BTreeMap<_, _>>();
+    assert!(DecisionAnchorState::from_effects(&disabled_effects).is_none());
+}
+
+#[test]
 fn read_only_roles_converge_and_close_graph_tools_without_mutation_effects() {
     let read_only_effects = effects()
         .into_iter()
@@ -70,7 +79,7 @@ fn read_only_roles_converge_and_close_graph_tools_without_mutation_effects() {
             ("caller", "codebase_memory_get_code_snippet", &caller),
             ("test", "codebase_memory_get_code_snippet", &test),
         ]),
-        DecisionAnchorTransition::Converged
+        DecisionAnchorTransition::EnabledEvidenceComplete
     );
     assert_eq!(
         state.on_tool_dispatched(&call("extra", "codebase_memory_search_graph"), 2),
@@ -84,14 +93,14 @@ fn read_only_roles_converge_and_close_graph_tools_without_mutation_effects() {
 }
 
 #[test]
-fn repeated_non_progressing_discovery_closes_graph_exploration() {
+fn repeated_non_progressing_discovery_stops_incomplete_enabled_sessions() {
     let mut state = DecisionAnchorState::from_effects(&effects()).unwrap();
     for (turn, id, expected) in [
         (0, "broad-one", DecisionAnchorTransition::Unchanged),
         (
             1,
             "broad-two",
-            DecisionAnchorTransition::ExplorationExhausted,
+            DecisionAnchorTransition::EnabledEvidenceIncomplete,
         ),
     ] {
         state.on_tool_dispatched(&call(id, "codebase_memory_get_architecture"), turn);
@@ -102,7 +111,7 @@ fn repeated_non_progressing_discovery_closes_graph_exploration() {
     }
     assert_eq!(
         state.on_tool_dispatched(&call("broad-three", "codebase_memory_get_architecture"), 2),
-        legacy_graph_denial()
+        exhausted_graph_denial(all_missing())
     );
     assert_eq!(
         state.on_tool_dispatched(&call("conventional", "read"), 2),

@@ -1,10 +1,7 @@
-//! Deterministic decision-anchor policy regressions.
-
 mod tests {
     use super::super::super::decision_anchor::*;
     use crate::machine::tests::common::{
-        assistant_tool_calls, calls_llm, complete, final_stop, llm_responded, run_tools,
-        tool_finished, user,
+        assistant_tool_calls, calls_llm, complete, llm_responded, run_tools, tool_finished, user,
     };
     use crate::machine::{
         AgentMachine, AgentRequest, SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY,
@@ -15,13 +12,14 @@ mod tests {
     use std::sync::Arc;
     use temper_agent_io::{EngineTime, Machine};
     use temper_protocol_activity::{
-        DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionAnchorTargetKindV1,
-        DecisionEvidenceKindV1, GraphCorrelationTargetKindV1, GraphCorrelationToolV1,
-        GraphCorrelationV1, GraphExplorationClosedReasonV1, GraphExplorationClosedV1,
+        CallerDiscoveryOutcomeV1, DecisionAnchorLineageStageV1, DecisionAnchorLineageV1,
+        DecisionAnchorTargetKindV1, DecisionEvidenceKindV1, FocusedTestDiscoveryOutcomeV1,
+        GraphCorrelationTargetKindV1, GraphCorrelationToolV1, GraphCorrelationV1,
+        GraphExplorationClosedReasonV1, GraphExplorationClosedV1, GraphRecoveryActionV1,
         GraphRecoveryEvidenceKindV1,
     };
     use tongs::{
-        model::{ContentBlock, Message, ToolCall, UserContent},
+        model::{Message, ToolCall, UserContent},
         tools::{ToolEffects, ToolOutput},
     };
 
@@ -34,27 +32,26 @@ mod tests {
 
     mod convergence {
         include!("decision_anchor_convergence.rs");
+        include!("decision_anchor_exact_read.rs");
+        include!("decision_anchor_convergence_matrix.rs");
+        include!("decision_anchor_progress.rs");
     }
 
     mod recovery {
         include!("decision_anchor_recovery.rs");
     }
+    use recovery::conventional_fallback_graph_denial;
 
     mod routing_recovery {
         include!("decision_anchor_routing_recovery.rs");
     }
 
-    mod evidence {
-        include!("decision_anchor_evidence.rs");
+    mod forest_exact_read {
+        include!("decision_anchor_forest_exact_read.rs");
     }
 
-    fn all_missing() -> [GraphRecoveryEvidenceKindV1; 4] {
-        [
-            GraphRecoveryEvidenceKindV1::Trace,
-            GraphRecoveryEvidenceKindV1::Implementation,
-            GraphRecoveryEvidenceKindV1::Caller,
-            GraphRecoveryEvidenceKindV1::FocusedTest,
-        ]
+    mod evidence {
+        include!("decision_anchor_evidence.rs");
     }
 
     fn completed_graph_denial() -> Option<ToolCallDenial> {
@@ -68,7 +65,7 @@ mod tests {
         remaining: u8,
     ) -> Option<ToolCallDenial> {
         Some(ToolCallDenial::GraphExplorationClosed(
-            GraphExplorationClosedV1::recoverable(missing, remaining),
+            GraphExplorationClosedV1::recoverable_without_actions(missing, remaining),
         ))
     }
 
@@ -78,10 +75,6 @@ mod tests {
         Some(ToolCallDenial::GraphExplorationClosed(
             GraphExplorationClosedV1::exhausted(missing),
         ))
-    }
-
-    fn legacy_graph_denial() -> Option<ToolCallDenial> {
-        Some(ToolCallDenial::GraphExplorationClosed(None))
     }
 
     fn effects() -> BTreeMap<String, ToolEffects> {
@@ -165,6 +158,21 @@ mod tests {
     }
 
     fn output(name: &str, root: &str, stage: DecisionAnchorLineageStageV1) -> ToolOutput {
+        if name == "codebase_memory_search_graph" {
+            return output_with_focused_test_discovery(
+                name,
+                root,
+                stage,
+                FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned,
+            );
+        }
+        if name == "codebase_memory_trace_path" {
+            return output_with_caller_discovery(
+                root,
+                stage,
+                CallerDiscoveryOutcomeV1::EligibleSelectorReturned,
+            );
+        }
         output_with_kinds(
             name,
             root,
@@ -175,6 +183,68 @@ mod tests {
                 DecisionAnchorTargetKindV1::QualifiedName,
             ],
         )
+    }
+
+    fn output_with_caller_discovery(
+        root: &str,
+        stage: DecisionAnchorLineageStageV1,
+        outcome: CallerDiscoveryOutcomeV1,
+    ) -> ToolOutput {
+        let (tool, kind) = correlation("codebase_memory_trace_path");
+        let lineage = DecisionAnchorLineageV1::new_with_route_metadata(
+            root.to_string(),
+            stage,
+            DecisionAnchorTargetKindV1::from_graph_correlation(kind),
+            [
+                DecisionAnchorTargetKindV1::Pattern,
+                DecisionAnchorTargetKindV1::FunctionName,
+                DecisionAnchorTargetKindV1::QualifiedName,
+            ],
+            [],
+            None,
+            Some(outcome),
+            None,
+        )
+        .unwrap();
+        ToolOutput {
+            content: Vec::new(),
+            details: Some(serde_json::json!({
+                SAFE_GRAPH_CORRELATION_DETAIL_KEY: GraphCorrelationV1::new(tool, kind, "request").unwrap(),
+                SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: lineage,
+            })),
+            is_error: false,
+        }
+    }
+
+    fn output_with_focused_test_discovery(
+        name: &str,
+        root: &str,
+        stage: DecisionAnchorLineageStageV1,
+        outcome: FocusedTestDiscoveryOutcomeV1,
+    ) -> ToolOutput {
+        let (tool, kind) = correlation(name);
+        let lineage = DecisionAnchorLineageV1::new_with_metadata(
+            root.to_string(),
+            stage,
+            DecisionAnchorTargetKindV1::from_graph_correlation(kind),
+            [
+                DecisionAnchorTargetKindV1::Pattern,
+                DecisionAnchorTargetKindV1::FunctionName,
+                DecisionAnchorTargetKindV1::QualifiedName,
+            ],
+            [],
+            None,
+            Some(outcome),
+        )
+        .unwrap();
+        ToolOutput {
+            content: Vec::new(),
+            details: Some(serde_json::json!({
+                SAFE_GRAPH_CORRELATION_DETAIL_KEY: GraphCorrelationV1::new(tool, kind, "request").unwrap(),
+                SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: lineage,
+            })),
+            is_error: false,
+        }
     }
 
     fn output_with_evidence(
@@ -204,6 +274,8 @@ mod tests {
             is_error: false,
         }
     }
+
+    include!("decision_anchor_semantic_search.rs");
 
     fn failure_output(category: &str) -> ToolOutput {
         ToolOutput {
@@ -483,7 +555,7 @@ mod tests {
                 request,
                 AgentRequest::RunTool {
                     call,
-                    denial: None,
+                    denial: Some(ToolCallDenial::DecisionAnchorMutation),
                     ..
                 } if call.id == "mutation"
             )
@@ -519,18 +591,18 @@ mod tests {
                 "codebase_memory_get_code_snippet",
                 &failure_output("transport"),
             ),
-            DecisionAnchorTransition::Unchanged
+            DecisionAnchorTransition::ProviderUnavailableFallback
         );
         assert!(
-            !fallback.blocks_mutation("write"),
-            "the unavailable expected source read must permit conventional fallback"
+            fallback.blocks_mutation("write"),
+            "provider fallback still requires its own exact conventional read"
         );
         assert_eq!(
             fallback.on_tool_dispatched(
                 &source_call("retry", DecisionEvidenceKindV1::Implementation),
                 3,
             ),
-            legacy_graph_denial(),
+            conventional_fallback_graph_denial(),
             "fallback must not immediately reopen graph exploration"
         );
 

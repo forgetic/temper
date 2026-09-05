@@ -366,6 +366,7 @@ impl ActivityProjection for TracingProjection {
                     tool.shell_discovery_disposition.version = shell_discovery_disposition.map(|value| value.version),
                     tool.shell_discovery_disposition.status = shell_discovery_status,
                     tool.shell_discovery_disposition.matching_discovery_segments = shell_discovery_disposition.map(|value| value.matching_discovery_segments),
+                    tool.recovery_reference.disposition = tool.recovery_reference_disposition.map(|value| value.as_str()),
                     "agent: tool {name}{suffix}",
                 );
                 if let Some(preview) = preview {
@@ -410,6 +411,9 @@ impl ActivityProjection for TracingProjection {
                         .map(|value| match value.reason {
                             temper_protocol_activity::GraphExplorationClosedReasonV1::Completed => {
                                 "completed"
+                            }
+                            temper_protocol_activity::GraphExplorationClosedReasonV1::NoCompatibleRecoveryAction => {
+                                "no_compatible_recovery_action"
                             }
                             temper_protocol_activity::GraphExplorationClosedReasonV1::RecoverableIncompleteEvidence => {
                                 "recoverable_incomplete_evidence"
@@ -458,6 +462,7 @@ impl ActivityProjection for TracingProjection {
                         tool.failure.graph.missing_evidence = graph_missing.as_deref(),
                         tool.failure.graph.permitted_action = graph_action,
                         tool.failure.graph.remaining_allowance = graph_remaining,
+                        tool.recovery_reference.disposition = tool.recovery_reference_disposition.map(|value| value.as_str()),
                         "agent: tool {name}{suffix} error",
                     );
                 } else {
@@ -469,6 +474,7 @@ impl ActivityProjection for TracingProjection {
                         tool = %name,
                         id = %id,
                         duration_ms,
+                        tool.recovery_reference.disposition = tool.recovery_reference_disposition.map(|value| value.as_str()),
                         "agent: tool {name}{suffix} done",
                     );
                 }

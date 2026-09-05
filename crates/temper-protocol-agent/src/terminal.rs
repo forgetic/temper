@@ -12,6 +12,37 @@ pub const AGENT_TERMINAL_PROTOCOL_VERSION: u32 = 1;
 /// Hard bound for the complete first-party terminal output JSON document.
 pub const MAX_AGENT_TERMINAL_OUTPUT_BYTES: usize = 4096;
 
+/// Closed policy reasons that may authoritatively classify a first-party stop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPolicyFailureReasonV1 {
+    DecisionAnchorRecoveryExhausted,
+}
+
+impl AgentPolicyFailureReasonV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DecisionAnchorRecoveryExhausted => "decision_anchor_recovery_exhausted",
+        }
+    }
+}
+
+/// Provider-neutral policy terminal produced from the coding agent's typed
+/// state-machine stop, never from model or process text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentPolicyFailureV1 {
+    pub reason: AgentPolicyFailureReasonV1,
+}
+
+impl AgentPolicyFailureV1 {
+    pub const fn decision_anchor_recovery_exhausted() -> Self {
+        Self {
+            reason: AgentPolicyFailureReasonV1::DecisionAnchorRecoveryExhausted,
+        }
+    }
+}
+
 /// A terminal diagnostic written when a first-party agent has no
 /// [`crate::WorkspaceResult`] to return.
 ///
@@ -21,7 +52,10 @@ pub const MAX_AGENT_TERMINAL_OUTPUT_BYTES: usize = 4096;
 #[serde(deny_unknown_fields)]
 pub struct AgentTerminalOutputV1 {
     pub protocol_version: u32,
-    pub model_failure: ModelFailureV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_failure: Option<ModelFailureV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_failure: Option<AgentPolicyFailureV1>,
 }
 
 impl AgentTerminalOutputV1 {
@@ -31,7 +65,17 @@ impl AgentTerminalOutputV1 {
         model_failure.normalize();
         Self {
             protocol_version: AGENT_TERMINAL_PROTOCOL_VERSION,
-            model_failure,
+            model_failure: Some(model_failure),
+            policy_failure: None,
+        }
+    }
+
+    /// Builds the only policy failure admitted by the v1 terminal protocol.
+    pub const fn decision_anchor_recovery_exhausted() -> Self {
+        Self {
+            protocol_version: AGENT_TERMINAL_PROTOCOL_VERSION,
+            model_failure: None,
+            policy_failure: Some(AgentPolicyFailureV1::decision_anchor_recovery_exhausted()),
         }
     }
 
@@ -42,8 +86,17 @@ impl AgentTerminalOutputV1 {
                 self.protocol_version
             ));
         }
-        self.model_failure
-            .validate()
-            .map_err(|error| error.to_string())
+        match (&self.model_failure, self.policy_failure) {
+            (Some(model_failure), None) => {
+                model_failure.validate().map_err(|error| error.to_string())
+            }
+            (None, Some(_)) => Ok(()),
+            (None, None) => {
+                Err("terminal output must contain exactly one typed failure".to_string())
+            }
+            (Some(_), Some(_)) => {
+                Err("terminal output contains ambiguous typed failures".to_string())
+            }
+        }
     }
 }

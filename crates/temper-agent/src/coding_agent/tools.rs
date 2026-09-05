@@ -324,6 +324,7 @@ fn add_one_subagent(
             tools: ToolRegistry::from_tools(tools),
             max_iterations,
             operation_limits,
+            lineage_admission: None,
             provider,
             stream_options: stream_options.clone(),
         }

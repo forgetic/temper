@@ -98,6 +98,9 @@ pub enum AgentEvent {
         /// Closed discovery classification present only when machine-owned
         /// admission denies `bash` before registry or process execution.
         shell_discovery_disposition: Option<ShellDiscoveryDispositionV1>,
+        /// Content-free admission of a run-local graph recovery reference.
+        recovery_reference_disposition:
+            Option<temper_protocol_activity::GraphRecoveryReferenceDispositionV1>,
     },
     /// A tool finished. Timing is measured by the shell around execution and
     /// `result` is a bounded text-only candidate; unrestricted tool details are
@@ -191,6 +194,14 @@ pub const CODEBASE_MEMORY_TOOL_PREFIX: &str = "codebase_memory_";
 /// other diagnostic field from that category rather than trusting arbitrary
 /// tool-owned JSON.
 pub const SAFE_TOOL_FAILURE_DETAIL_KEY: &str = "temper_safe_tool_failure_v1";
+/// Reserved wrapper marker for content-free confirmation that a previously
+/// admitted opaque trace reference was expanded before provider dispatch.
+pub const SAFE_RECOVERY_REFERENCE_DISPOSITION_DETAIL_KEY: &str =
+    "temper_recovery_reference_disposition_v1";
+/// Reserved wrapper marker for a content-free, current-root candidate miss.
+/// The value is either `retry_available` or `exhausted`; candidate identities
+/// and provider diagnostics remain wrapper-local.
+pub const SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY: &str = "temper_graph_candidate_recovery_v1";
 /// Reserved [`ToolOutput::details`] key for the closed, wrapper-extracted graph
 /// correlation record. Generic tool details never enter activity metadata.
 pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1";
@@ -200,6 +211,8 @@ pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1
 pub enum ToolCallDenial {
     /// A trusted anchor still lacks the required later source evidence.
     DecisionAnchorMutation,
+    /// The provisional implementation still requires its bounded inspection.
+    DecisionAnchorCorrectionInspection,
     /// Graph convergence or its non-progress budget closed graph exploration.
     /// Details are absent only for the legacy provider-unavailable fallback.
     GraphExplorationClosed(Option<GraphExplorationClosedV1>),
@@ -228,6 +241,10 @@ pub struct ToolResultMetadata {
     /// Typed current-root lineage from the trusted wrapper. It is restricted
     /// to durable activity's closed, provider-neutral schema.
     pub decision_anchor_lineage: Option<DecisionAnchorLineageV1>,
+    /// Present only after the trusted trace wrapper expanded a reserved
+    /// reference to its provider-derived selector.
+    pub recovery_reference_disposition:
+        Option<temper_protocol_activity::GraphRecoveryReferenceDispositionV1>,
 }
 
 // A preview may be safe for its explicit consumer but is never safe to expose
@@ -243,6 +260,10 @@ impl std::fmt::Debug for ToolResultMetadata {
             .field("codebase_memory_timing", &self.codebase_memory_timing)
             .field("graph_correlation", &self.graph_correlation)
             .field("decision_anchor_lineage", &self.decision_anchor_lineage)
+            .field(
+                "recovery_reference_disposition",
+                &self.recovery_reference_disposition,
+            )
             .finish()
     }
 }
@@ -387,6 +408,7 @@ mod tests {
             arg_preview: Some("src/main.rs".to_string()),
             diagnostic_arguments: None,
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         };
         match event {
             AgentEvent::ToolStart {
@@ -395,12 +417,14 @@ mod tests {
                 arg_preview,
                 diagnostic_arguments,
                 shell_discovery_disposition,
+                recovery_reference_disposition,
             } => {
                 assert_eq!(id, "call_1");
                 assert_eq!(name, "read");
                 assert_eq!(arg_preview.as_deref(), Some("src/main.rs"));
                 assert_eq!(diagnostic_arguments, None);
                 assert_eq!(shell_discovery_disposition, None);
+                assert_eq!(recovery_reference_disposition, None);
             }
             _ => panic!("expected ToolStart"),
         }
@@ -414,6 +438,7 @@ mod tests {
             arg_preview: None,
             diagnostic_arguments: None,
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         };
         assert!(matches!(
             event,
@@ -435,6 +460,7 @@ mod tests {
                 r#"{{"command":"{secret}"}}"#
             ))),
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         };
         let debug = format!("{event:?}");
         assert!(!debug.contains(secret));

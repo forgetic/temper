@@ -334,6 +334,17 @@ fn stable_effective_action_prompt_snapshots() {
                 assert!(actual.contains("LEGACY FALLBACK OUTCOMES"));
                 assert!(actual.contains("no-verdict success path"));
                 assert!(actual.contains("`submit_for_pr`"));
+                for expected in [
+                    "make the first discovery action a targeted graph symbol/code search",
+                    "Do not run a compound shell inventory before graph-based source selection",
+                    "make every command-list segment fully classifiable",
+                    "Repository status, validation, and other operational checks remain available after source selection",
+                ] {
+                    assert!(
+                        actual.contains(expected),
+                        "open_pr snapshot omitted {expected:?}"
+                    );
+                }
             }
             _ => unreachable!(),
         }

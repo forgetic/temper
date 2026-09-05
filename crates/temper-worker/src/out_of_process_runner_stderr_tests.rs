@@ -87,15 +87,33 @@ fn terminal_file_consumer_is_first_party_bounded_and_fail_closed() {
     )
     .expect("write terminal fixture");
 
-    let diagnostic = super::output_files::first_party_terminal_model_failure(true, &path)
-        .expect("valid first-party terminal is consumed");
+    let super::output_files::FirstPartyTerminalFailure::Model(diagnostic) =
+        super::output_files::first_party_terminal_failure(true, &path)
+            .expect("valid first-party terminal is consumed")
+    else {
+        panic!("model terminal decoded as policy")
+    };
     assert_eq!(diagnostic.provider, "openai-codex");
     assert_eq!(diagnostic.http_status, Some(504));
     assert!(diagnostic.retryable);
     assert_eq!(
-        super::output_files::first_party_terminal_model_failure(false, &path),
+        super::output_files::first_party_terminal_failure(false, &path),
         None,
         "third-party commands never consume the carrier"
+    );
+
+    std::fs::write(
+        &path,
+        r#"{"protocol_version":1,"policy_failure":{"reason":"decision_anchor_recovery_exhausted"}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        super::output_files::first_party_terminal_failure(true, &path),
+        Some(super::output_files::FirstPartyTerminalFailure::Policy(_))
+    ));
+    assert_eq!(
+        super::output_files::first_party_terminal_failure(false, &path),
+        None
     );
 
     std::fs::write(
@@ -104,7 +122,7 @@ fn terminal_file_consumer_is_first_party_bounded_and_fail_closed() {
     )
     .unwrap();
     assert_eq!(
-        super::output_files::first_party_terminal_model_failure(true, &path),
+        super::output_files::first_party_terminal_failure(true, &path),
         None,
         "unsafe provider content is malformed terminal evidence"
     );
@@ -115,7 +133,7 @@ fn terminal_file_consumer_is_first_party_bounded_and_fail_closed() {
     )
     .unwrap();
     assert_eq!(
-        super::output_files::first_party_terminal_model_failure(true, &path),
+        super::output_files::first_party_terminal_failure(true, &path),
         None,
         "oversized terminal files are not read"
     );
@@ -148,6 +166,10 @@ exit 2
         .expect_err("typed first-party failure");
 
     assert_eq!(error.class, temper_protocol_worker::FailureClass::Transient);
+    assert_eq!(
+        error.failure_code,
+        temper_protocol_activity::FailureCodeV1::ChildProcess
+    );
     let diagnostic = error
         .model_failure
         .unwrap_or_else(|| panic!("typed model failure missing: {}", error.message));
@@ -166,6 +188,87 @@ exit 2
             .contains("SECRET-SENTINEL-748"),
         "stderr must never populate typed model fields"
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn first_party_policy_terminal_is_permanent_and_does_not_retain_stderr() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = agent_script(
+        temp.path(),
+        "policy-failure-agent.sh",
+        r#"
+printf 'provider text /tmp/private selector=secret authorization: Bearer token
+' >&2
+cat > "$terminal" <<'JSON'
+{"protocol_version":1,"policy_failure":{"reason":"decision_anchor_recovery_exhausted"}}
+JSON
+exit 2
+"#,
+    );
+    let context = super::tests::test_context();
+    let cwd = temp.path().to_path_buf();
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()));
+
+    let error = temper_worker_io::block_on(async move {
+        runner.run("policy-terminal-job", &context, &cwd).await
+    })
+    .expect_err("typed policy terminal is a failure");
+
+    assert_eq!(error.class, temper_protocol_worker::FailureClass::Permanent);
+    assert_eq!(
+        error.failure_code,
+        temper_protocol_activity::FailureCodeV1::Policy
+    );
+    assert_eq!(error.model_failure, None);
+    assert!(error.message.contains("decision_anchor_recovery_exhausted"));
+    for forbidden in [
+        "provider text",
+        "/tmp/private",
+        "selector",
+        "Bearer",
+        "stderr",
+    ] {
+        assert!(
+            !error.message.contains(forbidden),
+            "policy error retained {forbidden}"
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn zero_exit_malformed_result_does_not_consume_a_policy_terminal() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = agent_script(
+        temp.path(),
+        "malformed-result-agent.sh",
+        r#"
+printf '%s' '{not-json' > "$result"
+cat > "$terminal" <<'JSON'
+{"protocol_version":1,"policy_failure":{"reason":"decision_anchor_recovery_exhausted"}}
+JSON
+"#,
+    );
+    let context = super::tests::test_context();
+    let cwd = temp.path().to_path_buf();
+    let runner = OutOfProcessRunner::new(vec![script.display().to_string()])
+        .with_runtime_limits(Some(AgentRuntimeLimitsV1::default()));
+
+    let error = temper_worker_io::block_on(async move {
+        runner.run("malformed-result-job", &context, &cwd).await
+    })
+    .expect_err("malformed result is rejected");
+
+    assert_eq!(error.class, temper_protocol_worker::FailureClass::Permanent);
+    assert_eq!(
+        error.failure_code,
+        temper_protocol_activity::FailureCodeV1::ChildProcess
+    );
+    assert_eq!(error.model_failure, None);
+    assert!(error.message.contains("result file is not valid JSON"));
+    assert!(!error.message.contains("decision_anchor_recovery_exhausted"));
 }
 
 #[test]
@@ -194,6 +297,10 @@ exit 2
 
     assert_eq!(error.class, temper_protocol_worker::FailureClass::Transient);
     assert_eq!(error.model_failure, None);
+    assert_eq!(
+        error.failure_code,
+        temper_protocol_activity::FailureCodeV1::ChildProcess
+    );
     assert!(error.message.contains("status 2"));
 }
 

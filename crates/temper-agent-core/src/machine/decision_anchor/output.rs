@@ -1,6 +1,9 @@
 //! Privacy-safe extraction of typed graph output used by decision-anchor policy.
 
-use super::super::protocol::{SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY};
+use super::super::protocol::{
+    SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY, SAFE_GRAPH_CORRELATION_DETAIL_KEY,
+    SAFE_TOOL_FAILURE_DETAIL_KEY,
+};
 use super::super::tool_failure::ToolFailureCategory;
 use super::*;
 
@@ -18,7 +21,7 @@ pub(super) fn successful_graph_batch(finished: &[FinishedCodebaseCall<'_>]) -> b
     finished.iter().any(|finished| !finished.output.is_error)
 }
 
-fn valid_graph_correlation(name: &str, output: &ToolOutput) -> bool {
+pub(super) fn valid_graph_correlation(name: &str, output: &ToolOutput) -> bool {
     if output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
         return false;
     }
@@ -38,7 +41,9 @@ pub(super) fn has_incompatible_targeted_result(
         let output = anchor_output(finished.name, finished.output);
         match output {
             Some(output) if output.lineage.stage == DecisionAnchorLineageStageV1::CarryForward => {
-                !active.accepts(&finished.call, &output.lineage)
+                active
+                    .accepted_root(&finished.call, &output.lineage)
+                    .is_none()
             }
             Some(_) => false,
             None => valid_graph_correlation(finished.name, finished.output),
@@ -62,9 +67,51 @@ pub(super) fn trusted_unavailable_provider_output(name: &str, output: &ToolOutpu
             .get("category")
             .and_then(serde_json::Value::as_str)
             .and_then(ToolFailureCategory::from_stable_str)
-            // A lifecycle denial cannot release an incomplete anchor as if
-            // the provider were systemically unavailable.
-            .is_some_and(|category| category != ToolFailureCategory::GraphLifecycleDenial)
+            .is_some_and(|category| {
+                matches!(
+                    category,
+                    ToolFailureCategory::ConfigurationStartup
+                        | ToolFailureCategory::ProjectNotReady
+                        | ToolFailureCategory::IndexFailure
+                        | ToolFailureCategory::Timeout
+                        | ToolFailureCategory::Transport
+                        | ToolFailureCategory::ProcessExit
+                        | ToolFailureCategory::ProviderProtocol
+                        | ToolFailureCategory::CircuitOpen
+                )
+            })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CandidateRecoveryDisposition {
+    RetryAvailable,
+    Exhausted,
+}
+
+pub(super) fn candidate_recovery_disposition(
+    name: &str,
+    output: &ToolOutput,
+) -> Option<CandidateRecoveryDisposition> {
+    if !output.is_error || !name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX) {
+        return None;
+    }
+    let details = output.details.as_ref()?;
+    let category = details
+        .get(SAFE_TOOL_FAILURE_DETAIL_KEY)?
+        .get("category")?
+        .as_str()
+        .and_then(ToolFailureCategory::from_stable_str)?;
+    if category != ToolFailureCategory::InvalidModelInput {
+        return None;
+    }
+    match details
+        .get(SAFE_GRAPH_CANDIDATE_RECOVERY_DETAIL_KEY)?
+        .as_str()?
+    {
+        "retry_available" => Some(CandidateRecoveryDisposition::RetryAvailable),
+        "exhausted" => Some(CandidateRecoveryDisposition::Exhausted),
+        _ => None,
+    }
 }
 
 pub(super) fn anchor_output(name: &str, output: &ToolOutput) -> Option<AnchorOutput> {

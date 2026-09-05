@@ -238,6 +238,7 @@ fn metadata_keeps_tool_start_identity_without_any_argument_bytes() {
             arg_preview: Some(ARGUMENT.to_string()),
             diagnostic_arguments: None,
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         });
 
         let frames = recorder.0.lock().expect("frames");
@@ -302,6 +303,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
             arg_preview: Some(secret.clone()),
             diagnostic_arguments: None,
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         });
         sink.emit(AgentEvent::ToolEnd {
             id: "tool-1".to_string(),
@@ -316,6 +318,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         });
         sink.emit(AgentEvent::ToolEnd {
@@ -333,6 +336,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         });
         sink.emit(AgentEvent::ToolStart {
@@ -341,6 +345,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
             arg_preview: Some("safe/path.rs".to_string()),
             diagnostic_arguments: None,
             shell_discovery_disposition: None,
+            recovery_reference_disposition: None,
         });
         sink.emit(AgentEvent::ToolEnd {
             id: "tool-2".to_string(),
@@ -355,6 +360,7 @@ fn metadata_excludes_content_and_all_modes_redact_and_bound() {
                 codebase_memory_timing: None,
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         });
         let json =
@@ -484,6 +490,7 @@ fn retries_keep_attempt_boundaries_inside_one_ordered_turn() {
         arg_preview: Some("src/lib.rs".to_string()),
         diagnostic_arguments: None,
         shell_discovery_disposition: None,
+        recovery_reference_disposition: None,
     });
     sink.emit(AgentEvent::ToolEnd {
         id: "tool-1".to_string(),
@@ -615,6 +622,7 @@ fn codebase_memory_provider_text_never_enters_activity_metadata() {
                 }),
                 graph_correlation: None,
                 decision_anchor_lineage: None,
+                recovery_reference_disposition: None,
             },
         });
 

@@ -174,6 +174,7 @@ pub(super) fn produce_first_party_run(collector: &TraceCollector) -> (String, Ag
         arg_preview: Some(ARGUMENT_SENTINEL.to_string()),
         diagnostic_arguments: None,
         shell_discovery_disposition: None,
+        recovery_reference_disposition: None,
     });
     events.emit(AgentEvent::ToolEnd {
         id: "tool-call-350".to_string(),
@@ -188,6 +189,7 @@ pub(super) fn produce_first_party_run(collector: &TraceCollector) -> (String, Ag
             codebase_memory_timing: None,
             graph_correlation: None,
             decision_anchor_lineage: None,
+            recovery_reference_disposition: None,
         },
     });
 

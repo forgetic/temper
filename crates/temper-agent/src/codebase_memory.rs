@@ -8,14 +8,14 @@
 //! on the actual provider tool definitions and are not copied into prompts.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use temper_agent_core::{
-    SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY, ToolFailureCategory,
-    ToolFailureDiagnostic,
+    LineageAdmissionHandle, SAFE_GRAPH_CORRELATION_DETAIL_KEY, SAFE_TOOL_FAILURE_DETAIL_KEY,
+    ToolFailureCategory, ToolFailureDiagnostic,
 };
 use temper_protocol_activity::{
     DecisionAnchorLineageStageV1, DecisionAnchorLineageV1, DecisionEvidenceKindV1,
@@ -51,7 +51,7 @@ use indexing::prepare_indexes;
 use lifecycle_observability::{
     DiscoveryEvidence, DiscoveryOutcome, FailureCategory, emit_discovery, emit_identity_selected,
 };
-use lineage::DecisionAnchorLineages;
+use lineage::DecisionAnchorLineageRegistry;
 use provider::validate_provider_contract;
 use scope::{WorkspaceScope, discover_workspace_projects};
 #[cfg(test)]
@@ -99,6 +99,7 @@ pub struct CodebaseMemoryToolset {
     registered_tool_metadata: Vec<CodebaseMemoryToolMetadata>,
     prompt_status: Option<String>,
     tools: Vec<Box<dyn Tool>>,
+    lineage_admission: Option<LineageAdmissionHandle>,
 }
 
 /// Registration metadata for one safe codebase-memory tool.
@@ -120,6 +121,7 @@ impl CodebaseMemoryToolset {
             registered_tool_metadata: Vec::new(),
             prompt_status: None,
             tools: Vec::new(),
+            lineage_admission: None,
         }
     }
 
@@ -127,6 +129,7 @@ impl CodebaseMemoryToolset {
         tools: Vec<Box<dyn Tool>>,
         registered_tool_metadata: Vec<CodebaseMemoryToolMetadata>,
         prompt_status: String,
+        lineage_admission: LineageAdmissionHandle,
     ) -> Self {
         let registered_tool_names = registered_tool_metadata
             .iter()
@@ -138,6 +141,7 @@ impl CodebaseMemoryToolset {
             registered_tool_metadata,
             prompt_status: Some(prompt_status),
             tools,
+            lineage_admission: Some(lineage_admission),
         }
     }
 
@@ -162,6 +166,11 @@ impl CodebaseMemoryToolset {
     /// are registered.
     pub fn prompt_status(&self) -> Option<&str> {
         self.prompt_status.as_deref()
+    }
+
+    /// Shared run-local pre-provider lineage resolver, when graph tools exist.
+    pub fn lineage_admission(&self) -> Option<LineageAdmissionHandle> {
+        self.lineage_admission.clone()
     }
 
     /// Consumes the toolset and returns the wrapped tongs tools.
@@ -447,7 +456,8 @@ async fn start_toolset(
     let health = Arc::new(CodebaseMemoryHealth::new(client.cancellation_handle()));
     // Provider-shaped target values remain in this wrapper-local registry. The
     // core receives only an opaque root and typed aggregate lineage record.
-    let decision_anchor_lineages = Arc::new(Mutex::new(DecisionAnchorLineages::default()));
+    let decision_anchor_lineages = Arc::new(DecisionAnchorLineageRegistry::new(Arc::clone(&scope)));
+    let lineage_admission: LineageAdmissionHandle = decision_anchor_lineages.clone();
 
     let mut tools: Vec<Box<dyn Tool>> = Vec::new();
     let mut registered_tool_metadata = Vec::new();
@@ -499,6 +509,7 @@ async fn start_toolset(
         tools,
         registered_tool_metadata,
         prompt_status,
+        lineage_admission,
     ))
 }
 
@@ -664,11 +675,22 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
             )
         })
         .unwrap_or((0, "", ""));
+    let focused_test_discovery = ev
+        .decision_anchor_lineage
+        .and_then(|lineage| lineage.focused_test_discovery)
+        .map(focused_test_discovery_outcome)
+        .unwrap_or("");
     let lineage_evidence_kind = ev
         .decision_anchor_lineage
         .and_then(|lineage| lineage.decision_evidence_kind)
         .map(decision_evidence_kind)
         .unwrap_or("");
+    let implementation_correction_available = ev
+        .decision_anchor_lineage
+        .is_some_and(|lineage| lineage.implementation_correction_available);
+    let implementation_authority_corrected = ev
+        .decision_anchor_lineage
+        .is_some_and(|lineage| lineage.implementation_authority_corrected);
     let (lineage_version, lineage_stage, lineage_result_target_kind_count) = ev
         .decision_anchor_lineage
         .map(|lineage| {
@@ -701,6 +723,9 @@ fn emit_mcp_tool_result(ev: McpToolResult<'_>) {
         graph.lineage.stage = lineage_stage,
         graph.lineage.result_target_kind_count = lineage_result_target_kind_count,
         graph.lineage.decision_evidence_kind = lineage_evidence_kind,
+        graph.lineage.focused_test_discovery = focused_test_discovery,
+        graph.lineage.implementation_correction_available = implementation_correction_available,
+        graph.lineage.implementation_authority_corrected = implementation_authority_corrected,
         "agent:   MCP tool result: {} error={}",
         ev.mcp_tool,
         ev.is_error,
@@ -733,6 +758,19 @@ fn decision_evidence_kind(kind: DecisionEvidenceKindV1) -> &'static str {
     }
 }
 
+fn focused_test_discovery_outcome(
+    outcome: temper_protocol_activity::FocusedTestDiscoveryOutcomeV1,
+) -> &'static str {
+    match outcome {
+        temper_protocol_activity::FocusedTestDiscoveryOutcomeV1::EligibleSelectorReturned => {
+            "eligible_selector_returned"
+        }
+        temper_protocol_activity::FocusedTestDiscoveryOutcomeV1::NoEligibleSelector => {
+            "no_eligible_selector"
+        }
+    }
+}
+
 fn codebase_memory_mode(mode: CodebaseMemoryMode) -> &'static str {
     match mode {
         CodebaseMemoryMode::Auto => "auto",
@@ -758,7 +796,7 @@ struct CodebaseMemoryTool {
     default_project_key: Option<&'static str>,
     call_timeout: Duration,
     scope: Arc<WorkspaceScope>,
-    decision_anchor_lineages: Arc<Mutex<DecisionAnchorLineages>>,
+    decision_anchor_lineages: Arc<DecisionAnchorLineageRegistry>,
 }
 
 impl CodebaseMemoryTool {
@@ -774,7 +812,7 @@ impl CodebaseMemoryTool {
         default_project_key: Option<&'static str>,
         call_timeout: Duration,
         scope: Arc<WorkspaceScope>,
-        decision_anchor_lineages: Arc<Mutex<DecisionAnchorLineages>>,
+        decision_anchor_lineages: Arc<DecisionAnchorLineageRegistry>,
     ) -> Self {
         debug_assert_eq!(public_name, allowed.public_name);
         Self {

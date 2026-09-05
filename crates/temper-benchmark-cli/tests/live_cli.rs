@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -29,7 +30,7 @@ workspace_context = "context.json"
 capture = "metadata"
 jig_script = "jig.json"
 post_run_commands = [["sh", "-c", "cat repo/provider-output.txt"]]
-repetitions = 1
+repetitions = 2
 "#,
     )
     .unwrap();
@@ -120,6 +121,7 @@ printf '%s\n' '{{"title":"Fake live","body":"# Report","summary":"{SECRET_SENTIN
     let aggregate: Value =
         serde_json::from_slice(&fs::read(output_dir.join("aggregate.json")).unwrap()).unwrap();
     assert_eq!(aggregate["mode"], "live");
+    assert_eq!(aggregate["outcomes"]["total"], 2);
     assert_eq!(
         aggregate["runs"][0]["summary"]["workspace_result"]["summary"],
         "[REDACTED]"
@@ -152,6 +154,40 @@ printf '%s\n' '{{"title":"Fake live","body":"# Report","summary":"{SECRET_SENTIN
             path.display()
         );
     }
+
+    let mut session_ids = BTreeSet::new();
+    for (index, run) in aggregate["runs"].as_array().unwrap().iter().enumerate() {
+        let session_id = run["summary"]["identity"]["agent_session_id"]
+            .as_str()
+            .expect("live trial has an agent session identity");
+        assert!(!session_id.trim().is_empty());
+        assert!(session_ids.insert(session_id.to_string()));
+        let repetition = output_dir
+            .join("repetitions")
+            .join(format!("{:03}", index + 1));
+        let context: Value =
+            serde_json::from_slice(&fs::read(repetition.join("workspace-context.json")).unwrap())
+                .unwrap();
+        assert_eq!(context["agent_session"]["session_id"], session_id);
+        assert_trace_session(
+            &fs::read_to_string(repetition.join("trace.export.jsonl")).unwrap(),
+            session_id,
+        );
+    }
+    assert_eq!(session_ids.len(), 2);
+}
+
+fn assert_trace_session(trace: &str, expected: &str) {
+    let mut events = 0;
+    for line in trace.lines() {
+        let record: Value = serde_json::from_str(line).unwrap();
+        if record["type"] != "agent_run_event_v1" {
+            continue;
+        }
+        events += 1;
+        assert_eq!(record["event"]["agent_session_id"], expected);
+    }
+    assert!(events > 0, "canonical trace contains no agent events");
 }
 
 #[cfg(unix)]

@@ -431,6 +431,7 @@ fn metadata_policy_rejects_forged_message_and_tool_argument_content() {
             truncated: false,
         })),
         shell_discovery_disposition: None,
+        recovery_reference_disposition: None,
     });
     assert!(matches!(
         run.accept_frame(tool),

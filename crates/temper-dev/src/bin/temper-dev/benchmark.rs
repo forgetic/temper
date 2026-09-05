@@ -84,17 +84,114 @@ pub(super) fn verify_ordinary_failure_recovery(trace: &str) -> Result<(), String
     Ok(())
 }
 
+pub(super) fn verify_post_source_exact_read_recovery(trace: &str) -> Result<(), String> {
+    let events = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|event| {
+            let data = event.pointer("/event/event/data")?;
+            data.get("status")?;
+            Some((event.pointer("/event/seq")?.as_u64()?, data.clone()))
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        ("read_route_before_source_chain", "read", "succeeded"),
+        (
+            "recovery_active_root_implementation",
+            "codebase_memory_get_code_snippet",
+            "succeeded",
+        ),
+        (
+            "patch_retry_affinity_before_exact_read",
+            "apply_patch",
+            "failed",
+        ),
+        ("read_route_after_source_chain", "read", "succeeded"),
+        ("patch_retry_affinity", "apply_patch", "succeeded"),
+    ];
+    let mut previous_seq = None;
+    for (call_id, tool, status) in expected {
+        let (seq, data) = events
+            .iter()
+            .find(|(_, data)| data.get("call_id").and_then(Value::as_str) == Some(call_id))
+            .ok_or_else(|| format!("enabled trace omitted {call_id}"))?;
+        if previous_seq.is_some_and(|previous| *seq <= previous) {
+            return Err("post-source exact-read recovery events were out of order".to_string());
+        }
+        previous_seq = Some(*seq);
+        if data.get("name").and_then(Value::as_str) != Some(tool) {
+            return Err(format!("{call_id} did not finish as {tool}"));
+        }
+        if data.get("status").and_then(Value::as_str) != Some(status) {
+            return Err(format!("{call_id} did not finish as {status}"));
+        }
+    }
+
+    let denial = events
+        .iter()
+        .find_map(|(_, data)| {
+            (data.get("call_id").and_then(Value::as_str)
+                == Some("patch_retry_affinity_before_exact_read"))
+            .then_some(data)
+        })
+        .expect("denied mutation was checked above")
+        .get("failure")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "denied mutation omitted its typed diagnostic".to_string())?;
+    let denial_fields = denial.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    if denial_fields
+        != BTreeSet::from([
+            "category",
+            "fallback_to_conventional_discovery",
+            "message",
+            "reason",
+            "retry_disposition",
+            "retryable",
+        ])
+        || denial.get("category").and_then(Value::as_str) != Some("policy_denial")
+        || denial.get("reason").and_then(Value::as_str) != Some("policy_precondition")
+    {
+        return Err("denied mutation retained a non-canonical diagnostic".to_string());
+    }
+
+    let denied_start = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find_map(|event| {
+            let data = event.pointer("/event/event/data")?;
+            (event.pointer("/event/event/type").and_then(Value::as_str) == Some("tool.started")
+                && data.get("call_id").and_then(Value::as_str)
+                    == Some("patch_retry_affinity_before_exact_read"))
+            .then_some(data.clone())
+        })
+        .ok_or_else(|| "denied mutation omitted its start event".to_string())?;
+    if denied_start.get("arguments").is_some() {
+        return Err("denied mutation retained private arguments".to_string());
+    }
+    Ok(())
+}
+
 pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(), String> {
+    let public_summary = serde_json::to_string(run)
+        .map_err(|error| format!("serialize controlled run summary: {error}"))?;
+    for private in [
+        "provider_invocation",
+        "provider_tool",
+        "requested_stable_project",
+        "root_binding",
+    ] {
+        if public_summary.contains(private) {
+            return Err("enabled run summary retained private provider or root state".to_string());
+        }
+    }
     let evidence = run
         .pointer("/metrics/graph/decision_evidence")
         .and_then(Value::as_array)
         .ok_or_else(|| "enabled run omitted graph decision evidence".to_string())?;
     let expected = BTreeMap::from([
-        (("search_graph", "search_code", "graph"), 1_u64),
+        (("search_graph", "trace_path", "graph"), 1_u64),
         (("search_graph", "get_code_snippet", "source"), 1),
-        (("search_code", "search_code", "graph"), 2),
-        (("trace_path", "search_code", "graph"), 1),
-        (("search_code", "get_code_snippet", "source"), 1),
+        (("trace_path", "get_code_snippet", "source"), 1),
         (("get_code_snippet", "read", "selection"), 1),
     ]);
     let expected_count = expected.values().sum::<u64>() as usize;
@@ -116,9 +213,13 @@ pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(),
         "kind",
         "target",
     ]);
-    let denied = [
-        "recovery_broad_architecture_denied",
-        "recovery_duplicate_worker_refinement_denied",
+    let excluded_consumers = [
+        "read_route_before_source_chain",
+        "patch_retry_affinity_before_exact_read",
+        "recovery_cross_root_caller_denied",
+        "recovery_cross_root_focused_test_denied",
+        "recovery_satisfied_trace_denied",
+        "post_decision_source_read",
     ];
     let mut observed = BTreeMap::new();
     for entry in evidence {
@@ -135,11 +236,12 @@ pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(),
                 object
                     .get(field)
                     .and_then(Value::as_str)
-                    .is_some_and(|call_id| denied.contains(&call_id))
+                    .is_some_and(|call_id| excluded_consumers.contains(&call_id))
             })
         {
             return Err(
-                "locally denied recovery attempts received decision relevance credit".to_string(),
+                "pre-source or locally denied actions received decision relevance credit"
+                    .to_string(),
             );
         }
         let tuple = (
@@ -163,136 +265,42 @@ pub(super) fn verify_safe_converged_decision_evidence(run: &Value) -> Result<(),
             "enabled decision evidence did not preserve the converged root forest".to_string(),
         );
     }
-    if !evidence.iter().any(|entry| {
-        entry.get("graph_call_id").and_then(Value::as_str) == Some("graph_source_delivery_caller")
-            && entry.get("graph_tool").and_then(Value::as_str) == Some("get_code_snippet")
-            && entry.get("consumer_call_id").and_then(Value::as_str)
-                == Some("read_route_after_source_chain")
-            && entry.get("consumer_tool").and_then(Value::as_str) == Some("read")
-            && entry.get("consumption_mode").and_then(Value::as_str) == Some("selection")
-            && entry.get("target").and_then(Value::as_str) == Some("repo/src/route.rs")
-            && entry.get("kind").and_then(Value::as_str) == Some("implementation")
-    }) {
+    let selection = evidence
+        .iter()
+        .filter(|entry| entry.get("consumption_mode").and_then(Value::as_str) == Some("selection"))
+        .collect::<Vec<_>>();
+    if selection.len() != 1 {
+        return Err(format!(
+            "enabled decision evidence retained {} exact source selections; expected 1",
+            selection.len()
+        ));
+    }
+    let selection = selection[0];
+    if selection.get("graph_call_id").and_then(Value::as_str)
+        != Some("recovery_active_root_implementation")
+        || selection.get("graph_tool").and_then(Value::as_str) != Some("get_code_snippet")
+        || selection.get("consumer_call_id").and_then(Value::as_str)
+            != Some("read_route_after_source_chain")
+        || selection.get("consumer_tool").and_then(Value::as_str) != Some("read")
+        || selection.get("target").and_then(Value::as_str) != Some("repo/src/route.rs")
+        || selection.get("kind").and_then(Value::as_str) != Some("implementation")
+    {
         return Err("enabled decision evidence omitted the exact source selection".to_string());
     }
     Ok(())
 }
 
+mod recovery;
+
 pub(super) fn verify_decision_gap_recovery(trace: &str) -> Result<(), String> {
-    const RECOVERY_GUIDANCE: &str = "decision-evidence recovery required; missing evidence: [caller]; permitted action: targeted_current_root_graph_call; remaining allowance: 4";
-    let events = trace
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter_map(|event| {
-            let data = event.pointer("/event/event/data")?;
-            data.get("status")?;
-            Some((event.pointer("/event/seq")?.as_u64()?, data.clone()))
-        })
-        .collect::<Vec<_>>();
-    let expected = [
-        ("duplicate_worker_refinement_non_progress_one", "succeeded"),
-        ("duplicate_worker_refinement_exhausts_budget", "succeeded"),
-        ("recovery_broad_architecture_denied", "failed"),
-        ("recovery_duplicate_worker_refinement_denied", "failed"),
-        ("graph_source_delivery_caller", "succeeded"),
-        ("post_decision_broad_architecture", "failed"),
-        ("post_decision_graph_search", "failed"),
-        ("post_decision_source_read", "failed"),
-    ];
-    let mut previous_seq = None;
-    for (call_id, status) in expected {
-        let (seq, data) = events
-            .iter()
-            .find(|(_, data)| data.get("call_id").and_then(Value::as_str) == Some(call_id))
-            .ok_or_else(|| format!("enabled trace omitted {call_id}"))?;
-        if previous_seq.is_some_and(|previous| *seq <= previous) {
-            return Err("decision-gap recovery events were out of order".to_string());
-        }
-        previous_seq = Some(*seq);
-        if data.get("status").and_then(Value::as_str) != Some(status) {
-            return Err(format!("{call_id} did not finish as {status}"));
-        }
-    }
-
-    let recoverable = serde_json::json!({
-        "reason": "recoverable_incomplete_evidence",
-        "missing_evidence": ["caller"],
-        "permitted_action": "targeted_current_root_graph_call",
-        "remaining_allowance": 4,
-    });
-    for call_id in [
-        "recovery_broad_architecture_denied",
-        "recovery_duplicate_worker_refinement_denied",
-    ] {
-        let data = events
-            .iter()
-            .find_map(|(_, data)| {
-                (data.get("call_id").and_then(Value::as_str) == Some(call_id)).then_some(data)
-            })
-            .expect("recovery denial was checked above");
-        let failure = data
-            .get("failure")
-            .ok_or_else(|| format!("{call_id} omitted its recovery diagnostic"))?;
-        if failure.get("category").and_then(Value::as_str) != Some("graph_lifecycle_denial")
-            || failure.get("reason").and_then(Value::as_str) != Some("decision_evidence_incomplete")
-            || failure.get("message").and_then(Value::as_str) != Some(RECOVERY_GUIDANCE)
-            || failure.get("graph_exploration") != Some(&recoverable)
-            || call_has_provider_invocation(trace, call_id, None, None)
-        {
-            return Err(format!(
-                "{call_id} did not retain the exact local missing-caller recovery denial"
-            ));
-        }
-    }
-
-    let completed = serde_json::json!({
-        "reason": "completed",
-        "missing_evidence": [],
-        "permitted_action": "conventional_discovery",
-        "remaining_allowance": 0,
-    });
-    for call_id in [
-        "post_decision_broad_architecture",
-        "post_decision_graph_search",
-        "post_decision_source_read",
-    ] {
-        let data = events
-            .iter()
-            .find_map(|(_, data)| {
-                (data.get("call_id").and_then(Value::as_str) == Some(call_id)).then_some(data)
-            })
-            .expect("post-completion denial was checked above");
-        let failure = data
-            .get("failure")
-            .ok_or_else(|| format!("{call_id} omitted its completion diagnostic"))?;
-        if failure.get("category").and_then(Value::as_str) != Some("graph_lifecycle_denial")
-            || failure.get("reason").and_then(Value::as_str) != Some("exploration_closed")
-            || failure.get("graph_exploration") != Some(&completed)
-            || call_has_provider_invocation(trace, call_id, None, None)
-        {
-            return Err(format!("{call_id} was not denied locally after completion"));
-        }
-    }
-
-    if !call_has_provider_invocation(
-        trace,
-        "graph_source_delivery_caller",
-        Some(8),
-        Some("get_code_snippet"),
-    ) {
-        return Err(
-            "targeted current-root caller recovery did not reach the provider last".to_string(),
-        );
-    }
-    Ok(())
+    recovery::verify_decision_gap_recovery(trace)
 }
 
 pub(super) fn verify_typed_graph_correlation_records(trace: &str) -> Result<(), String> {
     let expected = std::collections::BTreeMap::from([
         (("search_graph", "graph_query"), 2_u64),
-        (("search_code", "pattern"), 3),
         (("trace_path", "function_name"), 1),
-        (("get_code_snippet", "qualified_name"), 2),
+        (("get_code_snippet", "qualified_name"), 5),
     ]);
     let observed = trace
         .lines()
@@ -369,8 +377,11 @@ pub(super) fn verify_provider_invocations(trace: &str) -> Result<(), String> {
     for (invocation, expected_tool) in [
         (1, "search_graph"),
         (2, "search_graph"),
-        (6, "search_code"),
-        (7, "search_code"),
+        (3, "get_code_snippet"),
+        (4, "get_code_snippet"),
+        (5, "trace_path"),
+        (6, "get_code_snippet"),
+        (7, "get_code_snippet"),
         (8, "get_code_snippet"),
     ] {
         if invocations.get(&invocation) != Some(&BTreeSet::from([expected_tool.to_string()])) {
@@ -379,19 +390,19 @@ pub(super) fn verify_provider_invocations(trace: &str) -> Result<(), String> {
             ));
         }
     }
-    let parallel_tools = (3..=5)
-        .flat_map(|invocation| invocations[&invocation].iter().cloned())
-        .collect::<BTreeSet<_>>();
-    if parallel_tools
-        != BTreeSet::from([
-            "search_code".to_string(),
-            "trace_path".to_string(),
-            "get_code_snippet".to_string(),
-        ])
-    {
-        return Err(format!(
-            "parallel provider refinements were {parallel_tools:?}"
-        ));
+    for call_id in [
+        "recovery_cross_root_caller_denied",
+        "recovery_cross_root_focused_test_denied",
+        "recovery_satisfied_trace_denied",
+        "post_decision_broad_architecture",
+        "post_decision_graph_search",
+        "post_decision_source_read",
+    ] {
+        if call_has_provider_invocation(trace, call_id, None, None) {
+            return Err(format!(
+                "locally denied {call_id} reached the private provider"
+            ));
+        }
     }
     Ok(())
 }
@@ -542,12 +553,12 @@ mod tests {
         let records = [
             ("search_graph", "graph_query"),
             ("trace_path", "function_name"),
-            ("search_code", "pattern"),
             ("get_code_snippet", "qualified_name"),
             ("search_graph", "graph_query"),
             ("get_code_snippet", "qualified_name"),
-            ("search_code", "pattern"),
-            ("search_code", "pattern"),
+            ("get_code_snippet", "qualified_name"),
+            ("get_code_snippet", "qualified_name"),
+            ("get_code_snippet", "qualified_name"),
         ]
         .map(|(tool, target_kind)| correlation_event(tool, target_kind))
         .join("\n");
