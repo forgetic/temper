@@ -20,6 +20,7 @@ TYPED_LINEAGE_STAGE = 0
 MAPPED_GRAPH_STAGE = 0
 GRAPH_CONVERGENCE_STAGE = 0
 DECISION_GAP_RECOVERY_STAGE = 0
+DECISION_GAP_ROOT_QUERIES = set()
 DECISION_GAP_CORRECTION_PREVIEWS = set()
 FOCUSED_RELEVANCE_STAGE = 0
 RESULT_DRIVEN_TOKENS = {
@@ -55,6 +56,11 @@ GRAPH_CONVERGENCE_TOKENS = {
     "active_behavioral_test": "crate::fixture::behavior_" + uuid.uuid4().hex + "::ordinary_retry_keeps_topic_affinity",
     "unrelated": "crate::fixture::metrics_" + uuid.uuid4().hex + "::retry_count",
     "unpresented": "crate::fixture::storage_" + uuid.uuid4().hex + "::retry_record",
+}
+DECISION_GAP_TOKENS = {
+    f"root_{root}_{kind}": "crate::fixture::" + kind + "_" + uuid.uuid4().hex
+    for root in ("a", "b")
+    for kind in ("implementation", "caller", "behavioral_test")
 }
 FOCUSED_RELEVANCE_TOKENS = {
     "implementation": "crate::fixture::routing_" + uuid.uuid4().hex + "::worker_slot",
@@ -367,6 +373,14 @@ def ensure_graph_convergence_tokens():
     save_state(state)
 
 
+def ensure_decision_gap_tokens():
+    if not is_decision_gap_recovery_profile() or is_exact_source_selection_profile():
+        return
+    state = load_state()
+    state["decision_gap_tokens"] = DECISION_GAP_TOKENS
+    save_state(state)
+
+
 def ensure_focused_relevance_tokens():
     if not is_focused_relevance_profile():
         return
@@ -493,6 +507,7 @@ for line in sys.stdin:
         ensure_typed_lineage_tokens()
         ensure_mapped_graph_tokens()
         ensure_graph_convergence_tokens()
+        ensure_decision_gap_tokens()
         ensure_focused_relevance_tokens()
         if name == "index_status":
             if has_current_root_profile():
@@ -631,21 +646,22 @@ for line in sys.stdin:
                     source_path = "src/route.rs"
                     reported_path = source_path
                     event = "served_selection_corrected_source"
-                elif not selection and stage in (2, 3) and qualified_name == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]:
+                elif not selection and stage == 2 and qualified_name == DECISION_GAP_TOKENS["root_a_implementation"]:
+                    source_path = "src/route.rs"
+                    reported_path = source_path
+                    event = "served_gap_active_source"
+                elif not selection and stage == 4 and qualified_name == DECISION_GAP_TOKENS["root_b_implementation"]:
+                    source_path = "src/route.rs"
+                    reported_path = source_path
+                    event = "served_gap_active_source"
+                elif not selection and stage == 6 and qualified_name == DECISION_GAP_TOKENS["root_b_caller"]:
+                    source_path = "src/lib.rs"
+                    reported_path = source_path
+                    event = "served_gap_active_source"
+                elif not selection and stage == 7 and qualified_name == DECISION_GAP_TOKENS["root_a_behavioral_test"]:
                     source_path = "tests/alias_retry.rs"
                     reported_path = source_path
                     event = "served_gap_sibling_source"
-                elif not selection and stage in (5, 6, 7) and qualified_name in (
-                    GRAPH_CONVERGENCE_TOKENS["caller"],
-                    GRAPH_CONVERGENCE_TOKENS["active_behavioral_test"],
-                ):
-                    source_path = (
-                        "src/route.rs"
-                        if qualified_name == GRAPH_CONVERGENCE_TOKENS["caller"]
-                        else "tests/alias_retry.rs"
-                    )
-                    reported_path = source_path
-                    event = "served_gap_active_source"
                 else:
                     source_path = None
                     reported_path = None
@@ -1120,15 +1136,21 @@ for line in sys.stdin:
             if is_decision_gap_recovery_profile():
                 project = arguments.get("project", "")
                 selection = is_exact_source_selection_profile()
-                expected = terminal_function_name(
+                expected_stage = 4 if selection else DECISION_GAP_RECOVERY_STAGE
+                expected_token = (
                     GRAPH_CONVERGENCE_TOKENS["model"]
                     if selection
-                    else GRAPH_CONVERGENCE_TOKENS["implementation"]
+                    else DECISION_GAP_TOKENS[
+                        "root_a_implementation"
+                        if expected_stage == 3
+                        else "root_b_implementation"
+                    ]
                 )
+                expected = terminal_function_name(expected_token)
                 successful = (
                     current_root_source(project, "src/route.rs") is not None
                     and decision_gap_recovery_step(
-                        4, expected, arguments.get("function_name", "")
+                        expected_stage, expected, arguments.get("function_name", "")
                     )
                 )
                 selected = (
@@ -1137,7 +1159,11 @@ for line in sys.stdin:
                         GRAPH_CONVERGENCE_TOKENS["caller"],
                     ]
                     if selection
-                    else [GRAPH_CONVERGENCE_TOKENS["caller"]]
+                    else (
+                        []
+                        if expected_stage == 3
+                        else [DECISION_GAP_TOKENS["root_b_caller"]]
+                    )
                 )
                 payload = {
                     "function": {
@@ -1145,7 +1171,7 @@ for line in sys.stdin:
                         "qualifiedName": (
                             GRAPH_CONVERGENCE_TOKENS["model"]
                             if selection
-                            else GRAPH_CONVERGENCE_TOKENS["implementation"]
+                            else expected_token
                         ),
                     },
                     "callers": [
@@ -1164,7 +1190,11 @@ for line in sys.stdin:
                         (
                             "served_selection_correction_trace"
                             if selection
-                            else "served_gap_active_trace"
+                            else (
+                                "served_gap_exhausted_implementation_trace"
+                                if expected_stage == 3
+                                else "served_gap_active_trace"
+                            )
                         )
                         if successful
                         else None
@@ -1395,23 +1425,32 @@ for line in sys.stdin:
                     tokens = selected or []
                 else:
                     queries = {
-                        0: ("routing implementation affinity", [
-                            GRAPH_CONVERGENCE_TOKENS["implementation"],
-                            GRAPH_CONVERGENCE_TOKENS["caller"],
-                        ]),
-                        1: ("focused alias retry behavior", [
-                            GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
-                        ]),
+                        "routing implementation affinity": [
+                            DECISION_GAP_TOKENS["root_a_implementation"],
+                            DECISION_GAP_TOKENS["root_a_caller"],
+                            DECISION_GAP_TOKENS["root_a_behavioral_test"],
+                        ],
+                        "focused alias retry behavior": [
+                            DECISION_GAP_TOKENS["root_b_implementation"],
+                            DECISION_GAP_TOKENS["root_b_caller"],
+                            DECISION_GAP_TOKENS["root_b_behavioral_test"],
+                        ],
                     }
-                    selected = queries.get(stage)
+                    selected = queries.get(query)
                     successful = (
-                        selected is not None
+                        stage == 0
+                        and selected is not None
+                        and query not in DECISION_GAP_ROOT_QUERIES
                         and current_root_source(project, "src/route.rs") is not None
-                        and decision_gap_recovery_step(stage, selected[0], query)
                     )
-                    tokens = selected[1] if selected is not None else []
+                    if successful:
+                        DECISION_GAP_ROOT_QUERIES.add(query)
+                        if len(DECISION_GAP_ROOT_QUERIES) == 2:
+                            DECISION_GAP_RECOVERY_STAGE = 2
+                    tokens = selected or []
                 payload = {
                     "results": [{
+                        "root_query": query,
                         "results": [
                             {
                                 "name": terminal_function_name(token),
@@ -1419,13 +1458,21 @@ for line in sys.stdin:
                                 "file_path": (
                                     "tests/alias_retry.rs"
                                     if token == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]
+                                    or token in (
+                                        DECISION_GAP_TOKENS["root_a_behavioral_test"],
+                                        DECISION_GAP_TOKENS["root_b_behavioral_test"],
+                                    )
                                     else (
                                         "src/model.rs"
                                         if token == GRAPH_CONVERGENCE_TOKENS["model"]
                                         else "src/route.rs"
                                     )
                                 ),
-                                "is_test": token == GRAPH_CONVERGENCE_TOKENS["behavioral_test"],
+                                "is_test": token == GRAPH_CONVERGENCE_TOKENS["behavioral_test"]
+                                or token in (
+                                    DECISION_GAP_TOKENS["root_a_behavioral_test"],
+                                    DECISION_GAP_TOKENS["root_b_behavioral_test"],
+                                ),
                             }
                             for token in tokens
                         ],

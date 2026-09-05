@@ -231,15 +231,18 @@ for line in sys.stdin:
                 worker_rank = 7 if active else 5
                 prefix = "active" if active else "sibling"
                 results = []
-                result_count = 10 if mode == "active-root-overlap-handoff" and active else 70
+                result_count = 10 if mode == "active-root-overlap-handoff" else 70
                 for rank in range(1, result_count + 1):
-                    if mode == "active-root-overlap-handoff" and active:
+                    if mode == "active-root-overlap-handoff":
                         if rank == 1:
                             symbol = "affinity_topic"
                             qualified_name = "temper-v1-production.src.model.affinity_topic"
-                        elif 2 <= rank <= 6:
+                        elif active and 2 <= rank <= 6:
                             symbol = f"test_affinity_{rank}"
                             qualified_name = f"temper-v1-production.tests.route.{symbol}"
+                        elif 2 <= rank <= 6:
+                            results.append({"label": "Module", "file_path": f"src/{prefix}_{rank}.rs"})
+                            continue
                         elif rank == 7:
                             symbol = "worker_for"
                             qualified_name = "temper-v1-production.src.route.worker_for"
@@ -255,7 +258,7 @@ for line in sys.stdin:
                             "label": "Function",
                             "file_path": "tests/route.rs" if 2 <= rank <= 6 else "src/route.rs",
                         }
-                        if 2 <= rank <= 6:
+                        if active and 2 <= rank <= 6:
                             result["is_test"] = True
                         results.append(result)
                     elif rank < worker_rank:

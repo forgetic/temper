@@ -40,7 +40,7 @@ impl DecisionAnchorState {
             active_root,
             route,
             remaining: MAX_DECISION_GAP_RECOVERY_CALLS,
-            exhausted_roots: BTreeSet::new(),
+            exhausted_routes: BTreeSet::new(),
             remaining_pivots,
         }));
         self.exploration = ExplorationStatus::GapRecovery;
@@ -51,7 +51,8 @@ impl DecisionAnchorState {
         &mut self,
         mut anchors: AnchorForest,
         exhausted_root: String,
-        mut exhausted_roots: BTreeSet<String>,
+        exhausted_route: RecoveryRoute,
+        mut exhausted_routes: BTreeSet<(String, RecoveryRoute)>,
         remaining_pivots: usize,
     ) -> DecisionAnchorTransition {
         let exhausted_evidence = anchors
@@ -59,9 +60,9 @@ impl DecisionAnchorState {
             .get(&exhausted_root)
             .map(|root| root.evidence.clone())
             .unwrap_or_default();
-        exhausted_roots.insert(exhausted_root);
+        exhausted_routes.insert((exhausted_root, exhausted_route));
         let next = (remaining_pivots > 0)
-            .then(|| anchors.recovery_selection_excluding(&exhausted_roots))
+            .then(|| anchors.recovery_selection_excluding(&exhausted_routes))
             .flatten();
         let Some((active_root, route)) = next else {
             return self.enter_incomplete_enabled(exhausted_evidence);
@@ -73,7 +74,7 @@ impl DecisionAnchorState {
             active_root,
             route,
             remaining: MAX_DECISION_GAP_RECOVERY_CALLS,
-            exhausted_roots,
+            exhausted_routes,
             remaining_pivots: remaining_pivots.saturating_sub(1),
         }));
         self.exploration = ExplorationStatus::GapRecovery;
@@ -108,14 +109,15 @@ impl DecisionAnchorState {
             active_root,
             route,
             remaining,
-            exhausted_roots,
+            exhausted_routes,
             remaining_pivots,
         } = recovery;
         let Some(active) = anchors.roots.get(&active_root) else {
             return self.pivot_gap_recovery_or_exhaust(
                 anchors,
                 active_root,
-                exhausted_roots,
+                route,
+                exhausted_routes,
                 remaining_pivots,
             );
         };
@@ -268,7 +270,7 @@ impl DecisionAnchorState {
                     remaining: remaining
                         .saturating_add(1)
                         .min(MAX_DECISION_GAP_RECOVERY_CALLS),
-                    exhausted_roots,
+                    exhausted_routes,
                     remaining_pivots,
                 }));
                 self.exploration = ExplorationStatus::GapRecovery;
@@ -291,7 +293,8 @@ impl DecisionAnchorState {
             return self.pivot_gap_recovery_or_exhaust(
                 anchors,
                 active_root,
-                exhausted_roots,
+                route,
+                exhausted_routes,
                 remaining_pivots,
             );
         }
@@ -317,14 +320,15 @@ impl DecisionAnchorState {
             return self.pivot_gap_recovery_or_exhaust(
                 anchors,
                 active_root,
-                exhausted_roots,
+                route,
+                exhausted_routes,
                 remaining_pivots,
             );
         }
 
         let (next_root, next_route) = if active_route_complete {
             let Some((next_root, next_route)) =
-                anchors.recovery_selection_excluding(&exhausted_roots)
+                anchors.recovery_selection_excluding(&exhausted_routes)
             else {
                 return self.enter_incomplete_enabled(active_evidence);
             };
@@ -338,7 +342,7 @@ impl DecisionAnchorState {
             active_root: next_root,
             route: next_route,
             remaining,
-            exhausted_roots,
+            exhausted_routes,
             remaining_pivots,
         }));
         self.exploration = ExplorationStatus::GapRecovery;

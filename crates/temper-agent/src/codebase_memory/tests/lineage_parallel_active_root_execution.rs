@@ -106,9 +106,9 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
         assert_ne!(active_root.root_binding, sibling_root.root_binding);
         let handoff = active_handoff(&selected);
         let presented_handoff = handoff_references(handoff);
-        assert_eq!(presented_handoff, active_references);
-        let active_reference = active_references[2].clone();
-        let first_reference = active_references[0].clone();
+        assert_eq!(presented_handoff, sibling_references);
+        let active_reference = sibling_references[2].clone();
+        let first_reference = sibling_references[0].clone();
         let winner_reference = &active_reference;
         let winner_provider_selector = PARALLEL_ACTIVE_PROVIDER_SELECTOR;
         let winner_path = "demo/src/route.rs";
@@ -117,14 +117,14 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
         assert!(handoff.contains("bounded candidate inspection call"));
         assert!(handoff.contains("explicit commit call"));
         assert!(handoff.contains("decision_evidence_kind"));
-        assert!(!sibling_references.contains(&active_reference));
+        assert!(!active_references.contains(&active_reference));
 
         let fabricated = "temper-recovery-selector:00000000-0000-4000-8000-000000000099";
         let negative_calls = [
             (
                 "sibling",
                 "codebase_memory_get_code_snippet",
-                serde_json::json!({"qualified_name": sibling_references[0]}),
+                serde_json::json!({"qualified_name": active_references[0]}),
             ),
             (
                 "raw",
@@ -190,7 +190,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
         }
         assert_eq!(
             handoff_references(active_handoff(&corrected)),
-            active_references
+            sibling_references
         );
         assert!(
             crate::codebase_memory::tests::test_support::calls_named(
@@ -225,7 +225,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
         );
         assert_eq!(
             handoff_references(active_handoff(&corrected)),
-            active_references
+            sibling_references
         );
 
         let previews = complete_llm(
@@ -292,7 +292,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
                 admission.recovery_reference_disposition(
                     "codebase_memory_get_code_snippet",
                     &serde_json::json!({"qualified_name": winner_reference}),
-                    Some(&active_root.root_binding),
+                    Some(&sibling_root.root_binding),
                 ),
                 Some(GraphRecoveryReferenceDispositionV1::Recognized),
                 "the wrong preview cannot poison the later chosen candidate",
@@ -321,7 +321,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
             admission.resolve_for_active_root_with_recovery(
                 "codebase_memory_get_code_snippet",
                 &serde_json::json!({"qualified_name": loser_reference}),
-                Some(&active_root.root_binding),
+                Some(&sibling_root.root_binding),
             );
         assert!(matches!(
             repeated_preview,
@@ -339,7 +339,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
                     "qualified_name": winner_reference,
                     "decision_evidence_kind": "implementation",
                 }),
-                Some(&active_root.root_binding),
+                Some(&sibling_root.root_binding),
             ),
             Some(GraphRecoveryReferenceDispositionV1::Recognized),
             "rejecting a repeated preview cannot poison the explicit commit",
@@ -349,7 +349,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
             (&chosen_preview_output, winner_path),
         ] {
             let preview_lineage = lineage(preview);
-            assert_eq!(preview_lineage.root_binding, active_root.root_binding);
+            assert_eq!(preview_lineage.root_binding, sibling_root.root_binding);
             assert_eq!(preview_lineage.decision_evidence_kind, None);
             assert_eq!(
                 admission.resolve_source_target(&preview_lineage),
@@ -413,7 +413,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
         let handoff_after_previews = active_handoff(&after_previews);
         assert_eq!(
             handoff_references(handoff_after_previews),
-            active_references,
+            sibling_references,
         );
         assert!(handoff_after_previews.contains("explicit commit call"));
         assert!(handoff_after_previews.contains("decision_evidence_kind"));
@@ -475,7 +475,7 @@ fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
             .unwrap();
         assert!(!source_output.is_error);
         let source_lineage = lineage(&source_output);
-        assert_eq!(source_lineage.root_binding, active_root.root_binding);
+        assert_eq!(source_lineage.root_binding, sibling_root.root_binding);
         assert_eq!(
             source_lineage.decision_evidence_kind,
             Some(DecisionEvidenceKindV1::Implementation)

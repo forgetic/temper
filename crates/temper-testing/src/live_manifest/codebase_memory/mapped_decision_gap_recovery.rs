@@ -1,5 +1,4 @@
-//! Ephemeral validator for #1069's mapped recovery and #1091's root-coherent
-//! strengthening.
+//! Ephemeral validator for #1275's route-specific recovery strengthening.
 //!
 //! Provider arguments, selectors, roots, values, source, and diagnostics stay
 //! in temporary state. Only closed tool order and checkpoint categories cross
@@ -27,9 +26,9 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         "search_graph",
         "search_graph",
         "get_code_snippet",
-        "get_code_snippet",
         "trace_path",
         "get_code_snippet",
+        "trace_path",
         "get_code_snippet",
         "get_code_snippet",
     ];
@@ -41,7 +40,7 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         || calls.iter().any(|call| call.is_error)
     {
         return Err(
-            "decision-gap fixture requires eight successful root-coherent provider reads and no locally denied provider invocation"
+            "decision-gap fixture requires eight successful route-coherent provider reads and no locally denied provider invocation"
                 .into(),
         );
     }
@@ -66,17 +65,31 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     }
 
     let tokens = recovery_tokens(mcp)?;
-    let implementation = token(&tokens, "implementation")?;
-    let caller = token(&tokens, "caller")?;
-    let sibling_test = token(&tokens, "behavioral_test")?;
-    let active_test = token(&tokens, "active_behavioral_test")?;
-    let implementation_short = terminal_name(implementation)?;
+    let first_implementation = token(&tokens, "root_a_implementation")?;
+    let first_test = token(&tokens, "root_a_behavioral_test")?;
+    let second_implementation = token(&tokens, "root_b_implementation")?;
+    let second_caller = token(&tokens, "root_b_caller")?;
+    let first_implementation_short = terminal_name(first_implementation)?;
+    let second_implementation_short = terminal_name(second_implementation)?;
+    let root_queries = calls[3..5]
+        .iter()
+        .filter_map(|call| call.arguments.get("query").and_then(JsonValue::as_str))
+        .collect::<std::collections::BTreeSet<_>>();
+    if root_queries
+        != std::collections::BTreeSet::from([
+            "focused alias retry behavior",
+            "routing implementation affinity",
+        ])
+    {
+        return Err("decision-gap fixture did not establish both transient roots".into());
+    }
     let expected_arguments = [
-        (3, "query", "routing implementation affinity"),
-        (4, "query", "focused alias retry behavior"),
-        (5, "qualified_name", sibling_test),
-        (6, "qualified_name", sibling_test),
-        (7, "function_name", implementation_short),
+        (5, "qualified_name", first_implementation),
+        (6, "function_name", first_implementation_short),
+        (7, "qualified_name", second_implementation),
+        (8, "function_name", second_implementation_short),
+        (9, "qualified_name", second_caller),
+        (10, "qualified_name", first_test),
     ];
     if expected_arguments.iter().any(|(index, field, expected)| {
         calls[*index]
@@ -87,33 +100,15 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     }) {
         return Err("decision-gap fixture did not consume its transient root selections".into());
     }
-    let mut active_sources = calls[8..]
-        .iter()
-        .filter_map(|call| {
-            call.arguments
-                .get("qualified_name")
-                .and_then(JsonValue::as_str)
-        })
-        .collect::<Vec<_>>();
-    active_sources.sort_unstable();
-    let mut expected_active_sources = vec![caller, caller, active_test];
-    expected_active_sources.sort_unstable();
-    if active_sources != expected_active_sources {
-        return Err(
-            "completion-order-independent active-root batch omitted a declared source purpose"
-                .into(),
-        );
-    }
-
     let expected_events = [
         "served_gap_root",
         "served_gap_root",
-        "served_gap_sibling_source",
-        "served_gap_sibling_source",
+        "served_gap_active_source",
+        "served_gap_exhausted_implementation_trace",
+        "served_gap_active_source",
         "served_gap_active_trace",
         "served_gap_active_source",
-        "served_gap_active_source",
-        "served_gap_active_source",
+        "served_gap_sibling_source",
     ];
     if calls[3..]
         .iter()
@@ -184,7 +179,7 @@ fn recovery_tokens(mcp: &FakeMcpServer) -> Result<serde_json::Map<String, JsonVa
     let state: JsonValue = serde_json::from_str(&raw)
         .map_err(|_| "decision-gap fixture state was malformed".to_string())?;
     state
-        .get("graph_convergence_tokens")
+        .get("decision_gap_tokens")
         .and_then(JsonValue::as_object)
         .cloned()
         .ok_or("decision-gap fixture omitted transient selections".to_string())

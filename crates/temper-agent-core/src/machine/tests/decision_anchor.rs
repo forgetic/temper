@@ -46,6 +46,10 @@ mod tests {
         include!("decision_anchor_routing_recovery.rs");
     }
 
+    mod route_exhaustion {
+        include!("decision_anchor_route_exhaustion.rs");
+    }
+
     mod forest_exact_read {
         include!("decision_anchor_forest_exact_read.rs");
     }

@@ -1,5 +1,4 @@
-//! Jig runtime for feature #1069's mapped recovery scenario and #1091's
-//! root-coherent strengthening.
+//! Jig runtime for #1275's route-specific strengthening of mapped recovery.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,9 +13,10 @@ use temper_agent_core::{
 use super::{ModelObservations, is_current_root_source_result, messages_contain};
 
 const MIXED_RECOVERY_GUIDANCE: &str = "decision-evidence recovery required; missing evidence: [trace, implementation, caller, focused_test]; permitted action: targeted_current_root_graph_call; remaining allowance: 4";
-const TRACE_PROGRESS_GUIDANCE: &str = "decision-evidence recovery required; missing evidence: [implementation, caller, focused_test]; permitted action: targeted_current_root_graph_call; remaining allowance: 3";
 const DENIED_CANARY_COMMAND: &str =
     "printf 'executed\\n' > demo/.git/decision-gap-denied-shell-canary";
+const ROOT_A_QUERY: &str = "routing implementation affinity";
+const ROOT_B_QUERY: &str = "focused alias retry behavior";
 
 pub(super) fn start(
     request_count: Arc<AtomicUsize>,
@@ -57,64 +57,54 @@ fn reply(view: &RequestView) -> Reply {
                 serde_json::json!({"query": "routing implementation affinity"}),
             ),
             (
+                "discover-sibling-behavior-root",
+                "codebase_memory_search_graph",
+                serde_json::json!({"query": "focused alias retry behavior"}),
+            ),
+            (
                 "denied-shell-process-canary",
                 "bash",
                 serde_json::json!({"command": DENIED_CANARY_COMMAND, "timeout": 60}),
             ),
         ]),
-        2 => tool_reply(
-            "discover-sibling-behavior-root",
-            "codebase_memory_search_graph",
-            serde_json::json!({"query": "focused alias retry behavior"}),
+        3 => source_reply(
+            "prime-cross-root-recovery-guidance",
+            root_result_for(view, ROOT_B_QUERY, 0, "qualifiedName"),
+            "caller",
         ),
-        3 => tool_reply(
-            "sibling-focused-test-non-progress-one",
-            "codebase_memory_get_code_snippet",
-            serde_json::json!({
-                "qualified_name": root_result_at(view, 1, 0, "qualifiedName"),
-                "decision_evidence_kind": "focused_test",
-            }),
-        ),
-        4 => tool_reply(
-            "sibling-focused-test-exhausts-budget",
-            "codebase_memory_get_code_snippet",
-            serde_json::json!({
-                "qualified_name": root_result_at(view, 1, 0, "qualifiedName"),
-                "decision_evidence_kind": "focused_test",
-            }),
-        ),
-        5 => {
+        4 => {
             assert!(
                 messages_contain(view, MIXED_RECOVERY_GUIDANCE),
-                "sibling-only evidence must leave all active-root kinds missing"
+                "two roots must begin with all active-root kinds missing"
             );
             tool_batch(&[
                 (
                     "recovery-cross-root-caller-denied",
                     "codebase_memory_get_code_snippet",
                     serde_json::json!({
-                        "qualified_name": root_result_at(view, 1, 0, "qualifiedName"),
+                        "qualified_name": root_result_for(view, ROOT_B_QUERY, 0, "qualifiedName"),
                         "decision_evidence_kind": "caller",
                     }),
                 ),
                 (
-                    "recovery-active-root-trace",
-                    "codebase_memory_trace_path",
+                    "first-root-implementation",
+                    "codebase_memory_get_code_snippet",
                     serde_json::json!({
-                        "function_name": root_result_at(view, 0, 0, "name"),
+                        "qualified_name": root_result_for(view, ROOT_A_QUERY, 0, "qualifiedName"),
+                        "decision_evidence_kind": "implementation",
                     }),
                 ),
                 (
                     "recovery-cross-root-focused-test-denied",
                     "codebase_memory_get_code_snippet",
                     serde_json::json!({
-                        "qualified_name": root_result_at(view, 1, 0, "qualifiedName"),
+                        "qualified_name": root_result_for(view, ROOT_B_QUERY, 0, "qualifiedName"),
                         "decision_evidence_kind": "focused_test",
                     }),
                 ),
             ])
         }
-        8 => {
+        7 => {
             assert!(
                 view.messages
                     .iter()
@@ -123,48 +113,36 @@ fn reply(view: &RequestView) -> Reply {
                     >= 2,
                 "both cross-root siblings must retain the immutable pre-batch diagnostic"
             );
-            assert!(
-                messages_contain(view, TRACE_PROGRESS_GUIDANCE),
-                "the admitted trace must update the actual remaining kinds and allowance"
-            );
-            tool_batch(&[
-                (
-                    "recovery-active-root-implementation",
-                    "codebase_memory_get_code_snippet",
-                    serde_json::json!({
-                        "qualified_name": root_result_at(view, 0, 1, "qualifiedName"),
-                        "decision_evidence_kind": "implementation",
-                    }),
-                ),
-                (
-                    "recovery-active-root-caller",
-                    "codebase_memory_get_code_snippet",
-                    serde_json::json!({
-                        "qualified_name": root_result_at(view, 0, 1, "qualifiedName"),
-                        "decision_evidence_kind": "caller",
-                    }),
-                ),
-                (
-                    "recovery-active-root-focused-test",
-                    "codebase_memory_get_code_snippet",
-                    serde_json::json!({
-                        "qualified_name": root_result_at(view, 0, 2, "qualifiedName"),
-                        "decision_evidence_kind": "focused_test",
-                    }),
-                ),
-                (
-                    "recovery-satisfied-trace-denied",
-                    "codebase_memory_trace_path",
-                    serde_json::json!({
-                        "function_name": root_result_at(view, 0, 0, "name"),
-                    }),
-                ),
-            ])
+            tool_reply(
+                "first-root-empty-trace",
+                "codebase_memory_trace_path",
+                serde_json::json!({"function_name": root_result_for(view, ROOT_A_QUERY, 0, "name")}),
+            )
         }
+        8 => source_reply(
+            "second-root-implementation",
+            root_result_for(view, ROOT_B_QUERY, 0, "qualifiedName"),
+            "implementation",
+        ),
+        9 => tool_reply(
+            "second-root-trace",
+            "codebase_memory_trace_path",
+            serde_json::json!({"function_name": root_result_for(view, ROOT_B_QUERY, 0, "name")}),
+        ),
+        10 => source_reply(
+            "second-root-caller",
+            root_result_for(view, ROOT_B_QUERY, 1, "qualifiedName"),
+            "caller",
+        ),
+        11 => source_reply(
+            "first-root-focused-test",
+            root_result_for(view, ROOT_A_QUERY, 2, "qualifiedName"),
+            "focused_test",
+        ),
         12 => {
             assert!(
                 messages_contain(view, DECISION_ANCHOR_CONVERGENCE_MESSAGE),
-                "the active-root typed source batch must complete regardless of result order"
+                "the independent focused route must complete the retained forest"
             );
             tool_batch(&[
                 (
@@ -195,28 +173,38 @@ fn reply(view: &RequestView) -> Reply {
                 3,
                 "all post-completion graph attempts must be denied locally"
             );
-            tool_reply(
-                "classify-compound-shell-discovery",
-                "bash",
-                serde_json::json!({
-                    "command": "cd demo && rg worker_slot src",
-                    "timeout": 60,
-                }),
-            )
+            tool_batch(&[
+                (
+                    "patch-before-exact-read-denied",
+                    "apply_patch",
+                    route_patch_arguments(),
+                ),
+                (
+                    "unrelated-mutation-denied",
+                    "write",
+                    serde_json::json!({"path": "demo/src/unrelated.rs", "content": "changed"}),
+                ),
+            ])
         }
-        16 => tool_reply(
+        17 => tool_reply(
+            "classify-compound-shell-discovery",
+            "bash",
+            serde_json::json!({
+                "command": "cd demo && rg worker_slot src",
+                "timeout": 60,
+            }),
+        ),
+        18 => tool_reply(
             "read-route-after-recovery",
             "read",
             serde_json::json!({"path": "demo/src/route.rs"}),
         ),
-        17 => tool_reply(
+        19 => tool_reply(
             "patch-retry-affinity-after-recovery",
             "apply_patch",
-            serde_json::json!({
-                "patch": "diff --git a/demo/src/route.rs b/demo/src/route.rs\n--- a/demo/src/route.rs\n+++ b/demo/src/route.rs\n@@ -3,11 +3,7 @@ use crate::DeliveryAttempt;\n pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {\n     assert!(workers > 0, \"at least one delivery worker is required\");\n \n-    let routing_topic = if attempt.attempt == 0 {\n-        attempt.affinity_topic()\n-    } else {\n-        attempt.topic\n-    };\n+    let routing_topic = attempt.affinity_topic();\n     let mut hash = 0xcbf29ce484222325_u64;\n     for byte in attempt\n         .tenant\n"
-            }),
+            route_patch_arguments(),
         ),
-        18 => tool_reply(
+        20 => tool_reply(
             "validate-exact-recovered-repair",
             "bash",
             serde_json::json!({
@@ -224,18 +212,35 @@ fn reply(view: &RequestView) -> Reply {
                 "timeout": 60,
             }),
         ),
-        19 => tool_reply(
+        21 => tool_reply(
             "submit-recovered-minimal-repair",
             "submit_for_pr",
             serde_json::json!({
                 "summary": "Validated root-coherent recovery, exact repair, and host gates."
             }),
         ),
-        20 => Reply::text(
+        22 => Reply::text(
             r##"{"title":"Keep alias retries on the selected worker","body":"# Implementation report\nValidated immutable root-local recovery, progress-based missing kinds, one exact repair, host submission, and Actions.","summary":"Applied and validated the exact retry-affinity repair after root-coherent recovery."}"##,
         ),
         turn => panic!("unexpected mapped decision-gap recovery model turn {turn}"),
     }
+}
+
+fn source_reply(id: &str, qualified_name: String, kind: &str) -> Reply {
+    tool_reply(
+        id,
+        "codebase_memory_get_code_snippet",
+        serde_json::json!({
+            "qualified_name": qualified_name,
+            "decision_evidence_kind": kind,
+        }),
+    )
+}
+
+fn route_patch_arguments() -> JsonValue {
+    serde_json::json!({
+        "patch": "diff --git a/demo/src/route.rs b/demo/src/route.rs\n--- a/demo/src/route.rs\n+++ b/demo/src/route.rs\n@@ -3,11 +3,7 @@ use crate::DeliveryAttempt;\n pub(crate) fn worker_slot(attempt: &DeliveryAttempt<'_>, workers: usize) -> usize {\n     assert!(workers > 0, \"at least one delivery worker is required\");\n \n-    let routing_topic = if attempt.attempt == 0 {\n-        attempt.affinity_topic()\n-    } else {\n-        attempt.topic\n-    };\n+    let routing_topic = attempt.affinity_topic();\n     let mut hash = 0xcbf29ce484222325_u64;\n     for byte in attempt\n         .tenant\n"
+    })
 }
 
 fn tool_reply(id: &str, name: &str, args: JsonValue) -> Reply {
@@ -257,15 +262,20 @@ fn tool_batch(calls: &[(&str, &str, JsonValue)]) -> Reply {
     }
 }
 
-fn root_result_at(
+fn root_result_for(
     view: &RequestView,
-    root_index: usize,
+    root_query: &str,
     result_index: usize,
     field: &str,
 ) -> String {
     let pointer = format!("/results/0/results/{result_index}/{field}");
     root_results(view)
-        .nth(root_index)
+        .find(|result| {
+            result
+                .pointer("/results/0/root_query")
+                .and_then(JsonValue::as_str)
+                == Some(root_query)
+        })
         .and_then(|result| {
             result
                 .pointer(&pointer)

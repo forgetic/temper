@@ -20,7 +20,7 @@ pub(super) struct SourceEvidence {
     pub(super) implementation_authority_corrected: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum RecoveryRoute {
     Implementation,
     FocusedTest,

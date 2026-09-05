@@ -94,7 +94,9 @@ impl DecisionAnchorState {
                 })
             }
             Some(AnchorPhase::GapRecovery(recovery)) => {
-                !recovery.exhausted_roots.contains(root)
+                !recovery
+                    .exhausted_routes
+                    .contains(&(root.to_string(), route))
                     && recovery.remaining > 0
                     && recovery.anchors.roots.get(root).is_some_and(|anchor| {
                         let compatible = anchor.evidence.compatible_actions(anchor, route);
@@ -128,7 +130,7 @@ impl DecisionAnchorState {
                     active_root: root.to_string(),
                     route,
                     remaining: MAX_DECISION_GAP_RECOVERY_CALLS,
-                    exhausted_roots: BTreeSet::new(),
+                    exhausted_routes: BTreeSet::new(),
                     remaining_pivots,
                 }
             }

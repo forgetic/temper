@@ -257,21 +257,22 @@ benchmark are unchanged.
 
 ### Mapped live decision-gap recovery mapping
 
-`mapped-live-decision-gap-recovery` is the sole active mapping for feature
-`ai/temper#1091` and plan `ai/temper#1092` on
-`agent/pr-for-feature-1091`. This updates the scenario in place without changing
-its `introduced_by = "#1075"` provenance. The former feature
-`ai/temper#1069`, plan `ai/temper#1070`, and source branch
-`agent/pr-for-feature-1069` remain historical audit metadata for the original
-decision-gap contract. Distinct routing and behavioral roots exhaust normal
-exploration through two sibling focused-test reads. In one immutable
-recovery batch, cross-root caller and focused-test reads remain local while only
-the compatible active-root trace reaches the provider. Trace progress reports
-the actual remaining implementation, caller, and focused-test kinds with
-allowance three; a later completion-order-independent active-root source batch
-finishes the chain while a satisfied trace stays local. The scenario also
-retains one #1082 classified shell denial, three post-completion local denials,
-one exact repair, host submission, Actions, merge, and source closure. Its
+`mapped-live-decision-gap-recovery` is the sole active mapping for the
+self-contained feature and plan `ai/temper#1275` on
+`agent/pr-for-feature-1275`. This updates the scenario in
+place without changing its `introduced_by = "#1075"` provenance. Feature
+`ai/temper#1091`, plan `ai/temper#1092`, and source branch
+`agent/pr-for-feature-1091`, plus feature `ai/temper#1069`, plan
+`ai/temper#1070`, and source branch `agent/pr-for-feature-1069`, remain
+historical audit metadata. Two roots enter bounded recovery. The first consumes
+implementation evidence and then exhausts only its implementation route when
+its trace returns no caller. The second completes implementation, trace, and
+caller evidence; the first then remains eligible as the independent focused-
+test route on the final allowance. That source converges instead of exhausting.
+The scenario retains immutable cross-root local denials, one #1082 classified
+shell denial, three post-completion local denials, pre-read matching and
+unrelated mutation denials, one exact repair, host submission, Actions, merge,
+and source closure. Its
 no-compatible-action variant requires one terminal `stop_without_product` state
 with no landable result or denial loop. Aggregate evidence is limited to closed
 counts, types, lifecycle fields, binding facts, shell disposition, approved

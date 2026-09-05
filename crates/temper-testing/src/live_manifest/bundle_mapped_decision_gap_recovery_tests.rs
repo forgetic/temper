@@ -9,7 +9,7 @@ use temper_protocol_activity::{
 };
 
 #[test]
-fn decision_gap_recovery_bundle_maps_feature_1091_and_retains_1069_audit() {
+fn decision_gap_recovery_bundle_maps_feature_1275_and_retains_prior_audit() {
     let scenario_path = scenarios_root().join("mapped-live-decision-gap-recovery");
     let bundle = ScenarioBundle::load(&scenario_path).expect("decision-gap recovery bundle");
     let mcp = bundle
@@ -50,19 +50,20 @@ fn decision_gap_recovery_bundle_maps_feature_1091_and_retains_1069_audit() {
         .as_ref()
         .and_then(|scenario| scenario.feature_mapping.as_ref())
         .expect("feature mapping");
-    assert_eq!(mapping.feature.to_string(), "ai/temper#1091");
+    assert_eq!(mapping.feature.to_string(), "ai/temper#1275");
     assert_eq!(
         mapping.plan.as_ref().map(ToString::to_string).as_deref(),
-        Some("ai/temper#1092")
+        Some("ai/temper#1275")
     );
-    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1091");
+    assert_eq!(mapping.source_branch, "agent/pr-for-feature-1275");
     assert_eq!(mapping.change.as_str(), "updated");
     for expected in [
         "introduced_by = \"#1075\"",
         "immutable-cross-root-recovery-diagnostic",
-        "trace-progress-reports-actual-remaining-kinds",
-        "two-cross-root-local-denials-share-pre-batch-snapshot",
-        "one-satisfied-trace-local-denial-after-progress",
+        "first-implementation-route-exhausts-without-a-caller",
+        "matching-mutation-is-denied-before-exact-read",
+        "unrelated-mutation-remains-denied",
+        "three-cross-root-local-denials-preserve-allowance",
         "one-minimal-mutation",
         "excluded_never_executed_local_policy_denial",
         "tool.failure.graph.missing_evidence",
@@ -72,6 +73,9 @@ fn decision_gap_recovery_bundle_maps_feature_1091_and_retains_1069_audit() {
         assert!(manifest.contains(expected), "manifest omitted {expected}");
     }
     for historical in [
+        "ai/temper#1091",
+        "ai/temper#1092",
+        "agent/pr-for-feature-1091",
         "ai/temper#1069",
         "ai/temper#1070",
         "agent/pr-for-feature-1069",
@@ -96,9 +100,9 @@ fn decision_gap_recovery_bundle_maps_feature_1091_and_retains_1069_audit() {
     assert!(readme.contains("Privacy-safe evidence"));
     assert!(jig.contains("mapped-live-decision-gap-recovery-runtime"));
     assert!(readme.contains("one wholly fresh enabled smoke"));
-    assert!(readme.contains("--feature ai/temper#1091"));
-    assert!(readme.contains("--source-branch agent/pr-for-feature-1091"));
-    assert!(corpus_readme.contains("`ai/temper#1091` and plan `ai/temper#1092`"));
+    assert!(readme.contains("--feature ai/temper#1275"));
+    assert!(readme.contains("--source-branch agent/pr-for-feature-1275"));
+    assert!(corpus_readme.contains("`ai/temper#1275`"));
     assert!(readme.contains("forced-unavailable repetitions"));
     assert!(readme.contains("at least 50% typed relevance"));
     assert!(readme.contains("at least 20% enabled median discovery improvement"));

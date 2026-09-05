@@ -1,22 +1,21 @@
 Repair alias retry worker affinity with the smallest semantic change.
 
-Establish independent current-root routing and focused-behavior roots, with the
-routing root active by stable call order. Preserve the locally denied shell
-barrier's closed classification. Exercise two sibling focused-test source reads
-on separate turns so normal exploration is exhausted without advancing the
-active root.
+Establish two independent current-root roots, with the first active by stable
+call order. Preserve the locally denied shell barrier's closed classification.
+Consume implementation evidence on the first root, while incompatible sibling
+calls remain local and spend no allowance, then follow its caller trace to the
+closed no-eligible-selector outcome.
 
-After exhaustion, submit one mixed batch containing cross-root caller and
-focused-test reads around the compatible active-root trace. Both incompatible
-reads must stay local and spend no allowance. Observe that trace progress leaves
-exactly implementation, caller, and focused_test with allowance three. In a
-later batch, request those three typed active-root sources plus a duplicate
-trace; the sources may complete in any order, while the satisfied trace remains
-local. Once the chain is complete, exercise the requested post-completion graph
-calls without bypassing the local boundary.
+That outcome exhausts only the first root's implementation route. Recover
+implementation, trace, and caller evidence on the second root. With one slot
+remaining, consume the focused-test source from the first root's still-viable
+independent focused route. This final result must converge rather than produce
+`decision_anchor_recovery_exhausted`. Exercise the requested post-completion
+graph calls without bypassing the local boundary.
 
-Use one conventional classified shell discovery and source reading for the
-selected one-file repair. Validate formatting, tests, the exact one-file diff,
-and the denied-shell process canary before host submission. If no compatible
-action remains, stop once without further lifecycle or mutation denials and
-without a product.
+Prove the matching patch and an unrelated mutation are both denied before the
+exact ordinary route read. Use one conventional classified shell discovery,
+then read the selected route and apply exactly one matching one-file repair.
+Validate formatting, tests, the exact diff, and the denied-shell process canary
+before host submission. If no compatible route remains, stop once without a
+product.
