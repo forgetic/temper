@@ -36,6 +36,25 @@ impl DecisionAnchorState {
         }
     }
 
+    pub(super) fn replace_implementation_source_authority(
+        &mut self,
+        root_binding: &str,
+        call: &PendingCodebaseCall,
+        outcome: Option<&TargetAdmissionOutcome>,
+    ) {
+        self.source_authorities
+            .retain(|authority| authority.root_binding != root_binding);
+        self.pending_exact_reads.retain(|_, pending| {
+            pending
+                .sources
+                .iter()
+                .all(|source| source.root_binding != root_binding)
+        });
+        self.exact_read_authorities
+            .retain(|authority| authority.root_binding != root_binding);
+        self.record_source_authority(root_binding, call, outcome);
+    }
+
     pub(super) fn register_exact_read(
         &mut self,
         call: &ToolCall,
@@ -79,6 +98,7 @@ impl DecisionAnchorState {
             return;
         }
         if let Some(call_key) = GraphCorrelationV1::target_digest(&call.id) {
+            self.implementation_authority_exercised = true;
             self.pending_exact_reads.insert(
                 call_key,
                 PendingExactRead {
@@ -199,14 +219,14 @@ impl DecisionAnchorState {
     }
 
     pub(super) fn blocks_invocation_mutation(
-        &self,
+        &mut self,
         name: &str,
         admission: Option<&InvocationTargetAdmission>,
     ) -> bool {
         if !self.mutation_tools.contains(name) {
             return false;
         }
-        match admission {
+        let blocked = match admission {
             Some(
                 InvocationTargetAdmission::SourceNeutralProcess
                 | InvocationTargetAdmission::ControlPlane,
@@ -228,11 +248,15 @@ impl DecisionAnchorState {
             }
             Some(InvocationTargetAdmission::Read(_) | InvocationTargetAdmission::Ineligible(_))
             | None => true,
+        };
+        if !blocked && matches!(admission, Some(InvocationTargetAdmission::Mutation(_))) {
+            self.implementation_authority_exercised = true;
         }
+        blocked
     }
 
     #[cfg(test)]
-    pub(in crate::machine) fn blocks_mutation(&self, name: &str) -> bool {
+    pub(in crate::machine) fn blocks_mutation(&mut self, name: &str) -> bool {
         self.blocks_invocation_mutation(name, None)
     }
 }

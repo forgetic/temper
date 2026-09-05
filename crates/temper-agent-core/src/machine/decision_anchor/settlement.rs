@@ -83,8 +83,7 @@ impl DecisionAnchorState {
                     self.advance_gap_recovery(recovery, &finished)
                 }
                 Some(AnchorPhase::EnabledComplete(anchors)) => {
-                    self.phase = Some(AnchorPhase::EnabledComplete(anchors));
-                    DecisionAnchorTransition::Unchanged
+                    self.settle_enabled_implementation_correction(anchors, &finished)
                 }
                 Some(AnchorPhase::EnabledIncomplete(evidence)) => {
                     self.phase = Some(AnchorPhase::EnabledIncomplete(evidence));

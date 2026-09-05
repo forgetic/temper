@@ -45,7 +45,7 @@ TOOLS = [
     {"name": "get_architecture", "description": "Summarize architecture", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
     {"name": "get_code_snippet", "description": "Read indexed source", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}, "qualified_name": {"type": "string"}, "include_neighbors": {"type": "boolean"}}, "required": ["qualified_name"]}},
     {"name": "search_graph", "description": "Search graph", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "name_pattern": {"type": "string"}, "project": {"type": "string"}}}},
-    {"name": "trace_path", "description": "Trace graph calls", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}}}},
+    {"name": "trace_path", "description": "Trace graph calls", "inputSchema": {"type": "object", "properties": {"function_name": {"type": "string"}, "project": {"type": "string"}, "mode": {"type": "string"}, "direction": {"type": "string"}, "include_tests": {"type": "boolean"}}}},
     {"name": "list_projects", "description": "List projects", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "index_status", "description": "Index status", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]}},
     {"name": "detect_changes", "description": "Detect changes", "inputSchema": {"type": "object", "properties": {"project": {"type": "string"}}}},
@@ -279,26 +279,69 @@ for line in sys.stdin:
                         results.append(result)
                 payload = {"total": result_count, "has_more": False, "results": results}
                 tool_result(request["id"], json.dumps(payload), structured=payload)
+            elif mode == "active-root-overlap-handoff" and name == "trace_path":
+                symbol = args.get("function_name")
+                if symbol == "affinity_topic":
+                    payload = {
+                        "function": {
+                            "name": "affinity_topic",
+                            "qualified_name": "temper-v1-production.src.model.affinity_topic",
+                        },
+                        "callers": [
+                            {
+                                "name": "worker_slot",
+                                "qualified_name": "temper-v1-production.src.route.worker_slot",
+                            },
+                            {
+                                "name": "worker_for",
+                                "qualified_name": "temper-v1-production.src.route.worker_for",
+                            },
+                        ],
+                    }
+                    tool_result(request["id"], json.dumps(payload), structured=payload)
+                else:
+                    tool_result(request["id"], "invalid argument", True)
             elif mode in ("active-root-handoff", "active-root-overlap-handoff") and name == "get_code_snippet":
                 symbol = args.get("qualified_name")
                 expected = (
                     "temper-v1-production.src.model.affinity_topic",
                     "temper-v1-production.src.route.worker_slot",
+                    "temper-v1-production.src.route.worker_for",
+                    "temper-v1-production.tests.route.test_affinity_2",
+                    "temper-v1-production.tests.route.test_affinity_3",
+                    "temper-v1-production.tests.route.test_affinity_4",
+                    "temper-v1-production.tests.route.test_affinity_5",
+                    "temper-v1-production.tests.route.test_affinity_6",
+                    "test_affinity_2",
+                    "test_affinity_3",
+                    "test_affinity_4",
+                    "test_affinity_5",
+                    "test_affinity_6",
                 ) if mode == "active-root-overlap-handoff" else ("worker_slot", "sibling_worker_slot")
                 if symbol not in expected:
                     tool_result(request["id"], "invalid argument", True)
                 else:
+                    test_symbol = symbol.startswith("test_affinity_")
+                    qualified_symbol = (
+                        f"temper-v1-production.tests.route.{symbol}"
+                        if test_symbol
+                        else symbol
+                    )
                     file_path = (
                         "src/model.rs"
                         if symbol == "temper-v1-production.src.model.affinity_topic"
+                        else "tests/route.rs"
+                        if test_symbol or ".tests." in symbol
                         else "src/route.rs"
                     )
                     payload = {
                         "name": symbol,
-                        "qualified_name": symbol,
+                        "qualified_name": qualified_symbol,
                         "file_path": file_path,
                         "source": f"fn {symbol}() {{}}",
                     }
+                    if test_symbol or ".tests." in symbol:
+                        payload["is_test"] = True
                     tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode == "graph-errors" and args.get("query") == "invalid":
                 tool_result(request["id"], "invalid argument: query-local SECRET", True)

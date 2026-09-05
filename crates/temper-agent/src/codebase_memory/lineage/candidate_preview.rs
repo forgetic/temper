@@ -8,11 +8,19 @@ impl DecisionAnchorLineages {
         root_binding: &str,
         reference: &str,
     ) -> bool {
+        let Some(candidate) = self.recovery_reference_selectors.get(reference) else {
+            return false;
+        };
+        let purpose = candidate.purpose;
         let key = RecoverySelectorKey {
             root_binding: root_binding.to_string(),
-            purpose: RecoverySelectorPurpose::ImplementationCandidate,
+            purpose,
         };
-        if !self
+        if !matches!(
+            purpose,
+            RecoverySelectorPurpose::ImplementationCandidate
+                | RecoverySelectorPurpose::ImplementationCorrection
+        ) || !self
             .recovery_references
             .get(&key)
             .is_some_and(|references| references.iter().any(|candidate| candidate == reference))
@@ -23,7 +31,12 @@ impl DecisionAnchorLineages {
             return false;
         };
         if candidate.root_binding != root_binding
-            || candidate.purpose != RecoverySelectorPurpose::ImplementationCandidate
+            || !matches!(
+                candidate.purpose,
+                RecoverySelectorPurpose::ImplementationCandidate
+                    | RecoverySelectorPurpose::ImplementationCorrection
+            )
+            || !candidate.correction_supported
             || candidate.state != RecoverySelectorState::Available
             || candidate.previewed
             || !candidate.presented
@@ -70,7 +83,11 @@ impl DecisionAnchorLineages {
             .recovery_reference_selectors
             .get(public_reference)
             .filter(|reference| {
-                reference.purpose == RecoverySelectorPurpose::ImplementationCandidate
+                matches!(
+                    reference.purpose,
+                    RecoverySelectorPurpose::ImplementationCandidate
+                        | RecoverySelectorPurpose::ImplementationCorrection
+                ) && reference.correction_supported
                     && reference.presented
                     && reference.state == RecoverySelectorState::Available
                     && reference.previewed

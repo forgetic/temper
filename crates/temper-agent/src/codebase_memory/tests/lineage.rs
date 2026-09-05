@@ -724,6 +724,7 @@ mod tests {
         include!("lineage_active_root_execution.rs");
         include!("lineage_parallel_active_root_execution.rs");
         include!("lineage_parallel_active_root_execution_tests.rs");
+        include!("lineage_pre_mutation_correction.rs");
     }
 
     mod candidates {

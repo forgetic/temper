@@ -153,7 +153,13 @@ pub(crate) fn codebase_memory_prompt_section_with_status(
          implementation candidates, follow its bounded preview/commit protocol: inspect only presented\n\
          candidates without an evidence purpose, compare their source, then explicitly commit exactly one\n\
          candidate with the implementation purpose in a later turn. A preview never earns evidence or\n\
-         ordinary read/mutation authority. Choose the behaviorally relevant implementation candidate and\n\
+         ordinary read/mutation authority. An implementation source committed before caller and focused-test\n\
+         convergence remains provisional. If its typed traversal later produces the bounded pre-mutation\n\
+         implementation-correction handoff and retained caller/focused-test evidence shows another presented\n\
+         candidate better explains the requested failure, inspect only those candidates and explicitly correct\n\
+         at most once before any ordinary read or mutation; otherwise proceed to the exact ordinary read. That correction atomically replaces rather than\n\
+         accumulates implementation authority; after it succeeds, the old target and every unchosen candidate\n\
+         remain non-actionable. Choose the behaviorally relevant implementation candidate and\n\
          consume its exact source first; only then traverse inbound calls from that exact implementation in a later turn.\n\
          Admit caller source only from an exact identity returned by that traversal. Among\n\
          returned implementation candidates, favor the one whose result context matches the requested\n\
@@ -381,6 +387,15 @@ for line in sys.stdin:
             "explicitly commit exactly one",
             "preview never earns evidence or",
             "ordinary read/mutation authority",
+            "committed before caller and focused-test",
+            "convergence remains provisional",
+            "bounded pre-mutation",
+            "implementation-correction handoff",
+            "explicitly correct",
+            "at most once before any ordinary read or mutation",
+            "atomically replaces rather than",
+            "old target and every unchosen candidate",
+            "remain non-actionable",
             "consume its exact source first",
             "traverse inbound calls from that exact implementation in a later turn",
             "Admit caller",

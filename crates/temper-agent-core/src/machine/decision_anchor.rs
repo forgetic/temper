@@ -22,11 +22,13 @@ use super::protocol::{CODEBASE_MEMORY_TOOL_PREFIX, ToolCallDenial};
 mod actions;
 mod admission;
 mod anchors;
+mod authority_correction;
 mod evidence;
 mod exact_read;
 mod output;
 mod progress;
 mod settlement;
+mod source_evidence;
 
 use output::{
     CandidateRecoveryDisposition, anchor_output, candidate_recovery_disposition,
@@ -35,6 +37,7 @@ use output::{
 };
 pub(super) use progress::active_root_selector_handoff;
 use progress::{AcceptedEvidence, ResultProgress};
+use source_evidence::{DecisionGap, RecoveryRoute, SourceEvidence};
 
 /// Reserved wrapper detail carrying a process-local-root-bound lineage record.
 /// It is deliberately excluded from durable activity metadata.
@@ -83,6 +86,8 @@ pub(super) struct DecisionAnchorState {
     rejected_recovery_tuples: BTreeSet<RecoveryTupleIdentity>,
     pending_conventional_reads: BTreeMap<String, EligibleWorkspaceTarget>,
     conventional_read_authorities: Vec<EligibleWorkspaceTarget>,
+    implementation_correction_attempted: bool,
+    implementation_authority_exercised: bool,
 }
 
 enum AnchorPhase {
@@ -160,32 +165,6 @@ struct ExactReadAuthority {
     read_dispatched_turn: usize,
     read_dispatched_order: u64,
     read_dispatched_after_batch: u64,
-}
-
-#[derive(Clone, Default)]
-struct SourceEvidence {
-    trace_turn: Option<usize>,
-    decision_kinds: BTreeSet<DecisionEvidenceKindV1>,
-    caller_selector_available: bool,
-    trace_before_implementation: bool,
-    caller_traversal_outcome: Option<CallerDiscoveryOutcomeV1>,
-    focused_test_selector_available: bool,
-    focused_test_traversal_turn: Option<usize>,
-    focused_test_traversal_outcome: Option<FocusedTestDiscoveryOutcomeV1>,
-    focused_test_fallback_turn: Option<usize>,
-    focused_test_fallback_outcome: Option<FocusedTestDiscoveryOutcomeV1>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RecoveryRoute {
-    Implementation,
-    FocusedTest,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum DecisionGap {
-    Trace,
-    Evidence(DecisionEvidenceKindV1),
 }
 
 #[derive(Clone)]
@@ -266,6 +245,8 @@ impl DecisionAnchorState {
             rejected_recovery_tuples: BTreeSet::new(),
             pending_conventional_reads: BTreeMap::new(),
             conventional_read_authorities: Vec::new(),
+            implementation_correction_attempted: false,
+            implementation_authority_exercised: false,
         })
     }
 
@@ -408,6 +389,11 @@ impl DecisionAnchorState {
                     anchor.evidence.record_trace(call.turn);
                     anchor
                         .evidence
+                        .record_implementation_correction_availability(
+                            output.lineage.implementation_correction_available,
+                        );
+                    anchor
+                        .evidence
                         .record_caller_discovery(output.lineage.caller_discovery);
                     self.mark_accepted(id, AcceptedEvidence::Trace);
                 }
@@ -469,7 +455,13 @@ impl DecisionAnchorState {
                     }
                 }
                 GraphCorrelationToolV1::SearchGraph | GraphCorrelationToolV1::SearchCode => {}
-                GraphCorrelationToolV1::TracePath => {}
+                GraphCorrelationToolV1::TracePath => {
+                    anchor
+                        .evidence
+                        .record_implementation_correction_availability(
+                            output.lineage.implementation_correction_available,
+                        );
+                }
             }
             if accepted_source {
                 self.record_source_authority(root, call, *source_target);
