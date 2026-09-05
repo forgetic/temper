@@ -1,8 +1,11 @@
 const PARALLEL_ACTIVE_PROVIDER_SELECTOR: &str =
     "temper-v1-production.src.route.worker_slot";
+const PARALLEL_FIRST_PROVIDER_SELECTOR: &str =
+    "temper-v1-production.src.model.affinity_topic";
 
-#[test]
-fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
+fn run_parallel_overlapping_roots_execute_same_batch_candidate_selection(
+    reverse_candidate_order: bool,
+) {
     let server = crate::codebase_memory::tests::test_support::fake_server_script();
     let workspace = tempfile::tempdir().unwrap();
     let log_path = workspace.path().join("mcp.log");
@@ -111,6 +114,24 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
         assert_eq!(presented_handoff, active_references);
         let active_reference = active_references[2].clone();
         let first_reference = active_references[0].clone();
+        let (winner_reference, winner_provider_selector, winner_path, loser_reference, loser_path) =
+            if reverse_candidate_order {
+                (
+                    &first_reference,
+                    PARALLEL_FIRST_PROVIDER_SELECTOR,
+                    "demo/src/model.rs",
+                    &active_reference,
+                    "demo/src/route.rs",
+                )
+            } else {
+                (
+                    &active_reference,
+                    PARALLEL_ACTIVE_PROVIDER_SELECTOR,
+                    "demo/src/route.rs",
+                    &first_reference,
+                    "demo/src/model.rs",
+                )
+            };
         assert!(!handoff.contains("decision_evidence_kind"));
         assert!(!sibling_references.contains(&active_reference));
 
@@ -225,13 +246,18 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
 
         let admitted = complete_llm(
             &mut machine,
-            assistant(vec![(
-                "active-source",
-                "codebase_memory_get_code_snippet",
-                serde_json::json!({
-                    "qualified_name": active_reference
-                }),
-            )]),
+            assistant(vec![
+                (
+                    "winning-source",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({"qualified_name": winner_reference}),
+                ),
+                (
+                    "losing-source",
+                    "codebase_memory_get_code_snippet",
+                    serde_json::json!({"qualified_name": loser_reference}),
+                ),
+            ]),
         );
         assert!(admitted.iter().any(|request| matches!(
             request,
@@ -241,7 +267,36 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
                     GraphRecoveryReferenceDispositionV1::Recognized
                 ),
                 ..
-            }) if id == "active-source"
+            }) if id == "winning-source"
+        )));
+        let losing_dispatch = admitted
+            .iter()
+            .find_map(|request| match request {
+                AgentRequest::RunTool {
+                    call,
+                    denial,
+                    rejection,
+                    ..
+                } if call.id == "losing-source" => {
+                    Some((denial.is_some(), rejection.is_some()))
+                }
+                _ => None,
+            })
+            .expect("the losing candidate has a closed local dispatch");
+        assert_eq!(
+            losing_dispatch,
+            (false, false),
+            "the read-safe losing wrapper must run only to reject before expansion",
+        );
+        assert!(admitted.iter().any(|request| matches!(
+            request,
+            AgentRequest::Emit(AgentEvent::ToolStart {
+                id,
+                recovery_reference_disposition: Some(
+                    GraphRecoveryReferenceDispositionV1::Rejected
+                ),
+                ..
+            }) if id == "losing-source"
         )));
         let source_call = admitted
             .iter()
@@ -251,17 +306,47 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
                     denial: None,
                     rejection: None,
                     ..
-                } if call.id == "active-source" => Some(call.clone()),
+                } if call.id == "winning-source" => Some(call.clone()),
                 _ => None,
             })
-            .expect("the active opaque handoff reaches the wrapper");
+            .expect("exactly one presented candidate reaches the provider");
+        let losing_call = dispatched_call(&admitted, "losing-source");
         let source = registry
             .get("codebase_memory_get_code_snippet")
             .unwrap();
-        let source_output = source
-            .execute(&source_call.id, source_call.arguments, None)
-            .await
-            .unwrap();
+        let (source_output, denied_output) = if reverse_candidate_order {
+            let source_output = source
+                .execute(&source_call.id, source_call.arguments, None)
+                .await
+                .unwrap();
+            let denied_output = source
+                .execute(&losing_call.id, losing_call.arguments, None)
+                .await
+                .unwrap();
+            (source_output, denied_output)
+        } else {
+            let denied_output = source
+                .execute(&losing_call.id, losing_call.arguments, None)
+                .await
+                .unwrap();
+            assert_eq!(
+                admission.recovery_reference_disposition(
+                    "codebase_memory_get_code_snippet",
+                    &serde_json::json!({"qualified_name": winner_reference}),
+                    Some(&active_root.root_binding),
+                ),
+                Some(GraphRecoveryReferenceDispositionV1::Recognized),
+                "the losing wrapper cannot poison the selected reference",
+            );
+            let source_output = source
+                .execute(&source_call.id, source_call.arguments, None)
+                .await
+                .unwrap();
+            (source_output, denied_output)
+        };
+        assert!(denied_output.is_error);
+        let losing_failure =
+            ToolFailureDiagnostic::codebase_memory(ToolFailureCategory::InvalidModelInput);
         assert!(!source_output.is_error);
         let source_lineage = lineage(&source_output);
         assert_eq!(source_lineage.root_binding, active_root.root_binding);
@@ -277,7 +362,7 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
         let InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(read_target)) =
             admission.resolve_invocation_targets(
                 "read",
-                &serde_json::json!({"path": "demo/src/route.rs"}),
+                &serde_json::json!({"path": winner_path}),
             )
         else {
             panic!("the selected source authorizes its exact ordinary read");
@@ -286,7 +371,7 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
         let InvocationTargetAdmission::Mutation(mutation_targets) =
             admission.resolve_invocation_targets(
                 "write",
-                &serde_json::json!({"path": "demo/src/route.rs", "content": "changed"}),
+                &serde_json::json!({"path": winner_path, "content": "changed"}),
             )
         else {
             panic!("the selected source authorizes its exact ordinary mutation target");
@@ -298,12 +383,12 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
         assert_eq!(
             admission.resolve_invocation_targets(
                 "write",
-                &serde_json::json!({"path": "demo/src/model.rs", "content": "changed"}),
+                &serde_json::json!({"path": loser_path, "content": "changed"}),
             ),
             InvocationTargetAdmission::Mutation(vec![TargetAdmissionOutcome::Ineligible(
                 TargetAdmissionStatus::UnknownTarget,
             )]),
-            "the unchosen first candidate receives no mutation target authority",
+            "the losing same-batch candidate receives no mutation target authority",
         );
         let source_calls = crate::codebase_memory::tests::test_support::calls_named(
             &log_path,
@@ -312,7 +397,7 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
         assert_eq!(source_calls.len(), 1);
         assert_eq!(
             source_calls[0]["arguments"]["qualified_name"],
-            PARALLEL_ACTIVE_PROVIDER_SELECTOR
+            winner_provider_selector
         );
         assert_eq!(source_calls[0]["arguments"].as_object().unwrap().len(), 2);
         assert!(source_calls[0]["arguments"]["project"].is_string());
@@ -328,7 +413,26 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
                 .is_none()
         );
 
-        let advanced = complete_tool(&mut machine, "active-source", source_output, None);
+        let advanced = if reverse_candidate_order {
+            assert!(
+                complete_tool(&mut machine, "winning-source", source_output, None).is_empty()
+            );
+            complete_tool(
+                &mut machine,
+                "losing-source",
+                denied_output,
+                Some(losing_failure),
+            )
+        } else {
+            assert!(complete_tool(
+                &mut machine,
+                "losing-source",
+                denied_output,
+                Some(losing_failure),
+            )
+            .is_empty());
+            complete_tool(&mut machine, "winning-source", source_output, None)
+        };
         assert!(advanced.iter().any(|request| match request {
             AgentRequest::CallLlm { messages, .. } => messages.iter().any(|message| matches!(
                 message,
@@ -349,19 +453,19 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
             &mut machine,
             assistant(vec![
                 (
-                    "unchosen-first-source",
+                    "losing-source-again",
                     "codebase_memory_get_code_snippet",
-                    serde_json::json!({"qualified_name": first_reference}),
+                    serde_json::json!({"qualified_name": loser_reference}),
                 ),
                 (
-                    "consumed-source",
+                    "winning-source-again",
                     "codebase_memory_get_code_snippet",
-                    serde_json::json!({"qualified_name": active_reference}),
+                    serde_json::json!({"qualified_name": winner_reference}),
                 ),
             ]),
         );
         let mut stale_completed = Vec::new();
-        for id in ["unchosen-first-source", "consumed-source"] {
+        for id in ["losing-source-again", "winning-source-again"] {
             let (stale_output, stale_failure) =
                 if let Some(failure) = maybe_local_failure(&stale, id) {
                     (failed_output(), failure)
@@ -404,4 +508,14 @@ fn parallel_overlapping_roots_execute_the_next_turn_opaque_source_handoff() {
             }
         )));
     });
+}
+
+#[test]
+fn same_batch_candidate_selection_is_transactional_when_loser_finishes_first() {
+    run_parallel_overlapping_roots_execute_same_batch_candidate_selection(false);
+}
+
+#[test]
+fn same_batch_candidate_selection_is_transactional_when_winner_finishes_first_and_order_reverses() {
+    run_parallel_overlapping_roots_execute_same_batch_candidate_selection(true);
 }
