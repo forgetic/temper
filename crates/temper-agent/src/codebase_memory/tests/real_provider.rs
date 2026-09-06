@@ -74,6 +74,9 @@ fn installed_provider_release_supports_temper_graph_tools() {
         "def increment(value):\n    return value + 1\n\ndef run():\n    return increment(41)\n",
     )
     .expect("fixture source");
+    fs::write(repo.join(".cbmignore"), "excluded.py\n").expect("controlled exclusion");
+    fs::write(repo.join("excluded.py"), "def excluded():\n    return 7\n")
+        .expect("excluded source");
     assert!(
         Command::new("git")
             .args(["init", "-q"])
@@ -111,7 +114,46 @@ fn installed_provider_release_supports_temper_graph_tools() {
                 .unwrap()
                 .contains("stable current-checkout rebind completed")
         );
-        verify_graph_tools(&toolset.into_tools()).await;
+        let tools = toolset.into_tools();
+        verify_graph_tools(&tools).await;
+        let first = call(
+            &tools,
+            "check_index_coverage",
+            json!({"paths":["example.py","excluded.py"],"scopes":["."],"scope_limit":1}),
+        )
+        .await;
+        let report: Value = serde_json::from_str(&first).expect("coverage report");
+        assert_eq!(report["status"], "flagged", "{first}");
+        assert_eq!(
+            report["provider"]["paths"][0]["freshness"],
+            "metadata_match"
+        );
+        assert_ne!(
+            report["provider"]["paths"][1]["status"],
+            "no_recorded_issue"
+        );
+        let last=call(&tools,"check_index_coverage",json!({"paths":["example.py","excluded.py"],"scopes":["."],"scope_limit":1,"scope_offset":report["next_scope_offset"],"generation":report["generation"]})).await;
+        let last: Value = serde_json::from_str(&last).unwrap();
+        assert_eq!(last["status"], "flagged");
+        assert_eq!(last["pagination_complete"], true, "{last}");
+        assert_eq!(last["scope_pages"].as_array().unwrap().len(), 2);
+        fs::write(
+            repo.join("example.py"),
+            "def increment(value):\n    return value + 2\n",
+        )
+        .expect("controlled source change");
+        let changed = call(
+            &tools,
+            "check_index_coverage",
+            json!({"paths":["example.py"],"generation":report["generation"]}),
+        )
+        .await;
+        let changed: Value = serde_json::from_str(&changed).unwrap();
+        assert_eq!(changed["status"], "stale", "{changed}");
+        println!(
+            "installed_provider_0_10_8 coverage_paths_scopes_exclusion_changed_file=passed generation={} pagination_complete={}",
+            report["generation"], report["pagination_complete"]
+        );
     });
 }
 

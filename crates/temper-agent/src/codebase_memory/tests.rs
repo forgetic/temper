@@ -11,7 +11,7 @@ mod observability;
 mod real_provider;
 mod result_presentation;
 #[path = "test_support.rs"]
-mod test_support;
+pub(super) mod test_support;
 use super::*;
 use serde_json::json;
 use std::fs;

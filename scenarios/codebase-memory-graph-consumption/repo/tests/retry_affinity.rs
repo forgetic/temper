@@ -1,4 +1,4 @@
-use codebase_memory_retry_fixture::retry_worker_topic;
+use codebase_memory_retry_fixture::caller::dispatch as retry_worker_topic;
 
 #[test]
 fn alias_retries_keep_the_original_ordered_worker() {

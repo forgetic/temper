@@ -132,7 +132,7 @@ impl WorkspaceScope {
             .expect("scope always contains primary project")
     }
 
-    fn resolve_alias(&self, raw: &str) -> std::result::Result<&ScopedProject, String> {
+    pub(super) fn resolve_alias(&self, raw: &str) -> std::result::Result<&ScopedProject, String> {
         let alias = raw.trim();
         if alias.is_empty() {
             return Err("project/repo alias must not be empty".to_string());
@@ -483,7 +483,7 @@ impl ProjectIndexState {
     }
 }
 
-fn current_git_head(root: &Path) -> Option<String> {
+pub(super) fn current_git_head(root: &Path) -> Option<String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)

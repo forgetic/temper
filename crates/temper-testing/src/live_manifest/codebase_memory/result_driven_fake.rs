@@ -67,7 +67,7 @@ fn record_model_observations(view: &RequestView, observations: &mut ModelObserva
     if view
         .messages
         .iter()
-        .any(|message| message.content.len() > MAX_MODEL_MESSAGE_BYTES)
+        .any(|message| message.role == "tool" && message.content.len() > MAX_MODEL_MESSAGE_BYTES)
     {
         observations.oversized_message_seen = true;
     }

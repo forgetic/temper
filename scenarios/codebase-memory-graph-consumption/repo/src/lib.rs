@@ -1,3 +1,5 @@
+pub mod caller;
+
 /// Chooses the ordered worker key for an event attempt.
 pub fn retry_worker_topic<'a>(
     topic: &'a str,

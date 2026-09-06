@@ -33,6 +33,13 @@ pub(in crate::live_manifest) fn tune_codebase_memory_config(
         .or_insert_with(|| TomlValue::Table(Default::default()))
         .as_table_mut()
         .ok_or_else(|| "config.toml [agent] must be a table".to_string())?;
+    if fake_mcp
+        .safe_tools
+        .iter()
+        .any(|name| name == "check_index_coverage")
+    {
+        agent.insert("enable_subagents".into(), TomlValue::Boolean(true));
+    }
     if let Some(timeout) = configuration.tool_timeout_secs {
         let deadlines = agent
             .entry("deadlines".to_string())

@@ -15,6 +15,9 @@ use super::stable_rebind::{confirmed_project_from_calls, validate_stable_rebind_
 use super::{FakeMcpServer, McpToolCallEvidence};
 
 pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Result<(), String> {
+    if mcp.lifecycle_profile.as_deref() == Some("mapped-live-graph-consumption") {
+        return super::graph_consumption::validate(mcp, calls);
+    }
     let expected_tools = [
         "index_status",
         "index_repository",
@@ -178,7 +181,7 @@ mod tests {
             log_path: workspace.path().join("mcp.jsonl"),
             state_path,
             project: "demo".into(),
-            lifecycle_profile: Some("mapped-live-graph-consumption".into()),
+            lifecycle_profile: Some("mapped-live-ordinary-tool-convergence".into()),
             safe_tools: vec!["search_graph".into()],
             hidden_tools: vec!["index_repository".into()],
             readiness_delay_ms: 750,

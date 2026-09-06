@@ -5,6 +5,57 @@ use std::time::Duration;
 use super::*;
 
 #[test]
+fn codebase_memory_graph_consumption_bundle_declares_the_six_call_typed_chain() {
+    let bundle = ScenarioBundle::load(scenarios_root().join("codebase-memory-graph-consumption"))
+        .expect("graph-consumption bundle");
+    let mcp = bundle
+        .execution
+        .steps
+        .iter()
+        .find(|step| step.id == "start-fake-codebase-memory-mcp")
+        .expect("MCP fixture action");
+    assert!(matches!(
+        &mcp.action,
+        ManifestAction::StartCodebaseMemoryMcp {
+            fixture: Some(fixture),
+            safe_tools,
+            readiness_delay_ms: 750,
+            forced_systemic_failure: None,
+            ..
+        } if fixture == "graph-consumption" && safe_tools == &vec![
+            "search_graph".to_string(),
+            "search_code".to_string(),
+            "trace_path".to_string(),
+            "get_code_snippet".to_string(),
+            "list_projects".to_string(),
+            "index_status".to_string(),
+        ]
+    ));
+    let jig = std::fs::read_to_string(bundle.jig_script_path()).expect("scenario-owned Jig");
+    let manifest = std::fs::read_to_string(
+        scenarios_root().join("codebase-memory-graph-consumption/scenario.toml"),
+    )
+    .expect("graph-consumption manifest");
+    assert!(manifest.contains("feature = \"ai/temper#962\""));
+    assert!(manifest.contains("plan = \"ai/temper#963\""));
+    assert!(manifest.contains("six-complete-v1-typed-correlations"));
+    assert!(manifest.contains("graph.correlation.complete"));
+    assert!(manifest.contains("graph.correlation.target_kind"));
+    for call in [
+        "graph_identify_retry_worker",
+        "graph_refine_retry_worker",
+        "graph_trace_retry_worker_caller",
+        "read_confirmed_current_root_implementation",
+        "read_confirmed_current_root_caller",
+        "read_confirmed_current_root_test",
+    ] {
+        assert!(jig.contains(call), "graph-consumption Jig omitted {call}");
+    }
+    assert!(!jig.contains("get_architecture"));
+    assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
+}
+
+#[test]
 fn mapped_graph_consumption_bundle_maps_feature_1009_without_rewriting_history() {
     let scenario_path = scenarios_root().join("mapped-live-graph-consumption");
     let bundle = ScenarioBundle::load(&scenario_path).expect("mapped graph-consumption bundle");
@@ -42,7 +93,7 @@ fn mapped_graph_consumption_bundle_maps_feature_1009_without_rewriting_history()
     assert!(manifest.contains("plan = \"ai/temper#1010\""));
     assert!(manifest.contains("source_branch = \"agent/pr-for-feature-1009\""));
     assert!(manifest.contains("mapped-multi-part-lineage-before-minimal-repair"));
-    assert!(manifest.contains("five-complete-v1-correlations-and-lineages"));
+    assert!(manifest.contains("six-complete-v1-correlations-and-lineages"));
     assert!(manifest.contains("one-post-decision-local-denial"));
     assert!(manifest.contains("one-conventional-fallback-read"));
     assert!(manifest.contains("focused denial regressions"));

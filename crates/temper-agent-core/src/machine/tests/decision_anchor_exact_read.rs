@@ -148,6 +148,13 @@ fn only_successful_post_source_exact_reads_authorize_every_mutation_target() {
         "graph exploration stays closed while an exact read is awaited",
     );
 
+    for number in 0..6 {
+        let id = format!("coverage-{number}");
+        assert_eq!(state.on_tool_dispatched(&call(&id,"codebase_memory_check_index_coverage"),6),None);
+        assert_eq!(state.on_tool_finished(&id,"codebase_memory_check_index_coverage",&successful_read()),DecisionAnchorTransition::Unchanged);
+    }
+    assert_eq!(state.on_tool_dispatched(&call("still-closed","codebase_memory_search_graph"),6),completed_graph_denial(),"coverage cannot reopen discovery");
+
     let mutation = call("direct-mutation", "write");
     assert_eq!(
         state.on_tool_dispatched_with_targets(

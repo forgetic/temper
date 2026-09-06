@@ -88,6 +88,7 @@ impl LiveExecutionContext<'_> {
             "get_code_snippet",
             "list_projects",
             "index_status",
+            "check_index_coverage",
             "index_repository",
             "delete_project",
         ];

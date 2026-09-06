@@ -57,7 +57,7 @@ fn record_observations(view: &RequestView, observations: &mut ModelObservations)
     observations.oversized_message_seen |= view
         .messages
         .iter()
-        .any(|message| message.content.len() > MAX_MODEL_MESSAGE_BYTES);
+        .any(|message| message.role == "tool" && message.content.len() > MAX_MODEL_MESSAGE_BYTES);
 }
 
 fn reply(view: &RequestView) -> Reply {
@@ -73,27 +73,32 @@ fn reply(view: &RequestView) -> Reply {
             serde_json::json!({"pattern": result_at(view, "/results/0/results/0/name")}),
         ),
         2 => tool_reply(
-            "trace-mapped-routing-caller",
-            "codebase_memory_trace_path",
-            serde_json::json!({"function_name": result_at(view, "/results/0/name")}),
+            "read-mapped-current-root-implementation",
+            "codebase_memory_get_code_snippet",
+            serde_json::json!({"qualified_name": result_at(view, "/results/0/qualified_name"), "decision_evidence_kind":"implementation"}),
         ),
         3 => tool_reply(
-            "read-mapped-current-root-implementation",
+            "trace-mapped-routing-caller",
+            "codebase_memory_trace_path",
+            serde_json::json!({"function_name": result_at(view, "/results/0/qualified_name"), "direction":"inbound"}),
+        ),
+        4 => tool_reply(
+            "read-mapped-current-root-caller",
             "codebase_memory_get_code_snippet",
             serde_json::json!({
                 "qualified_name": result_at(view, "/callers/0/qualified_name"),
                 "decision_evidence_kind": "caller",
             }),
         ),
-        4 => tool_reply(
+        5 => tool_reply(
             "read-mapped-current-root-focused-test",
             "codebase_memory_get_code_snippet",
             serde_json::json!({
-                "qualified_name": result_at(view, "/source_metadata/related_source_references/0/qualifiedName"),
+                "qualified_name": result_at(view, "/results/0/results/1/qualifiedName"),
                 "decision_evidence_kind": "focused_test",
             }),
         ),
-        5 => {
+        6 => {
             assert_complete_source_evidence(view);
             tool_reply(
                 "observe-expected-unavailable-descendant",
@@ -101,7 +106,7 @@ fn reply(view: &RequestView) -> Reply {
                 serde_json::json!({"qualified_name": result_at(view, "/source_metadata/next_target/qualifiedName")}),
             )
         }
-        6 => {
+        7 => {
             assert!(
                 messages_contain(view, CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE),
                 "post-decision descendant must receive local convergence guidance"
@@ -112,25 +117,25 @@ fn reply(view: &RequestView) -> Reply {
                 serde_json::json!({"path": "demo/src/lib.rs"}),
             )
         }
-        7 => tool_reply(
+        8 => tool_reply(
             "write-minimal-mapped-repair",
             "write",
             serde_json::json!({
                 "path": "demo/src/lib.rs",
-                "content": "pub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, _attempt: u32) -> &'a str {\n    preferred.unwrap_or(value)\n}\n"
+                "content": "pub mod caller;\n\npub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, _attempt: u32) -> &'a str {\n    preferred.unwrap_or(value)\n}\n"
             }),
         ),
-        8 => tool_reply(
+        9 => tool_reply(
             "validate-minimal-mapped-repair",
             "bash",
             serde_json::json!({"command": "cd demo && cargo fmt --check && cargo test --quiet", "timeout": 60}),
         ),
-        9 => tool_reply(
+        10 => tool_reply(
             "submit-mapped-graph-repair",
             "submit_for_pr",
             serde_json::json!({"summary": "Consumed the mapped multi-part current-root lineage before the minimal repair."}),
         ),
-        10 => Reply::text(
+        11 => Reply::text(
             r##"{"title":"Keep selected dispatch behavior","body":"# Implementation report\nConsumed the mapped multi-part current-root lineage before the minimal repair. `cargo fmt --check` and `cargo test --quiet` pass.","summary":"Consumed mapped graph lineage before the minimal repair."}"##,
         ),
         turn => panic!("unexpected mapped graph-consumption model turn {turn}"),
@@ -166,8 +171,8 @@ fn assert_complete_source_evidence(view: &RequestView) {
                     && result.get("source").and_then(JsonValue::as_str).is_some()
             })
             .count(),
-        2,
-        "mutation requires two complete current-root source results"
+        3,
+        "mutation requires three complete typed current-root source results"
     );
 }
 
@@ -189,7 +194,10 @@ fn provider_results(view: &RequestView) -> Vec<JsonValue> {
                 .content
                 .split_once("\n\n[Decision anchor:")
                 .map_or(message.content.as_str(), |(result, _)| result);
-            serde_json::from_str(content).ok()
+            serde_json::Deserializer::from_str(content)
+                .into_iter::<JsonValue>()
+                .next()?
+                .ok()
         })
         .collect()
 }
