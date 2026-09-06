@@ -51,6 +51,9 @@ pub(super) fn scoped_parameters(
             .or_insert_with(|| Value::Object(Map::new()));
         let mut normalizes_project = false;
         if let Some(properties) = properties.as_object_mut() {
+            if super::provider_output::uses_json_format(allowed.mcp_name) {
+                properties.remove("format");
+            }
             normalizes_project =
                 properties.contains_key("repo") || properties.contains_key("project");
             if normalizes_project {

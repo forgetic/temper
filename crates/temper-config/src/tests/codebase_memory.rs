@@ -55,7 +55,7 @@ mode = "auto"
     assert!(tool.args.is_empty());
     assert_eq!(tool.roles, vec!["*".to_string()]);
     assert_eq!(tool.index, CodebaseMemoryIndex::Background);
-    assert_eq!(tool.startup_timeout_secs, 5);
+    assert_eq!(tool.startup_timeout_secs, 30);
     assert_eq!(tool.index_timeout_secs, 30);
     assert!(tool.retention.enabled);
     assert_eq!(tool.retention.max_obsolete_projects, 64);
@@ -127,7 +127,7 @@ fn config_template_enables_codebase_memory_auto_defaults() {
 }
 
 #[test]
-fn codebase_memory_valid_config_trims_deduplicates_and_filters_roles() {
+fn codebase_memory_valid_config_preserves_arguments_and_filters_roles() {
     let config = parse_config(
         r#"
 schema_version = 1
@@ -137,7 +137,7 @@ roles = ["engineer", "architect"]
 [agent.tools.codebase_memory]
 mode = " required "
 command = " codebase-memory-mcp "
-args = [" --cache ", "--cache", "", "  ", "local"]
+args = [" --cache ", "--cache", "", "  ", "0", "-", "0", "stable-lifecycle"]
 roles = [" engineer ", "architect", "engineer"]
 index = "blocking"
 startup_timeout_secs = 7
@@ -158,7 +158,19 @@ max_deletions_per_run = 2
     let tool = resolved.agent.tools.codebase_memory.expect("enabled");
     assert_eq!(tool.mode, CodebaseMemoryMode::Required);
     assert_eq!(tool.command, "codebase-memory-mcp");
-    assert_eq!(tool.args, vec!["--cache".to_string(), "local".to_string()]);
+    assert_eq!(
+        tool.args,
+        [
+            " --cache ",
+            "--cache",
+            "",
+            "  ",
+            "0",
+            "-",
+            "0",
+            "stable-lifecycle"
+        ]
+    );
     assert_eq!(
         tool.roles,
         vec!["engineer".to_string(), "architect".to_string()]

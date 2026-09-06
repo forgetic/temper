@@ -140,7 +140,7 @@ impl Tool for CodebaseMemoryTool {
                 timings,
             )));
         };
-        let input = match skein::runtime::spawn_blocking(move || {
+        let mut input = match skein::runtime::spawn_blocking(move || {
             scope.prepare_tool_input(&mcp_name, default_project_key, input, readiness_budget)
         })
         .await
@@ -158,6 +158,9 @@ impl Tool for CodebaseMemoryTool {
                 ));
             }
         };
+        if super::provider_output::uses_json_format(&self.mcp_name) {
+            input["format"] = Value::String("json".to_string());
+        }
         let readiness_wait_ms = duration_ms(readiness_started.elapsed());
         // Extract only one closed, structured correlation target before the
         // provider consumes the input. The returned DTO is a digest, never a
@@ -260,7 +263,10 @@ impl Tool for CodebaseMemoryTool {
         )
         .await
         {
-            Ok(Ok(result)) => result,
+            Ok(Ok(mut result)) => {
+                super::provider_output::normalize(&mut result);
+                result
+            }
             Ok(Err(error)) => {
                 let timings = ToolCallTimings {
                     readiness_wait_ms,

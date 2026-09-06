@@ -163,7 +163,7 @@ for line in sys.stdin:
         continue
     method = request.get("method")
     if method == "initialize":
-        rpc_result(request["id"], {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.9.0"}, "capabilities": {"tools": {}}})
+        rpc_result(request["id"], {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.10.8"}, "capabilities": {"tools": {}}})
     elif method == "tools/list":
         rpc_result(request["id"], {"tools": TOOLS})
     elif method == "tools/call":

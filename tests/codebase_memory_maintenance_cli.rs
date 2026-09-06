@@ -201,10 +201,10 @@ def schema(properties, required=()):
     return {"type": "object", "properties": properties, "required": list(required)}
 
 TOOLS = [
-    {"name": "list_projects", "inputSchema": schema({"limit": {"type": "integer"}, "cursor": {"type": "string"}}, ["limit"])},
+    {"name": "list_projects", "inputSchema": schema({"limit": {"type": "integer"}, "offset": {"type": "integer"}, "include_details": {"type": "boolean"}}, ["limit"])},
     {"name": "delete_project", "inputSchema": schema({"project": {"type": "string"}}, ["project"])},
     {"name": "index_status", "inputSchema": schema({"project": {"type": "string"}}, ["project"])},
-    {"name": "search_code", "inputSchema": schema({"project": {"type": "string"}, "query": {"type": "string"}}, ["query"])},
+    {"name": "search_code", "inputSchema": schema({"project": {"type": "string"}, "pattern": {"type": "string"}}, ["pattern", "project"])},
     {"name": "index_repository", "inputSchema": schema({"repo_path": {"type": "string"}, "name": {"type": "string"}}, ["repo_path"])},
 ]
 
@@ -222,7 +222,7 @@ for raw in sys.stdin:
     request_id = request["id"]
     method = request.get("method")
     if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.9.0"}, "capabilities": {"tools": {}}}})
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.10.8"}, "capabilities": {"tools": {}}}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}})
     elif method == "tools/call":
@@ -233,7 +233,7 @@ for raw in sys.stdin:
             handle.write(json.dumps({"name": name, "arguments": arguments}, sort_keys=True) + "\n")
         if name == "list_projects":
             projects = [] if os.path.exists(state_path) else [{"project": "ephemeral-1", "repo_path": candidate_path, "updated_at_unix_secs": 1, "ownership": "temper", "estimated_bytes": 1024, "status": "stale"}]
-            result(request_id, {"cache_instance_id": "cache-a", "cache_bytes": 1024 if projects else 0, "projects": projects})
+            result(request_id, {"cache_instance_id": "cache-a", "cache_bytes": 1024 if projects else 0, "projects": projects, "has_more": False, "offset": arguments["offset"], "limit": arguments["limit"]})
         elif name == "index_status":
             project = arguments.get("project", "")
             status = "ready" if project.startswith("temper-v1-") else "stale"
