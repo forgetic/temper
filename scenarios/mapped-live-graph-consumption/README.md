@@ -14,17 +14,18 @@ at runtime and never appear in the checked-in Jig.
 
 Across separate model turns the engineer must consume exactly:
 
-1. one targeted `search_graph` root;
+1. one targeted `search_graph` root with implementation and focused-test selectors;
 2. one transformed `search_code` refinement;
-3. one `trace_path` caller/model result;
-4. one current-root implementation `get_code_snippet`; and
-5. one current-root focused-test `get_code_snippet`.
+3. one typed current-root implementation `get_code_snippet`;
+4. one `trace_path` caller result;
+5. one typed current-root caller `get_code_snippet` from `src/caller.rs`; and
+6. one typed current-root focused-test `get_code_snippet`.
 
 Every successful call has a complete typed V1 correlation and lineage record.
-The first is a root and the next four are carry-forwards bound to that root.
-Both source reads complete the generic decision chain. A redundant descendant is
+The first is a root and the next five are carry-forwards bound to that root.
+The three typed source reads complete the generic decision chain. A redundant descendant is
 then denied locally with the fixed `graph_lifecycle_denial` category with reason `exploration_closed`, without
-another MCP invocation. Conventional source reading remains available before
+another MCP invocation. An ordinary source read must complete before writing
 the minimal repair, focused host validation, Actions pass, PR merge, and
 source-issue closure.
 

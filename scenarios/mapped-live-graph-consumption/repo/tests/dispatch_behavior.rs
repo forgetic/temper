@@ -1,4 +1,4 @@
-use mapped_live_graph_consumption_fixture::choose_dispatch;
+use mapped_live_graph_consumption_fixture::caller::dispatch as choose_dispatch;
 
 #[test]
 fn selected_dispatch_is_preserved_after_retry() {

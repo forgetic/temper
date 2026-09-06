@@ -17,6 +17,7 @@ Current guides:
 - [Configure a coding workspace external tool](configure-coding-workspace.md)
 - [Recover a codebase-memory cache safely](recover-codebase-memory.md)
 - [Upgrade and verify codebase-memory-mcp](upgrade-codebase-memory.md)
+- [Verify codebase-memory evidence and delegate findings](verify-codebase-memory-evidence.md)
 - [Operate durable agent traces and OpenTelemetry](operate-agent-traces.md)
 - [Benchmark coding-agent sessions](benchmark-agent-sessions.md)
 - [Deploy Temper with systemd](deploy-with-systemd.md)

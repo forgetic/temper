@@ -143,7 +143,8 @@ impl DecisionAnchorState {
             let order = self.next_call_order;
             self.next_call_order = self.next_call_order.saturating_add(1);
             let mut denial = None;
-            if call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX)
+            if (call.name.starts_with(CODEBASE_MEMORY_TOOL_PREFIX)
+                && call.name != "codebase_memory_check_index_coverage")
                 || incomplete_graph_selector.is_some()
             {
                 let traversal_not_ready = matches!(

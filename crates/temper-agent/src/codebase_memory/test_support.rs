@@ -8,7 +8,7 @@ use temper_protocol_agent::{
     WorkspaceWorkItem,
 };
 
-pub(super) fn fake_server_script() -> tempfile::TempDir {
+pub(in crate::codebase_memory) fn fake_server_script() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("fake_codebase_memory_mcp.py"),
@@ -407,7 +407,7 @@ pub(super) fn script_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("fake_codebase_memory_mcp.py")
 }
 
-pub(super) fn config(
+pub(in crate::codebase_memory) fn config(
     dir: &tempfile::TempDir,
     mode: CodebaseMemoryMode,
     index: CodebaseMemoryIndex,
@@ -450,7 +450,10 @@ pub(super) fn bad_command_config(mode: CodebaseMemoryMode) -> AgentToolConfig {
     }
 }
 
-pub(super) fn workspace_context(cwd: &Path, repos: &[(&str, &str, &str)]) -> WorkspaceContext {
+pub(in crate::codebase_memory) fn workspace_context(
+    cwd: &Path,
+    repos: &[(&str, &str, &str)],
+) -> WorkspaceContext {
     let repositories = repos
         .iter()
         .enumerate()

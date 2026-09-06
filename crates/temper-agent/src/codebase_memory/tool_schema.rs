@@ -32,7 +32,11 @@ pub(super) fn scoped_parameters(
         });
     }
 
-    let mut schema = input_schema.clone();
+    let mut schema = if allowed.mcp_name == "check_index_coverage" {
+        super::coverage::schema()
+    } else {
+        input_schema.clone()
+    };
     if !schema.is_object() {
         schema = json!({ "type": "object", "properties": {} });
     }
@@ -93,6 +97,9 @@ pub(super) fn description_for(
     server_description: &str,
     scope: &WorkspaceScope,
 ) -> String {
+    if allowed.mcp_name == "check_index_coverage" {
+        return "Check best-effort coverage of up to 16 repository-relative paths and 4 scopes (32 entries/page). Available after discovery closes; grants no lineage, source or mutation authority. Supply returned generation for pagination/revalidation. Complete relevant pagination and explicit limits are mandatory for broader claims. Read flagged/stale/unavailable files directly. Returns a bounded session-local evidence_id for structured child handoffs. Project aliases only.".to_string();
+    }
     let base = match server_description.trim() {
         "" => format!("Call codebase-memory MCP tool `{}`.", allowed.mcp_name),
         description => description.to_string(),

@@ -100,3 +100,12 @@ suppression; monotonic project-count or cache-byte growth without successful
 retention; any `partial_failure`; and consecutive `discovery_failed`,
 `inventory_uncertain`, or `timed_out` retention outcomes. A disabled or
 active-work-suppressed pass is state evidence, not a cleanup failure.
+
+Scoped verification emits `codebase_memory.coverage` with closed
+`coverage.status` and `coverage.pagination_complete` fields. Returned child
+handoffs emit `codebase_memory.handoff` with `handoff.status` set to `revalidated`
+or `invalidated`. These events omit source, selectors, provider transcripts,
+receipt identifiers and host paths. Existing MCP tool events retain bounded
+call timing; diagnostics carry no graph-correlation or decision-lineage marker.
+See [Verify evidence and delegate findings](../how-to/verify-codebase-memory-evidence.md)
+for reporting tiers, bounds, pagination and fallback.

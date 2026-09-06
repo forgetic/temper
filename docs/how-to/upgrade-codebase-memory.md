@@ -32,9 +32,13 @@ PATH=/absolute/staging/directory:$PATH cargo test -p temper-agent --lib \
 This Unix smoke test requires the actual 0.10.8 executable. It checks MCP
 initialization/version and Temper's provider contract, indexes a tiny repository
 through Temper's blocking stable-project binding, then exercises graph search,
-source snippets, caller tracing, and code search through the agent tool wrappers.
+source snippets, caller tracing, code search, and cited-path/scoped coverage through
+the agent tool wrappers. A controlled `.cbmignore` exclusion must be flagged and
+a changed source file must produce stale coverage.
 It sets both `CBM_RUNTIME_DIR` and `CBM_CACHE_DIR` to private temporary directories
-so its daemon and indexes are separate from the account's production state.
+so its daemon and indexes use private state. On a shared interactive host, run
+the already-built ignored test executable under a dedicated test account/UID as
+an additional isolation boundary; do not stop operator sessions or delete caches.
 
 The quick suite and scenario fixtures use fake MCP servers advertising 0.10.8.
 Temper rejects older releases. The fixtures' advertised version

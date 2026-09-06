@@ -1,91 +1,92 @@
-use serde_json::Value as JsonValue;
+//! Current typed source contract for the two historical consumption fixtures.
+use serde_json::Value;
 
 use super::stable_rebind::{confirmed_project_from_calls, validate_stable_rebind_contract};
 use super::{FakeMcpServer, McpToolCallEvidence};
 
-/// Validate the narrow, production-shaped graph chain without retaining MCP
-/// arguments or source in durable evidence. The fixture log is ephemeral; only
-/// safe names and aggregate counts cross the live-run evidence boundary.
 pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Result<(), String> {
-    let expected_tools = [
+    let expected = [
         "index_status",
         "index_repository",
         "index_status",
         "search_graph",
         "search_code",
+        "get_code_snippet",
         "trace_path",
         "get_code_snippet",
         "get_code_snippet",
     ];
-    let actual_tools = calls
+    if calls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>() != expected
+        || calls
+            .iter()
+            .any(|c| c.is_error || c.arguments.get("decision_evidence_kind").is_some())
+    {
+        return Err("historical fixture requires six successful ordered graph calls and wrapper-owned typed source evidence".into());
+    }
+    let requested = calls[1].arguments["name"]
+        .as_str()
+        .filter(|s| s.starts_with("temper-v1-"))
+        .ok_or("missing stable provider identity")?;
+    let actual = confirmed_project_from_calls(calls, requested)?;
+    if calls[3..].iter().any(|c| c.arguments["project"] != actual) {
+        return Err("historical source consumption lost current-root binding".into());
+    }
+    let raw =
+        std::fs::read_to_string(&mcp.state_path).map_err(|_| "missing historical fixture state")?;
+    let state: Value =
+        serde_json::from_str(&raw).map_err(|_| "malformed historical fixture state")?;
+    let tokens = &state["historical_tokens"];
+    let implementation = tokens["implementation"]
+        .as_str()
+        .ok_or("missing implementation selector")?;
+    let mapped = mcp.lifecycle_profile.as_deref() == Some("mapped-live-graph-consumption");
+    if calls[3].arguments["query"]
+        != if mapped {
+            "worker affinity routing"
+        } else {
+            "alias retry worker affinity"
+        }
+        || calls[4].arguments["pattern"] != implementation.rsplit("::").next().unwrap()
+        || calls[6].arguments["direction"] != "inbound"
+    {
+        return Err("historical graph discovery/refinement/trace bounds changed".into());
+    }
+    for (index, field, token) in [
+        (5, "qualified_name", "implementation"),
+        (6, "function_name", "implementation"),
+        (7, "qualified_name", "caller"),
+        (8, "qualified_name", "focused_test"),
+    ] {
+        if tokens[token].as_str().is_none() || calls[index].arguments[field] != tokens[token] {
+            return Err("historical fixture failed to consume a returned source selector".into());
+        }
+    }
+    let events = if mapped {
+        [
+            "served_mapped_root",
+            "served_mapped_carry_forward",
+            "served_mapped_current_root_source",
+            "served_mapped_carry_forward",
+            "served_mapped_current_root_source",
+            "served_mapped_current_root_source",
+        ]
+    } else {
+        [
+            "served_current_root_graph",
+            "served_current_root_code_refinement",
+            "served_current_root_source",
+            "served_current_root_graph_trace",
+            "served_current_root_source",
+            "served_current_root_source",
+        ]
+    };
+    if calls[3..]
         .iter()
-        .map(|call| call.name.as_str())
-        .collect::<Vec<_>>();
-    if actual_tools != expected_tools {
-        return Err(format!(
-            "graph-consumption fixture requires only its declared ordered MCP chain; expected {expected_tools:?}, got {actual_tools:?}"
-        ));
-    }
-    if calls.iter().any(|call| call.is_error) {
-        return Err(
-            "graph-consumption fixture recorded an unsuccessful declared MCP call".to_string(),
-        );
-    }
-    let requested = calls[1]
-        .arguments
-        .get("name")
-        .and_then(JsonValue::as_str)
-        .filter(|name| name.starts_with("temper-v1-"))
-        .ok_or("graph-consumption upsert did not use a stable provider identity")?;
-    if calls[0]
-        .arguments
-        .get("project")
-        .and_then(JsonValue::as_str)
-        != Some(requested)
-        || calls[0].fixture_event.as_deref() != Some("fresh_prior_binding")
+        .map(|c| c.fixture_event.as_deref().unwrap_or_default())
+        .collect::<Vec<_>>()
+        != events
     {
-        return Err(
-            "graph-consumption initial discovery was not a targeted stable-key lookup".to_string(),
-        );
-    }
-    let confirmed = confirmed_project_from_calls(calls, requested)?;
-    for call in &calls[3..] {
-        if call.arguments.get("project").and_then(JsonValue::as_str) != Some(confirmed.as_str()) {
-            return Err(format!(
-                "graph-consumption call `{}` did not use the confirmed current-root provider identity",
-                call.name
-            ));
-        }
-    }
-    let expected_targets = [
-        (3, "query", "alias retry worker affinity"),
-        (4, "pattern", "retry_worker_topic"),
-        (5, "function_name", "retry_worker_topic"),
-        (6, "qualified_name", "retry_worker_topic"),
-        (7, "qualified_name", "retry_worker_topic_retry_affinity"),
-    ];
-    for (index, field, expected) in expected_targets {
-        if calls[index]
-            .arguments
-            .get(field)
-            .and_then(JsonValue::as_str)
-            != Some(expected)
-        {
-            return Err(format!(
-                "graph-consumption call `{}` did not use declared targeted {field}",
-                calls[index].name
-            ));
-        }
-    }
-    if calls[4].fixture_event.as_deref() != Some("served_current_root_code_refinement")
-        || calls[5].fixture_event.as_deref() != Some("served_current_root_graph_trace")
-        || calls[6].fixture_event.as_deref() != Some("served_current_root_source")
-        || calls[7].fixture_event.as_deref() != Some("served_current_root_source")
-    {
-        return Err(
-            "graph-consumption fixture did not serve refinement, trace, and both source reads from the confirmed current root"
-                .to_string(),
-        );
+        return Err("historical fixture omitted current-root source checkpoints".into());
     }
     validate_stable_rebind_contract(mcp, calls, requested)
 }

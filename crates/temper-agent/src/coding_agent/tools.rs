@@ -230,6 +230,7 @@ pub(crate) fn add_subagents(
         parent_scope_id,
         operation_limits,
         &containment,
+        None,
     )
 }
 
@@ -244,6 +245,7 @@ pub(crate) fn add_subagents_with_containment(
     parent_scope_id: &str,
     operation_limits: temper_agent_core::AgentOperationLimits,
     containment: &AgentContainmentContext,
+    coverage: Option<std::sync::Arc<crate::codebase_memory::CoverageService>>,
 ) -> ToolRegistry {
     for spec in subagent_specs() {
         base = add_one_subagent(
@@ -256,6 +258,7 @@ pub(crate) fn add_subagents_with_containment(
             (scope_factory, parent_scope_id),
             operation_limits,
             containment,
+            coverage.clone(),
         );
     }
     base
@@ -273,6 +276,7 @@ fn add_one_subagent(
     scope: (&crate::activity::ScopeFactory, &str),
     operation_limits: temper_agent_core::AgentOperationLimits,
     containment: &AgentContainmentContext,
+    coverage: Option<std::sync::Arc<crate::codebase_memory::CoverageService>>,
 ) -> ToolRegistry {
     // The role's model tier. The cheap tier (e.g. Haiku) is for the read-only
     // searcher whose product is a focused report and which dominates token spend
@@ -329,7 +333,7 @@ fn add_one_subagent(
             stream_options: stream_options.clone(),
         }
     });
-    base.push(Box::new(
+    let tool: Box<dyn tongs::tools::Tool> = Box::new(
         // Both roles declare read-only effects so the parent can fan them out in
         // parallel. The bash-capable `delegate` is prompt-constrained to
         // read-only inspection (no edits/destructive commands), matching Claude's
@@ -354,6 +358,12 @@ fn add_one_subagent(
                 )
                 .observability
         })),
-    ));
+    );
+    base.push(match coverage {
+        Some(coverage) => Box::new(crate::codebase_memory::GraphHandoffTool::new(
+            tool, coverage,
+        )),
+        None => tool,
+    });
     base
 }

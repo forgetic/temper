@@ -10,17 +10,21 @@ trace, and current-root source reads before an exact repair.
 The real Forgejo, host Actions runner, standalone Temper, and deterministic
 Jig agent run one retry-worker repair. After targeted stable-key discovery and
 normalized ready confirmation of the active checkout root, the engineer makes
-exactly five provider-shaped model-visible MCP calls in this order:
+exactly six provider-shaped model-visible MCP calls in this order:
 
-1. `search_graph` identifies the retry-worker evidence;
+1. `search_graph` identifies the implementation and focused-test selectors;
 2. `search_code` refines `retry_worker_topic`;
-3. `trace_path` follows that symbol to its caller;
-4. `get_code_snippet` consumes the implementation from the confirmed root; and
-5. a second `get_code_snippet` consumes the focused test from that root.
+3. `get_code_snippet` consumes the typed implementation from `src/lib.rs`;
+4. `trace_path` follows that implementation to its caller;
+5. `get_code_snippet` consumes the typed caller from `src/caller.rs`; and
+6. `get_code_snippet` consumes the typed focused test from the confirmed root.
+
+The engineer then completes an ordinary read of the implementation before
+writing the repair. Graph snippets do not satisfy that mutation prerequisite.
 
 The trusted wrapper emits a complete V1 typed correlation only for a successful
 closed target extracted from one of those calls. The scenario asserts the
-ordered tool and target-kind sequence plus exactly five complete correlations;
+ordered tool and target-kind sequence plus exactly six complete correlations;
 it does not treat a generic successful RPC as relevant. The generic live
 fixture rejects a different order, an extra or broad MCP call, an unconfirmed
 provider identity, an unsuccessful call, or a source read not served from the
@@ -37,7 +41,7 @@ artifacts, never scenario-corpus evidence.
 
 This scenario validates the live workflow contract; it is not a live
 effectiveness approval. After the feature branch has an exact final head, run a
-fresh enabled smoke with complete 5/5 typed relevance and at least 50%
+fresh enabled smoke with complete typed relevance (6/6 for this scenario) and at least 50%
 relevance before starting the unchanged enabled/disabled/unavailable 5x3
 matrix. Do not count the failed `c388453` smoke or weaken either threshold.
 Retain only the approved privacy-safe aggregate report from a later successful

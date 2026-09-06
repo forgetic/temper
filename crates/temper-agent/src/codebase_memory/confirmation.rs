@@ -109,7 +109,7 @@ fn confirmed_upsert_identity(
     provider_identity(&object, provider_key, "upsert")
 }
 
-fn confirm_index_status(
+pub(super) fn confirm_index_status(
     result: &McpToolCallResult,
     provider_key: &str,
     actual_project: &str,

@@ -119,7 +119,9 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     validate_stable_rebind_contract(mcp, calls, requested)
 }
 
-fn relevance_tokens(mcp: &FakeMcpServer) -> Result<serde_json::Map<String, JsonValue>, String> {
+pub(super) fn relevance_tokens(
+    mcp: &FakeMcpServer,
+) -> Result<serde_json::Map<String, JsonValue>, String> {
     let raw = fs::read_to_string(&mcp.state_path)
         .map_err(|_| "focused-test relevance fixture state was unavailable".to_string())?;
     let state: JsonValue = serde_json::from_str(&raw)
@@ -131,7 +133,7 @@ fn relevance_tokens(mcp: &FakeMcpServer) -> Result<serde_json::Map<String, JsonV
         .ok_or("focused-test relevance fixture omitted transient selectors".to_string())
 }
 
-fn token<'a>(
+pub(super) fn token<'a>(
     tokens: &'a serde_json::Map<String, JsonValue>,
     name: &str,
 ) -> Result<&'a str, String> {

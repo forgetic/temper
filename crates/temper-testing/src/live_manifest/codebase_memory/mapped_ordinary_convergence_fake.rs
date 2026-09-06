@@ -52,7 +52,7 @@ fn record_observations(view: &RequestView, observations: &mut ModelObservations)
     observations.oversized_message_seen |= view
         .messages
         .iter()
-        .any(|message| message.content.len() > MAX_MODEL_MESSAGE_BYTES);
+        .any(|message| message.role == "tool" && message.content.len() > MAX_MODEL_MESSAGE_BYTES);
 }
 
 fn reply(view: &RequestView) -> Reply {

@@ -71,6 +71,7 @@ GRAPH_CALLS = 0
 EXACT_SELECTION_ROOT_QUERIES = set()
 
 TOOLS = [
+    {"name":"check_index_coverage","description":"Bounded path and scope coverage","inputSchema":{"type":"object","properties":{"project":{"type":"string"},"paths":{"type":"array"},"scopes":{"type":"array"},"scope_limit":{"type":"integer"},"scope_offset":{"type":"integer"}}}},
     {
         "name": "get_architecture",
         "description": "Get a high-level view of the bound project",
@@ -90,6 +91,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
+                "limit": {"type": "integer"},
                 "project": {"type": "string"},
             },
             "required": ["query"],
@@ -357,6 +359,10 @@ def is_focused_relevance_profile():
     return LIFECYCLE_PROFILE == "mapped-live-focused-test-source-relevance"
 
 
+def is_scoped_evidence_profile():
+    return is_focused_relevance_profile() and "check_index_coverage" in SAFE_TOOLS
+
+
 def is_exact_source_selection_profile():
     return LIFECYCLE_PROFILE == "mapped-live-exact-source-selection"
 
@@ -468,6 +474,63 @@ def sequential_step(expected_stage, expected_argument, actual_argument):
     return True
 
 
+HISTORICAL_STAGE = 0
+
+
+def historical_graph_result(name, arguments):
+    global HISTORICAL_STAGE
+    mapped = LIFECYCLE_PROFILE == "mapped-live-graph-consumption"
+    state = load_state()
+    tokens = state.get("historical_tokens")
+    if tokens is None:
+        prefix = "fixture::" + uuid.uuid4().hex + "::" if mapped else ""
+        tokens = {
+            "implementation": prefix + ("choose_dispatch" if mapped else "retry_worker_topic"),
+            "caller": prefix + "dispatch",
+            "focused_test": prefix + ("selected_dispatch_is_preserved_after_retry" if mapped else "alias_retries_keep_the_original_ordered_worker"),
+            "unavailable": prefix + "unavailable",
+        }
+        state["historical_tokens"] = tokens
+        save_state(state)
+    project = arguments.get("project", "")
+    source_paths = {"implementation": "src/lib.rs", "caller": "src/caller.rs", "focused_test": "tests/dispatch_behavior.rs" if mapped else "tests/retry_affinity.rs"}
+    records = [{"name": terminal_function_name(tokens[k]), "qualifiedName": tokens[k], "file_path": source_paths[k], "is_test": k == "focused_test"} for k in ("implementation", "focused_test")]
+    expected = ["search_graph", "search_code", "get_code_snippet", "trace_path", "get_code_snippet", "get_code_snippet"]
+    valid = HISTORICAL_STAGE < len(expected) and name == expected[HISTORICAL_STAGE] and current_root_source(project, "src/lib.rs") is not None
+    event = ""
+    payload = {}
+    if name == "search_graph":
+        valid = valid and arguments.get("query") == ("worker affinity routing" if mapped else "alias retry worker affinity")
+        payload = {"marker": "FAKE_MCP_GRAPH_RESULT", "results": [{"results": records}], "total": 2, "has_more": False}
+        event = "served_mapped_root" if mapped else "served_current_root_graph"
+    elif name == "search_code":
+        valid = valid and arguments.get("pattern") == terminal_function_name(tokens["implementation"])
+        payload = {"marker": "FAKE_MCP_CODE_RESULT", "results": [{"name": terminal_function_name(tokens["implementation"]), "qualified_name": tokens["implementation"], "file_path": "src/lib.rs", "related_source_references": [{"qualifiedName": tokens["caller"]}]}]}
+        event = "served_mapped_carry_forward" if mapped else "served_current_root_code_refinement"
+    elif name == "trace_path":
+        valid = valid and arguments.get("function_name") == tokens["implementation"] and arguments.get("direction") == "inbound"
+        caller = {"qualified_name": tokens["caller"], "file_path": "src/caller.rs"}
+        payload = {"marker": "FAKE_MCP_TRACE_RESULT", "function": {"qualified_name": tokens["implementation"]}, "direction": "inbound", "complete": True, "callers": [caller], "related_sources": [caller]}
+        event = "served_mapped_carry_forward" if mapped else "served_current_root_graph_trace"
+    else:
+        kind = {2: "implementation", 4: "caller", 5: "focused_test"}.get(HISTORICAL_STAGE)
+        valid = valid and kind is not None and arguments.get("qualified_name") == tokens[kind]
+        source = current_root_source(project, source_paths[kind]) if kind else None
+        valid = valid and source is not None
+        if kind:
+            payload = {"name": terminal_function_name(tokens[kind]), "qualified_name": tokens[kind], "file_path": source_paths[kind], "source": source, "binding": "current_prepared_checkout", "is_test": kind == "focused_test"}
+            if kind == "caller":
+                payload["callees"] = [{"qualified_name": tokens["implementation"]}]
+            if kind == "focused_test":
+                payload["source_metadata"] = {"next_target": {"qualifiedName": tokens["unavailable"]}}
+        event = "served_mapped_current_root_source" if mapped else "served_current_root_source"
+    log_tool(name, arguments, is_error=not valid, fixture_event=event if valid else None)
+    if valid:
+        HISTORICAL_STAGE += 1
+        return text_result(json.dumps(payload), structured=payload)
+    return text_result("historical typed graph sequence mismatch", True)
+
+
 for line in sys.stdin:
     if not line.strip():
         continue
@@ -491,6 +554,10 @@ for line in sys.stdin:
         params = request.get("params") or {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
+        if LIFECYCLE_PROFILE in ("graph-consumption", "mapped-live-graph-consumption") and name in ("search_graph", "search_code", "trace_path", "get_code_snippet"):
+            result = historical_graph_result(name, arguments)
+            send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+            continue
         if name == "get_architecture":
             project = arguments.get("project", "")
             successful = current_root_source(project, "src/lib.rs") is not None
@@ -509,7 +576,11 @@ for line in sys.stdin:
         ensure_graph_convergence_tokens()
         ensure_decision_gap_tokens()
         ensure_focused_relevance_tokens()
-        if name == "index_status":
+        if name == "check_index_coverage":
+            payload = {"project":arguments.get("project"),"signal":"best_effort","indexed_at":"fixture-generation-1279","metadata":{"generation":"fixture-generation-1279","generation_matches":True,"recording_status":"complete","hash_records_complete":True},"paths":[{"requested_path":p,"path":p,"status":"no_recorded_issue","freshness":"metadata_match","coverage":[]} for p in arguments.get("paths",[])],"scopes":[{"requested_scope":s,"scope":s,"total":0,"has_more":False,"entries":[],"status":"no_known_gaps"} for s in arguments.get("scopes",[])]}
+            log_tool(name, arguments, fixture_event="served_scoped_coverage")
+            result = text_result(json.dumps(payload), structured=payload)
+        elif name == "index_status":
             if has_current_root_profile():
                 project = arguments.get("project", "")
                 binding = load_state()["projects"].get(project)
@@ -549,7 +620,7 @@ for line in sys.stdin:
             project = arguments.get("project", "")
             qualified_name = arguments.get("qualified_name", "")
             if is_focused_relevance_profile():
-                focused_test_stage = 9 if is_exact_source_selection_profile() else 8
+                focused_test_stage = 4 if is_scoped_evidence_profile() else (9 if is_exact_source_selection_profile() else 8)
                 source_stage = {
                     FOCUSED_RELEVANCE_TOKENS["implementation"]: (
                         1,
@@ -562,7 +633,7 @@ for line in sys.stdin:
                     ),
                     FOCUSED_RELEVANCE_TOKENS["caller"]: (
                         3,
-                        "src/route.rs",
+                        "src/lib.rs" if is_scoped_evidence_profile() else "src/route.rs",
                         selection_checkpoint(
                             "served_focus_caller_source", "served_selection_caller_source"
                         ),
@@ -1356,6 +1427,21 @@ for line in sys.stdin:
                 else text_result("bound source unavailable", True)
             )
         elif name == "search_graph":
+            if is_scoped_evidence_profile():
+                project = arguments.get("project", "")
+                successful = (
+                    current_root_source(project, "src/route.rs") is not None
+                    and current_root_source(project, "tests/alias_retry.rs") is not None
+                    and focused_relevance_step(0, "route affinity", arguments.get("query", ""))
+                )
+                payload = {"results": [
+                    {"qualified_name": FOCUSED_RELEVANCE_TOKENS["implementation"], "file_path": "src/route.rs", "is_test": False},
+                    {"qualified_name": FOCUSED_RELEVANCE_TOKENS["focused_test"], "file_path": "tests/alias_retry.rs", "is_test": True},
+                ], "total": 2, "has_more": False}
+                log_tool(name, arguments, is_error=not successful, fixture_event="served_focus_root" if successful else None)
+                result = text_result(json.dumps(payload), structured=payload) if successful else text_result("bound source unavailable", True)
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_focused_relevance_profile():
                 project = arguments.get("project", "")
                 fallback_stage = 8 if is_exact_source_selection_profile() else 7

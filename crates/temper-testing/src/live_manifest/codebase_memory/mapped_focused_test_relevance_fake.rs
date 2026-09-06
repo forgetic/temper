@@ -25,7 +25,7 @@ pub(super) fn start(
     .map_err(|error| format!("start mapped focused-test relevance Jig fake LLM: {error}"))
 }
 
-fn record_observations(view: &RequestView, observations: &mut ModelObservations) {
+pub(super) fn record_observations(view: &RequestView, observations: &mut ModelObservations) {
     observations.prompt_guidance_seen |= messages_contain(view, "CODEBASE MEMORY");
     observations.memory_result_seen |= provider_results(view)
         .iter()
@@ -42,8 +42,12 @@ fn record_observations(view: &RequestView, observations: &mut ModelObservations)
     observations.current_root_source_results += sources;
 }
 
-fn reply(view: &RequestView) -> Reply {
-    match view.prior_tool_results {
+pub(super) fn reply(view: &RequestView) -> Reply {
+    reply_at(view, view.prior_tool_results)
+}
+
+pub(super) fn reply_at(view: &RequestView, turn: usize) -> Reply {
+    match turn {
         0 => tool_reply(
             "discover-focused-relevance-root",
             "codebase_memory_search_code",
@@ -160,7 +164,7 @@ fn source_reply(id: &str, qualified_name: String, kind: &str) -> Reply {
     )
 }
 
-fn tool_reply(id: &str, name: &str, args: JsonValue) -> Reply {
+pub(super) fn tool_reply(id: &str, name: &str, args: JsonValue) -> Reply {
     Reply {
         turns: vec![Turn::ToolCall {
             id: id.to_string(),
@@ -172,7 +176,7 @@ fn tool_reply(id: &str, name: &str, args: JsonValue) -> Reply {
     }
 }
 
-fn implementation_target(view: &RequestView) -> String {
+pub(super) fn implementation_target(view: &RequestView) -> String {
     provider_results(view)
         .iter()
         .find_map(|result| result.pointer("/results/0/qualified_name"))
@@ -181,7 +185,7 @@ fn implementation_target(view: &RequestView) -> String {
         .expect("targeted root omitted its implementation selector")
 }
 
-fn caller_target(view: &RequestView) -> String {
+pub(super) fn caller_target(view: &RequestView) -> String {
     provider_results(view)
         .iter()
         .find_map(|result| result.pointer("/callers/0/qualified_name"))
@@ -190,7 +194,7 @@ fn caller_target(view: &RequestView) -> String {
         .expect("implementation trace omitted its caller selector")
 }
 
-fn focused_test_target(view: &RequestView) -> String {
+pub(super) fn focused_test_target(view: &RequestView) -> String {
     provider_results(view)
         .iter()
         .rev()
@@ -202,7 +206,7 @@ fn focused_test_target(view: &RequestView) -> String {
         .expect("semantic fallback omitted its exact focused-test selector")
 }
 
-fn provider_results(view: &RequestView) -> Vec<JsonValue> {
+pub(super) fn provider_results(view: &RequestView) -> Vec<JsonValue> {
     view.messages
         .iter()
         .filter(|message| message.role == "tool")
@@ -211,7 +215,10 @@ fn provider_results(view: &RequestView) -> Vec<JsonValue> {
                 .content
                 .split_once("\n\n[Decision anchor:")
                 .map_or(message.content.as_str(), |(result, _)| result);
-            serde_json::from_str(content).ok()
+            serde_json::Deserializer::from_str(content)
+                .into_iter::<JsonValue>()
+                .next()
+                .and_then(Result::ok)
         })
         .collect()
 }
