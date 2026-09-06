@@ -10,6 +10,10 @@ use super::WorkspaceScope;
 
 const MAX_TARGETED_DISCOVERY_BYTES: usize = 64 * 1024;
 
+#[cfg(test)]
+#[path = "tests/discovery.rs"]
+mod tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::codebase_memory) enum TargetedProjectState {
     Missing,
@@ -71,6 +75,17 @@ fn parse_targeted_status(
         .ok_or_else(|| discovery_protocol_error(provider_key, "response must be a JSON object"))?;
 
     validate_targeted_identity(object, provider_key)?;
+    // Released providers (including 0.10.8) report an absent project as this
+    // JSON tool error, without status or identity fields. Accept only that
+    // exact envelope; other errors and contradictory metadata remain unknown.
+    if result.is_error
+        && object.get("error").and_then(Value::as_str) == Some("project not found or not indexed")
+        && object
+            .keys()
+            .all(|key| matches!(key.as_str(), "error" | "hint"))
+    {
+        return Ok(TargetedProjectState::Missing);
+    }
     let status = targeted_status(object, provider_key)?;
 
     if is_missing_status(&status) {

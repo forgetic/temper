@@ -23,12 +23,14 @@ use crate::codebase_memory_retention::{
 };
 
 const PROVIDER_NAME: &str = "codebase-memory-mcp";
-const MINIMUM_PROVIDER_VERSION: (u64, u64, u64) = (0, 9, 0);
+const MINIMUM_PROVIDER_VERSION: (u64, u64, u64) = (0, 10, 8);
 const MAX_PROVIDER_RECORD_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDER_FIELD_BYTES: usize = 4096;
 const PROVIDER_PROJECT_NOT_FOUND: &str = "provider project was not found";
 const MAX_TOOL_LIST_PAGES: usize = 8;
 static PROVIDER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+mod pagination;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ProviderProjectStatus {
@@ -154,7 +156,7 @@ impl ProviderSession {
     pub(super) fn safe_probe(&mut self, project: &str, deadline: Instant) -> Result<(), String> {
         self.call_tool(
             "search_code",
-            json!({"project": project, "query": "Temper"}),
+            json!({"project": project, "pattern": "Temper", "format": "json"}),
             deadline,
         )?;
         Ok(())
@@ -287,12 +289,8 @@ impl CodebaseMemoryMaintenanceProvider for ProviderSession {
         limit: u32,
         deadline: Instant,
     ) -> Result<CodebaseMemoryProjectPage, String> {
-        let mut arguments = Map::new();
-        arguments.insert("limit".to_string(), Value::from(limit));
-        if let Some(cursor) = cursor {
-            arguments.insert("cursor".to_string(), Value::String(cursor.to_string()));
-        }
-        let result = self.call_tool("list_projects", Value::Object(arguments), deadline)?;
+        let arguments = pagination::arguments(cursor, limit)?;
+        let result = self.call_tool("list_projects", arguments, deadline)?;
         parse_inventory_page(&result)
     }
 
@@ -410,8 +408,9 @@ fn validate_maintenance_tools(tools: &BTreeMap<String, Value>) -> Result<(), Str
     let list = tools
         .get("list_projects")
         .ok_or("provider did not advertise bounded list_projects maintenance")?;
-    require_property(list, "limit", "integer", true)?;
-    require_property(list, "cursor", "string", false)?;
+    require_property(list, "limit", "integer", false)?;
+    require_property(list, "offset", "integer", false)?;
+    require_property(list, "include_details", "boolean", false)?;
     let delete = tools
         .get("delete_project")
         .ok_or("provider did not advertise delete_project maintenance")?;
@@ -424,7 +423,7 @@ fn validate_recovery_tools(tools: &BTreeMap<String, Value>, rebuild: bool) -> Re
         .get("search_code")
         .ok_or("provider did not advertise a safe search_code verification probe")?;
     require_property(probe, "project", "string", false)?;
-    require_property(probe, "query", "string", true)?;
+    require_property(probe, "pattern", "string", true)?;
     if rebuild {
         let index = tools
             .get("index_repository")
@@ -611,7 +610,7 @@ fn parse_inventory_page(value: &Value) -> Result<CodebaseMemoryProjectPage, Stri
             object,
             &["cache_bytes", "cacheBytes", "total_bytes", "totalBytes"],
         ),
-        next_cursor: string_field(object, &["next_cursor", "nextCursor"]),
+        next_cursor: pagination::next_cursor(object)?,
     })
 }
 
@@ -621,7 +620,7 @@ fn parse_project_record(value: &Value) -> Result<CodebaseMemoryProjectRecord, St
         .ok_or("provider project record was not an object")?;
     let metadata = object.get("metadata").and_then(Value::as_object);
     let project = string_field(object, &["project", "name", "id"]);
-    let repo_path = string_field(object, &["repo_path", "repoPath", "path"])
+    let repo_path = string_field(object, &["root_path", "repo_path", "repoPath", "path"])
         .or_else(|| {
             metadata.and_then(|value| string_field(value, &["repo_path", "repoPath", "path"]))
         })

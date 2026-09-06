@@ -40,7 +40,7 @@ for line in sys.stdin:
         continue
     method = request.get("method")
     if method == "initialize":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.9.0"}, "capabilities": {"tools": {}}}})
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "codebase-memory-mcp", "version": "0.10.8"}, "capabilities": {"tools": {}}}})
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":

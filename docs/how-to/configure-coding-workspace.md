@@ -102,7 +102,7 @@ model_idle_timeout_secs = 120
 [agent.providers.anthropic]
 # url = "https://api.anthropic.com"   # optional base-URL override → --provider-url
 models = { main = "claude-opus-4-8", investigate = "claude-haiku-4-5" }
-# A codebase-memory provider is optional. Temper requires provider 0.9.0+ for
+# A codebase-memory provider is optional. Temper requires provider 0.10.8+ for
 # targeted stable identity and host-only bounded maintenance.
 [agent.tools.codebase_memory]
 mode = "auto"
@@ -110,7 +110,7 @@ command = "codebase-memory-mcp"
 args = []
 roles = ["architect", "engineer", "code-reviewer"]
 index = "background"
-startup_timeout_secs = 5
+startup_timeout_secs = 30
 index_timeout_secs = 120
 
 [agent.tools.codebase_memory.retention]
@@ -123,6 +123,10 @@ inventory_page_size = 50
 max_inventory_pages = 20
 max_deletions_per_run = 16
 ```
+
+Temper requires codebase-memory-mcp **0.10.8 or newer**. Follow
+[Upgrade and verify codebase-memory-mcp](upgrade-codebase-memory.md) to check
+both the test executable and the deployed worker's configured executable.
 
 Codebase-memory indexes use a stable key derived from the configured logical
 Forge repository, not the prepared checkout path. Runtime workers use the

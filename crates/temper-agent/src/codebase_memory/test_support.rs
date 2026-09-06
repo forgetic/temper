@@ -26,7 +26,7 @@ if mode == "hang":
     sys.exit(0)
 
 provider_name = "other-provider" if mode == "incompatible-name" else "codebase-memory-mcp"
-provider_version = "0.8.1" if mode == "incompatible-version" else "0.9.0"
+provider_version = "0.9.0" if mode == "incompatible-version" else "0.10.8"
 capabilities = {} if mode == "incompatible-capability" else {"tools": {}}
 
 index_properties = {

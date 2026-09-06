@@ -128,7 +128,7 @@ mode = \"auto\"          # off | auto | required
 # args = []
 # roles = [\"*\"]          # or selected workflow roles
 # index = \"background\"   # off | background | blocking
-# startup_timeout_secs = 5
+# startup_timeout_secs = 30
 # index_timeout_secs = 30
 
 # Worker-owned cleanup inventories only bounded provider pages and deletes only

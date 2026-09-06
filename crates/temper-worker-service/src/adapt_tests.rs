@@ -74,7 +74,7 @@ fn agent_invocation_carries_resolved_tool_config_when_enabled() {
     let codebase_memory = tool_config.codebase_memory.expect("codebase memory config");
     assert_eq!(codebase_memory.mode, CodebaseMemoryMode::Required);
     assert_eq!(codebase_memory.command, "codebase-memory-mcp");
-    assert_eq!(codebase_memory.args, vec!["--cache", "local"]);
+    assert_eq!(codebase_memory.args, vec![" --cache ", "local"]);
     assert_eq!(codebase_memory.roles, vec!["engineer"]);
     assert_eq!(codebase_memory.index, CodebaseMemoryIndex::Blocking);
     assert_eq!(codebase_memory.startup_timeout_secs, 7);

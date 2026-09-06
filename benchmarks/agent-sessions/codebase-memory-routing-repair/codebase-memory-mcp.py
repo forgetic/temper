@@ -237,7 +237,7 @@ for line in sys.stdin:
                     "protocolVersion": "2024-11-05",
                     "serverInfo": {
                         "name": "codebase-memory-mcp",
-                        "version": "0.9.0",
+                        "version": "0.10.8",
                     },
                     "capabilities": {"tools": {}},
                 },

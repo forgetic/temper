@@ -40,7 +40,7 @@ fn changed_preflight_or_provider_identity_changes_the_review_binding() {
     preflight.proposed[0].estimated_bytes = Some(43);
     let provider = CodebaseMemoryProviderIdentity {
         name: "codebase-memory-mcp".to_string(),
-        version: "0.9.0".to_string(),
+        version: "0.10.8".to_string(),
         cache_instance_id: None,
     };
     let plan = retention_plan_id(

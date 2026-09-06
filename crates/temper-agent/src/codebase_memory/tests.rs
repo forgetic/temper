@@ -7,6 +7,8 @@ mod indexing;
 mod lifecycle;
 mod lineage;
 mod observability;
+#[cfg(unix)]
+mod real_provider;
 mod result_presentation;
 #[path = "test_support.rs"]
 mod test_support;

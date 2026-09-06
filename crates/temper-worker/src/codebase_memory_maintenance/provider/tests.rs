@@ -24,12 +24,12 @@ fn inventory_parser_preserves_complete_ownership_and_lifecycle_metadata() {
                 "estimatedBytes": 4096
             }
         }],
-        "nextCursor": "page-2"
+        "offset": 0, "limit": 1, "has_more": true
     }))
     .expect("page parses");
     assert_eq!(page.cache_instance_id.as_deref(), Some("cache-a"));
     assert_eq!(page.cache_bytes, Some(8192));
-    assert_eq!(page.next_cursor.as_deref(), Some("page-2"));
+    assert_eq!(page.next_cursor.as_deref(), Some("1"));
     assert_eq!(page.projects[0].estimated_bytes, Some(4096));
     assert_eq!(page.projects[0].ownership.as_deref(), Some("temper"));
     assert!(page.projects[0].updated_at_unix_secs.is_some());
@@ -42,7 +42,7 @@ fn maintenance_negotiation_requires_bounded_pagination_and_delete_identity() {
             "list_projects".to_string(),
             json!({"inputSchema": {
                 "type": "object",
-                "properties": {"limit": {"type": "integer"}, "cursor": {"type": "string"}},
+                "properties": {"limit": {"type": "integer"}, "offset": {"type": "integer"}, "include_details": {"type": "boolean"}},
                 "required": ["limit"]
             }}),
         ),
@@ -86,9 +86,9 @@ fn recovery_negotiation_requires_target_status_safe_probe_and_stable_name() {
             json!({"inputSchema": {
                 "properties": {
                     "project": {"type": "string"},
-                    "query": {"type": "string"}
+                    "pattern": {"type": "string"}
                 },
-                "required": ["query"]
+                "required": ["pattern", "project"]
             }}),
         ),
         (
@@ -115,7 +115,7 @@ fn recovery_negotiation_requires_target_status_safe_probe_and_stable_name() {
 #[test]
 fn inventory_parser_retains_byte_and_active_indexing_evidence() {
     let page = parse_inventory_page(&json!({
-        "cache_instance_id": "cache-a",
+        "cache_instance_id": "cache-a", "has_more": false,
         "cache_bytes": 55_000,
         "projects": [{
             "project": "old",
@@ -158,7 +158,7 @@ fn inventory_parser_retains_byte_and_active_indexing_evidence() {
 
     let oversized = "s".repeat(MAX_PROVIDER_FIELD_BYTES + 1);
     let error = parse_inventory_page(&json!({
-        "cache_instance_id": "cache-a",
+        "cache_instance_id": "cache-a", "has_more": false,
         "projects": [{
             "project": oversized,
             "repo_path": "/workspace/engineer/old/temper",

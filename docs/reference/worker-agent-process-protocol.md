@@ -35,14 +35,14 @@ supervision. Profile deadline overrides inherit field-by-field from
 ### Codebase-memory provider contract
 
 When `--tool-config` enables `codebase_memory`, Temper supports
-`codebase-memory-mcp` version 0.9.0 or newer. Initialization must identify that
+`codebase-memory-mcp` version 0.10.8 or newer. Initialization must identify that
 provider in `serverInfo`, advertise the MCP `tools` capability, and expose:
 
 - `index_status` with a required string `project` input and a bounded JSON
   result that explicitly classifies the requested identity as missing, stale,
   or fresh; and
 - `index_repository` with required string `repo_path` and a string `name`
-  input. Version 0.9.0 defines `name` as the stable, idempotent upsert identity,
+  input. Version 0.10.8 defines `name` as the stable, idempotent upsert identity,
   so concurrent calls with the same name converge rather than create
   path-keyed projects.
 
@@ -54,9 +54,21 @@ role, correlation key, and work item are not inputs. Model-facing aliases stay
 limited to prepared-workspace repository identities and are translated to that
 provider project key internally.
 
+Temper requests `format = "json"` for graph tools and expands the provider's
+`cols`/`rows` and `qn_prefix`/`groups` tables into explicit records before
+deriving typed source-selection evidence. Row order, pagination, and file and
+symbol identities are preserved. Ambiguous or oversized expansions do not
+produce typed evidence.
+
 Startup calls `index_status` only for those derived identities; it never reads
-an unfiltered provider inventory. Only an explicit missing or stale result may
-start indexing. A timeout, malformed response, unknown status, or incompatible
+an unfiltered provider inventory. With indexing enabled, an explicit missing,
+stale, or fresh result permits a rebind to the prepared checkout. Even a fresh
+project must confirm the current root before its evidence is used. The released
+provider's JSON tool-error envelope
+`{"error":"project not found or not indexed"}` (with an optional `hint`) also
+explicitly means missing. This exact error requires MCP `isError: true` and no
+additional metadata fields; other errors or contradictory metadata remain
+unavailable. A timeout, malformed response, unknown status, or incompatible
 provider marks discovery unavailable and causes zero `index_repository` calls.
 Auto mode either disables an incompatible provider with upgrade guidance or,
 for an unknown discovery result, exposes a fresh read-only MCP client with the
@@ -72,7 +84,7 @@ worker/runtime boundary for both split workers and standalone, but it does not
 add provider tools to the model schema.
 
 The worker negotiates two additional **host-only** provider tools before a
-maintenance pass: paginated `list_projects(limit, cursor)` and
+maintenance pass: paginated `list_projects(limit, offset, include_details)` and
 `delete_project(project)`. Every inventory page must carry one stable,
 non-empty `cache_instance_id`; a missing/changing identity, repeated cursor,
 duplicate/incomplete record, timeout, provider mismatch, or page-bound overrun

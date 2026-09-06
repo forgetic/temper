@@ -14,7 +14,7 @@ use super::{dedup_strings, trimmed};
 const DEFAULT_CODEBASE_MEMORY_MODE: &str = "auto";
 const DEFAULT_CODEBASE_MEMORY_COMMAND: &str = "codebase-memory-mcp";
 const DEFAULT_CODEBASE_MEMORY_INDEX: &str = "background";
-const DEFAULT_CODEBASE_MEMORY_STARTUP_TIMEOUT_SECS: u64 = 5;
+const DEFAULT_CODEBASE_MEMORY_STARTUP_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_CODEBASE_MEMORY_INDEX_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_CODEBASE_MEMORY_RETENTION_ENABLED: bool = true;
 const DEFAULT_CODEBASE_MEMORY_MAX_OBSOLETE_PROJECTS: u32 = 64;
@@ -57,11 +57,9 @@ fn resolve_codebase_memory_tool(
         None => DEFAULT_CODEBASE_MEMORY_COMMAND.to_string(),
     };
 
-    let args = raw
-        .args
-        .as_deref()
-        .map(|args| dedup_strings(args.iter().filter_map(|arg| trimmed(Some(arg.as_str())))))
-        .unwrap_or_default();
+    // Arguments are positional: duplicate, empty, and whitespace-bearing values
+    // can all be meaningful to the provider or its launcher.
+    let args = raw.args.clone().unwrap_or_default();
     let roles = match raw.roles.as_deref() {
         Some(roles) => resolve_codebase_memory_roles(roles)?,
         None => vec!["*".to_string()],

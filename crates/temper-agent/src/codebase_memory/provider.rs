@@ -3,11 +3,10 @@ use serde_json::Value;
 use crate::mcp::{McpError, McpToolDescriptor, StdioMcpClient};
 
 pub(super) const SUPPORTED_PROVIDER_NAME: &str = "codebase-memory-mcp";
-pub(super) const MINIMUM_PROVIDER_VERSION: &str = "0.9.0";
+pub(super) const MINIMUM_PROVIDER_VERSION: &str = "0.10.8";
 
-/// Enforces the provider seam Temper relies on for path-independent project
-/// identity. Older providers can only create path-keyed projects and must not
-/// be allowed to index a prepared checkout.
+/// Enforces the supported release baseline and the provider schema Temper
+/// relies on for path-independent project identity before indexing a checkout.
 pub(super) fn validate_provider_contract(
     client: &StdioMcpClient,
     advertised: &[McpToolDescriptor],
@@ -22,7 +21,7 @@ pub(super) fn validate_provider_contract(
             "initialize identified `{name}` instead of `{SUPPORTED_PROVIDER_NAME}`"
         )));
     }
-    if !version_at_least(version, (0, 9, 0)) {
+    if !version_at_least(version, (0, 10, 8)) {
         return Err(incompatible(&format!(
             "provider version `{version}` is older than {MINIMUM_PROVIDER_VERSION}"
         )));
@@ -121,11 +120,12 @@ mod tests {
 
     #[test]
     fn provider_version_comparison_is_numeric_and_rejects_malformed_values() {
-        assert!(version_at_least("0.9.0", (0, 9, 0)));
-        assert!(version_at_least("v0.10.1+build", (0, 9, 0)));
-        assert!(!version_at_least("0.9.0-alpha.1", (0, 9, 0)));
-        assert!(!version_at_least("0.9.0.1", (0, 9, 0)));
-        assert!(!version_at_least("0.8.99", (0, 9, 0)));
-        assert!(!version_at_least("unknown", (0, 9, 0)));
+        assert!(version_at_least("0.10.8", (0, 10, 8)));
+        assert!(version_at_least("v0.10.8+build", (0, 10, 8)));
+        assert!(!version_at_least("0.10.8-alpha.1", (0, 10, 8)));
+        assert!(!version_at_least("0.10.8.1", (0, 10, 8)));
+        assert!(!version_at_least("0.9.0", (0, 10, 8)));
+        assert!(!version_at_least("0.10.7", (0, 10, 8)));
+        assert!(!version_at_least("unknown", (0, 10, 8)));
     }
 }

@@ -23,7 +23,7 @@ temper --config /etc/temper/config.toml \
 
 Confirm that:
 
-- the configured provider is `codebase-memory-mcp` 0.9.0 or newer;
+- the configured provider is `codebase-memory-mcp` 0.10.8 or newer;
 - `[agent.tools.codebase_memory.retention]` is enabled and its age, count,
   inventory-page, and deletion limits are appropriate;
 - `[paths]`/worker workspace points at the affected Temper workspace root; and

@@ -41,6 +41,7 @@ mod indexing;
 mod lifecycle_observability;
 mod lineage;
 mod provider;
+mod provider_output;
 mod result_presentation;
 mod scope;
 mod tool;

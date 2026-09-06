@@ -432,7 +432,7 @@ fn incompatible_provider_versions_and_schemas_fail_safely_with_upgrade_guidance(
                 auto.status(),
                 CodebaseMemoryToolsetStatus::AutoUnavailable { reason }
                     if reason.contains("incompatible codebase-memory provider")
-                        && reason.contains("upgrade `codebase-memory-mcp` to >= 0.9.0")
+                        && reason.contains("upgrade `codebase-memory-mcp` to >= 0.10.8")
             ));
             assert!(auto.registered_tool_names().is_empty());
 
@@ -457,7 +457,7 @@ fn incompatible_provider_versions_and_schemas_fail_safely_with_upgrade_guidance(
             assert!(
                 error
                     .to_string()
-                    .contains("upgrade `codebase-memory-mcp` to >= 0.9.0")
+                    .contains("upgrade `codebase-memory-mcp` to >= 0.10.8")
             );
             assert!(calls_named(&log_path, "index_repository").is_empty());
             assert!(calls_named(&log_path, "index_status").is_empty());
