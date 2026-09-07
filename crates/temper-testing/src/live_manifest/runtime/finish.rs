@@ -13,6 +13,13 @@ impl LiveExecutionContext<'_> {
             .convergence
             .take()
             .ok_or_else(|| "execution ended without workflow.wait_convergence".to_string())?;
+        super::super::artifact_benchmark::verify_merged(
+            &self.harness.scenario.repo,
+            self.workspace.path(),
+            required_ref(&self.admin_token, "forgejo.provision")?,
+            &convergence.final_state,
+            &self.logs.repo_populate_log,
+        )?;
         let fake = self
             .fake
             .take()

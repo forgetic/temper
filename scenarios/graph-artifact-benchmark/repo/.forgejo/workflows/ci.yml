@@ -1,0 +1,16 @@
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: validate artifact benchmark and report consumer
+        run: |
+          set -eu
+          command -v python3
+          command -v zstd
+          python3 benchmarks/codebase-memory-artifacts/benchmark.py fixture --output ci-artifact-report.json
+          python3 verify_report.py graph-artifact-report.json ci-artifact-report.json
+          python3 -m unittest discover -s tests -v

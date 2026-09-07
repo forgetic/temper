@@ -1,0 +1,14 @@
+{
+  "observed_utc": "2026-09-07T01:39:26Z",
+  "kernel": "6.12.74+deb13+1-amd64",
+  "architecture": "x86_64",
+  "cpu_model": "Intel(R) Core(TM) i5-8265U CPU @ 1.60GHz",
+  "logical_cpus": 8,
+  "memory_bytes": 16441110528,
+  "filesystem": "btrfs",
+  "python": "3.13.5",
+  "git": "git version 2.47.3",
+  "zstd": "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***",
+  "page_cache_policy": "not flushed; fresh application caches only",
+  "benchmark_native_activity_started": false
+}

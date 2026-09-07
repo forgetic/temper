@@ -136,6 +136,13 @@ dry-run-first `temper maintenance codebase-memory` command. Follow
 [Recover a codebase-memory cache safely](recover-codebase-memory.md) before any
 apply or stable-project rebuild; do not delete the provider cache directory.
 
+Graph artifact persistence remains opt-in. The separate
+[artifact experiment](../explanation/codebase-memory-artifacts/experiment.md)
+defines the pinned benchmark and correctness gates for evaluating reuse in
+clean checkouts. Its [measured decision](../explanation/codebase-memory-artifacts/decision.md)
+defers shared artifacts. It does not change the workspace's index arguments or grant
+permission to remove an existing cache.
+
 ```toml
 # credentials.toml — secrets (chmod 600, keep out of version control)
 

@@ -1,0 +1,151 @@
+{
+  "phases": [
+    {
+      "name": "architect-triage",
+      "when": {
+        "messages_contain": [
+          "ROLE: architect"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "artifact-architect-read-consumer",
+                "name": "read",
+                "args": {
+                  "path": "service/report_summary.py"
+                }
+              }
+            },
+            {
+              "tool_call": {
+                "id": "artifact-architect-read-contract",
+                "name": "read",
+                "args": {
+                  "path": "service/tests/test_report_summary.py"
+                }
+              }
+            },
+            {
+              "tool_call": {
+                "id": "artifact-architect-read-purpose",
+                "name": "read",
+                "args": {
+                  "path": "service/README.md"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"verdict\": \"ready_code\", \"body\": \"The report consumer currently repeats the decision field without checking the\\nevidence kind. Run the opt-in benchmark fixture and deliver its report as\\n`graph-artifact-report.json`. Fix `artifact_recommendation` so synthetic reports\\nalways defer, even when their decision field claims a pilot. Native reports may\\nreturn `bounded-ci-pilot-candidate` only with complete main/failure accounting,\\npassing correctness, and default persistence disabled. Keep the harness and\\nvalidation fixtures unchanged. Run the real product tests before submitting.\\n\"}"
+        }
+      ]
+    },
+    {
+      "name": "engineer-implementation",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "artifact-read-consumer",
+                "name": "read",
+                "args": {
+                  "path": "service/report_summary.py"
+                }
+              }
+            },
+            {
+              "tool_call": {
+                "id": "artifact-read-tests",
+                "name": "read",
+                "args": {
+                  "path": "service/tests/test_report_summary.py"
+                }
+              }
+            },
+            {
+              "tool_call": {
+                "id": "artifact-read-purpose",
+                "name": "read",
+                "args": {
+                  "path": "service/README.md"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "artifact-run-harness",
+                "name": "bash",
+                "args": {
+                  "command": "cd service && python3 benchmarks/codebase-memory-artifacts/benchmark.py fixture --output graph-artifact-report.json && python3 verify_report.py graph-artifact-report.json"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "artifact-fix-consumer",
+                "name": "write",
+                "args": {
+                  "path": "service/report_summary.py",
+                  "content": "\"\"\"Render an artifact adoption recommendation for an operator.\"\"\"\n\n\ndef artifact_recommendation(report):\n    if report.get(\"evidence_kind\") != \"native\" or report.get(\"native_performance_evidence\") is not True:\n        return \"defer\"\n    if report.get(\"default_persistence_enabled\") is not False:\n        return \"defer\"\n    required = (\"complete_cell_accounting\", \"failure_case_accounting\", \"correctness_passed\")\n    if not all(report.get(field) is True for field in required):\n        return \"defer\"\n    if report.get(\"decision\") == \"bounded-ci-pilot-candidate\":\n        return \"bounded-ci-pilot-candidate\"\n    return \"defer\"\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "artifact-run-product-tests",
+                "name": "bash",
+                "args": {
+                  "command": "cd service && python3 -m unittest discover -s tests -v"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "artifact-submit",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "Prevent synthetic artifact reports from authorizing a pilot and deliver the verified 25-sample fixture report."
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"summary\": \"Prevent synthetic artifact reports from authorizing a pilot and deliver the verified 25-sample fixture report.\"}"
+        }
+      ]
+    }
+  ]
+}

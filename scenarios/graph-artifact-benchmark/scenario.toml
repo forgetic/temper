@@ -1,0 +1,232 @@
+schema = "temper.scenario.v1"
+name = "graph-artifact-benchmark"
+status = "active"
+intent = "Deliver and validate the shared artifact benchmark through real host CI without treating synthetic samples as native performance evidence."
+introduced_by = "#1281"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[validation]
+feature = "ai/temper#1281"
+plan = "ai/temper#1278"
+source_branch = "agent/pr-for-feature-1281"
+change = "new"
+
+[feature_contract]
+claim = "The opt-in artifact harness preserves complete cell, identity, failure, and privacy evidence while a synthetic run cannot authorize adoption."
+stimulus = "A Jig engineer executes the exact repository harness in a disposable checkout, fixes the report consumer, and submits its report and product change through real host CI."
+observable = "Twenty-five synthetic main samples, four artifact failure recoveries, exact source/root/call/coverage checks, bounded report contents, CI success, mechanical merge, and issue closure."
+assertion = "A merged-head verifier checks embedded harness and validation bytes, revalidates the delivered report, runs product tests, and emits closed facts retained in required assertion stdout."
+runtime_budget_seconds = 600
+jig_script_path = "jig/graph-artifact-benchmark.json"
+
+[runner]
+uses = "manifest"
+
+[observability]
+log_format = "json"
+rust_log = "temper=debug"
+
+[topology]
+kind = "single-repo-forgejo-standalone"
+forge = "forgejo"
+runner = "forgejo-actions-host"
+temper = "standalone"
+agent_model = "scripted-fake-llm"
+repos = ["service"]
+
+[workflow]
+name = "basic-delivery"
+format = "temper-workflow-json"
+path = "config/workflow.json"
+
+[[repos]]
+id = "service"
+slug = "acme/service"
+default_branch = "main"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+ci_seed_path = "repo/.forgejo/workflows/ci.yml"
+ci_target = ".forgejo/workflows/ci.yml"
+
+[[issues]]
+id = "intake"
+repo = "service"
+kind = "intake"
+title = "Keep synthetic graph artifact reports out of adoption decisions"
+body = "config/intake-issue.md"
+author = "site_admin"
+labels = []
+created_after = "standalone_ready"
+
+[[agents]]
+role = "architect"
+kind = "llm"
+mode = "scripted-fake"
+tool = "triage_workspace"
+queues = ["triage"]
+expected_verdict = "ready_code"
+
+[[agents]]
+role = "engineer"
+kind = "llm"
+mode = "scripted-fake"
+tool = "coding_workspace"
+queues = ["code_ready", "pr_ci_failed"]
+
+[[agents]]
+role = "mechanical"
+kind = "built-in"
+mode = "automation"
+queues = ["raw_intake", "landing"]
+
+[[steps]]
+id = "provision-forgejo"
+action = "forgejo.provision"
+description = "Start the real Forgejo validation instance and create the service repository."
+
+[[steps]]
+id = "wait-for-forgejo-runner"
+action = "forgejo_runner.ready"
+description = "Register and require the real host forgejo-runner / Actions CI worker."
+
+[[steps]]
+id = "configure-jig-fake-llm"
+action = "jig.fake_llm"
+roles = ["architect", "engineer"]
+script_path = "jig/graph-artifact-benchmark.json"
+
+[[steps]]
+id = "launch-standalone-temper"
+action = "temper.launch_standalone"
+config = "config/workflow.json"
+requires_observability = true
+
+[[steps]]
+id = "seed-service-repo"
+action = "repo.seed"
+repo = "service"
+seed_path = "repo"
+ci_source = "config/ci.yml"
+
+[[steps]]
+id = "seed-intake-issue"
+action = "issue.seed"
+issue_id = "intake"
+repo = "service"
+after = "temper.launch_standalone"
+
+[[steps]]
+id = "wait-for-convergence"
+action = "workflow.wait_convergence"
+strategy = "single-pull-request"
+until = "single implementation PR merged and source issue closed"
+
+[expect]
+template = "single-pr-merged-source-closed"
+outcome = "The intake issue is triaged to ready code, implemented by one PR, passes CI, and lands automatically."
+merged_pull_requests = 1
+closed_parent_issues = 1
+
+[[expect.checks]]
+required = true
+id = "intake-triaged-and-finalized"
+artifact = "issue:intake"
+state = "closed"
+labels = ["code"]
+
+[[expect.checks]]
+required = true
+id = "implementation-pr-landed"
+artifact = "pull_request"
+state = "merged"
+labels_cleared = ["landing"]
+ci = "passed"
+
+[[expect.checks]]
+required = true
+id = "default-branch-updated"
+artifact = "repo:service"
+branch = "main"
+contains_engineer_diff = true
+
+[[expect.events]]
+required = true
+id = "triage-transition-observed"
+event = "transition.applied"
+artifact_ref = "$source_artifact"
+transition = "triage_intake_to_code"
+
+[[expect.events]]
+required = true
+id = "implementation-pr-opened-event"
+event = "pr.opened"
+source_artifact = "$source_artifact"
+kind = "implementation_pr"
+for_issue_number = "$provider.issue_number"
+
+[[expect.sequence]]
+required = true
+id = "basic-delivery-converges-by-events"
+scope = "source_artifact"
+events = [
+  { event = "transition.applied", artifact_ref = "$source_artifact", transition = "triage_intake_to_code" },
+  { event = "pr.opened", source_artifact = "$source_artifact" },
+  { event = "ci.completed", pr_ref = "$implementation_pr", conclusion = "success" },
+  { event = "pr.merged", pr_ref = "$implementation_pr" },
+  { event = "item.resolved", artifact_ref = "$source_artifact" },
+]
+
+[[expect.count]]
+required = true
+id = "no-duplicate-implementation-prs-by-source"
+event = "pr.opened"
+group_by = ["source_artifact"]
+max = 1
+
+[[expect.sequence]]
+required = true
+id = "ordinary-source-read-before-harness-and-consumer-repair"
+events = [
+  { event = "tool.end", fields = { tool = "read", id = "artifact-read-consumer" } },
+  { event = "tool.end", fields = { tool = "bash", id = "artifact-run-harness" } },
+  { event = "tool.start", fields = { tool = "write", id = "artifact-fix-consumer" } },
+  { event = "tool.end", fields = { tool = "bash", id = "artifact-run-product-tests" } },
+  { event = "workspace.diff.produced" },
+]
+
+[change_policy]
+validation_report_required = true
+promotion_artifact = "optional"
+examples_changed = false
+fixture_paths_must_exist = true
+compatible_changes = [
+  "Clarify README text without changing seeded behavior.",
+  "Update copied fixtures when the basic-delivery workflow changes incompatibly and the scenario remains the promoted regression.",
+  "Add expectation details that narrow the documented happy path without requiring a new runner.",
+]
+requires_new_scenario_or_major_update = [
+  "Adding a human review or owner gate.",
+  "Changing the topology away from one Forgejo repo served by standalone Temper.",
+  "Replacing the scripted fake agents with a live-provider validation requirement.",
+]
+
+[[assertions]]
+id = "artifact-contract-survives-ci-and-merge"
+kind = "command"
+phase = "after-convergence"
+command = "assertions/artifact-contract.sh"
+timeout_ms = 5000
+required = true
+
+[latency_budget]
+startup = "90s"
+convergence = "6m"
+poll_backstop = "10m"
+
+[live_harness]
+poll_cadence = "1s"
+ci_poll_cadence = "1s"
+mechanical_cadence = "1s"
+poll_backstop = "10m"

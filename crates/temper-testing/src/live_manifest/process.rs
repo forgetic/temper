@@ -433,6 +433,7 @@ pub(super) fn populate_repo(
     )?;
 
     copy_dir_contents(&repo.seed_path, &checkout)?;
+    super::artifact_benchmark::install(&checkout)?;
     let seeded_ci = checkout.join(&repo.ci_target);
     let seeded_ci_text = fs::read_to_string(&seeded_ci)
         .map_err(|error| format!("read seeded CI {}: {error}", seeded_ci.display()))?;
@@ -702,7 +703,12 @@ pub(super) fn read_tail(path: &Path, lines: usize) -> String {
     }
 }
 
-fn run_git(checkout: &Path, args: &[&str], log: &Path, label: &str) -> Result<(), String> {
+pub(super) fn run_git(
+    checkout: &Path,
+    args: &[&str],
+    log: &Path,
+    label: &str,
+) -> Result<(), String> {
     run_git_maybe(checkout, args, log, label).map_err(|status| {
         format!(
             "{label} failed with {status}\n--- git log ---\n{}",
@@ -719,7 +725,7 @@ fn run_git_maybe(checkout: &Path, args: &[&str], log: &Path, label: &str) -> Res
     )
 }
 
-fn run_git_with_token(
+pub(super) fn run_git_with_token(
     checkout: &Path,
     token: &str,
     args: &[&str],
@@ -744,7 +750,7 @@ fn run_git_with_token(
     })
 }
 
-fn run_logged(command: &mut Command, log: &Path, label: &str) -> Result<(), String> {
+pub(super) fn run_logged(command: &mut Command, log: &Path, label: &str) -> Result<(), String> {
     append_log(log, &format!("$ {label}\n"))?;
     let output = command.output().map_err(|error| error.to_string())?;
     append_log(log, &String::from_utf8_lossy(&output.stdout))?;
