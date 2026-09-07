@@ -6,11 +6,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub(in crate::live_manifest) struct CodebaseMemoryFake {
+    // Drop gates and join forwarding before stopping the sequential Jig server.
+    shared_router: Option<shared_lifecycle::JigRouter>,
     fake: FakeLlm,
     engineer_requests: Arc<AtomicUsize>,
     observations: Arc<Mutex<ModelObservations>>,
     require_current_root_source: bool,
     privacy_safe_log: bool,
+    shared_lifecycle: Option<Arc<shared_lifecycle::Control>>,
 }
 
 impl CodebaseMemoryFake {
@@ -31,7 +34,15 @@ impl CodebaseMemoryFake {
         let request_count = Arc::clone(&engineer_requests);
         let observations = Arc::new(Mutex::new(ModelObservations::default()));
         let observations_for_rule = Arc::clone(&observations);
-        let fake = if script_path
+        let shared_lifecycle = (lifecycle_profile == Some("shared-codebase-memory-lifecycle"))
+            .then(|| Arc::new(shared_lifecycle::Control::default()));
+        let mut shared_router = None;
+        let fake = if let Some(control) = &shared_lifecycle {
+            let (fake, router) =
+                shared_lifecycle::start(Arc::clone(&request_count), Arc::clone(control))?;
+            shared_router = Some(router);
+            fake
+        } else if script_path
             .file_name()
             .is_some_and(|name| name == "scoped-graph-evidence.json")
         {
@@ -109,16 +120,26 @@ impl CodebaseMemoryFake {
             .map_err(|error| format!("start scenario Jig fake LLM: {error}"))?
         };
         Ok(Self {
+            shared_router,
             fake,
             engineer_requests,
             observations,
             require_current_root_source,
             privacy_safe_log: privacy::is_privacy_safe_profile(lifecycle_profile),
+            shared_lifecycle,
         })
     }
 
+    pub(in crate::live_manifest) fn shared_lifecycle(
+        &self,
+    ) -> Option<&Arc<shared_lifecycle::Control>> {
+        self.shared_lifecycle.as_ref()
+    }
+
     pub(in crate::live_manifest) fn base_url(&self) -> String {
-        self.fake.base_url()
+        self.shared_router
+            .as_ref()
+            .map_or_else(|| self.fake.base_url(), |router| router.base_url())
     }
 
     pub(in crate::live_manifest) fn engineer_requests(&self) -> usize {
@@ -281,6 +302,12 @@ impl CodebaseMemoryFake {
     }
 
     pub(in crate::live_manifest) fn log_tail(&self) -> String {
+        if self.shared_lifecycle.is_some() {
+            return format!(
+                "shared lifecycle Jig: {} engineer requests; correlated acceptance is retained separately",
+                self.engineer_requests()
+            );
+        }
         let requests = self.fake.requests();
         let observations = self.observations.lock().expect("observations lock");
         let mut lines = vec![format!(

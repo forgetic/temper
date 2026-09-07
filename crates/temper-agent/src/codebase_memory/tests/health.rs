@@ -322,7 +322,10 @@ fn query_local_failures_and_empty_results_keep_the_circuit_healthy() {
             .await
             .expect("ordinary empty result succeeds");
         assert!(!empty.is_error);
-        assert!(output_text(&empty).is_empty());
+        assert_eq!(
+            serde_json::from_str::<Value>(&output_text(&empty)).unwrap()["results"],
+            json!([])
+        );
 
         let healthy = search
             .execute("healthy", json!({"query": "healthy"}), None)

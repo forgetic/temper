@@ -558,7 +558,7 @@ fn poll_command(fd: RawFd, timeout: Duration) -> io::Result<CommandPoll> {
     }
 }
 
-fn become_subreaper() -> io::Result<()> {
+pub(super) fn become_subreaper() -> io::Result<()> {
     // SAFETY: PR_SET_CHILD_SUBREAPER takes an integer boolean and no pointers.
     if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } == 0 {
         Ok(())

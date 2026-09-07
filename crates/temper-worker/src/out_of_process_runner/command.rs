@@ -7,11 +7,10 @@ impl OutOfProcessRunner {
         &self,
         directory: &Path,
         context: &WorkspaceContext,
+        invocation_config: Option<&AgentToolConfig>,
     ) -> Result<Option<PathBuf>, AgentRunError> {
-        let Some(tool_config) = self
-            .tool_config
-            .as_ref()
-            .filter(|config| config.enabled_for_role(&context.work_item.role))
+        let Some(tool_config) =
+            invocation_config.filter(|config| config.enabled_for_role(&context.work_item.role))
         else {
             return Ok(None);
         };

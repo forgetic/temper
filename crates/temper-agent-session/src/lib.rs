@@ -92,3 +92,6 @@ mod tests {
         );
     }
 }
+
+#[doc(hidden)]
+pub use temper_codebase_memory_runtime::dispatch_provider_bootstrap_helper;

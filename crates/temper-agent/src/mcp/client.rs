@@ -51,6 +51,7 @@ pub struct StdioMcpServerConfig {
     pub startup_timeout: Duration,
     pub call_timeout: Duration,
     containment_identity: String,
+    pub(super) working_directory: Option<std::path::PathBuf>,
 }
 
 impl StdioMcpServerConfig {
@@ -61,6 +62,7 @@ impl StdioMcpServerConfig {
             startup_timeout: Duration::from_secs(5),
             call_timeout: Duration::from_secs(30),
             containment_identity: "mcp-server".to_string(),
+            working_directory: None,
         }
     }
 
@@ -74,6 +76,12 @@ impl StdioMcpServerConfig {
 
     pub(super) fn containment_identity(&self) -> &str {
         &self.containment_identity
+    }
+
+    /// Sets the frontend's session root without changing the host process CWD.
+    pub fn with_working_directory(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
+        self.working_directory = Some(directory.into());
+        self
     }
 
     pub fn with_startup_timeout(mut self, timeout: Duration) -> Self {

@@ -256,7 +256,7 @@ impl Tool for CodebaseMemoryTool {
         });
 
         let graph_started = Instant::now();
-        let result = match temper_agent_io::timeout(
+        let mut result = match temper_agent_io::timeout(
             execution_budget,
             self.client
                 .call_tool(&self.mcp_name, input, execution_budget),
@@ -329,6 +329,13 @@ impl Tool for CodebaseMemoryTool {
                 }));
             }
             return Ok(record_recovery_expansion(output));
+        }
+        if !super::source_guard::verify(&self.scope, &mcp_project, &self.mcp_name, &mut result) {
+            return Ok(record_recovery_expansion(self.failed_output(
+                &mcp_project,
+                ToolFailureCategory::ProjectNotReady,
+                timings,
+            )));
         }
         let presented = present_result(&result.text, graph_correlation.as_ref());
         // Successful, complete, untruncated targeted calls alone may emit a

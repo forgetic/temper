@@ -109,3 +109,11 @@ receipt identifiers and host paths. Existing MCP tool events retain bounded
 call timing; diagnostics carry no graph-correlation or decision-lineage marker.
 See [Verify evidence and delegate findings](../how-to/verify-codebase-memory-evidence.md)
 for reporting tiers, bounds, pagination and fallback.
+
+Shared ownership emits `codebase_memory.shared_owner` with a closed
+`lifecycle.stage`: `started`, `admitted`, `released`, `admission_expired`,
+`unavailable`, or `completed`. Optional bootstrap failure adds only a closed
+category. The events contain no provider source, command arguments, credential
+values or host paths. `completed` means the owner monitor finished ordinary
+containment cleanup. Inspect its cleanup proof to distinguish natural exit from
+recovered descendants; this event alone does not prove final account shutdown.

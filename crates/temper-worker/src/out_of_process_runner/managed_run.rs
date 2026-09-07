@@ -3,16 +3,17 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::executor::{
-    JobCancellationRequest, JobCleanupObserver, ResourceJoinReport, ResourceJoinStatus,
-};
+use crate::executor::{JobCancellationRequest, JobCleanupObserver, ResourceJoinStatus};
 use crate::managed_effect::JoinedBlocking;
 use crate::trace::ActivityEndpoint;
 
-use super::output_files::{
-    FirstPartyTerminalFailure, first_party_terminal_failure, read_operator_transcript,
-};
 use super::*;
+
+mod channels;
+mod resources;
+mod result;
+use channels::{bounded_forge_future, bounded_submit_future, forge_unavailable, optional_listener};
+use resources::{RunResources, join_status};
 
 struct ForgeHostTask {
     future: AgentForgeContextFuture,
@@ -25,158 +26,6 @@ struct SubmitHostTask {
 }
 
 const LIFECYCLE_CONNECT_GRACE: Duration = Duration::from_millis(100);
-
-/// Every blocking or threaded resource owned by one attempt. The explicit
-/// cancellation path drives this owner to `finish`; Drop is only the abrupt
-/// component-loss hard-kill fallback.
-struct RunResources {
-    job_id: String,
-    fence: AttemptFence,
-    accepted_submit: AcceptedSubmitProofStore,
-    process: Option<ManagedAgentProcess>,
-    lifecycle: Option<lifecycle::LifecycleEndpoint>,
-    activity: Option<ActivityEndpoint>,
-    trace: Option<TraceRun>,
-    submit: Option<LocalServer>,
-    forge: Option<LocalServer>,
-    finished: bool,
-}
-
-impl RunResources {
-    fn process_mut(&mut self) -> &mut ManagedAgentProcess {
-        self.process
-            .as_mut()
-            .expect("run resources always own a process until quiescence")
-    }
-
-    fn finish(
-        mut self,
-        mut result: SupervisorResult,
-        cancelled: bool,
-        lifecycle_cancellation: ResourceJoinStatus,
-    ) -> SupervisorResult {
-        result.quiesced.cleanup.resources.process_supervisor = if self
-            .process
-            .as_mut()
-            .is_some_and(ManagedAgentProcess::join_completed)
-        {
-            ResourceJoinStatus::Joined
-        } else {
-            ResourceJoinStatus::Failed("agent supervisor thread panicked".to_string())
-        };
-        self.process.take();
-        self.stop_endpoints(&mut result.quiesced.cleanup.resources);
-        result.quiesced.cleanup.resources.lifecycle_cancellation = lifecycle_cancellation;
-        if cancelled {
-            self.finish_cancelled_activity();
-            // Clear again after joining accepted handlers. A submit gate that
-            // was already running when the fence closed cannot leave proof.
-            self.accepted_submit.clear();
-        }
-        self.finished = true;
-        emit_quiesced(&self.job_id, &result.quiesced, cancelled);
-        result
-    }
-
-    fn finish_cancelled_activity(&self) {
-        let Some(trace) = self.trace.as_ref() else {
-            return;
-        };
-        match trace.finish_cancelled() {
-            Ok(_) | Err(crate::trace::TraceError::AlreadyTerminal) => {}
-            Err(error) => tracing::warn!(
-                target: "temper::worker",
-                service = "worker",
-                event = "agent.activity.terminal_failed",
-                run_id = trace.run_id(),
-                job_id = self.job_id,
-                %error,
-                "worker could not persist synthetic cancelled terminal activity"
-            ),
-        }
-    }
-
-    fn stop_endpoints(&mut self, report: &mut ResourceJoinReport) {
-        if let Some(server) = self.submit.take() {
-            report.submit_endpoint = join_status(server.stop(), "submit endpoint");
-        }
-        if let Some(server) = self.forge.take() {
-            report.forge_endpoint = join_status(server.stop(), "Forge endpoint");
-        }
-        if let Some(endpoint) = self.activity.take() {
-            report.activity_endpoint = join_status(endpoint.stop(), "activity endpoint");
-        }
-        if let Some(endpoint) = self.lifecycle.take() {
-            report.lifecycle_endpoint = join_status(endpoint.stop(), "lifecycle endpoint");
-        }
-    }
-}
-
-impl Drop for RunResources {
-    fn drop(&mut self) {
-        if self.finished || self.process.is_none() {
-            return;
-        }
-
-        // Abrupt owner loss is a last-resort safety path. Watchdog
-        // cancellation stays in the async run loop below and never waits for
-        // the process supervisor from Drop.
-        self.fence.close();
-        self.accepted_submit.clear();
-        self.process.take();
-        let mut ignored = ResourceJoinReport::no_process();
-        self.stop_endpoints(&mut ignored);
-        self.finish_cancelled_activity();
-        self.accepted_submit.clear();
-        self.finished = true;
-    }
-}
-
-fn join_status(joined: bool, resource: &str) -> ResourceJoinStatus {
-    if joined {
-        ResourceJoinStatus::Joined
-    } else {
-        ResourceJoinStatus::Failed(format!("{resource} thread panicked"))
-    }
-}
-
-fn emit_quiesced(job_id: &str, outcome: &JobQuiesced, cancelled: bool) {
-    let cleanup = &outcome.cleanup;
-    let report = &cleanup.containment;
-    let recovered = !report.observed_survivors().is_empty()
-        || report.omitted_survivors() > 0
-        || !matches!(
-            report.disposition(),
-            temper_process_containment::CleanupDisposition::AlreadyEmpty
-        );
-    if cancelled || recovered || !cleanup.proves_quiescence() {
-        tracing::warn!(
-            target: "temper::worker",
-            service = "worker",
-            event = "worker.job.quiesced",
-            job_id,
-            cancellation = ?cleanup.cancellation,
-            backend = ?report.backend(),
-            root = report.root().value(),
-            disposition = ?report.disposition(),
-            resources = ?cleanup.resources,
-            "agent run cleanup recovered descendants or followed cancellation"
-        );
-    } else {
-        tracing::debug!(
-            target: "temper::worker",
-            service = "worker",
-            event = "worker.job.quiesced",
-            job_id,
-            cancellation = ?cleanup.cancellation,
-            backend = ?report.backend(),
-            root = report.root().value(),
-            disposition = ?report.disposition(),
-            resources = ?cleanup.resources,
-            "agent run completed with recursive emptiness and resource joins proven"
-        );
-    }
-}
 
 impl OutOfProcessRunner {
     #[allow(clippy::too_many_arguments)]
@@ -233,7 +82,9 @@ impl OutOfProcessRunner {
             AgentRunError::transient(format!("write agent context file: {error}"))
         })?;
 
-        let tool_config_path = self.write_tool_config(temp.path(), context)?;
+        let (invocation_config, provider_bootstrap) = self.prepare_provider(context, cwd).await?;
+        let tool_config_path =
+            self.write_tool_config(temp.path(), context, invocation_config.as_ref())?;
         let runtime_limits_path = runtime_limits::write(temp.path(), self.runtime_limits)?;
         let trace_policy_path = self.write_trace_policy(temp.path(), job_id);
 
@@ -248,7 +99,11 @@ impl OutOfProcessRunner {
         // child. Third-party commands receive neither flag.
         let mut lifecycle_endpoint = if self.runtime_limits.is_some() {
             Some(
-                lifecycle::LifecycleEndpoint::bind(progress).map_err(|error| {
+                lifecycle::LifecycleEndpoint::bind_with_provider(
+                    progress,
+                    provider_bootstrap.clone(),
+                )
+                .map_err(|error| {
                     AgentRunError::transient(format!("bind agent lifecycle endpoint: {error}"))
                 })?,
             )
@@ -326,6 +181,13 @@ impl OutOfProcessRunner {
         // untrusted agent instruction can execute. The cgroup backend passes
         // its inherited scope descriptor to first-party children so their tool
         // containments are nested below this final safety net.
+        if provider_bootstrap.as_ref().is_some_and(|bootstrap| {
+            bootstrap.admission_remaining().is_zero() && bootstrap.expire_admission()
+        }) {
+            return Err(AgentRunError::transient(
+                "shared graph serving admission expired before job launch",
+            ));
+        }
         let prepared = containment_factory
             .prepare(containment_spec)
             .map_err(|error| {
@@ -413,6 +275,14 @@ impl OutOfProcessRunner {
         let mut pending_submit: Option<SubmitHostTask> = None;
         let mut forge_closed = false;
         let mut submit_closed = false;
+        let mut admission_timer = Box::pin(temper_worker_io::sleep_for(
+            provider_bootstrap
+                .as_ref()
+                .map_or(Duration::from_secs(86_400), |bootstrap| {
+                    bootstrap.admission_remaining()
+                }),
+        ));
+        let mut admission_checked = provider_bootstrap.is_none();
         let mut observed_cancellation = None;
         let mut lifecycle_cancellations = Vec::new();
         let supervisor_result = loop {
@@ -431,6 +301,15 @@ impl OutOfProcessRunner {
             }
 
             let next = std::future::poll_fn(|task_cx| {
+                if !admission_checked && admission_timer.as_mut().poll(task_cx).is_ready() {
+                    admission_checked = true;
+                    if provider_bootstrap
+                        .as_ref()
+                        .is_some_and(|bootstrap| bootstrap.expire_admission())
+                    {
+                        cancellation.request(JobCancellationRequest::HardKill);
+                    }
+                }
                 // Cancellation wins a same-poll race with natural child exit:
                 // once WorkerMachine closes the attempt fence it must receive
                 // one cancellation report, never a normal result.
@@ -706,107 +585,14 @@ impl OutOfProcessRunner {
                 "agent attempt was cancelled after joined process cleanup",
             ));
         }
-        let ChildOutcome {
-            status_code,
-            stderr_tail,
-        } = supervisor_result.outcome?;
-        match status_code {
-            Some(0) => {}
-            Some(code) => {
-                let generic_message =
-                    format!("agent command exited with status {code}; stderr tail: {stderr_tail}");
-                match first_party_terminal_failure(
-                    self.runtime_limits.is_some(),
-                    &terminal_output_path,
-                ) {
-                    Some(FirstPartyTerminalFailure::Model(model_failure)) => {
-                        return Err(AgentRunError::transient(generic_message)
-                            .with_model_failure(model_failure));
-                    }
-                    Some(FirstPartyTerminalFailure::Policy(policy_failure)) => {
-                        return Err(AgentRunError::permanent(format!(
-                            "first-party agent terminal policy failure: {}",
-                            policy_failure.reason.as_str()
-                        ))
-                        .with_failure_code(temper_protocol_activity::FailureCodeV1::Policy));
-                    }
-                    None => {}
-                }
-                return Err(AgentRunError::transient(generic_message));
-            }
-            None => {
-                return Err(AgentRunError::transient(format!(
-                    "agent command terminated without an exit code; stderr tail: {stderr_tail}"
-                )));
-            }
-        }
-
-        if !fence.is_open() {
-            return Err(AgentRunError::new(
-                temper_protocol_worker::FailureClass::Canceled,
-                "agent attempt was cancelled before result acceptance",
-            ));
-        }
-        let result_bytes = std::fs::read(&result_path).map_err(|error| {
-            AgentRunError::permanent(format!("agent did not write a valid result file: {error}"))
-        })?;
-        if !fence.is_open() {
-            return Err(AgentRunError::new(
-                temper_protocol_worker::FailureClass::Canceled,
-                "agent attempt was cancelled while reading its result",
-            ));
-        }
-        let result = serde_json::from_slice::<WorkspaceResult>(&result_bytes).map_err(|error| {
-            AgentRunError::permanent(format!("agent result file is not valid JSON: {error}"))
-        })?;
-        let operator_transcript = read_operator_transcript(operator_transcript_path);
-        Ok(AgentRunOutput {
-            result,
-            accepted_submit: fence.is_open().then(|| accepted_submit.latest()).flatten(),
-            operator_transcript,
-        })
+        result::accept_result(
+            supervisor_result.outcome?,
+            self.runtime_limits.is_some(),
+            &terminal_output_path,
+            &fence,
+            &result_path,
+            &accepted_submit,
+            operator_transcript_path,
+        )
     }
-}
-
-fn bounded_forge_future(
-    future: AgentForgeContextFuture,
-    timeout: Duration,
-) -> AgentForgeContextFuture {
-    Box::pin(async move {
-        match skein::time::timeout(temper_worker_io::engine_now(), timeout, future).await {
-            Ok(result) => result,
-            Err(_) => Err(temper_protocol_agent::ForgeContextErrorCode::ForgeUnavailable),
-        }
-    })
-}
-
-fn bounded_submit_future(future: SubmitForPrFuture, timeout: Duration) -> SubmitForPrFuture {
-    Box::pin(async move {
-        match skein::time::timeout(temper_worker_io::engine_now(), timeout, future).await {
-            Ok(response) => response,
-            Err(_) => SubmitForPrResponse::rejected(format!(
-                "submit_for_pr exceeded the generic tool deadline of {:.3}s",
-                timeout.as_secs_f64()
-            )),
-        }
-    })
-}
-
-fn optional_listener(
-    enabled: bool,
-    label: &str,
-) -> Result<Option<(TcpListener, String)>, AgentRunError> {
-    if !enabled {
-        return Ok(None);
-    }
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|error| AgentRunError::transient(format!("bind {label}: {error}")))?;
-    let address = listener
-        .local_addr()
-        .map_err(|error| AgentRunError::transient(format!("read {label} address: {error}")))?;
-    Ok(Some((listener, address.to_string())))
-}
-
-fn forge_unavailable() -> ForgeContextResponse {
-    ForgeContextResponse::error(temper_protocol_agent::ForgeContextErrorCode::ForgeUnavailable)
 }

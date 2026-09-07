@@ -226,7 +226,7 @@ fn run_parallel_forest_candidate_menu(reverse_completion: bool) {
     .unwrap();
 
     temper_agent_io::block_on(async move {
-        let toolset = crate::codebase_memory::build_codebase_memory_toolset(
+        let toolset = crate::codebase_memory::tests::build_codebase_memory_toolset(
             Some(&crate::codebase_memory::tests::test_support::config(
                 &server,
                 CodebaseMemoryMode::Required,

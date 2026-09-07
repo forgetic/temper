@@ -1,5 +1,7 @@
 use super::super::tests::test_support::*;
-use super::super::{build_codebase_memory_toolset, build_codebase_memory_toolset_with_timeout};
+use super::super::tests::{
+    build_codebase_memory_toolset, build_codebase_memory_toolset_with_timeout,
+};
 use super::*;
 use std::time::Duration;
 use temper_protocol_agent::{CodebaseMemoryIndex, CodebaseMemoryMode};

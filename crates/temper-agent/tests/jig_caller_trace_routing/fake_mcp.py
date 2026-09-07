@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import os
 import sys
 
@@ -30,6 +31,8 @@ def send(value):
     sys.stdout.flush()
 
 def result(request_id, payload):
+    if "source" in payload:
+        payload["source"] = Path(payload["file_path"]).read_text()
     send({"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(payload)}], "isError": False}})
 
 for line in sys.stdin:

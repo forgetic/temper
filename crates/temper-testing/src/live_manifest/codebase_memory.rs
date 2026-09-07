@@ -46,6 +46,7 @@ mod result_driven_fake;
 mod result_driven_guidance;
 mod scoped_graph_evidence;
 mod sequential_graph_evidence;
+pub(super) mod shared_lifecycle;
 mod stable_rebind;
 mod typed_lineage_anchor;
 mod typed_lineage_fake;
@@ -409,8 +410,15 @@ pub(super) fn write_fake_mcp(
 ) -> Result<FakeMcpServer, String> {
     let script_path = root.join("fake-codebase-memory-mcp.py");
     let log_path = root.join("logs/fake-codebase-memory-mcp.jsonl");
-    fs::write(&script_path, FAKE_MCP_SCRIPT)
-        .map_err(|error| format!("write fake MCP server {}: {error}", script_path.display()))?;
+    fs::write(
+        &script_path,
+        if lifecycle_profile == Some("shared-codebase-memory-lifecycle") {
+            include_str!("codebase_memory/shared_lifecycle/provider.py")
+        } else {
+            FAKE_MCP_SCRIPT
+        },
+    )
+    .map_err(|error| format!("write fake MCP server {}: {error}", script_path.display()))?;
     if let Some(parent) = log_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("create fake MCP log dir {}: {error}", parent.display()))?;

@@ -50,6 +50,7 @@ use crate::{WorkerAgentTraceConfig, WorkerLivenessLimits};
 mod command;
 mod lifecycle;
 mod output_files;
+mod provider;
 mod runner;
 mod runtime_limits;
 mod side_channel;
@@ -112,6 +113,7 @@ pub struct OutOfProcessRunner {
     /// current workflow role, these are written to a per-run JSON file and
     /// passed as `--tool-config <file>`.
     tool_config: Option<AgentToolConfig>,
+    provider_owners: temper_codebase_memory_runtime::ProviderOwnerManager,
     /// Complete operation limits supplied only to known first-party agents.
     runtime_limits: Option<AgentRuntimeLimitsV1>,
     /// Worker-owned cancellation limits. WorkerMachine uses the same resolved
@@ -167,6 +169,7 @@ impl OutOfProcessRunner {
             command,
             env: Vec::new(),
             tool_config: None,
+            provider_owners: Default::default(),
             runtime_limits: None,
             liveness_limits: WorkerLivenessLimits::default(),
             trace_policy: None,

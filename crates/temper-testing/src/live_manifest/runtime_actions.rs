@@ -55,6 +55,7 @@ impl LiveExecutionContext<'_> {
                     fixture,
                     Some(
                         "stable-lifecycle"
+                            | "shared-codebase-memory-lifecycle"
                             | "stable-rebind"
                             | "graph-consumption"
                             | "sequential-graph-evidence"
@@ -294,6 +295,11 @@ impl LiveExecutionContext<'_> {
                 mcp,
                 configuration,
             )?;
+            if mcp.lifecycle_profile.as_deref() == Some("shared-codebase-memory-lifecycle") {
+                super::super::codebase_memory::shared_lifecycle::tune(
+                    &self.bundle_dir.join("config.toml"),
+                )?;
+            }
         }
         let mut standalone = spawn_temper_standalone(
             &self.harness.temper,

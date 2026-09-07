@@ -19,6 +19,7 @@ const READ_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 struct LifecycleServerState {
     reporter: JobProgressReporter,
+    provider_bootstrap: Option<temper_codebase_memory_runtime::ProviderBootstrap>,
     stopping: Arc<AtomicBool>,
     connected: Arc<AtomicBool>,
     stream_finished: Arc<AtomicBool>,
@@ -93,7 +94,15 @@ pub(super) struct LifecycleEndpoint {
 }
 
 impl LifecycleEndpoint {
+    #[cfg(test)]
     pub(super) fn bind(reporter: JobProgressReporter) -> io::Result<Self> {
+        Self::bind_with_provider(reporter, None)
+    }
+
+    pub(super) fn bind_with_provider(
+        reporter: JobProgressReporter,
+        provider_bootstrap: Option<temper_codebase_memory_runtime::ProviderBootstrap>,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         listener.set_nonblocking(true)?;
         let address = listener.local_addr()?.to_string();
@@ -106,6 +115,7 @@ impl LifecycleEndpoint {
         let attempt_id = reporter.attempt_id().to_string();
         let server_state = LifecycleServerState {
             reporter,
+            provider_bootstrap,
             stopping: Arc::clone(&stopping),
             connected: Arc::clone(&connected),
             stream_finished: Arc::clone(&stream_finished),
@@ -202,6 +212,7 @@ fn serve(listener: TcpListener, state: LifecycleServerState, address: &str) {
                     &state.stopping,
                     &mut expected_seq,
                     &state.cancellation_acknowledged,
+                    state.provider_bootstrap.as_ref(),
                 );
                 state
                     .active_stream
@@ -246,6 +257,7 @@ fn receive_lifecycle_stream(
     stopping: &AtomicBool,
     expected_seq: &mut u64,
     cancellation_acknowledged: &AtomicBool,
+    provider_bootstrap: Option<&temper_codebase_memory_runtime::ProviderBootstrap>,
 ) -> Result<(), String> {
     stream
         .set_read_timeout(Some(READ_POLL_INTERVAL))
@@ -285,7 +297,15 @@ fn receive_lifecycle_stream(
         *expected_seq = expected_seq.saturating_add(1);
         // A false return includes a stale attempt. The endpoint deliberately
         // ignores it; worker policy owns attempt currentness.
-        let _ = reporter.accept_frame(frame);
+        let admitted = matches!(
+            frame.event,
+            temper_protocol_agent::AgentLifecycleEventV1::CodebaseMemoryServingAdmitted
+        );
+        if reporter.accept_frame(frame) && admitted {
+            if let Some(bootstrap) = provider_bootstrap {
+                bootstrap.serving_admitted();
+            }
+        }
     }
     Ok(())
 }

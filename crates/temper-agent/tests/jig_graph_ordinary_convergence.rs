@@ -1,3 +1,6 @@
+#[path = "support/fake_graph_admission.rs"]
+mod fake_graph_admission;
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -134,7 +137,7 @@ fn jig_trusted_graph_unavailability_requires_fresh_read_before_ordinary_mutation
             Some(&tool_config),
             Some(submit),
             Some(forge),
-            Default::default(),
+            fake_graph_admission::activity(),
             AgentRuntimeLimitsV1::default(),
         )
         .await

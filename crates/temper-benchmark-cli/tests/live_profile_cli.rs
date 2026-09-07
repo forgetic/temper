@@ -90,6 +90,27 @@ api_key = "profile-live-secret"
 
     let profile_bin_dir = temporary.path().join("profile-bin");
     fs::create_dir(&profile_bin_dir).unwrap();
+    // This profile opts into required graph tools. Supply a real stdio
+    // bootstrap handshake while the scripted agent checks config forwarding.
+    let graph_provider = profile_bin_dir.join("profile-codebase-memory");
+    fs::write(
+        &graph_provider,
+        r#"#!/usr/bin/env python3
+import json
+import sys
+assert sys.argv[1:] == ["--profile-test", "--tool-profile=analysis"]
+for line in sys.stdin:
+    request = json.loads(line)
+    if request.get("method") == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "serverInfo": {"name": "codebase-memory-mcp", "version": "0.10.8"}
+        }}), flush=True)
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&graph_provider, fs::Permissions::from_mode(0o755)).unwrap();
+
     let profile_agent = profile_bin_dir.join("temper");
     fs::write(
         &profile_agent,

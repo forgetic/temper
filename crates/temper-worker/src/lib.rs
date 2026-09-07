@@ -146,3 +146,6 @@ pub use workspace::{
     cleanup_scoped_workspace_sync, forgejo_remote_url, scoped_workspace_root,
     workspace_scope_component,
 };
+
+#[doc(hidden)]
+pub use temper_codebase_memory_runtime::dispatch_provider_bootstrap_helper;

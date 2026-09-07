@@ -564,6 +564,9 @@ fn finish_inbound_record(capture: BoundedCapture) -> Result<Vec<u8>, ProtocolOve
 fn server_command(config: &StdioMcpServerConfig) -> ContainmentCommand {
     let mut command = ContainmentCommand::new(config.command.as_str());
     command.args(&config.args);
+    if let Some(directory) = &config.working_directory {
+        command.current_dir(directory);
+    }
     command
 }
 

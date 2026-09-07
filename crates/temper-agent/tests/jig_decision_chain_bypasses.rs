@@ -189,7 +189,6 @@ fn jig_agent_completes_a_root_coherent_forest_before_exact_read_and_mutation() {
         run.steps,
         vec![
             DecisionStep::Discovery,
-            DecisionStep::Refinement,
             DecisionStep::ImplementationSource,
             DecisionStep::Trace,
             DecisionStep::CallerSource,

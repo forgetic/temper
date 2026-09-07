@@ -4,8 +4,14 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
+mod control;
+mod rebind;
+
 const PROVIDER_VERSION: &str = "0.10.8";
 const TIMEOUT: Duration = Duration::from_secs(60);
+
+#[cfg(target_os = "linux")]
+mod lifecycle;
 
 struct ProviderRuntime {
     directory: tempfile::TempDir,
@@ -13,6 +19,42 @@ struct ProviderRuntime {
 }
 
 impl ProviderRuntime {
+    fn bootstrap(
+        &self,
+        root: &std::path::Path,
+    ) -> (
+        temper_codebase_memory_runtime::ProviderOwnerManager,
+        temper_codebase_memory_runtime::ProviderBootstrap,
+    ) {
+        use temper_codebase_memory_runtime::{
+            LaunchConfig, ProviderBootstrap, ProviderOwnerManager,
+        };
+        let manager = ProviderOwnerManager::default();
+        let helper = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("temper-agent-containment-helper");
+        let context = crate::containment_tests::containment_context();
+        let bootstrap = ProviderBootstrap::start(
+            &manager,
+            LaunchConfig {
+                command: "env".into(),
+                args: self.args.clone(),
+                workspace: root.to_path_buf(),
+                environment: Vec::new(),
+                startup_timeout: Duration::from_secs(30),
+                admission_timeout: Duration::from_secs(90),
+            },
+            context.factory(),
+            &helper,
+        )
+        .expect("shared native admission");
+        (manager, bootstrap)
+    }
+
     fn new() -> Self {
         let directory = tempfile::Builder::new()
             .prefix("temper-cbm-")
@@ -56,10 +98,7 @@ impl Drop for ProviderRuntime {
     fn drop(&mut self) {
         // Both overrides remain in force even during panic cleanup: never stop
         // the account's production daemon or remove its cache.
-        let _ = Command::new("env")
-            .args(&self.args)
-            .args(["daemon", "stop"])
-            .output();
+        let _ = control::native_control(self, "stop");
     }
 }
 
@@ -86,8 +125,10 @@ fn installed_provider_release_supports_temper_graph_tools() {
             .success()
     );
 
+    let (manager, bootstrap) = runtime.bootstrap(&repo);
+    let completion = bootstrap.completion();
     temper_agent_io::block_on(async move {
-        let client = StdioMcpClient::connect(runtime.mcp_config())
+        let client = StdioMcpClient::connect(runtime.mcp_config().with_working_directory(&repo))
             .await
             .expect("provider starts");
         let metadata = client.server_metadata().expect("provider metadata");
@@ -100,11 +141,14 @@ fn installed_provider_release_supports_temper_graph_tools() {
         drop(client);
 
         let config = runtime.agent_config();
-        let toolset = build_codebase_memory_toolset(
+        let toolset = super::super::build_managed_codebase_memory_toolset(
             Some(&config),
             "engineer",
             &context,
             runtime.directory.path(),
+            TIMEOUT,
+            &crate::containment_tests::containment_context(),
+            bootstrap,
         )
         .await
         .expect("real provider indexes and confirms the active checkout");
@@ -150,6 +194,15 @@ fn installed_provider_release_supports_temper_graph_tools() {
         .await;
         let changed: Value = serde_json::from_str(&changed).unwrap();
         assert_eq!(changed["status"], "stale", "{changed}");
+        drop(tools);
+        let final_report = completion
+            .wait(Duration::from_secs(40))
+            .expect("natural provider shutdown");
+        assert_eq!(
+            final_report.disposition(),
+            temper_process_containment::CleanupDisposition::AlreadyEmpty
+        );
+        manager.reap_completed();
         println!(
             "installed_provider_0_10_8 coverage_paths_scopes_exclusion_changed_file=passed generation={} pagination_complete={}",
             report["generation"], report["pagination_complete"]

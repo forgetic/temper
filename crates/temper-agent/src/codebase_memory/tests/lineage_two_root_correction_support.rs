@@ -32,21 +32,21 @@ async fn two_root_correction_harness() -> TwoRootCorrectionHarness {
     std::fs::create_dir_all(workspace.path().join("repo/tests")).unwrap();
     std::fs::write(
         workspace.path().join("repo/src/route.rs"),
-        "fn worker_for() {}\nfn worker_slot() {}\n",
+        "fn worker_for() {} // PRIVATE-TWO-ROOT-SOURCE\nfn worker_slot() {} // PRIVATE-TWO-ROOT-SOURCE\n",
     )
     .unwrap();
     std::fs::write(
         workspace.path().join("repo/src/model.rs"),
-        "fn affinity_topic() {}\n",
+        "fn affinity_topic() {} // PRIVATE-TWO-ROOT-SOURCE\n",
     )
     .unwrap();
     std::fs::write(
         workspace.path().join("repo/tests/route.rs"),
-        "fn keeps_worker_affinity() {}\n",
+        "fn keeps_worker_affinity() {} // PRIVATE-TWO-ROOT-SOURCE\n",
     )
     .unwrap();
 
-    let toolset = crate::codebase_memory::build_codebase_memory_toolset(
+    let toolset = crate::codebase_memory::tests::build_codebase_memory_toolset(
         Some(&crate::codebase_memory::tests::test_support::config(
             &server,
             CodebaseMemoryMode::Required,

@@ -265,7 +265,8 @@ impl JobWatchState {
             AgentLifecycleEventV1::ModelProgress { .. }
             | AgentLifecycleEventV1::ModelRetrying { .. }
             | AgentLifecycleEventV1::Containment { .. }
-            | AgentLifecycleEventV1::SteeringApplied => {}
+            | AgentLifecycleEventV1::SteeringApplied
+            | AgentLifecycleEventV1::CodebaseMemoryServingAdmitted => {}
         }
     }
 }

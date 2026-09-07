@@ -7,12 +7,14 @@ pub(super) async fn start_toolset(
     mut scope: WorkspaceScope,
     generic_tool_timeout: Duration,
     containment: &AgentContainmentContext,
+    serving_admitted: Option<&(dyn Fn() + Send + Sync)>,
 ) -> std::result::Result<CodebaseMemoryToolset, McpError> {
     let startup_timeout = Duration::from_secs(config.startup_timeout_secs);
     let index_timeout = Duration::from_secs(config.index_timeout_secs);
     let call_timeout = effective_mcp_call_timeout(index_timeout, generic_tool_timeout);
     let mcp_config = StdioMcpServerConfig::new(config.command.clone(), config.args.clone())
         .with_containment_identity("codebase-memory")
+        .with_working_directory(scope.primary_root())
         .with_startup_timeout(startup_timeout)
         .with_call_timeout(index_timeout);
     emit_agent_tool_configured(AgentToolConfigured {
@@ -98,11 +100,17 @@ pub(super) async fn start_toolset(
     // Discovery requests and their timeouts are process-fatal in the stdio
     // client. Never clone that process into model-visible wrappers, even after
     // successful discovery: initialize and validate a fresh serving client.
-    drop(discovery_client);
     let client =
         StdioMcpClient::connect_with_containment(mcp_config.clone(), containment.clone()).await?;
     let advertised = client.list_tools(startup_timeout).await?;
     validate_provider_contract(&client, &advertised)?;
+    if let Some(admitted) = serving_admitted {
+        admitted();
+    }
+    // The replacement must be admitted before a healthy discovery session
+    // leaves the shared provider generation. A timed-out discovery connection
+    // is already poisoned; it is never reused by the serving wrappers.
+    drop(discovery_client);
 
     // Establish the serving client before spawning a background upsert. That
     // makes the background index's readiness visible from the first model tool

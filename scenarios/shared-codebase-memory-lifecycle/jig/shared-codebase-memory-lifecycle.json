@@ -1,0 +1,17 @@
+{
+  "phases": [
+    {
+      "name": "shared-codebase-memory-lifecycle-runtime",
+      "when": {
+        "messages_contain": [
+          "__shared_lifecycle_runtime__"
+        ]
+      },
+      "sequence": [
+        {
+          "text": "The gated runtime owns issue-specific A/B ordering. Required source tool IDs: lifecycle-b-post-cancel-search, lifecycle-b-source-implementation, lifecycle-b-caller-trace, lifecycle-b-source-caller, lifecycle-b-source-focused_test, lifecycle-b-ordinary-read, lifecycle-b-repair, lifecycle-b-validate, lifecycle-b-submit."
+        }
+      ]
+    }
+  ]
+}

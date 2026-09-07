@@ -2,12 +2,23 @@ mod bridge;
 mod confirmation;
 mod correlation;
 mod decision_evidence;
+#[cfg(target_os = "linux")]
+mod handoff;
 mod health;
 mod indexing;
 mod lifecycle;
+mod managed;
+#[cfg(target_os = "linux")]
+mod managed_admission;
+#[cfg(target_os = "linux")]
+mod shared_owner;
+mod source_guard_wrapped;
+pub(in crate::codebase_memory) use managed::{
+    build_codebase_memory_toolset, build_codebase_memory_toolset_with_timeout,
+};
 mod lineage;
 mod observability;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 mod real_provider;
 mod result_presentation;
 #[path = "test_support.rs"]

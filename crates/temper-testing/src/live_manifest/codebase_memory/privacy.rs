@@ -13,6 +13,7 @@ pub(super) fn is_privacy_safe_profile(profile: Option<&str>) -> bool {
         profile,
         Some(
             "provider-result-anchor"
+                | "shared-codebase-memory-lifecycle"
                 | "provider-neutral-anchor-lineage"
                 | "mapped-live-graph-consumption"
                 | "mapped-live-denied-shell-classification"

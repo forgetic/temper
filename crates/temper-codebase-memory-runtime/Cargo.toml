@@ -1,0 +1,18 @@
+[package]
+name = "temper-codebase-memory-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Transient shared codebase-memory bootstrap ownership outside individual jobs."
+
+[dependencies]
+temper-protocol-agent = { path = "../temper-protocol-agent" }
+temper-process-containment = { path = "../temper-process-containment" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
