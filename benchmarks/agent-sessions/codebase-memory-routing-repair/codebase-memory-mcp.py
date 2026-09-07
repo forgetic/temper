@@ -174,6 +174,7 @@ def confirmed_graph_read(project, tool):
     )
     save_state(state)
     identity = {
+        "project": project,
         "confirmed_project": project,
         "graph_read_project": project,
         "project_route": "confirmed_identity",
@@ -356,11 +357,8 @@ for line in sys.stdin:
                     json.dumps(
                         identity
                         | {
-                            "readiness": (
-                                "cold stable upsert is ready"
-                                if graph_read_number == 1
-                                else "warm stable project remains ready"
-                            ),
+                            "cold_stable_upsert_ready": graph_read_number == 1,
+                            "warm_stable_project_ready": graph_read_number >= 2,
                             "results": results,
                         },
                         sort_keys=True,
@@ -377,11 +375,8 @@ for line in sys.stdin:
                     json.dumps(
                         identity
                         | {
-                            "readiness": (
-                                "warm stable project remains ready"
-                                if graph_read_number >= 2
-                                else "cold stable upsert is ready"
-                            ),
+                            "cold_stable_upsert_ready": graph_read_number == 1,
+                            "warm_stable_project_ready": graph_read_number >= 2,
                             "results": [
                                 {"qualified_name": "worker_slot", "file_path": "src/route.rs"},
                             ],
