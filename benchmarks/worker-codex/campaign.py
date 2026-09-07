@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -228,6 +229,9 @@ def capture_patch(checkout, baseline, output):
 
 
 def preflight(options):
+    search_binary = shutil.which("rg")
+    if search_binary is None:
+        raise ValueError("ripgrep (rg) must be on the common PATH for both contestants")
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     config_path = codex_home / "config.toml"
     config = tomllib.loads(config_path.read_text())
@@ -252,6 +256,7 @@ def preflight(options):
             "service_tier": "provider_default", "same_openai_account": True,
             "provider_reported_model": None, "provider_reported_reasoning_effort": None,
             "host_cpu_count": os.cpu_count(),
+            "common_search_binary_sha256": sha256(Path(search_binary)),
             "harness_sources": {path.name: sha256(path)
                                 for path in sorted(Path(__file__).parent.glob("*.py"))},
             "codex_config_sha256": sha256(config_path),

@@ -8,7 +8,7 @@ been achieved.
 
 ## Prepare the campaign
 
-Use a host with Python 3.12+, Git, Rust/Cargo, Codex, and the real
+Use a host with Python 3.12+, Git, ripgrep (`rg`), Rust/Cargo, Codex, and the real
 `codebase-memory-mcp` executable. The fixture runs Forgejo and its runner
 locally; CI jobs execute directly on the host. The existing Temper deployment
 is not used. Build the three required binaries before timing any arm:
