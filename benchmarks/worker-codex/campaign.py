@@ -16,6 +16,7 @@ import tomllib
 
 from codex_run import run_codex
 from metrics import codex_metrics, comparison, mcp_metrics, temper_metrics
+from native_model import model_evidence
 from stack import start
 from stack_sessions import read_agent_sessions
 
@@ -111,6 +112,10 @@ def native_arm(seed, task, arm, inputs, options):
         trial.update({key: None for key in fields})
         trial.update(agent_succeeded=False, tool_evidence_complete=False)
     trial.update(delivery=delivery, error=delivery_error, agent_sessions=sessions, analysis=analysis)
+    trial["model_evidence"] = model_evidence(journal_root, trial["model_attempts"])
+    if not trial["model_evidence"]["matches_requested_model"]:
+        trial["agent_succeeded"] = False
+        trial["configuration_error"] = "native model requests are missing, incomplete, or mismatched"
     trial["mcp"] = mcp_metrics(arm / "mcp.jsonl")
     if delivery is None:
         trial["correct"] = False

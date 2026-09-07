@@ -246,14 +246,25 @@ class CampaignTests(unittest.TestCase):
         self.assertGreaterEqual(trial["validation"]["oracle_wall_seconds"], 0)
         self.assertIn("raw validation output", (output / "host-oracle.log").read_text())
 
-    def native_trial(self, *, failure=None, validation_error=None):
+    def test_native_model_mismatch_cannot_pass_with_successful_delivery_and_oracle(self):
+        trial, _arm, _calls = self.native_trial(model="gpt-5.5")
+        self.assertEqual(trial["coding_seconds"], 4)
+        self.assertTrue(trial["validation"]["passed"])
+        self.assertFalse(trial["agent_succeeded"])
+        self.assertFalse(trial["correct"])
+        self.assertFalse(trial["model_evidence"]["matches_requested_model"])
+
+    def native_trial(self, *, failure=None, validation_error=None, model="gpt-6-astra"):
         arm = self.root / (failure or "complete")
         journal = arm / "journals"
         for name in ["first", "second"]:
             (journal / name).mkdir(parents=True)
             (journal / name / "manifest.json").write_text("{}")
+            (journal / name / "events.jsonl").write_text(json.dumps({"event": {
+                "type": "model.call.started", "data": {"provider": "openai-codex", "model": model}}}) + "\n")
         summary = {"terminal": {"status": "succeeded"}, "trace": {"terminal_event_observed": True},
-                   "metrics": {"tools": {"failed": 0, "by_name": {"shell": {"calls": 2},
+                   "metrics": {"model": {"calls": 1, "attempts": 1},
+                     "tools": {"failed": 0, "by_name": {"shell": {"calls": 2},
                        "codebase_memory_search_graph": {"calls": 1}}}}}
         calls = []
 

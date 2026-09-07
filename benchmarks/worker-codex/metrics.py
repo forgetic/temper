@@ -127,7 +127,8 @@ def temper_metrics(summaries: list[dict], sessions: list[dict] | None = None) ->
         walls = [s["duration_ms"] / 1000 for s in sessions]
     ordered_statuses = [s.get("status") for s in sessions] if sessions else []
     all_models = bool(summaries) and all(s.get("metrics", {}).get("model") for s in summaries)
-    all_tokens = bool(summaries) and all(_complete_coverage(c) for c in token_coverage)
+    all_tokens = (bool(summaries) and all(_complete_coverage(c) for c in token_coverage)
+                  and sum(c["observed"] for c in token_coverage) > 0)
     return {
         "contestant": "temper", "attempts": len(summaries),
         "coding_seconds": sum(walls) if session_timing_complete else None,

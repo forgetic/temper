@@ -98,6 +98,10 @@ common gates and the frozen external oracle; Temper's validated checkout must
 match the merged commit. Every scheduled failure or timeout stays in the
 campaign. Keep exploratory reruns separate from final pairs.
 
+Setup checks Temper's resolved standalone provider/model settings before filing
+the issue. Native trace events must also identify the expected model on every
+observed request; a different model or missing evidence invalidates the attempt.
+
 ## Read the evidence
 
 `campaign.json` records the frozen inputs, configuration, binary hashes, and
