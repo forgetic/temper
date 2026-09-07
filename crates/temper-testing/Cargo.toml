@@ -18,6 +18,10 @@ path = "src/bin/temper-testing-daemon-worker.rs"
 name = "temper-forgejo-fixture"
 path = "src/bin/temper-forgejo-fixture.rs"
 
+[[bin]]
+name = "temper-benchmark-stack"
+path = "src/bin/temper-benchmark-stack.rs"
+
 # Compiled process fixture and custom early-main driver for the Linux
 # descendant-containment acceptance matrix. The driver dispatches the private
 # supervisor helper before running production APIs; no test invokes Cargo.

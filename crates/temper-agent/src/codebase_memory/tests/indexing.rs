@@ -139,7 +139,7 @@ fn confirmed_missing_projects_use_stable_blocking_upsert_and_repeated_roots_conv
         &dir,
         CodebaseMemoryMode::Required,
         CodebaseMemoryIndex::Blocking,
-        "missing",
+        "missing-inventory",
         &log_path,
         json!({}),
     );
@@ -154,6 +154,12 @@ fn confirmed_missing_projects_use_stable_blocking_upsert_and_repeated_roots_conv
         )
         .await
         .expect("first blocking stable upsert succeeds");
+        assert!(
+            !toolset
+                .prompt_status()
+                .expect("prompt status")
+                .contains("unrelated-inventory-project")
+        );
         assert!(
             toolset
                 .prompt_status()

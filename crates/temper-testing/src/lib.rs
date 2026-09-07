@@ -15,6 +15,7 @@
 //! HTTP seam in `temper-forge-forgejo`).
 
 pub mod agents;
+pub mod benchmark_stack;
 pub mod ci;
 pub mod counting_forge;
 pub mod counting_http;

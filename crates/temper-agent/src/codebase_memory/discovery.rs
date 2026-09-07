@@ -76,13 +76,19 @@ fn parse_targeted_status(
 
     validate_targeted_identity(object, provider_key)?;
     // Released providers (including 0.10.8) report an absent project as this
-    // JSON tool error, without status or identity fields. Accept only that
-    // exact envelope; other errors and contradictory metadata remain unknown.
+    // JSON tool error, without status or identity fields. Populated accounts
+    // include advisory inventory; validate its shape, then discard it. Only the
+    // requested project's exact missing error authorizes initial indexing.
     if result.is_error
         && object.get("error").and_then(Value::as_str) == Some("project not found or not indexed")
-        && object
-            .keys()
-            .all(|key| matches!(key.as_str(), "error" | "hint"))
+        && object.iter().all(|(key, value)| match key.as_str() {
+            "error" | "hint" => value.is_string(),
+            "available_projects" => value
+                .as_array()
+                .is_some_and(|projects| projects.iter().all(Value::is_string)),
+            "count" => value.as_u64().is_some(),
+            _ => false,
+        })
     {
         return Ok(TargetedProjectState::Missing);
     }
