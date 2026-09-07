@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "project": "temper-artifact-benchmark",
+  "provider": {
+    "path": "/absolute/path/to/codebase-memory-mcp",
+    "sha256": "cb6dc545a8cb714799461ba7d8c223dbca7d02ca46ea5a4215c1beb450fd8e09",
+    "version": "0.10.8"
+  },
+  "source": {
+    "repository": "/absolute/path/to/temper",
+    "p0": "0000000000000000000000000000000000000000",
+    "p1": "1111111111111111111111111111111111111111",
+    "ignore_sha256": {
+      "p0": "0000000000000000000000000000000000000000000000000000000000000000",
+      "p1": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "experiment": {
+    "uid": 62078,
+    "gid": 62078,
+    "mode": "full",
+    "provider_environment": {},
+    "repetitions": 5,
+    "order": [
+      [
+        "cold-p0",
+        "artifact-p0",
+        "cold-p1",
+        "stale-artifact-p1",
+        "warm-incremental-p1"
+      ],
+      [
+        "artifact-p0",
+        "cold-p1",
+        "stale-artifact-p1",
+        "warm-incremental-p1",
+        "cold-p0"
+      ],
+      [
+        "cold-p1",
+        "stale-artifact-p1",
+        "warm-incremental-p1",
+        "cold-p0",
+        "artifact-p0"
+      ],
+      [
+        "stale-artifact-p1",
+        "warm-incremental-p1",
+        "cold-p0",
+        "artifact-p0",
+        "cold-p1"
+      ],
+      [
+        "warm-incremental-p1",
+        "cold-p0",
+        "artifact-p0",
+        "cold-p1",
+        "stale-artifact-p1"
+      ]
+    ],
+    "minimum_improvement_fraction": 0.2,
+    "timeout_seconds": 1200,
+    "shutdown_timeout_seconds": 45,
+    "sample_interval_seconds": 0.02,
+    "maximum_consumer_job_regression_fraction": 0.0
+  },
+  "queries": {
+    "p0": {
+      "symbols": [
+        {
+          "name": "artifact_probe",
+          "file": "src/probe.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "name": "artifact_caller",
+          "file": "src/probe.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "calls": [
+        {
+          "caller": "artifact_caller",
+          "callee": "artifact_probe"
+        }
+      ],
+      "coverage_paths": [
+        "src/probe.rs"
+      ],
+      "absent_symbols": [
+        "artifact_deleted"
+      ],
+      "absent_files": [
+        "src/deleted.rs",
+        "src/old_name.rs"
+      ]
+    },
+    "p1": {
+      "symbols": [
+        {
+          "name": "artifact_probe",
+          "file": "src/probe.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        {
+          "name": "artifact_caller",
+          "file": "src/probe.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "calls": [
+        {
+          "caller": "artifact_caller",
+          "callee": "artifact_probe"
+        }
+      ],
+      "coverage_paths": [
+        "src/probe.rs"
+      ],
+      "absent_symbols": [
+        "artifact_deleted"
+      ],
+      "absent_files": [
+        "src/deleted.rs",
+        "src/old_name.rs"
+      ]
+    }
+  }
+}
