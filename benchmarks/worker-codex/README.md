@@ -11,8 +11,9 @@ reporting, and compatibility across those responsibilities.
 The performance target is a Temper median coding-session duration no greater
 than Codex's, with both passing the same behavioral acceptance checks. This
 single task measures performance on this workload; it does not establish parity
-on all coding work. This directory initially supplies the contract and oracle;
-the live delivery harness is a separate work item.
+on all coding work. The live harness is `benchmark.py`; follow
+[Benchmark the worker against Codex](../../docs/how-to/benchmark-worker-vs-codex.md)
+for prerequisites, commands, private artifacts, and metric interpretation.
 
 ## Inputs and correctness
 
@@ -74,10 +75,11 @@ Jig scenarios remain separate workflow-validation evidence.
 Run the Codex arm on a fresh equivalent checkout with
 `codex --dangerously-bypass-approvals-and-sandbox`, passing exactly `task.md` as
 the task. Use GPT-6 Astra with `xhigh` reasoning for both arms. Record the
-effective requested and provider-reported model identities and reasoning
-settings, Codex version, Temper revision, and agent/provider configuration.
-Reject a comparison with a model fallback or an unverified effort setting.
-Do not assume a shared model nickname resolves to the same model.
+requested settings, effective client configuration, and any available
+provider-reported model identities and reasoning settings, plus Codex version
+and Temper revision. Reject observed model/effort mismatches or configuration
+drift. Public CLI events may omit provider metadata; keep it unavailable rather
+than inferring confirmation from the request or a shared model nickname.
 
 Use the same host, available CPU/memory, Rust toolchain, network path, task
 deadline, and delivery validation. Build infrastructure binaries and warm Rust
