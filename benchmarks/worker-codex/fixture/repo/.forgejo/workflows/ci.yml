@@ -1,0 +1,15 @@
+name: ci
+
+on:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - name: Checkout
+        uses: https://github.com/actions/checkout@v4
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Test
+        run: cargo test --offline --quiet

@@ -14,6 +14,10 @@ implementation crates and process boundary.
 
 ## Checked-in benchmarks
 
+[`worker-codex/`](worker-codex/README.md) defines the frozen real-model worker
+versus Codex delivery benchmark: a dependency-free Rust seed, common coding
+task, independent host acceptance tests, and paired-run measurement protocol.
+
 [`codebase-memory-artifacts/`](codebase-memory-artifacts/README.md) is the
 opt-in native graph artifact experiment. It compares clean indexing, artifact
 bootstrap and retained-cache updates using isolated provider state. Its
