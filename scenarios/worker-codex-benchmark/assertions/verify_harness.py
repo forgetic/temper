@@ -72,7 +72,9 @@ def run_suites(benchmark):
 def main():
     require(len(sys.argv) == 2, "one assertion context path is required")
     context = json.loads(Path(sys.argv[1]).read_text())
-    repository = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+    script_directory = Path(__file__).resolve().parent
+    repository = Path(subprocess.check_output(
+        ["git", "-C", str(script_directory), "rev-parse", "--show-toplevel"], text=True).strip())
     head = subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
     check_context(context, head)
     benchmark = exact_sources(repository, head)

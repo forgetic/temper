@@ -56,3 +56,7 @@ The scenario requires Python 3.11 or newer and Git on the host. Commit the
 scenario and benchmark sources before live validation: dirty or untracked
 inputs intentionally fail the source-identity assertion. Generated logs and
 checkpoint reports belong in validation artifacts, outside this scenario.
+
+The hook locates its checkout from its own script directory. Its context
+contains the already-evaluated manifest assertions; the CLI appends the hook's
+own outcome only after the command returns.
