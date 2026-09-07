@@ -10,7 +10,7 @@ import socket
 import subprocess
 import time
 
-from stack_config import configure
+from stack_config import configure, verify_resolved
 from stack_forge import Forge, await_delivery
 from stack_sessions import read_agent_sessions
 from stack_lifecycle import close_stack
@@ -57,6 +57,8 @@ class Stack:
         self._init(workflow)
         self.effective_configuration = configure(self.bundle, self.root, self.temper_bin,
                                                  auth_file, codebase_memory)
+        self.effective_configuration["resolved_standalone"] = verify_resolved(
+            self.bundle, self.root, self.temper_bin, self.env)
         self._seed(Path(seed))
         self._launch()
         self.setup_seconds = (self.ready_ns - setup_started_ns) / 1e9

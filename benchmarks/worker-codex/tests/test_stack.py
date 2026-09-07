@@ -12,12 +12,72 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stack import Stack, start
+from stack_config import MODEL, configure, verify_resolved
 from stack_forge import Forge, ci_passed
 from stack_sessions import read_agent_sessions
 from stack_support import stop_process, write_toml
 
 
 class StackTests(unittest.TestCase):
+    def test_configuration_pins_both_standalone_and_spawned_agent_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            config = {"engine": {}, "agent": {
+                "provider": "anthropic", "max_iterations": 3, "enable_subagents": True,
+                "providers": {"chatgpt": {"models": {"main": "gpt-5.5", "investigate": "old"}}},
+                "profiles": {name: {"provider": "anthropic", "model": "old",
+                                     "credential": "stale-secret", "subagents": True}
+                             for name in ["engineer", "ci_diagnostician"]}}}
+            write_toml(bundle / "config.toml", config)
+            write_toml(bundle / "credentials.toml", {})
+            mcp = {"mode": "required", "command": "provider", "args": []}
+            configure(bundle, root, Path("/bin/temper"), root / "auth.json", mcp)
+            agent = tomllib.loads((bundle / "config.toml").read_text())["agent"]
+            self.assertEqual(agent["provider"], "chatgpt")
+            self.assertEqual(agent["max_iterations"], 100)
+            self.assertFalse(agent["enable_subagents"])
+            self.assertEqual(agent["providers"]["chatgpt"]["models"],
+                             {"main": MODEL, "investigate": MODEL})
+            for profile in agent["profiles"].values():
+                self.assertEqual(profile["provider"], "chatgpt")
+                self.assertEqual(profile["model"], MODEL)
+                self.assertEqual(profile["investigate_model"], MODEL)
+                self.assertEqual(profile["max_iterations"], 100)
+                self.assertFalse(profile["subagents"])
+                self.assertNotIn("credential", profile)
+            credentials = tomllib.loads((bundle / "credentials.toml").read_text())
+            self.assertEqual(credentials["agent"]["providers"]["chatgpt"],
+                             {"type": "oauth", "auth_file": str(root / "auth.json")})
+
+    def test_resolved_settings_reject_default_model_even_when_profiles_claim_astra(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            expected = {"provider": "chatgpt", "main model": MODEL, "investigate": MODEL,
+                        "max_iters": "100", "subagents": "false", "credential": "oauth (file)"}
+            for wrong_key in [None, *expected]:
+                with self.subTest(wrong_key=wrong_key):
+                    actual = expected.copy()
+                    if wrong_key:
+                        actual[wrong_key] = "gpt-5.5" if wrong_key == "main model" else "wrong"
+                    text = "[agent]\n" + "\n".join(f"  {k} = {v}" for k, v in actual.items())
+                    text += "\n[agent.profiles.engineer]\n  main model = gpt-6-astra\n"
+
+                    def show(command, path, **kwargs):
+                        self.assertEqual(command[-2:], ["config", "show"])
+                        self.assertEqual(kwargs["env"], {"TEST": "safe"})
+                        path.write_text(text)
+
+                    with patch("stack_config.run_logged", side_effect=show):
+                        if wrong_key:
+                            with self.assertRaisesRegex(ValueError, "settings mismatch"):
+                                verify_resolved(root, root, Path("temper"), {"TEST": "safe"})
+                        else:
+                            self.assertEqual(verify_resolved(root, root, Path("temper"),
+                                                             {"TEST": "safe"}), expected)
+                    self.assertEqual((root / "resolved-config.log").read_text(), text)
+
     def test_rejected_nonempty_root_does_not_remove_existing_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
