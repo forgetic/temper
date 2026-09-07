@@ -16,9 +16,12 @@ measured; it carries no fabricated durations, token counts, or parity claim.
 The required after-convergence assertion then loads the actual benchmark
 sources and tests directly from `benchmarks/worker-codex/` in the checked-out
 Temper repository. It runs `test_metrics.py`, `test_mcp_metrics.py`,
-`test_mcp_proxy.py`, and `test_campaign.py`, covering comparator rejection/success, request correlation,
-stdio forwarding, failed-attempt retention, configuration drift, and complete
-patch capture. The proxy tests use a deterministic toy stdio server; they do
+`test_mcp_proxy.py`, `test_native_model.py`, and `test_campaign.py`, covering
+comparator rejection/success, request correlation, stdio forwarding,
+failed-attempt retention, configuration drift, and complete patch capture.
+Native-model checks require every request and retry to select Astra, reject
+missing request evidence, and keep unavailable token usage unknown. The proxy
+tests use a deterministic toy stdio server; they do
 not contact a live codebase-memory provider or model. The scenario contains no
 copy of the benchmark implementation and adds no scenario-runner behavior.
 
