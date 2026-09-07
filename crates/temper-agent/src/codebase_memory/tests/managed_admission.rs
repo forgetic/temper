@@ -76,7 +76,11 @@ fn check_startup_cleanup(expire: bool, mode: CodebaseMemoryMode) {
 import json, pathlib, signal, sys, time
 root = pathlib.Path(sys.argv[1])
 def terminate(_signal, _frame):
-    (root/'cleanup-held-admission').write_text(str(not (root/'frontend-exited').exists()))
+    # Existence is the Rust reader's synchronization point. Publish the complete
+    # observation atomically so it cannot read between open(O_TRUNC) and write.
+    marker = root/'cleanup-held-admission.pending'
+    marker.write_text(str(not (root/'frontend-exited').exists()))
+    marker.replace(root/'cleanup-held-admission')
 signal.signal(signal.SIGTERM, terminate)
 for line in sys.stdin:
     request = json.loads(line)
