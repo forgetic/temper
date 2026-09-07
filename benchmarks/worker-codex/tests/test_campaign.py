@@ -11,6 +11,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from test_metrics import native_tools, successful_trials
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,9 +48,9 @@ class CampaignTests(unittest.TestCase):
             output.mkdir(parents=True, exist_ok=True)
             if len(seen) == 1:
                 raise RuntimeError("deterministic first-attempt failure")
-            return {"contestant": name, "correct": True, "agent_succeeded": True,
-                    "coding_seconds": 1 if name == "temper" else 2,
-                    "tool_calls": 3, "graph_calls": 1, "mcp": {"complete": True}}
+            trial = next(t for t in successful_trials(1) if t["contestant"] == name)
+            trial["coding_seconds"] = 1 if name == "temper" else 2
+            return trial
 
         configuration = {"schema_version": 1, "model": "gpt-6-astra", "reasoning_effort": "xhigh",
                          "codex_config_sha256": "frozen-configuration-hash"}
@@ -99,8 +100,7 @@ class CampaignTests(unittest.TestCase):
 
         def arm(_seed, _task, output, _inputs, _options):
             output.mkdir(parents=True)
-            return {"contestant": "temper", "correct": True, "agent_succeeded": True,
-                    "coding_seconds": 1, "tool_calls": 3, "graph_calls": 1, "mcp": {"complete": True}}
+            return successful_trials(1)[0]
 
         snapshots = [{"config_hash": "initial"}, {"config_hash": "initial"}, {"config_hash": "changed"}]
         with ExitStack() as mocks, redirect_stdout(io.StringIO()):
@@ -121,10 +121,7 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(json.loads((options.output / "campaign.json").read_text())["config_hash"], "initial")
 
     def test_comparison_rejects_invalid_durations_and_missing_tool_evidence(self):
-        baseline = [{"contestant": name, "pair": pair, "correct": True,
-                     "agent_succeeded": True, "coding_seconds": duration,
-                     "tool_calls": 4, "graph_calls": 2, "mcp": {"complete": True}}
-                    for pair in range(1, 6) for name, duration in [("temper", 5), ("codex", 10)]]
+        baseline = successful_trials()
         self.assertTrue(campaign.comparison(baseline, 5)["performance_target_met"])
         for field, value in [("coding_seconds", float("nan")), ("coding_seconds", float("inf")),
                              ("coding_seconds", -1), ("coding_seconds", 0),
@@ -262,10 +259,10 @@ class CampaignTests(unittest.TestCase):
             (journal / name / "manifest.json").write_text("{}")
             (journal / name / "events.jsonl").write_text(json.dumps({"event": {
                 "type": "model.call.started", "data": {"provider": "openai-codex", "model": model}}}) + "\n")
-        summary = {"terminal": {"status": "succeeded"}, "trace": {"terminal_event_observed": True},
+        summary = {"terminal": {"status": "succeeded"},
+                   "trace": {"terminal_event_observed": True, "events": {"observed": 10, "expected": 10}},
                    "metrics": {"model": {"calls": 1, "attempts": 1},
-                     "tools": {"failed": 0, "by_name": {"shell": {"calls": 2},
-                       "codebase_memory_search_graph": {"calls": 1}}}}}
+                      "tools": native_tools({"shell": 2, "codebase_memory_search_graph": 1})}}
         calls = []
 
         def analyze(command, **kwargs):

@@ -100,11 +100,14 @@ def temper_metrics(summaries: list[dict], sessions: list[dict] | None = None) ->
     for run in summaries:
         status = (run.get("terminal") or {}).get("status")
         statuses.append(status)
-        complete = complete and bool(run.get("trace", {}).get("terminal_event_observed"))
+        trace = run.get("trace", {})
+        complete = (complete and trace.get("terminal_event_observed") is True
+                    and _complete_coverage(trace.get("events")))
         metrics = run.get("metrics", {})
         token_coverage.append((metrics.get("tokens") or {}).get("coverage"))
         model_duration_coverage.append((metrics.get("model") or {}).get("duration_coverage"))
         tools = metrics.get("tools")
+        complete = complete and _tool_summary_complete(tools)
         if tools is None:
             complete = False
         else:
@@ -121,8 +124,7 @@ def temper_metrics(summaries: list[dict], sessions: list[dict] | None = None) ->
             if isinstance(value, int):
                 model[key] += value
     session_timing_complete = (bool(sessions)
-                               and all(isinstance(s.get("duration_ms"), (int, float))
-                                       for s in sessions))
+                               and all(_positive_duration(s.get("duration_ms")) for s in sessions))
     if session_timing_complete:
         walls = [s["duration_ms"] / 1000 for s in sessions]
     ordered_statuses = [s.get("status") for s in sessions] if sessions else []
@@ -157,22 +159,30 @@ def temper_metrics(summaries: list[dict], sessions: list[dict] | None = None) ->
 
 def comparison(trials: list[dict], expected_pairs: int = 5) -> dict:
     """Do not calculate a success-only median or silently drop a missing pair."""
-    cells = {name: [t for t in trials if t["contestant"] == name]
+    if not _count(expected_pairs) or expected_pairs == 0:
+        raise ValueError("expected_pairs must be a positive integer")
+    expected_order = [(pair, order, name) for pair in range(1, expected_pairs + 1)
+                      for order, name in enumerate(
+                          ("temper", "codex") if pair % 2 else ("codex", "temper"), 1)]
+    order_complete = ([(t.get("pair"), t.get("order"), t.get("contestant")) for t in trials]
+                      == expected_order and all(_count(t.get("pair")) and _count(t.get("order"))
+                                               for t in trials))
+    cells = {name: [t for t in trials if t.get("contestant") == name]
              for name in ("temper", "codex")}
     result = {"schema_version": 1, "expected_pairs": expected_pairs,
-              "trials": trials, "contestants": {}, "performance_target_met": False}
+              "trials": trials, "contestants": {}, "order_complete": order_complete,
+              "timing_target_met": False, "performance_target_met": False}
     for name, rows in cells.items():
         valid = (len(rows) == expected_pairs
+                 and all(_count(t.get("pair")) for t in rows)
                  and sorted(t["pair"] for t in rows) == list(range(1, expected_pairs + 1))
-                 and all(t.get("correct") and t.get("agent_succeeded")
-                         and _positive_duration(t.get("coding_seconds")) for t in rows))
+                 and all(t.get("correct") is True and t.get("agent_succeeded") is True
+                         and _positive_duration(t.get("coding_seconds"))
+                         and _passed_validation(t.get("validation"))
+                         and (name != "temper" or _native_trial_complete(t)) for t in rows))
         cell = {"attempted": len(rows), "passed": sum(bool(t.get("correct")) for t in rows),
                 "complete": valid,
-                "tool_evidence_complete": all(
-                    all(isinstance(t.get(k), int) and not isinstance(t.get(k), bool) and t[k] >= 0
-                        for k in ["tool_calls", "graph_calls"])
-                    and t.get("tool_evidence_complete", True)
-                    and t.get("mcp", {}).get("complete", False) for t in rows)}
+                "tool_evidence_complete": bool(rows) and all(_trial_tools_complete(t) for t in rows)}
         if valid:
             times = [t["coding_seconds"] for t in rows]
             cell.update(median_seconds=statistics.median(times), min_seconds=min(times),
@@ -183,7 +193,7 @@ def comparison(trials: list[dict], expected_pairs: int = 5) -> dict:
                     if all(isinstance(v, int) and not isinstance(v, bool) and v >= 0
                            for v in values) else None)
         result["contestants"][name] = cell
-    if all(c["complete"] for c in result["contestants"].values()):
+    if order_complete and all(c["complete"] for c in result["contestants"].values()):
         ratio = (result["contestants"]["temper"]["median_seconds"]
                  / result["contestants"]["codex"]["median_seconds"])
         result.update(temper_to_codex_ratio=ratio,
@@ -199,8 +209,76 @@ def _positive_duration(value):
 
 
 def _complete_coverage(value):
-    return (isinstance(value, dict) and value.get("observed") is not None
+    return (isinstance(value, dict) and _count(value.get("observed"))
+            and _count(value.get("expected"))
             and value.get("observed") == value.get("expected"))
+
+
+def _count(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _tool_summary_complete(tools):
+    if not isinstance(tools, dict):
+        return False
+    groups = tools.get("by_name")
+    if not isinstance(groups, dict):
+        return False
+    fields = ("calls", "succeeded", "failed", "cancelled")
+    for row in [tools, *groups.values()]:
+        if (not isinstance(row, dict) or not all(_count(row.get(key)) for key in fields)
+                or row["calls"] != sum(row[key] for key in fields[1:])
+                or not _complete_coverage(row.get("duration_coverage"))
+                or row["duration_coverage"]["expected"] != row["calls"]):
+            return False
+    return all(tools[key] == sum(row[key] for row in groups.values()) for key in fields)
+
+
+def _passed_validation(value):
+    return isinstance(value, dict) and value.get("complete") is True and value.get("passed") is True
+
+
+def _native_trial_complete(trial):
+    delivery, model = trial.get("delivery"), trial.get("model_evidence")
+    if not isinstance(delivery, dict) or not isinstance(model, dict):
+        return False
+    analysis, invocations = trial.get("analysis"), trial.get("attempts")
+    if (not isinstance(analysis, dict) or analysis.get("complete") is not True
+            or analysis.get("errors") != [] or not _count(invocations) or invocations == 0
+            or not all(_count(analysis.get(key)) and analysis[key] == invocations
+                       for key in ["traces", "analyzed_traces", "invocations"])):
+        return False
+    if (delivery.get("status") != "succeeded" or not delivery.get("merged_at")
+            or not all(isinstance(delivery.get(key), str) and delivery[key]
+                       for key in ["final_sha", "merge_commit_sha", "seed_sha"])
+            or delivery["final_sha"] != delivery["merge_commit_sha"]
+            or delivery["final_sha"] == delivery["seed_sha"]
+            or delivery.get("session_timing_complete") is not True
+            or not _count(delivery.get("ci_run_count")) or delivery["ci_run_count"] == 0):
+        return False
+    attempts, requests = trial.get("model_attempts"), model.get("requests")
+    if (not _count(attempts) or attempts == 0 or model.get("complete") is not True
+            or model.get("matches_requested_model") is not True or model.get("errors") != []
+            # This is the pinned native setting; provider-reported effort remains unavailable.
+            or model.get("reasoning_effort") != "xhigh"
+            or not _count(model.get("observed_attempts"))
+            or not _count(model.get("expected_attempts"))
+            or model["observed_attempts"] != attempts or model["expected_attempts"] != attempts
+            or not isinstance(requests, list) or not requests):
+        return False
+    return (all(isinstance(r, dict) and r.get("provider") == "openai-codex"
+                and r.get("model") == "gpt-6-astra" and _count(r.get("attempts"))
+                and r["attempts"] > 0 for r in requests)
+            and sum(r["attempts"] for r in requests) == attempts)
+
+
+def _trial_tools_complete(trial):
+    mcp = trial.get("mcp")
+    return (trial.get("tool_evidence_complete") is True
+            and all(_count(trial.get(key)) for key in ["tool_calls", "graph_calls"])
+            and trial["graph_calls"] <= trial["tool_calls"]
+            and isinstance(mcp, dict) and mcp.get("available") is True
+            and mcp.get("complete") is True and _count(mcp.get("provider_calls")))
 
 
 def mcp_metrics(path: Path) -> dict:
