@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "project": "temper-artifact-benchmark",
+  "provider": {
+    "path": "codebase-memory-mcp",
+    "sha256": "cb6dc545a8cb714799461ba7d8c223dbca7d02ca46ea5a4215c1beb450fd8e09",
+    "version": "0.10.8"
+  },
+  "source": {
+    "repository": ".",
+    "p0": "386d70b28297cd20a40dd2ad90b5d0a0124d1f8a",
+    "p1": "b7a7d9140b359baf0aa111c25af43cb67173764d",
+    "ignore_sha256": {
+      "p0": "970a0c64d57d22cb0b8fbce8b55a3f9e0c44cb44e4fa5e293ecfb9478d2796e9",
+      "p1": "970a0c64d57d22cb0b8fbce8b55a3f9e0c44cb44e4fa5e293ecfb9478d2796e9"
+    }
+  },
+  "experiment": {
+    "uid": 62078,
+    "gid": 62078,
+    "mode": "full",
+    "provider_environment": {},
+    "repetitions": 5,
+    "order": [
+      [
+        "cold-p0",
+        "artifact-p0",
+        "cold-p1",
+        "stale-artifact-p1",
+        "warm-incremental-p1"
+      ],
+      [
+        "artifact-p0",
+        "cold-p1",
+        "stale-artifact-p1",
+        "warm-incremental-p1",
+        "cold-p0"
+      ],
+      [
+        "cold-p1",
+        "stale-artifact-p1",
+        "warm-incremental-p1",
+        "cold-p0",
+        "artifact-p0"
+      ],
+      [
+        "stale-artifact-p1",
+        "warm-incremental-p1",
+        "cold-p0",
+        "artifact-p0",
+        "cold-p1"
+      ],
+      [
+        "warm-incremental-p1",
+        "cold-p0",
+        "artifact-p0",
+        "cold-p1",
+        "stale-artifact-p1"
+      ]
+    ],
+    "minimum_improvement_fraction": 0.2,
+    "timeout_seconds": 1200,
+    "shutdown_timeout_seconds": 45,
+    "sample_interval_seconds": 0.02,
+    "maximum_consumer_job_regression_fraction": 0.0
+  },
+  "queries": {
+    "p0": {
+      "symbols": [
+        {
+          "name": "artifact_probe_edited",
+          "file": "benchmarks/codebase-memory-artifact-probes/src/edited.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "65d667912600ccac6fb5fa1415fa789a39649f46592bcfc5eb125a7e63282226"
+        },
+        {
+          "name": "artifact_probe_renamed",
+          "file": "benchmarks/codebase-memory-artifact-probes/src/renamed_old.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "6f6db1e4311227bc1a32d40641c5873de68720b810be2a2af9124bccb347ab5d"
+        },
+        {
+          "name": "artifact_probe_route",
+          "file": "benchmarks/codebase-memory-artifact-probes/src/route.rs",
+          "start_line": 3,
+          "end_line": 7,
+          "source_sha256": "379459e25cda9c0ffdd929a0415ba8e4728432ea4facd97e3a82c7283afc661e"
+        },
+        {
+          "name": "artifact_probe_deleted",
+          "file": "benchmarks/codebase-memory-artifact-probes/src/removed.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "7be8a76c3c21bc88215167cbf30a5fd828f0496ada0e64dcc5ae02d77f239998"
+        },
+        {
+          "name": "read_initialize",
+          "file": "crates/temper-codebase-memory-runtime/src/frontend.rs",
+          "start_line": 137,
+          "end_line": 167,
+          "source_sha256": "56c373c14b795fb352baf4d7799c72e71bd8595cf37088c88002307a990937d3"
+        },
+        {
+          "name": "retry_read",
+          "file": "crates/temper-codebase-memory-runtime/src/frontend.rs",
+          "start_line": 169,
+          "end_line": 176,
+          "source_sha256": "645ac0d8aa02983c7799ab70be30a8a663fc7a5f097deb204c4973158eae71fa"
+        }
+      ],
+      "calls": [
+        {
+          "caller": "artifact_probe_route",
+          "callee": "artifact_probe_edited"
+        },
+        {
+          "caller": "artifact_probe_route",
+          "callee": "artifact_probe_renamed"
+        },
+        {
+          "caller": "artifact_probe_route",
+          "callee": "artifact_probe_deleted"
+        },
+        {
+          "caller": "read_initialize",
+          "callee": "retry_read"
+        }
+      ],
+      "coverage_paths": [
+        "benchmarks/codebase-memory-artifact-probes/src/edited.rs",
+        "benchmarks/codebase-memory-artifact-probes/src/removed.rs",
+        "benchmarks/codebase-memory-artifact-probes/src/renamed_old.rs",
+        "benchmarks/codebase-memory-artifact-probes/src/route.rs",
+        "crates/temper-codebase-memory-runtime/src/frontend.rs"
+      ],
+      "absent_symbols": [
+        "artifact_probe_added"
+      ],
+      "absent_files": [
+        "benchmarks/codebase-memory-artifact-probes/src/added.rs",
+        "benchmarks/codebase-memory-artifact-probes/src/renamed_new.rs"
+      ]
+    },
+    "p1": {
+      "symbols": [
+        {
+          "name": "artifact_probe_edited",
+          "file": "benchmarks/codebase-memory-artifact-probes/src/edited.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "4453e3e7d6069b4eeb70276390b75cb6dd9337b90849a88cc42c77968693207d"
+        },
+        {
+          "name": "artifact_probe_renamed",
+          "file": "benchmarks/codebase-memory-artifact-probes/src/renamed_new.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "6f6db1e4311227bc1a32d40641c5873de68720b810be2a2af9124bccb347ab5d"
+        },
+        {
+          "name": "artifact_probe_route",
+          "file": "benchmarks/codebase-memory-artifact-probes/src/route.rs",
+          "start_line": 3,
+          "end_line": 7,
+          "source_sha256": "fca5e7209c0346bdbfb589d5fae36b8485ed9ca21a7a5b0e67e614e3e331a3f6"
+        },
+        {
+          "name": "artifact_probe_added",
+          "file": "benchmarks/codebase-memory-artifact-probes/src/added.rs",
+          "start_line": 1,
+          "end_line": 3,
+          "source_sha256": "aaa51f87b7aff11358cfbe44a9b2ccacf340f06cd7a76772ad6ca0348bb8b408"
+        },
+        {
+          "name": "read_initialize",
+          "file": "crates/temper-codebase-memory-runtime/src/frontend.rs",
+          "start_line": 137,
+          "end_line": 167,
+          "source_sha256": "56c373c14b795fb352baf4d7799c72e71bd8595cf37088c88002307a990937d3"
+        },
+        {
+          "name": "retry_read",
+          "file": "crates/temper-codebase-memory-runtime/src/frontend.rs",
+          "start_line": 169,
+          "end_line": 176,
+          "source_sha256": "645ac0d8aa02983c7799ab70be30a8a663fc7a5f097deb204c4973158eae71fa"
+        }
+      ],
+      "calls": [
+        {
+          "caller": "artifact_probe_route",
+          "callee": "artifact_probe_edited"
+        },
+        {
+          "caller": "artifact_probe_route",
+          "callee": "artifact_probe_renamed"
+        },
+        {
+          "caller": "artifact_probe_route",
+          "callee": "artifact_probe_added"
+        },
+        {
+          "caller": "read_initialize",
+          "callee": "retry_read"
+        }
+      ],
+      "coverage_paths": [
+        "benchmarks/codebase-memory-artifact-probes/src/added.rs",
+        "benchmarks/codebase-memory-artifact-probes/src/edited.rs",
+        "benchmarks/codebase-memory-artifact-probes/src/renamed_new.rs",
+        "benchmarks/codebase-memory-artifact-probes/src/route.rs",
+        "crates/temper-codebase-memory-runtime/src/frontend.rs"
+      ],
+      "absent_symbols": [
+        "artifact_probe_deleted"
+      ],
+      "absent_files": [
+        "benchmarks/codebase-memory-artifact-probes/src/removed.rs",
+        "benchmarks/codebase-memory-artifact-probes/src/renamed_old.rs"
+      ]
+    }
+  }
+}

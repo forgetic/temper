@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "frozen_at_utc": "2026-09-07T01:53:13.767754+00:00",
+  "native_observations_before_freeze": 0,
+  "harness_commit": "4cbefe5deec6713f801d6ba5f65f5d6b000af01e",
+  "config_sha256": "78923d1489d601cdc48d5d24fc1f221134db63146ec5f4d51545a496fc57bffd",
+  "protocol_sha256": "ba14fe5755c5caf2c71a900e9aaae85694badf66a6d40c7a721859b0b3d31256",
+  "harness_files_sha256": {
+    "benchmarks/codebase-memory-artifacts/accounting.py": "92fae57dfd528cabca2d9e5de4f35bb668c4e06976b993f15496120358d09b09",
+    "benchmarks/codebase-memory-artifacts/artifact.py": "332fdb0959cbe0791fedd2b44130972b11f106e2a677225801ae1910235041e5",
+    "benchmarks/codebase-memory-artifacts/benchmark.py": "4a0e858dc752b62973571dd727ddea93792f2a69248c097c032bae322bab5ffe",
+    "benchmarks/codebase-memory-artifacts/contract.py": "afa8b6c01e71ea64e43a0bf352ae5d2e861f1fc6381a5116694f150a7d6314b3",
+    "benchmarks/codebase-memory-artifacts/fixture.py": "9842e05b8bed6cba8d0ac2631787572cc7891cda5fc93b341f92e29d97e9c4f4",
+    "benchmarks/codebase-memory-artifacts/native.py": "863337949e53f62db91ee7e32e29c100b6f703e467012f602b062cce015de7c2",
+    "benchmarks/codebase-memory-artifacts/protocol.py": "bbfe952540cba3a2346d3515d4e53185eaf2f73a4f427568f55c2fa89fa3c8ba",
+    "benchmarks/codebase-memory-artifacts/reporting.py": "4f51257def5f2e3b71feab5cf7ce5f2b1257953888a83ca1fa54f9565f2fec5a",
+    "benchmarks/codebase-memory-artifacts/source.py": "fc74bc384161e4c47c6e4a4849fac810516b6f7bf5f1e0f06da4ad3b379dabcc"
+  },
+  "source_commits": {
+    "p0": "386d70b28297cd20a40dd2ad90b5d0a0124d1f8a",
+    "p1": "b7a7d9140b359baf0aa111c25af43cb67173764d"
+  },
+  "provider_sha256": "cb6dc545a8cb714799461ba7d8c223dbca7d02ca46ea5a4215c1beb450fd8e09",
+  "harness_tests": {
+    "non_native_passed": 12,
+    "static_review": "passed; no remaining blockers"
+  },
+  "adoption_threshold": {
+    "minimum_ready_correct_improvement_fraction": 0.2,
+    "maximum_consumer_job_regression_fraction": 0.0,
+    "requires_clean_initial_correctness_and_natural_exit": true
+  },
+  "repetitions": 5,
+  "main_cells": 5,
+  "failure_observations": 4
+}
