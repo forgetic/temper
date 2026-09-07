@@ -81,6 +81,11 @@ and Temper revision. Reject observed model/effort mismatches or configuration
 drift. Public CLI events may omit provider metadata; keep it unavailable rather
 than inferring confirmation from the request or a shared model nickname.
 
+Disable sub-agent delegation in both contestants for this single-agent
+comparison. Codex's default multi-agent feature is explicitly disabled; its
+normal graph provider remains enabled. This keeps child models and unreported
+child tool activity outside the comparison rather than hiding their work.
+
 Use the same host, available CPU/memory, Rust toolchain, network path, task
 deadline, and delivery validation. Build infrastructure binaries and warm Rust
 toolchain/download caches before measurements. Use a cold workspace and cold

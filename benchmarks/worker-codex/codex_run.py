@@ -34,6 +34,7 @@ def run_codex(
         "--json", "--ephemeral", "--color", "never",
         "--model", "gpt-6-astra",
         "-c", 'model_reasoning_effort="xhigh"',
+        "-c", "features.multi_agent=false",
         "-c", "mcp_servers.forgejo.enabled=false",
         "--output-last-message", str(output / "final-message.txt"),
     ]
@@ -101,6 +102,7 @@ def run_codex(
     result = {
         "schema_version": 1, "contestant": "codex",
         "model": "gpt-6-astra", "reasoning_effort": "xhigh",
+        "subagents": False,
         "started_unix": started_unix, "ended_unix": time.time(),
         "process_wall_seconds": time.monotonic() - started,
         "exit_code": exit_code, "timed_out": timed_out,

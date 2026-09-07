@@ -253,6 +253,7 @@ def preflight(options):
         if not path.is_file():
             raise ValueError(f"required file missing: {path}")
     return {"schema_version": 1, "model": "gpt-6-astra", "reasoning_effort": "xhigh",
+            "subagents": False,
             "service_tier": "provider_default", "same_openai_account": True,
             "provider_reported_model": None, "provider_reported_reasoning_effort": None,
             "host_cpu_count": os.cpu_count(),

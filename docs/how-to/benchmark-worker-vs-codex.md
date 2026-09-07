@@ -90,7 +90,8 @@ Defaults are five pairs and 1,800 seconds per arm. Codex and MCP executable
 flags are optional when those programs are on `PATH`.
 
 The harness pins GPT-6 Astra and `xhigh`; Codex runs with
-`--dangerously-bypass-approvals-and-sandbox`. Temper receives one `code` +
+`--dangerously-bypass-approvals-and-sandbox`. Both contestants disable sub-agent
+delegation so the comparison covers one coding agent per invocation. Temper receives one `code` +
 `ready` issue, produces its PR, passes CI on that exact head, and mechanically
 merges it. The source issue must close. Both final candidates undergo the
 common gates and the frozen external oracle; Temper's validated checkout must
