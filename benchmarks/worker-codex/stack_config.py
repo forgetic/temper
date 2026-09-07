@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 import tomllib
 
-from stack_support import write_toml
+from stack_support import run_logged, write_toml
 
 MODEL = "gpt-6-astra"
 
@@ -15,7 +15,13 @@ def configure(bundle, root, temper_bin, auth_file, codebase_memory=None):
     config.setdefault("paths", {})["state_dir"] = str(root / "state")
     config["engine"].update(poll_cadence_secs=2, ci_poll_cadence_secs=2,
                             mechanical_cadence_secs=2)
-    profiles = config["agent"]["profiles"]
+    # Standalone resolves the root agent settings; spawned workers use profiles.
+    agent = config["agent"]
+    agent.update(provider="chatgpt", max_iterations=100, enable_subagents=False)
+    agent.setdefault("providers", {}).setdefault("chatgpt", {})["models"] = {
+        "main": MODEL, "investigate": MODEL,
+    }
+    profiles = agent["profiles"]
     for profile in profiles.values():
         profile.update(command=[str(temper_bin), "agent"], provider="chatgpt",
                        model=MODEL, investigate_model=MODEL, subagents=False,
@@ -45,3 +51,25 @@ def configure(bundle, root, temper_bin, auth_file, codebase_memory=None):
             "reasoning_source": "native ChatGptOAuth coding_thinking_level",
             "profiles": list(profiles), "subagents": False,
             "service_tier": "provider_default", "codebase_memory": codebase_memory}
+
+
+def verify_resolved(bundle, root, temper_bin, env):
+    """Check the actual standalone settings before starting any model work."""
+    log_path = root / "resolved-config.log"
+    run_logged([str(temper_bin), "--config", str(bundle), "config", "show"],
+               log_path, env=env)
+    agent, section = {}, None
+    for line in log_path.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line
+        elif section == "[agent]" and "=" in line:
+            key, value = line.split("=", 1)
+            agent[key.strip()] = value.strip()
+    expected = {"provider": "chatgpt", "main model": MODEL, "investigate": MODEL,
+                "max_iters": "100", "subagents": "false", "credential": "oauth (file)"}
+    mismatches = [key for key, value in expected.items() if agent.get(key) != value]
+    if mismatches:
+        raise ValueError("resolved standalone benchmark settings mismatch: "
+                         + ", ".join(mismatches) + "; inspect resolved-config.log")
+    return {key: agent[key] for key in expected}
