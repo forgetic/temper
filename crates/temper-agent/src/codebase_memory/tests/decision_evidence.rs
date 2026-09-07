@@ -25,6 +25,7 @@ fn source_evidence_schema_and_lineage_are_closed_and_provider_private() {
     let workspace = tempfile::tempdir().expect("workspace");
     let log_path = workspace.path().join("decision-evidence.log");
     let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    seed_lineage_sources(&workspace.path().join("demo"));
 
     temper_agent_io::block_on(async move {
         let tools = build_codebase_memory_toolset(

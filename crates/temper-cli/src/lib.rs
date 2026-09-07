@@ -432,3 +432,6 @@ mod tests {
         assert_eq!(parsed.globals.format, OutputFormat::Human);
     }
 }
+
+#[doc(hidden)]
+pub use temper_agent_session::dispatch_provider_bootstrap_helper;

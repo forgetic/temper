@@ -121,6 +121,9 @@ pub enum AgentLifecycleEventV1 {
         status: AgentLifecycleToolStatusV1,
     },
     SteeringApplied,
+    /// A fresh serving frontend passed the pinned provider contract. This can
+    /// release an existing parent bootstrap; it grants no launch authority.
+    CodebaseMemoryServingAdmitted,
     /// Nested managed-bash/MCP containment evidence. Assignment identity is
     /// supplied by the worker-owned endpoint rather than this child frame.
     Containment {
@@ -147,7 +150,9 @@ impl AgentLifecycleEventV1 {
             Self::Containment { observation } => observation
                 .validate()
                 .map_err(AgentLifecycleValidationError::new),
-            Self::SteeringApplied | Self::AgentFinished { .. } => Ok(()),
+            Self::SteeringApplied
+            | Self::CodebaseMemoryServingAdmitted
+            | Self::AgentFinished { .. } => Ok(()),
         }
     }
 }

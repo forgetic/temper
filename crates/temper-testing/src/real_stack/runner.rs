@@ -92,7 +92,8 @@ impl HermeticActivityCounters {
             | AgentLifecycleEventV1::ModelRetrying { .. }
             | AgentLifecycleEventV1::AgentFinished { .. }
             | AgentLifecycleEventV1::Containment { .. }
-            | AgentLifecycleEventV1::SteeringApplied => return,
+            | AgentLifecycleEventV1::SteeringApplied
+            | AgentLifecycleEventV1::CodebaseMemoryServingAdmitted => return,
         };
         counter.fetch_add(1, Ordering::SeqCst);
     }

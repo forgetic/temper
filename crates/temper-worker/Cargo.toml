@@ -7,6 +7,7 @@ license.workspace = true
 description = "Temper worker process: long-polls a Temper daemon and runs role/coding jobs. Speaks only the worker/daemon wire protocol; never calls the Forge API. (Formerly smith-worker.)"
 
 [dependencies]
+temper-codebase-memory-runtime = { path = "../temper-codebase-memory-runtime" }
 skein.workspace = true
 temper-protocol-agent = { path = "../temper-protocol-agent" }
 temper-protocol-activity = { path = "../temper-protocol-activity" }

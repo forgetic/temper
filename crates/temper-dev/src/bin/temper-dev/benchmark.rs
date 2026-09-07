@@ -365,7 +365,12 @@ pub(super) fn verify_provider_invocations(trace: &str) -> Result<(), String> {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
     {
-        collect_provider_invocations(&event, &mut invocations);
+        if let Some((invocation, tool)) = provider_invocation_record(&event) {
+            invocations
+                .entry(invocation)
+                .or_default()
+                .insert(tool.to_string());
+        }
     }
     let expected_keys = (1..=8).collect::<BTreeSet<_>>();
     if invocations.keys().copied().collect::<BTreeSet<_>>() != expected_keys {
@@ -407,29 +412,39 @@ pub(super) fn verify_provider_invocations(trace: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn collect_provider_invocations(value: &Value, invocations: &mut BTreeMap<u64, BTreeSet<String>>) {
-    match value {
-        Value::String(text) => {
-            if let Some(payload) = provider_payload(text) {
-                if let (Some(invocation), Some(tool)) = (
-                    payload.get("provider_invocation").and_then(Value::as_u64),
-                    payload.get("provider_tool").and_then(Value::as_str),
-                ) {
-                    invocations
-                        .entry(invocation)
-                        .or_default()
-                        .insert(tool.to_string());
+pub(super) fn verify_structured_readiness(trace: &str) -> Result<(), String> {
+    for expected in [1, 2] {
+        let ready = trace
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .any(|record| {
+                if provider_invocation_record(&record) != Some((expected, "search_graph")) {
+                    return false;
                 }
-            }
+                record
+                    .pointer("/record/model_result_text/text")
+                    .and_then(Value::as_str)
+                    .and_then(provider_payload)
+                    .is_some_and(|payload| {
+                        payload.get("project").and_then(Value::as_str)
+                            == Some("temper-benchmark-codebase-memory-routing-repair")
+                            && payload
+                                .get("cold_stable_upsert_ready")
+                                .and_then(Value::as_bool)
+                                == Some(expected == 1)
+                            && payload
+                                .get("warm_stable_project_ready")
+                                .and_then(Value::as_bool)
+                                == Some(expected == 2)
+                    })
+            });
+        if !ready {
+            return Err(format!(
+                "provider invocation {expected} omitted structured readiness"
+            ));
         }
-        Value::Array(values) => values
-            .iter()
-            .for_each(|value| collect_provider_invocations(value, invocations)),
-        Value::Object(values) => values
-            .values()
-            .for_each(|value| collect_provider_invocations(value, invocations)),
-        _ => {}
     }
+    Ok(())
 }
 
 fn call_has_provider_invocation(
@@ -443,34 +458,28 @@ fn call_has_provider_invocation(
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|record| {
             record.pointer("/record/call_id").and_then(Value::as_str) == Some(call_id)
-                && value_has_provider_invocation(&record, invocation, tool)
+                && provider_invocation_record(&record).is_some_and(|(observed, observed_tool)| {
+                    invocation.is_none_or(|expected| observed == expected)
+                        && tool.is_none_or(|expected| observed_tool == expected)
+                })
         })
 }
 
-fn value_has_provider_invocation(
-    value: &Value,
-    invocation: Option<u64>,
-    tool: Option<&str>,
-) -> bool {
-    match value {
-        Value::String(text) => provider_payload(text).is_some_and(|payload| {
-            payload
-                .get("provider_invocation")
-                .and_then(Value::as_u64)
-                .is_some_and(|observed| invocation.is_none_or(|expected| observed == expected))
-                && payload
-                    .get("provider_tool")
-                    .and_then(Value::as_str)
-                    .is_some_and(|observed| tool.is_none_or(|expected| observed == expected))
-        }),
-        Value::Array(values) => values
-            .iter()
-            .any(|value| value_has_provider_invocation(value, invocation, tool)),
-        Value::Object(values) => values
-            .values()
-            .any(|value| value_has_provider_invocation(value, invocation, tool)),
-        _ => false,
+// Use the operator transcript's tool identity. Unknown provider text fields
+// are intentionally removed before source presentation; the numeric fixture
+// invocation counter survives and still proves whether a denied call ran.
+fn provider_invocation_record(value: &Value) -> Option<(u64, &str)> {
+    let record = value.get("record")?;
+    let tool = record
+        .get("tool_name")?
+        .as_str()?
+        .strip_prefix("codebase_memory_")?;
+    let result = record.get("model_result_text")?;
+    if result.get("truncated")?.as_bool()? {
+        return None;
     }
+    let payload = provider_payload(result.get("text")?.as_str()?)?;
+    Some((payload.get("provider_invocation")?.as_u64()?, tool))
 }
 
 fn value_has_confirmed_graph_read(value: &Value) -> bool {
@@ -581,12 +590,25 @@ mod tests {
 }
 
 fn confirmed_current_root_source_payload(payload: &Value, symbol: &str) -> bool {
-    payload.get("source_root").and_then(Value::as_str) == Some("confirmed_current_root")
+    let path = match symbol {
+        "worker_slot" => "src/route.rs",
+        "DeliveryRouter::worker_for" => "src/delivery.rs",
+        "alias_retries_stay_on_the_original_ordered_worker" => "tests/alias_retry.rs",
+        "public_facade_keeps_operational_helpers_cohesive" => "tests/public_api.rs",
+        _ => return false,
+    };
+    // Check the actual fixture bytes after Temper's current-checkout source
+    // guard, rather than a provider-supplied source_root text assertion.
+    // The independent trace check above still proves normalized project binding.
+    let root = std::path::Path::new(
+        "benchmarks/agent-sessions/codebase-memory-routing-repair/fixture/repo",
+    );
+    let Ok(source) = std::fs::read_to_string(root.join(path)) else {
+        return false;
+    };
+    payload.get("project").and_then(Value::as_str)
+        == Some("temper-benchmark-codebase-memory-routing-repair")
         && payload.get("qualified_name").and_then(Value::as_str) == Some(symbol)
-        && payload
-            .get("source_path")
-            .and_then(Value::as_str)
-            .is_some_and(|path| path.starts_with("src/") || path.starts_with("tests/"))
-        && payload.get("source").and_then(Value::as_str).is_some()
-        && confirmed_graph_read_payload(payload)
+        && payload.get("file_path").and_then(Value::as_str) == Some(path)
+        && payload.get("source").and_then(Value::as_str) == Some(source.as_str())
 }

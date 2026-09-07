@@ -1,3 +1,7 @@
+#[path = "support/fake_graph_admission.rs"]
+mod fake_graph_admission;
+use fake_graph_admission::run_coding_agent_native_with_tool_config;
+
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -7,7 +11,7 @@ use jig_server::FakeLlm;
 use serde_json::Value as JsonValue;
 use temper_agent::{
     CodingAgentError, ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
-    WorkspaceWorkItem, run_coding_agent_native_with_tool_config,
+    WorkspaceWorkItem,
 };
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,

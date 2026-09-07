@@ -35,6 +35,12 @@ use crate::mcp::{
 use temper_agent_core::AgentContainmentContext;
 
 mod background;
+mod build;
+pub(crate) use build::build_codebase_memory_toolset_with_timeout_and_containment;
+pub use build::{
+    build_codebase_memory_toolset, build_codebase_memory_toolset_with_timeout,
+    build_managed_codebase_memory_toolset,
+};
 mod confirmation;
 mod coverage;
 pub(crate) use coverage::{CoverageService, GraphHandoffTool};
@@ -46,6 +52,7 @@ mod provider;
 mod provider_output;
 mod result_presentation;
 mod scope;
+mod source_guard;
 mod startup;
 #[cfg(test)]
 use startup::effective_mcp_call_timeout;
@@ -244,116 +251,6 @@ impl std::fmt::Display for CodebaseMemoryToolsetError {
 }
 
 impl std::error::Error for CodebaseMemoryToolsetError {}
-
-/// Builds a codebase-memory MCP toolset from the parsed agent tool config and
-/// prepared workspace scope.
-///
-/// Error behavior is mode-dependent:
-///
-/// - absent config or a role mismatch returns an empty, disabled toolset;
-/// - `mode = auto` returns an empty `AutoUnavailable` toolset on MCP
-///   spawn/initialize/list failure;
-/// - `mode = required` returns [`CodebaseMemoryToolsetError`] for those same
-///   startup failures;
-/// - index/bootstrap failures are fatal only in `required`; in `auto` the tools
-///   are exposed with stale/in-progress prompt metadata.
-///
-/// The agent-callable tools are workspace-scoped: `project`/`repo` inputs are
-/// resolved only against aliases derived from [`WorkspaceContext::repos`], and
-/// internal `index_repository` calls are made only for those prepared repo roots.
-pub async fn build_codebase_memory_toolset(
-    config: Option<&AgentToolConfig>,
-    role: &str,
-    context: &WorkspaceContext,
-    cwd: &Path,
-) -> std::result::Result<CodebaseMemoryToolset, CodebaseMemoryToolsetError> {
-    build_codebase_memory_toolset_with_timeout(config, role, context, cwd, Duration::MAX).await
-}
-
-/// Builds the toolset while clamping model-visible MCP calls to the generic
-/// agent tool deadline. Startup and index operations retain their narrower,
-/// purpose-specific limits.
-pub async fn build_codebase_memory_toolset_with_timeout(
-    config: Option<&AgentToolConfig>,
-    role: &str,
-    context: &WorkspaceContext,
-    cwd: &Path,
-    generic_tool_timeout: Duration,
-) -> std::result::Result<CodebaseMemoryToolset, CodebaseMemoryToolsetError> {
-    let containment = default_containment_context();
-    build_codebase_memory_toolset_with_timeout_and_containment(
-        config,
-        role,
-        context,
-        cwd,
-        generic_tool_timeout,
-        &containment,
-    )
-    .await
-}
-
-fn default_containment_context() -> AgentContainmentContext {
-    #[cfg(test)]
-    {
-        crate::containment_tests::containment_context()
-    }
-    #[cfg(not(test))]
-    AgentContainmentContext::production(None)
-}
-
-pub(crate) async fn build_codebase_memory_toolset_with_timeout_and_containment(
-    config: Option<&AgentToolConfig>,
-    role: &str,
-    context: &WorkspaceContext,
-    cwd: &Path,
-    generic_tool_timeout: Duration,
-    containment: &AgentContainmentContext,
-) -> std::result::Result<CodebaseMemoryToolset, CodebaseMemoryToolsetError> {
-    let Some(codebase_memory) = config.and_then(|config| config.codebase_memory.as_ref()) else {
-        return Ok(CodebaseMemoryToolset::disabled(
-            CodebaseMemoryToolsetStatus::NotConfigured,
-        ));
-    };
-    if !codebase_memory.applies_to_role(role) {
-        return Ok(CodebaseMemoryToolset::disabled(
-            CodebaseMemoryToolsetStatus::NotEnabledForRole {
-                role: role.to_string(),
-            },
-        ));
-    }
-
-    let scope = match WorkspaceScope::from_context(context, cwd) {
-        Ok(scope) => scope,
-        Err(error) if codebase_memory.mode == CodebaseMemoryMode::Auto => {
-            return Ok(CodebaseMemoryToolset::disabled(
-                CodebaseMemoryToolsetStatus::AutoUnavailable { reason: error },
-            ));
-        }
-        Err(error) => {
-            return Err(CodebaseMemoryToolsetError::required_setup(format!(
-                "required codebase-memory workspace scope failed: {error}"
-            )));
-        }
-    };
-
-    match start_toolset(
-        codebase_memory,
-        role,
-        scope,
-        generic_tool_timeout,
-        containment,
-    )
-    .await
-    {
-        Ok(toolset) => Ok(toolset),
-        Err(error) if codebase_memory.mode == CodebaseMemoryMode::Auto => Ok(
-            CodebaseMemoryToolset::disabled(CodebaseMemoryToolsetStatus::AutoUnavailable {
-                reason: error.to_string(),
-            }),
-        ),
-        Err(error) => Err(CodebaseMemoryToolsetError::required_startup(error)),
-    }
-}
 
 struct CodebaseMemoryTool {
     client: StdioMcpClient,

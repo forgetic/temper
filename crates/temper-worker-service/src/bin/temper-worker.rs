@@ -18,6 +18,12 @@ Long-polls the engine for coding jobs and runs each by spawning the out-of-proce
 `temper serve worker`.";
 
 fn main() -> ExitCode {
+    if let Some(status) =
+        temper_worker::dispatch_provider_bootstrap_helper(std::env::args_os().skip(1))
+    {
+        return status;
+    }
+
     #[cfg(target_os = "linux")]
     if let Some(status) =
         temper_worker::dispatch_linux_supervisor_helper(std::env::args_os().skip(1))

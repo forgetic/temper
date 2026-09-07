@@ -25,11 +25,13 @@ glibc version.
 From the Temper repository, put the staged directory first on `PATH` and run:
 
 ```sh
-PATH=/absolute/staging/directory:$PATH cargo test -p temper-agent --lib \
-  installed_provider_release_supports_temper_graph_tools -- --ignored
+PATH=/absolute/staging/directory:$PATH cargo dev-test-build
+PATH=/absolute/staging/directory:$PATH cargo nextest run --workspace \
+  -E 'test(installed_provider_release_supports_temper_graph_tools)' --run-ignored only
 ```
 
-This Unix smoke test requires the actual 0.10.8 executable. It checks MCP
+The build includes the shared-owner helper used by the ignored Linux smoke test.
+The test requires the actual 0.10.8 executable. It checks MCP
 initialization/version and Temper's provider contract, indexes a tiny repository
 through Temper's blocking stable-project binding, then exercises graph search,
 source snippets, caller tracing, code search, and cited-path/scoped coverage through
@@ -84,3 +86,43 @@ The 0.10.8 inventory uses `offset`/`limit` pagination and does not expose the
 cache instance identity required by Temper's deletion safeguards. Maintenance
 therefore fails closed without deleting projects; the graph-tool smoke does not
 claim to validate cache reclamation. Do not bypass that identity requirement.
+
+## Keep one account cohort consistent
+
+Use the same executable build, native coordination ABI and canonical cache root
+for every active provider session under an OS account. Version text alone does
+not establish build identity: record the installed executable digest alongside
+its release and platform archive. Resolve symlinks in cache paths before comparing
+settings. `CBM_RUNTIME_DIR` changes storage paths; it is not an account-isolation
+boundary. Per-job cache overrides under one shared account are test fixtures,
+not a production isolation strategy.
+
+Keep daemon-global environment settings consistent, including cache/runtime
+placement, worker limits, tracing and memory settings. The first activating
+session establishes the daemon configuration. Temper passes operator-resolved
+worker invocation overrides to its bootstrap as well as to its serving child.
+Session-specific allowed-root and tool-profile restrictions have a different
+scope; a bootstrap analysis profile does not narrow the serving session's tools.
+
+To change the build, ABI, cache root or daemon-global settings, first stop new
+admissions and finish/stop every affected account session, including interactive
+clients and other workers. Preserve existing indexes and use the native staged
+installer above. Reconnect affected sessions only after activation completes.
+Do not replace the executable beneath active sessions, delete coordination files,
+or repeatedly spawn through a reported version/build/cache-root conflict.
+
+Native admission and activation are bounded operations that can report cohort
+conflicts. Inspect the provider's daemon, conflict and activation diagnostics in
+the configured runtime/cache locations. In this build the canonical cache's
+`logs/cbm-daemon.log` records daemon operations and `logs/daemon-conflicts.ndjson`
+records cohort conflicts. Retain the closed failure category,
+release/digest and operation timing rather than copying source, secret-bearing
+arguments or host paths into durable Temper telemetry. A one-shot CLI request
+participates in native admission and mutation coordination, then releases its
+session; it is not a permanent keepalive. `daemon start` explicitly requests a
+permanent daemon and is not Temper's lifecycle workaround.
+
+Temper's Linux worker/standalone shared owner preserves other sessions through
+individual job cancellation. Whole-worker/service shutdown still requires orderly
+handling of affected account sessions; see
+[Shared codebase-memory lifetime](../explanation/shared-codebase-memory-lifecycle.md).

@@ -17,9 +17,17 @@ pub(super) fn decision_chain_fake(
                     if message.role != "tool" {
                         return None;
                     }
+                    let result = provider_result(&message.content)?;
+                    let field = match field {
+                        "current_root" | "next" => "qualified_name",
+                        "implementation_source" | "caller_model" | "behavioral_test" => {
+                            if result.pointer("/results/0/kind")?.as_str()? != field { return None; }
+                            "source"
+                        }
+                        other => other,
+                    };
                     let pointer = format!("/results/0/{field}");
-                    provider_result(&message.content)?
-                        .pointer(&pointer)
+                    result.pointer(&pointer)
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
                 })
@@ -66,8 +74,8 @@ pub(super) fn decision_chain_fake(
                 .iter()
                 .filter_map(|message| provider_result(&message.content))
                 .find_map(|result| {
-                    let source = result.pointer(&format!("/results/0/{marker}"))?;
-                    source.as_str()?;
+                    if result.pointer("/results/0/kind")?.as_str()? != marker { return None; }
+                    result.pointer("/results/0/source")?.as_str()?;
                     result.pointer("/results/0/qualified_name")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
@@ -155,25 +163,17 @@ pub(super) fn decision_chain_fake(
                 ])
             }
             (DecisionCase::RootCoherentForest, 2) => {
-                record(DecisionStep::Refinement);
-                tool_reply(
-                    "refine-forest-implementation",
-                    "codebase_memory_search_code",
-                    serde_json::json!({"pattern": next_target()}),
-                )
-            }
-            (DecisionCase::RootCoherentForest, 3) => {
                 record(DecisionStep::ImplementationSource);
                 tool_reply(
                     "read-forest-implementation",
                     "codebase_memory_get_code_snippet",
                     serde_json::json!({
-                        "qualified_name": next_target(),
+                        "qualified_name": recovery_selector("implementation_candidate"),
                         "decision_evidence_kind": "implementation",
                     }),
                 )
             }
-            (DecisionCase::RootCoherentForest, 4) => {
+            (DecisionCase::RootCoherentForest, 3) => {
                 record(DecisionStep::Trace);
                 tool_reply(
                     "trace-forest-implementation",
@@ -184,7 +184,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::RootCoherentForest, 5) => {
+            (DecisionCase::RootCoherentForest, 4) => {
                 record(DecisionStep::CallerSource);
                 tool_reply(
                     "read-forest-caller",
@@ -195,7 +195,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::RootCoherentForest, 6) => {
+            (DecisionCase::RootCoherentForest, 5) => {
                 assert_guidance(
                     view,
                     &[
@@ -210,13 +210,13 @@ pub(super) fn decision_chain_fake(
                     serde_json::json!({
                         "qualified_name": recovery_selector_from(
                             "focused_test_result",
-                            "PRIVATE-PROVIDER-PAYLOAD",
+                            "forest_behavior",
                         ),
                         "decision_evidence_kind": "focused_test",
                     }),
                 )
             }
-            (DecisionCase::RootCoherentForest, 7) => {
+            (DecisionCase::RootCoherentForest, 6) => {
                 assert_guidance(
                     view,
                     &[
@@ -232,7 +232,7 @@ pub(super) fn decision_chain_fake(
                     serde_json::json!({"path": "demo/EVIDENCE.md"}),
                 )
             }
-            (DecisionCase::RootCoherentForest, 8) => {
+            (DecisionCase::RootCoherentForest, 7) => {
                 record(DecisionStep::Mutation);
                 tool_reply(
                     "mutate-after-forest-evidence",
@@ -243,7 +243,7 @@ pub(super) fn decision_chain_fake(
                     }),
                 )
             }
-            (DecisionCase::RootCoherentForest, 9) => {
+            (DecisionCase::RootCoherentForest, 8) => {
                 assert!(
                     !mutation_was_blocked(),
                     "complete forest plus exact read must admit the matching mutation",

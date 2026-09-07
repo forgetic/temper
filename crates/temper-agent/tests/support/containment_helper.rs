@@ -3,6 +3,12 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    if let Some(status) =
+        temper_agent::dispatch_provider_bootstrap_helper(std::env::args_os().skip(1))
+    {
+        return status;
+    }
+
     #[cfg(target_os = "linux")]
     if let Some(status) =
         temper_agent::dispatch_linux_supervisor_helper(std::env::args_os().skip(1))

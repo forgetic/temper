@@ -109,7 +109,8 @@ temper-engine = ["temper-forge", "temper-engine-io", "temper-log", "temper-runne
 # ===========================================================================
 temper-worker-io = []
 temper-process-containment = []
-temper-worker = ["temper-process-containment", "temper-protocol-activity", "temper-protocol-worker", "temper-worker-io", "temper-protocol-agent", "temper-scenario-core", "temper-verdict"]
+temper-codebase-memory-runtime = ["temper-process-containment", "temper-protocol-agent"]
+temper-worker = ["temper-codebase-memory-runtime", "temper-process-containment", "temper-protocol-activity", "temper-protocol-worker", "temper-worker-io", "temper-protocol-agent", "temper-scenario-core", "temper-verdict"]
 
 # ===========================================================================
 # AGENT layer (formerly anvil). Consumes the worker-exposed agent protocol.
@@ -129,7 +130,7 @@ temper-agent-core = ["temper-agent-io", "temper-process-containment", "temper-pr
 # zero internal deps, so no implementation leaks across tiers; but it IS an
 # additional upstream protocol. Drop it from this list if you want CI to force
 # the agent down to exactly one protocol crate.
-temper-agent = ["temper-agent-core", "temper-agent-io", "temper-protocol-activity", "temper-protocol-agent", "temper-protocol-interaction", "temper-verdict"]
+temper-agent = ["temper-codebase-memory-runtime", "temper-agent-core", "temper-agent-io", "temper-protocol-activity", "temper-protocol-agent", "temper-protocol-interaction", "temper-verdict"]
 
 # ===========================================================================
 # COMPOSITION ROOT + shared test harnesses — span tiers by design, so they get
@@ -152,7 +153,7 @@ temper-log = ["temper-protocol-activity"]
 # through the facade factory — no concrete backend dep.
 temper-engine-service = ["temper-config", "temper-engine", "temper-engine-io", "temper-forge", "temper-workflow", "temper-reference-delivery", "temper-log"]
 temper-worker-service = ["temper-config", "temper-worker", "temper-worker-io", "temper-log"]
-temper-agent-session = ["temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-protocol-activity", "temper-protocol-agent", "temper-log"]
+temper-agent-session = ["temper-codebase-memory-runtime", "temper-config", "temper-agent", "temper-agent-core", "temper-agent-io", "temper-protocol-activity", "temper-protocol-agent", "temper-log"]
 
 # Reusable co-resident worker→daemon carrier. This is deliberate cross-tier
 # composition glue kept out of `temper-worker` so slim worker builds do not
@@ -182,7 +183,7 @@ temper-cli-config = ["temper-cli-common", "temper-config", "temper-workflow"]
 # in-process agent runner lives here; reusable worker→daemon transport glue is
 # pulled from temper-daemon-transport). Builds its forge through the facade
 # factory — no concrete backend dep.
-temper-cli-daemon = ["temper-config", "temper-log", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-protocol-activity", "temper-protocol-agent", "temper-daemon-transport", "temper-engine", "temper-engine-io", "temper-forge", "temper-reference-delivery", "temper-worker", "temper-process-containment", "temper-protocol-worker", "temper-workflow"]
+temper-cli-daemon = ["temper-codebase-memory-runtime", "temper-config", "temper-log", "temper-engine-service", "temper-worker-service", "temper-agent-session", "temper-agent", "temper-protocol-activity", "temper-protocol-agent", "temper-daemon-transport", "temper-engine", "temper-engine-io", "temper-forge", "temper-reference-delivery", "temper-worker", "temper-process-containment", "temper-protocol-worker", "temper-workflow"]
 
 # `temper init`: interactive first-run. Orchestration only — config writing in
 # temper-config, provisioning inlined directly via temper-provision. Builds its

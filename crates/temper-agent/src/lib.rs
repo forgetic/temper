@@ -72,3 +72,6 @@ pub use temper_agent_core::{
 };
 pub use temper_protocol_interaction::{ConversationReply, ConversationRequest};
 pub use usage::RunTotals;
+
+#[doc(hidden)]
+pub use temper_codebase_memory_runtime::dispatch_provider_bootstrap_helper;

@@ -247,6 +247,21 @@ impl ScopeFactory {
         })
     }
 
+    pub(crate) fn codebase_memory_admission(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
+        self.lifecycle_projection.as_ref().map(|projection| {
+            let projection = Arc::clone(projection);
+            Arc::new(move || {
+                projection.emit(
+                    temper_protocol_agent::AgentLifecycleScopeV1 {
+                        id: "codebase_memory".into(),
+                        parent_id: None,
+                    },
+                    temper_protocol_agent::AgentLifecycleEventV1::CodebaseMemoryServingAdmitted,
+                )
+            }) as Arc<dyn Fn() + Send + Sync>
+        })
+    }
+
     /// Mint one nested invocation scope with an explicit parent. Calling this
     /// method for every tool execution makes concurrent sub-agents distinct.
     pub fn child(

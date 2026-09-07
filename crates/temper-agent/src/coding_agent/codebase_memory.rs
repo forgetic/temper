@@ -77,6 +77,7 @@ pub(super) async fn prepare_codebase_memory_tools(
         cwd,
         Duration::MAX,
         &crate::containment_tests::containment_context(),
+        Some(&|| {}),
     )
     .await
 }
@@ -88,6 +89,7 @@ pub(super) async fn prepare_codebase_memory_tools_with_timeout(
     cwd: &Path,
     generic_tool_timeout: Duration,
     containment: &AgentContainmentContext,
+    serving_admitted: Option<&(dyn Fn() + Send + Sync)>,
 ) -> Result<PreparedCodebaseMemoryTools, CodingAgentError> {
     let toolset = build_codebase_memory_toolset_with_timeout_and_containment(
         tool_config,
@@ -96,6 +98,7 @@ pub(super) async fn prepare_codebase_memory_tools_with_timeout(
         cwd,
         generic_tool_timeout,
         containment,
+        serving_admitted,
     )
     .await
     .map_err(|error| CodingAgentError::CodebaseMemory(error.to_string()))?;

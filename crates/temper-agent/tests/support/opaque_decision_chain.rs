@@ -1,4 +1,7 @@
 //! Native-Jig coverage for opaque result-derived graph decision chains.
+#[path = "fake_graph_admission.rs"]
+mod fake_graph_admission;
+use fake_graph_admission::run_coding_agent_native_with_tool_config;
 
 use std::fs;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -7,7 +10,7 @@ use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_agent::{
     CodingAgentError, ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository,
-    WorkspaceWorkItem, run_coding_agent_native_with_tool_config,
+    WorkspaceWorkItem,
 };
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
@@ -126,6 +129,16 @@ pub fn run(case: DecisionCase) -> DecisionRun {
         .expect("seed independent conventional fallback target");
         checkout.git(&["add", "FALLBACK.md"]);
         checkout.git(&["commit", "-m", "seed independent fallback target"]);
+    }
+
+    if case == DecisionCase::RootCoherentForest {
+        fs::write(
+            checkout.repo_path().join("PRIVATE_GRAPH_SOURCE.md"),
+            "PRIVATE-PROVIDER-SOURCE",
+        )
+        .unwrap();
+        checkout.git(&["add", "PRIVATE_GRAPH_SOURCE.md"]);
+        checkout.git(&["commit", "-m", "seed private graph source"]);
     }
 
     let observed_steps = Arc::new(Mutex::new(Vec::new()));

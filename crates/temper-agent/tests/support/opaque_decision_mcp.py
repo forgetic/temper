@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import sys
 import uuid
 
@@ -16,6 +17,7 @@ def opaque():
     return "crate::opaque_" + uuid.uuid4().hex
 
 targets = {name: opaque() for name in ["root", "refinement", "implementation", "caller", "behavior", "forest_behavior", "selectorless_implementation"]}
+targets["forest_behavior"] = "crate::forest_behavior_" + uuid.uuid4().hex
 fallback_targets = [f"crate.fallback.nonviable_{index}" for index in range(3)]
 
 def send(value):
@@ -39,7 +41,9 @@ def response(name, args):
     if name == "search_graph":
         query = args.get("query")
         if query == "oversized-unretained":
-            return {"payload": "x" * 20000}
+            # Valid typed metadata fits the source guard but exceeds the
+            # presentation budget after decision-guidance reservation.
+            return result(qualified_name="x" * 15000)
         if query in {"nonviable-one", "nonviable-two", "nonviable-three"}:
             index = ["nonviable-one", "nonviable-two", "nonviable-three"].index(query)
             return result(qualified_name=fallback_targets[index])
@@ -91,9 +95,9 @@ def response(name, args):
             "callers": [],
             "results": [{"qualified_name": args.get("function_name")}],
         }
-    if name == "trace_path" and args.get("function_name") == targets["implementation"]:
+    if name == "trace_path" and args.get("function_name") in {targets["implementation"], targets["refinement"]}:
         return {
-            "function": {"qualified_name": targets["implementation"]},
+            "function": {"qualified_name": args.get("function_name")},
             "callers": [{"qualified_name": targets["caller"]}],
             "results": [{"next": targets["caller"], "qualified_name": targets["caller"]}],
         }
@@ -110,49 +114,51 @@ def response(name, args):
             next=targets["selectorless_implementation"],
             qualified_name=targets["selectorless_implementation"],
             file_path="EVIDENCE.md",
-            source=opaque(),
-            implementation_source=opaque(),
+            source=Path("EVIDENCE.md").read_text(),
+            kind="implementation_source",
         )
     if name == "get_code_snippet" and args.get("qualified_name") in fallback_targets:
         return result(
             qualified_name=args.get("qualified_name"),
             file_path="EVIDENCE.md",
-            source=opaque(),
-            implementation_source=opaque(),
+            source=Path("EVIDENCE.md").read_text(),
+            kind="implementation_source",
         )
-    if name == "get_code_snippet" and args.get("qualified_name") == targets["implementation"]:
+    if name == "get_code_snippet" and args.get("qualified_name") in {targets["implementation"], targets["refinement"]}:
         return result(
-            next=targets["implementation"],
-            qualified_name=targets["implementation"],
+            next=args.get("qualified_name"),
+            qualified_name=args.get("qualified_name"),
             file_path="EVIDENCE.md",
-            source=opaque(),
-            implementation_source=opaque(),
+            source=Path("EVIDENCE.md").read_text(),
+            kind="implementation_source",
         )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["caller"]:
         return result(
             next=targets["caller"],
             qualified_name=targets["caller"],
             file_path="EVIDENCE.md",
-            source=opaque(),
-            caller_model=opaque(),
+            source=Path("EVIDENCE.md").read_text(),
+            kind="caller_model",
         )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["behavior"]:
         return result(
             qualified_name=targets["behavior"],
             file_path="EVIDENCE.md",
-            source=opaque(),
-            behavioral_test=opaque(),
+            source=Path("EVIDENCE.md").read_text(),
+            kind="behavioral_test",
             is_test=True,
         )
     if name == "get_code_snippet" and args.get("qualified_name") == targets["forest_behavior"]:
         return result(
             qualified_name=targets["forest_behavior"],
-            file_path="EVIDENCE.md",
-            source="PRIVATE-PROVIDER-SOURCE",
+            file_path="PRIVATE_GRAPH_SOURCE.md",
+            source=Path("PRIVATE_GRAPH_SOURCE.md").read_text(),
             provider_payload="PRIVATE-PROVIDER-PAYLOAD",
-            behavioral_test=opaque(),
+            kind="behavioral_test",
             is_test=True,
         )
+    if name == "get_code_snippet":
+        return result(qualified_name=opaque(), file_path="README.md", source=Path("README.md").read_text())
     return result(qualified_name=opaque(), evidence=opaque())
 
 for line in sys.stdin:

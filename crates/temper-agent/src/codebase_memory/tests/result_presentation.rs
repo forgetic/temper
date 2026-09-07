@@ -26,6 +26,14 @@ fn successful_targeted_results_present_only_a_bounded_provider_neutral_decision_
     let workspace = tempfile::tempdir().expect("workspace");
     let log_path = workspace.path().join("decision-anchor.log");
     let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    seed_lineage_sources(&workspace.path().join("demo"));
+    for (symbol, bytes) in [("large", 15_000), ("oversized", 20_000)] {
+        std::fs::write(
+            workspace.path().join(format!("demo/src/{symbol}.rs")),
+            format!("fn {symbol}() {{}} // {}\n", "x".repeat(bytes)),
+        )
+        .unwrap();
+    }
 
     temper_agent_io::block_on(async move {
         let tools = build_codebase_memory_toolset(
@@ -136,6 +144,27 @@ fn successful_targeted_results_present_only_a_bounded_provider_neutral_decision_
             "truncated results retain V1 correlation but cannot create lineage"
         );
         assert!(output_text(&truncated).len() <= MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
+
+        let oversized = search
+            .execute(
+                "oversized",
+                json!({"query": "oversized", "pattern": FIXTURE_TARGET}),
+                None,
+            )
+            .await
+            .expect("oversized source result is bounded unavailability");
+        assert!(oversized.is_error);
+        assert!(!output_text(&oversized).contains("fn oversized"));
+        assert!(!output_text(&oversized).contains(DECISION_ANCHOR));
+        assert!(
+            oversized
+                .details
+                .as_ref()
+                .unwrap()
+                .get(SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY)
+                .is_none()
+        );
+        assert!(output_text(&oversized).len() <= MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
     });
 }
 
@@ -145,6 +174,7 @@ fn wrapper_carries_only_typed_equivalent_provider_identities_under_one_opaque_ro
     let workspace = tempfile::tempdir().expect("workspace");
     let log_path = workspace.path().join("lineage.log");
     let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    seed_lineage_sources(&workspace.path().join("demo"));
 
     temper_agent_io::block_on(async move {
         let tools = build_codebase_memory_toolset(
@@ -221,11 +251,7 @@ fn wrapper_carries_only_typed_equivalent_provider_identities_under_one_opaque_ro
             source_output.details,
         ])
         .unwrap();
-        for raw in [
-            "crate::engine::run",
-            "/private/src/lib.rs",
-            "PRIVATE-SOURCE",
-        ] {
+        for raw in ["crate::engine::run", "src/lib.rs", "PRIVATE-SOURCE"] {
             assert!(!rendered.contains(raw), "details retained {raw:?}");
         }
     });
@@ -238,6 +264,7 @@ fn wrapper_adds_only_opaque_recovery_references_to_private_typed_parts() {
     let workspace = tempfile::tempdir().expect("workspace");
     let log_path = workspace.path().join("typed-parts.log");
     let context = workspace_context(workspace.path(), &[("acme", "demo", "demo")]);
+    seed_lineage_sources(&workspace.path().join("demo"));
 
     temper_agent_io::block_on(async move {
         let tools = build_codebase_memory_toolset(
@@ -275,12 +302,12 @@ fn wrapper_adds_only_opaque_recovery_references_to_private_typed_parts() {
             .expect("root result");
         let root = lineage(&root_output);
         let root_text = output_text(&root_output);
-        assert!(root_text.starts_with("MODEL-VISIBLE-TYPED-RESULT symbol=run"));
+        assert!(root_text.contains("\"qualified_name\":\"crate::engine::run\""));
         assert!(root_text.contains(DECISION_ANCHOR));
         assert!(root_text.contains("[Recovery selector references:"));
         assert!(
             !root_text.contains(PRIVATE_TYPED_VALUE),
-            "structured-only values must not alter model-visible text"
+            "unverified optional provider text must not alter model-visible source"
         );
 
         let trace_output = trace

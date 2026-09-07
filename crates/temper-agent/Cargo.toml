@@ -7,6 +7,7 @@ license.workspace = true
 description = "Temper-specific provider/auth/decision core for the temper agent. (Formerly anvil-temper-agent.)"
 
 [dependencies]
+temper-codebase-memory-runtime = { path = "../temper-codebase-memory-runtime" }
 skein.workspace = true
 async-trait.workspace = true
 tracing = { workspace = true }

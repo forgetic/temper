@@ -53,6 +53,7 @@ members = [
     "crates/temper-protocol-agent",
     "crates/temper-worker-io",
     "crates/temper-process-containment",
+    "crates/temper-codebase-memory-runtime",
     "crates/temper-worker",
     # Merged from anvil (the coding/decision agent):
     "crates/temper-agent-core",

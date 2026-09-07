@@ -90,11 +90,24 @@ fn codebase_memory_bridge_wraps_allowed_tool_and_filters_destructive_tools() {
         );
         let text = output_text(&output);
         assert!(!output.is_error);
-        assert!(text.contains("search_code result"));
-        assert!(text.contains("needle"));
+        assert!(text.contains("FixtureMatch"));
         assert!(text.contains(&provider_key));
-        assert!(text.contains("output truncated"));
+        let calls = calls_named(&log_path, "search_code");
+        assert_eq!(calls[0]["arguments"]["query"], "needle");
+        assert_eq!(calls[0]["arguments"]["project"], provider_key);
         assert!(text.len() <= MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
+
+        let architecture = tools
+            .iter()
+            .find(|tool| tool.name() == "codebase_memory_get_architecture")
+            .expect("architecture wrapper present");
+        let bounded = architecture
+            .execute("large", json!({}), None)
+            .await
+            .unwrap();
+        assert!(!bounded.is_error);
+        assert!(output_text(&bounded).contains("output truncated"));
+        assert!(output_text(&bounded).len() <= MAX_CODEBASE_MEMORY_OUTPUT_BYTES);
     });
 }
 

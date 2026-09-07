@@ -38,6 +38,11 @@ Commands:
 
 fn main() -> ExitCode {
     #[cfg(target_os = "linux")]
+    if let Some(status) = temper_worker::dispatch_provider_bootstrap_helper(env::args_os().skip(1))
+    {
+        return status;
+    }
+    #[cfg(target_os = "linux")]
     if let Some(status) = temper_worker::dispatch_linux_supervisor_helper(env::args_os().skip(1)) {
         return status;
     }

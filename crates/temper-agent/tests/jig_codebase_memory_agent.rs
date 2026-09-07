@@ -1,3 +1,7 @@
+#[path = "support/fake_graph_admission.rs"]
+mod fake_graph_admission;
+use fake_graph_admission::run_coding_agent_native_with_tool_config;
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,7 +11,6 @@ use jig_core::{Reply, Script, StopReason, Turn};
 use jig_server::FakeLlm;
 use temper_agent::{
     ProviderConfig, WorkspaceContext, WorkspaceGuidance, WorkspaceRepository, WorkspaceWorkItem,
-    run_coding_agent_native_with_tool_config,
 };
 use temper_protocol_agent::{
     AgentToolConfig, CodebaseMemoryIndex, CodebaseMemoryMode, CodebaseMemoryToolConfig,
@@ -24,6 +27,12 @@ const FAKE_MCP_DESCRIPTION_SENTINEL: &str = "FAKE-MCP-DESCRIPTION-SENTINEL-384";
 fn jig_coding_agent_can_call_registered_codebase_memory_tool() {
     let checkout = TempCheckout::new("jig-codebase-memory-tool-call");
     checkout.init_git();
+    fs::write(
+        checkout.repo_path().join("GRAPH_SOURCE.md"),
+        "FAKE_MCP_SEARCH_RESULT\n",
+    )
+    .unwrap();
+    checkout.git(&["add", "GRAPH_SOURCE.md"]);
     let notes_path = checkout.repo_path().join("MEMORY_NOTES.md");
     fs::write(&notes_path, "pending exact read\n").expect("seed exact-read target");
     checkout.git(&["add", "MEMORY_NOTES.md"]);
@@ -385,6 +394,7 @@ fn fake_codebase_memory_mcp_script() -> tempfile::TempDir {
         r#"
 import json
 import sys
+from pathlib import Path
 
 TOOLS = [
     {"name": "search_graph", "description": "Semantic graph search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "project": {"type": "string"}}, "required": ["query"]}},
@@ -417,7 +427,7 @@ for line in sys.stdin:
         if name == "index_status":
             text = json.dumps({"project": args.get("project", ""), "status": "fresh"})
         elif name == "search_code":
-            text = json.dumps({"results": [{"qualified_name": "crate::WidgetService", "summary": "FAKE_MCP_SEARCH_RESULT"}]})
+            text = json.dumps({"results": [{"qualified_name": "crate::WidgetService", "file_path": "GRAPH_SOURCE.md", "source": Path("GRAPH_SOURCE.md").read_text()}]})
         elif name == "search_graph" and args.get("query") == "widget service notes behavior":
             text = json.dumps({"results": [{"qualified_name": "crate::WidgetTest", "is_test": True}]})
         elif name == "trace_path" and args.get("function_name") == "crate::WidgetService":
@@ -425,7 +435,7 @@ for line in sys.stdin:
         elif name == "trace_path" and args.get("function_name") == "crate::WidgetCaller":
             text = json.dumps({"function": {"qualified_name": "crate::WidgetCaller"}, "callers": [{"qualified_name": "crate::WidgetTest", "is_test": True}]})
         elif name == "get_code_snippet":
-            payload = {"qualified_name": args.get("qualified_name"), "file_path": "MEMORY_NOTES.md", "source": "typed source"}
+            payload = {"qualified_name": args.get("qualified_name"), "file_path": "MEMORY_NOTES.md", "source": Path("MEMORY_NOTES.md").read_text()}
             if args.get("qualified_name") == "crate::WidgetTest":
                 payload["is_test"] = True
             text = json.dumps(payload)

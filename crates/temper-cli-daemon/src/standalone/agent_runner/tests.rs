@@ -336,7 +336,7 @@ fn in_process_runner_stores_tool_config_and_filters_by_role() {
 }
 
 #[test]
-fn in_process_runner_passes_tool_config_to_native_loop() {
+fn in_process_runner_passes_tool_config_to_parent_bootstrap() {
     let tool_config = required_bad_tool_config_for_role("architect");
     temper_engine_io::block_on_with(move |_cx, handle| async move {
         let provider = ProviderConfig::new(
@@ -357,11 +357,7 @@ fn in_process_runner_passes_tool_config_to_native_loop() {
             .expect_err("required codebase-memory startup failure aborts run");
         assert_eq!(error.class, FailureClass::Transient);
         assert!(error.message.contains("codebase-memory tool setup failed"));
-        assert!(
-            error
-                .message
-                .contains("required codebase-memory MCP startup failed")
-        );
+        assert!(error.message.contains("shared provider bootstrap:"));
     });
 }
 
@@ -413,8 +409,8 @@ fn in_process_terminal_failures_never_capture_tool_diagnostics() {
             assert_eq!(error.class, FailureClass::Transient);
             for sentinel in RAW_ERROR_SENTINELS {
                 assert!(
-                    error.message.contains(sentinel),
-                    "job diagnostics retain {sentinel}"
+                    !error.message.contains(sentinel),
+                    "bootstrap diagnostics leaked {sentinel}"
                 );
             }
 

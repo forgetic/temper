@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_passes_tool_config_to_native_loop() {
+    fn drive_passes_tool_config_and_requires_parent_admission() {
         let temp = tempfile::tempdir().expect("tempdir");
         let result_path = temp.path().join("result.json");
         let config = AgentConfig::new(
@@ -279,10 +279,10 @@ mod tests {
             result_path.display().to_string(),
             None,
         )
-        .expect_err("required codebase-memory startup failure aborts session");
+        .expect_err("required graph tools without parent admission abort the session");
 
         assert!(error.contains("codebase-memory tool setup failed"));
-        assert!(error.contains("required codebase-memory MCP startup failed"));
+        assert!(error.contains("codebase-memory requires active parent-owned provider admission"));
         assert!(!result_path.exists());
     }
 

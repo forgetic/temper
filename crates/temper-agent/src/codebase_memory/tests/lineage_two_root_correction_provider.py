@@ -80,12 +80,20 @@ def get_code_snippet(symbol):
         return None
     leaf = symbol.rsplit(".", 1)[-1]
     qualified_symbol = "temper-v1-production.tests.route.keeps_worker_affinity" if symbol == "keeps_worker_affinity" else symbol
+    with open(paths[symbol], "r", encoding="utf-8", newline="") as handle:
+        lines = handle.readlines()
+    selected = [(number, line) for number, line in enumerate(lines, 1)
+                if line.lstrip().startswith(f"fn {leaf}(")]
+    assert len(selected) == 1, "fixture must contain the exact selected function"
+    number, source = selected[0]
     payload = {
         "name": leaf,
         "qualified_name": qualified_symbol,
         "label": "Function",
         "file_path": paths[symbol],
-        "source": f"// PRIVATE-TWO-ROOT-SOURCE\nfn {leaf}() {{}}",
+        "source": source,
+        "start_line": number,
+        "end_line": number,
         "callers": 0,
         "callees": 0,
     }

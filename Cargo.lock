@@ -1753,6 +1753,7 @@ dependencies = [
  "skein",
  "temper-agent-core",
  "temper-agent-io",
+ "temper-codebase-memory-runtime",
  "temper-process-containment",
  "temper-protocol-activity",
  "temper-protocol-agent",
@@ -1807,6 +1808,7 @@ dependencies = [
  "temper-agent-core",
  "temper-agent-io",
  "temper-benchmark-cli",
+ "temper-codebase-memory-runtime",
  "temper-log",
  "temper-process-containment",
  "temper-protocol-activity",
@@ -1891,6 +1893,7 @@ dependencies = [
  "skein",
  "temper-agent",
  "temper-agent-session",
+ "temper-codebase-memory-runtime",
  "temper-config",
  "temper-daemon-transport",
  "temper-engine",
@@ -1930,6 +1933,18 @@ dependencies = [
  "temper-workflow",
  "tempfile",
  "toml",
+ "uuid",
+]
+
+[[package]]
+name = "temper-codebase-memory-runtime"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "temper-process-containment",
+ "temper-protocol-agent",
+ "tracing",
  "uuid",
 ]
 
@@ -2443,6 +2458,7 @@ dependencies = [
  "skein",
  "temper-agent",
  "temper-agent-core",
+ "temper-codebase-memory-runtime",
  "temper-daemon-transport",
  "temper-engine",
  "temper-engine-io",

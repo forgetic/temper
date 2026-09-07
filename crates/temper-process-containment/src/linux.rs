@@ -18,9 +18,11 @@ use crate::{
 };
 
 mod helper;
+mod natural_lifetime;
 mod process;
 mod protocol;
 
+pub use natural_lifetime::run_linux_transient_descendant_owner;
 use process::PidFd;
 use protocol::{ProtocolFrame, SupervisorClient};
 

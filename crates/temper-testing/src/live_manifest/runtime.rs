@@ -448,16 +448,30 @@ impl<'a> LiveExecutionContext<'a> {
                 ConvergenceStrategy::CodebaseMemory => {
                     let fake = required_ref(&self.fake, "jig.fake_llm")?.codebase()?;
                     let mcp = required_ref(&self.mcp, "mcp.fake_codebase_memory.start")?;
-                    let (state, evidence) = super::codebase_memory::converge(
-                        forge,
-                        repository,
-                        primary_issue,
-                        &self.harness.admin_user,
-                        &mut standalone,
-                        timeout,
-                        fake,
-                        mcp,
-                    )?;
+                    let (state, evidence) = if let Some(control) = fake.shared_lifecycle() {
+                        super::codebase_memory::shared_lifecycle::converge(
+                            forge,
+                            repository,
+                            &self.issues,
+                            &self.harness.admin_user,
+                            &mut standalone,
+                            timeout,
+                            control,
+                            mcp,
+                            &self.logs.standalone_log,
+                        )?
+                    } else {
+                        super::codebase_memory::converge(
+                            forge,
+                            repository,
+                            primary_issue,
+                            &self.harness.admin_user,
+                            &mut standalone,
+                            timeout,
+                            fake,
+                            mcp,
+                        )?
+                    };
                     (state, None, Some(evidence), None)
                 }
                 ConvergenceStrategy::ImplementationPrHandoff => {

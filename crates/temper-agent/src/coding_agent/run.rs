@@ -355,6 +355,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
         None => containment,
     };
     cancellation.install_emergency_registry(containment.emergency_termination_registry());
+    let serving_admitted = scope_factory.codebase_memory_admission();
     let codebase_memory = run_until_agent_cancellation(
         &cancellation,
         prepare_codebase_memory_tools_with_timeout(
@@ -364,6 +365,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
             cwd,
             operation_limits.tool_timeout,
             &containment,
+            serving_admitted.as_deref(),
         ),
     )
     .await

@@ -437,14 +437,7 @@ fn verify_controlled_benchmark(root: &Path, cli_condition: &str) -> Result<(), S
             benchmark::verify_typed_graph_correlation_records(&trace)?;
             benchmark::verify_decision_gap_recovery(&trace)?;
             benchmark::verify_provider_invocations(&trace)?;
-            for expected in [
-                "cold stable upsert is ready",
-                "warm stable project remains ready",
-            ] {
-                if !trace.contains(expected) {
-                    return Err(format!("enabled trace omitted {expected:?}"));
-                }
-            }
+            benchmark::verify_structured_readiness(&trace)?;
             if !benchmark::trace_has_confirmed_graph_read(&trace) {
                 return Err(
                     "enabled trace did not prove graph reads used the confirmed normalized provider identity"
