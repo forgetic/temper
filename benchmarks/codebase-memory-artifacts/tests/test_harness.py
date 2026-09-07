@@ -18,6 +18,7 @@ from reporting import build_report, project_sample
 from native import NativeSession
 from source import checkout, git
 from protocol import McpClient
+from accounting import AccountMeter
 
 
 class HarnessTests(unittest.TestCase):
@@ -198,6 +199,36 @@ class HarnessTests(unittest.TestCase):
         client.close()
         client.process.terminate.assert_called_once()
         self.assertTrue(client.forced_cleanup)
+
+    def test_process_roles_survive_exec_zombie_and_pid_reuse(self):
+        meter = AccountMeter.__new__(AccountMeter)
+        meter.seen, meter.peak, meter.samples = {}, 0, 0
+        def snapshot(start, arguments, state="S", rss=4096):
+            return {"start": start, "arguments": arguments, "command": " ".join(arguments), "state": state, "rss": rss}
+        meter.observe({17: snapshot(100, ["provider", "--tool-profile=analysis"])})
+        meter.observe({17: snapshot(100, ["provider", "cli", "--index-worker", "--index-worker-build", "build"])})
+        meter.observe({17: snapshot(100, [], "Z", 0)})
+        worker = meter.seen[(17, 100)]
+        self.assertTrue(worker["observed_index_worker"])
+        self.assertIn("--index-worker", worker["command"])
+        self.assertEqual((worker["state"], worker["rss"]), ("Z", 0))
+        meter.observe({17: snapshot(200, ["provider", "--tool-profile=analysis"])})
+        self.assertEqual(len(meter.seen), 2)
+        self.assertFalse(meter.seen[(17, 200)]["observed_index_worker"])
+        self.assertTrue(meter.seen[(17, 100)]["observed_index_worker"])
+        self.assertEqual(meter.peak, 4096)
+
+    def test_daemon_role_uses_exact_audited_argument_and_survives_empty_snapshot(self):
+        meter = AccountMeter.__new__(AccountMeter)
+        meter.seen, meter.peak, meter.samples = {}, 0, 0
+        for arguments in (["provider", "--cbm-daemon-internal"], []):
+            meter.observe({19: {"start": 300, "arguments": arguments, "command": " ".join(arguments), "rss": 0}})
+        self.assertTrue(meter.seen[(19, 300)]["observed_daemon"])
+        self.assertEqual(meter.seen[(19, 300)]["command"], "provider --cbm-daemon-internal")
+        arguments = ["/some/--index-worker/path", "--index-worker-build", "--cbm-daemon-internal-extra"]
+        meter.observe({20: {"start": 400, "arguments": arguments, "command": " ".join(arguments), "rss": 0}})
+        self.assertFalse(meter.seen[(20, 400)]["observed_daemon"])
+        self.assertFalse(meter.seen[(20, 400)]["observed_index_worker"])
 
 
 if __name__ == "__main__":

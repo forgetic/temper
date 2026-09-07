@@ -19,12 +19,13 @@ def processes(uid):
             if path.stat().st_uid != uid:
                 continue
             fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+            arguments = [part.decode(errors="replace") for part in (path / "cmdline").read_bytes().split(b"\0") if part]
             # /proc stat fields 22=starttime,24=rss; fields[0] is state(3).
             observed[int(path.name)] = {"start": int(fields[19]), "rss": int(fields[21]) * os.sysconf("SC_PAGE_SIZE"),
                                        "user_seconds": (int(fields[11]) + int(fields[13])) / os.sysconf("SC_CLK_TCK"),
                                        "system_seconds": (int(fields[12]) + int(fields[14])) / os.sysconf("SC_CLK_TCK"),
                                        "state": fields[0], "parent": int(fields[1]),
-                                       "command": (path / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")}
+                                       "arguments": arguments, "command": " ".join(arguments)}
         except (OSError, ValueError, IndexError):
             continue
     return observed
@@ -67,7 +68,7 @@ class AccountMeter:
         self.thread.join()
         previous = resource.getrusage(resource.RUSAGE_CHILDREN)
         live = processes(self.uid)
-        if any("--index-worker" in p["command"] for p in live.values()):
+        if any("--index-worker" in p["arguments"] for p in live.values()):
             raise Refusal("warm-phase-worker-still-active")
         carry_user = sum(p["user_seconds"] for p in live.values())
         carry_system = sum(p["system_seconds"] for p in live.values())
@@ -85,10 +86,7 @@ class AccountMeter:
     def _sample(self):
         while not self.stop.is_set():
             current = processes(self.uid)
-            self.peak = max(self.peak, sum(p["rss"] for p in current.values()))
-            self.samples += 1
-            for pid, data in current.items():
-                self.seen[(pid, data["start"])] = data
+            self.observe(current)
             if self.cache is not None:
                 for path in (self.cache / "logs").glob(".worker-log-*"):
                     if path.name in self.worker_logs:
@@ -101,6 +99,22 @@ class AccountMeter:
                     except OSError:
                         continue
             self.stop.wait(self.interval)
+
+    def observe(self, current):
+        """Retain observed roles across exec and empty exit/zombie cmdlines."""
+        self.peak = max(self.peak, sum(p["rss"] for p in current.values()))
+        self.samples += 1
+        for pid, data in current.items():
+            identity = (pid, data["start"])
+            previous = self.seen.get(identity, {})
+            arguments = data["arguments"]
+            self.seen[identity] = {
+                **data,
+                "command": data["command"] or previous.get("command", ""),
+                "arguments": arguments or previous.get("arguments", []),
+                "observed_daemon": previous.get("observed_daemon", False) or "--cbm-daemon-internal" in arguments,
+                "observed_index_worker": previous.get("observed_index_worker", False) or "--index-worker" in arguments,
+            }
 
     def finish(self, deadline):
         natural = drain(self.uid, deadline)
@@ -115,8 +129,8 @@ class AccountMeter:
                 "peak_concurrent_provider_rss_bytes": self.peak, "rss_sample_count": self.samples,
                 "sample_interval_seconds": self.interval, "account_job_seconds": time.monotonic() - self.started,
                 "observed_process_count": len(self.seen),
-                "observed_daemon_count": sum("--daemon" in d["command"] for d in self.seen.values()),
-                "observed_index_worker_count": sum("--index-worker" in d["command"] for d in self.seen.values())}
+                "observed_daemon_count": sum(d["observed_daemon"] for d in self.seen.values()),
+                "observed_index_worker_count": sum(d["observed_index_worker"] for d in self.seen.values())}
 
 
 def reap():
