@@ -1,0 +1,12 @@
+name: ci
+on: [push]
+jobs:
+  build:
+    runs-on: host
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: validate delivered benchmark contract
+        run: |
+          python3 -I -B report_contract.py benchmark-contract.json
+          python3 -B -m unittest discover -s tests -v

@@ -1,0 +1,119 @@
+{
+  "phases": [
+    {
+      "name": "architect-triage",
+      "when": {
+        "messages_contain": [
+          "ROLE: architect"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "benchmark-architect-read-purpose",
+                "name": "read",
+                "args": {
+                  "path": "service/README.md"
+                }
+              }
+            },
+            {
+              "tool_call": {
+                "id": "benchmark-architect-read-contract",
+                "name": "read",
+                "args": {
+                  "path": "service/report_contract.py"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"verdict\": \"ready_code\", \"body\": \"Deliver `benchmark-contract.json` using exactly the fields and values declared\\nin `report_contract.py`. Read the validator and README, write only that report,\\nand run both the report validator and its focused unit tests before submitting.\\nKeep all seed validation and workflow files unchanged.\\n\\nThis is a Jig delivery contract. Do not include fabricated timing, model usage,\\nprovider usage, or parity results. The required after-convergence host assertion\\nruns the actual benchmark accounting, MCP proxy, and campaign tests separately.\\nReal GPT-6 Astra/xhigh comparisons are established only by the independent\\nfive-pair campaign under `benchmarks/worker-codex/`.\\n\"}"
+        }
+      ]
+    },
+    {
+      "name": "engineer-delivery",
+      "when": {
+        "messages_contain": [
+          "ROLE: engineer"
+        ]
+      },
+      "sequence": [
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "benchmark-read-contract",
+                "name": "read",
+                "args": {
+                  "path": "service/report_contract.py"
+                }
+              }
+            },
+            {
+              "tool_call": {
+                "id": "benchmark-read-report-tests",
+                "name": "read",
+                "args": {
+                  "path": "service/tests/test_report_contract.py"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "benchmark-write-report",
+                "name": "write",
+                "args": {
+                  "path": "service/benchmark-contract.json",
+                  "content": "{\n  \"schema_version\": 1,\n  \"feature\": \"ai/temper#1285\",\n  \"evidence_kind\": \"jig_delivery_contract\",\n  \"real_model_performance_measured\": false,\n  \"real_provider_usage_measured\": false,\n  \"performance_target_met\": false,\n  \"benchmark_task\": \"benchmarks/worker-codex/task.md\",\n  \"independent_harness_checks\": \"required_after_convergence\"\n}\n"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "benchmark-validate-report",
+                "name": "bash",
+                "args": {
+                  "command": "cd service && python3 -I -B report_contract.py benchmark-contract.json && python3 -B -m unittest discover -s tests -v"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "benchmark-submit-report",
+                "name": "submit_for_pr",
+                "args": {
+                  "summary": "Deliver the Jig benchmark contract report without claiming measured model performance or provider usage."
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "text": "{\"summary\": \"Deliver the validated scripted benchmark contract; independent host harness checks remain required.\"}"
+        }
+      ]
+    }
+  ]
+}
