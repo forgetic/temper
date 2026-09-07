@@ -182,6 +182,8 @@ for line in sys.stdin:
                     elif mode == "index-unconfirmed-root":
                         confirmation["status"] = "indexed"
                     tool_result(request["id"], json.dumps(confirmation))
+                elif mode == "missing-inventory":
+                    tool_result(request["id"], json.dumps({"error": "project not found or not indexed", "hint": "Use list_projects to see all indexed projects", "available_projects": ["unrelated-inventory-project"], "count": 1}), True)
                 elif mode in ("missing", "index-hang", "index-error", "index-error-secret", "index-malformed", "index-wrong-project", "index-missing-root", "index-malformed-root", "index-wrong-root", "index-unconfirmed-root", "confirmation-missing-identity", "confirmation-malformed-identity", "confirmation-mismatched-identity", "confirmation-path-keyed-identity", "background-budget-success", "background-budget-timeout"):
                     tool_result(request["id"], json.dumps({"project": project, "status": "missing"}), True)
                 elif mode == "stale":
