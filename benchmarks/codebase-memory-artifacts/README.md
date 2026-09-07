@@ -5,7 +5,8 @@ This opt-in Linux benchmark compares the audited native codebase-memory-mcp
 default persistence setting. The checked-in
 [experiment](../../docs/explanation/codebase-memory-artifacts/experiment.md)
 and [configuration](../../docs/explanation/codebase-memory-artifacts/config.json)
-define the measured dataset and decision rule.
+define the measured dataset and decision rule. The [measured decision](../../docs/explanation/codebase-memory-artifacts/decision.md)
+defers shared artifacts and links every native observation.
 
 ## Run the synthetic workflow
 
@@ -119,10 +120,14 @@ Missing, corrupt, truncated and incompatible-schema artifacts first pass
 through the same immutable-manifest gate as normal consumers. Disposable raw
 provider probes then measure what the installed provider does with those exact
 bad inputs. This deliberately bypasses the wrapper only inside the isolated
-experiment. The bytes are quarantined and recovery uses a fresh named project
-with no artifact; it never deletes or repurposes operator caches. Foreign-root
+experiment. The post-probe artifact directory is quarantined and recovery uses
+a fresh named project with no artifact; it never deletes or repurposes operator caches. Foreign-root
 or stale-source outcomes remain initial refusals even if recovery succeeds.
-Schema mutation tests rejection; it cannot establish next-version compatibility.
+Native indexing can refresh an existing artifact even with persistence disabled;
+quarantine therefore need not retain the original malformed bytes. The measured
+[decision](../../docs/explanation/codebase-memory-artifacts/decision.md) records
+this behavior and its evidence limits. Schema mutation tests rejection; it
+cannot establish next-version compatibility.
 
 The manifest binds source, provider version/build, configuration/ignore
 identity, artifact/metadata checksums, byte sizes and actual SQLite inspection.

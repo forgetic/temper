@@ -8,6 +8,7 @@
 //! the topology proof here so later CLI wiring can reuse the same evidence model.
 
 mod actions_history;
+mod artifact_benchmark;
 mod bundle;
 mod codebase_memory;
 mod convergence;

@@ -1,9 +1,10 @@
-# Agent-session benchmark corpus
+# Benchmark corpus
 
-`benchmarks/` contains repeatable inputs for measuring and describing one coding
-agent session. It is separate from the [`scenarios/`](../scenarios/README.md)
-validation corpus: benchmarks report agent-loop structure and performance,
-while scenarios prove workflow correctness and convergence.
+`benchmarks/` contains repeatable inputs for measuring coding agent sessions
+and codebase-memory operations. It is separate from the
+[`scenarios/`](../scenarios/README.md) validation corpus: benchmarks report
+structure and performance, while scenarios prove workflow correctness and
+convergence.
 
 The operator command is `temper-benchmark`. See
 [Benchmark agent sessions](../docs/how-to/benchmark-agent-sessions.md) for trace
@@ -12,6 +13,15 @@ analysis, harness and live runs, repetitions, retention, and comparisons. The
 implementation crates and process boundary.
 
 ## Checked-in benchmarks
+
+[`codebase-memory-artifacts/`](codebase-memory-artifacts/README.md) is the
+opt-in native graph artifact experiment. It compares clean indexing, artifact
+bootstrap and retained-cache updates using isolated provider state. Its
+[protocol](../docs/explanation/codebase-memory-artifacts/experiment.md) pins
+source revisions, correctness queries, run order and the decision threshold.
+The associated Rust probe crate supplies controlled source mutations. Native
+measurements are separate from its synthetic Jig delivery scenario and from
+the agent-session lane below.
 
 `agent-sessions/cross-cutting-rust-change/` is the deterministic structural
 reference benchmark. It contains:
