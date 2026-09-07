@@ -17,6 +17,10 @@ only when the seed explicitly declares `.temper-artifact-harness`, and records
 their SHA-256 identities. There is no second benchmark implementation under the
 scenario directory.
 
+The architect reads the current report consumer, its product tests, and the
+repository purpose before returning the ready-code specification. This exercises
+the ordinary read-only triage tool loop.
+
 The engineer executes the real harness's explicit `fixture` command, delivers
 its JSON report, and fixes a report consumer that trusts an unqualified decision
 field. Product tests require synthetic reports to defer even if their decision
