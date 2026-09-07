@@ -9,6 +9,10 @@ use crate::{
 const ROUTE_TARGET: &str = "00000000-0000-4000-8000-000000000021";
 const UNRELATED_TARGET: &str = "00000000-0000-4000-8000-000000000022";
 
+mod reported_empty_callers {
+    include!("decision_anchor_reported_empty_callers.rs");
+}
+
 fn source_admission(root: &str, kind: DecisionEvidenceKindV1) -> LineageAdmissionOutcome {
     LineageAdmissionOutcome::Eligible(
         EligibleLineageAdmission::new(

@@ -93,6 +93,11 @@ fn expand_tables(value: &mut Value, depth: usize) -> Option<()> {
 
 fn table_records(object: &Map<String, Value>) -> Option<Vec<Value>> {
     let cols = object.get("cols")?.as_array()?;
+    if cols.is_empty() {
+        return None;
+    }
+    // Empty tables still need a valid schema before they can report absence.
+    row_record(cols, &Value::Array(vec![Value::Null; cols.len()]))?;
     let mut records = Vec::new();
     let mut bytes = 0;
     if let Some(groups) = object.get("groups") {
@@ -100,7 +105,17 @@ fn table_records(object: &Map<String, Value>) -> Option<Vec<Value>> {
             return None;
         }
         for group in groups.as_array()? {
+            if !group
+                .as_object()?
+                .keys()
+                .all(|key| matches!(key.as_str(), "qn_prefix" | "file" | "rows"))
+            {
+                return None;
+            }
             let prefix = group.get("qn_prefix")?.as_str()?;
+            if let Some(file) = group.get("file") {
+                file.as_str()?;
+            }
             for row in group.get("rows")?.as_array()? {
                 let mut record = row_record(cols, row)?;
                 let name = record.get("name")?.as_str()?;

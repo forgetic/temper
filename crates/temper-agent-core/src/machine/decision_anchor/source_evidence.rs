@@ -173,6 +173,7 @@ impl SourceEvidence {
     pub(super) fn needs(&self, gap: DecisionGap) -> bool {
         match gap {
             DecisionGap::Trace => !self.has_trace(),
+            DecisionGap::Evidence(DecisionEvidenceKindV1::Caller) => !self.caller_is_complete(),
             DecisionGap::Evidence(kind) => !self.decision_kinds.contains(&kind),
         }
     }
@@ -184,6 +185,12 @@ impl SourceEvidence {
     pub(super) fn progress_count(&self) -> usize {
         usize::from(self.has_trace())
             + self.decision_kinds.len()
+            + usize::from(
+                self.no_production_callers_reported()
+                    && !self
+                        .decision_kinds
+                        .contains(&DecisionEvidenceKindV1::Caller),
+            )
             + usize::from(self.focused_test_traversal_turn.is_some())
             + usize::from(self.focused_test_fallback_turn.is_some())
     }
@@ -244,10 +251,7 @@ impl SourceEvidence {
                 self.decision_kinds
                     .contains(&DecisionEvidenceKindV1::Implementation),
             )
-            + usize::from(
-                self.decision_kinds
-                    .contains(&DecisionEvidenceKindV1::Caller),
-            )
+            + usize::from(self.caller_is_complete())
     }
 
     pub(super) fn implementation_is_complete(&self) -> bool {
@@ -255,9 +259,20 @@ impl SourceEvidence {
             && self
                 .decision_kinds
                 .contains(&DecisionEvidenceKindV1::Implementation)
-            && self
-                .decision_kinds
-                .contains(&DecisionEvidenceKindV1::Caller)
+            && self.caller_is_complete()
+    }
+
+    fn caller_is_complete(&self) -> bool {
+        self.decision_kinds
+            .contains(&DecisionEvidenceKindV1::Caller)
+            || self.no_production_callers_reported()
+    }
+
+    fn no_production_callers_reported(&self) -> bool {
+        self.has_trace()
+            && !self.caller_selector_available
+            && self.caller_traversal_outcome
+                == Some(CallerDiscoveryOutcomeV1::NoProductionCallersReported)
     }
 
     pub(super) fn focused_test_is_complete(&self) -> bool {

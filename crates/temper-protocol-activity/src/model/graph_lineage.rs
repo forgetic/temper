@@ -97,6 +97,10 @@ pub enum DecisionEvidenceKindV1 {
 pub enum CallerDiscoveryOutcomeV1 {
     EligibleSelectorReturned,
     NoEligibleSelector,
+    /// A complete production-only traversal explicitly reported zero callers.
+    /// This describes the graph, not the absence of real-world callers. The
+    /// implementation, focused-test, and ordinary source-read checks still apply.
+    NoProductionCallersReported,
 }
 
 /// Typed outcome of a provider call intended to discover a focused test.
