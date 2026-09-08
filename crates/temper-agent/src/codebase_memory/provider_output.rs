@@ -68,9 +68,22 @@ fn expand_tables(value: &mut Value, depth: usize) -> Option<()> {
     match value {
         Value::Object(object) => {
             if object.contains_key("cols") {
-                let records = table_records(object)?;
+                let mut records = table_records(object)?;
                 if object.contains_key("results") {
                     return None;
+                }
+                let returned = records.len();
+                if object.get("search_mode").and_then(Value::as_str) == Some("bm25") {
+                    records.retain(|record| !source_less_decorator(record));
+                }
+                let omitted = returned - records.len();
+                if omitted > 0 {
+                    // Keep provider totals/pagination intact: these are omitted
+                    // metadata nodes, not evidence of an empty source query.
+                    if object.contains_key("omitted_non_source_nodes") {
+                        return None;
+                    }
+                    object.insert("omitted_non_source_nodes".to_string(), omitted.into());
                 }
                 object.remove("cols");
                 object.remove("rows");
@@ -89,6 +102,25 @@ fn expand_tables(value: &mut Value, depth: usize) -> Option<()> {
         _ => {}
     }
     Some(())
+}
+
+fn source_less_decorator(value: &Value) -> bool {
+    let Some(record) = value.as_object() else {
+        return false;
+    };
+    // Released BM25 results include e.g. ["<decorator:test>", "Decorator", "", "", rank].
+    // Only this closed, source-less record is metadata. Extra fields (including
+    // nested source) and malformed real source paths must still face the guard.
+    record.len() == 5
+        && record.get("label").and_then(Value::as_str) == Some("Decorator")
+        && record.get("file_path").and_then(Value::as_str) == Some("")
+        && record.get("lines").and_then(Value::as_str) == Some("")
+        && record.get("rank").is_some_and(Value::is_number)
+        && record
+            .get("qualified_name")
+            .and_then(Value::as_str)
+            .and_then(|name| name.strip_prefix("<decorator:")?.strip_suffix('>'))
+            .is_some_and(|name| !name.is_empty())
 }
 
 fn table_records(object: &Map<String, Value>) -> Option<Vec<Value>> {

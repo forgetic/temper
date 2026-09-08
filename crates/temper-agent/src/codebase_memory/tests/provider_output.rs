@@ -80,3 +80,20 @@ fn conflicting_mcp_representations_cannot_be_normalized_into_authority() {
     normalize(&mut response);
     assert!(response.typed_parts.is_none());
 }
+
+#[test]
+fn source_less_decorator_is_omitted_without_rewriting_provider_counts() {
+    let mut response = result(json!({
+        "cols": ["qn", "label", "file", "lines", "rank"],
+        "rows": [["<decorator:test>", "Decorator", "", "", -7.252591004539256]],
+        "total": 1, "has_more": false, "search_mode": "bm25"
+    }));
+    normalize(&mut response);
+    let value: Value = serde_json::from_str(&response.text).unwrap();
+    assert_eq!(value["results"], json!([]));
+    assert_eq!(value["total"], 1);
+    assert_eq!(value["has_more"], false);
+    assert_eq!(value["omitted_non_source_nodes"], 1);
+    assert!(!response.text.contains("<decorator:test>"));
+    assert!(response.typed_parts.is_some());
+}

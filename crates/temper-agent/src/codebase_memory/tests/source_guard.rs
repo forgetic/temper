@@ -194,3 +194,37 @@ fn raw_search_match_content_is_checked_at_its_exact_line() {
         assert_eq!(verify_at_root(root.path(), &mut result), accepted);
     }
 }
+
+#[test]
+fn decorator_metadata_does_not_exempt_source_fields_or_malformed_source_paths() {
+    let root = fixture();
+    let foreign = fixture();
+    for (path, source) in [
+        (json!(""), json!(LOCAL)),
+        (Value::Null, json!(LOCAL)),
+        (json!(foreign.path().join("sentinel.py")), json!(LOCAL)),
+        (json!("sentinel.py"), json!(FOREIGN)),
+        (json!(""), json!({"source": LOCAL})),
+    ] {
+        let mut result = response(json!({
+            "cols": ["qn", "label", "file", "lines", "rank", "source"],
+            "search_mode": "bm25",
+            "rows": [["<decorator:test>", "Decorator", path, "", -7.252591004539256, source]]
+        }));
+        crate::codebase_memory::provider_output::normalize(&mut result);
+        assert!(!verify_at_root(root.path(), &mut result));
+    }
+    for row in [
+        json!(["fixture.sentinel", "Function", "", "", -1]),
+        json!(["fixture.sentinel", "Decorator", "", "", -1]),
+        json!(["<decorator:test>", "Decorator", null, "", -1]),
+        json!(["<decorator:test>", "Decorator", "", "1-2", -1]),
+    ] {
+        let mut result = response(json!({
+            "cols": ["qn", "label", "file", "lines", "rank"], "rows": [row],
+            "search_mode": "bm25"
+        }));
+        crate::codebase_memory::provider_output::normalize(&mut result);
+        assert!(!verify_at_root(root.path(), &mut result));
+    }
+}
