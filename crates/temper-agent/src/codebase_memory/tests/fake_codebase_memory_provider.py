@@ -287,7 +287,10 @@ for line in sys.stdin:
                 payload = {"total": result_count, "has_more": False, "results": results}
                 tool_result(request["id"], json.dumps(payload), structured=payload)
             elif mode == "active-root-overlap-handoff" and name == "trace_path":
-                symbol = args.get("function_name")
+                symbol = {
+                    "temper-v1-production.src.model.affinity_topic": "affinity_topic",
+                    "temper-v1-production.src.route.worker_slot": "worker_slot",
+                }.get(args.get("function_name"))
                 if symbol in ("affinity_topic", "worker_slot"):
                     callers = [
                         {
