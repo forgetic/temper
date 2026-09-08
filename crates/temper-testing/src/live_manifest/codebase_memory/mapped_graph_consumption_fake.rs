@@ -20,6 +20,14 @@ pub(super) fn start(
     request_count: Arc<AtomicUsize>,
     observations: Arc<Mutex<ModelObservations>>,
 ) -> Result<FakeLlm, String> {
+    start_with_reply(request_count, observations, reply)
+}
+
+pub(super) fn start_with_reply(
+    request_count: Arc<AtomicUsize>,
+    observations: Arc<Mutex<ModelObservations>>,
+    reply: fn(&RequestView) -> Reply,
+) -> Result<FakeLlm, String> {
     FakeLlm::start(Script::rule(move |view| {
         if !messages_contain(view, "ROLE: engineer") {
             return Reply::text("unexpected mapped graph-consumption fake-LLM request");
@@ -58,7 +66,7 @@ fn record_observations(view: &RequestView, observations: &mut ModelObservations)
         .any(|message| message.role == "tool" && message.content.len() > MAX_MODEL_MESSAGE_BYTES);
 }
 
-fn reply(view: &RequestView) -> Reply {
+pub(super) fn reply(view: &RequestView) -> Reply {
     match view.prior_tool_results {
         0 => tool_reply(
             "discover-mapped-routing-root",
