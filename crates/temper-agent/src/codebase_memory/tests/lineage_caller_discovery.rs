@@ -86,6 +86,38 @@ fn release_empty_caller_table_reports_zero_only_after_implementation_source() {
 }
 
 #[test]
+fn opaque_trace_preserves_qualified_source_in_provider_echoed_zero_report() {
+    let (mut lineages, root) = implementation_lineage(true);
+    let guidance = lineages.recovery_selector_guidance(&root).unwrap();
+    let reference = guidance
+        .split_once("implementation_evidence_result=")
+        .and_then(|(_, rest)| rest.split([',', '.']).next())
+        .unwrap();
+    let mut input = trace_input();
+    input["function_name"] = json!(reference);
+    lineages
+        .reserve_implementation_trace_reference(&input, Some(&root))
+        .unwrap()
+        .unwrap();
+    let expanded = lineages
+        .expand_recovery_selector(GraphCorrelationToolV1::TracePath.public_name(), &mut input, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(input["function_name"], IMPLEMENTATION);
+    // The real provider echoes the request selector, including short names.
+    let result = normalized(json!({
+        "function": input["function_name"], "direction": "inbound", "mode": "calls",
+        "callers_total": 0, "callers": {"cols": ["name", "hop"], "groups": []}
+    }));
+    let trace = lineages.record_with_expanded_recovery(
+        &correlation(GraphCorrelationTargetKindV1::FunctionName), &input,
+        result.typed_parts.as_deref(), None, Some(&expanded),
+    ).unwrap();
+    assert_eq!(trace.root_binding, root);
+    assert_eq!(trace.caller_discovery, Some(CallerDiscoveryOutcomeV1::NoProductionCallersReported));
+}
+
+#[test]
 fn release_populated_caller_table_preserves_exact_caller_source_admission() {
     let (mut lineages, root) = implementation_lineage(true);
     let trace = record_trace(

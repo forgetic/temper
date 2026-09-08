@@ -408,9 +408,16 @@ impl DecisionAnchorLineages {
             _ => return Err(()),
         };
         let public_reference = input[field].as_str().ok_or(())?.to_string();
-        let provider_value = reference.provider_value(kind).ok_or(())?.to_string();
         let is_trace_reference = GraphCorrelationToolV1::from_public_name(tool_name)
             == Some(GraphCorrelationToolV1::TracePath);
+        // Keep the selected source identity: the provider echoes this selector
+        // in caller reports, and a short name can identify multiple functions.
+        let provider_value = is_trace_reference
+            .then(|| reference.provider_value(DecisionAnchorTargetKindV1::QualifiedName))
+            .flatten()
+            .or_else(|| reference.provider_value(kind))
+            .ok_or(())?
+            .to_string();
         if is_trace_reference && reference.state != RecoverySelectorState::Reserved {
             return Err(());
         }
