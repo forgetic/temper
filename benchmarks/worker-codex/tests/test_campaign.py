@@ -29,6 +29,10 @@ class CampaignTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="worker-codex-campaign-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        namespace = patch.object(campaign, "prepare_namespace", return_value={
+            "namespace": "test-namespace", "complete": False})
+        namespace.start()
+        self.addCleanup(namespace.stop)
 
     def test_failure_is_retained_and_all_five_alternating_pairs_run(self):
         seen = []

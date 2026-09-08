@@ -27,6 +27,7 @@ def successful_trials(pairs=5):
             trial = {"contestant": name, "pair": pair, "order": ordinal, "correct": True,
                      "agent_succeeded": True, "coding_seconds": 5 if name == "temper" else 10,
                      "validation": {"complete": True, "passed": True},
+                     "graph_evidence": {"complete": True, "eligible": True},
                      "tool_calls": 4, "graph_calls": 2, "tool_evidence_complete": True,
                      "mcp": {"available": True, "complete": True, "provider_calls": 3}}
             if name == "temper":

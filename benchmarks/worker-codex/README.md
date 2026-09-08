@@ -98,6 +98,28 @@ another run's patch, transcript, graph, or solution. Do not run arms concurrentl
 or perform heavy unrelated builds during a measurement. Record unavoidable
 provider-side prompt-cache usage; clients cannot force that cache cold.
 
+For Codex, the harness generates a UUID project namespace and checks that exact
+name with a read-only host `index_status` request before starting the CLI. The
+provider must explicitly report that the namespace is not found or not indexed.
+This setup check does not index the task and is excluded from coding time. Its
+handshake and status request are setup evidence, outside the session MCP counts. The
+harness appends the namespace and checkout path to Codex's existing
+`developer_instructions`; it preserves their text and records the combined
+instruction text and hashes. Active Codex profiles are rejected during preflight
+because their instruction layering is not resolved by this harness. The common
+task and seed remain unchanged. Native Temper already supplies its worker with
+the isolated stack's project identity.
+
+Codex's retained MCP events must show successful indexing of the current
+checkout under the supplied namespace before any project-scoped graph request.
+Every later scoped request must use that same project. Native traces must have
+complete graph-call evidence and no typed systemic-fallback signal. These checks
+produce `graph_evidence` independently of task correctness: a correct solution
+can remain ineligible for the matched graph comparison. Final performance
+eligibility requires both graph evidence and the other completion checks. Older
+baselines retain their original configuration and evidence; a retrospective
+scope check cannot manufacture their missing pre-session namespace proof.
+
 Confirm Codex has the actual `codebase-memory-mcp` provider configured and its
 tools discoverable before a campaign. Provide the same provider build and
 graph-first AGENTS.md to Temper. A smoke check may confirm MCP availability on
