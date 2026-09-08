@@ -6,6 +6,11 @@ real Temper delivery and Codex, with independent host validation. Read the
 interpreting results. This procedure does not imply the performance target has
 been achieved.
 
+Ordinary PR CI runs the deterministic Python contract tests. Run the same check
+locally with `python3 -m unittest discover -s benchmarks/worker-codex/tests -v`.
+These tests use toy providers and mocked model/stack calls and require no
+provider credentials or live deployment.
+
 ## Prepare the campaign
 
 Use a host with Python 3.12+, Git, ripgrep (`rg`), Rust/Cargo, Codex, and the real

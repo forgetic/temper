@@ -73,6 +73,12 @@ jobs:
             echo "TMPDIR=$scratch_dir"
             echo "TEMPER_CI_SCRATCH_DIR=$scratch_dir"
           } >> "$GITHUB_ENV"
+      - name: Worker/Codex benchmark contracts
+        # Deterministic Python fixtures and toy stdio providers; no credentials,
+        # model requests, or live Forgejo/Temper stack are needed.
+        env:
+          TEMPER_BENCHMARK_LIVE: "0"
+        run: python3 -m unittest discover -s benchmarks/worker-codex/tests -v
       - name: Format
         run: cargo fmt --all -- --check
       - name: Dependency graph
