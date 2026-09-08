@@ -1,0 +1,17 @@
+{
+  "phases": [
+    {
+      "name": "mapped-live-companion-read-runtime",
+      "when": {
+        "messages_contain": [
+          "__mapped_live_companion_read_fixture_runtime__"
+        ]
+      },
+      "sequence": [
+        {
+          "text": "The live fixture requires the existing companion read before the cohesive patch retry."
+        }
+      ]
+    }
+  ]
+}
