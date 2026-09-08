@@ -362,7 +362,7 @@ fn opaque_recovery_reference_resolves_and_expands_without_exposing_selector() {
             .unwrap()
             .is_some()
     );
-    assert_eq!(trace_input["function_name"], FUNCTION_SELECTOR);
+    assert_eq!(trace_input["function_name"], PRIVATE_SELECTOR);
 
     let repeated = serde_json::json!({"function_name": reference});
     assert!(

@@ -13,6 +13,7 @@ mod managed_admission;
 #[cfg(target_os = "linux")]
 mod shared_owner;
 mod source_guard_wrapped;
+mod source_less_decorator;
 pub(in crate::codebase_memory) use managed::{
     build_codebase_memory_toolset, build_codebase_memory_toolset_with_timeout,
 };

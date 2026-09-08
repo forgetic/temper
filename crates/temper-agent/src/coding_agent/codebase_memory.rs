@@ -180,8 +180,10 @@ When delegating, prefer structured graph_context with the session coverage evide
          carry a caller evidence label.\n\
          Only the selected-implementation traversal's provider-returned caller identities are eligible\n\
          later-turn caller/model selectors. A\n\
-         complete empty inbound trace settles that selected symbol's graph-caller relationship; do not\n\
-         manufacture caller evidence by rereading the traced symbol as its own caller. Initial discovery may\n\
+         complete inbound trace with an explicit zero total reports no production callers in the graph; do not\n\
+         manufacture caller evidence by rereading the traced symbol as its own caller. This typed outcome waives only\n\
+         caller source, never focused-test evidence or the exact ordinary source read. An empty list without a\n\
+         total does not establish this outcome. Initial discovery may\n\
          establish independent implementation and focused-test roots in parallel, but every dependent selector\n\
          must come from its own provider result. Focused-test evidence follows a separately admitted root:\n\
          consume only an exact test identity returned by that root in a later turn, and keep its exact source\n\
@@ -202,7 +204,7 @@ When delegating, prefer structured graph_context with the session coverage evide
          fallback. Keep genuinely independent discovery parallel. A call that\n\
          consumes the current result must be in a later model turn; later evidence calls whose\n\
          selectors were established by earlier turns may remain parallel. Do not mutate until consumed\n\
-         source evidence covers the selected implementation and its inbound caller on one root plus the\n\
+         source evidence covers the selected implementation and its inbound caller on one root (or its typed zero-caller report) plus the\n\
          focused behavioral test on its own retained root, sufficient to justify the smallest semantic diff.\n\
          Bound later independent roots, pivots, readiness rechecks, and rejected selector tuples; repeated,\n\
          broad, malformed, irrelevant, or cross-root attempts add no evidence and cannot reopen exploration.\n\

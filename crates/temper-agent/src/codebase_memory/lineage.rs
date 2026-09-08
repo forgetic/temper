@@ -19,6 +19,7 @@ const MAX_RESULT_TARGETS: usize = 64;
 
 mod active_root_handoff;
 mod admission;
+mod caller_discovery;
 mod candidate_completion;
 mod candidate_preview;
 mod candidate_projection;
@@ -226,7 +227,14 @@ impl DecisionAnchorLineages {
             .flatten();
         let mut implementation_correction_available = false;
         let mut caller_discovery = caller_candidates.as_ref().map(|candidates| {
-            if candidates.is_empty() {
+            if candidates.is_empty()
+                && selector_binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.implementation_evidence_result)
+                && self.reports_no_production_callers(&root_binding, input, typed_parts)
+            {
+                CallerDiscoveryOutcomeV1::NoProductionCallersReported
+            } else if candidates.is_empty() {
                 CallerDiscoveryOutcomeV1::NoEligibleSelector
             } else {
                 CallerDiscoveryOutcomeV1::EligibleSelectorReturned
@@ -328,7 +336,10 @@ impl DecisionAnchorLineages {
                         callers,
                         SelectorOrigin::CallerTraversalResult,
                     )?;
-                    if marked == 0 {
+                    if marked == 0
+                        && caller_discovery
+                            != Some(CallerDiscoveryOutcomeV1::NoProductionCallersReported)
+                    {
                         caller_discovery = Some(CallerDiscoveryOutcomeV1::NoEligibleSelector);
                     }
                 }
@@ -557,10 +568,21 @@ fn one_symbol_field(
 }
 
 fn collect_reference_list<C: CandidateCollection>(value: &Value, candidates: &mut C) -> Option<()> {
-    for value in value.as_array()? {
+    for value in reference_records(value)? {
         collect_reference(value, candidates)?;
     }
     Some(())
+}
+
+/// The release provider's grouped tables normalize to a nested `results` list.
+fn reference_records(value: &Value) -> Option<&Vec<Value>> {
+    if let Some(records) = value.as_array() {
+        return Some(records);
+    }
+    let object = value.as_object()?;
+    (object.len() == 1)
+        .then(|| object.get("results")?.as_array())
+        .flatten()
 }
 
 fn collect_reference_list_or_count<C: CandidateCollection>(
