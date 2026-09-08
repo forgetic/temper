@@ -187,6 +187,23 @@ fn decision_gap_recovery_bundle_retains_closed_no_compatible_action_contract() {
     );
 }
 
+#[test]
+fn decision_gap_recovery_provider_requires_exact_qualified_trace_identity() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = std::process::Command::new("python3")
+        .arg(crate_root.join("tests/support/gap_trace_protocol.py"))
+        .arg(crate_root.join("src/live_manifest/fake_codebase_memory_mcp.py"))
+        .arg(scenarios_root().join("mapped-live-decision-gap-recovery/repo"))
+        .output()
+        .expect("run the real gap fixture protocol");
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 fn scenarios_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
