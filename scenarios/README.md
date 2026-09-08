@@ -204,6 +204,14 @@ and lineage type facts; transient provider/model values, targets, source paths,
 digests, traces, credentials, and runtime logs remain ephemeral. This mapping
 does not change the historical `#991` mapping.
 
+### Mapped live patch-creation mapping
+
+`mapped-live-patch-creation` maps `ai/temper#1303` on
+`agent/pr-for-feature-1303`. It inherits the historical graph-consumption
+provider, seed, CI, and graph counts, then applies one patch that repairs its
+read implementation and creates an absent regression file. A host check reads
+the exact created blob from the recorded merged default-branch commit.
+
 ### Mapped live graph-consumption mapping
 
 `mapped-live-graph-consumption` is the sole active mapping for `ai/temper#1009`

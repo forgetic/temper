@@ -1,0 +1,17 @@
+{
+  "phases": [
+    {
+      "name": "mapped-live-patch-creation-runtime",
+      "when": {
+        "messages_contain": [
+          "__mapped_live_patch_creation_fixture_runtime__"
+        ]
+      },
+      "sequence": [
+        {
+          "text": "The live fixture reuses the typed graph chain before a verified creation patch."
+        }
+      ]
+    }
+  ]
+}
