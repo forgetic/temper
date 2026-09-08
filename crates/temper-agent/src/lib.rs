@@ -23,6 +23,7 @@ pub mod prompt_overlays;
 pub mod provider;
 mod tool_preview;
 pub mod usage;
+mod workspace_patch;
 
 pub use activity::{
     AgentActivityConfig, AgentCancellationLatch, AgentLifecycleReporter, protocol_model_failure,

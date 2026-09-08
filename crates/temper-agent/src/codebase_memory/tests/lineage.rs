@@ -789,5 +789,6 @@ mod tests {
     mod target_admission {
         use super::*;
         include!("lineage_targets.rs");
+        include!("lineage_creation.rs");
     }
 }

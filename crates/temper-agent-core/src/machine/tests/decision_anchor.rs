@@ -33,6 +33,7 @@ mod tests {
     mod convergence {
         include!("decision_anchor_convergence.rs");
         include!("decision_anchor_exact_read.rs");
+        include!("decision_anchor_creation.rs");
         include!("decision_anchor_convergence_matrix.rs");
         include!("decision_anchor_progress.rs");
     }
@@ -90,6 +91,7 @@ mod tests {
             ("codebase_memory_get_architecture", ToolEffects::read()),
             ("read", ToolEffects::read()),
             ("write", ToolEffects::write()),
+            ("apply_patch", ToolEffects::write()),
         ]
         .into_iter()
         .map(|(name, effect)| (name.to_string(), effect))
