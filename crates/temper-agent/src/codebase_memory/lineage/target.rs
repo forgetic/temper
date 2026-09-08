@@ -5,14 +5,15 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use temper_agent_core::{
-    EligibleWorkspaceTarget, InvocationTargetAdmission, TargetAdmissionOutcome,
-    TargetAdmissionStatus,
+    EligibleWorkspaceTarget, InvocationTargetAdmission, MissingWorkspaceTarget,
+    TargetAdmissionOutcome, TargetAdmissionStatus,
 };
 use temper_protocol_activity::{DecisionAnchorLineageV1, DecisionEvidenceKindV1};
 use uuid::Uuid;
 
 use super::super::scope::WorkspaceScope;
 use crate::mcp::McpToolResultPart;
+use crate::workspace_patch::{PatchOperation, patch_targets, verify_missing_target};
 
 mod process;
 
@@ -114,19 +115,44 @@ impl WorkspaceTargetRegistry {
                         TargetAdmissionStatus::MalformedTarget,
                     );
                 };
-                match patch_paths(patch) {
-                    Ok(paths) => InvocationTargetAdmission::Mutation(
-                        paths
-                            .iter()
-                            .map(|path| self.resolve_workspace_path(scope, path))
-                            .collect(),
-                    ),
-                    Err(status) => InvocationTargetAdmission::Ineligible(status),
-                }
+                self.resolve_patch(scope, patch)
             }
             "bash" => process::classify_bash(object),
             "submit_for_pr" => InvocationTargetAdmission::ControlPlane,
             _ => InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool),
+        }
+    }
+
+    fn resolve_patch(&self, scope: &WorkspaceScope, patch: &str) -> InvocationTargetAdmission {
+        let targets = match patch_targets(patch) {
+            Ok(targets) => targets,
+            Err(status) => return InvocationTargetAdmission::Ineligible(status),
+        };
+        let mut existing = Vec::new();
+        let mut creations = Vec::new();
+        for (path, operation) in targets {
+            match operation {
+                PatchOperation::Existing => {
+                    existing.push(self.resolve_workspace_path(scope, &path))
+                }
+                PatchOperation::Create => {
+                    if let Err(status) = verify_missing_target(&scope.workspace_root, &path) {
+                        return InvocationTargetAdmission::Ineligible(status);
+                    }
+                    creations.push(
+                        MissingWorkspaceTarget::new(Uuid::new_v4().to_string())
+                            .expect("v4 UUID is a valid run-local absence proof"),
+                    );
+                }
+            }
+        }
+        if creations.is_empty() {
+            InvocationTargetAdmission::Mutation(existing)
+        } else {
+            InvocationTargetAdmission::PatchCreation {
+                existing,
+                creations,
+            }
         }
     }
 
@@ -345,102 +371,4 @@ fn canonical_existing_path(
         return Err(TargetAdmissionStatus::UnknownTarget);
     }
     Ok(canonical)
-}
-
-#[derive(Default)]
-struct PatchSection {
-    old: String,
-    new: String,
-    old_marker: Option<String>,
-    new_marker: Option<String>,
-    body_started: bool,
-}
-
-fn patch_paths(patch: &str) -> Result<Vec<String>, TargetAdmissionStatus> {
-    let mut paths = BTreeSet::new();
-    let mut current: Option<PatchSection> = None;
-    for line in patch.lines() {
-        if line.starts_with("diff --git ") {
-            if let Some(section) = current.take() {
-                finish_patch_section(section, &mut paths)?;
-            }
-            let fields = line.split_ascii_whitespace().collect::<Vec<_>>();
-            if fields.len() != 4 || fields[..2] != ["diff", "--git"] {
-                return Err(TargetAdmissionStatus::MalformedTarget);
-            }
-            current = Some(PatchSection {
-                old: git_path(fields[2], "a/")?,
-                new: git_path(fields[3], "b/")?,
-                ..PatchSection::default()
-            });
-        } else if line.starts_with("@@ ") || line == "GIT binary patch" {
-            let section = current
-                .as_mut()
-                .ok_or(TargetAdmissionStatus::MalformedTarget)?;
-            section.body_started = true;
-        } else if let Some(marker) = line.strip_prefix("--- ") {
-            let section = current
-                .as_mut()
-                .ok_or(TargetAdmissionStatus::MalformedTarget)?;
-            if section.body_started {
-                continue;
-            }
-            if section.old_marker.replace(marker.to_string()).is_some() {
-                return Err(TargetAdmissionStatus::CompetingTargets);
-            }
-        } else if let Some(marker) = line.strip_prefix("+++ ") {
-            let section = current
-                .as_mut()
-                .ok_or(TargetAdmissionStatus::MalformedTarget)?;
-            if section.body_started {
-                continue;
-            }
-            if section.new_marker.replace(marker.to_string()).is_some() {
-                return Err(TargetAdmissionStatus::CompetingTargets);
-            }
-        }
-    }
-    finish_patch_section(
-        current.ok_or(TargetAdmissionStatus::MalformedTarget)?,
-        &mut paths,
-    )?;
-    if paths.is_empty() {
-        return Err(TargetAdmissionStatus::MalformedTarget);
-    }
-    Ok(paths.into_iter().collect())
-}
-
-fn finish_patch_section(
-    section: PatchSection,
-    paths: &mut BTreeSet<String>,
-) -> Result<(), TargetAdmissionStatus> {
-    let old_marker = section
-        .old_marker
-        .ok_or(TargetAdmissionStatus::MalformedTarget)?;
-    let new_marker = section
-        .new_marker
-        .ok_or(TargetAdmissionStatus::MalformedTarget)?;
-    if old_marker != "/dev/null" && old_marker != format!("a/{}", section.old) {
-        return Err(TargetAdmissionStatus::CompetingTargets);
-    }
-    if new_marker != "/dev/null" && new_marker != format!("b/{}", section.new) {
-        return Err(TargetAdmissionStatus::CompetingTargets);
-    }
-    if old_marker != "/dev/null" {
-        paths.insert(section.old);
-    }
-    if new_marker != "/dev/null" {
-        paths.insert(section.new);
-    }
-    Ok(())
-}
-
-fn git_path(value: &str, prefix: &str) -> Result<String, TargetAdmissionStatus> {
-    let path = value
-        .strip_prefix(prefix)
-        .ok_or(TargetAdmissionStatus::MalformedTarget)?;
-    if path.is_empty() || path.contains('\\') || path.starts_with('"') {
-        return Err(TargetAdmissionStatus::MalformedTarget);
-    }
-    Ok(path.to_string())
 }

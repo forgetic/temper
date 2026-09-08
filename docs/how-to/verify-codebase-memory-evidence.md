@@ -21,7 +21,16 @@ project aliases are rejected before provider dispatch.
 Coverage is useful at verification time, including after discovery converges.
 It never reopens the discovery budget, increases recovery attempts, creates
 lineage/source authority, or replaces the parent's successful ordinary exact
-read before mutation.
+read before changing an existing file.
+
+Create files with an explicit unified `apply_patch` section whose old marker is
+`--- /dev/null`. Temper verifies that the destination is absent inside the
+workspace; new subdirectories are allowed, symlink ancestors are rejected.
+Creation requires completed graph evidence and any pending correction inspection,
+or an already released provider-unavailable fallback. A failed `read` never
+authorizes creation. Each existing file in the same patch still needs its own
+successful exact read. The tool repeats the absence check at execution and rejects
+the whole patch if a creation destination has appeared or any target is invalid.
 
 After discovery converges, use the ordinary `read` tool on the selected primary
 implementation. Once that read succeeds, read each existing companion source,

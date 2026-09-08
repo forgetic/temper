@@ -7,6 +7,9 @@
 use std::fmt;
 use std::sync::Arc;
 
+mod creation;
+pub use creation::MissingWorkspaceTarget;
+
 use serde_json::Value;
 use temper_protocol_activity::{
     DecisionAnchorLineageV1, DecisionAnchorTargetKindV1, DecisionEvidenceKindV1,
@@ -204,6 +207,12 @@ pub enum InvocationTargetAdmission {
     /// Every explicit mutation target has its own entry. An ineligible entry
     /// cannot piggyback on an eligible sibling in a multi-target operation.
     Mutation(Vec<TargetAdmissionOutcome>),
+    /// Explicit unified-patch creations, independently checked for absence.
+    /// Existing siblings retain every ordinary exact-read requirement.
+    PatchCreation {
+        existing: Vec<TargetAdmissionOutcome>,
+        creations: Vec<MissingWorkspaceTarget>,
+    },
     /// A process invocation classified by the trusted wrapper as having no
     /// direct source-mutation operation.
     SourceNeutralProcess,

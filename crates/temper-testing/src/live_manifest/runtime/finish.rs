@@ -20,6 +20,13 @@ impl LiveExecutionContext<'_> {
             &convergence.final_state,
             &self.logs.repo_populate_log,
         )?;
+        super::super::patch_creation::verify_merged(
+            &self.harness.scenario,
+            self.workspace.path(),
+            required_ref(&self.admin_token, "forgejo.provision")?,
+            &convergence.final_state,
+            &self.logs.repo_populate_log,
+        )?;
         let fake = self
             .fake
             .take()
