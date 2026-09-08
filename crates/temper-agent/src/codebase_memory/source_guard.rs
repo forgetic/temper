@@ -13,6 +13,9 @@ use crate::mcp::{McpToolCallResult, McpToolResultPart};
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 
+#[path = "source_guard_metadata.rs"]
+mod metadata;
+
 pub(super) fn verify(
     scope: &WorkspaceScope,
     project: &str,
@@ -84,48 +87,6 @@ fn has_source(value: &Value) -> bool {
     }
 }
 
-fn safe_field(key: &str, value: &Value) -> bool {
-    // Reconstruct only known release metadata and verified source. Arbitrary
-    // text/message properties and nested sidecars never pass through raw.
-    matches!(
-        key,
-        "source"
-            | "context"
-            | "snippet"
-            | "code"
-            | "content"
-            | "file_path"
-            | "file"
-            | "path"
-            | "qualified_name"
-            | "name"
-            | "label"
-            | "language"
-            | "kind"
-            | "type"
-            | "project"
-            | "lines"
-            | "match_method"
-            | "results"
-            | "nodes"
-            | "matches"
-            | "snippets"
-            | "raw_matches"
-            | "files"
-            | "directories"
-            | "caller_names"
-            | "callee_names"
-            | "start_line"
-            | "end_line"
-            | "source_start"
-            | "context_start"
-            | "source_truncated"
-            | "source_clipped"
-    ) || value.is_number()
-        || value.is_boolean()
-        || value.is_null()
-}
-
 fn consistent_parts(result: &McpToolCallResult, value: &Value) -> bool {
     result.typed_parts.as_ref().is_some_and(|parts| {
         !parts.is_empty()
@@ -159,7 +120,7 @@ fn check_value(
             // Stored signatures/docstrings have no exact source range contract.
             // Retain symbol/path metadata; omit these optional source-derived
             // fields rather than represent another checkout's stored text.
-            object.retain(|key, value| safe_field(key, value));
+            metadata::retain_fields(object)?;
             for key in ["results", "nodes", "snippets"] {
                 if object.get(key).is_some_and(|value| {
                     !value
@@ -183,7 +144,7 @@ fn check_value(
                     return None;
                 }
             }
-            if ["file_path", "file", "path"]
+            if metadata::PATH_FIELDS
                 .iter()
                 .any(|key| object.contains_key(*key))
                 && file_path(object).is_none()
@@ -222,7 +183,7 @@ fn check_value(
 
 fn file_path(object: &Map<String, Value>) -> Option<&str> {
     let mut found = None;
-    for key in ["file_path", "file", "path"] {
+    for key in metadata::PATH_FIELDS {
         if let Some(value) = object.get(key) {
             let path = value.as_str().filter(|path| !path.is_empty())?;
             if found.is_some_and(|previous| previous != path) {
@@ -350,3 +311,7 @@ fn line_offset(bytes: &[u8], line: u64) -> Option<usize> {
 #[cfg(test)]
 #[path = "tests/source_guard.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/source_guard_identities.rs"]
+mod identity_tests;
