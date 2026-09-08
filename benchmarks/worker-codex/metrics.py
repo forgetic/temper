@@ -178,10 +178,13 @@ def comparison(trials: list[dict], expected_pairs: int = 5) -> dict:
                  and sorted(t["pair"] for t in rows) == list(range(1, expected_pairs + 1))
                  and all(t.get("correct") is True and t.get("agent_succeeded") is True
                          and _positive_duration(t.get("coding_seconds"))
+                         and _configuration_complete(t.get("configuration_evidence"))
                          and _passed_validation(t.get("validation"))
                          and (name != "temper" or _native_trial_complete(t)) for t in rows))
         cell = {"attempted": len(rows), "passed": sum(bool(t.get("correct")) for t in rows),
                 "complete": valid,
+                "configuration_complete": bool(rows) and all(
+                    _configuration_complete(t.get("configuration_evidence")) for t in rows),
                 "graph_eligible": bool(rows) and all(
                     isinstance(t.get("graph_evidence"), dict)
                     and t["graph_evidence"].get("complete") is True
@@ -241,6 +244,12 @@ def _tool_summary_complete(tools):
 
 def _passed_validation(value):
     return isinstance(value, dict) and value.get("complete") is True and value.get("passed") is True
+
+
+def _configuration_complete(value):
+    return (isinstance(value, dict) and all(
+        isinstance(value.get(phase), dict) and value[phase].get("complete") is True
+        and value[phase].get("matches_frozen") is True for phase in ["before", "after"]))
 
 
 def _native_trial_complete(trial):
