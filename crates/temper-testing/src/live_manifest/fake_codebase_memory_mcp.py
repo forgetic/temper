@@ -1221,7 +1221,7 @@ for line in sys.stdin:
                 successful = (
                     current_root_source(project, "src/route.rs") is not None
                     and decision_gap_recovery_step(
-                        expected_stage, expected, arguments.get("function_name", "")
+                        expected_stage, expected_token, arguments.get("function_name", "")
                     )
                 )
                 selected = (

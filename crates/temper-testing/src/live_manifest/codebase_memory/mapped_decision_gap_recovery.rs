@@ -69,8 +69,6 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     let first_test = token(&tokens, "root_a_behavioral_test")?;
     let second_implementation = token(&tokens, "root_b_implementation")?;
     let second_caller = token(&tokens, "root_b_caller")?;
-    let first_implementation_short = terminal_name(first_implementation)?;
-    let second_implementation_short = terminal_name(second_implementation)?;
     let root_queries = calls[3..5]
         .iter()
         .filter_map(|call| call.arguments.get("query").and_then(JsonValue::as_str))
@@ -85,9 +83,9 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     }
     let expected_arguments = [
         (5, "qualified_name", first_implementation),
-        (6, "function_name", first_implementation_short),
+        (6, "function_name", first_implementation),
         (7, "qualified_name", second_implementation),
-        (8, "function_name", second_implementation_short),
+        (8, "function_name", second_implementation),
         (9, "qualified_name", second_caller),
         (10, "qualified_name", first_test),
     ];
@@ -193,12 +191,4 @@ fn token<'a>(
         .get(name)
         .and_then(JsonValue::as_str)
         .ok_or("decision-gap fixture omitted a transient selection".to_string())
-}
-
-fn terminal_name(qualified: &str) -> Result<&str, String> {
-    qualified
-        .rsplit_once("::")
-        .map(|(_, terminal)| terminal)
-        .filter(|terminal| !terminal.is_empty())
-        .ok_or("decision-gap fixture selection was not transformable".to_string())
 }
