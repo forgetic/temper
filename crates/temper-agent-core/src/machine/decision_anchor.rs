@@ -23,6 +23,7 @@ mod actions;
 mod admission;
 mod anchors;
 mod authority_correction;
+mod companion_read;
 mod evidence;
 mod exact_read;
 mod output;
@@ -30,7 +31,7 @@ mod progress;
 mod settlement;
 mod source_evidence;
 
-use exact_read::SourceTargetAuthority;
+use exact_read::{ExactReadAuthority, PendingExactRead, SourceTargetAuthority};
 use output::{
     CandidateRecoveryDisposition, anchor_output, candidate_recovery_disposition,
     graph_tool_for_name, has_incompatible_targeted_result, successful_graph_batch,
@@ -44,12 +45,12 @@ use source_evidence::{DecisionGap, RecoveryRoute, SourceEvidence};
 /// It is deliberately excluded from durable activity metadata.
 pub const SAFE_DECISION_ANCHOR_LINEAGE_DETAIL_KEY: &str = "temper_decision_anchor_lineage_v1";
 /// Fixed, model-visible explanation for a locally denied mutation.
-pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after either its qualifying graph source result has completed or conventional fallback has been released, then retry the mutation";
+pub const DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE: &str = "workspace mutation blocked: complete graph discovery and the primary implementation's exact ordinary read, then successfully read every existing companion target with the ordinary read tool before including it in a mutation. After released conventional fallback, successfully read each exact target. Unknown or unread targets cannot be edited; retry only after satisfying these requirements";
 /// Fixed, model-visible explanation for an exact read attempted before the
 /// bounded correction inspection has completed.
 pub const DECISION_ANCHOR_CORRECTION_INSPECTION_MESSAGE: &str = "ordinary exact read blocked: inspect every candidate in the bounded implementation-correction handoff without an evidence purpose, then explicitly retain the provisional target with its exact ordinary read or correct to one inspected candidate in a later model turn";
 /// Fixed, privacy-safe instruction queued exactly once when graph evidence is complete.
-pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration, use the ordinary read tool to read the exact workspace target selected by the qualifying graph source result, and only then mutate that matching target.";
+pub const DECISION_ANCHOR_CONVERGENCE_MESSAGE: &str = "graph exploration complete: stop codebase-memory exploration and use the ordinary read tool to read the primary implementation selected by the qualifying graph source result. After that succeeds, ordinary exact reads of existing companion source, test, and documentation files authorize their inclusion in the cohesive change. Every existing mutation target needs its own successful read.";
 /// Fixed, privacy-safe result for graph calls denied after convergence or exhaustion.
 pub const CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE: &str = "codebase-memory exploration is closed for this run; continue with conventional tools; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
 /// Fixed bounded fallback released only after trusted systemic provider unavailability.
@@ -83,6 +84,7 @@ pub(super) struct DecisionAnchorState {
     source_authorities: Vec<SourceTargetAuthority>,
     pending_exact_reads: BTreeMap<String, PendingExactRead>,
     exact_read_authorities: Vec<ExactReadAuthority>,
+    companion_reads: companion_read::CompanionReads,
     settled_batches: u64,
     batch_progress: BTreeMap<String, ResultProgress>,
     model_guidance: Vec<String>,
@@ -143,24 +145,6 @@ struct GapRecovery {
     remaining: u8,
     exhausted_routes: BTreeSet<(String, RecoveryRoute)>,
     remaining_pivots: usize,
-}
-
-struct PendingExactRead {
-    sources: Vec<SourceTargetAuthority>,
-    dispatched_turn: usize,
-    dispatched_order: u64,
-    dispatched_after_batch: u64,
-}
-
-struct ExactReadAuthority {
-    target: EligibleWorkspaceTarget,
-    root_binding: String,
-    source_completed_turn: usize,
-    source_completed_order: u64,
-    source_completed_batch: u64,
-    read_dispatched_turn: usize,
-    read_dispatched_order: u64,
-    read_dispatched_after_batch: u64,
 }
 
 #[derive(Clone)]
@@ -237,6 +221,7 @@ impl DecisionAnchorState {
             source_authorities: Vec::new(),
             pending_exact_reads: BTreeMap::new(),
             exact_read_authorities: Vec::new(),
+            companion_reads: companion_read::CompanionReads::default(),
             settled_batches: 0,
             batch_progress: BTreeMap::new(),
             model_guidance: Vec::new(),
