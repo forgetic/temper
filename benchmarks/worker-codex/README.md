@@ -101,6 +101,7 @@ provider-side prompt-cache usage; clients cannot force that cache cold.
 For Codex, the harness generates a UUID project namespace and checks that exact
 name with a read-only host `index_status` request before starting the CLI. The
 provider must explicitly report that the namespace is not found or not indexed.
+An unsuccessful namespace check retains a failed arm and stops before Codex starts.
 This setup check does not index the task and is excluded from coding time. Its
 handshake and status request are setup evidence, outside the session MCP counts. The
 harness appends the namespace and checkout path to Codex's existing

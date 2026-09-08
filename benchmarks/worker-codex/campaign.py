@@ -155,6 +155,9 @@ def codex_arm(seed, task, arm, inputs, options):
     subprocess.run(["git", "clone", "--quiet", "--no-hardlinks", str(seed), str(checkout)], check=True)
     namespace = prepare_namespace(options.mcp_bin, checkout)
     write_json(arm / "graph-namespace.json", namespace)
+    if namespace.get("complete") is not True:
+        raise ValueError("Codex graph namespace preflight failed before model startup: "
+                         + str(namespace.get("error", "missing namespace proof")))
     process = run_codex(checkout, task, arm / "session", executable=str(options.codex_bin),
                         timeout_seconds=options.timeout_seconds,
                         mcp_proxy=Path(__file__).with_name("mcp_proxy.py"), mcp_binary=options.mcp_bin,
