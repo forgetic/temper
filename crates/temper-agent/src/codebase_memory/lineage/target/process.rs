@@ -86,7 +86,10 @@ fn source_neutral_segment(segment: &str, substitution: bool) -> bool {
     match words.as_slice() {
         ["true"] | ["false"] => true,
         ["cd", path] => safe_word(path),
-        ["cargo", "fmt", "--check"] => true,
+        ["cargo", "fmt", "--check"]
+        | ["cargo", "fmt", "--all", "--check"]
+        | ["cargo", "fmt", "--", "--check"]
+        | ["cargo", "fmt", "--all", "--", "--check"] => true,
         ["cargo", "test", arguments @ ..] => arguments.iter().all(|word| safe_word(word)),
         ["git", "diff", arguments @ ..] => arguments.iter().all(|word| safe_git_diff_word(word)),
         ["git", "status", arguments @ ..] => arguments.iter().all(|word| safe_word(word)),
