@@ -389,6 +389,7 @@ pub async fn run_coding_agent_native_with_totals_tool_config_hosts_and_containme
         ),
         temperature: provider_config.temperature(),
         thinking_level: provider_config.coding_thinking_level(),
+        session_id: provider_config.coding_session_id(context.agent_session.as_ref()),
         headers: provider_config.request_headers_for_session(context.agent_session.as_ref()),
         ..tongs::provider::StreamOptions::default()
     };

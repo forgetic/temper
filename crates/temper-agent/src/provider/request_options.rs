@@ -65,6 +65,18 @@ impl ProviderConfig {
         headers
     }
 
+    /// Codex uses this durable, non-secret workstream identity for prompt-cache
+    /// routing and request correlation. Keep it stable across turns and resumed
+    /// runs; other providers retain their existing session/header semantics.
+    pub(crate) fn coding_session_id(&self, session: Option<&AgentSessionState>) -> Option<String> {
+        if !matches!(self.auth(), AuthMode::ChatGptOAuth { .. }) {
+            return None;
+        }
+        session
+            .filter(|session| !session.session_id.trim().is_empty())
+            .map(|session| session.session_id.clone())
+    }
+
     /// The mandatory first `system` block for this mode, if any.
     ///
     /// `Some` only for Anthropic OAuth, whose Claude subscription path rejects
