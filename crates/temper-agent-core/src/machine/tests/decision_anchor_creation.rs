@@ -117,3 +117,5 @@ fn patch_creation_after_provider_fallback_does_not_authorize_existing_files() {
         None
     );
 }
+
+include!("decision_anchor_creation_batch.rs");

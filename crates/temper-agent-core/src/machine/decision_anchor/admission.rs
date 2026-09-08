@@ -105,12 +105,13 @@ impl DecisionAnchorState {
         let forest_selection_conflict = forest_selection.is_err();
         let forest_selection = forest_selection.ok().flatten();
         let snapshot = self.staged_admission_snapshot(forest_selection.as_ref());
-        let batch_has_exact_read = invocation_targets.iter().any(|target| {
+        let batch_has_exact_read_or_creation = invocation_targets.iter().any(|target| {
             matches!(
                 target,
-                Some(InvocationTargetAdmission::Read(
-                    TargetAdmissionOutcome::Eligible(_)
-                ))
+                Some(
+                    InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(_))
+                        | InvocationTargetAdmission::PatchCreation { .. }
+                )
             )
         });
         let batch_has_correction_preview = admissions.iter().any(|admission| {
@@ -218,7 +219,7 @@ impl DecisionAnchorState {
                     admission.completes_implementation_correction_inspection()
                 });
                 let correction_admissible = correction.is_some_and(|admission| {
-                    !batch_has_exact_read
+                    !batch_has_exact_read_or_creation
                         && (!batch_has_correction_preview || correction_preview)
                         && (correction_preview || !correction_commit_selected)
                         && (if correction_preview {
