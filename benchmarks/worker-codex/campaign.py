@@ -55,9 +55,10 @@ def execute(options) -> dict:
             print(f"pair {pair}/{options.pairs}: starting {contestant}", flush=True)
             started = time.monotonic()
             start_load = list(os.getloadavg())
+            before = check_configuration(options, frozen_preflight)
             try:
-                if preflight(options) != frozen_preflight:
-                    raise ValueError("benchmark configuration or binary changed during the campaign")
+                if not before["matches_frozen"]:
+                    raise ValueError(before["error"])
                 if contestant == "temper":
                     trial = native_arm(seed, task, arm, inputs, options)
                 else:
@@ -68,6 +69,9 @@ def execute(options) -> dict:
                          "correct": False, "coding_seconds": None,
                          "error": f"{type(error).__name__}: {error}",
                          "tool_calls": None, "graph_calls": None}
+            # Keep completed measurements even when the configuration changed during the arm.
+            trial["configuration_evidence"] = {
+                "before": before, "after": check_configuration(options, frozen_preflight)}
             trial.update(pair=pair, order=ordinal, attempt_wall_seconds=time.monotonic() - started,
                          host_load_average_at_start=start_load)
             write_json(arm / "trial.json", trial)
@@ -78,6 +82,18 @@ def execute(options) -> dict:
     result = comparison(trials, options.pairs)
     write_json(root / "comparison.json", result)
     return result
+
+
+def check_configuration(options, frozen):
+    try:
+        observed = preflight(options)
+    except Exception as error:
+        return {"complete": False, "matches_frozen": False,
+                "error": f"{type(error).__name__}: {error}"}
+    evidence = {"complete": True, "matches_frozen": observed == frozen, "observed": observed}
+    if not evidence["matches_frozen"]:
+        evidence["error"] = "benchmark configuration or binary changed during the campaign"
+    return evidence
 
 
 def native_arm(seed, task, arm, inputs, options):
