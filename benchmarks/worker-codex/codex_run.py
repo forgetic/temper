@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,8 @@ import signal
 import subprocess
 import sys
 import time
+
+from graph_setup import current_developer_instructions
 
 
 def run_codex(
@@ -21,6 +24,7 @@ def run_codex(
     timeout_seconds: float = 1800,
     mcp_proxy: Path | None = None,
     mcp_binary: Path | None = None,
+    graph_namespace: dict | None = None,
 ) -> dict:
     """Measure a single fresh session, including CLI/tool startup and validation.
 
@@ -38,6 +42,15 @@ def run_codex(
         "-c", "mcp_servers.forgejo.enabled=false",
         "--output-last-message", str(output / "final-message.txt"),
     ]
+    if graph_namespace is not None:
+        existing = current_developer_instructions()
+        instructions = "\n\n".join(part for part in [existing, graph_namespace["instructions"]] if part)
+        command += ["-c", "developer_instructions=" + json.dumps(instructions)]
+        (output / "developer-instructions.json").write_text(json.dumps({
+            "text": instructions, "sha256": hashlib.sha256(instructions.encode()).hexdigest(),
+            "existing_sha256": hashlib.sha256(existing.encode()).hexdigest(),
+            "graph_namespace_sha256": graph_namespace["instructions_sha256"],
+        }, indent=2) + "\n")
     if mcp_proxy is not None:
         if mcp_binary is None:
             raise ValueError("MCP recording requires an explicit provider binary")

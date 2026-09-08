@@ -182,6 +182,10 @@ def comparison(trials: list[dict], expected_pairs: int = 5) -> dict:
                          and (name != "temper" or _native_trial_complete(t)) for t in rows))
         cell = {"attempted": len(rows), "passed": sum(bool(t.get("correct")) for t in rows),
                 "complete": valid,
+                "graph_eligible": bool(rows) and all(
+                    isinstance(t.get("graph_evidence"), dict)
+                    and t["graph_evidence"].get("complete") is True
+                    and t["graph_evidence"].get("eligible") is True for t in rows),
                 "tool_evidence_complete": bool(rows) and all(_trial_tools_complete(t) for t in rows)}
         if valid:
             times = [t["coding_seconds"] for t in rows]
@@ -199,7 +203,8 @@ def comparison(trials: list[dict], expected_pairs: int = 5) -> dict:
         result.update(temper_to_codex_ratio=ratio,
                       timing_target_met=expected_pairs >= 5 and ratio <= 1,
                       performance_target_met=expected_pairs >= 5 and ratio <= 1
-                      and all(c["tool_evidence_complete"] for c in result["contestants"].values()))
+                      and all(c["tool_evidence_complete"] and c["graph_eligible"]
+                              for c in result["contestants"].values()))
     return result
 
 

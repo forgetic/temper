@@ -17,6 +17,8 @@ import tomllib
 from codex_run import run_codex
 from metrics import codex_metrics, comparison, mcp_metrics, temper_metrics
 from native_model import model_evidence
+from graph_evidence import codex_graph_evidence, native_graph_evidence
+from graph_setup import developer_instructions, prepare_namespace
 from stack import start
 from stack_sessions import read_agent_sessions
 
@@ -117,6 +119,7 @@ def native_arm(seed, task, arm, inputs, options):
         trial["agent_succeeded"] = False
         trial["configuration_error"] = "native model requests are missing, incomplete, or mismatched"
     trial["mcp"] = mcp_metrics(arm / "mcp.jsonl")
+    trial["graph_evidence"] = native_graph_evidence(journal_root, len(sessions), trial["graph_calls"])
     if delivery is None:
         trial["correct"] = False
     else:
@@ -150,11 +153,19 @@ def codex_arm(seed, task, arm, inputs, options):
     arm.mkdir()
     checkout = arm / "repo"
     subprocess.run(["git", "clone", "--quiet", "--no-hardlinks", str(seed), str(checkout)], check=True)
+    namespace = prepare_namespace(options.mcp_bin, checkout)
+    write_json(arm / "graph-namespace.json", namespace)
+    if namespace.get("complete") is not True:
+        raise ValueError("Codex graph namespace preflight failed before model startup: "
+                         + str(namespace.get("error", "missing namespace proof")))
     process = run_codex(checkout, task, arm / "session", executable=str(options.codex_bin),
                         timeout_seconds=options.timeout_seconds,
-                        mcp_proxy=Path(__file__).with_name("mcp_proxy.py"), mcp_binary=options.mcp_bin)
+                        mcp_proxy=Path(__file__).with_name("mcp_proxy.py"), mcp_binary=options.mcp_bin,
+                        graph_namespace=namespace)
     trial = codex_metrics(arm / "session/events.jsonl", process)
     trial["mcp"] = mcp_metrics(arm / "session/mcp.jsonl")
+    trial["graph_namespace"] = namespace
+    trial["graph_evidence"] = codex_graph_evidence(arm / "session/events.jsonl", checkout, namespace)
     validate_trial(trial, checkout, seed, inputs, arm)
     return trial
 
@@ -240,6 +251,7 @@ def preflight(options):
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     config_path = codex_home / "config.toml"
     config = tomllib.loads(config_path.read_text())
+    developer_instructions(config)  # Validate that infrastructure context can preserve user instructions.
     mcp = config.get("mcp_servers", {}).get("codebase-memory-mcp", {})
     if not mcp or mcp.get("enabled") is False:
         raise ValueError("Codex default configuration must enable codebase-memory-mcp")

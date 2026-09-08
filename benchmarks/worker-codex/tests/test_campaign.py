@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from test_metrics import native_tools, successful_trials
+from test_graph_evidence import namespace_proof
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +30,9 @@ class CampaignTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="worker-codex-campaign-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        namespace = patch.object(campaign, "prepare_namespace", return_value=namespace_proof())
+        namespace.start()
+        self.addCleanup(namespace.stop)
 
     def test_failure_is_retained_and_all_five_alternating_pairs_run(self):
         seen = []
@@ -133,6 +137,46 @@ class CampaignTests(unittest.TestCase):
                 self.assertFalse(result["performance_target_met"])
                 evidence_key = "complete" if field == "coding_seconds" else "tool_evidence_complete"
                 self.assertFalse(result["contestants"]["temper"][evidence_key])
+
+    def test_failed_namespace_proof_retains_failed_arm_without_starting_codex(self):
+        options = SimpleNamespace(output=self.root / "campaign", repository=self.root / "source",
+                                  task_revision="frozen-revision", pairs=1, timeout_seconds=45,
+                                  mcp_bin=Path("provider"))
+        proof = {"complete": False, "missing_before_start": False, "namespace": "unproven",
+                 "error": "provider status unavailable"}
+
+        def export(_repository, _revision, output):
+            (output / "fixture/repo").mkdir(parents=True)
+            (output / "task.md").write_text("Frozen task\n")
+            return output
+
+        def native(_seed, _task, output, _inputs, _options):
+            output.mkdir(parents=True)
+            return successful_trials(1)[0]
+
+        with ExitStack() as mocks, redirect_stdout(io.StringIO()):
+            mocks.enter_context(patch.dict("os.environ", {"TEMPER_BENCHMARK_LIVE": "1"}))
+            mocks.enter_context(patch.object(campaign, "export_inputs", side_effect=export))
+            mocks.enter_context(patch.object(campaign, "preflight", return_value={"frozen": True}))
+            mocks.enter_context(patch.object(campaign, "seed_commit"))
+            mocks.enter_context(patch.object(campaign, "git", return_value="a" * 40))
+            mocks.enter_context(patch.object(campaign.subprocess, "run"))
+            mocks.enter_context(patch.object(campaign, "native_arm", side_effect=native))
+            mocks.enter_context(patch.object(campaign, "prepare_namespace", return_value=proof))
+            codex = mocks.enter_context(patch.object(campaign, "run_codex"))
+            result = campaign.execute(options)
+        codex.assert_not_called()
+        arm = options.output / "pairs/001/codex"
+        self.assertEqual(json.loads((arm / "graph-namespace.json").read_text()), proof)
+        trial = json.loads((arm / "trial.json").read_text())
+        self.assertFalse(trial["correct"])
+        self.assertFalse(trial["agent_succeeded"])
+        self.assertIsNone(trial["coding_seconds"])
+        self.assertIn("before model startup", trial["error"])
+        self.assertIn("provider status unavailable", trial["error"])
+        self.assertFalse((arm / "session").exists())
+        self.assertEqual(result["trials"][1], trial)
+        self.assertFalse(result["performance_target_met"])
 
     def test_incomplete_native_analysis_preserves_clock_and_readable_trace_metrics(self):
         for failure in ["exit", "missing", "json", "schema"]:
