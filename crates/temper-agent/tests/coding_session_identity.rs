@@ -80,7 +80,12 @@ fn other_providers_keep_their_existing_session_wire_contract() {
     let requests = anthropic.requests();
     assert_eq!(requests.len(), 2);
     for request in &requests {
-        assert_no_codex_identity(request);
+        assert!(request.body.get("prompt_cache_key").is_none());
+        assert_eq!(header(request, "session-id"), None);
+        // Anthropic already has its own UUID request header; the durable
+        // workstream belongs only in its existing session header.
+        let request_id = header(request, "x-client-request-id").unwrap();
+        assert!(uuid::Uuid::parse_str(request_id).is_ok());
         assert_eq!(
             header(request, "x-claude-code-session-id"),
             Some("anthropic-workstream")
