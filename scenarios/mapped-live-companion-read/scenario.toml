@@ -1,0 +1,73 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-companion-read"
+status = "active"
+intent = "Prove that a cohesive repair remains blocked until the existing companion has its own successful ordinary read."
+introduced_by = "#1304"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/mapped-live-graph-consumption"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/mapped-live-companion-read.json"
+
+[validation]
+feature = "ai/temper#1304"
+plan = "ai/temper#1304"
+source_branch = "agent/pr-for-feature-1304"
+change = "new"
+
+[feature_contract]
+claim = "After complete graph evidence and a primary read, an unread existing companion blocks the whole patch; its later successful ordinary read authorizes that cohesive repair."
+stimulus = "Reuse the six-call provider transcript and primary read, attempt a mixed primary/documentation patch before the documentation read, observe local denial, then read it and retry the same patch through real validation, CI, and merge."
+observable = "The unchanged six typed graph calls and graph denial, a primary read, a policy-denied mixed patch, an existing companion read, a successful two-file patch, passing validation and CI, merge, issue closure, and exact merged companion bytes."
+assertion = "Historical graph counts remain enforced; the unread mixed patch fails locally before any edit, a successful companion read precedes the same patch retry, and the companion existed in the seed and changed to the expected bytes at the actual merged commit."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-companion-read.json"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Repair preferred dispatch and its existing companion documentation"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[expect]
+outcome = "An unread companion blocks the cohesive patch; its exact read enables the retry and the edited companion is verified at the actual merged commit."
+
+[[expect.sequence]]
+required = true
+id = "typed-source-and-companion-read-before-cohesive-repair"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "implementation" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "caller" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", id = "observe-expected-unavailable-descendant", "tool.failure.category" = "graph_lifecycle_denial" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-conventional-fallback-source" } },
+  { event = "tool.error", fields = { tool = "apply_patch", id = "patch-unread-companion-denied", "tool.failure.category" = "policy_denial", "tool.failure.reason" = "policy_precondition" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-existing-companion" } },
+  { event = "tool.end", fields = { tool = "apply_patch", id = "patch-read-primary-and-companion" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-minimal-mapped-repair" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-mapped-graph-repair" } },
+  { event = "workspace.diff.produced", fields = { changed_count = 2 } },
+]
+
+[[assertions]]
+id = "existing-companion-matches-actual-merged-change"
+kind = "command"
+phase = "after-convergence"
+command = "assertions/merged-companion.sh"
+timeout_ms = 5000
+required = true

@@ -11,6 +11,7 @@ mod actions_history;
 mod artifact_benchmark;
 mod bundle;
 mod codebase_memory;
+mod companion_read;
 mod convergence;
 mod execution_plan;
 mod failure_evidence;

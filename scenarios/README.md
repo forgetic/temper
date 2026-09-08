@@ -211,6 +211,13 @@ and lineage type facts; transient provider/model values, targets, source paths,
 digests, traces, credentials, and runtime logs remain ephemeral. This mapping
 does not change the historical `#991` mapping.
 
+### Mapped live companion-read mapping
+
+`mapped-live-companion-read` maps `ai/temper#1304` on
+`agent/pr-for-feature-1304`. Its first cohesive patch is denied while the existing
+README is unread; after its ordinary read, the same patch repairs the primary
+and README. The host verifies changed companion bytes at the actual merged SHA.
+
 ### Mapped live patch-creation mapping
 
 `mapped-live-patch-creation` maps `ai/temper#1303` on
