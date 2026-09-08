@@ -170,3 +170,35 @@ fn companion_authority_requires_an_ordinary_read_of_an_eligible_host_target() {
         Some(ToolCallDenial::DecisionAnchorMutation)
     );
 }
+
+#[test]
+fn companion_patch_can_include_a_verified_new_file_after_every_existing_read() {
+    let mut state = companion_ready_state();
+    let patch = InvocationTargetAdmission::PatchCreation {
+        existing: vec![
+            TargetAdmissionOutcome::Eligible(exact_target(TARGET_A)),
+            TargetAdmissionOutcome::Eligible(exact_target(TARGET_B)),
+        ],
+        creations: vec![
+            crate::MissingWorkspaceTarget::new("00000000-0000-4000-8000-000000000020".to_string())
+                .unwrap(),
+        ],
+    };
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("mixed-unread", "apply_patch"),
+            11,
+            Some(&patch)
+        ),
+        Some(ToolCallDenial::DecisionAnchorMutation),
+    );
+    companion_read_result(&mut state, TARGET_B, 12, true, false);
+    assert_eq!(
+        state.on_tool_dispatched_with_targets(
+            &call("mixed-ready", "apply_patch"),
+            13,
+            Some(&patch)
+        ),
+        None,
+    );
+}
