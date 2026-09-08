@@ -9,7 +9,8 @@ import unittest
 
 
 SUITES = ("test_metrics.py", "test_mcp_metrics.py", "test_mcp_proxy.py",
-          "test_native_model.py", "test_campaign.py")
+          "test_native_model.py", "test_campaign.py", "test_graph_evidence.py",
+          "test_graph_setup.py")
 
 
 def require(condition, message):
@@ -90,7 +91,8 @@ def main():
         "checkpoints": ["tracked_feature_sources_verified", "real_host_ci_completed",
                         "one_pr_merged", "source_issue_closed", "paired_accounting_tests_passed",
                         "provider_accounting_tests_passed", "stdio_proxy_tests_passed",
-                        "native_model_selection_tests_passed", "campaign_retention_tests_passed"],
+                        "native_model_selection_tests_passed", "campaign_retention_tests_passed",
+                        "fresh_graph_scope_tests_passed", "namespace_setup_tests_passed"],
     }
     output = Path(context["artifact_directory"]) / "deterministic-harness-checks.json"
     output.write_text(json.dumps(report, indent=2) + "\n")
