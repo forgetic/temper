@@ -9,7 +9,12 @@ use serde::Deserialize;
 use tongs::error::{Error, Result};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
+use crate::workspace_patch::{PatchOperation, patch_targets, verify_missing_target};
+
 const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
+
+#[cfg(test)]
+mod creation_tests;
 
 pub(super) struct ApplyPatchTool {
     cwd: PathBuf,
@@ -39,6 +44,8 @@ impl Tool for ApplyPatchTool {
          cross-file source, test, and documentation changes instead of one edit/write \
          turn per file. The patch is checked in full before application; absolute paths, \
          parent traversal, unsafe paths, malformed hunks, and partial application fail. \
+         To create a new file, use `--- /dev/null` and `+++ b/path`; the destination \
+         must still be absent. Creation cannot replace an existing file. \
          Input: { patch: string } containing `diff --git`, `---`/`+++`, and `@@` hunks."
     }
 
@@ -114,6 +121,15 @@ fn git_apply(cwd: &Path, patch: &str) -> std::result::Result<(), String> {
 }
 
 fn run_git_apply(cwd: &Path, patch: &str, check: bool) -> std::result::Result<(), String> {
+    let targets = patch_targets(patch)
+        .map_err(|status| format!("apply_patch: invalid patch targets: {status:?}"))?;
+    for (path, operation) in targets {
+        if operation == PatchOperation::Create {
+            verify_missing_target(cwd, &path).map_err(|status| {
+                format!("apply_patch: creation target is not safely absent: {status:?}")
+            })?;
+        }
+    }
     let discovery_ceiling = cwd.parent().unwrap_or(cwd);
     let mut command = Command::new("git");
     command
