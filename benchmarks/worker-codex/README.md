@@ -11,8 +11,9 @@ reporting, and compatibility across those responsibilities.
 The performance target is a Temper median coding-session duration no greater
 than Codex's, with both passing the same behavioral acceptance checks. This
 single task measures performance on this workload; it does not establish parity
-on all coding work. This directory initially supplies the contract and oracle;
-the live delivery harness is a separate work item.
+on all coding work. The live harness is `benchmark.py`; follow
+[Benchmark the worker against Codex](../../docs/how-to/benchmark-worker-vs-codex.md)
+for prerequisites, commands, private artifacts, and metric interpretation.
 
 ## Inputs and correctness
 
@@ -74,10 +75,16 @@ Jig scenarios remain separate workflow-validation evidence.
 Run the Codex arm on a fresh equivalent checkout with
 `codex --dangerously-bypass-approvals-and-sandbox`, passing exactly `task.md` as
 the task. Use GPT-6 Astra with `xhigh` reasoning for both arms. Record the
-effective requested and provider-reported model identities and reasoning
-settings, Codex version, Temper revision, and agent/provider configuration.
-Reject a comparison with a model fallback or an unverified effort setting.
-Do not assume a shared model nickname resolves to the same model.
+requested settings, effective client configuration, and any available
+provider-reported model identities and reasoning settings, plus Codex version
+and Temper revision. Reject observed model/effort mismatches or configuration
+drift. Public CLI events may omit provider metadata; keep it unavailable rather
+than inferring confirmation from the request or a shared model nickname.
+
+Disable sub-agent delegation in both contestants for this single-agent
+comparison. Codex's default multi-agent feature is explicitly disabled; its
+normal graph provider remains enabled. This keeps child models and unreported
+child tool activity outside the comparison rather than hiding their work.
 
 Use the same host, available CPU/memory, Rust toolchain, network path, task
 deadline, and delivery validation. Build infrastructure binaries and warm Rust
@@ -90,6 +97,29 @@ inside the measured coding session. Do not seed one arm with
 another run's patch, transcript, graph, or solution. Do not run arms concurrently
 or perform heavy unrelated builds during a measurement. Record unavoidable
 provider-side prompt-cache usage; clients cannot force that cache cold.
+
+For Codex, the harness generates a UUID project namespace and checks that exact
+name with a read-only host `index_status` request before starting the CLI. The
+provider must explicitly report that the namespace is not found or not indexed.
+An unsuccessful namespace check retains a failed arm and stops before Codex starts.
+This setup check does not index the task and is excluded from coding time. Its
+handshake and status request are setup evidence, outside the session MCP counts. The
+harness appends the namespace and checkout path to Codex's existing
+`developer_instructions`; it preserves their text and records the combined
+instruction text and hashes. Active Codex profiles are rejected during preflight
+because their instruction layering is not resolved by this harness. The common
+task and seed remain unchanged. Native Temper already supplies its worker with
+the isolated stack's project identity.
+
+Codex's retained MCP events must show successful indexing of the current
+checkout under the supplied namespace before any project-scoped graph request.
+Every later scoped request must use that same project. Native traces must have
+complete graph-call evidence and no typed systemic-fallback signal. These checks
+produce `graph_evidence` independently of task correctness: a correct solution
+can remain ineligible for the matched graph comparison. Final performance
+eligibility requires both graph evidence and the other completion checks. Older
+baselines retain their original configuration and evidence; a retrospective
+scope check cannot manufacture their missing pre-session namespace proof.
 
 Confirm Codex has the actual `codebase-memory-mcp` provider configured and its
 tools discoverable before a campaign. Provide the same provider build and
