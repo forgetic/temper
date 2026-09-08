@@ -10,7 +10,10 @@ use temper_agent_core::{
     CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE, DECISION_ANCHOR_CONVERGENCE_MESSAGE,
 };
 
-use super::{ModelObservations, is_current_root_source_result, messages_contain};
+use super::{ModelObservations, messages_contain};
+
+#[path = "mapped_gap_source_evidence.rs"]
+mod source_evidence;
 
 const MIXED_RECOVERY_GUIDANCE: &str = "decision-evidence recovery required; missing evidence: [trace, implementation, caller, focused_test]; permitted action: targeted_current_root_graph_call; remaining allowance: 4";
 const DENIED_CANARY_COMMAND: &str =
@@ -39,11 +42,7 @@ fn record_observations(view: &RequestView, observations: &mut ModelObservations)
     observations.graph_trace_seen |= provider_results(view)
         .iter()
         .any(|result| result.get("callers").is_some());
-    let sources = view
-        .messages
-        .iter()
-        .filter(|message| is_current_root_source_result(&message.content))
-        .count();
+    let sources = source_evidence::verified_source_count(&provider_results(view));
     observations.current_root_source_seen |= sources > 0;
     observations.current_root_source_results += sources;
 }
@@ -268,20 +267,13 @@ fn root_result_for(
     result_index: usize,
     field: &str,
 ) -> String {
-    let pointer = format!("/results/0/results/{result_index}/{field}");
-    root_results(view)
-        .find(|result| {
-            result
-                .pointer("/results/0/root_query")
-                .and_then(JsonValue::as_str)
-                == Some(root_query)
-        })
-        .and_then(|result| {
-            result
-                .pointer(&pointer)
-                .and_then(JsonValue::as_str)
-                .map(str::to_string)
-        })
+    let root_index = match root_query {
+        ROOT_A_QUERY => 0,
+        ROOT_B_QUERY => 1,
+        _ => panic!("unknown scripted root query"),
+    };
+    source_evidence::selected_value(&provider_results(view), root_index, result_index, field)
+        .map(str::to_string)
         .expect("independent root omitted an approved later-turn selector")
 }
 

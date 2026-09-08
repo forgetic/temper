@@ -10,9 +10,11 @@ use temper_agent_core::CODEBASE_MEMORY_EXPLORATION_CLOSED_MESSAGE;
 
 use super::{
     BOUNDED_GRAPH_RESULT_NEEDLE, MAX_MODEL_MESSAGE_BYTES, ModelObservations,
-    RAW_PROVIDER_FAILURE_NEEDLE, SAFE_PROVIDER_FAILURE, is_current_root_source_result,
-    messages_contain,
+    RAW_PROVIDER_FAILURE_NEEDLE, SAFE_PROVIDER_FAILURE, messages_contain,
 };
+
+#[path = "mapped_graph_source_evidence.rs"]
+mod source_evidence;
 
 pub(super) fn start(
     request_count: Arc<AtomicUsize>,
@@ -44,11 +46,7 @@ fn record_observations(view: &RequestView, observations: &mut ModelObservations)
     observations.graph_trace_seen |= provider_results(view)
         .iter()
         .any(|result| result.get("related_sources").is_some());
-    let sources = view
-        .messages
-        .iter()
-        .filter(|message| is_current_root_source_result(&message.content))
-        .count();
+    let sources = source_evidence::verified_source_count(&provider_results(view));
     observations.current_root_source_seen |= sources > 0;
     observations.current_root_source_results += sources;
     observations.safe_failure_seen |= messages_contain(view, SAFE_PROVIDER_FAILURE);
@@ -163,16 +161,17 @@ fn assert_complete_source_evidence(view: &RequestView) {
             .any(|result| result.get("related_sources").is_some())
     );
     assert_eq!(
+        source_evidence::verified_source_count(&results),
+        3,
+        "mutation requires exact implementation, caller, and focused-test fixture sources"
+    );
+    assert_eq!(
         results
             .iter()
-            .filter(|result| {
-                result.get("binding").and_then(JsonValue::as_str)
-                    == Some("current_prepared_checkout")
-                    && result.get("source").and_then(JsonValue::as_str).is_some()
-            })
+            .filter(|result| result.get("source").is_some())
             .count(),
         3,
-        "mutation requires three complete typed current-root source results"
+        "the mapped transcript must contain exactly its three declared source results"
     );
 }
 
