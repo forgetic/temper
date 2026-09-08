@@ -99,7 +99,7 @@ fn opaque_trace_preserves_qualified_source_in_provider_echoed_zero_report() {
         .reserve_implementation_trace_reference(&input, Some(&root))
         .unwrap()
         .unwrap();
-    let expanded = lineages
+    lineages
         .expand_recovery_selector(GraphCorrelationToolV1::TracePath.public_name(), &mut input, None)
         .unwrap()
         .unwrap();
@@ -109,9 +109,9 @@ fn opaque_trace_preserves_qualified_source_in_provider_echoed_zero_report() {
         "function": input["function_name"], "direction": "inbound", "mode": "calls",
         "callers_total": 0, "callers": {"cols": ["name", "hop"], "groups": []}
     }));
-    let trace = lineages.record_with_expanded_recovery(
+    let trace = lineages.record(
         &correlation(GraphCorrelationTargetKindV1::FunctionName), &input,
-        result.typed_parts.as_deref(), None, Some(&expanded),
+        result.typed_parts.as_deref(),
     ).unwrap();
     assert_eq!(trace.root_binding, root);
     assert_eq!(trace.caller_discovery, Some(CallerDiscoveryOutcomeV1::NoProductionCallersReported));
