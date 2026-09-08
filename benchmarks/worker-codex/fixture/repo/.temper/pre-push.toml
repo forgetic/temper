@@ -1,0 +1,15 @@
+version = 1
+
+[pre_push]
+required = true
+cwd = "repo"
+
+[[pre_push.commands]]
+id = "fixture-format"
+argv = ["cargo", "fmt", "--all", "--", "--check"]
+timeout_secs = 60
+
+[[pre_push.commands]]
+id = "fixture-tests"
+argv = ["cargo", "test", "--offline", "--quiet"]
+timeout_secs = 60
