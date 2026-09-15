@@ -27,12 +27,14 @@ fn reply(view: &RequestView) -> Reply {
 fn patch() -> String {
     let creation_header = format!("diff --git a/demo/{CREATED_FILE} b/demo/{CREATED_FILE}");
     let creation_hunk = format!("@@ -0,0 +1,{} @@", CREATED_SOURCE.lines().count());
+    // Consume the declared old rows before the indented next-file boundary;
+    // only the new counts are deliberately wrong and need recounting.
     mapped_patch_creation_fake::patch()
         .replace(
             "@@ -1,9 +1,5 @@\n pub mod caller;\n",
-            "@@ -1 +1 @@\n-pub mod caller;\n+pub mod caller; // Keep caller routing public.\n@@ -2,80 +2,40 @@\n",
+            "@@ -1 +1 @@\n-pub mod caller;\n+pub mod caller; // Keep caller routing public.\n@@ -2,8 +2,40 @@\n",
         )
-        .replace(&creation_header, &format!("  {creation_header}"))
+        .replace(&creation_header, &format!(" {creation_header}"))
         .replace(&creation_hunk, "@@ -0,0 +1,80 @@")
         .replace("new file mode 100644\n", "")
 }
@@ -75,11 +77,11 @@ mod tests {
     #[test]
     fn framing_fixture_requires_recovery_before_git_can_apply_it() {
         let patch = patch();
-        assert!(patch.contains("\n  diff --git a/demo/tests/created_dispatch.rs"));
+        assert!(patch.contains("\n diff --git a/demo/tests/created_dispatch.rs"));
         assert!(patch.contains(
             "@@ -1 +1 @@\n-pub mod caller;\n+pub mod caller; // Keep caller routing public.\n@@"
         ));
-        assert!(patch.contains("@@ -2,80 +2,40 @@"));
+        assert!(patch.contains("@@ -2,8 +2,40 @@"));
         assert!(patch.contains("@@ -0,0 +1,80 @@"));
         assert!(!patch.contains("new file mode"));
         let temp = tempfile::tempdir().unwrap();
