@@ -6,13 +6,19 @@ import json
 from pathlib import Path
 
 
-def codex_config_fingerprint(config, output: Path, pairs: int) -> str:
+def codex_config_fingerprint(config, output: Path, pairs: int, *, layout: str = "paired") -> str:
+    root = output.resolve()
+    if layout == "paired":
+        checkouts = [root / f"pairs/{pair:03}/codex/repo" for pair in range(1, pairs + 1)]
+    elif layout == "single":
+        checkouts = [root / "codex/repo"]
+    elif layout == "none":
+        checkouts = []
+    else:
+        raise ValueError("Codex checkout layout must be paired, single, or none")
     normalized = copy.deepcopy(config)
     projects = normalized.get("projects")
     if isinstance(projects, dict):
-        root = output.resolve()
-        checkouts = [root / "codex/repo"]  # The single-arm diagnostic layout.
-        checkouts += [root / f"pairs/{pair:03}/codex/repo" for pair in range(1, pairs + 1)]
         for checkout in checkouts:
             key = str(checkout)
             if projects.get(key) == {"trust_level": "trusted"}:

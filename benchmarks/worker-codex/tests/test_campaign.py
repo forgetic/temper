@@ -93,6 +93,14 @@ class CampaignTests(unittest.TestCase):
                 campaign.execute(options)
         self.assertFalse(options.output.exists())
 
+    def test_campaign_rejects_diagnostic_layouts_before_creating_output(self):
+        for layout in ["single", "none"]:
+            options = SimpleNamespace(output=self.root / layout, codex_checkout_layout=layout)
+            with patch.dict("os.environ", {"TEMPER_BENCHMARK_LIVE": "1"}):
+                with self.assertRaisesRegex(ValueError, "paired Codex checkout layout"):
+                    campaign.execute(options)
+            self.assertFalse(options.output.exists())
+
     def test_configuration_drift_retains_failed_arm_without_running_it(self):
         options = SimpleNamespace(output=self.root / "campaign", repository=self.root / "source",
                                   task_revision="frozen-revision", pairs=1, timeout_seconds=45)
