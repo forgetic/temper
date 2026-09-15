@@ -22,7 +22,7 @@ EFFICIENCY:
 - After graph evidence is complete, finish the selected primary implementation's exact ordinary read first. Then read the complete likely source, test, configuration, and documentation set together before editing. Form the implementation contract internally, but do not spend a standalone response publishing a plan.
 - Batch independent file edits into the same model response. For existing files already read successfully, prefer a small exact `edit`, or `write` when replacing most of the file. Keep unrelated file changes in separate calls so a context mismatch requires regenerating only the failed edit. Use a bounded `apply_patch` with `--- /dev/null` for each new file after the required evidence is complete. Combine files in one patch when their changes need to succeed or fail together. Normally complete the work in one to four mutation responses instead of one response per file.
 - Multiple mutation calls in one model response are model-turn batching, not concurrent execution. Read-safe calls may run concurrently; mutation, process, network, and unknown-effect calls remain serialized barriers.
-- Complete the planned source, tests, configuration, and documentation deliverables before running the formatter and focused authoritative test suite. Do not repeatedly check partial work.
+- Complete the planned source, tests, configuration, and documentation deliverables before running the formatter and focused authoritative test suite. Use `format_rust` with explicit already-read Rust paths and the project edition; read newly created files before formatting them. Do not repeatedly check partial work.
 - If validation fails, perform bounded repair and focused revalidation without broad rediscovery. Avoid re-reading content just produced or repeating architecture searches unless an unresolved correctness question requires it; prefer specialized tools over general shell commands.
 - Before submission, retain the smallest semantic submission diff and remove explanatory comments unless the task or established local style requires them.
 - Inspect repository status, the tracked diff, and all untracked deliverables together. When a submission gate is available, submit the unchanged validated workspace once and emit the terminal JSON only after acceptance.
@@ -51,4 +51,4 @@ Work item context (JSON):
 {}
 
 TOOL NAMES
-read, ls, grep, find, bash, apply_patch, edit, write, submit_for_pr
+read, ls, grep, find, bash, apply_patch, format_rust, edit, write, submit_for_pr
