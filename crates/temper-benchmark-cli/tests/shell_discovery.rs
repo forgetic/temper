@@ -501,3 +501,55 @@ fn unsupported_and_incomplete_shell_commands_remain_unknown() {
         );
     }
 }
+
+#[test]
+fn mutation_diagnostics_preserve_closed_shell_exclusion_without_forged_credit() {
+    for reason in [
+        ToolFailureReasonV1::MalformedMutationTarget,
+        ToolFailureReasonV1::ConflictingMutationTargets,
+    ] {
+        let mut trace = ingest_trace(fixture("graph-shell-excluded-denial-events.jsonl")).unwrap();
+        denied_finish(&mut trace).failure = Some(ToolFailureDiagnosticV1::with_reason(
+            ToolFailureCategoryV1::SchemaArgumentMismatch,
+            reason,
+        ));
+        let summary = analyze_trace(&trace, &shell_discovery_options());
+        let discovery = summary
+            .metrics
+            .graph
+            .as_ref()
+            .unwrap()
+            .conventional_discovery_before_selection
+            .as_ref()
+            .unwrap();
+        assert_eq!(discovery.classified_shell_segments, 0);
+        assert_eq!(discovery.total_calls, Some(0));
+        assert_eq!(
+            discovery.shell_command_classification_coverage,
+            MetricCoverageV1 {
+                observed: 1,
+                expected: Some(1)
+            }
+        );
+        denied_start(&mut trace).arguments = Some(CapturedContentV1::Inline(InlineContentV1 {
+            text: "PRIVATE-COMMAND".to_string(),
+            truncated: false,
+        }));
+        assert_denial_is_unavailable(&trace, "typed cause cannot authorize retained arguments");
+        denied_start(&mut trace).arguments = None;
+        denied_finish(&mut trace).status = ToolStatusV1::Succeeded;
+        assert_denial_is_unavailable(&trace, "typed cause still requires failed completion");
+        denied_finish(&mut trace).status = ToolStatusV1::Failed;
+        denied_finish(&mut trace).call_id = "other-call".to_string();
+        assert_denial_is_unavailable(&trace, "typed cause cannot excuse a mismatched call");
+    }
+    let mut trace = ingest_trace(fixture("graph-shell-excluded-denial-events.jsonl")).unwrap();
+    denied_finish(&mut trace).failure = Some(ToolFailureDiagnosticV1::with_reason(
+        ToolFailureCategoryV1::SchemaArgumentMismatch,
+        ToolFailureReasonV1::InvalidArguments,
+    ));
+    assert_denial_is_unavailable(
+        &trace,
+        "generic schema failure is not a mutation admission denial",
+    );
+}

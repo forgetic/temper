@@ -211,6 +211,10 @@ pub const SAFE_GRAPH_CORRELATION_DETAIL_KEY: &str = "temper_graph_correlation_v1
 pub enum ToolCallDenial {
     /// A trusted anchor still lacks the required later source evidence.
     DecisionAnchorMutation,
+    /// A denied mutation contains malformed target arguments.
+    MalformedMutationTarget,
+    /// A denied mutation declares incompatible operations or creation targets.
+    ConflictingMutationTargets,
     /// The provisional implementation still requires its bounded inspection.
     DecisionAnchorCorrectionInspection,
     /// Graph convergence or its non-progress budget closed graph exploration.

@@ -319,59 +319,77 @@ fn decision_anchor_shell_denial_never_invokes_registry_or_exposes_arguments() {
         "CREDENTIAL-VALUE",
         "PROCESS-LOCAL-VALUE",
     ];
-    let executions = Arc::new(AtomicUsize::new(0));
-    let tools = ToolRegistry::from_tools(vec![Box::new(NeverRunBash(Arc::clone(&executions)))]);
-    let clock = FakeClock(Mutex::new(VecDeque::from([10, 10])));
-    let recorder = Arc::new(Recorder::default());
-    let observed = Arc::clone(&recorder);
-    let call = ToolCall {
-        id: "denied-shell".to_string(),
-        name: "bash".to_string(),
-        arguments: serde_json::json!({
-            "command": PRIVATE.join(" "),
-            "argv": PRIVATE,
-        }),
-    };
-    let output = temper_agent_io::block_on(async move {
-        execute_tool(
-            &tools,
-            &call,
-            Duration::from_secs(1),
-            &CancellationToken::default(),
-            Some(ToolCallDenial::DecisionAnchorMutation),
-            &clock,
-            observed.as_ref(),
-            None,
-            None,
-        )
-        .await
-        .expect("local denial settles")
-    });
+    for (denial, category, reason) in [
+        (
+            ToolCallDenial::DecisionAnchorMutation,
+            ToolFailureCategory::PolicyDenial,
+            ToolFailureReason::PolicyPrecondition,
+        ),
+        (
+            ToolCallDenial::MalformedMutationTarget,
+            ToolFailureCategory::SchemaArgumentMismatch,
+            ToolFailureReason::MalformedMutationTarget,
+        ),
+        (
+            ToolCallDenial::ConflictingMutationTargets,
+            ToolFailureCategory::SchemaArgumentMismatch,
+            ToolFailureReason::ConflictingMutationTargets,
+        ),
+    ] {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let tools = ToolRegistry::from_tools(vec![Box::new(NeverRunBash(Arc::clone(&executions)))]);
+        let clock = FakeClock(Mutex::new(VecDeque::from([10, 10])));
+        let recorder = Arc::new(Recorder::default());
+        let observed = Arc::clone(&recorder);
+        let call = ToolCall {
+            id: "denied-shell".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": PRIVATE.join(" "),
+                "argv": PRIVATE,
+            }),
+        };
+        let output = temper_agent_io::block_on(async move {
+            execute_tool(
+                &tools,
+                &call,
+                Duration::from_secs(1),
+                &CancellationToken::default(),
+                Some(denial),
+                &clock,
+                observed.as_ref(),
+                None,
+                None,
+            )
+            .await
+            .expect("local denial settles")
+        });
 
-    assert_eq!(executions.load(Ordering::SeqCst), 0);
-    let failure = output.failure.expect("typed policy failure");
-    assert_eq!(failure.category, ToolFailureCategory::PolicyDenial);
-    assert_eq!(failure.reason, ToolFailureReason::PolicyPrecondition);
-    let model_text = output.output.content.iter().find_map(|block| match block {
-        tongs::model::ContentBlock::Text(text) => Some(text.text.as_str()),
-        _ => None,
-    });
-    assert_eq!(model_text, Some(failure.message.as_str()));
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        let failure = output.failure.expect("typed policy failure");
+        assert_eq!(failure.category, category);
+        assert_eq!(failure.reason, reason);
+        let model_text = output.output.content.iter().find_map(|block| match block {
+            tongs::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        });
+        assert_eq!(model_text, Some(failure.message.as_str()));
 
-    let event = recorder.0.lock().expect("events").remove(0);
-    let AgentEvent::ToolEnd { status, result, .. } = &event else {
-        panic!("denied shell must emit a completion");
-    };
-    assert_eq!(*status, ToolCallStatus::Failed);
-    assert_eq!(result.failure.as_ref(), Some(&failure));
-    assert_eq!(
-        result.preview.as_deref(),
-        Some(failure.message.as_str()),
-        "the completion may retain only the canonical model-visible failure"
-    );
-    let rendered = format!("{event:?} {failure:?} {:?}", output.output);
-    for private in PRIVATE {
-        assert!(!rendered.contains(private), "denial leaked {private}");
+        let event = recorder.0.lock().expect("events").remove(0);
+        let AgentEvent::ToolEnd { status, result, .. } = &event else {
+            panic!("denied shell must emit a completion");
+        };
+        assert_eq!(*status, ToolCallStatus::Failed);
+        assert_eq!(result.failure.as_ref(), Some(&failure));
+        assert_eq!(
+            result.preview.as_deref(),
+            Some(failure.message.as_str()),
+            "the completion may retain only the canonical model-visible failure"
+        );
+        let rendered = format!("{event:?} {failure:?} {:?}", output.output);
+        for private in PRIVATE {
+            assert!(!rendered.contains(private), "denial leaked {private}");
+        }
     }
 }
 
