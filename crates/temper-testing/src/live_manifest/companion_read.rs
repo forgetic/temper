@@ -22,9 +22,11 @@ pub(super) fn verify_merged(
     final_state: &FinalStateEvidence,
     log: &Path,
 ) -> Result<(), String> {
-    if scenario.scenario_path.file_name().and_then(|s| s.to_str())
-        != Some("mapped-live-companion-read")
-    {
+    let name = scenario.scenario_path.file_name().and_then(|s| s.to_str());
+    if !matches!(
+        name,
+        Some("mapped-live-companion-read" | "mapped-live-batched-edits")
+    ) {
         return Ok(());
     }
     if std::fs::read_to_string(scenario.repo.seed_path.join(COMPANION_FILE))
@@ -51,14 +53,33 @@ pub(super) fn verify_merged(
         return Err("companion scenario default branch is not the recorded merged commit".into());
     }
     verify_companion_blob(&checkout, merged)?;
+    if name == Some("mapped-live-batched-edits") {
+        super::batched_edits::verify_primary_blob(&checkout, merged)?;
+    }
     super::patch_creation::verify_changed_paths(
         &checkout,
         merged,
         &["Cargo.lock", COMPANION_FILE, "src/lib.rs"],
     )?;
-    writeln!(OpenOptions::new().append(true).open(log).map_err(|e| e.to_string())?,
-        "companion-read-fact {{\"checkpoint\":\"existing-seed-file-matches-merged-change\",\"passed\":true}}")
-        .map_err(|e| e.to_string())
+    let (prefix, checkpoint) = if name == Some("mapped-live-batched-edits") {
+        (
+            "batched-edit-fact",
+            "both-existing-files-match-merged-changes",
+        )
+    } else {
+        (
+            "companion-read-fact",
+            "existing-seed-file-matches-merged-change",
+        )
+    };
+    writeln!(
+        OpenOptions::new()
+            .append(true)
+            .open(log)
+            .map_err(|e| e.to_string())?,
+        "{prefix} {{\"checkpoint\":\"{checkpoint}\",\"passed\":true}}"
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn verify_companion_blob(checkout: &Path, merged: &str) -> Result<(), String> {
@@ -69,7 +90,7 @@ fn verify_companion_blob(checkout: &Path, merged: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn git_output(checkout: &Path, arguments: &[&str]) -> Result<Vec<u8>, String> {
+pub(super) fn git_output(checkout: &Path, arguments: &[&str]) -> Result<Vec<u8>, String> {
     let output = Command::new("git")
         .current_dir(checkout)
         .args(arguments)
