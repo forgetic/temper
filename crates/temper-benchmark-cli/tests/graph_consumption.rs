@@ -784,3 +784,5 @@ fn independently_rooted_canonical_descendants_are_relevant_to_their_own_targets(
     assert_eq!(graph.relevant_results, Some(5));
     assert_eq!(graph.relevance_coverage.observed, 5);
 }
+
+mod batched_mutations;

@@ -23,6 +23,8 @@ pub mod prompt_overlays;
 pub mod provider;
 mod tool_preview;
 pub mod usage;
+mod workspace_edits;
+mod workspace_files;
 mod workspace_format;
 mod workspace_patch;
 

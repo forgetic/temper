@@ -49,7 +49,9 @@
 
 mod capability;
 mod codebase_memory;
+mod edit_files;
 mod error;
+mod file_updates;
 mod forge;
 mod format;
 mod patch;
