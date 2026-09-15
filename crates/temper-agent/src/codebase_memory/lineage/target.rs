@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use super::super::scope::WorkspaceScope;
 use crate::mcp::McpToolResultPart;
+use crate::workspace_format::{FormatRustInput, existing_format_target};
 use crate::workspace_patch::{PatchOperation, patch_targets, verify_missing_target};
 
 mod process;
@@ -117,6 +118,26 @@ impl WorkspaceTargetRegistry {
                 };
                 self.resolve_patch(scope, patch)
             }
+            "format_rust" => match FormatRustInput::parse(arguments) {
+                Ok(input) => InvocationTargetAdmission::Mutation(
+                    input
+                        .paths
+                        .iter()
+                        .map(|path| {
+                            if existing_format_target(&scope.workspace_root, path).is_err() {
+                                TargetAdmissionOutcome::Ineligible(
+                                    TargetAdmissionStatus::MalformedTarget,
+                                )
+                            } else {
+                                self.resolve_workspace_path(scope, path)
+                            }
+                        })
+                        .collect(),
+                ),
+                Err(_) => {
+                    InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::MalformedTarget)
+                }
+            },
             "bash" => process::classify_bash(object),
             "submit_for_pr" => InvocationTargetAdmission::ControlPlane,
             _ => InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool),

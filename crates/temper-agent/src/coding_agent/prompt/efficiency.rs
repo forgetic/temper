@@ -67,7 +67,9 @@ pub(super) fn render_efficiency(prompt: &mut String, capability: Capability) {
              remain serialized barriers.\n\
              - Complete the planned source, tests, configuration, and documentation \
              deliverables before running the formatter and focused authoritative \
-             test suite. Do not repeatedly check partial work.\n\
+             test suite. Use `format_rust` with explicit already-read Rust paths \
+             and the project edition; read newly created files before formatting \
+             them. Do not repeatedly check partial work.\n\
              - If validation fails, perform bounded repair and focused revalidation \
              without broad rediscovery. Avoid re-reading content just produced or \
              repeating architecture searches unless an unresolved correctness \
