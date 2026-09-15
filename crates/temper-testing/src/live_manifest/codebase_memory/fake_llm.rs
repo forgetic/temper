@@ -69,6 +69,12 @@ impl CodebaseMemoryFake {
         } else if lifecycle_profile == Some("mapped-live-graph-consumption")
             && script_path
                 .file_name()
+                .is_some_and(|name| name == "mapped-live-rust-format.json")
+        {
+            mapped_rust_format_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-graph-consumption")
+            && script_path
+                .file_name()
                 .is_some_and(|name| name == "mapped-live-patch-creation.json")
         {
             mapped_patch_creation_fake::start(request_count, observations_for_rule)?

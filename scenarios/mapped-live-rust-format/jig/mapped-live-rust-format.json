@@ -1,0 +1,17 @@
+{
+  "phases": [
+    {
+      "name": "mapped-live-rust-format-runtime",
+      "when": {
+        "messages_contain": [
+          "__mapped_live_rust_format_fixture_runtime__"
+        ]
+      },
+      "sequence": [
+        {
+          "text": "The live fixture formats only explicit Rust files after every target has been read."
+        }
+      ]
+    }
+  ]
+}

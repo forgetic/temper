@@ -148,7 +148,7 @@ pub(super) fn reply(view: &RequestView) -> Reply {
     }
 }
 
-fn tool_reply(id: &str, name: &str, args: JsonValue) -> Reply {
+pub(super) fn tool_reply(id: &str, name: &str, args: JsonValue) -> Reply {
     Reply {
         turns: vec![Turn::ToolCall {
             id: id.to_string(),
