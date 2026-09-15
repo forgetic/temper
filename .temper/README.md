@@ -14,9 +14,15 @@ The script runs these checks in order and stops on the first failure:
 3. Rust file-size policy
 4. Ambient-environment access policy
 5. Workspace test prebuild
-6. Quick nextest test execution
-7. Linked test-binary cleanup
-8. Clippy
+6. Test executable integrity regressions and native-header checks
+7. Quick nextest test execution
+8. Linked test-binary cleanup
+9. Clippy
+
+The integrity guard uses nextest's binaries-only inventory without executing
+test harnesses. Missing or damaged executable headers fail validation before a
+corrupt retained output can silently appear as an empty test suite. It reports
+the affected paths and leaves the outputs available for inspection and rebuild.
 
 The repository-local kache configuration excludes the three `harness = false`
 test targets that kache 0.11 cannot recognize as extensionless executables.
