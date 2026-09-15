@@ -4,10 +4,17 @@ use super::*;
 fn batched_mutations_preserve_prior_read_evidence_without_becoming_selections() {
     let mut baseline = typed_graph_consumption_trace();
     set_tool_name(&mut baseline, "patch-route", "read");
-    set_started_arguments(&mut baseline, "patch-route", "repo/src/route.rs", false);
+    set_started_arguments(
+        &mut baseline,
+        "patch-route",
+        r#"{"path":"repo/src/route.rs"}"#,
+        false,
+    );
     let expected = analyze_trace(&baseline, &graph_consumption_options())
         .metrics
         .graph;
+    assert_eq!(expected.as_ref().unwrap().relevant_results, Some(5));
+    assert_eq!(expected.as_ref().unwrap().irrelevant_successes, Some(0));
     for (name, arguments) in [
         (
             "edit_files",
