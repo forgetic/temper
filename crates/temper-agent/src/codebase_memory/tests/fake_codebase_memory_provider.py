@@ -202,6 +202,9 @@ for line in sys.stdin:
                     marker.write("waiting")
                 deadline = time.monotonic() + 15
                 while not os.path.exists(f"{marker_base}.index-release"):
+                    if not os.path.exists(f"{marker_base}.index-waiting"):
+                        tool_result(request["id"], "index fixture workspace removed", True)
+                        break
                     if time.monotonic() >= deadline:
                         tool_result(request["id"], "index fixture release timed out", True)
                         break
