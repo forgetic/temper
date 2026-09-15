@@ -1,0 +1,74 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-rust-format"
+status = "active"
+intent = "Prove that explicit Rust formatting requires each exact target read and delivers only the formatted primary and new regression."
+introduced_by = "#1314"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/mapped-live-patch-creation"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/mapped-live-rust-format.json"
+
+[validation]
+feature = "ai/temper#1314"
+plan = "ai/temper#1314"
+source_branch = "agent/pr-for-feature-1314"
+change = "new"
+
+[feature_contract]
+claim = "After complete typed graph evidence and a successful primary read, formatting a newly created regression is denied until its own read; the identical explicit format call then delivers exact formatted files."
+stimulus = "Reuse the historical six-call provider transcript and primary read, apply an intentionally unformatted edit/create patch, attempt formatting both explicit Rust paths before the new-file read, observe local denial, read that file, then retry the same format call through real Forgejo, host Actions, standalone Temper, and Jig."
+observable = "The unchanged six typed graph calls and graph denial, a primary read, a successful creation patch, a denied format call, a new regression read, one successful format call, passing validation and CI, merge, issue closure, and exact formatted merged blobs."
+assertion = "All historical graph counts remain enforced; an unread new target blocks the whole formatting call; after its successful read, the identical call succeeds and delivers exactly Cargo.lock, src/lib.rs, and tests/created_dispatch.rs, with both Rust blobs matching their formatted expectations at the actual merge."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-rust-format.json"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Repair preferred dispatch and create its regression test"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[expect]
+outcome = "Every explicit Rust formatting target has been read and both exact formatted files reach the merged commit with only the expected generated lockfile."
+
+[[expect.sequence]]
+required = true
+id = "typed-source-and-exact-reads-before-rust-format"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "implementation" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "caller" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", id = "observe-expected-unavailable-descendant", "tool.failure.category" = "graph_lifecycle_denial" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-conventional-fallback-source" } },
+  { event = "tool.end", fields = { tool = "apply_patch", id = "patch-unformatted-primary-and-create-regression" } },
+  { event = "tool.error", fields = { tool = "format_rust", id = "format-unread-created-regression-denied", "tool.failure.category" = "policy_denial", "tool.failure.reason" = "policy_precondition" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-created-regression-before-format" } },
+  { event = "tool.end", fields = { tool = "format_rust", id = "format-read-primary-and-created-regression" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-minimal-mapped-repair" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-mapped-graph-repair" } },
+  { event = "workspace.diff.produced", fields = { changed_count = 3 } },
+]
+
+[[assertions]]
+id = "formatted-primary-and-regression-match-actual-merge"
+kind = "command"
+phase = "after-convergence"
+command = "assertions/merged-creation.sh"
+timeout_ms = 5000
+required = true
