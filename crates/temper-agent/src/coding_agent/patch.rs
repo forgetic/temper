@@ -42,9 +42,9 @@ impl Tool for ApplyPatchTool {
     }
 
     fn description(&self) -> &str {
-        "Apply one cohesive unified Git patch to the workspace. Prefer this for planned \
-         cross-file source, test, and documentation changes instead of one edit/write \
-         turn per file. The patch is checked in full before application; absolute paths, \
+        "Apply a unified Git patch for coupled changes or verified new-file creation. \
+         Batch independent existing-file edit/write calls in one model response. \
+         The patch is checked in full before application; absolute paths, \
          parent traversal, unsafe paths, malformed hunks, and partial application fail. \
          To create a new file, use `--- /dev/null` and `+++ b/path`; the destination \
          must still be absent. Creation cannot replace an existing file. \
