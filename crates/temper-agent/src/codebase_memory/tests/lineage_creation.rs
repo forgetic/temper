@@ -134,3 +134,70 @@ fn patch_creation_destination_appearing_after_admission_is_rejected_by_real_tool
         "concurrent content\n"
     );
 }
+
+#[test]
+fn mutation_diagnostics_receive_distinct_parser_conflict_and_unread_target_statuses() {
+    let root = tempfile::tempdir().unwrap();
+    let registry = creation_registry(root.path());
+    std::fs::create_dir_all(root.path().join("demo")).unwrap();
+    std::fs::write(root.path().join("demo/existing.rs"), "old\n").unwrap();
+    for (patch, expected) in [
+        (
+            "not a unified diff".to_string(),
+            TargetAdmissionStatus::MalformedTarget,
+        ),
+        (
+            new_file_patch("demo/existing.rs"),
+            TargetAdmissionStatus::CompetingTargets,
+        ),
+        (
+            new_file_patch("demo/existing.rs/child.rs"),
+            TargetAdmissionStatus::CompetingTargets,
+        ),
+        (
+            format!(
+                "{}{}",
+                new_file_patch("demo/new.rs"),
+                new_file_patch("demo/new.rs")
+            ),
+            TargetAdmissionStatus::CompetingTargets,
+        ),
+    ] {
+        assert!(
+            matches!(registry.resolve_invocation_targets("apply_patch", &serde_json::json!({"patch":patch})),
+            InvocationTargetAdmission::Ineligible(status) if status == expected)
+        );
+    }
+    let missing_path_argument =
+        registry.resolve_invocation_targets("write", &serde_json::json!({"content":"PRIVATE"}));
+    assert!(
+        matches!(missing_path_argument, InvocationTargetAdmission::Mutation(ref outcomes)
+        if matches!(outcomes.as_slice(), [TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::MalformedTarget)]))
+    );
+    let existing_patch =
+        "--- a/demo/existing.rs\n+++ b/demo/existing.rs\n@@ -1 +1 @@\n-old\n+updated\n";
+    let mixed = format!("{}{}", existing_patch, new_file_patch("demo/new.rs"));
+    assert!(
+        matches!(registry.resolve_invocation_targets("apply_patch", &serde_json::json!({"patch":mixed})),
+        InvocationTargetAdmission::PatchCreation { existing, .. }
+        if matches!(existing.as_slice(), [TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget)]))
+    );
+    assert!(matches!(
+        registry
+            .resolve_invocation_targets("read", &serde_json::json!({"path":"demo/existing.rs"})),
+        InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(_))
+    ));
+    assert!(
+        matches!(registry.resolve_invocation_targets("apply_patch", &serde_json::json!({"patch":mixed})),
+        InvocationTargetAdmission::PatchCreation { existing, .. }
+        if matches!(existing.as_slice(), [TargetAdmissionOutcome::Eligible(_)]))
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("demo/existing.rs")).unwrap(),
+        "old\n"
+    );
+    assert!(
+        !root.path().join("demo/new.rs").exists(),
+        "resolution must not mutate files"
+    );
+}

@@ -448,6 +448,12 @@ async fn execute_tool(
         if let Some(denial) = denial {
             let failure = match denial {
                 ToolCallDenial::DecisionAnchorMutation => ToolFailureDiagnostic::policy_denial(),
+                ToolCallDenial::MalformedMutationTarget => {
+                    ToolFailureDiagnostic::schema(ToolFailureReason::MalformedMutationTarget)
+                }
+                ToolCallDenial::ConflictingMutationTargets => {
+                    ToolFailureDiagnostic::schema(ToolFailureReason::ConflictingMutationTargets)
+                }
                 ToolCallDenial::DecisionAnchorCorrectionInspection => {
                     ToolFailureDiagnostic::correction_inspection_denial()
                 }

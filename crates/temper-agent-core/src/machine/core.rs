@@ -475,7 +475,14 @@ impl AgentMachine {
                 .flatten();
             let shell_discovery_disposition = (rejection.is_none()
                 && call.name == "bash"
-                && matches!(&denial, Some(ToolCallDenial::DecisionAnchorMutation)))
+                && matches!(
+                    &denial,
+                    Some(
+                        ToolCallDenial::DecisionAnchorMutation
+                            | ToolCallDenial::MalformedMutationTarget
+                            | ToolCallDenial::ConflictingMutationTargets
+                    )
+                ))
             .then(ShellDiscoveryDispositionV1::excluded_never_executed_local_policy_denial);
             // A locally rejected or denied call must not expose either
             // shell-rendered argument presentation to activity.

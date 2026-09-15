@@ -37,6 +37,10 @@ pub(super) fn map_tool_failure(value: ToolFailureDiagnostic) -> ToolFailureDiagn
     let reason = match value.reason {
         ToolFailureReason::UnknownTool => ToolFailureReasonV1::UnknownTool,
         ToolFailureReason::InvalidArguments => ToolFailureReasonV1::InvalidArguments,
+        ToolFailureReason::MalformedMutationTarget => ToolFailureReasonV1::MalformedMutationTarget,
+        ToolFailureReason::ConflictingMutationTargets => {
+            ToolFailureReasonV1::ConflictingMutationTargets
+        }
         ToolFailureReason::PolicyPrecondition => ToolFailureReasonV1::PolicyPrecondition,
         ToolFailureReason::CorrectionInspectionRequired => {
             ToolFailureReasonV1::CorrectionInspectionRequired

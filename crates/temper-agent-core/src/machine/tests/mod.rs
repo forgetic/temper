@@ -14,4 +14,5 @@ mod batching;
 mod decision_anchor;
 mod invocation;
 mod loop_lifecycle;
+mod mutation_diagnostics;
 mod ordinary_failure;

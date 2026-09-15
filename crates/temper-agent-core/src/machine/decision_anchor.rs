@@ -27,6 +27,7 @@ mod companion_read;
 mod creation;
 mod evidence;
 mod exact_read;
+mod mutation_diagnostic;
 mod output;
 mod progress;
 mod settlement;
