@@ -52,11 +52,11 @@ pub(super) fn render_efficiency(prompt: &mut String, capability: Capability) {
              before editing. Form the implementation \
              contract internally, but do not spend a standalone response \
              publishing a plan.\n\
-             - Batch independent file edits into the same model response. For \
-             existing files already read successfully, prefer a small exact `edit`, \
-             or `write` when replacing most of the file. Keep unrelated file changes \
-             in separate calls so a context mismatch requires regenerating only \
-             the failed edit. Use a bounded `apply_patch` with `--- /dev/null` for \
+             - Use one `edit_files` call for the complete set of existing files \
+             already read successfully. Supply unique, nonoverlapping exact oldText/newText \
+             replacements against each original file. Keep independent mutation calls \
+             in the same model response; use `edit` for a small individual repair \
+             or `write` when replacing most of one file. Use a bounded `apply_patch` with `--- /dev/null` for \
              each new file after the required evidence is complete. Combine files \
              in one patch when their changes need to succeed or fail together. \
              Normally complete the work in one to four mutation responses instead \

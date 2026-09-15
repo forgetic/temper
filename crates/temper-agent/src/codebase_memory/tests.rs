@@ -2,6 +2,7 @@ mod bridge;
 mod confirmation;
 mod correlation;
 mod decision_evidence;
+mod edit_files_targets;
 mod format_targets;
 #[cfg(target_os = "linux")]
 mod handoff;

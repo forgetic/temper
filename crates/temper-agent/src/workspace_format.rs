@@ -1,12 +1,15 @@
 //! Shared admission and execution contract for explicit Rust formatting targets.
 
 use std::collections::BTreeSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
 
-pub(crate) const MAX_FORMAT_BYTES: usize = 2 * 1024 * 1024;
-pub(crate) const MAX_FORMAT_PATHS: usize = 64;
+use crate::workspace_files::validate_relative;
+pub(crate) use crate::workspace_files::{
+    MAX_FILE_BYTES as MAX_FORMAT_BYTES, MAX_FILE_PATHS as MAX_FORMAT_PATHS,
+    existing_target as existing_format_target,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,14 +53,7 @@ impl FormatRustInput {
         let mut unique = BTreeSet::new();
         for raw in &input.paths {
             let path = Path::new(raw);
-            if raw.is_empty()
-                || raw.len() > 4096
-                || raw.trim() != raw
-                || raw.contains(['\0', '\\'])
-                || raw.split('/').any(|part| matches!(part, "" | "." | ".."))
-                || path
-                    .components()
-                    .any(|part| !matches!(part, Component::Normal(_)))
+            if validate_relative(raw).is_err()
                 || path.extension().and_then(|value| value.to_str()) != Some("rs")
                 || !unique.insert(raw)
             {
@@ -68,28 +64,4 @@ impl FormatRustInput {
         }
         Ok(input)
     }
-}
-
-pub(crate) fn existing_format_target(root: &Path, relative: &str) -> Result<PathBuf, String> {
-    let mut candidate = root.canonicalize().map_err(|error| error.to_string())?;
-    if candidate != root {
-        return Err("workspace root changed during formatting".into());
-    }
-    for component in Path::new(relative).components() {
-        let Component::Normal(component) = component else {
-            return Err("format target must remain inside the workspace".into());
-        };
-        candidate.push(component);
-        let metadata = std::fs::symlink_metadata(&candidate)
-            .map_err(|error| format!("cannot inspect {relative}: {error}"))?;
-        if metadata.file_type().is_symlink() {
-            return Err(format!("format target contains a symlink: {relative}"));
-        }
-    }
-    if !std::fs::metadata(&candidate).is_ok_and(|metadata| metadata.is_file()) {
-        return Err(format!(
-            "format target must be an existing regular file: {relative}"
-        ));
-    }
-    Ok(candidate)
 }
