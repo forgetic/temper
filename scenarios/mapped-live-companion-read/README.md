@@ -20,3 +20,6 @@ Run `cargo dev-scenario-run scenarios/mapped-live-companion-read` from the
 validated source head, or use the documented focused validation command for
 `ai/temper#1304` with the landing branch, PR, SHA, and output directory.
 This is a functional Jig delivery proof, not real-model timing evidence.
+
+The inherited seed has no `Cargo.lock`; its validation command generates one.
+The delivery diff therefore contains the two patched files and that lockfile.
