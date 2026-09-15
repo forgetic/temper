@@ -9,12 +9,14 @@ use serde::Deserialize;
 use tongs::error::{Error, Result};
 use tongs::tools::{Tool, ToolEffects, ToolOutput, ToolUpdate};
 
-use crate::workspace_patch::{PatchOperation, patch_targets, verify_missing_target};
-
-const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
+use crate::workspace_patch::{
+    MAX_PATCH_BYTES, PatchOperation, prepare_patch, verify_missing_target,
+};
 
 #[cfg(test)]
 mod creation_tests;
+#[cfg(test)]
+mod framing_tests;
 
 pub(super) struct ApplyPatchTool {
     cwd: PathBuf,
@@ -46,6 +48,8 @@ impl Tool for ApplyPatchTool {
          parent traversal, unsafe paths, malformed hunks, and partial application fail. \
          To create a new file, use `--- /dev/null` and `+++ b/path`; the destination \
          must still be absent. Creation cannot replace an existing file. \
+         The host recounts hunk lengths and canonicalizes file headers before \
+         checking every target; source and context lines must match exactly. \
          Input: { patch: string } containing `diff --git`, `---`/`+++`, and `@@` hunks."
     }
 
@@ -85,7 +89,14 @@ impl Tool for ApplyPatchTool {
         }
         let cwd = self.cwd.clone();
         let patch = input.patch;
-        let files = changed_file_count(&patch);
+        let files = match prepare_patch(&patch) {
+            Ok(prepared) => prepared.targets.len(),
+            Err(status) => {
+                return Ok(ToolOutput::error(format!(
+                    "apply_patch: invalid patch targets: {status:?}"
+                )));
+            }
+        };
         // The registry wraps this filesystem tool in a dedicated joined owner
         // thread, so the blocking subprocess is contained outside the agent's
         // sans-I/O executor.
@@ -107,7 +118,11 @@ fn validate_patch(patch: &str) -> Result<()> {
             "apply_patch: patch exceeds {MAX_PATCH_BYTES} bytes"
         )));
     }
-    if !patch.lines().any(|line| line.starts_with("diff --git ")) {
+    if !patch.lines().any(|line| {
+        line.strip_prefix(' ')
+            .unwrap_or(line)
+            .starts_with("diff --git ")
+    }) {
         return Err(Error::Tool(
             "apply_patch: expected a unified Git patch with `diff --git` headers".into(),
         ));
@@ -121,9 +136,9 @@ fn git_apply(cwd: &Path, patch: &str) -> std::result::Result<(), String> {
 }
 
 fn run_git_apply(cwd: &Path, patch: &str, check: bool) -> std::result::Result<(), String> {
-    let targets = patch_targets(patch)
+    let prepared = prepare_patch(patch)
         .map_err(|status| format!("apply_patch: invalid patch targets: {status:?}"))?;
-    for (path, operation) in targets {
+    for (path, operation) in prepared.targets {
         if operation == PatchOperation::Create {
             verify_missing_target(cwd, &path).map_err(|status| {
                 format!("apply_patch: creation target is not safely absent: {status:?}")
@@ -153,7 +168,7 @@ fn run_git_apply(cwd: &Path, patch: &str, check: bool) -> std::result::Result<()
         .stdin
         .take()
         .expect("piped stdin")
-        .write_all(patch.as_bytes())
+        .write_all(prepared.text.as_bytes())
         .map_err(|error| format!("apply_patch: cannot send patch to git apply: {error}"))?;
     let output = child
         .wait_with_output()
@@ -169,24 +184,16 @@ fn run_git_apply(cwd: &Path, patch: &str, check: bool) -> std::result::Result<()
     ))
 }
 
-fn changed_file_count(patch: &str) -> usize {
-    patch
-        .lines()
-        .filter(|line| line.starts_with("diff --git "))
-        .count()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn validates_shape_size_and_counts_files() {
+    fn validates_shape_and_size() {
         assert!(validate_patch("").is_err());
         assert!(validate_patch("--- a/a\n+++ b/a\n").is_err());
         let patch = "diff --git a/a b/a\ndiff --git a/b b/b\n";
         assert!(validate_patch(patch).is_ok());
-        assert_eq!(changed_file_count(patch), 2);
     }
 
     #[test]
