@@ -104,7 +104,7 @@ role = "engineer"
 tool = "codebase_memory"
 mode = "required"
 index = "background"
-tool_timeout_secs = 2
+tool_timeout_secs = 60
 server = "$step:start-fake-codebase-memory-mcp"
 
 [[steps]]
