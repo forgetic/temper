@@ -25,13 +25,13 @@ temper-protocol-activity = { path = "../temper-protocol-activity" }
 temper-protocol-interaction = { path = "../temper-protocol-interaction" }
 uuid.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
 jig-server = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-core = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
 jig-record = { git = "https://git.ekanayaka.io/ai/jig.git", rev = "ca1edfd" }
-tempfile = { workspace = true }
 temper-process-containment = { path = "../temper-process-containment" }
 # Test-only: the jig-record request oracle runs its recorder on a jig-runtime
 # (skein) thread.
