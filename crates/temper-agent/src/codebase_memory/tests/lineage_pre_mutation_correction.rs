@@ -1,3 +1,5 @@
+include!("lineage_retained_companion_read.rs");
+
 fn run_implementation_correction_inspection(
     reverse_preview_completion: bool,
     retain_worker_slot: bool,
@@ -402,69 +404,9 @@ fn run_implementation_correction_inspection(
                 Some(ToolFailureDiagnostic::policy_denial()),
             );
 
-            // The rejected implementation gains no mutation authority from its preview.
-            // Only this later independent read can admit it as an exact companion.
-            let unchosen_read = complete_llm(
+            assert_retained_companion_read_preserves_retired_selector(
                 &mut machine,
-                assistant(vec![(
-                    "unchosen-target-read",
-                    "read",
-                    serde_json::json!({"path":"demo/src/model.rs"}),
-                )]),
-            );
-            let _ = complete_tool(
-                &mut machine,
-                "unchosen-target-read",
-                successful_output(),
-                None,
-            );
-            let retired_selector = complete_llm(
-                &mut machine,
-                assistant(vec![(
-                    "correction-after-companion-read",
-                    "codebase_memory_get_code_snippet",
-                    serde_json::json!({
-                        "qualified_name": correction_references[0],
-                        "decision_evidence_kind": "implementation",
-                    }),
-                )]),
-            );
-            assert!(retired_selector.iter().any(|request| matches!(
-                request,
-                AgentRequest::Emit(AgentEvent::ToolStart {
-                    recovery_reference_disposition: Some(
-                        GraphRecoveryReferenceDispositionV1::Rejected
-                    ),
-                    ..
-                })
-            )));
-            let retired_failure =
-                local_failure(&retired_selector, "correction-after-companion-read");
-            let _ = complete_tool(
-                &mut machine,
-                "correction-after-companion-read",
-                failed_output(),
-                Some(retired_failure),
-            );
-
-            let companion_mutation = complete_llm(
-                &mut machine,
-                assistant(vec![(
-                    "companion-target-mutation",
-                    "write",
-                    serde_json::json!({"path":"demo/src/model.rs","content":"changed"}),
-                )]),
-            );
-            assert!(companion_mutation.iter().any(|request| matches!(
-                request,
-                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
-                    if call.id == "companion-target-mutation"
-            )));
-            let _ = complete_tool(
-                &mut machine,
-                "companion-target-mutation",
-                successful_output(),
-                None,
+                &correction_references[0],
             );
 
             let retained_mutation = complete_llm(
@@ -479,11 +421,6 @@ fn run_implementation_correction_inspection(
                 request,
                 AgentRequest::RunTool { call, denial: None, rejection: None, .. }
                     if call.id == "retained-target-mutation"
-            )));
-            assert!(unchosen_read.iter().any(|request| matches!(
-                request,
-                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
-                    if call.id == "unchosen-target-read"
             )));
             return;
         }
