@@ -5,7 +5,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use temper_agent_core::TargetAdmissionStatus;
 
 mod creation;
+mod framing;
+#[cfg(test)]
+mod framing_tests;
+mod hunks;
 pub(crate) use creation::verify_missing_target;
+
+pub(crate) const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
+
+pub(crate) struct PreparedPatch {
+    pub(crate) text: String,
+    pub(crate) targets: BTreeMap<String, PatchOperation>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PatchOperation {
@@ -23,6 +34,26 @@ struct PatchSection {
 }
 
 pub(crate) fn patch_targets(
+    patch: &str,
+) -> Result<BTreeMap<String, PatchOperation>, TargetAdmissionStatus> {
+    Ok(prepare_patch(patch)?.targets)
+}
+
+pub(crate) fn prepare_patch(patch: &str) -> Result<PreparedPatch, TargetAdmissionStatus> {
+    // Explicit contradictory declarations remain contradictions even when
+    // another part of the input needs its framing or hunk lengths repaired.
+    if matches!(
+        canonical_targets(patch),
+        Err(TargetAdmissionStatus::CompetingTargets)
+    ) {
+        return Err(TargetAdmissionStatus::CompetingTargets);
+    }
+    let text = framing::canonicalize(patch)?;
+    let targets = canonical_targets(&text)?;
+    Ok(PreparedPatch { text, targets })
+}
+
+fn canonical_targets(
     patch: &str,
 ) -> Result<BTreeMap<String, PatchOperation>, TargetAdmissionStatus> {
     let mut paths = BTreeMap::new();

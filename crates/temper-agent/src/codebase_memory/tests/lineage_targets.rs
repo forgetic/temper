@@ -100,6 +100,12 @@
             TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::UnknownTarget),
             "an unmatched sibling must not piggyback on the admitted source target"
         );
+        let indented = patch.replace("\ndiff --git", "\n diff --git");
+        assert_eq!(
+            registry.resolve_invocation_targets("apply_patch", &serde_json::json!({"patch": indented})),
+            InvocationTargetAdmission::Mutation(targets.clone()),
+            "Git-compatible indented framing must expose the same unread sibling"
+        );
 
         let InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(fallback_target)) =
             registry.resolve_invocation_targets(
