@@ -174,8 +174,7 @@ fn mutation_diagnostics_receive_distinct_parser_conflict_and_unread_target_statu
         matches!(missing_path_argument, InvocationTargetAdmission::Mutation(ref outcomes)
         if matches!(outcomes.as_slice(), [TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::MalformedTarget)]))
     );
-    let existing_patch =
-        "--- a/demo/existing.rs\n+++ b/demo/existing.rs\n@@ -1 +1 @@\n-old\n+updated\n";
+    let existing_patch = "diff --git a/demo/existing.rs b/demo/existing.rs\n--- a/demo/existing.rs\n+++ b/demo/existing.rs\n@@ -1 +1 @@\n-old\n+updated\n";
     let mixed = format!("{}{}", existing_patch, new_file_patch("demo/new.rs"));
     assert!(
         matches!(registry.resolve_invocation_targets("apply_patch", &serde_json::json!({"patch":mixed})),
