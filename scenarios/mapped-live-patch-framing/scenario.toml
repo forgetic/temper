@@ -23,10 +23,10 @@ source_branch = "agent/pr-for-feature-1305"
 change = "new"
 
 [feature_contract]
-claim = "After complete typed graph evidence and a successful primary read, a cohesive patch with incorrect hunk counts, an indented second header, and a missing creation mode still delivers exactly the authorized edit and creation."
-stimulus = "Reuse the historical six-call provider transcript, observe local graph closure, read the primary implementation, then apply one explicit creation patch whose second diff header is indented, both hunk counts are wrong, and creation mode is omitted; run host validation, and deliver it through real Forgejo, host Actions, standalone Temper, and Jig."
-observable = "The unchanged six typed graph calls and local denial, one successful ordinary primary read, one successful recovered two-file patch, passing validation and CI, PR merge, issue closure, and an exact new-file comparison at the recorded merged commit."
-assertion = "All historical graph counts remain enforced; the intentionally malformed patch envelope completes after the primary read; two authored files and the generated Cargo.lock change; the new regression was absent from the seed and its bytes match the actual merged default-branch commit."
+claim = "After complete typed graph evidence and a successful primary read, a cohesive patch with incorrect hunk counts, an indented second header, a missing creation mode, and a zero-context first-line replacement still delivers exactly the authorized edit and creation."
+stimulus = "Reuse the historical six-call provider transcript, observe local graph closure, read the primary implementation, then apply one explicit creation patch whose second diff header is indented, the contextual hunk counts are wrong, creation mode is omitted, and its first line has a zero-context replacement; run host validation, and deliver it through real Forgejo, host Actions, standalone Temper, and Jig."
+observable = "The unchanged six typed graph calls and local denial, one successful ordinary primary read, one successful recovered two-file patch, passing validation and CI, PR merge, issue closure, and an exact primary and new-file comparisons at the recorded merged commit."
+assertion = "All historical graph counts remain enforced; the intentionally malformed patch envelope completes after the primary read; two authored files and the generated Cargo.lock change; the primary file and new regression bytes match their exact expectations, the regression was absent from the seed, and its bytes match the actual merged default-branch commit."
 runtime_budget_seconds = 600
 jig_script_path = "jig/mapped-live-patch-framing.json"
 
