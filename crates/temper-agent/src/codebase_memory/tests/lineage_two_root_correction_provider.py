@@ -53,6 +53,11 @@ def search_graph(query):
 
 
 def trace_path(symbol):
+    qualified_symbol = symbol
+    symbol = {
+        "temper-v1-production.src.model.affinity_topic": "affinity_topic",
+        "temper-v1-production.src.route.worker_slot": "worker_slot",
+    }.get(symbol)
     if symbol == "affinity_topic":
         callers = [
             {"name": "worker_slot", "qualified_name": "temper-v1-production.src.route.worker_slot"},
@@ -65,7 +70,7 @@ def trace_path(symbol):
         ]
     else:
         return None
-    return {"function": symbol, "direction": "inbound", "mode": "calls", "callers": callers, "provider_note": "PRIVATE-TWO-ROOT-PROVIDER-TEXT"}
+    return {"function": qualified_symbol, "direction": "inbound", "mode": "calls", "callers": callers, "provider_note": "PRIVATE-TWO-ROOT-PROVIDER-TEXT"}
 
 
 def get_code_snippet(symbol):
