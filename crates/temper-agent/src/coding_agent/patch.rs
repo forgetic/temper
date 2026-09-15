@@ -50,6 +50,7 @@ impl Tool for ApplyPatchTool {
          must still be absent. Creation cannot replace an existing file. \
          The host recounts hunk lengths and canonicalizes file headers before \
          checking every target; source and context lines must match exactly. \
+         Hunks without surrounding context are supported. \
          Input: { patch: string } containing `diff --git`, `---`/`+++`, and `@@` hunks."
     }
 
@@ -153,7 +154,7 @@ fn run_git_apply(cwd: &Path, patch: &str, check: bool) -> std::result::Result<()
         // Workspaces may contain one or more nested repositories and may also
         // live below an unrelated checkout. Apply relative to the authorized
         // workspace root instead of letting Git discover an ancestor repo.
-        .args(["apply", "--whitespace=nowarn"]);
+        .args(["apply", "--whitespace=nowarn", "--unidiff-zero"]);
     if check {
         command.arg("--check");
     }
