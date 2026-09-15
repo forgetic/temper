@@ -43,6 +43,11 @@ pub(super) fn verify_merged(
         return Err("creation scenario default branch is not the recorded merged commit".into());
     }
     verify_created_blob(&checkout, merged)?;
+    verify_changed_paths(
+        &checkout,
+        merged,
+        &["Cargo.lock", "src/lib.rs", CREATED_FILE],
+    )?;
     writeln!(OpenOptions::new().append(true).open(log).map_err(|e| e.to_string())?,
         "patch-creation-fact {{\"checkpoint\":\"absent-seed-file-matches-merged-bytes\",\"passed\":true}}")
         .map_err(|e| e.to_string())
@@ -52,6 +57,21 @@ fn verify_created_blob(checkout: &Path, merged: &str) -> Result<(), String> {
     let blob = git_output(checkout, &["show", &format!("{merged}:{CREATED_FILE}")])?;
     if blob != CREATED_SOURCE.as_bytes() {
         return Err("created regression does not match expected merged bytes".into());
+    }
+    Ok(())
+}
+
+pub(super) fn verify_changed_paths(
+    checkout: &Path,
+    merged: &str,
+    expected: &[&str],
+) -> Result<(), String> {
+    let changed = git_output(
+        checkout,
+        &["diff", "--name-only", &format!("{merged}^"), merged],
+    )?;
+    if changed != format!("{}\n", expected.join("\n")).as_bytes() {
+        return Err("mapped patch delivery contains unexpected changed paths".into());
     }
     Ok(())
 }
@@ -104,6 +124,47 @@ mod tests {
             1
         );
         assert!(bundle.repo.ci_source.contains("cargo test --quiet"));
+    }
+
+    #[test]
+    fn merged_path_check_requires_the_exact_patch_and_generated_lockfile() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        git_output(root, &["init", "--quiet"]).unwrap();
+        let commit = || {
+            git_output(root, &["add", "."]).unwrap();
+            git_output(
+                root,
+                &[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "--allow-empty",
+                    "-m",
+                    "fixture",
+                ],
+            )
+            .unwrap();
+        };
+        commit();
+        for path in ["Cargo.lock", "src/lib.rs", CREATED_FILE] {
+            std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.join(path), "fixture\n").unwrap();
+        }
+        commit();
+        let expected = ["Cargo.lock", "src/lib.rs", CREATED_FILE];
+        verify_changed_paths(root, "HEAD", &expected).unwrap();
+        assert!(verify_changed_paths(root, "HEAD", &["src/lib.rs", CREATED_FILE]).is_err());
+        assert!(
+            verify_changed_paths(root, "HEAD", &["Cargo.lock", "README.md", "src/lib.rs"]).is_err()
+        );
+        std::fs::write(root.join("unexpected.txt"), "extra\n").unwrap();
+        commit();
+        assert!(verify_changed_paths(root, "HEAD", &expected).is_err());
+        verify_changed_paths(root, "HEAD^", &expected).unwrap();
     }
 
     #[test]

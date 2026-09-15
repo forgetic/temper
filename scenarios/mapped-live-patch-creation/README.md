@@ -23,3 +23,6 @@ functional evidence; it does not measure real-model performance.
 Provider values and source contents remain in temporary runtime state. Retained
 aggregate evidence contains only the existing graph facts and the closed
 `absent-seed-file-matches-merged-bytes` checkpoint.
+
+The inherited seed has no `Cargo.lock`; its validation command generates one.
+The delivery diff therefore contains the two patched files and that lockfile.
