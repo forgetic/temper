@@ -26,7 +26,7 @@ change = "new"
 claim = "After complete typed graph evidence and a successful primary read, one cohesive patch can edit that existing file and create a host-verified absent regression file."
 stimulus = "Reuse the historical six-call provider transcript, observe local graph closure, read the primary implementation, then apply one explicit creation patch, run host validation, and deliver it through real Forgejo, host Actions, standalone Temper, and Jig."
 observable = "The unchanged six typed graph calls and local denial, one successful ordinary primary read, one successful two-file patch, passing validation and CI, PR merge, issue closure, and an exact new-file comparison at the recorded merged commit."
-assertion = "All historical graph counts remain enforced; the patch completes after the primary read; two files change; the new regression was absent from the seed and its bytes match the actual merged default-branch commit."
+assertion = "All historical graph counts remain enforced; the patch completes after the primary read; two authored files and the generated Cargo.lock change; the new regression was absent from the seed and its bytes match the actual merged default-branch commit."
 runtime_budget_seconds = 600
 jig_script_path = "jig/mapped-live-patch-creation.json"
 
@@ -59,7 +59,7 @@ events = [
   { event = "tool.end", fields = { tool = "apply_patch", id = "patch-read-primary-and-create-regression" } },
   { event = "tool.end", fields = { tool = "bash", id = "validate-minimal-mapped-repair" } },
   { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-mapped-graph-repair" } },
-  { event = "workspace.diff.produced", fields = { changed_count = 2 } },
+  { event = "workspace.diff.produced", fields = { changed_count = 3 } },
 ]
 
 [[assertions]]

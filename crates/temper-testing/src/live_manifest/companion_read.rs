@@ -51,6 +51,11 @@ pub(super) fn verify_merged(
         return Err("companion scenario default branch is not the recorded merged commit".into());
     }
     verify_companion_blob(&checkout, merged)?;
+    super::patch_creation::verify_changed_paths(
+        &checkout,
+        merged,
+        &["Cargo.lock", COMPANION_FILE, "src/lib.rs"],
+    )?;
     writeln!(OpenOptions::new().append(true).open(log).map_err(|e| e.to_string())?,
         "companion-read-fact {{\"checkpoint\":\"existing-seed-file-matches-merged-change\",\"passed\":true}}")
         .map_err(|e| e.to_string())

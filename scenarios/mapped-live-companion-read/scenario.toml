@@ -61,7 +61,7 @@ events = [
   { event = "tool.end", fields = { tool = "apply_patch", id = "patch-read-primary-and-companion" } },
   { event = "tool.end", fields = { tool = "bash", id = "validate-minimal-mapped-repair" } },
   { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-mapped-graph-repair" } },
-  { event = "workspace.diff.produced", fields = { changed_count = 2 } },
+  { event = "workspace.diff.produced", fields = { changed_count = 3 } },
 ]
 
 [[assertions]]
