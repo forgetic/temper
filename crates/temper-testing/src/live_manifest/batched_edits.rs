@@ -52,7 +52,13 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|entry| entry["fields"]["tool"].as_str() == Some("edit_files"))
+            .filter(|entry| {
+                entry
+                    .get("fields")
+                    .and_then(|fields| fields.get("tool"))
+                    .and_then(|tool| tool.as_str())
+                    == Some("edit_files")
+            })
             .collect::<Vec<_>>();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0]["event"].as_str(), Some("tool.error"));
