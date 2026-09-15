@@ -10,6 +10,7 @@ use tongs::tools::{
 };
 
 use super::Capability;
+use super::edit_files::EditFilesTool;
 use super::forge::{ForgeContextHost, ForgeGetItemTool, ForgeListRelatedTool};
 use super::format::FormatRustTool;
 use super::patch::ApplyPatchTool;
@@ -83,6 +84,7 @@ fn coding_tools_vec(
         Box::new(ManagedBashTool::with_containment(cwd, containment.clone())),
     ];
     if capability.is_writable() {
+        tools.push(joined_filesystem_tool(Box::new(EditFilesTool::new(cwd))));
         tools.push(joined_filesystem_tool(Box::new(ApplyPatchTool::new(cwd))));
         tools.push(joined_filesystem_tool(Box::new(FormatRustTool::new(
             cwd,

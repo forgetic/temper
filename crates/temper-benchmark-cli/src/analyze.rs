@@ -361,11 +361,15 @@ fn structure_metrics(trace: &NormalizedTrace, options: &AnalyzeOptions) -> Struc
         let AgentActivityEventV1::ToolFinished(tool) = &event.event else {
             continue;
         };
-        if tool.name == "edit" && tool.status == ToolStatusV1::Failed {
+        if matches!(tool.name.as_str(), "edit" | "edit_files")
+            && tool.status == ToolStatusV1::Failed
+        {
             failed_edits = failed_edits.saturating_add(1);
         }
-        if matches!(tool.name.as_str(), "write" | "edit" | "apply_patch")
-            && tool.status == ToolStatusV1::Succeeded
+        if matches!(
+            tool.name.as_str(),
+            "write" | "edit" | "edit_files" | "apply_patch" | "format_rust"
+        ) && tool.status == ToolStatusV1::Succeeded
         {
             mutation_sequences.insert(event.seq);
             match event.turn {
