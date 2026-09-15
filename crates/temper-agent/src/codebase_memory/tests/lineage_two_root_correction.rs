@@ -461,6 +461,40 @@ fn run_two_root_correction_regression(
         );
         assert!(!has_active_root_handoff(&after_exact_read));
 
+        for (id, path) in [
+            ("old-model-mutation", "repo/src/model.rs"),
+            ("unrelated-mutation", "repo/src/unrelated.rs"),
+        ] {
+            let denied = complete_llm(
+                &mut machine,
+                assistant(vec![(
+                    id,
+                    "write",
+                    serde_json::json!({"path":path,"content":"changed"}),
+                )]),
+            );
+            assert_decision_anchor_mutation_denial(&denied, id);
+            let failure = ToolFailureDiagnostic::policy_denial();
+            retained_diagnostics.push(failure.clone());
+            let _ = complete_tool(&mut machine, id, failed_output(), Some(failure));
+        }
+
+        for (read_id, path) in [
+            ("old-model-read", "repo/src/model.rs"),
+            ("post-decision-route-read", "repo/src/route.rs"),
+        ] {
+            let reads = complete_llm(
+                &mut machine,
+                assistant(vec![(read_id, "read", serde_json::json!({"path": path}))]),
+            );
+            assert!(reads.iter().any(|request| matches!(
+                request,
+                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
+                    if call.id == read_id
+            )));
+            let _ = complete_tool(&mut machine, read_id, successful_output(), None);
+        }
+
         let selected_or_first = selected_correction_reference
             .as_ref()
             .unwrap_or(&correction_references[0]);
@@ -502,39 +536,7 @@ fn run_two_root_correction_regression(
             "retired correction references cannot be reused at the provider",
         );
 
-        for (read_id, path) in [
-            ("old-model-read", "repo/src/model.rs"),
-            ("post-decision-route-read", "repo/src/route.rs"),
-        ] {
-            let reads = complete_llm(
-                &mut machine,
-                assistant(vec![(read_id, "read", serde_json::json!({"path": path}))]),
-            );
-            assert!(reads.iter().any(|request| matches!(
-                request,
-                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
-                    if call.id == read_id
-            )));
-            let _ = complete_tool(&mut machine, read_id, successful_output(), None);
-        }
-
-        for (id, path) in [
-            ("old-model-mutation", "repo/src/model.rs"),
-            ("unrelated-mutation", "repo/src/unrelated.rs"),
-        ] {
-            let denied = complete_llm(
-                &mut machine,
-                assistant(vec![(
-                    id,
-                    "write",
-                    serde_json::json!({"path":path,"content":"changed"}),
-                )]),
-            );
-            assert_decision_anchor_mutation_denial(&denied, id);
-            let failure = ToolFailureDiagnostic::policy_denial();
-            retained_diagnostics.push(failure.clone());
-            let _ = complete_tool(&mut machine, id, failed_output(), Some(failure));
-        }
+        assert_two_root_companion_mutation(&mut machine);
 
         let still_closed = complete_llm(
             &mut machine,
