@@ -943,3 +943,9 @@ validation.
 patch with recoverable envelope defects. It inherits the typed graph and exact
 merged-file proof from `mapped-live-patch-creation`; the existing creation and
 companion mappings remain separate.
+
+## Explicit Rust formatting
+
+`mapped-live-rust-format` maps #1314 to exact reads for every explicit Rust
+formatting target, including a newly created regression, before verifying both
+formatted merged blobs and the exact three delivered paths.

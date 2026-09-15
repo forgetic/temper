@@ -8,6 +8,7 @@ use std::process::Command;
 use super::process::run_git_with_token;
 use super::{FinalStateEvidence, ScenarioBundle};
 
+pub(super) const FORMATTED_PRIMARY_SOURCE: &str = "pub mod caller;\n\npub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, _attempt: u32) -> &'a str {\n    preferred.unwrap_or(value)\n}\n";
 pub(super) const FRAMED_PRIMARY_SOURCE: &str = "pub mod caller; // Keep caller routing public.\n\npub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, _attempt: u32) -> &'a str {\n    preferred.unwrap_or(value)\n}\n";
 pub(super) const CREATED_FILE: &str = "tests/created_dispatch.rs";
 pub(super) const CREATED_SOURCE: &str = "use mapped_live_graph_consumption_fixture::choose_dispatch;\n\n#[test]\nfn a_new_regression_keeps_preferred_dispatch_across_retries() {\n    for attempt in [0, 1, 4] {\n        assert_eq!(choose_dispatch(\"raw\", Some(\"stable\"), attempt), \"stable\");\n    }\n}\n";
@@ -21,7 +22,9 @@ pub(super) fn verify_merged(
 ) -> Result<(), String> {
     if !matches!(
         scenario.scenario_path.file_name().and_then(|s| s.to_str()),
-        Some("mapped-live-patch-creation" | "mapped-live-patch-framing")
+        Some(
+            "mapped-live-patch-creation" | "mapped-live-patch-framing" | "mapped-live-rust-format"
+        )
     ) {
         return Ok(());
     }
@@ -49,6 +52,11 @@ pub(super) fn verify_merged(
         == Some("mapped-live-patch-framing")
     {
         verify_blob(&checkout, merged, "src/lib.rs", FRAMED_PRIMARY_SOURCE)?;
+    }
+    if scenario.scenario_path.file_name().and_then(|s| s.to_str())
+        == Some("mapped-live-rust-format")
+    {
+        verify_blob(&checkout, merged, "src/lib.rs", FORMATTED_PRIMARY_SOURCE)?;
     }
     verify_changed_paths(
         &checkout,
