@@ -19,6 +19,7 @@ pub(in crate::codebase_memory) use managed::{
 };
 mod lineage;
 mod observability;
+mod readiness_budget;
 #[cfg(target_os = "linux")]
 mod real_provider;
 mod result_presentation;
