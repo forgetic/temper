@@ -91,6 +91,12 @@ jobs:
         run: scripts/check-no-ambient-env.sh
       - name: Build
         run: cargo dev-test-build
+      - name: Test executable integrity
+        # Obtain binary paths without executing harnesses: a damaged retained
+        # output can otherwise look like a successful suite with zero tests.
+        run: |
+          python3 -B -m unittest discover -s scripts/tests -p test_test_executables.py
+          scripts/check-test-executables.py
       - name: Test (quick)
         # Keep this adjacent to the all-target test build. Narrow Cargo lanes
         # change the active feature/target fingerprint set and would make
