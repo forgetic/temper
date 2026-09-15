@@ -171,7 +171,11 @@ When delegating, prefer structured graph_context with the session coverage evide
          evidence, or retain the provisional target with its exact ordinary read. Correction, exact read, and\n\
          mutation remain blocked during the inspection checkpoint. A correction atomically replaces rather than\n\
          accumulates implementation authority; after it succeeds, the old target and every unchosen candidate\n\
-         remain non-actionable. Choose the behaviorally relevant implementation candidate and\n\
+         remain non-actionable through their retired implementation or correction authority. After the current\n\
+         selected implementation has been read successfully, an independent successful ordinary read may grant\n\
+         exact companion-file mutation authority, including for a previously unchosen file. This never revives\n\
+         retired selectors, changes the selected implementation, or supplies graph evidence. Choose the behaviorally\n\
+         relevant implementation candidate and\n\
          consume its exact source first; only then traverse inbound calls from that exact implementation in a later turn.\n\
          Admit caller source only from an exact identity returned by that traversal. Among\n\
          returned implementation candidates, favor the one whose result context matches the requested\n\
