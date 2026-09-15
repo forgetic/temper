@@ -18,9 +18,10 @@ pub(super) fn verify_merged(
     final_state: &FinalStateEvidence,
     log: &Path,
 ) -> Result<(), String> {
-    if scenario.scenario_path.file_name().and_then(|s| s.to_str())
-        != Some("mapped-live-patch-creation")
-    {
+    if !matches!(
+        scenario.scenario_path.file_name().and_then(|s| s.to_str()),
+        Some("mapped-live-patch-creation" | "mapped-live-patch-framing")
+    ) {
         return Ok(());
     }
     if scenario.repo.seed_path.join(CREATED_FILE).exists() {

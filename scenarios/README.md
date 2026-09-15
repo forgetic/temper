@@ -943,3 +943,10 @@ validation.
 
 [focused-validation]: ../docs/how-to/run-focused-feature-validation.md
 [validator-handoff]: ../docs/reference/post-merge-validator-handoff.md
+
+## Recoverable patch framing
+
+`mapped-live-patch-framing` maps #1305 to a live delivery of a cohesive edit/create
+patch with recoverable envelope defects. It inherits the typed graph and exact
+merged-file proof from `mapped-live-patch-creation`; the existing creation and
+companion mappings remain separate.

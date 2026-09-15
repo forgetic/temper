@@ -1,0 +1,17 @@
+{
+  "phases": [
+    {
+      "name": "mapped-live-patch-framing-runtime",
+      "when": {
+        "messages_contain": [
+          "__mapped_live_patch_framing_fixture_runtime__"
+        ]
+      },
+      "sequence": [
+        {
+          "text": "The live fixture reuses typed graph discovery before a recoverable patch envelope."
+        }
+      ]
+    }
+  ]
+}
