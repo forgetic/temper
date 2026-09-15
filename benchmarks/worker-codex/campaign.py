@@ -27,6 +27,8 @@ from stack_sessions import read_agent_sessions
 def execute(options) -> dict:
     if os.environ.get("TEMPER_BENCHMARK_LIVE") != "1":
         raise ValueError("real model runs require TEMPER_BENCHMARK_LIVE=1")
+    if getattr(options, "codex_checkout_layout", "paired") != "paired":
+        raise ValueError("campaign execution requires the paired Codex checkout layout")
     root = options.output.resolve()
     if root.is_relative_to(options.repository.resolve()):
         raise ValueError("output must be outside the source repository to avoid inherited task context")
@@ -270,6 +272,7 @@ def preflight(options):
     config_path = codex_home / "config.toml"
     config_bytes = config_path.read_bytes()
     config = tomllib.loads(config_bytes.decode())
+    checkout_layout = getattr(options, "codex_checkout_layout", "paired")
     developer_instructions(config)  # Validate that infrastructure context can preserve user instructions.
     mcp = config.get("mcp_servers", {}).get("codebase-memory-mcp", {})
     if not mcp or mcp.get("enabled") is False:
@@ -298,7 +301,8 @@ def preflight(options):
                                 for path in sorted(Path(__file__).parent.glob("*.py"))},
             "codex_config_sha256": hashlib.sha256(config_bytes).hexdigest(),
             "codex_effective_config_sha256": codex_config_fingerprint(
-                config, options.output, options.pairs),
+                config, options.output, options.pairs, layout=checkout_layout),
+            "codex_config_fingerprint_layout": checkout_layout,
             "codex_config_fingerprint_policy": "ignore exact generated-checkout trusted entries only",
             "codex_instructions_sha256": (sha256(codex_home / "AGENTS.md")
                                           if (codex_home / "AGENTS.md").exists() else None),

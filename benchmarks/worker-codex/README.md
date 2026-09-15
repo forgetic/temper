@@ -85,9 +85,12 @@ Configuration evidence retains the raw Codex config-file hash and a fingerprint
 of its effective TOML settings before and after each arm. Codex automatically
 registers fresh checkouts as trusted projects. The effective fingerprint omits
 only exact `{ trust_level = "trusted" }` entries for this campaign's generated
-Codex checkouts (or its single-arm diagnostic checkout). Other project paths,
-additional project fields, and all model, provider, MCP, instruction, and binary
-changes still cause a configuration mismatch.
+paired Codex checkouts. Private diagnostics explicitly select the single Codex
+checkout layout or no ignored checkout entries for a native-only run. The
+selected layout is retained in preflight evidence and cannot change during a
+run. Entries from another layout, other project paths, additional project fields,
+and all model, provider, MCP, instruction, and binary changes still cause a
+configuration mismatch.
 
 Disable sub-agent delegation in both contestants for this single-agent
 comparison. Codex's default multi-agent feature is explicitly disabled; its
