@@ -99,6 +99,8 @@ impl ToolFailureCategory {
 pub enum ToolFailureReason {
     UnknownTool,
     InvalidArguments,
+    MalformedMutationTarget,
+    ConflictingMutationTargets,
     PolicyPrecondition,
     CorrectionInspectionRequired,
     AccessDenied,
@@ -127,6 +129,8 @@ impl ToolFailureReason {
         match self {
             Self::UnknownTool => "unknown_tool",
             Self::InvalidArguments => "invalid_arguments",
+            Self::MalformedMutationTarget => "malformed_mutation_target",
+            Self::ConflictingMutationTargets => "conflicting_mutation_targets",
             Self::PolicyPrecondition => "policy_precondition",
             Self::CorrectionInspectionRequired => "correction_inspection_required",
             Self::AccessDenied => "access_denied",
@@ -156,6 +160,14 @@ impl ToolFailureReason {
             Self::UnknownTool => "tool name is not registered; use a listed canonical tool name",
             Self::InvalidArguments => {
                 "tool arguments did not match the canonical schema; correct the call and try again"
+            }
+            Self::MalformedMutationTarget => {
+                temper_protocol_activity::ToolFailureReasonV1::MalformedMutationTarget
+                    .safe_message()
+            }
+            Self::ConflictingMutationTargets => {
+                temper_protocol_activity::ToolFailureReasonV1::ConflictingMutationTargets
+                    .safe_message()
             }
             Self::PolicyPrecondition => {
                 super::decision_anchor::DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE
@@ -210,6 +222,8 @@ impl ToolFailureReason {
             | Self::DeadlineExceeded => ToolRetryDisposition::Retryable,
             Self::UnknownTool
             | Self::InvalidArguments
+            | Self::MalformedMutationTarget
+            | Self::ConflictingMutationTargets
             | Self::ToolReportedFailure
             | Self::ToolExecutionError
             | Self::InvalidModelInput
@@ -251,7 +265,10 @@ impl ToolFailureReason {
             (category, self),
             (
                 ToolFailureCategory::SchemaArgumentMismatch,
-                Self::UnknownTool | Self::InvalidArguments
+                Self::UnknownTool
+                    | Self::InvalidArguments
+                    | Self::MalformedMutationTarget
+                    | Self::ConflictingMutationTargets
             ) | (
                 ToolFailureCategory::PolicyDenial,
                 Self::PolicyPrecondition | Self::CorrectionInspectionRequired | Self::AccessDenied

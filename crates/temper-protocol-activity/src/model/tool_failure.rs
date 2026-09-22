@@ -98,6 +98,8 @@ impl ToolFailureCategoryV1 {
 pub enum ToolFailureReasonV1 {
     UnknownTool,
     InvalidArguments,
+    MalformedMutationTarget,
+    ConflictingMutationTargets,
     PolicyPrecondition,
     CorrectionInspectionRequired,
     AccessDenied,
@@ -126,6 +128,8 @@ impl ToolFailureReasonV1 {
         match self {
             Self::UnknownTool => "unknown_tool",
             Self::InvalidArguments => "invalid_arguments",
+            Self::MalformedMutationTarget => "malformed_mutation_target",
+            Self::ConflictingMutationTargets => "conflicting_mutation_targets",
             Self::PolicyPrecondition => "policy_precondition",
             Self::CorrectionInspectionRequired => "correction_inspection_required",
             Self::AccessDenied => "access_denied",
@@ -155,6 +159,12 @@ impl ToolFailureReasonV1 {
             Self::UnknownTool => "tool name is not registered; use a listed canonical tool name",
             Self::InvalidArguments => {
                 "tool arguments did not match the canonical schema; correct the call and try again"
+            }
+            Self::MalformedMutationTarget => {
+                "mutation arguments are malformed: correct the tool arguments and workspace paths; for apply_patch supply a complete unified diff with matching file headers; correct the invocation before retrying"
+            }
+            Self::ConflictingMutationTargets => {
+                "mutation targets conflict: declare each path once with one operation, and use creation headers only when the destination is absent and existing ancestors are directories; correct the invocation before retrying"
             }
             Self::PolicyPrecondition => {
                 "workspace mutation blocked: use the ordinary read tool to read the exact target named by this mutation after either its qualifying graph source result has completed or conventional fallback has been released, then retry the mutation"
@@ -209,6 +219,8 @@ impl ToolFailureReasonV1 {
             | Self::DeadlineExceeded => ToolRetryDispositionV1::Retryable,
             Self::UnknownTool
             | Self::InvalidArguments
+            | Self::MalformedMutationTarget
+            | Self::ConflictingMutationTargets
             | Self::ToolReportedFailure
             | Self::ToolExecutionError
             | Self::InvalidModelInput
@@ -251,7 +263,10 @@ impl ToolFailureReasonV1 {
             (category, self),
             (
                 ToolFailureCategoryV1::SchemaArgumentMismatch,
-                Self::UnknownTool | Self::InvalidArguments
+                Self::UnknownTool
+                    | Self::InvalidArguments
+                    | Self::MalformedMutationTarget
+                    | Self::ConflictingMutationTargets
             ) | (
                 ToolFailureCategoryV1::PolicyDenial,
                 Self::PolicyPrecondition | Self::CorrectionInspectionRequired | Self::AccessDenied

@@ -428,3 +428,74 @@ fn recovery_reference_activity_retains_only_closed_lifecycle_dispositions() {
     assert!(!durable.contains(PRIVATE_REFERENCE));
     assert!(!durable.contains(PRIVATE_SELECTOR));
 }
+
+#[test]
+fn mutation_diagnostics_retain_only_canonical_reason_and_recovery_guidance() {
+    const SECRET: &str = "PRIVATE-PATCH /private/path CREDENTIAL";
+    for (reason, expected) in [
+        (
+            ToolFailureReason::MalformedMutationTarget,
+            ToolFailureReasonV1::MalformedMutationTarget,
+        ),
+        (
+            ToolFailureReason::ConflictingMutationTargets,
+            ToolFailureReasonV1::ConflictingMutationTargets,
+        ),
+    ] {
+        for mode in [
+            CaptureModeV1::Metadata,
+            CaptureModeV1::Transcript,
+            CaptureModeV1::Diagnostic,
+        ] {
+            let recorder = Arc::new(Recorder::default());
+            let factory = ScopeFactory::with_parts(
+                AgentActivityCapturePolicyV1 {
+                    capture: mode,
+                    ..Default::default()
+                },
+                Arc::new(FakeClock::new(0..10)),
+                vec![recorder.clone()],
+            );
+            let run = factory.main("main", ModelIdentity::new("p", "m"));
+            let mut failure = ToolFailureDiagnostic::schema(reason);
+            failure.message = SECRET.to_string();
+            run.observability.events.emit(AgentEvent::ToolEnd {
+                id: "invalid-mutation".to_string(),
+                name: "apply_patch".to_string(),
+                status: ToolCallStatus::Failed,
+                duration_ms: 0,
+                result: ToolResultMetadata {
+                    preview: Some(SECRET.to_string()),
+                    bytes: SECRET.len() as u64,
+                    truncated: false,
+                    failure: Some(failure),
+                    codebase_memory_timing: None,
+                    graph_correlation: None,
+                    decision_anchor_lineage: None,
+                    recovery_reference_disposition: None,
+                },
+            });
+            let frames = recorder.0.lock().expect("frames");
+            let finished = frames
+                .iter()
+                .find_map(|frame| match &frame.event {
+                    AgentActivityEventV1::ToolFinished(value) => Some(value),
+                    _ => None,
+                })
+                .expect("tool finish");
+            let failure = finished.failure.as_ref().expect("closed reason");
+            assert_eq!(failure.reason, expected);
+            assert_eq!(
+                failure.category,
+                ToolFailureCategoryV1::SchemaArgumentMismatch
+            );
+            assert_eq!(
+                failure.retry_disposition,
+                ToolRetryDispositionV1::CorrectInvocation
+            );
+            assert_eq!(failure.message, reason.safe_message());
+            assert_eq!(finished.result, None);
+            assert!(!serde_json::to_string(&*frames).unwrap().contains(SECRET));
+        }
+    }
+}

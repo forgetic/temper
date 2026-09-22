@@ -359,7 +359,9 @@ impl DecisionAnchorState {
             if denial.is_none()
                 && self.blocks_invocation_mutation(&call.name, invocation_target.as_ref())
             {
-                denial = Some(ToolCallDenial::DecisionAnchorMutation);
+                denial = Some(super::mutation_diagnostic::blocked_mutation_denial(
+                    invocation_target.as_ref(),
+                ));
             }
             denials.push(denial);
         }
