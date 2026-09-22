@@ -43,6 +43,7 @@ mod mapped_ordinary_convergence_fake;
 mod mapped_patch_creation_fake;
 mod mapped_patch_framing_fake;
 mod mapped_rust_format_fake;
+mod mapped_schema_feedback_fake;
 mod model_observations;
 pub(super) use fake_llm::CodebaseMemoryFake;
 mod privacy;

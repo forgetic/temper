@@ -20,7 +20,11 @@ pub(super) fn start(
 }
 
 fn reply(view: &RequestView) -> Reply {
-    match view.prior_tool_results {
+    reply_at(view, view.prior_tool_results)
+}
+
+pub(super) fn reply_at(view: &RequestView, prior_tool_results: usize) -> Reply {
+    match prior_tool_results {
         0..=7 => mapped_graph_consumption_fake::reply(view),
         8 => tool("batch-unread-companion-denied", "edit_files", batch()),
         9 => {

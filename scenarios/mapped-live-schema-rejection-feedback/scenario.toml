@@ -1,0 +1,74 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-schema-rejection-feedback"
+status = "active"
+intent = "Prove safe schema-owned feedback repairs a malformed batch without bypassing existing-file read admission."
+introduced_by = "#1322"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/mapped-live-batched-edits"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/mapped-live-schema-rejection-feedback.json"
+
+[validation]
+feature = "ai/temper#1322"
+plan = "ai/temper#1322"
+source_branch = "agent/pr-for-feature-1322"
+change = "new"
+
+[feature_contract]
+claim = "A malformed edit_files call reports its canonical name and missing schema field without echoing caller keys or values, then the corrected call still obeys ordinary-read admission."
+stimulus = "After the inherited graph chain and primary read, omit oldText and include sentinel key/value bytes; observe safe feedback, retry a well-shaped unread-companion batch, read the companion after denial, and retry successfully."
+observable = "A schema_argument_mismatch for edit_files precedes the unchanged policy denial and successful read/admitted batch sequence; the next model request includes the missing-field hint and no sentinels."
+assertion = "The recorded next model request contains the schema-owned oldText location and no caller sentinels; unchanged graph counts, strict old-text retry, exact merged primary/companion blobs, and exactly three changed paths remain required."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-schema-rejection-feedback.json"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Repair preferred dispatch and its existing companion documentation"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[expect]
+outcome = "The malformed call yields useful scrubbed feedback, the corrected batch still requires both reads, and both edited files are verified at the actual merged commit."
+
+[[expect.sequence]]
+required = true
+id = "schema-feedback-before-admitted-batch"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "implementation" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "caller" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", id = "observe-expected-unavailable-descendant", "tool.failure.category" = "graph_lifecycle_denial" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-conventional-fallback-source" } },
+  { event = "tool.error", fields = { tool = "edit_files", id = "batch-missing-old-text", "tool.failure.category" = "schema_argument_mismatch", "tool.failure.reason" = "invalid_arguments" } },
+  { event = "tool.error", fields = { tool = "edit_files", id = "batch-unread-companion-denied", "tool.failure.category" = "policy_denial", "tool.failure.reason" = "policy_precondition" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-existing-companion" } },
+  { event = "tool.end", fields = { tool = "edit_files", id = "batch-read-primary-and-companion" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-minimal-mapped-repair" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-mapped-graph-repair" } },
+  { event = "workspace.diff.produced", fields = { changed_count = 3 } },
+]
+
+[[assertions]]
+id = "both-existing-files-match-actual-merged-changes"
+kind = "command"
+phase = "after-convergence"
+command = "assertions/merged-files.sh"
+timeout_ms = 5000
+required = true
