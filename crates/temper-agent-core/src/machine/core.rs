@@ -28,6 +28,7 @@ pub type ToolStartPresentationFn =
 /// Compatibility name retained for the existing run-builder parameter.
 pub type ArgPreviewFn = ToolStartPresentationFn;
 
+use crate::invocation::SchemaFeedback;
 use crate::model_failure::ModelFailureDiagnostic;
 use crate::{LineageAdmissionHandle, ToolInvocationCatalog};
 
@@ -80,11 +81,13 @@ pub struct AgentMachine {
     invocation_catalog: Arc<ToolInvocationCatalog>,
     /// Typed local failures for calls scrubbed by the invocation boundary.
     pub(super) invocation_rejections: BTreeMap<String, ToolFailureDiagnostic>,
+    /// Schema-owned model guidance, never projected into failure protocol data.
+    invocation_schema_feedback: BTreeMap<String, SchemaFeedback>,
     /// Content-free traversal kinds whose required selector was unusable
     /// before invocation scrubbing.
     incomplete_graph_selectors: BTreeMap<String, GraphCorrelationToolV1>,
     /// Content-free public graph kinds retained when canonical invocation
-    /// validation scrubbed their arguments and names.
+    /// validation scrubbed their arguments.
     rejected_graph_tools: BTreeMap<String, GraphCorrelationToolV1>,
     /// Closed opaque-reference classifications captured before malformed
     /// arguments are scrubbed by the public invocation boundary.
@@ -185,6 +188,7 @@ impl AgentMachine {
             turn: 0,
             invocation_catalog,
             invocation_rejections: BTreeMap::new(),
+            invocation_schema_feedback: BTreeMap::new(),
             incomplete_graph_selectors: BTreeMap::new(),
             rejected_graph_tools: BTreeMap::new(),
             recovery_reference_dispositions: BTreeMap::new(),
@@ -315,6 +319,7 @@ impl AgentMachine {
         // by policy, previewed, batched, or dispatched.
         (
             self.invocation_rejections,
+            self.invocation_schema_feedback,
             self.incomplete_graph_selectors,
             self.rejected_graph_tools,
         ) = self.invocation_catalog.canonicalize_message(&mut assistant);
@@ -353,7 +358,9 @@ impl AgentMachine {
         // serialized batch. This is pure policy over the calls' declared effects.
         self.phase = Phase::AwaitingTools;
         self.turn_results.clear();
-        self.pending_batches = plan_batches(self.invocation_catalog.effects(), &tool_calls);
+        self.pending_batches = plan_batches(self.invocation_catalog.effects(), &tool_calls, |id| {
+            self.invocation_rejections.contains_key(id)
+        });
         requests.extend(self.dispatch_current_batch());
         requests
     }
@@ -695,6 +702,7 @@ impl AgentMachine {
                         &pending.call.name,
                         output,
                         pending.failure,
+                        self.invocation_schema_feedback.remove(&pending.call.id),
                     ),
                 )));
             }

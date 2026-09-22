@@ -41,12 +41,19 @@ pub(super) fn effects_for(effects: &BTreeMap<String, ToolEffects>, name: &str) -
 pub(super) fn plan_batches(
     effects: &BTreeMap<String, ToolEffects>,
     calls: &[ToolCall],
+    is_rejected: impl Fn(&str) -> bool,
 ) -> VecDeque<Vec<PendingTool>> {
     let mut batches = VecDeque::new();
     let mut current: Vec<PendingTool> = Vec::new();
     let mut active: Option<ToolEffects> = None;
     for call in calls {
-        let call_effects = effects_for(effects, &call.name);
+        // Retaining a known rejected name must not remove the serialized
+        // barrier formerly supplied by the unknown-name placeholder.
+        let call_effects = if is_rejected(&call.id) {
+            ToolEffects::write()
+        } else {
+            effects_for(effects, &call.name)
+        };
         let compatible = match active {
             Some(active_effects) => active_effects.compatible_with(call_effects),
             None => true,

@@ -406,37 +406,39 @@ fn catalog_preflight_rejection_never_executes_the_registry_tool() {
         }
     }
 
-    let executions = Arc::new(AtomicUsize::new(0));
-    let tools = ToolRegistry::from_tools(vec![Box::new(NeverRunTool(Arc::clone(&executions)))]);
-    let clock = FakeClock(Mutex::new(VecDeque::from([10, 10])));
-    let recorder = Arc::new(Recorder::default());
-    let observed = Arc::clone(&recorder);
-    let call = ToolCall {
-        id: "rejected".to_string(),
-        name: crate::REJECTED_TOOL_NAME.to_string(),
-        arguments: serde_json::json!({}),
-    };
-    let diagnostic = ToolFailureDiagnostic::schema(ToolFailureReason::InvalidArguments);
-    let output = temper_agent_io::block_on(async move {
-        execute_tool(
-            &tools,
-            &call,
-            Duration::from_secs(1),
-            &CancellationToken::default(),
-            None,
-            &clock,
-            observed.as_ref(),
-            None,
-            Some(diagnostic),
-        )
-        .await
-        .expect("local rejection settles")
-    });
-    assert_eq!(executions.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        output.failure.expect("typed failure").reason,
-        ToolFailureReason::InvalidArguments
-    );
+    for name in [crate::REJECTED_TOOL_NAME, "read"] {
+        let executions = Arc::new(AtomicUsize::new(0));
+        let tools = ToolRegistry::from_tools(vec![Box::new(NeverRunTool(Arc::clone(&executions)))]);
+        let clock = FakeClock(Mutex::new(VecDeque::from([10, 10])));
+        let recorder = Arc::new(Recorder::default());
+        let observed = Arc::clone(&recorder);
+        let call = ToolCall {
+            id: "rejected".to_string(),
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+        };
+        let diagnostic = ToolFailureDiagnostic::schema(ToolFailureReason::InvalidArguments);
+        let output = temper_agent_io::block_on(async move {
+            execute_tool(
+                &tools,
+                &call,
+                Duration::from_secs(1),
+                &CancellationToken::default(),
+                None,
+                &clock,
+                observed.as_ref(),
+                None,
+                Some(diagnostic),
+            )
+            .await
+            .expect("local rejection settles")
+        });
+        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            output.failure.expect("typed failure").reason,
+            ToolFailureReason::InvalidArguments
+        );
+    }
 }
 
 #[test]
