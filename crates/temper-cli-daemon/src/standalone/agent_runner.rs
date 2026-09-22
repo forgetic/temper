@@ -223,7 +223,7 @@ impl InProcessAgentRunner {
                 None
             }
         };
-        let activity_endpoint = trace.as_ref().and_then(|trace| match trace.bind_endpoint() {
+        let activity_endpoint = trace.as_ref().and_then(|trace| match trace.bind_endpoint_requiring_main_scope() {
             Ok(endpoint) => Some(endpoint),
             Err(error) => {
                 tracing::warn!(

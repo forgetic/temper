@@ -111,7 +111,11 @@ impl OutOfProcessRunner {
             None
         };
         let mut activity_endpoint = if self.trace_policy.is_some() {
-            trace.and_then(|trace| match trace.bind_endpoint() {
+            trace.and_then(|trace| match if self.runtime_limits.is_some() {
+                trace.bind_endpoint_requiring_main_scope()
+            } else {
+                trace.bind_endpoint()
+            } {
                 Ok(endpoint) => Some(endpoint),
                 Err(error) => {
                     tracing::warn!(
