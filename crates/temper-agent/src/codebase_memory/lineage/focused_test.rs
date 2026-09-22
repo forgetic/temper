@@ -363,14 +363,20 @@ fn collect_direct_exact_source_candidates(
         (terminal == display).then_some(())?;
     }
 
-    for identity in [qualified_identity, function_identity, display_identity]
-        .into_iter()
-        .flatten()
+    for (identity, provider_value) in [
+        (qualified_identity, qualified),
+        (function_identity, function),
+        (display_identity, display_name),
+    ]
+    .into_iter()
+    .filter_map(|(identity, provider_value)| identity.zip(provider_value))
     {
         candidates.insert(Candidate {
             kind: DecisionAnchorTargetKindV1::QualifiedName,
             provider_kind: DecisionAnchorTargetKindV1::QualifiedName,
-            provider_value: identity.clone(),
+            // Canonical identities bind lineage; only the provider's original
+            // spelling is valid when expanding a source-read reference.
+            provider_value,
             value: identity,
             provider_result_order: 0,
             provider_result_is_test: true,

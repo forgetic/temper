@@ -744,6 +744,10 @@ mod tests {
         include!("lineage_focused_test_recovery.rs");
     }
 
+    mod focused_test_provider_identity {
+        include!("lineage_focused_test_provider_identity.rs");
+    }
+
     mod caller_discovery {
         include!("lineage_caller_discovery.rs");
     }
