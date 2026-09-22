@@ -32,8 +32,16 @@ fn rejected_message(
     let _ = machine.on_start(EngineTime::ZERO);
     let requests = complete(&mut machine, llm_responded(assistant(api, vec![("bad", name, arguments)])));
     let (call, rejection) = dispatched(&requests);
-    assert_eq!(call.name, expected_name);
+    assert_eq!(call.name, REJECTED_TOOL_NAME);
     assert_eq!(call.arguments, serde_json::json!({}));
+    assert!(requests.iter().any(|request| matches!(request,
+        AgentRequest::Emit(AgentEvent::ToolStart { id, name, .. })
+            if id == "bad" && name == REJECTED_TOOL_NAME
+    )));
+    assert!(requests.iter().any(|request| matches!(request,
+        AgentRequest::RunTool { call, denial: None, rejection: Some(_), .. }
+            if call.id == "bad"
+    )));
     let failure = rejection.expect("schema rejection").clone();
     assert_eq!(failure.category, crate::ToolFailureCategory::SchemaArgumentMismatch);
     assert_eq!(admission.graph.load(Ordering::SeqCst), 0);
@@ -48,13 +56,17 @@ fn rejected_message(
         Message::ToolResult(result) => Some(result),
         _ => None,
     }).expect("model-visible local result");
-    assert_eq!(result.tool_name, expected_name);
+    assert_eq!(result.tool_name, REJECTED_TOOL_NAME);
     assert!(result.is_error);
     assert!(result.details.is_none());
-    result.content.iter().filter_map(|block| match block {
+    let message = result.content.iter().filter_map(|block| match block {
         ContentBlock::Text(text) => Some(text.text.as_str()),
         _ => None,
-    }).collect::<Vec<_>>().join("\n")
+    }).collect::<Vec<_>>().join("\n");
+    if expected_name != REJECTED_TOOL_NAME {
+        assert!(message.contains(&format!("Tool {expected_name}: ")));
+    }
+    message
 }
 
 #[test]
@@ -145,7 +157,7 @@ fn schema_feedback_preserves_rejected_read_batch_barriers_and_result_identity() 
     let second = complete(&mut machine, tool_finished("first", tool_output("first", false)));
     assert_eq!(run_tools(&second), ["invalid"]);
     let (call, failure) = dispatched(&second);
-    assert_eq!(call.name, "read");
+    assert_eq!(call.name, REJECTED_TOOL_NAME);
     let failure = failure.unwrap().clone();
     let third = complete(&mut machine, tool_failed("invalid", tool_output("ignored", true), failure));
     assert_eq!(run_tools(&third), ["last"]);

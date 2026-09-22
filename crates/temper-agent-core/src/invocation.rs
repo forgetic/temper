@@ -20,8 +20,8 @@ use crate::machine::{ToolFailureDiagnostic, ToolFailureReason};
 mod schema_feedback;
 pub(crate) use schema_feedback::SchemaFeedback;
 
-/// Safe placeholder for an unknown tool. Known rejected calls retain only the
-/// registry-owned canonical name; supplied argument values are always scrubbed.
+/// Inert placeholder retained for every rejected call. A known canonical name
+/// survives only in private schema feedback, never as an executable identity.
 pub const REJECTED_TOOL_NAME: &str = "invalid_tool_invocation";
 
 /// Failure to assemble one unambiguous catalog from the finalized registry.
@@ -61,8 +61,8 @@ pub struct CanonicalInvocation {
     /// Private schema-owned guidance, retained separately from wire diagnostics.
     pub(crate) schema_feedback: Option<SchemaFeedback>,
     /// Closed shape retained when a locally rejected traversal call did not
-    /// carry its usable required selector. Only the registry-owned name
-    /// survives argument scrubbing.
+    /// carry its usable required selector. The supplied name and arguments
+    /// are scrubbed.
     pub(crate) incomplete_graph_selector: Option<GraphCorrelationToolV1>,
 }
 
@@ -280,9 +280,7 @@ fn rejected(
     incomplete_graph_selector: Option<GraphCorrelationToolV1>,
     schema_feedback: Option<SchemaFeedback>,
 ) -> CanonicalInvocation {
-    if reason == ToolFailureReason::UnknownTool {
-        call.name = REJECTED_TOOL_NAME.to_string();
-    }
+    call.name = REJECTED_TOOL_NAME.to_string();
     call.arguments = Value::Object(Map::new());
     CanonicalInvocation {
         call,
