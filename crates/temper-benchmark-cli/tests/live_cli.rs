@@ -7,6 +7,10 @@ use std::process::Command;
 
 use serde_json::Value;
 
+#[cfg(unix)]
+#[path = "support/activity_lifecycle.rs"]
+mod activity_lifecycle;
+
 const SECRET_SENTINEL: &str = "TEMPER_LIVE_SECRET_SENTINEL_550_d9d47e";
 const CAPTURE_SENTINEL: &str = "TEMPER_LIVE_CAPTURE_SENTINEL_571_a62f3c";
 
@@ -20,6 +24,7 @@ fn live_run_uses_resolved_credentials_and_excludes_them_from_every_artifact() {
     fs::create_dir_all(&fixture).unwrap();
     fs::write(fixture.join("README.md"), "# live fixture\n").unwrap();
     write_context(temporary.path());
+    activity_lifecycle::write_activity_emitter(temporary.path());
     fs::write(temporary.path().join("jig.json"), "{}\n").unwrap();
     fs::write(
         temporary.path().join("benchmark.toml"),
@@ -65,15 +70,21 @@ models = { main = "deepseek-live-test" }
         format!(
             r##"#!/bin/sh
 set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 result=""
+activity_address=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--result" ]; then
     result="$2"
+    shift 2
+  elif [ "$1" = "--activity-address" ]; then
+    activity_address="$2"
     shift 2
   else
     shift
   fi
 done
+python3 "$root/emit-activity.py" "$activity_address"
 printf '%s' "${{TEMPER_AGENT_PROVIDER_CREDENTIALS_JSON:?}}" > "${{TEMPER_TEST_RECEIVED_CREDENTIAL:?}}"
 printf '%s\n' '{SECRET_SENTINEL}' >&2
 printf '%s\n' '{SECRET_SENTINEL}' > repo/provider-output.txt
@@ -122,6 +133,10 @@ printf '%s\n' '{{"title":"Fake live","body":"# Report","summary":"{SECRET_SENTIN
         serde_json::from_slice(&fs::read(output_dir.join("aggregate.json")).unwrap()).unwrap();
     assert_eq!(aggregate["mode"], "live");
     assert_eq!(aggregate["outcomes"]["total"], 2);
+    assert_eq!(aggregate["outcomes"]["succeeded"], 2);
+    assert_eq!(aggregate["outcomes"]["failed"], 0);
+    assert_eq!(aggregate["outcomes"]["cancelled"], 0);
+    assert_eq!(aggregate["outcomes"]["incomplete"], 0);
     assert_eq!(
         aggregate["runs"][0]["summary"]["workspace_result"]["summary"],
         "[REDACTED]"
@@ -165,6 +180,7 @@ printf '%s\n' '{{"title":"Fake live","body":"# Report","summary":"{SECRET_SENTIN
         let repetition = output_dir
             .join("repetitions")
             .join(format!("{:03}", index + 1));
+        activity_lifecycle::assert_successful_lifecycle(&repetition);
         let context: Value =
             serde_json::from_slice(&fs::read(repetition.join("workspace-context.json")).unwrap())
                 .unwrap();

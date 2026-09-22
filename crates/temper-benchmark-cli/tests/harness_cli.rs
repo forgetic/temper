@@ -7,6 +7,10 @@ use std::process::Command;
 use serde_json::Value;
 
 #[cfg(unix)]
+#[path = "support/activity_lifecycle.rs"]
+mod activity_lifecycle;
+
+#[cfg(unix)]
 #[test]
 fn run_cli_writes_harness_artifacts_and_honors_repetition_override() {
     use std::os::unix::fs::PermissionsExt;
@@ -16,6 +20,7 @@ fn run_cli_writes_harness_artifacts_and_honors_repetition_override() {
     fs::create_dir_all(&fixture).unwrap();
     fs::write(fixture.join("README.md"), "# fixture\n").unwrap();
     write_context(temporary.path());
+    activity_lifecycle::write_activity_emitter(temporary.path());
     fs::write(
         temporary.path().join("jig.json"),
         r#"{"fixed":{"text":"{}"}}"#,
@@ -39,15 +44,21 @@ repetitions = 3
         &agent,
         r##"#!/bin/sh
 set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 result=""
+activity_address=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--result" ]; then
     result="$2"
+    shift 2
+  elif [ "$1" = "--activity-address" ]; then
+    activity_address="$2"
     shift 2
   else
     shift
   fi
 done
+python3 "$root/emit-activity.py" "$activity_address"
 printf '%s\n' '{"title":"Fake harness","body":"# Report","summary":"fake completed"}' > "$result"
 "##,
     )
@@ -82,12 +93,17 @@ printf '%s\n' '{"title":"Fake harness","body":"# Report","summary":"fake complet
     assert_eq!(aggregate["benchmark"], "cli-harness");
     assert_eq!(aggregate["mode"], "harness");
     assert_eq!(aggregate["outcomes"]["total"], 2);
+    assert_eq!(aggregate["outcomes"]["succeeded"], 2);
+    assert_eq!(aggregate["outcomes"]["failed"], 0);
+    assert_eq!(aggregate["outcomes"]["cancelled"], 0);
+    assert_eq!(aggregate["outcomes"]["incomplete"], 0);
     assert_eq!(
         aggregate["runs"][0]["summary"]["workspace_result"]["title"],
         "Fake harness"
     );
     for repetition in ["001", "002"] {
         let root = output_dir.join("repetitions").join(repetition);
+        activity_lifecycle::assert_successful_lifecycle(&root);
         for artifact in [
             "manifest.toml",
             "workspace-context.json",
@@ -123,6 +139,7 @@ fn run_cli_retains_failed_agent_evidence_and_continues_later_repetitions() {
     fs::create_dir_all(&fixture).unwrap();
     fs::write(fixture.join("README.md"), "# fixture\n").unwrap();
     write_context(temporary.path());
+    activity_lifecycle::write_activity_emitter(temporary.path());
     fs::write(
         temporary.path().join("jig.json"),
         r#"{"fixed":{"text":"{}"}}"#,
@@ -155,9 +172,13 @@ fi
 count=$((count + 1))
 printf '%s\n' "$count" > "$state"
 result=""
+activity_address=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--result" ]; then
     result="$2"
+    shift 2
+  elif [ "$1" = "--activity-address" ]; then
+    activity_address="$2"
     shift 2
   else
     shift
@@ -168,6 +189,7 @@ if [ "$count" -eq 2 ]; then
   printf '%s\n' failed > repo/failure-evidence.txt
   exit 17
 fi
+python3 "$root/emit-activity.py" "$activity_address"
 printf '{"title":"Completed repetition %s","body":"# Report","summary":"completed"}\n' "$count" > "$result"
 "##,
     )
@@ -199,6 +221,11 @@ printf '{"title":"Completed repetition %s","body":"# Report","summary":"complete
     assert_eq!(aggregate["outcomes"]["failed"], 1);
     assert_eq!(aggregate["outcomes"]["cancelled"], 0);
     assert_eq!(aggregate["outcomes"]["incomplete"], 0);
+    for repetition in ["001", "003"] {
+        activity_lifecycle::assert_successful_lifecycle(
+            &output_dir.join("repetitions").join(repetition),
+        );
+    }
     assert_eq!(
         aggregate["runs"][0]["summary"]["terminal"]["status"],
         "succeeded"
