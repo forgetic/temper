@@ -32,9 +32,10 @@ The script runs these commands in order and stops on the first failure:
 3. `scripts/check-rust-file-size.sh`
 4. `scripts/check-no-ambient-env.sh`
 5. `cargo dev-test-build`
-6. `cargo dev-test-quick`
-7. Drop linked test binaries from `target/debug` before linting
-8. `cargo dev-clippy`
+6. Test executable integrity regressions and native-header checks
+7. `cargo dev-test-quick`
+8. Drop linked test binaries from `target/debug` before linting
+9. `cargo dev-clippy`
 
 Run `cargo dev-scenario-check` or the sole manual live-run alias,
 `cargo dev-scenario-run scenarios/<name>`, separately when your change touches
