@@ -1,0 +1,17 @@
+{
+  "phases": [
+    {
+      "name": "mapped-live-schema-rejection-feedback-runtime",
+      "when": {
+        "messages_contain": [
+          "__mapped_live_schema_rejection_feedback_fixture_runtime__"
+        ]
+      },
+      "sequence": [
+        {
+          "text": "The live fixture requires the existing companion read before the cohesive batch retry."
+        }
+      ]
+    }
+  ]
+}

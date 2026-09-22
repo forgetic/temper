@@ -25,7 +25,11 @@ pub(super) fn verify_merged(
     let name = scenario.scenario_path.file_name().and_then(|s| s.to_str());
     if !matches!(
         name,
-        Some("mapped-live-companion-read" | "mapped-live-batched-edits")
+        Some(
+            "mapped-live-companion-read"
+                | "mapped-live-batched-edits"
+                | "mapped-live-schema-rejection-feedback"
+        )
     ) {
         return Ok(());
     }
@@ -53,7 +57,7 @@ pub(super) fn verify_merged(
         return Err("companion scenario default branch is not the recorded merged commit".into());
     }
     verify_companion_blob(&checkout, merged)?;
-    if name == Some("mapped-live-batched-edits") {
+    if is_batch_scenario(name) {
         super::batched_edits::verify_primary_blob(&checkout, merged)?;
     }
     super::patch_creation::verify_changed_paths(
@@ -61,7 +65,7 @@ pub(super) fn verify_merged(
         merged,
         &["Cargo.lock", COMPANION_FILE, "src/lib.rs"],
     )?;
-    let (prefix, checkpoint) = if name == Some("mapped-live-batched-edits") {
+    let (prefix, checkpoint) = if is_batch_scenario(name) {
         (
             "batched-edit-fact",
             "both-existing-files-match-merged-changes",
@@ -80,6 +84,13 @@ pub(super) fn verify_merged(
         "{prefix} {{\"checkpoint\":\"{checkpoint}\",\"passed\":true}}"
     )
     .map_err(|e| e.to_string())
+}
+
+fn is_batch_scenario(name: Option<&str>) -> bool {
+    matches!(
+        name,
+        Some("mapped-live-batched-edits" | "mapped-live-schema-rejection-feedback")
+    )
 }
 
 fn verify_companion_blob(checkout: &Path, merged: &str) -> Result<(), String> {
