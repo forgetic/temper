@@ -197,9 +197,22 @@ for line in sys.stdin:
                 tool_result(request["id"], "index_repository requires repo_path and stable name", True)
                 continue
             if mode == "background-budget-success":
-                # Keep this above process-startup jitter so the success-budget
-                # test observes readiness rather than a completed background run.
-                time.sleep(0.30)
+                marker_base = os.path.splitext(log_path)[0]
+                with open(f"{marker_base}.index-waiting", "w", encoding="utf-8") as marker:
+                    marker.write("waiting")
+                deadline = time.monotonic() + 15
+                while not os.path.exists(f"{marker_base}.index-release"):
+                    if not os.path.exists(f"{marker_base}.index-waiting"):
+                        tool_result(request["id"], "index fixture workspace removed", True)
+                        break
+                    if time.monotonic() >= deadline:
+                        tool_result(request["id"], "index fixture release timed out", True)
+                        break
+                    time.sleep(0.005)
+                else:
+                    actual = stable_upsert(project, repo_path)
+                    tool_result(request["id"], json.dumps({"project": actual, "status": "indexed"}))
+                continue
             elif mode == "background-budget-timeout":
                 time.sleep(0.30)
             if mode == "index-hang":
