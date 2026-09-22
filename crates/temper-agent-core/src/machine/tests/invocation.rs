@@ -243,6 +243,11 @@ fn canonical_graph_call_queries_run_local_admission_before_dispatch() {
     );
 }
 
+mod schema_feedback {
+    use super::*;
+    include!("invocation/schema_feedback.rs");
+}
+
 mod incomplete_graph_selector {
     use super::*;
     include!("invocation/incomplete_graph_selector.rs");
@@ -404,7 +409,14 @@ fn malformed_ambiguous_and_unavailable_forms_are_scrubbed_and_typed() {
             llm_responded(assistant(api, vec![("call", name, arguments)])),
         );
         let (call, rejection) = dispatched(&requests);
-        assert_eq!(call.name, REJECTED_TOOL_NAME);
+        assert_eq!(
+            call.name,
+            if expected == ToolFailureReason::UnknownTool {
+                REJECTED_TOOL_NAME
+            } else {
+                "read"
+            }
+        );
         assert_eq!(call.arguments, serde_json::json!({}));
         assert_eq!(rejection.expect("typed rejection").reason, expected);
     }
