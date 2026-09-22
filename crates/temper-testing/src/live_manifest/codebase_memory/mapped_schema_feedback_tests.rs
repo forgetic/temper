@@ -94,14 +94,26 @@ fn schema_feedback_bundle_preserves_graph_and_admission_contracts() {
         .unwrap()
         .iter()
         .filter(|event| {
-            event
-                .get("fields")
-                .and_then(|f| f.get("tool"))
-                .and_then(|v| v.as_str())
-                == Some("edit_files")
+            matches!(
+                event
+                    .get("fields")
+                    .and_then(|f| f.get("id"))
+                    .and_then(|v| v.as_str()),
+                Some(
+                    "batch-missing-old-text"
+                        | "batch-unread-companion-denied"
+                        | "batch-read-primary-and-companion"
+                )
+            )
         })
         .collect::<Vec<_>>();
     assert_eq!(batch.len(), 3);
+    assert_eq!(
+        batch[0]["fields"]["tool"].as_str(),
+        Some("invalid_tool_invocation")
+    );
+    assert_eq!(batch[1]["fields"]["tool"].as_str(), Some("edit_files"));
+    assert_eq!(batch[2]["fields"]["tool"].as_str(), Some("edit_files"));
     assert_eq!(
         batch[0]["fields"]["tool.failure.category"].as_str(),
         Some("schema_argument_mismatch")

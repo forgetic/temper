@@ -56,7 +56,7 @@ events = [
   { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "focused_test" } },
   { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", id = "observe-expected-unavailable-descendant", "tool.failure.category" = "graph_lifecycle_denial" } },
   { event = "tool.end", fields = { tool = "read", id = "read-conventional-fallback-source" } },
-  { event = "tool.error", fields = { tool = "edit_files", id = "batch-missing-old-text", "tool.failure.category" = "schema_argument_mismatch", "tool.failure.reason" = "invalid_arguments" } },
+  { event = "tool.error", fields = { tool = "invalid_tool_invocation", id = "batch-missing-old-text", "tool.failure.category" = "schema_argument_mismatch", "tool.failure.reason" = "invalid_arguments" } },
   { event = "tool.error", fields = { tool = "edit_files", id = "batch-unread-companion-denied", "tool.failure.category" = "policy_denial", "tool.failure.reason" = "policy_precondition" } },
   { event = "tool.end", fields = { tool = "read", id = "read-existing-companion" } },
   { event = "tool.end", fields = { tool = "edit_files", id = "batch-read-primary-and-companion" } },
