@@ -358,9 +358,7 @@ impl AgentMachine {
         // serialized batch. This is pure policy over the calls' declared effects.
         self.phase = Phase::AwaitingTools;
         self.turn_results.clear();
-        self.pending_batches = plan_batches(self.invocation_catalog.effects(), &tool_calls, |id| {
-            self.invocation_rejections.contains_key(id)
-        });
+        self.pending_batches = plan_batches(self.invocation_catalog.effects(), &tool_calls);
         requests.extend(self.dispatch_current_batch());
         requests
     }

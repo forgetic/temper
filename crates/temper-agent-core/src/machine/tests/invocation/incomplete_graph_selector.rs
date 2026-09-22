@@ -275,7 +275,7 @@ fn staged_incomplete_trace_returns_an_invokable_opaque_selector_then_accepts_it(
         _ => None,
     });
     let scrubbed = scrubbed.expect("scrubbed assistant call");
-    assert_eq!(scrubbed.name, "codebase_memory_trace_path");
+    assert_eq!(scrubbed.name, REJECTED_TOOL_NAME);
     assert_eq!(scrubbed.arguments, serde_json::json!({}));
 
     let next_turn = complete(
