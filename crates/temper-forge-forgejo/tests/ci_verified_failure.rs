@@ -292,12 +292,13 @@ fn proof_never_overrides_non_ordinary_or_non_failure_provider_evidence() {
 
 #[test]
 fn list_and_exact_opaque_get_return_identical_conclusion_and_provenance() {
-    let (listed, _) = read_with_evidence(evidence(vec![statement()]));
+    let proof_evidence = evidence(vec![statement()]);
+    let (listed, _) = read_with_evidence(proof_evidence.clone());
 
     let client = MockHttpClient::new();
     client.push_response(200, runs("failure"));
     client.push_response(200, jobs("failure"));
-    client.push_response(200, evidence(vec![statement()]));
+    client.push_response(200, proof_evidence);
     let found = block_on(
         forge(client).get_ci_job(&CiJobId::new("forgejo:acme/widgets:actions:591:42:2:9001")),
     )
