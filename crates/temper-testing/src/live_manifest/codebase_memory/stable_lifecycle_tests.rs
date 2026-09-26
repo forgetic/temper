@@ -51,13 +51,15 @@ fn result_view(results: &[Value]) -> RequestView {
     RequestView::new(
         Dialect::OpenAi,
         None,
-        results
-            .iter()
-            .map(|result| ViewMessage {
-                role: "tool".into(),
-                content: format!("{result}\n\n[Decision anchor: current-root source]"),
-            })
-            .collect(),
+        std::iter::once(ViewMessage {
+            role: "user".into(),
+            content: "ROLE: engineer\nCODEBASE MEMORY".into(),
+        })
+        .chain(results.iter().map(|result| ViewMessage {
+            role: "tool".into(),
+            content: format!("{result}\n\n[Decision anchor: current-root source]"),
+        }))
+        .collect(),
         results.len(),
     )
 }
@@ -153,7 +155,7 @@ fn only_exact_tool_role_source_matches_establish_consumption() {
         "{\"binding\":\"current_prepared_checkout\"}",
     ] {
         let mut request = result_view(&valid);
-        request.messages[2].content = content.into();
+        request.messages[3].content = content.into();
         assert!(!stable_lifecycle_fake::verified_result(&request));
     }
 }
