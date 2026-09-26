@@ -264,12 +264,15 @@ def seed_fresh_prior_binding(project):
 
 def rebind_current_root(project, repo_path):
     state = load_state()
-    confirmed_project = normalized_provider_project(project)
+    confirmed_project = (
+        project
+        if LIFECYCLE_PROFILE == "stable-lifecycle"
+        else normalized_provider_project(project)
+    )
     if project not in state["projects"]:
         state["counters"]["project_creations"] += 1
     else:
-        # The production provider canonicalizes the requested stable key. It
-        # remains one retained provider project, not a second path-keyed one.
+        # Replacing the root binding retains one provider project.
         del state["projects"][project]
     state["projects"][confirmed_project] = {
         "requested_stable_project": project,
@@ -308,6 +311,7 @@ def text_result(text, is_error=False, structured=None):
 
 def has_current_root_profile():
     return LIFECYCLE_PROFILE in (
+        "stable-lifecycle",
         "stable-rebind",
         "graph-consumption",
         "sequential-graph-evidence",
@@ -591,6 +595,11 @@ for line in sys.stdin:
                         "root_path": binding["repo_path"],
                         "status": "ready",
                     }))
+                elif LIFECYCLE_PROFILE == "stable-lifecycle":
+                    log_tool(name, arguments, is_error=True)
+                    result = text_result(
+                        json.dumps({"project": project, "status": "missing"}), True
+                    )
                 else:
                     seed_fresh_prior_binding(project)
                     log_tool(name, arguments, fixture_event="fresh_prior_binding")

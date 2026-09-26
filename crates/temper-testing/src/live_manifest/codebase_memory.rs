@@ -53,6 +53,8 @@ mod result_driven_guidance;
 mod scoped_graph_evidence;
 mod sequential_graph_evidence;
 pub(super) mod shared_lifecycle;
+#[cfg(test)]
+mod stable_readiness_tests;
 mod stable_rebind;
 mod typed_lineage_anchor;
 mod typed_lineage_fake;
