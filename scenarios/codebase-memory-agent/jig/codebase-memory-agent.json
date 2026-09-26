@@ -15,7 +15,7 @@
                 "id": "call_memory_search",
                 "name": "codebase_memory_search_code",
                 "args": {
-                  "query": "WidgetService"
+                  "pattern": "WidgetService"
                 }
               }
             }
@@ -30,7 +30,7 @@
                 "name": "write",
                 "args": {
                   "path": "demo/MEMORY_NOTES.md",
-                  "content": "memory-guided notes\nFAKE_MCP_SEARCH_RESULT project=temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a query=WidgetService\n"
+                  "content": "memory-guided notes\nREADME.md:5: WidgetService keeps one stable repository identity across prepared checkouts.\n"
                 }
               }
             }

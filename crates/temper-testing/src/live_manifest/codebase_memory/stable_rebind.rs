@@ -11,6 +11,7 @@ pub(super) fn validate_mcp_contract(
     calls: &[McpToolCallEvidence],
 ) -> Result<(), String> {
     match mcp.lifecycle_profile.as_deref() {
+        Some("stable-lifecycle") => return super::stable_lifecycle::validate(mcp, calls),
         Some("graph-consumption") => return super::graph_consumption::validate(mcp, calls),
         Some("sequential-graph-evidence") => {
             return super::sequential_graph_evidence::validate(mcp, calls);

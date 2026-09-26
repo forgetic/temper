@@ -107,7 +107,7 @@ action = "jig.fake_llm"
 role = "engineer"
 script_path = "jig/codebase-memory-agent.json"
 first_tool = "codebase_memory_search_code"
-expected_result = "FAKE_MCP_SEARCH_RESULT"
+expected_result = "one verified current-root search result"
 expected_output_name = "MEMORY_NOTES.md"
 
 [[steps]]
@@ -265,7 +265,7 @@ default_project = "acme/demo"
 actual_project = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a"
 search_code_call_omits_project = true
 expected_output_name = "MEMORY_NOTES.md"
-expected_result = "FAKE_MCP_SEARCH_RESULT"
+expected_result = "one verified current-root search result"
 
 [change_policy]
 validation_report_required = true
