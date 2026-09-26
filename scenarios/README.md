@@ -204,6 +204,13 @@ and lineage type facts; transient provider/model values, targets, source paths,
 digests, traces, credentials, and runtime logs remain ephemeral. This mapping
 does not change the historical `#991` mapping.
 
+### Mapped live batched-edit mapping
+
+`mapped-live-batched-edits` maps `ai/temper#1318` on
+`agent/pr-for-feature-1318`. It denies a batch while an existing companion is
+unread, then retries the identical batch after that read. Both exact file blobs
+and the complete changed-path set are verified at the actual merged SHA.
+
 ### Mapped live companion-read mapping
 
 `mapped-live-companion-read` maps `ai/temper#1304` on

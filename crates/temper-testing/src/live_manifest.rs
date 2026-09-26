@@ -9,6 +9,7 @@
 
 mod actions_history;
 mod artifact_benchmark;
+mod batched_edits;
 mod bundle;
 mod codebase_memory;
 mod companion_read;

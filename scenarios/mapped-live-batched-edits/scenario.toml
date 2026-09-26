@@ -1,0 +1,73 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-batched-edits"
+status = "active"
+intent = "Prove that one multi-file exact-edit call requires every existing target to have a successful ordinary read."
+introduced_by = "#1318"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/mapped-live-graph-consumption"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/mapped-live-batched-edits.json"
+
+[validation]
+feature = "ai/temper#1318"
+plan = "ai/temper#1318"
+source_branch = "agent/pr-for-feature-1318"
+change = "new"
+
+[feature_contract]
+claim = "After complete graph evidence and a primary read, an unread existing companion blocks the whole batch; its later successful ordinary read authorizes that cohesive repair."
+stimulus = "Reuse the six-call provider transcript and primary read, attempt a mixed primary/documentation batch before the documentation read, observe local denial, then read it and retry the same batch through real validation, CI, and merge."
+observable = "The unchanged six typed graph calls and graph denial, a primary read, a policy-denied mixed batch, an existing companion read, a successful two-file batch, passing validation and CI, merge, issue closure, and exact merged primary and companion bytes."
+assertion = "Historical graph counts remain enforced; the unread mixed batch fails locally before any edit, a successful companion read precedes the same batch retry, and both existing files changed to the expected bytes at the actual merged commit."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-batched-edits.json"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Repair preferred dispatch and its existing companion documentation"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[expect]
+outcome = "An unread companion blocks the cohesive batch; its exact read enables the retry and both edited files are verified at the actual merged commit."
+
+[[expect.sequence]]
+required = true
+id = "typed-source-and-companion-read-before-batched-edits"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "implementation" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "caller" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", id = "observe-expected-unavailable-descendant", "tool.failure.category" = "graph_lifecycle_denial" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-conventional-fallback-source" } },
+  { event = "tool.error", fields = { tool = "edit_files", id = "batch-unread-companion-denied", "tool.failure.category" = "policy_denial", "tool.failure.reason" = "policy_precondition" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-existing-companion" } },
+  { event = "tool.end", fields = { tool = "edit_files", id = "batch-read-primary-and-companion" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-minimal-mapped-repair" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-mapped-graph-repair" } },
+  { event = "workspace.diff.produced", fields = { changed_count = 3 } },
+]
+
+[[assertions]]
+id = "both-existing-files-match-actual-merged-changes"
+kind = "command"
+phase = "after-convergence"
+command = "assertions/merged-files.sh"
+timeout_ms = 5000
+required = true

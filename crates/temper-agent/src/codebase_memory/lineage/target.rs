@@ -13,6 +13,8 @@ use uuid::Uuid;
 
 use super::super::scope::WorkspaceScope;
 use crate::mcp::McpToolResultPart;
+use crate::workspace_edits::EditFilesInput;
+use crate::workspace_files::existing_target;
 use crate::workspace_format::{FormatRustInput, existing_format_target};
 use crate::workspace_patch::{PatchOperation, patch_targets, verify_missing_target};
 
@@ -118,6 +120,26 @@ impl WorkspaceTargetRegistry {
                 };
                 self.resolve_patch(scope, patch)
             }
+            "edit_files" => match EditFilesInput::parse(arguments) {
+                Ok(input) => InvocationTargetAdmission::Mutation(
+                    input
+                        .files
+                        .iter()
+                        .map(|file| {
+                            if existing_target(&scope.workspace_root, &file.path).is_err() {
+                                TargetAdmissionOutcome::Ineligible(
+                                    TargetAdmissionStatus::MalformedTarget,
+                                )
+                            } else {
+                                self.resolve_workspace_path(scope, &file.path)
+                            }
+                        })
+                        .collect(),
+                ),
+                Err(_) => {
+                    InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::MalformedTarget)
+                }
+            },
             "format_rust" => match FormatRustInput::parse(arguments) {
                 Ok(input) => InvocationTargetAdmission::Mutation(
                     input
