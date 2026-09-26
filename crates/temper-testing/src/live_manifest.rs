@@ -17,6 +17,7 @@ mod failure_evidence;
 mod fake_llm;
 mod handoff;
 mod late_stream_jig;
+mod patch_creation;
 mod plan_feature;
 mod process;
 mod runtime;

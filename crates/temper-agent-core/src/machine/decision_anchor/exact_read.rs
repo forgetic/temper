@@ -250,7 +250,7 @@ impl DecisionAnchorState {
         self.implementation_correction_inspection_completed = false;
     }
 
-    fn mutation_targets_authorized(
+    pub(super) fn mutation_targets_authorized(
         &self,
         anchors: &AnchorForest,
         admission: Option<&InvocationTargetAdmission>,
@@ -275,7 +275,7 @@ impl DecisionAnchorState {
             })
     }
 
-    fn conventional_mutation_targets_authorized(
+    pub(super) fn conventional_mutation_targets_authorized(
         &self,
         admission: Option<&InvocationTargetAdmission>,
     ) -> bool {
@@ -321,10 +321,25 @@ impl DecisionAnchorState {
                     }
                 })
             }
+            Some(InvocationTargetAdmission::PatchCreation {
+                existing,
+                creations,
+            }) => {
+                name != "apply_patch"
+                    || !self.patch_creation_authorized(existing, !creations.is_empty())
+            }
             Some(InvocationTargetAdmission::Read(_) | InvocationTargetAdmission::Ineligible(_))
             | None => true,
         };
-        if !blocked && matches!(admission, Some(InvocationTargetAdmission::Mutation(_))) {
+        if !blocked
+            && matches!(
+                admission,
+                Some(
+                    InvocationTargetAdmission::Mutation(_)
+                        | InvocationTargetAdmission::PatchCreation { .. }
+                )
+            )
+        {
             self.implementation_authority_exercised = true;
         }
         blocked

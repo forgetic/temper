@@ -1,0 +1,71 @@
+schema = "temper.scenario.v1"
+name = "mapped-live-patch-creation"
+status = "active"
+intent = "Prove that verified new-file creation can accompany an already-read implementation repair after graph convergence."
+introduced_by = "#1303"
+owner_area = "agent-tools"
+stability = "provisional"
+timeout = "10m"
+
+[fixtures]
+extends = "scenarios/mapped-live-graph-consumption"
+
+[runner]
+uses = "manifest"
+
+[jig]
+script_path = "jig/mapped-live-patch-creation.json"
+
+[validation]
+feature = "ai/temper#1303"
+plan = "ai/temper#1303"
+source_branch = "agent/pr-for-feature-1303"
+change = "new"
+
+[feature_contract]
+claim = "After complete typed graph evidence and a successful primary read, one cohesive patch can edit that existing file and create a host-verified absent regression file."
+stimulus = "Reuse the historical six-call provider transcript, observe local graph closure, read the primary implementation, then apply one explicit creation patch, run host validation, and deliver it through real Forgejo, host Actions, standalone Temper, and Jig."
+observable = "The unchanged six typed graph calls and local denial, one successful ordinary primary read, one successful two-file patch, passing validation and CI, PR merge, issue closure, and an exact new-file comparison at the recorded merged commit."
+assertion = "All historical graph counts remain enforced; the patch completes after the primary read; two authored files and the generated Cargo.lock change; the new regression was absent from the seed and its bytes match the actual merged default-branch commit."
+runtime_budget_seconds = 600
+jig_script_path = "jig/mapped-live-patch-creation.json"
+
+[[issues]]
+id = "source"
+repo = "service"
+kind = "code"
+title = "Repair preferred dispatch and create its regression test"
+body = "config/source-issue.md"
+author = "site_admin"
+labels = ["code", "ready"]
+created_after = "standalone_ready"
+
+[expect]
+outcome = "A graph-informed cohesive patch edits its read primary and creates a missing regression file; exact created bytes are verified after real CI and merge."
+
+[[expect.sequence]]
+required = true
+id = "typed-source-and-read-before-cohesive-creation"
+scope = "source_artifact"
+events = [
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_graph", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "root" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "search_code", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "implementation" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "trace_path", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "caller" } },
+  { event = "mcp.tool.result", fields = { "mcp.tool" = "get_code_snippet", is_error = false, "graph.correlation.complete" = true, "graph.correlation.version" = 1, "graph.lineage.complete" = true, "graph.lineage.stage" = "carry_forward", "graph.lineage.decision_evidence_kind" = "focused_test" } },
+  { event = "tool.error", fields = { tool = "codebase_memory_get_code_snippet", id = "observe-expected-unavailable-descendant", "tool.failure.category" = "graph_lifecycle_denial" } },
+  { event = "tool.end", fields = { tool = "read", id = "read-conventional-fallback-source" } },
+  { event = "tool.end", fields = { tool = "apply_patch", id = "patch-read-primary-and-create-regression" } },
+  { event = "tool.end", fields = { tool = "bash", id = "validate-minimal-mapped-repair" } },
+  { event = "tool.end", fields = { tool = "submit_for_pr", id = "submit-mapped-graph-repair" } },
+  { event = "workspace.diff.produced", fields = { changed_count = 3 } },
+]
+
+[[assertions]]
+id = "created-regression-matches-actual-merged-bytes"
+kind = "command"
+phase = "after-convergence"
+command = "assertions/merged-creation.sh"
+timeout_ms = 5000
+required = true
