@@ -1,6 +1,6 @@
 use temper_protocol_activity::{
-    ACTIVITY_PROTOCOL_VERSION, AgentActivityEventV1, AgentRunEventV1, FailureCodeV1, FailureInfoV1,
-    RunFailedV1, RunFinishedV1, RunStatusV1, StopReasonV1,
+    ACTIVITY_PROTOCOL_VERSION, AgentActivityEventV1, AgentRunEventV1, AgentScopeKindV1,
+    FailureCodeV1, FailureInfoV1, RunFailedV1, RunFinishedV1, RunStatusV1, StopReasonV1,
 };
 use temper_protocol_worker::FailureClass;
 
@@ -8,6 +8,30 @@ use super::{
     TraceError, TraceRun, TraceTerminal, TraceTerminalKind, append_event, elapsed_ms,
     host_failure_summary, now_rfc3339,
 };
+
+#[derive(Default)]
+pub(super) struct MainScopeState {
+    required: bool,
+    started: bool,
+    finished: bool,
+}
+
+impl MainScopeState {
+    pub(super) fn require(&mut self) {
+        self.required = true;
+    }
+
+    pub(super) fn observe(&mut self, event: &AgentRunEventV1) {
+        if event.scope.kind == AgentScopeKindV1::Main {
+            self.started |= matches!(event.event, AgentActivityEventV1::ScopeStarted(_));
+            self.finished |= matches!(event.event, AgentActivityEventV1::ScopeFinished(_));
+        }
+    }
+
+    fn incomplete(&self) -> bool {
+        self.required && !(self.started && self.finished)
+    }
+}
 
 impl TraceRun {
     /// Writes the sole successful terminal event for the run.
@@ -75,6 +99,14 @@ impl TraceRun {
         }
         if state.disabled {
             return Err(TraceError::Disabled);
+        }
+        if matches!(&event, AgentActivityEventV1::RunFinished(finished)
+            if finished.status == RunStatusV1::Succeeded)
+            && state.main_scope.incomplete()
+        {
+            return Err(TraceError::InvalidSpool(
+                "successful activity capture is missing required main-scope boundaries".to_string(),
+            ));
         }
         let seq = state.next_seq;
         let canonical = AgentRunEventV1 {

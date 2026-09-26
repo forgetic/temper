@@ -1,4 +1,4 @@
-use std::io::{self, BufRead, BufReader, Read};
+use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,8 +11,21 @@ use temper_protocol_activity::{
 
 use super::{MAX_CHILD_ACTIVITY_FRAME_BYTES, MAX_CHILD_ACTIVITY_RECORD_BYTES, TraceRun};
 
+mod reader;
+use reader::ActivityRecordReader;
+
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const FRAME_READ_TIMEOUT: Duration = Duration::from_secs(2);
+// Bound even a continuously writing peer after shutdown. This wire budget is
+// independent of accepted-event quotas (duplicates and whitespace cost bytes).
+const MAX_TERMINAL_DRAIN_BYTES: u64 = 64 * 1024 * 1024;
+
+#[cfg(test)]
+#[path = "endpoint_completion_tests.rs"]
+mod completion_tests;
+#[cfg(test)]
+#[path = "endpoint_drain_tests.rs"]
+mod drain_tests;
 
 /// A per-run loopback endpoint. Each accepted connection is a persistent,
 /// newline-delimited stream of independently bounded bare frames or
@@ -31,6 +44,21 @@ pub struct ActivityEndpoint {
     address: String,
     state: ActivityEndpointState,
     thread: Option<JoinHandle<()>>,
+}
+
+impl TraceRun {
+    /// Binds a known first-party producer whose successful capture requires
+    /// both durable main-scope boundaries, even if no child record arrives.
+    /// Synthetic and third-party traces may use `bind_endpoint` instead.
+    pub fn bind_endpoint_requiring_main_scope(&self) -> io::Result<ActivityEndpoint> {
+        self.inner
+            .state
+            .lock()
+            .expect("trace run state lock")
+            .main_scope
+            .require();
+        self.bind_endpoint()
+    }
 }
 
 impl ActivityEndpoint {
@@ -77,9 +105,9 @@ impl ActivityEndpoint {
         &self.address
     }
 
-    /// Stops accepting records and joins the endpoint thread. The loopback
-    /// wake avoids waiting for the nonblocking accept poll, while an accepted
-    /// idle stream observes shutdown within its bounded read-poll duration.
+    /// Joins the endpoint after a finite drain of buffered and socket bytes.
+    /// Socket waiting has one read-poll budget, independent of durable append
+    /// latency; a wire-byte cap also bounds continuously writing peers.
     pub fn stop(mut self) -> bool {
         self.stop_inner()
     }
@@ -120,7 +148,6 @@ impl ActivityEndpoint {
             }
         }
         self.state.stopping.store(true, Ordering::Release);
-        let _ = TcpStream::connect(&self.address);
         self.thread
             .take()
             .is_none_or(|thread| thread.join().is_ok())
@@ -140,21 +167,19 @@ fn serve(
     address: &str,
     read_poll_duration: Duration,
 ) {
-    while !state.stopping.load(Ordering::Acquire) {
+    loop {
         match listener.accept() {
             Ok((stream, peer)) => {
-                if state.stopping.load(Ordering::Acquire) {
-                    break;
-                }
+                // A producer may already be queued when stop is requested.
+                // Accept and drain that connection before leaving the listener.
                 state.connected.store(true, Ordering::Release);
                 state.stream_finished.store(false, Ordering::Release);
                 let outcome = receive_activity_stream(
                     stream,
                     &run,
-                    &state.stopping,
-                    &state.main_scope_started,
-                    &state.main_scope_finished,
+                    &state,
                     read_poll_duration,
+                    MAX_TERMINAL_DRAIN_BYTES,
                 );
                 state.stream_finished.store(true, Ordering::Release);
                 if let Err(error) = outcome {
@@ -168,8 +193,14 @@ fn serve(
                         "worker rejected an agent activity record"
                     );
                 }
+                if state.stopping.load(Ordering::Acquire) {
+                    break;
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if state.stopping.load(Ordering::Acquire) {
+                    break;
+                }
                 thread::sleep(ACCEPT_POLL_INTERVAL);
             }
             Err(error) => {
@@ -194,87 +225,13 @@ fn serve(
 fn receive_activity_stream(
     stream: TcpStream,
     run: &TraceRun,
-    stopping: &AtomicBool,
-    main_scope_started: &AtomicBool,
-    main_scope_finished: &AtomicBool,
+    state: &ActivityEndpointState,
     read_poll_duration: Duration,
+    drain_byte_limit: u64,
 ) -> Result<(), String> {
-    stream
-        .set_read_timeout(Some(read_poll_duration))
-        .map_err(|error| format!("set activity record read timeout: {error}"))?;
-    // Include room for CRLF and one sentinel byte. `Take` prevents a peer from
-    // growing the line buffer beyond the absolute record bound before the
-    // worker has identified whether the value is a frame or wrapper. Every
-    // retry subtracts bytes already accumulated from this original allowance.
-    let read_allowance = u64::try_from(MAX_CHILD_ACTIVITY_RECORD_BYTES)
-        .unwrap_or(u64::MAX)
-        .saturating_add(3);
-    let mut reader = BufReader::new(stream);
+    let mut reader = ActivityRecordReader::new(stream, read_poll_duration, drain_byte_limit)?;
     let mut received = false;
-    loop {
-        let mut bytes = Vec::new();
-        loop {
-            if stopping.load(Ordering::Acquire) {
-                return Ok(());
-            }
-            let accumulated = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-            let remaining = read_allowance.saturating_sub(accumulated);
-            if remaining == 0 {
-                return Err(format!(
-                    "child activity record exceeds {MAX_CHILD_ACTIVITY_RECORD_BYTES} bytes"
-                ));
-            }
-
-            let read = match reader
-                .by_ref()
-                .take(remaining)
-                .read_until(b'\n', &mut bytes)
-            {
-                Ok(read) => read,
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    if stopping.load(Ordering::Acquire) {
-                        return Ok(());
-                    }
-                    continue;
-                }
-                Err(error) => return Err(format!("read child activity record: {error}")),
-            };
-
-            if read == 0 {
-                if !bytes.is_empty() {
-                    return if bytes.len() > MAX_CHILD_ACTIVITY_RECORD_BYTES {
-                        Err(format!(
-                            "child activity record exceeds {MAX_CHILD_ACTIVITY_RECORD_BYTES} bytes"
-                        ))
-                    } else {
-                        Err("child activity record is not newline terminated".to_string())
-                    };
-                }
-                return if received {
-                    Ok(())
-                } else {
-                    Err("child activity record is empty".to_string())
-                };
-            }
-            if bytes.last() == Some(&b'\n') {
-                break;
-            }
-            // `read_until` can return without a delimiter only at EOF or when
-            // this record's bounded `Take` allowance has been exhausted.
-            return if bytes.len() > MAX_CHILD_ACTIVITY_RECORD_BYTES {
-                Err(format!(
-                    "child activity record exceeds {MAX_CHILD_ACTIVITY_RECORD_BYTES} bytes"
-                ))
-            } else {
-                Err("child activity record is not newline terminated".to_string())
-            };
-        }
-
+    while let Some(mut bytes) = reader.read_record(&state.stopping)? {
         bytes.pop();
         if bytes.last() == Some(&b'\r') {
             bytes.pop();
@@ -301,10 +258,10 @@ fn receive_activity_stream(
                 let is_main_terminal = is_main_scope_terminal(&frame);
                 run.accept_frame(frame).map_err(|error| error.to_string())?;
                 if is_main_start {
-                    main_scope_started.store(true, Ordering::Release);
+                    state.main_scope_started.store(true, Ordering::Release);
                 }
                 if is_main_terminal {
-                    main_scope_finished.store(true, Ordering::Release);
+                    state.main_scope_finished.store(true, Ordering::Release);
                 }
             }
             (Err(_), Ok(record)) => {
@@ -313,10 +270,10 @@ fn receive_activity_stream(
                 run.accept_record(record)
                     .map_err(|error| error.to_string())?;
                 if is_main_start {
-                    main_scope_started.store(true, Ordering::Release);
+                    state.main_scope_started.store(true, Ordering::Release);
                 }
                 if is_main_terminal {
-                    main_scope_finished.store(true, Ordering::Release);
+                    state.main_scope_finished.store(true, Ordering::Release);
                 }
             }
             (Ok(_), Ok(_)) => {
@@ -327,6 +284,14 @@ fn receive_activity_stream(
             }
         }
         received = true;
+        if state.main_scope_finished.load(Ordering::Acquire) {
+            return Ok(());
+        }
+    }
+    if received || state.stopping.load(Ordering::Acquire) {
+        Ok(())
+    } else {
+        Err("child activity record is empty".to_string())
     }
 }
 
