@@ -89,7 +89,7 @@ id = "start-fake-codebase-memory-mcp"
 action = "mcp.fake_codebase_memory.start"
 project = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a"
 lifecycle_profile = "stable-lifecycle"
-advertises_safe_tools = ["search_code", "list_projects", "index_status"]
+advertises_safe_tools = ["search_graph", "search_code", "get_code_snippet", "trace_path", "list_projects", "index_status"]
 advertises_hidden_tools = ["index_repository", "delete_project"]
 
 [[steps]]
@@ -106,8 +106,8 @@ id = "configure-jig-fake-llm"
 action = "jig.fake_llm"
 role = "engineer"
 script_path = "jig/codebase-memory-agent.json"
-first_tool = "codebase_memory_search_code"
-expected_result = "one verified current-root search result"
+first_tool = "codebase_memory_search_graph"
+expected_result = "verified current-root implementation, caller, and focused test"
 expected_output_name = "MEMORY_NOTES.md"
 
 [[steps]]
@@ -258,14 +258,14 @@ exactly = 1
 [codebase_memory]
 mode = "required"
 index = "blocking"
-fake_mcp_tools = ["search_code", "list_projects", "index_status", "index_repository", "delete_project"]
-model_callable_safe_tools = ["codebase_memory_search_code", "codebase_memory_list_projects", "codebase_memory_index_status"]
+fake_mcp_tools = ["search_graph", "get_code_snippet", "trace_path", "search_code", "list_projects", "index_status", "index_repository", "delete_project"]
+model_callable_safe_tools = ["codebase_memory_search_graph", "codebase_memory_get_code_snippet", "codebase_memory_trace_path", "codebase_memory_search_code", "codebase_memory_list_projects", "codebase_memory_index_status"]
 model_forbidden_tools = ["codebase_memory_index_repository", "codebase_memory_delete_project"]
 default_project = "acme/demo"
 actual_project = "temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a"
 search_code_call_omits_project = true
 expected_output_name = "MEMORY_NOTES.md"
-expected_result = "one verified current-root search result"
+expected_result = "verified current-root implementation, caller, and focused test"
 
 [change_policy]
 validation_report_required = true
