@@ -111,6 +111,28 @@ fn assert_decision_anchor_mutation_denial(requests: &[AgentRequest], id: &str) {
     )));
 }
 
+fn assert_two_root_companion_mutation(machine: &mut AgentMachine) {
+    let requests = complete_llm(
+        machine,
+        assistant(vec![(
+            "read-model-companion-mutation",
+            "write",
+            serde_json::json!({"path":"repo/src/model.rs","content":"changed"}),
+        )]),
+    );
+    assert!(requests.iter().any(|request| matches!(
+        request,
+        AgentRequest::RunTool { call, denial: None, rejection: None, .. }
+            if call.id == "read-model-companion-mutation"
+    )));
+    let _ = complete_tool(
+        machine,
+        "read-model-companion-mutation",
+        successful_output(),
+        None,
+    );
+}
+
 fn assert_two_root_privacy(
     retained_metadata: &[Option<serde_json::Value>],
     retained_diagnostics: &[ToolFailureDiagnostic],

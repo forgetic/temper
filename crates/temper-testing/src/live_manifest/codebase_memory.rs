@@ -25,6 +25,7 @@ mod aggregate;
 mod configuration;
 mod fake_llm;
 mod graph_consumption;
+mod mapped_companion_read_fake;
 mod mapped_decision_gap_recovery;
 mod mapped_decision_gap_recovery_fake;
 mod mapped_denied_shell_classification;

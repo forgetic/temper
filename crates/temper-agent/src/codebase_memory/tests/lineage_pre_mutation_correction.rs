@@ -1,3 +1,5 @@
+include!("lineage_retained_companion_read.rs");
+
 fn run_implementation_correction_inspection(
     reverse_preview_completion: bool,
     retain_worker_slot: bool,
@@ -372,20 +374,6 @@ fn run_implementation_correction_inspection(
                 Some(stale_failure),
             );
 
-            let unchosen_read = complete_llm(
-                &mut machine,
-                assistant(vec![(
-                    "unchosen-target-read",
-                    "read",
-                    serde_json::json!({"path":"demo/src/model.rs"}),
-                )]),
-            );
-            let _ = complete_tool(
-                &mut machine,
-                "unchosen-target-read",
-                successful_output(),
-                None,
-            );
             let unchosen_mutation = complete_llm(
                 &mut machine,
                 assistant(vec![(
@@ -416,6 +404,11 @@ fn run_implementation_correction_inspection(
                 Some(ToolFailureDiagnostic::policy_denial()),
             );
 
+            assert_retained_companion_read_preserves_retired_selector(
+                &mut machine,
+                &correction_references[0],
+            );
+
             let retained_mutation = complete_llm(
                 &mut machine,
                 assistant(vec![(
@@ -428,11 +421,6 @@ fn run_implementation_correction_inspection(
                 request,
                 AgentRequest::RunTool { call, denial: None, rejection: None, .. }
                     if call.id == "retained-target-mutation"
-            )));
-            assert!(unchosen_read.iter().any(|request| matches!(
-                request,
-                AgentRequest::RunTool { call, denial: None, rejection: None, .. }
-                    if call.id == "unchosen-target-read"
             )));
             return;
         }

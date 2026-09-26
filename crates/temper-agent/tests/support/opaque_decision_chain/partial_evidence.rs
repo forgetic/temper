@@ -87,10 +87,10 @@ pub(super) fn reply(
         (DecisionCase::ImplementationOnlyProviderFallback, 5) => {
             assert_fallback(view, mutation_was_blocked);
             assert!(view.messages.iter().any(|message| {
-                message.role == "tool"
-                    && message
-                        .content
-                        .contains("conventional fallback has been released")
+                message.role == "user"
+                    && message.content.contains(
+                        "codebase-memory is systemically unavailable and graph exploration is closed for this run.",
+                    )
             }));
             record(DecisionStep::MutationBlocked);
             record(DecisionStep::SourceRead);

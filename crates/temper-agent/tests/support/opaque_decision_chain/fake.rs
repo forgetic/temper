@@ -116,9 +116,9 @@ pub(super) fn decision_chain_fake(
         let mutation_was_blocked = || {
             view.messages.iter().any(|message| {
                 message.role == "tool"
-                    && message
-                        .content
-                        .contains("workspace mutation blocked: use the ordinary read tool")
+                    && message.content.contains(
+                        temper_agent_core::DECISION_ANCHOR_MUTATION_BLOCKED_MESSAGE,
+                    )
             })
         };
 

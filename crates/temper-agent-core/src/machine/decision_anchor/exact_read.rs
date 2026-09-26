@@ -2,7 +2,52 @@
 
 use super::*;
 
-const MAX_EXACT_TARGET_AUTHORITIES: usize = 64;
+pub(super) const MAX_EXACT_TARGET_AUTHORITIES: usize = 64;
+
+pub(super) struct PendingExactRead {
+    sources: Vec<SourceTargetAuthority>,
+    dispatched_turn: usize,
+    dispatched_order: u64,
+    dispatched_after_batch: u64,
+}
+
+#[derive(Clone)]
+pub(super) struct ExactReadAuthority {
+    pub(super) target: EligibleWorkspaceTarget,
+    pub(super) root_binding: String,
+    source_completed_turn: usize,
+    source_completed_order: u64,
+    source_completed_batch: u64,
+    read_dispatched_turn: usize,
+    read_dispatched_order: u64,
+    read_dispatched_after_batch: u64,
+}
+
+impl ExactReadAuthority {
+    pub(super) fn authorizes(
+        &self,
+        target: &EligibleWorkspaceTarget,
+        anchors: &AnchorForest,
+    ) -> bool {
+        self.target.matches(target)
+            && anchors.root_has_complete_evidence(&self.root_binding)
+            && self.read_dispatched_after_batch >= self.source_completed_batch
+            && (self.read_dispatched_turn > self.source_completed_turn
+                || self.read_dispatched_turn == self.source_completed_turn
+                    && self.read_dispatched_order > self.source_completed_order)
+    }
+
+    pub(super) fn same_read(&self, other: &Self) -> bool {
+        self.target.matches(&other.target)
+            && self.root_binding == other.root_binding
+            && self.source_completed_turn == other.source_completed_turn
+            && self.source_completed_order == other.source_completed_order
+            && self.source_completed_batch == other.source_completed_batch
+            && self.read_dispatched_turn == other.read_dispatched_turn
+            && self.read_dispatched_order == other.read_dispatched_order
+            && self.read_dispatched_after_batch == other.read_dispatched_after_batch
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct SourceTargetAuthority {
@@ -111,6 +156,7 @@ impl DecisionAnchorState {
         order: u64,
         admission: Option<&InvocationTargetAdmission>,
     ) {
+        self.register_companion_read(call, admission);
         if matches!(self.phase, Some(AnchorPhase::ProviderUnavailable)) {
             let Some(InvocationTargetAdmission::Read(TargetAdmissionOutcome::Eligible(target))) =
                 admission
@@ -162,6 +208,7 @@ impl DecisionAnchorState {
     }
 
     pub(super) fn settle_exact_reads(&mut self, completed: &[SettledToolCall<'_>]) {
+        self.settle_companion_reads(completed);
         for (id, name, output, _, succeeded) in completed {
             let Some(call_key) = GraphCorrelationV1::target_digest(id) else {
                 continue;
@@ -263,15 +310,10 @@ impl DecisionAnchorState {
                 let TargetAdmissionOutcome::Eligible(target) = outcome else {
                     return false;
                 };
-                self.exact_read_authorities.iter().any(|authority| {
-                    authority.target.matches(target)
-                        && anchors.root_has_complete_evidence(&authority.root_binding)
-                        && authority.read_dispatched_after_batch >= authority.source_completed_batch
-                        && (authority.read_dispatched_turn > authority.source_completed_turn
-                            || authority.read_dispatched_turn == authority.source_completed_turn
-                                && authority.read_dispatched_order
-                                    > authority.source_completed_order)
-                })
+                self.exact_read_authorities
+                    .iter()
+                    .any(|authority| authority.authorizes(target, anchors))
+                    || self.companion_target_authorized(target, anchors)
             })
     }
 

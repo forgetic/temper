@@ -32,6 +32,16 @@ authorizes creation. Each existing file in the same patch still needs its own
 successful exact read. The tool repeats the absence check at execution and rejects
 the whole patch if a creation destination has appeared or any target is invalid.
 
+After discovery converges, use the ordinary `read` tool on the selected primary
+implementation. Once that read succeeds, read each existing companion source,
+test, or documentation file needed by the change. Those successful exact reads
+authorize edits to their own targets under the same completed implementation
+decision. Reads made before the primary read, failed reads, and unverified paths
+do not authorize companion edits. A mixed patch is denied if any existing target
+has not been admitted. Companion reads do not add graph evidence or release an
+incomplete recovery; their authority depends on the primary read remaining
+current.
+
 The response distinguishes `clean`, `flagged`, `stale`, `unavailable`, and
 `malformed`, retaining bounded generation/freshness metadata, exclusions, source
 flags and scope pagination. Clean means no recorded gap. Read flagged, skipped,

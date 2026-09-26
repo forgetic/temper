@@ -9,6 +9,8 @@ use jig_server::FakeLlm;
 use super::{ModelObservations, mapped_graph_consumption_fake};
 use crate::live_manifest::patch_creation::{CREATED_FILE, CREATED_SOURCE};
 
+pub(super) const PRIMARY_PATCH: &str = "diff --git a/demo/src/lib.rs b/demo/src/lib.rs\n--- a/demo/src/lib.rs\n+++ b/demo/src/lib.rs\n@@ -1,9 +1,5 @@\n pub mod caller;\n \n-pub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, attempt: u32) -> &'a str {\n-    if attempt == 0 {\n-        preferred.unwrap_or(value)\n-    } else {\n-        value\n-    }\n+pub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, _attempt: u32) -> &'a str {\n+    preferred.unwrap_or(value)\n }\n";
+
 pub(super) fn start(
     request_count: Arc<AtomicUsize>,
     observations: Arc<Mutex<ModelObservations>>,
@@ -32,14 +34,13 @@ fn reply(view: &RequestView) -> Reply {
 }
 
 fn patch() -> String {
-    let primary = "diff --git a/demo/src/lib.rs b/demo/src/lib.rs\n--- a/demo/src/lib.rs\n+++ b/demo/src/lib.rs\n@@ -1,9 +1,5 @@\n pub mod caller;\n \n-pub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, attempt: u32) -> &'a str {\n-    if attempt == 0 {\n-        preferred.unwrap_or(value)\n-    } else {\n-        value\n-    }\n+pub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, _attempt: u32) -> &'a str {\n+    preferred.unwrap_or(value)\n }\n";
     let lines = CREATED_SOURCE.lines().count();
     let additions = CREATED_SOURCE
         .lines()
         .map(|line| format!("+{line}\n"))
         .collect::<String>();
     format!(
-        "{primary}diff --git a/demo/{CREATED_FILE} b/demo/{CREATED_FILE}\nnew file mode 100644\n--- /dev/null\n+++ b/demo/{CREATED_FILE}\n@@ -0,0 +1,{lines} @@\n{additions}"
+        "{PRIMARY_PATCH}diff --git a/demo/{CREATED_FILE} b/demo/{CREATED_FILE}\nnew file mode 100644\n--- /dev/null\n+++ b/demo/{CREATED_FILE}\n@@ -0,0 +1,{lines} @@\n{additions}"
     )
 }
 

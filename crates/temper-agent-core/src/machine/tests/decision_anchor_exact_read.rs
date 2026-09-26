@@ -1,5 +1,7 @@
 // Post-source exact-read admission and batching regressions.
 
+include!("decision_anchor_companion_read.rs");
+
 use std::sync::Arc;
 
 use crate::{
