@@ -235,3 +235,79 @@
             TargetAdmissionOutcome::Ineligible(TargetAdmissionStatus::AmbiguousTarget)
         );
     }
+
+    fn fmt_check_registry(workspace: &std::path::Path) -> DecisionAnchorLineageRegistry {
+        let context = crate::codebase_memory::tests::test_support::workspace_context(
+            workspace,
+            &[("acme", "demo", "demo")],
+        );
+        let scope = crate::codebase_memory::scope::WorkspaceScope::from_context(&context, workspace)
+            .unwrap();
+        DecisionAnchorLineageRegistry::new(std::sync::Arc::new(scope))
+    }
+
+    #[test]
+    fn cargo_fmt_check_standard_forms_are_source_neutral() {
+        let workspace = tempfile::tempdir().unwrap();
+        let registry = fmt_check_registry(workspace.path());
+        for command in [
+            "cargo fmt --check",
+            "cargo fmt --all --check",
+            "cargo fmt -- --check",
+            "cargo fmt --all -- --check",
+        ] {
+            for script in [
+                command.to_string(),
+                format!("cd demo && {command} && cargo test --quiet && git diff --check"),
+            ] {
+                assert_eq!(
+                    registry.resolve_invocation_targets(
+                        "bash",
+                        &serde_json::json!({"command": script}),
+                    ),
+                    InvocationTargetAdmission::SourceNeutralProcess,
+                    "{script}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cargo_fmt_check_rejects_writes_unknown_flags_and_shell_mutation() {
+        let workspace = tempfile::tempdir().unwrap();
+        let registry = fmt_check_registry(workspace.path());
+        for command in [
+            "cargo fmt",
+            "cargo fmt --all",
+            "cargo fmt --",
+            "cargo fmt --all --",
+            "cargo fmt --all -- --emit files",
+            "cargo fmt --all -- --check --emit files",
+            "cargo fmt --check=false",
+            "cargo fmt --all-features --check",
+            "cargo fmt --manifest-path other/Cargo.toml --check",
+            "cargo fmt -- --check --config-path other.toml",
+            "cargo fmt -- --all --check",
+            "cargo fmt --all --all --check",
+            "cargo fmt -- -- --check",
+            "cargo fmt --check --check",
+            "cargo fmt --all -- --check src/lib.rs",
+            "cargo fmt --all -- --check && cargo fmt",
+            "cargo fmt --all -- --check && touch demo/src/lib.rs",
+            "cargo fmt --all -- --check; touch demo/src/lib.rs",
+            "cargo fmt --all -- --check\ntouch demo/src/lib.rs",
+            "cargo fmt --all -- --check > demo/src/lib.rs",
+            "cargo fmt --all -- --check | sh",
+            "cargo fmt --all -- --check || true",
+            "cargo fmt --all -- --check $(touch demo/src/lib.rs)",
+        ] {
+            assert_eq!(
+                registry.resolve_invocation_targets(
+                    "bash",
+                    &serde_json::json!({"command": command}),
+                ),
+                InvocationTargetAdmission::Ineligible(TargetAdmissionStatus::UnsupportedTool),
+                "{command}",
+            );
+        }
+    }
