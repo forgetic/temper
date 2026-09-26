@@ -15,6 +15,7 @@ import time
 import tomllib
 
 from codex_run import run_codex
+from config_fingerprint import codex_config_fingerprint, configurations_match
 from metrics import codex_metrics, comparison, mcp_metrics, temper_metrics
 from native_model import model_evidence
 from graph_evidence import codex_graph_evidence, native_graph_evidence
@@ -26,6 +27,8 @@ from stack_sessions import read_agent_sessions
 def execute(options) -> dict:
     if os.environ.get("TEMPER_BENCHMARK_LIVE") != "1":
         raise ValueError("real model runs require TEMPER_BENCHMARK_LIVE=1")
+    if getattr(options, "codex_checkout_layout", "paired") != "paired":
+        raise ValueError("campaign execution requires the paired Codex checkout layout")
     root = options.output.resolve()
     if root.is_relative_to(options.repository.resolve()):
         raise ValueError("output must be outside the source repository to avoid inherited task context")
@@ -90,7 +93,8 @@ def check_configuration(options, frozen):
     except Exception as error:
         return {"complete": False, "matches_frozen": False,
                 "error": f"{type(error).__name__}: {error}"}
-    evidence = {"complete": True, "matches_frozen": observed == frozen, "observed": observed}
+    evidence = {"complete": True, "matches_frozen": configurations_match(observed, frozen),
+                "observed": observed}
     if not evidence["matches_frozen"]:
         evidence["error"] = "benchmark configuration or binary changed during the campaign"
     return evidence
@@ -266,7 +270,9 @@ def preflight(options):
         raise ValueError("ripgrep (rg) must be on the common PATH for both contestants")
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     config_path = codex_home / "config.toml"
-    config = tomllib.loads(config_path.read_text())
+    config_bytes = config_path.read_bytes()
+    config = tomllib.loads(config_bytes.decode())
+    checkout_layout = getattr(options, "codex_checkout_layout", "paired")
     developer_instructions(config)  # Validate that infrastructure context can preserve user instructions.
     mcp = config.get("mcp_servers", {}).get("codebase-memory-mcp", {})
     if not mcp or mcp.get("enabled") is False:
@@ -293,7 +299,11 @@ def preflight(options):
             "common_search_binary_sha256": sha256(Path(search_binary)),
             "harness_sources": {path.name: sha256(path)
                                 for path in sorted(Path(__file__).parent.glob("*.py"))},
-            "codex_config_sha256": sha256(config_path),
+            "codex_config_sha256": hashlib.sha256(config_bytes).hexdigest(),
+            "codex_effective_config_sha256": codex_config_fingerprint(
+                config, options.output, options.pairs, layout=checkout_layout),
+            "codex_config_fingerprint_layout": checkout_layout,
+            "codex_config_fingerprint_policy": "ignore exact generated-checkout trusted entries only",
             "codex_instructions_sha256": (sha256(codex_home / "AGENTS.md")
                                           if (codex_home / "AGENTS.md").exists() else None),
             "binaries": {name: sha256(getattr(options, name)) for name in
