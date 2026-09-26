@@ -22,6 +22,7 @@ mod configuration;
 mod convergence_evidence;
 mod fake_llm;
 mod graph_consumption;
+mod legacy_graph_observations;
 mod mapped_batched_edits_fake;
 mod mapped_companion_read_fake;
 mod mapped_decision_gap_recovery;
