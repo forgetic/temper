@@ -1,0 +1,1408 @@
+{
+  "schema_version": 1,
+  "description": "Sanitized final five-pair measurements; private artifacts are referenced by relative path and SHA-256.",
+  "campaign_id": "final-campaign-87e190-001",
+  "started_utc": "2026-09-26T22:15:06.237892+00:00",
+  "completed_utc": "2026-09-26T23:27:34.092911+00:00",
+  "pairs": 5,
+  "order": [
+    [
+      "temper",
+      "codex"
+    ],
+    [
+      "codex",
+      "temper"
+    ],
+    [
+      "temper",
+      "codex"
+    ],
+    [
+      "codex",
+      "temper"
+    ],
+    [
+      "temper",
+      "codex"
+    ]
+  ],
+  "timeout_seconds_per_arm": 1800,
+  "acceptance": {
+    "criterion": "All five attempts per contestant correct with complete evidence, all native PRs landed, and Temper median coding time <= Codex.",
+    "passed": true,
+    "manual_review_count": 10,
+    "external_tests_per_attempt": 17,
+    "all_scheduled_attempts_retained": true,
+    "ratio_of_medians": 0.9899973339743354,
+    "general_performance_superiority_established": false,
+    "tool_count_parity_established": false
+  },
+  "source": {
+    "measured_commit": "87e190453b25fecd4916c6dbee8ba41accea175c",
+    "measured_tree": "28289c33f671982830b4b6a552971a5f9a9da722",
+    "integration_merge": "c8d517623777ae75d314be16076bf5962024c0ea",
+    "integration_tree_identical": true,
+    "task_revision": "8af00baa943417fe2d6542311e02584f975debba",
+    "task_sha256": "2184f7444e077804d87b2cabffc8ef0c40d1f806a879189d79fb4f16302cff45",
+    "seed_sha": "e1802a491825650f725b81fa650215cc1f05b6d1",
+    "input_objects": {
+      "fixture/repo": "ee67b8284321a40ea7b0cae1297a326087932aeb",
+      "task.md": "32043d4d89985bb868b128042cfaaf833e2e9900",
+      "acceptance": "da4fb7d6c95d8886d2cf72b2c1069cbc490f9469"
+    }
+  },
+  "configuration": {
+    "model": "gpt-6-astra",
+    "reasoning_effort": "xhigh",
+    "subagents": false,
+    "service_tier": "provider_default",
+    "same_openai_account": true,
+    "provider_reported_model": null,
+    "provider_reported_reasoning_effort": null,
+    "host_cpu_count": 8,
+    "cache_policy": "warm toolchain/shared MCP daemon; cold per-arm checkout, target, and project",
+    "versions": {
+      "codex": "codex-cli 0.157.1",
+      "mcp": "codebase-memory-mcp 0.10.8",
+      "rustc": "rustc 1.85.0 (4d91de4e4 2025-02-17) (built from a source tarball)"
+    },
+    "binaries": {
+      "temper_bin": "d893b01d2837517cfe0ca934e0c72000c41a214e37934f7a7c53274e0cceb767",
+      "fixture_bin": "be9746a0bc1507a188ea7176fe015bf8a956dbc7abaad86d1ce034347bd3c630",
+      "analyzer_bin": "6547643cbaa4fe6efdc7b82e77c0af380da58343c87d533f2586823a7e82e685",
+      "codex_bin": "3e2584f3f3829a43a0495011a1cecb2facbe64a2403e2b682351fd9c2983f970",
+      "mcp_bin": "cb6dc545a8cb714799461ba7d8c223dbca7d02ca46ea5a4215c1beb450fd8e09"
+    },
+    "harness_sources": {
+      "benchmark.py": "07dcd83326c073a59ab67ff09aae79c43051f8929fed10071beddf342f455664",
+      "campaign.py": "0b40033c006d0fe2d41b88e1a6bbd18f9e95d0e1f208f8de97d1e1d21445d647",
+      "codex_run.py": "116f528c19cba9426b9fc6f8f406feb3feaa69524ec7f4797a55e73fe11afc9e",
+      "config_fingerprint.py": "64cda3192e1a5bf71451fb8a33c1a4d8a610a1a83c6bf648ba66c533161f40b1",
+      "graph_evidence.py": "0a3c6949f350be393a7f11c8c904d4303d3e234ce4c3254af11e596c7e226593",
+      "graph_setup.py": "45965cbed0a37a1e3f57e042dce815cd1c456e6cf83e422e9229dfc0c4e94e13",
+      "mcp_proxy.py": "6221804da447efbbdd9016df6285dbfca44c77473025a602bd29811db4a3dcb4",
+      "metrics.py": "dbec52b0cf32648cd4fe49cafec646a2232b744c091279653a0a4f0a911df5f1",
+      "native_model.py": "f09d1c2ce22b3b328c0835d8b02f4b82f3ed78916a6e7f9cea5b22791aed8333",
+      "stack.py": "f416660c20f3e407a617194606e5f3ea1a66b1c4ea2fd4846f96d035cb39831c",
+      "stack_config.py": "1c2fb11109a2aee732329dacef48ad166ce3d369b60c7de1e740252658b52b6d",
+      "stack_forge.py": "4e89a39b3a9c21900fe2a3f36b068e7c7697248dfd22109943390f2ff4298ff5",
+      "stack_lifecycle.py": "d45a279f79343348ce55f9fc4ffcc8ff989b8d1b7957cb384f472fba3b7f21c6",
+      "stack_sessions.py": "fa342a15f652e85f06b2fc059888c4d422809f2f57a2b8cf46583fe1ecf60f12",
+      "stack_smoke.py": "0c87b4364c8e2cc41173038127560fa45189708377384e652b83eadca4effc10",
+      "stack_support.py": "24afd61fc8e15327e2e3e2cf37da310611009a1f621aa4b3f10707261bdba8f8"
+    },
+    "codex_config_sha256": "22fec1e9eafcf1571c7b91f77344a13f79eea4047b405773de0f2da27637ad10",
+    "codex_effective_config_sha256": "0565f320031e508edfe1912f89b5365aa99a44a5c926c247307b5c08f8338281",
+    "codex_config_fingerprint_layout": "paired",
+    "codex_config_fingerprint_policy": "ignore exact generated-checkout trusted entries only",
+    "codex_instructions_sha256": "7403a7b1c9af4f92940627ba8be99ba2782892019dc22b4e62c2b5bba222ea0e",
+    "common_search_binary_sha256": "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849"
+  },
+  "build": {
+    "profile": "dev",
+    "locked": true,
+    "seconds": 358.9380016039995,
+    "source_hash_count": 2684,
+    "harness_hash_count": 51,
+    "binaries": {
+      "temper": {
+        "sha256": "d893b01d2837517cfe0ca934e0c72000c41a214e37934f7a7c53274e0cceb767",
+        "bytes": 224313608
+      },
+      "temper-agent": {
+        "sha256": "c76d92eef398bec1d1a0121f6a17cb5b699f089318463cf947128b64f8e3f771",
+        "bytes": 90944352
+      },
+      "temper-benchmark-stack": {
+        "sha256": "be9746a0bc1507a188ea7176fe015bf8a956dbc7abaad86d1ce034347bd3c630",
+        "bytes": 109073912
+      },
+      "temper-benchmark": {
+        "sha256": "6547643cbaa4fe6efdc7b82e77c0af380da58343c87d533f2586823a7e82e685",
+        "bytes": 95305888
+      }
+    },
+    "receipt_sha256": "64678fe08d92a6db09797a3c9a8fd29fb7d72080da7bbdfae01fa9a86190615c"
+  },
+  "host": {
+    "logical_cpus": 8,
+    "cargo_jobs": 1,
+    "cargo_rustc_version": "1.85.0",
+    "compiler_wrapper": "kache",
+    "forgejo_version": "16.0.1",
+    "forgejo_runner_version": "12.12.0",
+    "cargo_config_sha256": "0582e42a1f28c07c36e6c5eb8b7953f25d681238ae47d07dc68749a190796682",
+    "deployed_temper_used": false,
+    "continuous_exclusive_host_occupancy_proven": false
+  },
+  "codex_command_contract": {
+    "dangerously_bypass_approvals_and_sandbox": true,
+    "json": true,
+    "ephemeral": true,
+    "multi_agent": false,
+    "forgejo_mcp_enabled": false,
+    "default_codebase_memory_mcp_enabled": true,
+    "provider_tool_allowlist": null,
+    "provider_tool_denylist": null
+  },
+  "summary": {
+    "temper": {
+      "coding_seconds": {
+        "median": 371.943,
+        "mean": 453.9514,
+        "min": 350.864,
+        "max": 800.9,
+        "sample_stddev": 194.19466819225497
+      },
+      "tool_calls": {
+        "median": 38,
+        "mean": 38.8,
+        "min": 35,
+        "max": 44,
+        "sample_stddev": 3.2710854467592254
+      },
+      "model_selected_graph_calls": {
+        "median": 9,
+        "mean": 8.4,
+        "min": 7,
+        "max": 9,
+        "sample_stddev": 0.8944271909999159
+      },
+      "actual_mcp_calls": {
+        "median": 18,
+        "mean": 16.8,
+        "min": 13,
+        "max": 18,
+        "sample_stddev": 2.16794833886788
+      },
+      "attempted": 5,
+      "correct": 5,
+      "manual_reviews_passed": 5,
+      "tools_by_name_total": {
+        "apply_patch": 5,
+        "bash": 29,
+        "codebase_memory_check_index_coverage": 9,
+        "codebase_memory_get_code_snippet": 19,
+        "codebase_memory_search_graph": 9,
+        "codebase_memory_trace_path": 5,
+        "edit_files": 9,
+        "find": 1,
+        "format_rust": 5,
+        "ls": 15,
+        "read": 83,
+        "submit_for_pr": 5
+      },
+      "tools_by_canonical_name_total": {
+        "edit_files": 9,
+        "find": 1,
+        "format_rust": 5,
+        "ls": 15,
+        "mcp.check_index_coverage": 9,
+        "mcp.get_code_snippet": 19,
+        "mcp.search_graph": 9,
+        "mcp.trace_path": 5,
+        "patch": 5,
+        "read": 83,
+        "shell": 29,
+        "submit_for_pr": 5
+      },
+      "mcp_by_name_total": {
+        "check_index_coverage": 18,
+        "get_code_snippet": 19,
+        "index_repository": 5,
+        "index_status": 28,
+        "search_graph": 9,
+        "trace_path": 5
+      }
+    },
+    "codex": {
+      "coding_seconds": {
+        "median": 375.7010117459995,
+        "mean": 378.25953566860005,
+        "min": 351.7053744220002,
+        "max": 403.20542286399996,
+        "sample_stddev": 18.707551760641536
+      },
+      "tool_calls": {
+        "median": 28,
+        "mean": 30,
+        "min": 27,
+        "max": 35,
+        "sample_stddev": 3.391164991562634
+      },
+      "model_selected_graph_calls": {
+        "median": 15,
+        "mean": 16.6,
+        "min": 13,
+        "max": 21,
+        "sample_stddev": 3.646916505762094
+      },
+      "actual_mcp_calls": {
+        "median": 15,
+        "mean": 16.6,
+        "min": 13,
+        "max": 21,
+        "sample_stddev": 3.646916505762094
+      },
+      "attempted": 5,
+      "correct": 5,
+      "manual_reviews_passed": 5,
+      "tools_by_name_total": {
+        "mcp.codebase-memory-mcp.check_index_coverage": 3,
+        "mcp.codebase-memory-mcp.get_architecture": 4,
+        "mcp.codebase-memory-mcp.get_code_snippet": 54,
+        "mcp.codebase-memory-mcp.index_repository": 5,
+        "mcp.codebase-memory-mcp.search_code": 2,
+        "mcp.codebase-memory-mcp.search_graph": 10,
+        "mcp.codebase-memory-mcp.trace_path": 5,
+        "patch": 15,
+        "shell": 52
+      },
+      "tools_by_canonical_name_total": {
+        "mcp.check_index_coverage": 3,
+        "mcp.get_architecture": 4,
+        "mcp.get_code_snippet": 54,
+        "mcp.index_repository": 5,
+        "mcp.search_code": 2,
+        "mcp.search_graph": 10,
+        "mcp.trace_path": 5,
+        "patch": 15,
+        "shell": 52
+      },
+      "mcp_by_name_total": {
+        "check_index_coverage": 3,
+        "get_architecture": 4,
+        "get_code_snippet": 54,
+        "index_repository": 5,
+        "search_code": 2,
+        "search_graph": 10,
+        "trace_path": 5
+      }
+    }
+  },
+  "trials": [
+    {
+      "pair": 1,
+      "contestant": "temper",
+      "order": 1,
+      "coding_seconds": 350.864,
+      "tool_calls": 35,
+      "model_selected_graph_calls": 8,
+      "actual_mcp_calls": 17,
+      "tool_failures": 1,
+      "tools_by_name": {
+        "apply_patch": 1,
+        "bash": 4,
+        "codebase_memory_check_index_coverage": 2,
+        "codebase_memory_get_code_snippet": 3,
+        "codebase_memory_search_graph": 2,
+        "codebase_memory_trace_path": 1,
+        "edit_files": 1,
+        "format_rust": 1,
+        "ls": 3,
+        "read": 16,
+        "submit_for_pr": 1
+      },
+      "mcp_by_name": {
+        "index_status": 6,
+        "index_repository": 1,
+        "search_graph": 2,
+        "get_code_snippet": 3,
+        "trace_path": 1,
+        "check_index_coverage": 4
+      },
+      "mcp_outcomes": {
+        "tool_error": 1,
+        "success": 16
+      },
+      "mcp_seconds": 5.5166478009999995,
+      "mcp_repeated_identical_requests": 8,
+      "model_calls": 16,
+      "model_attempts": 16,
+      "model_seconds": 334.709,
+      "tokens": {
+        "input_tokens": 39284,
+        "output_tokens": 9139,
+        "cache_read_tokens": 329728,
+        "cache_write_tokens": 0,
+        "total_input_tokens": 369012,
+        "uncached_input_tokens": 39284,
+        "cached_input_tokens": 329728
+      },
+      "host_load_average_at_start": [
+        0.6923828125,
+        0.97021484375,
+        1.2587890625
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "9809153883de1faf368c74329bb91054107347d0e36d1d40471a0caebbb65ef2",
+      "delivery": {
+        "head_sha": "1b0ceda1eca72a242d408633df0adf0c546143d4",
+        "merge_commit_sha": "2528414686a6e87f812a561d90b3251632ee1263",
+        "seed_sha": "e1802a491825650f725b81fa650215cc1f05b6d1",
+        "issue_number": 1,
+        "pull_request_number": 2,
+        "setup_seconds": 8.507741074,
+        "issue_to_merge_observed_seconds": 361.927999197,
+        "ci_run_count": 1,
+        "ci_seconds": 3.0,
+        "outside_coding_seconds": 11.063999197000044,
+        "closed_issue": true,
+        "merged_pr": true,
+        "issue_to_first_pr_observed_seconds": 355.325074073,
+        "first_pr_to_landed_observed_seconds": 6.602925124,
+        "queue_poll_seconds": null,
+        "branch_pr_publication_seconds": null,
+        "merge_convergence_seconds": null,
+        "residual_outside_coding_and_recorded_ci_seconds": 8.063999197000044
+      },
+      "tools_by_canonical_name": {
+        "edit_files": 1,
+        "format_rust": 1,
+        "ls": 3,
+        "mcp.check_index_coverage": 2,
+        "mcp.get_code_snippet": 3,
+        "mcp.search_graph": 2,
+        "mcp.trace_path": 1,
+        "patch": 1,
+        "read": 16,
+        "shell": 4,
+        "submit_for_pr": 1
+      },
+      "timing_boundary": "sum_of_native_in_process_invocation_duration",
+      "attempt_wall_seconds": 378.6797069639997,
+      "host_validation_seconds": 3.3638328030001503,
+      "host_oracle_seconds": 2.3072777380002663,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/001/temper/trial.json",
+          "sha256": "6486c527ee44ed795286d0deb1c4bc73e24f998a35cda982d366bc930672c946"
+        },
+        "acceptance.json": {
+          "path": "pairs/001/temper/acceptance.json",
+          "sha256": "04ca0560f4c2a2efbc630c16be4b5f7fbc6e93421c928803184b0e36865b87c0"
+        },
+        "validation.json": {
+          "path": "pairs/001/temper/validation.json",
+          "sha256": "1f839f3cc526b1e81b35573d7369b3d1ea75c8a9cb39390112fd53828ac6d193"
+        },
+        "manual-review.json": {
+          "path": "pairs/001/temper/manual-review.json",
+          "sha256": "9809153883de1faf368c74329bb91054107347d0e36d1d40471a0caebbb65ef2"
+        }
+      },
+      "session_count": 1,
+      "first_session_seconds": 350.864,
+      "failure_classification": {
+        "policy_denials": 0,
+        "edit_execution_failures": 0,
+        "coverage_call_failures": 1,
+        "all_recovered": true
+      }
+    },
+    {
+      "pair": 1,
+      "contestant": "codex",
+      "order": 2,
+      "coding_seconds": 385.6927971160003,
+      "tool_calls": 35,
+      "model_selected_graph_calls": 21,
+      "actual_mcp_calls": 21,
+      "tool_failures": 4,
+      "tools_by_name": {
+        "shell": 11,
+        "mcp.codebase-memory-mcp.index_repository": 1,
+        "mcp.codebase-memory-mcp.search_graph": 2,
+        "mcp.codebase-memory-mcp.get_architecture": 1,
+        "mcp.codebase-memory-mcp.get_code_snippet": 11,
+        "mcp.codebase-memory-mcp.trace_path": 1,
+        "mcp.codebase-memory-mcp.check_index_coverage": 3,
+        "mcp.codebase-memory-mcp.search_code": 2,
+        "patch": 3
+      },
+      "mcp_by_name": {
+        "index_repository": 1,
+        "search_graph": 2,
+        "get_architecture": 1,
+        "get_code_snippet": 11,
+        "trace_path": 1,
+        "check_index_coverage": 3,
+        "search_code": 2
+      },
+      "mcp_outcomes": {
+        "success": 21
+      },
+      "mcp_seconds": 2.629840886,
+      "mcp_repeated_identical_requests": 0,
+      "model_calls": null,
+      "model_attempts": null,
+      "model_seconds": null,
+      "tokens": {
+        "input_tokens": 419538,
+        "cached_input_tokens": 376064,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 11768,
+        "reasoning_output_tokens": 1584,
+        "total_input_tokens": 419538,
+        "uncached_input_tokens": 43474
+      },
+      "host_load_average_at_start": [
+        0.7392578125,
+        0.76513671875,
+        1.06005859375
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "344355e3f6ba198565462672264a0fbac7a6a7b19e6ffaa1397a91929bb4b4ea",
+      "tools_by_canonical_name": {
+        "mcp.check_index_coverage": 3,
+        "mcp.get_architecture": 1,
+        "mcp.get_code_snippet": 11,
+        "mcp.index_repository": 1,
+        "mcp.search_code": 2,
+        "mcp.search_graph": 2,
+        "mcp.trace_path": 1,
+        "patch": 3,
+        "shell": 11
+      },
+      "timing_boundary": "cli_process_start_to_exit",
+      "attempt_wall_seconds": 395.88764565400015,
+      "host_validation_seconds": 2.822164770999734,
+      "host_oracle_seconds": 2.4836745200000223,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/001/codex/trial.json",
+          "sha256": "74924889ad2b118f270bc30792270a00be45a5fed21bc929d2aec519d8c6fa47"
+        },
+        "acceptance.json": {
+          "path": "pairs/001/codex/acceptance.json",
+          "sha256": "1c33b11912a140231ab6985b30eae054065caf7f0f639afe48e8e3dd8138d530"
+        },
+        "validation.json": {
+          "path": "pairs/001/codex/validation.json",
+          "sha256": "ae5ecc7e75a23b1cde145936de87883c39f5a414c9c218a34d9fceb5670bb2f2"
+        },
+        "manual-review.json": {
+          "path": "pairs/001/codex/manual-review.json",
+          "sha256": "344355e3f6ba198565462672264a0fbac7a6a7b19e6ffaa1397a91929bb4b4ea"
+        }
+      },
+      "process_started_unix": 1790461292.3908398,
+      "process_ended_unix": 1790461678.0836332,
+      "failure_classification": {
+        "expected_diff_exit_one": 4,
+        "unexpected_tool_failures": 0
+      }
+    },
+    {
+      "pair": 2,
+      "contestant": "temper",
+      "order": 2,
+      "coding_seconds": 800.9,
+      "tool_calls": 44,
+      "model_selected_graph_calls": 9,
+      "actual_mcp_calls": 18,
+      "tool_failures": 4,
+      "tools_by_name": {
+        "apply_patch": 1,
+        "bash": 6,
+        "codebase_memory_check_index_coverage": 2,
+        "codebase_memory_get_code_snippet": 4,
+        "codebase_memory_search_graph": 2,
+        "codebase_memory_trace_path": 1,
+        "edit_files": 5,
+        "format_rust": 1,
+        "ls": 3,
+        "read": 18,
+        "submit_for_pr": 1
+      },
+      "mcp_by_name": {
+        "index_status": 6,
+        "index_repository": 1,
+        "search_graph": 2,
+        "get_code_snippet": 4,
+        "trace_path": 1,
+        "check_index_coverage": 4
+      },
+      "mcp_outcomes": {
+        "tool_error": 1,
+        "success": 17
+      },
+      "mcp_seconds": 3.279834457,
+      "mcp_repeated_identical_requests": 8,
+      "model_calls": 28,
+      "model_attempts": 28,
+      "model_seconds": 786.737,
+      "tokens": {
+        "input_tokens": 58339,
+        "output_tokens": 23094,
+        "cache_read_tokens": 880896,
+        "cache_write_tokens": 0,
+        "total_input_tokens": 939235,
+        "uncached_input_tokens": 58339,
+        "cached_input_tokens": 880896
+      },
+      "host_load_average_at_start": [
+        0.6806640625,
+        0.49365234375,
+        0.6875
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "9565826278628525abe480849f117664bb9998d8435f379eb2f92195252addb8",
+      "delivery": {
+        "head_sha": "13cf7d24015bb3b6c1937a4dd1a54afd7567284f",
+        "merge_commit_sha": "531e63fd9d26fcc52cb650af93cd84db0737fd8b",
+        "seed_sha": "e1802a491825650f725b81fa650215cc1f05b6d1",
+        "issue_number": 1,
+        "pull_request_number": 2,
+        "setup_seconds": 8.429026629,
+        "issue_to_merge_observed_seconds": 809.853866371,
+        "ci_run_count": 1,
+        "ci_seconds": 3.0,
+        "outside_coding_seconds": 8.953866371000004,
+        "closed_issue": true,
+        "merged_pr": true,
+        "issue_to_first_pr_observed_seconds": 805.588854367,
+        "first_pr_to_landed_observed_seconds": 4.265012004,
+        "queue_poll_seconds": null,
+        "branch_pr_publication_seconds": null,
+        "merge_convergence_seconds": null,
+        "residual_outside_coding_and_recorded_ci_seconds": 5.953866371000004
+      },
+      "tools_by_canonical_name": {
+        "edit_files": 5,
+        "format_rust": 1,
+        "ls": 3,
+        "mcp.check_index_coverage": 2,
+        "mcp.get_code_snippet": 4,
+        "mcp.search_graph": 2,
+        "mcp.trace_path": 1,
+        "patch": 1,
+        "read": 18,
+        "shell": 6,
+        "submit_for_pr": 1
+      },
+      "timing_boundary": "sum_of_native_in_process_invocation_duration",
+      "attempt_wall_seconds": 826.62905606,
+      "host_validation_seconds": 3.414729673000693,
+      "host_oracle_seconds": 2.3374766690003526,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/002/temper/trial.json",
+          "sha256": "a548cb6c4892b675eb54748f5d816c50743ff1defbc76067e612368938c7b198"
+        },
+        "acceptance.json": {
+          "path": "pairs/002/temper/acceptance.json",
+          "sha256": "a9c0fe621b3c17830d7346eb4db398198afb3a4c1b11edd6262af23daf098c4c"
+        },
+        "validation.json": {
+          "path": "pairs/002/temper/validation.json",
+          "sha256": "3ca6194342e6e046917c69be653fde5eb5d5f95e56abd430b98baf4af9377515"
+        },
+        "manual-review.json": {
+          "path": "pairs/002/temper/manual-review.json",
+          "sha256": "9565826278628525abe480849f117664bb9998d8435f379eb2f92195252addb8"
+        }
+      },
+      "session_count": 1,
+      "first_session_seconds": 800.9,
+      "failure_classification": {
+        "policy_denials": 1,
+        "edit_execution_failures": 3,
+        "coverage_call_failures": 0,
+        "all_recovered": true
+      }
+    },
+    {
+      "pair": 2,
+      "contestant": "codex",
+      "order": 1,
+      "coding_seconds": 375.7010117459995,
+      "tool_calls": 28,
+      "model_selected_graph_calls": 13,
+      "actual_mcp_calls": 13,
+      "tool_failures": 5,
+      "tools_by_name": {
+        "shell": 12,
+        "mcp.codebase-memory-mcp.index_repository": 1,
+        "mcp.codebase-memory-mcp.search_graph": 1,
+        "mcp.codebase-memory-mcp.get_code_snippet": 10,
+        "mcp.codebase-memory-mcp.trace_path": 1,
+        "patch": 3
+      },
+      "mcp_by_name": {
+        "index_repository": 1,
+        "search_graph": 1,
+        "get_code_snippet": 10,
+        "trace_path": 1
+      },
+      "mcp_outcomes": {
+        "success": 13
+      },
+      "mcp_seconds": 2.487823898,
+      "mcp_repeated_identical_requests": 0,
+      "model_calls": null,
+      "model_attempts": null,
+      "model_seconds": null,
+      "tokens": {
+        "input_tokens": 315018,
+        "cached_input_tokens": 271616,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 11277,
+        "reasoning_output_tokens": 1684,
+        "total_input_tokens": 315018,
+        "uncached_input_tokens": 43402
+      },
+      "host_load_average_at_start": [
+        0.41064453125,
+        0.44677734375,
+        0.80078125
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "85679a0218e659228e2fb7ce6b52605989f10f2bd511ace2a8d6625159c0f146",
+      "tools_by_canonical_name": {
+        "mcp.get_code_snippet": 10,
+        "mcp.index_repository": 1,
+        "mcp.search_graph": 1,
+        "mcp.trace_path": 1,
+        "patch": 3,
+        "shell": 12
+      },
+      "timing_boundary": "cli_process_start_to_exit",
+      "attempt_wall_seconds": 385.7324677919996,
+      "host_validation_seconds": 2.69638712699998,
+      "host_oracle_seconds": 2.301563886000622,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/002/codex/trial.json",
+          "sha256": "3a8ec92b8083dc3c5df401b47b645755a77e408adce5cc2f935dd9c9d22e7ba2"
+        },
+        "acceptance.json": {
+          "path": "pairs/002/codex/acceptance.json",
+          "sha256": "db35dcf10c853522122531e5793f2edda35383cc7da55c0320316469b0210014"
+        },
+        "validation.json": {
+          "path": "pairs/002/codex/validation.json",
+          "sha256": "3c9579a358280ecd03c49ffd592207bff416666fb25be1c8551a4c1e131413f3"
+        },
+        "manual-review.json": {
+          "path": "pairs/002/codex/manual-review.json",
+          "sha256": "85679a0218e659228e2fb7ce6b52605989f10f2bd511ace2a8d6625159c0f146"
+        }
+      },
+      "process_started_unix": 1790461688.2176058,
+      "process_ended_unix": 1790462063.9186156,
+      "failure_classification": {
+        "expected_diff_exit_one": 5,
+        "unexpected_tool_failures": 0
+      }
+    },
+    {
+      "pair": 3,
+      "contestant": "temper",
+      "order": 1,
+      "coding_seconds": 376.371,
+      "tool_calls": 39,
+      "model_selected_graph_calls": 9,
+      "actual_mcp_calls": 18,
+      "tool_failures": 2,
+      "tools_by_name": {
+        "apply_patch": 1,
+        "bash": 7,
+        "codebase_memory_check_index_coverage": 2,
+        "codebase_memory_get_code_snippet": 4,
+        "codebase_memory_search_graph": 2,
+        "codebase_memory_trace_path": 1,
+        "edit_files": 1,
+        "format_rust": 1,
+        "ls": 3,
+        "read": 16,
+        "submit_for_pr": 1
+      },
+      "mcp_by_name": {
+        "index_status": 6,
+        "index_repository": 1,
+        "search_graph": 2,
+        "get_code_snippet": 4,
+        "trace_path": 1,
+        "check_index_coverage": 4
+      },
+      "mcp_outcomes": {
+        "tool_error": 1,
+        "success": 17
+      },
+      "mcp_seconds": 3.805458624,
+      "mcp_repeated_identical_requests": 8,
+      "model_calls": 21,
+      "model_attempts": 21,
+      "model_seconds": 361.781,
+      "tokens": {
+        "input_tokens": 42676,
+        "output_tokens": 9419,
+        "cache_read_tokens": 509312,
+        "cache_write_tokens": 0,
+        "total_input_tokens": 551988,
+        "uncached_input_tokens": 42676,
+        "cached_input_tokens": 509312
+      },
+      "host_load_average_at_start": [
+        2.0419921875,
+        0.98046875,
+        0.77001953125
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "a4105ae45c6f78f7d6ca49cae1199a9d2c6383a1b2e1db39178d88305d4c6998",
+      "delivery": {
+        "head_sha": "db48249e2e7d0e96a3eb3a7f938891d299a8290a",
+        "merge_commit_sha": "8a3e8fd162bfad6a1b52aac2d50e0b4bf67fe7a8",
+        "seed_sha": "e1802a491825650f725b81fa650215cc1f05b6d1",
+        "issue_number": 1,
+        "pull_request_number": 2,
+        "setup_seconds": 8.518960002,
+        "issue_to_merge_observed_seconds": 386.565388683,
+        "ci_run_count": 1,
+        "ci_seconds": 3.0,
+        "outside_coding_seconds": 10.194388683,
+        "closed_issue": true,
+        "merged_pr": true,
+        "issue_to_first_pr_observed_seconds": 380.534373722,
+        "first_pr_to_landed_observed_seconds": 6.031014961,
+        "queue_poll_seconds": null,
+        "branch_pr_publication_seconds": null,
+        "merge_convergence_seconds": null,
+        "residual_outside_coding_and_recorded_ci_seconds": 7.194388683
+      },
+      "tools_by_canonical_name": {
+        "edit_files": 1,
+        "format_rust": 1,
+        "ls": 3,
+        "mcp.check_index_coverage": 2,
+        "mcp.get_code_snippet": 4,
+        "mcp.search_graph": 2,
+        "mcp.trace_path": 1,
+        "patch": 1,
+        "read": 16,
+        "shell": 7,
+        "submit_for_pr": 1
+      },
+      "timing_boundary": "sum_of_native_in_process_invocation_duration",
+      "attempt_wall_seconds": 403.35483639999984,
+      "host_validation_seconds": 3.367931180000596,
+      "host_oracle_seconds": 2.303679145999922,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/003/temper/trial.json",
+          "sha256": "bf019156521af384c0a116b5f885ea4ab83ae9dd7da42bb261b3e6c2a2c0afd8"
+        },
+        "acceptance.json": {
+          "path": "pairs/003/temper/acceptance.json",
+          "sha256": "2630a7fd24ab4e17738dc01bb4cc8b278e18da5b57ca0bfebd7fcba134c7fef1"
+        },
+        "validation.json": {
+          "path": "pairs/003/temper/validation.json",
+          "sha256": "83f43af5010aeda266c66f18b50f67a0adbb073b217c91f0d0a8a187a49f383f"
+        },
+        "manual-review.json": {
+          "path": "pairs/003/temper/manual-review.json",
+          "sha256": "a4105ae45c6f78f7d6ca49cae1199a9d2c6383a1b2e1db39178d88305d4c6998"
+        }
+      },
+      "session_count": 1,
+      "first_session_seconds": 376.371,
+      "failure_classification": {
+        "policy_denials": 2,
+        "edit_execution_failures": 0,
+        "coverage_call_failures": 0,
+        "all_recovered": true
+      }
+    },
+    {
+      "pair": 3,
+      "contestant": "codex",
+      "order": 2,
+      "coding_seconds": 403.20542286399996,
+      "tool_calls": 32,
+      "model_selected_graph_calls": 20,
+      "actual_mcp_calls": 20,
+      "tool_failures": 0,
+      "tools_by_name": {
+        "shell": 9,
+        "mcp.codebase-memory-mcp.index_repository": 1,
+        "mcp.codebase-memory-mcp.search_graph": 3,
+        "mcp.codebase-memory-mcp.get_architecture": 1,
+        "mcp.codebase-memory-mcp.get_code_snippet": 14,
+        "mcp.codebase-memory-mcp.trace_path": 1,
+        "patch": 3
+      },
+      "mcp_by_name": {
+        "index_repository": 1,
+        "search_graph": 3,
+        "get_architecture": 1,
+        "get_code_snippet": 14,
+        "trace_path": 1
+      },
+      "mcp_outcomes": {
+        "success": 20
+      },
+      "mcp_seconds": 2.502655391,
+      "mcp_repeated_identical_requests": 0,
+      "model_calls": null,
+      "model_attempts": null,
+      "model_seconds": null,
+      "tokens": {
+        "input_tokens": 377875,
+        "cached_input_tokens": 338688,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 12298,
+        "reasoning_output_tokens": 2718,
+        "total_input_tokens": 377875,
+        "uncached_input_tokens": 39187
+      },
+      "host_load_average_at_start": [
+        0.77685546875,
+        0.7431640625,
+        0.73193359375
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "c614ac8e93e9450b42aae4b10ef838c0c092799add6dd9c4a725e9840e9f6ed7",
+      "tools_by_canonical_name": {
+        "mcp.get_architecture": 1,
+        "mcp.get_code_snippet": 14,
+        "mcp.index_repository": 1,
+        "mcp.search_graph": 3,
+        "mcp.trace_path": 1,
+        "patch": 3,
+        "shell": 9
+      },
+      "timing_boundary": "cli_process_start_to_exit",
+      "attempt_wall_seconds": 413.5191769009998,
+      "host_validation_seconds": 2.931447680999554,
+      "host_oracle_seconds": 2.2969396640000923,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/003/codex/trial.json",
+          "sha256": "25c1d5f2218c39b1d0cbbcf514e9054c230610549f634ca1b921d33e43b94a59"
+        },
+        "acceptance.json": {
+          "path": "pairs/003/codex/acceptance.json",
+          "sha256": "4401bd734fedc7217d8dce4ec93760974d34214d5bb62e71db88d9aa1162989b"
+        },
+        "validation.json": {
+          "path": "pairs/003/codex/validation.json",
+          "sha256": "a40e00027f913a6a6243efc0b91a35e652975e216e07ac48bad314de36acc61a"
+        },
+        "manual-review.json": {
+          "path": "pairs/003/codex/manual-review.json",
+          "sha256": "c614ac8e93e9450b42aae4b10ef838c0c092799add6dd9c4a725e9840e9f6ed7"
+        }
+      },
+      "process_started_unix": 1790463304.0022023,
+      "process_ended_unix": 1790463707.2076237,
+      "failure_classification": {
+        "expected_diff_exit_one": 0,
+        "unexpected_tool_failures": 0
+      }
+    },
+    {
+      "pair": 4,
+      "contestant": "temper",
+      "order": 2,
+      "coding_seconds": 369.679,
+      "tool_calls": 38,
+      "model_selected_graph_calls": 9,
+      "actual_mcp_calls": 18,
+      "tool_failures": 1,
+      "tools_by_name": {
+        "apply_patch": 1,
+        "bash": 5,
+        "codebase_memory_check_index_coverage": 2,
+        "codebase_memory_get_code_snippet": 4,
+        "codebase_memory_search_graph": 2,
+        "codebase_memory_trace_path": 1,
+        "edit_files": 1,
+        "find": 1,
+        "format_rust": 1,
+        "ls": 3,
+        "read": 16,
+        "submit_for_pr": 1
+      },
+      "mcp_by_name": {
+        "index_status": 6,
+        "index_repository": 1,
+        "search_graph": 2,
+        "get_code_snippet": 4,
+        "trace_path": 1,
+        "check_index_coverage": 4
+      },
+      "mcp_outcomes": {
+        "tool_error": 1,
+        "success": 17
+      },
+      "mcp_seconds": 3.264720252,
+      "mcp_repeated_identical_requests": 8,
+      "model_calls": 20,
+      "model_attempts": 20,
+      "model_seconds": 355.335,
+      "tokens": {
+        "input_tokens": 44251,
+        "output_tokens": 9726,
+        "cache_read_tokens": 467712,
+        "cache_write_tokens": 0,
+        "total_input_tokens": 511963,
+        "uncached_input_tokens": 44251,
+        "cached_input_tokens": 467712
+      },
+      "host_load_average_at_start": [
+        0.4921875,
+        0.4775390625,
+        0.6025390625
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "977a8954c1d494f69938030fca2116cdb35d69edef10dbc22aea23bdd535733b",
+      "delivery": {
+        "head_sha": "11fc9008da9f42458464356e97704af3910fc250",
+        "merge_commit_sha": "b5cf6314c1f904af5d23fa2d9bfb618be76f379a",
+        "seed_sha": "e1802a491825650f725b81fa650215cc1f05b6d1",
+        "issue_number": 1,
+        "pull_request_number": 2,
+        "setup_seconds": 8.53084599,
+        "issue_to_merge_observed_seconds": 379.346991033,
+        "ci_run_count": 1,
+        "ci_seconds": 3.0,
+        "outside_coding_seconds": 9.667991033000021,
+        "closed_issue": true,
+        "merged_pr": true,
+        "issue_to_first_pr_observed_seconds": 373.929948436,
+        "first_pr_to_landed_observed_seconds": 5.417042597,
+        "queue_poll_seconds": null,
+        "branch_pr_publication_seconds": null,
+        "merge_convergence_seconds": null,
+        "residual_outside_coding_and_recorded_ci_seconds": 6.667991033000021
+      },
+      "tools_by_canonical_name": {
+        "edit_files": 1,
+        "find": 1,
+        "format_rust": 1,
+        "ls": 3,
+        "mcp.check_index_coverage": 2,
+        "mcp.get_code_snippet": 4,
+        "mcp.search_graph": 2,
+        "mcp.trace_path": 1,
+        "patch": 1,
+        "read": 16,
+        "shell": 5,
+        "submit_for_pr": 1
+      },
+      "timing_boundary": "sum_of_native_in_process_invocation_duration",
+      "attempt_wall_seconds": 396.1465406320003,
+      "host_validation_seconds": 3.330899242000669,
+      "host_oracle_seconds": 2.2240973250000025,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/004/temper/trial.json",
+          "sha256": "ccc07b1d90e85dee2398d7d62e9736a128a5acfaeec1278f0064b4d258cd5bd3"
+        },
+        "acceptance.json": {
+          "path": "pairs/004/temper/acceptance.json",
+          "sha256": "1b9f5551635b4f995ea579114856feaa9348a6fe680ca785acc510b355e0917c"
+        },
+        "validation.json": {
+          "path": "pairs/004/temper/validation.json",
+          "sha256": "6bbac3a5d9515bdb931f1c3772d7a2d551a94e2d8e31d10fba27290473c23c65"
+        },
+        "manual-review.json": {
+          "path": "pairs/004/temper/manual-review.json",
+          "sha256": "977a8954c1d494f69938030fca2116cdb35d69edef10dbc22aea23bdd535733b"
+        }
+      },
+      "session_count": 1,
+      "first_session_seconds": 369.679,
+      "failure_classification": {
+        "policy_denials": 1,
+        "edit_execution_failures": 0,
+        "coverage_call_failures": 0,
+        "all_recovered": true
+      }
+    },
+    {
+      "pair": 4,
+      "contestant": "codex",
+      "order": 1,
+      "coding_seconds": 351.7053744220002,
+      "tool_calls": 27,
+      "model_selected_graph_calls": 14,
+      "actual_mcp_calls": 14,
+      "tool_failures": 4,
+      "tools_by_name": {
+        "shell": 10,
+        "mcp.codebase-memory-mcp.index_repository": 1,
+        "mcp.codebase-memory-mcp.search_graph": 1,
+        "mcp.codebase-memory-mcp.get_architecture": 1,
+        "mcp.codebase-memory-mcp.get_code_snippet": 10,
+        "mcp.codebase-memory-mcp.trace_path": 1,
+        "patch": 3
+      },
+      "mcp_by_name": {
+        "index_repository": 1,
+        "search_graph": 1,
+        "get_architecture": 1,
+        "get_code_snippet": 10,
+        "trace_path": 1
+      },
+      "mcp_outcomes": {
+        "success": 14
+      },
+      "mcp_seconds": 2.510732182,
+      "mcp_repeated_identical_requests": 0,
+      "model_calls": null,
+      "model_attempts": null,
+      "model_seconds": null,
+      "tokens": {
+        "input_tokens": 311738,
+        "cached_input_tokens": 273152,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 10493,
+        "reasoning_output_tokens": 1243,
+        "total_input_tokens": 311738,
+        "uncached_input_tokens": 38586
+      },
+      "host_load_average_at_start": [
+        0.5908203125,
+        0.6484375,
+        0.697265625
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "2c27d6797c20a4b85b529c92ddda8f6e5f094fd75f88e2accbb98452d42ee818",
+      "tools_by_canonical_name": {
+        "mcp.get_architecture": 1,
+        "mcp.get_code_snippet": 10,
+        "mcp.index_repository": 1,
+        "mcp.search_graph": 1,
+        "mcp.trace_path": 1,
+        "patch": 3,
+        "shell": 10
+      },
+      "timing_boundary": "cli_process_start_to_exit",
+      "attempt_wall_seconds": 361.70176034700035,
+      "host_validation_seconds": 2.616605430999698,
+      "host_oracle_seconds": 2.3032411300000604,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/004/codex/trial.json",
+          "sha256": "977e776a0f56034e43254e2d2c0efc6a1658bdeb40519451db4a9342d3809781"
+        },
+        "acceptance.json": {
+          "path": "pairs/004/codex/acceptance.json",
+          "sha256": "35e6c9a4792037aaae803da11125df0eaf58767e0d0703d17e798f0bad920bab"
+        },
+        "validation.json": {
+          "path": "pairs/004/codex/validation.json",
+          "sha256": "d196d57218b2c297a4e7ac4a4e76e7d7892fd55ad1f88632ced520360e506c98"
+        },
+        "manual-review.json": {
+          "path": "pairs/004/codex/manual-review.json",
+          "sha256": "2c27d6797c20a4b85b529c92ddda8f6e5f094fd75f88e2accbb98452d42ee818"
+        }
+      },
+      "process_started_unix": 1790463717.54456,
+      "process_ended_unix": 1790464069.249933,
+      "failure_classification": {
+        "expected_diff_exit_one": 4,
+        "unexpected_tool_failures": 0
+      }
+    },
+    {
+      "pair": 5,
+      "contestant": "temper",
+      "order": 1,
+      "coding_seconds": 371.943,
+      "tool_calls": 38,
+      "model_selected_graph_calls": 7,
+      "actual_mcp_calls": 13,
+      "tool_failures": 3,
+      "tools_by_name": {
+        "apply_patch": 1,
+        "bash": 7,
+        "codebase_memory_check_index_coverage": 1,
+        "codebase_memory_get_code_snippet": 4,
+        "codebase_memory_search_graph": 1,
+        "codebase_memory_trace_path": 1,
+        "edit_files": 1,
+        "format_rust": 1,
+        "ls": 3,
+        "read": 17,
+        "submit_for_pr": 1
+      },
+      "mcp_by_name": {
+        "index_status": 4,
+        "index_repository": 1,
+        "search_graph": 1,
+        "get_code_snippet": 4,
+        "trace_path": 1,
+        "check_index_coverage": 2
+      },
+      "mcp_outcomes": {
+        "tool_error": 1,
+        "success": 12
+      },
+      "mcp_seconds": 3.219930197,
+      "mcp_repeated_identical_requests": 5,
+      "model_calls": 23,
+      "model_attempts": 23,
+      "model_seconds": 356.261,
+      "tokens": {
+        "input_tokens": 40361,
+        "output_tokens": 9232,
+        "cache_read_tokens": 531712,
+        "cache_write_tokens": 0,
+        "total_input_tokens": 572073,
+        "uncached_input_tokens": 40361,
+        "cached_input_tokens": 531712
+      },
+      "host_load_average_at_start": [
+        0.65869140625,
+        0.60888671875,
+        0.6318359375
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "026888d7716368d003b5e7d34223db0024ab0b09b3840e8d5c90186a7cbef382",
+      "delivery": {
+        "head_sha": "f852043eb7b659fb149811c59c96bd27fb615dbf",
+        "merge_commit_sha": "e19e832f6378d8c8fa6e27cc9f9ed27ad363742d",
+        "seed_sha": "e1802a491825650f725b81fa650215cc1f05b6d1",
+        "issue_number": 1,
+        "pull_request_number": 2,
+        "setup_seconds": 8.784688397,
+        "issue_to_merge_observed_seconds": 381.655401019,
+        "ci_run_count": 1,
+        "ci_seconds": 4.0,
+        "outside_coding_seconds": 9.712401019000026,
+        "closed_issue": true,
+        "merged_pr": true,
+        "issue_to_first_pr_observed_seconds": 376.015131569,
+        "first_pr_to_landed_observed_seconds": 5.64026945,
+        "queue_poll_seconds": null,
+        "branch_pr_publication_seconds": null,
+        "merge_convergence_seconds": null,
+        "residual_outside_coding_and_recorded_ci_seconds": 5.712401019000026
+      },
+      "tools_by_canonical_name": {
+        "edit_files": 1,
+        "format_rust": 1,
+        "ls": 3,
+        "mcp.check_index_coverage": 1,
+        "mcp.get_code_snippet": 4,
+        "mcp.search_graph": 1,
+        "mcp.trace_path": 1,
+        "patch": 1,
+        "read": 17,
+        "shell": 7,
+        "submit_for_pr": 1
+      },
+      "timing_boundary": "sum_of_native_in_process_invocation_duration",
+      "attempt_wall_seconds": 398.70772671800023,
+      "host_validation_seconds": 3.3622212009995565,
+      "host_oracle_seconds": 2.3023519950002083,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/005/temper/trial.json",
+          "sha256": "b20f601673e3c6f272a85442e7faec5c10b2d9f3d3a3cc9154909d17ddb82046"
+        },
+        "acceptance.json": {
+          "path": "pairs/005/temper/acceptance.json",
+          "sha256": "ef34055e1cafc58706fe78bcd2a1d51984d71640228ad9f3870d70d22edf3857"
+        },
+        "validation.json": {
+          "path": "pairs/005/temper/validation.json",
+          "sha256": "e6cb6006e40010610f52949ad32069b4e1853fa70bca4a99daece0fe51bec219"
+        },
+        "manual-review.json": {
+          "path": "pairs/005/temper/manual-review.json",
+          "sha256": "026888d7716368d003b5e7d34223db0024ab0b09b3840e8d5c90186a7cbef382"
+        }
+      },
+      "session_count": 1,
+      "first_session_seconds": 371.943,
+      "failure_classification": {
+        "policy_denials": 2,
+        "edit_execution_failures": 0,
+        "coverage_call_failures": 1,
+        "all_recovered": true
+      }
+    },
+    {
+      "pair": 5,
+      "contestant": "codex",
+      "order": 2,
+      "coding_seconds": 374.9930721950004,
+      "tool_calls": 28,
+      "model_selected_graph_calls": 15,
+      "actual_mcp_calls": 15,
+      "tool_failures": 1,
+      "tools_by_name": {
+        "shell": 10,
+        "mcp.codebase-memory-mcp.index_repository": 1,
+        "mcp.codebase-memory-mcp.search_graph": 3,
+        "mcp.codebase-memory-mcp.get_architecture": 1,
+        "mcp.codebase-memory-mcp.get_code_snippet": 9,
+        "mcp.codebase-memory-mcp.trace_path": 1,
+        "patch": 3
+      },
+      "mcp_by_name": {
+        "index_repository": 1,
+        "search_graph": 3,
+        "get_architecture": 1,
+        "get_code_snippet": 9,
+        "trace_path": 1
+      },
+      "mcp_outcomes": {
+        "success": 15
+      },
+      "mcp_seconds": 2.477479212,
+      "mcp_repeated_identical_requests": 0,
+      "model_calls": null,
+      "model_attempts": null,
+      "model_seconds": null,
+      "tokens": {
+        "input_tokens": 318154,
+        "cached_input_tokens": 277888,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 11557,
+        "reasoning_output_tokens": 1875,
+        "total_input_tokens": 318154,
+        "uncached_input_tokens": 40266
+      },
+      "host_load_average_at_start": [
+        0.65234375,
+        0.57861328125,
+        0.6162109375
+      ],
+      "correct": true,
+      "manual_review": "passed",
+      "acceptance_tests_passed": 17,
+      "review_sha256": "99229c061f78fb85c8c25ff72a032c52b77ea61ddb24e5060b8d754dfad3c537",
+      "tools_by_canonical_name": {
+        "mcp.get_architecture": 1,
+        "mcp.get_code_snippet": 9,
+        "mcp.index_repository": 1,
+        "mcp.search_graph": 3,
+        "mcp.trace_path": 1,
+        "patch": 3,
+        "shell": 10
+      },
+      "timing_boundary": "cli_process_start_to_exit",
+      "attempt_wall_seconds": 385.0090919509985,
+      "host_validation_seconds": 2.6355538649986556,
+      "host_oracle_seconds": 2.2834528290004528,
+      "configuration_matches_frozen_before_and_after": true,
+      "graph_evidence_complete_and_eligible": true,
+      "billed_cost": null,
+      "evidence": {
+        "trial.json": {
+          "path": "pairs/005/codex/trial.json",
+          "sha256": "b547cda179b9261ce9ea4eff01ed3d50ac6cf092b6e7cb0e194b50d38200015f"
+        },
+        "acceptance.json": {
+          "path": "pairs/005/codex/acceptance.json",
+          "sha256": "6d6880e69ba30c157fe4e4056003d055cda95ab4b787f296d662336a1cda4d56"
+        },
+        "validation.json": {
+          "path": "pairs/005/codex/validation.json",
+          "sha256": "56aab7dd42bee105c0e08945b73dba781d3b760b2eaebd57b8f7d9253c50615b"
+        },
+        "manual-review.json": {
+          "path": "pairs/005/codex/manual-review.json",
+          "sha256": "99229c061f78fb85c8c25ff72a032c52b77ea61ddb24e5060b8d754dfad3c537"
+        }
+      },
+      "process_started_unix": 1790464874.0489135,
+      "process_ended_unix": 1790465249.0419843,
+      "failure_classification": {
+        "expected_diff_exit_one": 1,
+        "unexpected_tool_failures": 0
+      }
+    }
+  ],
+  "evidence": {
+    "private_root": "/var/tmp/temper-worker-codex-evidence/",
+    "primary_index": {
+      "path": "final-campaign-87e190-001/primary-evidence-index.json",
+      "sha256": "d78807bbdab54657d62f2bc8ce563efeb8fd04028dae31fcc7221e4075e1f75b",
+      "selected_file_count": 263
+    },
+    "root_acceptance_audit_sha256": "44cd0f800705924b8ed5f3923c23767b3dc33c888c6eb282626ad790db3868e2",
+    "independent_campaign_audit_sha256": "d8f5a0b3ac7b2f9c410220538139876a1e5d87b5dbc34ba980b3f88b196c03c3",
+    "local_validation_sha256": "42d5b1696ec535ffa132a7ff44ce6e8f57e52076bd975d93b9cefed200a20acf",
+    "ci_receipt_sha256": "1786df7506f9569b7b26439cde72e9ff58ca68c7e661e82634258e9ba1898aec",
+    "focused_artifact_1734_sha256": "d23e260e80bebaa1aab5ebe4c89a0e7b45530ae3504959915f2a42c48b1ecc67",
+    "ordinary_ci_run": 1884,
+    "focused_ci_run": 1885,
+    "exploratory_inventory_sha256": "1efacecbccfb322dc60150bb7eba784ec6832a237c9f2b99ee801dced69f020c",
+    "prior_attempts": {
+      "total": 20,
+      "terminal": 19,
+      "historically_correct": 9,
+      "historically_incorrect": 10,
+      "interrupted_without_conclusion": 1,
+      "all_excluded_from_final_campaign": true
+    }
+  },
+  "limitations": [
+    "One task and five pairs; no general performance equivalence or statistical significance claim.",
+    "Temper mean is worse and tool counts are higher; median acceptance is narrow.",
+    "Codex model requests, attempts and durations unavailable; provider identity/effort unreported.",
+    "Observed host quietness and alternating order do not eliminate provider/cache noise.",
+    "Expected nonzero diff exits and native recovered tool failures have different meanings.",
+    "MCP provider calls include worker setup/readiness; do not add them again to selected-tool counts.",
+    "Codex tool durations use receipt intervals; summed durations can overlap.",
+    "Queueing, publication and merge/convergence durations are not individually observable.",
+    "Cost unavailable; raw token fields have contestant-specific semantics; use normalized totals.",
+    "No controlled ablation or eligible before/after baseline proves a causal speedup.",
+    "Historical post-merge runs 1868/1870/1877/1883 failed in pre-existing graph fixtures; mapped success is not whole-corpus success."
+  ]
+}

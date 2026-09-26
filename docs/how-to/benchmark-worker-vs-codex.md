@@ -6,6 +6,9 @@ real Temper delivery and Codex, with independent host validation. Read the
 interpreting results. This procedure does not imply the performance target has
 been achieved.
 
+The [2026-09-26 results](../reference/worker-codex-benchmark-results.md) record
+the five-pair campaign, including its narrow median result and slower mean.
+
 Ordinary PR CI runs the deterministic Python contract tests. Run the same check
 locally with `python3 -m unittest discover -s benchmarks/worker-codex/tests -v`.
 These tests use toy providers and mocked model/stack calls and require no

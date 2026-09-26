@@ -8,3 +8,5 @@ task-specific pages.
 
 For live coding-agent performance comparisons, see
 [Benchmark the Temper worker against Codex](how-to/benchmark-worker-vs-codex.md).
+The [measured results](reference/worker-codex-benchmark-results.md) include all
+five final pairs, tool/MCP usage, provenance, and limitations.
