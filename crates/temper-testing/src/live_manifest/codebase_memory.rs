@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -16,13 +15,11 @@ use super::convergence::{
     ci_observation_evidence, completed_ci_observation, issue_evidence, poll_until, pr_evidence,
     reject_labels, require_labels,
 };
-use super::{
-    ENGINEER, FinalStateEvidence, ForcedSystemicFailureFixture, LiveCodebaseMemoryEvidence,
-    LivePrivacySafeCodebaseMemoryBindingEvidence,
-};
+use super::{ENGINEER, FinalStateEvidence, ForcedSystemicFailureFixture};
 
 mod aggregate;
 mod configuration;
+mod convergence_evidence;
 mod fake_llm;
 mod graph_consumption;
 mod mapped_batched_edits_fake;
@@ -53,16 +50,16 @@ mod result_driven_guidance;
 mod scoped_graph_evidence;
 mod sequential_graph_evidence;
 pub(super) mod shared_lifecycle;
+mod stable_lifecycle;
+mod stable_lifecycle_fake;
 #[cfg(test)]
 mod stable_readiness_tests;
 mod stable_rebind;
 mod typed_lineage_anchor;
 mod typed_lineage_fake;
-use aggregate::privacy_safe_checkpoints;
 pub(super) use configuration::{ToolConfiguration, tune_codebase_memory_config};
+pub(super) use convergence_evidence::converge;
 use model_observations::ModelObservations;
-use privacy::write_privacy_safe_mcp_log;
-use stable_rebind::{stable_rebind_evidence, validate_mcp_contract};
 
 const MEMORY_FILE: &str = "src/lib.rs";
 const MEMORY_RESULT_NEEDLE: &str = "FAKE_MCP_GRAPH_RESULT";
@@ -76,104 +73,6 @@ const RAW_PROVIDER_FAILURE_NEEDLE: &str = "MCP-FIXTURE-SECRET";
 const SAFE_PROVIDER_FAILURE: &str = "codebase-memory provider or protocol request failed; do not retry codebase-memory immediately; continue with read, grep, find, shell, or other conventional discovery instead";
 const BOUNDED_GRAPH_RESULT_NEEDLE: &str = "[codebase-memory output truncated to 16384 bytes]";
 const MAX_MODEL_MESSAGE_BYTES: usize = 20 * 1024;
-
-pub(super) fn converge(
-    forge: &ForgejoForge,
-    repository: &RepositoryId,
-    issue: ItemNumber,
-    admin_user: &str,
-    standalone: &mut super::process::ChildGuard,
-    timeout: Duration,
-    fake: &CodebaseMemoryFake,
-    mcp: &FakeMcpServer,
-) -> Result<(FinalStateEvidence, LiveCodebaseMemoryEvidence), String> {
-    let final_state = drive_codebase_memory_convergence(
-        forge, repository, issue, admin_user, standalone, timeout,
-    )?;
-    let calls = logged_tool_calls(&mcp.log_path)?;
-    validate_mcp_contract(mcp, &calls)?;
-    fake.validate_observations(mcp)?;
-    let mut mcp_call_counts = BTreeMap::<String, usize>::new();
-    for call in &calls {
-        *mcp_call_counts.entry(call.name.clone()).or_default() += 1;
-    }
-    let mcp_search_calls = mcp_call_counts
-        .get("search_graph")
-        .copied()
-        .unwrap_or_default();
-    let privacy_safe_aggregate = privacy::is_privacy_safe_profile(mcp.lifecycle_profile.as_deref());
-    let aggregate_checkpoints = privacy_safe_checkpoints(mcp, &calls);
-    let stable_rebind = stable_rebind_evidence(mcp, &calls)?;
-    let evidence_mcp_log = if privacy_safe_aggregate {
-        write_privacy_safe_mcp_log(mcp, &calls)?
-    } else {
-        mcp.log_path.clone()
-    };
-    let privacy_safe_binding = privacy_safe_aggregate
-        .then(|| {
-            stable_rebind
-                .as_ref()
-                .map(|binding| LivePrivacySafeCodebaseMemoryBindingEvidence {
-                    confirmation_call_count: binding.confirmation_call_count,
-                    targeted_ready_confirmation: binding.targeted_ready_confirmation,
-                    current_root_rebound: binding.current_root_rebound,
-                    graph_reads_use_confirmed_project: binding.graph_reads_use_confirmed_project,
-                    source_reads_use_confirmed_project: binding.source_reads_use_confirmed_project,
-                    source_served_from_current_root: binding.source_served_from_current_root,
-                    global_inventory_avoided: binding.global_inventory_avoided,
-                })
-        })
-        .flatten();
-    let expected_result = if matches!(
-        mcp.lifecycle_profile.as_deref(),
-        Some(
-            "sequential-graph-evidence"
-                | "result-driven-decision-guidance"
-                | "provider-result-anchor"
-                | "provider-neutral-anchor-lineage"
-                | "mapped-live-graph-consumption"
-                | "mapped-live-denied-shell-classification"
-                | "mapped-live-ordinary-tool-convergence"
-                | "mapped-live-graph-convergence"
-                | "mapped-live-decision-gap-recovery"
-                | "mapped-live-exact-source-selection"
-                | "mapped-live-focused-test-source-relevance"
-        )
-    ) {
-        "one successful provider-shaped graph result".to_string()
-    } else {
-        MEMORY_RESULT_NEEDLE.to_string()
-    };
-    Ok((
-        final_state,
-        LiveCodebaseMemoryEvidence {
-            produced_file: (!privacy_safe_aggregate).then(|| MEMORY_FILE.to_string()),
-            expected_result: (!privacy_safe_aggregate).then_some(expected_result),
-            fake_mcp_log: evidence_mcp_log,
-            mcp_search_calls,
-            mcp_call_counts: mcp_call_counts.into_iter().collect(),
-            readiness_delay_ms: (!privacy_safe_aggregate).then_some(mcp.readiness_delay_ms),
-            forced_failure_tool: mcp
-                .forced_systemic_failure
-                .as_ref()
-                .map(|failure| failure.tool.clone()),
-            aggregate_checkpoints,
-            safe_tools: mcp
-                .safe_tools
-                .iter()
-                .map(|tool| format!("codebase_memory_{tool}"))
-                .collect(),
-            hidden_tools: mcp
-                .hidden_tools
-                .iter()
-                .map(|tool| format!("codebase_memory_{tool}"))
-                .collect(),
-            lifecycle: mcp.lifecycle_profile.clone(),
-            stable_rebind: (!privacy_safe_aggregate).then_some(stable_rebind).flatten(),
-            privacy_safe_binding,
-        },
-    ))
-}
 
 fn drive_codebase_memory_convergence(
     forge: &ForgejoForge,
@@ -258,6 +157,7 @@ fn assert_pr_body_contains_engineer_summary(pr: &PullRequest) -> Result<(), Stri
     if !pr.body.contains(ENGINEER_SUMMARY)
         && !pr.body.contains(PROVIDER_NEUTRAL_ENGINEER_SUMMARY)
         && !pr.body.contains(GRAPH_CONVERGENCE_ENGINEER_SUMMARY)
+        && !pr.body.contains(stable_lifecycle::ENGINEER_SUMMARY)
     {
         return Err(format!(
             "implementation PR body does not contain an approved engineer summary:\n{}",

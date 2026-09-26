@@ -302,6 +302,23 @@ def current_root_source(project, relative_path):
         return None
 
 
+def stable_lifecycle_search(arguments):
+    project = arguments.get("project", "")
+    pattern = arguments.get("pattern")
+    source = current_root_source(project, "README.md")
+    if source is None or not isinstance(pattern, str) or not pattern:
+        log_tool("search_code", arguments, is_error=True)
+        return text_result("bound search source or pattern unavailable", True)
+    matches = [
+        {"file_path": "README.md", "line": number, "content": line}
+        for number, line in enumerate(source.splitlines(), start=1)
+        if pattern in line
+    ]
+    payload = {"matches": matches, "total": len(matches), "has_more": False}
+    log_tool("search_code", arguments, fixture_event="served_stable_current_root_search")
+    return text_result(json.dumps(payload), structured=payload)
+
+
 def text_result(text, is_error=False, structured=None):
     result = {"content": [{"type": "text", "text": text}], "isError": is_error}
     if structured is not None:
@@ -992,6 +1009,10 @@ for line in sys.stdin:
                     }
                 result = text_result(json.dumps(payload))
         elif name == "search_code":
+            if LIFECYCLE_PROFILE == "stable-lifecycle":
+                result = stable_lifecycle_search(arguments)
+                send({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                continue
             if is_focused_relevance_profile():
                 project = arguments.get("project", "")
                 stage = FOCUSED_RELEVANCE_STAGE
