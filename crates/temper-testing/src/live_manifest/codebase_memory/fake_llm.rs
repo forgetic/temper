@@ -41,6 +41,7 @@ impl CodebaseMemoryFake {
             .file_name()
             .is_some_and(|name| name == "mapped-live-schema-rejection-feedback.json");
         let mut shared_router = None;
+        let legacy_graph_consumption = lifecycle_profile == Some("graph-consumption");
         let fake = if let Some(control) = &shared_lifecycle {
             let (fake, router) =
                 shared_lifecycle::start(Arc::clone(&request_count), Arc::clone(control))?;
@@ -116,28 +117,32 @@ impl CodebaseMemoryFake {
                 if messages_contain(view, "CODEBASE MEMORY") {
                     observations.prompt_guidance_seen = true;
                 }
-                if messages_contain(view, MEMORY_RESULT_NEEDLE)
-                    || messages_contain(view, "SEQUENTIAL_GRAPH_RESULT")
-                {
-                    observations.memory_result_seen = true;
+                if legacy_graph_consumption {
+                    legacy_graph_observations::record(view, &mut observations);
+                } else {
+                    if messages_contain(view, MEMORY_RESULT_NEEDLE)
+                        || messages_contain(view, "SEQUENTIAL_GRAPH_RESULT")
+                    {
+                        observations.memory_result_seen = true;
+                    }
+                    if messages_contain(view, "FAKE_MCP_CODE_RESULT")
+                        || messages_contain(view, "SEQUENTIAL_CODE_RESULT")
+                    {
+                        observations.code_refinement_seen = true;
+                    }
+                    if messages_contain(view, "FAKE_MCP_TRACE_RESULT")
+                        || messages_contain(view, "SEQUENTIAL_TRACE_RESULT")
+                    {
+                        observations.graph_trace_seen = true;
+                    }
+                    let current_root_source_results = view
+                        .messages
+                        .iter()
+                        .filter(|message| is_current_root_source_result(&message.content))
+                        .count();
+                    observations.current_root_source_seen |= current_root_source_results > 0;
+                    observations.current_root_source_results += current_root_source_results;
                 }
-                if messages_contain(view, "FAKE_MCP_CODE_RESULT")
-                    || messages_contain(view, "SEQUENTIAL_CODE_RESULT")
-                {
-                    observations.code_refinement_seen = true;
-                }
-                if messages_contain(view, "FAKE_MCP_TRACE_RESULT")
-                    || messages_contain(view, "SEQUENTIAL_TRACE_RESULT")
-                {
-                    observations.graph_trace_seen = true;
-                }
-                let current_root_source_results = view
-                    .messages
-                    .iter()
-                    .filter(|message| is_current_root_source_result(&message.content))
-                    .count();
-                observations.current_root_source_seen |= current_root_source_results > 0;
-                observations.current_root_source_results += current_root_source_results;
                 if messages_contain(view, SAFE_PROVIDER_FAILURE) {
                     observations.safe_failure_seen = true;
                 }
