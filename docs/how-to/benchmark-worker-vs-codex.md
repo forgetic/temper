@@ -6,26 +6,37 @@ real Temper delivery and Codex, with independent host validation. Read the
 interpreting results. This procedure does not imply the performance target has
 been achieved.
 
+Ordinary PR CI runs the deterministic Python contract tests. Run the same check
+locally with `python3 -m unittest discover -s benchmarks/worker-codex/tests -v`.
+These tests use toy providers and mocked model/stack calls and require no
+provider credentials or live deployment.
+
 ## Prepare the campaign
 
 Use a host with Python 3.12+, Git, ripgrep (`rg`), Rust/Cargo, Codex, and the real
 `codebase-memory-mcp` executable. The fixture runs Forgejo and its runner
 locally; CI jobs execute directly on the host. The existing Temper deployment
-is not used. Build the three required binaries before timing any arm:
+is not used. From the committed candidate source, build the three required
+binaries in a new dedicated output directory before timing any arm:
 
 ```sh
-cargo build -p temper --bin temper
-cargo build -p temper-testing --bin temper-benchmark-stack
-cargo build -p temper-benchmark-cli --bin temper-benchmark
+candidate_revision=$(git rev-parse HEAD)
+benchmark_build_target=$(mktemp -d /var/tmp/temper-benchmark-build.XXXXXX)
+CARGO_TARGET_DIR="$benchmark_build_target" cargo build \
+  -p temper -p temper-testing -p temper-benchmark-cli \
+  --bin temper --bin temper-benchmark-stack --bin temper-benchmark
 
 benchmark_bins=$(mktemp -d /var/tmp/temper-benchmark-bins.XXXXXX)
-cp target/debug/temper target/debug/temper-benchmark-stack \
-  target/debug/temper-benchmark "$benchmark_bins/"
-git rev-parse HEAD > "$benchmark_bins/source-revision.txt"
+cp "$benchmark_build_target/debug/temper" \
+  "$benchmark_build_target/debug/temper-benchmark-stack" \
+  "$benchmark_build_target/debug/temper-benchmark" "$benchmark_bins/"
+printf '%s\n' "$candidate_revision" > "$benchmark_bins/source-revision.txt"
 task_revision=$(git rev-parse HEAD)
 ```
 
-Keep these binaries fixed for the campaign. Copying them outside `target/`
+This fresh candidate build directory is separate from the per-arm checkout and
+build targets used during timing; keep the same build profile across candidates.
+Keep these binaries fixed for the campaign. Copying them outside the build directory
 protects them from pre-PR cleanup. `--task-revision` selects committed task,
 fixture, and oracle inputs using `git archive`; working-tree edits are not
 inputs. Record the source revision used to build each candidate separately

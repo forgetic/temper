@@ -27,6 +27,9 @@ def successful_trials(pairs=5):
             trial = {"contestant": name, "pair": pair, "order": ordinal, "correct": True,
                      "agent_succeeded": True, "coding_seconds": 5 if name == "temper" else 10,
                      "validation": {"complete": True, "passed": True},
+                     "configuration_evidence": {
+                         phase: {"complete": True, "matches_frozen": True}
+                         for phase in ["before", "after"]},
                      "graph_evidence": {"complete": True, "eligible": True},
                      "tool_calls": 4, "graph_calls": 2, "tool_evidence_complete": True,
                      "mcp": {"available": True, "complete": True, "provider_calls": 3}}
@@ -211,6 +214,26 @@ class MetricsTests(unittest.TestCase):
                     trials = self.trials()
                     trials[index][key] = value
                     self.assertFalse(comparison(trials)["performance_target_met"])
+
+    def test_configuration_requires_matching_checks_before_and_after_each_arm(self):
+        for index in [0, 1]:
+            for phase in ["before", "after"]:
+                for check in [None, {}, {"matches_frozen": True},
+                              {"complete": True, "matches_frozen": False},
+                              {"complete": False, "matches_frozen": True},
+                              {"complete": True, "matches_frozen": 1}]:
+                    with self.subTest(contestant=index, phase=phase, check=check):
+                        trials = self.trials()
+                        trials[index]["configuration_evidence"][phase] = check
+                        result = comparison(trials)
+                        cell = result["contestants"][trials[index]["contestant"]]
+                        self.assertFalse(cell["configuration_complete"])
+                        self.assertFalse(result["timing_target_met"])
+                        self.assertFalse(result["performance_target_met"])
+                        self.assertTrue(trials[index]["correct"])
+            trials = self.trials()
+            del trials[index]["configuration_evidence"]
+            self.assertFalse(comparison(trials)["performance_target_met"])
 
     def codex(self, events):
         with tempfile.TemporaryDirectory() as temporary:

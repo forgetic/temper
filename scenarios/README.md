@@ -18,6 +18,13 @@ comparisons; do not add benchmark or timing semantics to scenario manifests.
 See [Benchmark agent sessions](../docs/how-to/benchmark-agent-sessions.md) for
 the operator workflow.
 
+[`worker-codex-benchmark/`](worker-codex-benchmark/README.md) maps feature
+`ai/temper#1285`. A bounded Jig report lands through real host CI and mechanical
+merge, then required host assertions run the exact benchmark accounting,
+stdio-proxy, and campaign tests from the feature checkout. These checks prove
+delivery and harness contracts; the separate real-model paired campaign
+establishes coding-agent performance.
+
 ## Runnable scenarios
 
 `temper-scenario run` has one implicit execution topology and one public

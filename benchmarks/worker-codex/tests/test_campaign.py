@@ -106,7 +106,7 @@ class CampaignTests(unittest.TestCase):
             output.mkdir(parents=True)
             return successful_trials(1)[0]
 
-        snapshots = [{"config_hash": "initial"}, {"config_hash": "initial"}, {"config_hash": "changed"}]
+        snapshots = ([{"config_hash": "initial"}] * 3 + [{"config_hash": "changed"}] * 2)
         with ExitStack() as mocks, redirect_stdout(io.StringIO()):
             mocks.enter_context(patch.dict("os.environ", {"TEMPER_BENCHMARK_LIVE": "1"}))
             mocks.enter_context(patch.object(campaign, "export_inputs", side_effect=export))
@@ -123,6 +123,69 @@ class CampaignTests(unittest.TestCase):
         self.assertFalse(result["trials"][1]["correct"])
         self.assertIn("changed during the campaign", result["trials"][1]["error"])
         self.assertEqual(json.loads((options.output / "campaign.json").read_text())["config_hash"], "initial")
+
+    def test_final_arm_configuration_drift_or_check_failure_preserves_measurements(self):
+        for failure in [None, "drift", "unavailable"]:
+            with self.subTest(failure=failure):
+                options = SimpleNamespace(output=self.root / str(failure), repository=self.root / "source",
+                                          task_revision="frozen-revision", pairs=5, timeout_seconds=45)
+                seen = []
+                configuration = {"config_hash": "initial"}
+
+                def export(_repository, _revision, output):
+                    (output / "fixture/repo").mkdir(parents=True)
+                    (output / "task.md").write_text("Frozen task\n")
+                    return output
+
+                def arm(name, _seed, _task, output, _inputs, _options):
+                    output.mkdir(parents=True)
+                    trial = successful_trials()[len(seen)]
+                    self.assertEqual(trial["contestant"], name)
+                    seen.append(dict(trial))
+                    if len(seen) == 10 and failure == "drift":
+                        configuration["config_hash"] = "changed"
+                    return trial
+
+                def preflight(_options):
+                    if len(seen) == 10 and failure == "unavailable":
+                        raise OSError("final configuration unreadable")
+                    return dict(configuration)
+
+                with ExitStack() as mocks, redirect_stdout(io.StringIO()):
+                    mocks.enter_context(patch.dict("os.environ", {"TEMPER_BENCHMARK_LIVE": "1"}))
+                    mocks.enter_context(patch.object(campaign, "export_inputs", side_effect=export))
+                    checks = mocks.enter_context(patch.object(campaign, "preflight", side_effect=preflight))
+                    mocks.enter_context(patch.object(campaign, "seed_commit"))
+                    mocks.enter_context(patch.object(campaign, "git", return_value="a" * 40))
+                    mocks.enter_context(patch.object(campaign, "native_arm",
+                        side_effect=lambda *args: arm("temper", *args)))
+                    mocks.enter_context(patch.object(campaign, "codex_arm",
+                        side_effect=lambda *args: arm("codex", *args)))
+                    result = campaign.execute(options)
+
+                self.assertEqual(checks.call_count, 21)
+                self.assertEqual(len(seen), 10)
+                self.assertEqual(len(result["trials"]), 10)
+                self.assertTrue(result["order_complete"])
+                self.assertEqual(result["performance_target_met"], failure is None)
+                self.assertEqual(result["timing_target_met"], failure is None)
+                self.assertTrue(all(t["correct"] for t in result["trials"]))
+                self.assertTrue(all(t["configuration_evidence"]["after"]["matches_frozen"]
+                                    for t in result["trials"][:-1]))
+                final = result["trials"][-1]
+                for key in ["coding_seconds", "tool_calls", "graph_calls", "validation", "correct",
+                            "agent_succeeded", "mcp", "graph_evidence"]:
+                    self.assertEqual(final[key], seen[-1][key])
+                evidence = final["configuration_evidence"]
+                self.assertTrue(evidence["before"]["matches_frozen"])
+                self.assertEqual(evidence["after"]["matches_frozen"], failure is None)
+                self.assertEqual(evidence["after"]["complete"], failure != "unavailable")
+                if failure == "drift":
+                    self.assertEqual(evidence["after"]["observed"], {"config_hash": "changed"})
+                if failure:
+                    self.assertIn("error", evidence["after"])
+                self.assertEqual(json.loads((options.output / "pairs/005/codex/trial.json").read_text()), final)
+                self.assertEqual(json.loads((options.output / "comparison.json").read_text()), result)
 
     def test_comparison_rejects_invalid_durations_and_missing_tool_evidence(self):
         baseline = successful_trials()
