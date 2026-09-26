@@ -170,7 +170,9 @@ impl NativeJigAgentRunner {
             .begin_run(job_id, context)
             .ok()
             .flatten();
-        let activity_endpoint = trace.as_ref().and_then(|trace| trace.bind_endpoint().ok());
+        let activity_endpoint = trace
+            .as_ref()
+            .and_then(|trace| trace.bind_endpoint_requiring_main_scope().ok());
         let activity_address = activity_endpoint
             .as_ref()
             .map(|endpoint| endpoint.address().to_string());

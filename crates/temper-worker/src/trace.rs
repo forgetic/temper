@@ -251,6 +251,7 @@ struct RunState {
     /// it onto its own per-run canonical root so host boundaries and child
     /// events share exactly one unique main scope.
     source_main_scope_id: Option<String>,
+    main_scope: terminal::MainScopeState,
     blobs: BTreeMap<String, BlobReferenceV1>,
     /// Exact attachment-bearing source frames already accepted during this
     /// live run. The attachment bytes are integrity-bound by the frame digest,
@@ -383,6 +384,7 @@ impl TraceRun {
                         disabled: false,
                         scopes,
                         source_main_scope_id: None,
+                        main_scope: terminal::MainScopeState::default(),
                         blobs: BTreeMap::new(),
                         accepted_child_records: BTreeMap::new(),
                         accepted_prompts: BTreeMap::new(),
@@ -425,7 +427,7 @@ impl TraceRun {
         &self.inner.manifest
     }
 
-    /// Binds the per-run loopback endpoint used by first-party child agents.
+    /// Binds a per-run loopback endpoint without requiring a child lifecycle.
     /// One accepted connection carries a persistent newline-delimited record
     /// stream and may remain idle while the run is active.
     pub fn bind_endpoint(&self) -> io::Result<ActivityEndpoint> {
@@ -562,6 +564,7 @@ fn append_event(
         .scopes
         .entry(event.scope.id.clone())
         .or_insert_with(|| event.scope.clone());
+    state.main_scope.observe(event);
     inner.coordination.publish_append(&inner.manifest.run_id);
     Ok(())
 }
