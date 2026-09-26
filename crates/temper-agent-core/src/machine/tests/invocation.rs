@@ -243,6 +243,11 @@ fn canonical_graph_call_queries_run_local_admission_before_dispatch() {
     );
 }
 
+mod schema_feedback {
+    use super::*;
+    include!("invocation/schema_feedback.rs");
+}
+
 mod incomplete_graph_selector {
     use super::*;
     include!("invocation/incomplete_graph_selector.rs");

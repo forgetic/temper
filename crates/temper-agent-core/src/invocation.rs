@@ -17,8 +17,11 @@ use tongs::tools::{ToolEffects, ToolRegistry};
 
 use crate::machine::{ToolFailureDiagnostic, ToolFailureReason};
 
-/// Safe placeholder retained for a rejected call. Supplied names and argument
-/// values never enter conversation history, previews, telemetry, or dispatch.
+mod schema_feedback;
+pub(crate) use schema_feedback::SchemaFeedback;
+
+/// Inert placeholder retained for every rejected call. A known canonical name
+/// survives only in private schema feedback, never as an executable identity.
 pub const REJECTED_TOOL_NAME: &str = "invalid_tool_invocation";
 
 /// Failure to assemble one unambiguous catalog from the finalized registry.
@@ -55,6 +58,8 @@ pub struct CanonicalInvocation {
     /// Present when the call must settle locally without consulting the tool
     /// registry. The call itself has already been scrubbed in this case.
     pub rejection: Option<ToolFailureDiagnostic>,
+    /// Private schema-owned guidance, retained separately from wire diagnostics.
+    pub(crate) schema_feedback: Option<SchemaFeedback>,
     /// Closed shape retained when a locally rejected traversal call did not
     /// carry its usable required selector. The supplied name and arguments
     /// are scrubbed.
@@ -160,34 +165,41 @@ impl ToolInvocationCatalog {
             return CanonicalInvocation {
                 call,
                 rejection: None,
+                schema_feedback: None,
                 incomplete_graph_selector: None,
             };
         }
         let Some(canonical_name) = self.resolve_name(api, &call.name).map(str::to_string) else {
-            return rejected(call, ToolFailureReason::UnknownTool, None);
+            return rejected(call, ToolFailureReason::UnknownTool, None, None);
         };
         call.name = canonical_name.clone();
+        let schema = &self
+            .entries
+            .get(&canonical_name)
+            .expect("resolved catalog entry")
+            .definition
+            .parameters;
         let incomplete_graph_selector =
             incomplete_required_graph_selector(&canonical_name, &call.arguments);
         if let Some(tool) = incomplete_graph_selector {
-            return rejected(call, ToolFailureReason::InvalidArguments, Some(tool));
+            let feedback = SchemaFeedback::from_schema(&canonical_name, schema, &call.arguments);
+            return rejected(
+                call,
+                ToolFailureReason::InvalidArguments,
+                Some(tool),
+                feedback,
+            );
         }
         if normalize_arguments(api, &canonical_name, &mut call.arguments).is_err()
-            || !arguments_match(
-                &self
-                    .entries
-                    .get(&canonical_name)
-                    .expect("resolved catalog entry")
-                    .definition
-                    .parameters,
-                &call.arguments,
-            )
+            || !arguments_match(schema, &call.arguments)
         {
-            return rejected(call, ToolFailureReason::InvalidArguments, None);
+            let feedback = SchemaFeedback::from_schema(&canonical_name, schema, &call.arguments);
+            return rejected(call, ToolFailureReason::InvalidArguments, None, feedback);
         }
         CanonicalInvocation {
             call,
             rejection: None,
+            schema_feedback: None,
             incomplete_graph_selector: None,
         }
     }
@@ -199,10 +211,12 @@ impl ToolInvocationCatalog {
         assistant: &mut AssistantMessage,
     ) -> (
         BTreeMap<String, ToolFailureDiagnostic>,
+        BTreeMap<String, SchemaFeedback>,
         BTreeMap<String, GraphCorrelationToolV1>,
         BTreeMap<String, GraphCorrelationToolV1>,
     ) {
         let mut rejections = BTreeMap::new();
+        let mut feedback = BTreeMap::new();
         let mut incomplete_graph_selectors = BTreeMap::new();
         let mut rejected_graph_tools = BTreeMap::new();
         let api = assistant.api.clone();
@@ -215,6 +229,9 @@ impl ToolInvocationCatalog {
                 .and_then(GraphCorrelationToolV1::from_public_name);
             let normalized = self.canonicalize(&api, call.clone());
             *call = normalized.call;
+            if let Some(detail) = normalized.schema_feedback {
+                feedback.insert(call.id.clone(), detail);
+            }
             if let Some(tool) = normalized.incomplete_graph_selector {
                 incomplete_graph_selectors.insert(call.id.clone(), tool);
             }
@@ -227,7 +244,12 @@ impl ToolInvocationCatalog {
                 rejections.insert(call.id.clone(), rejection);
             }
         }
-        (rejections, incomplete_graph_selectors, rejected_graph_tools)
+        (
+            rejections,
+            feedback,
+            incomplete_graph_selectors,
+            rejected_graph_tools,
+        )
     }
 
     fn resolve_name(&self, api: &str, supplied: &str) -> Option<&str> {
@@ -256,12 +278,14 @@ fn rejected(
     mut call: ToolCall,
     reason: ToolFailureReason,
     incomplete_graph_selector: Option<GraphCorrelationToolV1>,
+    schema_feedback: Option<SchemaFeedback>,
 ) -> CanonicalInvocation {
     call.name = REJECTED_TOOL_NAME.to_string();
     call.arguments = Value::Object(Map::new());
     CanonicalInvocation {
         call,
         rejection: Some(ToolFailureDiagnostic::schema(reason)),
+        schema_feedback,
         incomplete_graph_selector,
     }
 }

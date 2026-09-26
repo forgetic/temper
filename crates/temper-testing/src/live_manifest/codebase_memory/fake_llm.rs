@@ -13,6 +13,7 @@ pub(in crate::live_manifest) struct CodebaseMemoryFake {
     observations: Arc<Mutex<ModelObservations>>,
     require_current_root_source: bool,
     privacy_safe_log: bool,
+    require_schema_feedback: bool,
     shared_lifecycle: Option<Arc<shared_lifecycle::Control>>,
 }
 
@@ -36,6 +37,9 @@ impl CodebaseMemoryFake {
         let observations_for_rule = Arc::clone(&observations);
         let shared_lifecycle = (lifecycle_profile == Some("shared-codebase-memory-lifecycle"))
             .then(|| Arc::new(shared_lifecycle::Control::default()));
+        let require_schema_feedback = script_path
+            .file_name()
+            .is_some_and(|name| name == "mapped-live-schema-rejection-feedback.json");
         let mut shared_router = None;
         let fake = if let Some(control) = &shared_lifecycle {
             let (fake, router) =
@@ -54,6 +58,10 @@ impl CodebaseMemoryFake {
             result_driven_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("provider-neutral-anchor-lineage") {
             typed_lineage_fake::start(request_count, observations_for_rule)?
+        } else if lifecycle_profile == Some("mapped-live-graph-consumption")
+            && require_schema_feedback
+        {
+            mapped_schema_feedback_fake::start(request_count, observations_for_rule)?
         } else if lifecycle_profile == Some("mapped-live-graph-consumption")
             && script_path
                 .file_name()
@@ -156,6 +164,7 @@ impl CodebaseMemoryFake {
             observations,
             require_current_root_source,
             privacy_safe_log: privacy::is_privacy_safe_profile(lifecycle_profile),
+            require_schema_feedback,
             shared_lifecycle,
         })
     }
@@ -177,6 +186,9 @@ impl CodebaseMemoryFake {
     }
 
     pub(super) fn validate_observations(&self, mcp: &FakeMcpServer) -> Result<(), String> {
+        if self.require_schema_feedback {
+            mapped_schema_feedback_fake::validate_requests(&self.fake.requests())?;
+        }
         let (
             prompt_guidance_seen,
             memory_result_seen,

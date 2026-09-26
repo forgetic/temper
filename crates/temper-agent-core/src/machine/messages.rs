@@ -3,7 +3,8 @@
 use tongs::model::{AssistantMessage, ContentBlock, StopReason, ToolResultMessage};
 use tongs::tools::ToolOutput;
 
-use super::ToolFailureDiagnostic;
+use super::{ToolFailureCategory, ToolFailureDiagnostic, ToolFailureReason};
+use crate::invocation::SchemaFeedback;
 
 /// Builds the tool-result message appended to the conversation after a tool runs.
 pub(super) fn tool_result_message(
@@ -11,11 +12,18 @@ pub(super) fn tool_result_message(
     tool_name: &str,
     output: ToolOutput,
     failure: Option<ToolFailureDiagnostic>,
+    schema_feedback: Option<SchemaFeedback>,
 ) -> ToolResultMessage {
     let (content, details, is_error) = match failure {
         Some(failure) => (
             vec![ContentBlock::Text(tongs::model::TextContent {
-                text: failure.model_message(),
+                text: match schema_feedback.filter(|_| {
+                    failure.category == ToolFailureCategory::SchemaArgumentMismatch
+                        && failure.reason == ToolFailureReason::InvalidArguments
+                }) {
+                    Some(feedback) => format!("{} {}", failure.model_message(), feedback.message()),
+                    None => failure.model_message(),
+                },
                 text_signature: None,
             })],
             None,
