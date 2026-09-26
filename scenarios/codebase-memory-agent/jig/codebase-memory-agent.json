@@ -12,10 +12,10 @@
           "turns": [
             {
               "tool_call": {
-                "id": "call_memory_search",
-                "name": "codebase_memory_search_code",
+                "id": "graph_identify_retry_worker",
+                "name": "codebase_memory_search_graph",
                 "args": {
-                  "query": "WidgetService"
+                  "query": "alias retry worker affinity"
                 }
               }
             }
@@ -26,11 +26,84 @@
           "turns": [
             {
               "tool_call": {
-                "id": "call_write_memory_notes",
-                "name": "write",
+                "id": "graph_refine_retry_worker",
+                "name": "codebase_memory_search_code",
                 "args": {
-                  "path": "demo/MEMORY_NOTES.md",
-                  "content": "memory-guided notes\nFAKE_MCP_SEARCH_RESULT project=temper-v1-2109ec4816468ae8767e84925ca8c37d129c10e3d3b06adc875d2c103da24d0a query=WidgetService\n"
+                  "pattern": "retry_worker_topic"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "read_confirmed_current_root_implementation",
+                "name": "codebase_memory_get_code_snippet",
+                "args": {
+                  "qualified_name": "retry_worker_topic",
+                  "decision_evidence_kind": "implementation"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "graph_trace_retry_worker_caller",
+                "name": "codebase_memory_trace_path",
+                "args": {
+                  "function_name": "retry_worker_topic",
+                  "direction": "inbound"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "read_confirmed_current_root_caller",
+                "name": "codebase_memory_get_code_snippet",
+                "args": {
+                  "qualified_name": "dispatch",
+                  "decision_evidence_kind": "caller"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "read_confirmed_current_root_test",
+                "name": "codebase_memory_get_code_snippet",
+                "args": {
+                  "qualified_name": "alias_retries_keep_the_original_ordered_worker",
+                  "decision_evidence_kind": "focused_test"
+                }
+              }
+            }
+          ],
+          "stop": "tool_calls"
+        },
+        {
+          "turns": [
+            {
+              "tool_call": {
+                "id": "create_memory_notes",
+                "name": "apply_patch",
+                "args": {
+                  "patch": "diff --git a/demo/MEMORY_NOTES.md b/demo/MEMORY_NOTES.md\nnew file mode 100644\n--- /dev/null\n+++ b/demo/MEMORY_NOTES.md\n@@ -0,0 +1,4 @@\n+memory-guided notes\n+src/lib.rs: retry_worker_topic chooses the ordered worker key for an event attempt.\n+src/caller.rs: dispatch calls retry_worker_topic.\n+tests/retry_affinity.rs: alias_retries_keep_the_original_ordered_worker checks retry affinity.\n"
                 }
               }
             }

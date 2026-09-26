@@ -42,7 +42,9 @@ impl CodebaseMemoryFake {
             .is_some_and(|name| name == "mapped-live-schema-rejection-feedback.json");
         let mut shared_router = None;
         let legacy_graph_consumption = lifecycle_profile == Some("graph-consumption");
-        let fake = if let Some(control) = &shared_lifecycle {
+        let fake = if lifecycle_profile == Some("stable-lifecycle") {
+            stable_lifecycle_fake::start(request_count, observations_for_rule, script)?
+        } else if let Some(control) = &shared_lifecycle {
             let (fake, router) =
                 shared_lifecycle::start(Arc::clone(&request_count), Arc::clone(control))?;
             shared_router = Some(router);
@@ -191,6 +193,16 @@ impl CodebaseMemoryFake {
     }
 
     pub(super) fn validate_observations(&self, mcp: &FakeMcpServer) -> Result<(), String> {
+        if mcp.lifecycle_profile.as_deref() == Some("stable-lifecycle") {
+            let observations = self
+                .observations
+                .lock()
+                .map_err(|_| "model observation mutex poisoned")?;
+            return stable_lifecycle::validate_observations(
+                &observations,
+                self.engineer_requests(),
+            );
+        }
         if self.require_schema_feedback {
             mapped_schema_feedback_fake::validate_requests(&self.fake.requests())?;
         }
