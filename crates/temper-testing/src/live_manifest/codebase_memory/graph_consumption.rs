@@ -28,7 +28,34 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         .filter(|s| s.starts_with("temper-v1-"))
         .ok_or("missing stable provider identity")?;
     let actual = confirmed_project_from_calls(calls, requested)?;
-    if calls[3..].iter().any(|c| c.arguments["project"] != actual) {
+    validate_source_calls(mcp, &calls[3..], &actual)?;
+    validate_stable_rebind_contract(mcp, calls, requested)
+}
+
+pub(super) fn validate_source_calls(
+    mcp: &FakeMcpServer,
+    calls: &[McpToolCallEvidence],
+    actual: &str,
+) -> Result<(), String> {
+    if calls
+        .iter()
+        .map(|call| call.name.as_str())
+        .collect::<Vec<_>>()
+        != [
+            "search_graph",
+            "search_code",
+            "get_code_snippet",
+            "trace_path",
+            "get_code_snippet",
+            "get_code_snippet",
+        ]
+        || calls
+            .iter()
+            .any(|call| call.is_error || call.arguments.get("decision_evidence_kind").is_some())
+    {
+        return Err("historical fixture requires six successful ordered graph calls and wrapper-owned typed source evidence".into());
+    }
+    if calls.iter().any(|c| c.arguments["project"] != actual) {
         return Err("historical source consumption lost current-root binding".into());
     }
     let raw =
@@ -40,22 +67,22 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
         .as_str()
         .ok_or("missing implementation selector")?;
     let mapped = mcp.lifecycle_profile.as_deref() == Some("mapped-live-graph-consumption");
-    if calls[3].arguments["query"]
+    if calls[0].arguments["query"]
         != if mapped {
             "worker affinity routing"
         } else {
             "alias retry worker affinity"
         }
-        || calls[4].arguments["pattern"] != implementation.rsplit("::").next().unwrap()
-        || calls[6].arguments["direction"] != "inbound"
+        || calls[1].arguments["pattern"] != implementation.rsplit("::").next().unwrap()
+        || calls[3].arguments["direction"] != "inbound"
     {
         return Err("historical graph discovery/refinement/trace bounds changed".into());
     }
     for (index, field, token) in [
-        (5, "qualified_name", "implementation"),
-        (6, "function_name", "implementation"),
-        (7, "qualified_name", "caller"),
-        (8, "qualified_name", "focused_test"),
+        (2, "qualified_name", "implementation"),
+        (3, "function_name", "implementation"),
+        (4, "qualified_name", "caller"),
+        (5, "qualified_name", "focused_test"),
     ] {
         if tokens[token].as_str().is_none() || calls[index].arguments[field] != tokens[token] {
             return Err("historical fixture failed to consume a returned source selector".into());
@@ -80,7 +107,7 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
             "served_current_root_source",
         ]
     };
-    if calls[3..]
+    if calls
         .iter()
         .map(|c| c.fixture_event.as_deref().unwrap_or_default())
         .collect::<Vec<_>>()
@@ -88,5 +115,5 @@ pub(super) fn validate(mcp: &FakeMcpServer, calls: &[McpToolCallEvidence]) -> Re
     {
         return Err("historical fixture omitted current-root source checkpoints".into());
     }
-    validate_stable_rebind_contract(mcp, calls, requested)
+    Ok(())
 }

@@ -36,8 +36,11 @@ def check_protocol(provider):
         first, second = root / "first-checkout", root / "second-checkout"
         first.mkdir()
         second.mkdir()
-        (first / "README.md").write_text("first WidgetService source\n")
-        (second / "README.md").write_text("second WidgetService source\n")
+        for checkout in (first, second):
+            for relative in ("src/lib.rs", "src/caller.rs", "tests/retry_affinity.rs"):
+                path = checkout / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{checkout.name}: {relative} source\n")
         log = root / "stable.jsonl"
         project = "temper-stable-fixture"
         results = exchange(provider, first, log, "stable-lifecycle", [
@@ -67,27 +70,36 @@ def check_protocol(provider):
         assert list(state["projects"]) == [project], state
         assert state["counters"] == {"project_creations": 1, "rebinds": 2}, state
 
-        search = exchange(provider, second, log, "stable-lifecycle", [
-            ("tools/list", {}),
-            ("search_code", {"project": project, "pattern": "WidgetService"}),
-            ("search_code", {"project": "foreign-project", "pattern": "WidgetService"}),
-            ("search_code", {"project": project, "query": "WidgetService"}),
-            ("search_code", {"project": project, "pattern": "absent-symbol"}),
-        ])
-        schema = next(tool["inputSchema"] for tool in search[0]["tools"]
-                      if tool["name"] == "search_code")
+        chain = [
+            ("search_graph", {"query": "alias retry worker affinity"}),
+            ("search_code", {"pattern": "retry_worker_topic"}),
+            ("get_code_snippet", {"qualified_name": "retry_worker_topic"}),
+            ("trace_path", {"function_name": "retry_worker_topic", "direction": "inbound"}),
+            ("get_code_snippet", {"qualified_name": "dispatch"}),
+            ("get_code_snippet", {"qualified_name": "alias_retries_keep_the_original_ordered_worker"}),
+        ]
+        bound = [(name, dict(arguments, project=project)) for name, arguments in chain]
+        search = exchange(provider, second, log, "stable-lifecycle", [("tools/list", {})] + bound)
+        schema = next(tool["inputSchema"] for tool in search[0]["tools"] if tool["name"] == "search_code")
         assert schema["required"] == ["pattern"]
-        match = {"file_path": "README.md", "line": 1, "content": "second WidgetService source"}
-        expected_search = {"matches": [match], "total": 1, "has_more": False}
-        assert payload(search[1]) == search[1]["structuredContent"] == expected_search
-        assert search[2]["isError"] is True
-        assert search[3]["isError"] is True
-        assert payload(search[4]) == {"matches": [], "total": 0, "has_more": False}
-        (second / "README.md").unlink()
-        missing_source = exchange(provider, second, log, "stable-lifecycle", [
-            ("search_code", {"project": project, "pattern": "WidgetService"}),
-        ])
-        assert missing_source[0]["isError"] is True
+        for result in search[1:]:
+            assert payload(result) == result["structuredContent"]
+        for index, relative in [(3, "src/lib.rs"), (5, "src/caller.rs"), (6, "tests/retry_affinity.rs")]:
+            source = payload(search[index])
+            assert source["file_path"] == relative
+            assert source["source"] == (second / relative).read_text()
+        for name, arguments in [
+            ("search_graph", {"project": "foreign-project", "query": "alias retry worker affinity"}),
+            ("search_code", {"project": project, "pattern": "retry_worker_topic"}),
+        ]:
+            invalid = exchange(provider, second, log, "stable-lifecycle", [(name, arguments)])
+            assert invalid[0]["isError"] is True
+        for arguments in [{"query": "retry_worker_topic"}, {"pattern": "absent-symbol"}]:
+            invalid = exchange(provider, second, log, "stable-lifecycle", [bound[0], ("search_code", dict(arguments, project=project))])
+            assert invalid[1]["isError"] is True
+        (second / "src/caller.rs").unlink()
+        missing_source = exchange(provider, second, log, "stable-lifecycle", bound[:5])
+        assert missing_source[4]["isError"] is True
 
         normalized = "normalized-" + project
         control = exchange(provider, first, root / "rebind.jsonl", "stable-rebind", [
@@ -108,7 +120,7 @@ def check_protocol(provider):
         print(json.dumps({"missing_then_ready": True, "current_root_rebound": True,
                           "restart_retains_binding": True, "foreign_project_missing": True,
                           "normalized_profile_preserved": True, "unknown_profile_not_ready": True,
-                          "structured_search_uses_rebound_source": True,
+                          "structured_chain_uses_rebound_sources": True,
                           "invalid_pattern_or_source_rejected": True}))
 
 

@@ -1,21 +1,15 @@
-//! Gate the basic Jig write on the current checkout's exact search match.
+//! Gate basic notes creation on the selected current-checkout source chain.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use jig_core::{Reply, RequestView, Script};
 use jig_server::FakeLlm;
-use serde_json::Value;
 
 use super::{
     MAX_MODEL_MESSAGE_BYTES, ModelObservations, RAW_PROVIDER_FAILURE_NEEDLE, messages_contain,
     stable_lifecycle,
 };
-
-const README: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../scenarios/codebase-memory-agent/repo/README.md"
-));
 
 pub(super) fn start(
     request_count: Arc<AtomicUsize>,
@@ -34,19 +28,18 @@ pub(super) fn start(
 }
 
 pub(super) fn reply(view: &RequestView, script: &Script) -> Reply {
-    assert!(
-        view.prior_tool_results == 0 || verified_result(view),
-        "stable lifecycle must receive its verified search source before writing notes"
-    );
-    script.next_reply(view)
+    let reply = script.next_reply(view);
+    if reply.turns.iter().any(|turn| {
+        matches!(turn, jig_core::Turn::ToolCall { name, .. } if name == "apply_patch" || name == "submit_for_pr")
+    }) {
+        assert!(verified_result(view), "stable lifecycle must receive complete graph source before creating notes");
+    }
+    reply
 }
 
 fn record(view: &RequestView, observations: &mut ModelObservations) {
     observations.prompt_guidance_seen |= messages_contain(view, "CODEBASE MEMORY");
-    let received = verified_result(view);
-    observations.memory_result_seen |= received;
-    observations.current_root_source_seen |= received;
-    observations.current_root_source_results = usize::from(observations.current_root_source_seen);
+    super::legacy_graph_observations::record(view, observations);
     observations.raw_provider_text_seen |= messages_contain(view, RAW_PROVIDER_FAILURE_NEEDLE);
     observations.oversized_message_seen |= view
         .messages
@@ -55,32 +48,7 @@ fn record(view: &RequestView, observations: &mut ModelObservations) {
 }
 
 pub(super) fn verified_result(view: &RequestView) -> bool {
-    let expected = expected_match();
-    view.messages
-        .iter()
-        .filter(|message| message.role == "tool")
-        .filter_map(|message| {
-            let content = message
-                .content
-                .split_once("\n\n[Decision anchor:")
-                .map_or(message.content.as_str(), |(result, _)| result);
-            serde_json::from_str::<Value>(content).ok()
-        })
-        .any(|result| {
-            result["matches"] == serde_json::json!([expected])
-                && result["total"] == 1
-                && result["has_more"] == false
-        })
-}
-
-pub(super) fn expected_match() -> Value {
-    let matches = README
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains(stable_lifecycle::PATTERN))
-        .collect::<Vec<_>>();
-    let [(index, content)] = matches.as_slice() else {
-        panic!("basic scenario README must contain exactly one search match");
-    };
-    serde_json::json!({"file_path":"README.md", "line":index + 1,"content":content})
+    let mut observations = ModelObservations::default();
+    super::legacy_graph_observations::record(view, &mut observations);
+    stable_lifecycle::complete_source_observations(&observations)
 }
