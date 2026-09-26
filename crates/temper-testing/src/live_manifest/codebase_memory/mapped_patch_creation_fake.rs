@@ -19,21 +19,29 @@ pub(super) fn start(
 }
 
 fn reply(view: &RequestView) -> Reply {
+    reply_with_patch(view, "patch-read-primary-and-create-regression", patch)
+}
+
+pub(super) fn reply_with_patch(
+    view: &RequestView,
+    call_id: &str,
+    make_patch: fn() -> String,
+) -> Reply {
     if view.prior_tool_results != 8 {
         return mapped_graph_consumption_fake::reply(view);
     }
     Reply {
         turns: vec![Turn::ToolCall {
-            id: "patch-read-primary-and-create-regression".into(),
+            id: call_id.into(),
             name: "apply_patch".into(),
-            args: serde_json::json!({"patch": patch()}),
+            args: serde_json::json!({"patch": make_patch()}),
         }],
         usage: Default::default(),
         stop: StopReason::ToolCalls,
     }
 }
 
-fn patch() -> String {
+pub(super) fn patch() -> String {
     let lines = CREATED_SOURCE.lines().count();
     let additions = CREATED_SOURCE
         .lines()

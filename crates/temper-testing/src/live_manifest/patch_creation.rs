@@ -8,6 +8,7 @@ use std::process::Command;
 use super::process::run_git_with_token;
 use super::{FinalStateEvidence, ScenarioBundle};
 
+pub(super) const FRAMED_PRIMARY_SOURCE: &str = "pub mod caller; // Keep caller routing public.\n\npub fn choose_dispatch<'a>(value: &'a str, preferred: Option<&'a str>, _attempt: u32) -> &'a str {\n    preferred.unwrap_or(value)\n}\n";
 pub(super) const CREATED_FILE: &str = "tests/created_dispatch.rs";
 pub(super) const CREATED_SOURCE: &str = "use mapped_live_graph_consumption_fixture::choose_dispatch;\n\n#[test]\nfn a_new_regression_keeps_preferred_dispatch_across_retries() {\n    for attempt in [0, 1, 4] {\n        assert_eq!(choose_dispatch(\"raw\", Some(\"stable\"), attempt), \"stable\");\n    }\n}\n";
 
@@ -18,9 +19,10 @@ pub(super) fn verify_merged(
     final_state: &FinalStateEvidence,
     log: &Path,
 ) -> Result<(), String> {
-    if scenario.scenario_path.file_name().and_then(|s| s.to_str())
-        != Some("mapped-live-patch-creation")
-    {
+    if !matches!(
+        scenario.scenario_path.file_name().and_then(|s| s.to_str()),
+        Some("mapped-live-patch-creation" | "mapped-live-patch-framing")
+    ) {
         return Ok(());
     }
     if scenario.repo.seed_path.join(CREATED_FILE).exists() {
@@ -43,6 +45,11 @@ pub(super) fn verify_merged(
         return Err("creation scenario default branch is not the recorded merged commit".into());
     }
     verify_created_blob(&checkout, merged)?;
+    if scenario.scenario_path.file_name().and_then(|s| s.to_str())
+        == Some("mapped-live-patch-framing")
+    {
+        verify_blob(&checkout, merged, "src/lib.rs", FRAMED_PRIMARY_SOURCE)?;
+    }
     verify_changed_paths(
         &checkout,
         merged,
@@ -54,9 +61,13 @@ pub(super) fn verify_merged(
 }
 
 fn verify_created_blob(checkout: &Path, merged: &str) -> Result<(), String> {
-    let blob = git_output(checkout, &["show", &format!("{merged}:{CREATED_FILE}")])?;
-    if blob != CREATED_SOURCE.as_bytes() {
-        return Err("created regression does not match expected merged bytes".into());
+    verify_blob(checkout, merged, CREATED_FILE, CREATED_SOURCE)
+}
+
+fn verify_blob(checkout: &Path, merged: &str, path: &str, expected: &str) -> Result<(), String> {
+    let blob = git_output(checkout, &["show", &format!("{merged}:{path}")])?;
+    if blob != expected.as_bytes() {
+        return Err("mapped patch file does not match expected merged bytes".into());
     }
     Ok(())
 }
@@ -174,7 +185,9 @@ mod tests {
         git_output(root, &["init", "--quiet"]).unwrap();
         std::fs::create_dir(root.join("tests")).unwrap();
         std::fs::write(root.join(CREATED_FILE), CREATED_SOURCE).unwrap();
-        git_output(root, &["add", CREATED_FILE]).unwrap();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), FRAMED_PRIMARY_SOURCE).unwrap();
+        git_output(root, &["add", CREATED_FILE, "src/lib.rs"]).unwrap();
         git_output(
             root,
             &[
@@ -190,8 +203,10 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join(CREATED_FILE), "wrong working tree bytes\n").unwrap();
+        std::fs::write(root.join("src/lib.rs"), "wrong primary bytes\n").unwrap();
         verify_created_blob(root, "HEAD").unwrap();
-        git_output(root, &["add", CREATED_FILE]).unwrap();
+        verify_blob(root, "HEAD", "src/lib.rs", FRAMED_PRIMARY_SOURCE).unwrap();
+        git_output(root, &["add", CREATED_FILE, "src/lib.rs"]).unwrap();
         git_output(
             root,
             &[
@@ -207,7 +222,9 @@ mod tests {
         )
         .unwrap();
         assert!(verify_created_blob(root, "HEAD").is_err());
+        assert!(verify_blob(root, "HEAD", "src/lib.rs", FRAMED_PRIMARY_SOURCE).is_err());
         verify_created_blob(root, "HEAD^").unwrap();
+        verify_blob(root, "HEAD^", "src/lib.rs", FRAMED_PRIMARY_SOURCE).unwrap();
         assert!(verify_created_blob(root, "missing-ref").is_err());
     }
 }
