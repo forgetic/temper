@@ -36,16 +36,17 @@ fn script() -> jig_core::Script {
 
 #[test]
 fn checked_in_script_uses_shared_schema_and_writes_the_verified_match() {
+    let script = script();
     let mut request = result_view(valid_result());
     request.prior_tool_results = 0;
-    let first = stable_lifecycle_fake::reply(&request, &script());
+    let first = stable_lifecycle_fake::reply(&request, &script);
     let [Turn::ToolCall { name, args, .. }] = first.turns.as_slice() else {
         panic!("search turn")
     };
     assert_eq!(name, "codebase_memory_search_code");
     assert_eq!(args, &json!({"pattern":PATTERN}));
     request.prior_tool_results = 1;
-    let next = stable_lifecycle_fake::reply(&request, &script());
+    let next = stable_lifecycle_fake::reply(&request, &script);
     let [Turn::ToolCall { name, args, .. }] = next.turns.as_slice() else {
         panic!("write turn")
     };
