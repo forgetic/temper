@@ -11,6 +11,7 @@ use tongs::tools::{
 
 use super::Capability;
 use super::forge::{ForgeContextHost, ForgeGetItemTool, ForgeListRelatedTool};
+use super::format::FormatRustTool;
 use super::patch::ApplyPatchTool;
 use super::submit::{SubmitForPrCallback, SubmitForPrTool, submit_for_pr_available};
 use temper_agent_core::{AgentContainmentContext, ManagedBashTool, joined_filesystem_tool};
@@ -83,6 +84,10 @@ fn coding_tools_vec(
     ];
     if capability.is_writable() {
         tools.push(joined_filesystem_tool(Box::new(ApplyPatchTool::new(cwd))));
+        tools.push(joined_filesystem_tool(Box::new(FormatRustTool::new(
+            cwd,
+            containment.clone(),
+        ))));
         tools.push(joined_filesystem_tool(create_edit_tool(cwd)));
         tools.push(joined_filesystem_tool(create_write_tool(cwd)));
     }

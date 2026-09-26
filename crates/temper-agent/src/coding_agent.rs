@@ -51,6 +51,7 @@ mod capability;
 mod codebase_memory;
 mod error;
 mod forge;
+mod format;
 mod patch;
 mod prompt;
 mod prompt_lineage;
