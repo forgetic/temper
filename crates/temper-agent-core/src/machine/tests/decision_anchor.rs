@@ -34,6 +34,7 @@ mod tests {
         include!("decision_anchor_convergence.rs");
         include!("decision_anchor_exact_read.rs");
         include!("decision_anchor_creation.rs");
+        include!("decision_anchor_mutation_diagnostics.rs");
         include!("decision_anchor_convergence_matrix.rs");
         include!("decision_anchor_progress.rs");
     }

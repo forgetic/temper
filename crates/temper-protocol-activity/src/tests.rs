@@ -8,6 +8,7 @@ use super::*;
 
 mod export;
 mod model_failure;
+mod mutation_diagnostics;
 mod prompt;
 mod tool_failure;
 

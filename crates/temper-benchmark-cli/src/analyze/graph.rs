@@ -453,11 +453,17 @@ fn conventional_discovery(
                             completion.seq > event.seq
                                 && completion.name == tool.name
                                 && completion.status == ToolStatusV1::Failed
-                                && completion.failure
-                                    == Some((
+                                && matches!(
+                                    completion.failure,
+                                    Some((
                                         ToolFailureCategoryV1::PolicyDenial,
                                         ToolFailureReasonV1::PolicyPrecondition,
+                                    )) | Some((
+                                        ToolFailureCategoryV1::SchemaArgumentMismatch,
+                                        ToolFailureReasonV1::MalformedMutationTarget
+                                            | ToolFailureReasonV1::ConflictingMutationTargets,
                                     ))
+                                )
                         });
                     if valid_pair {
                         shell_observed = shell_observed.saturating_add(1);
