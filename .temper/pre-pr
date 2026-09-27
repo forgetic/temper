@@ -35,6 +35,8 @@ run cargo fmt --all -- --check
 run cargo depgraph-check check
 run scripts/check-rust-file-size.sh
 run scripts/check-no-ambient-env.sh
+run python3 scripts/prepare-build-cache.py
+run python3 -B -m unittest discover -s scripts/tests -p test_build_cache.py
 run cargo dev-test-build
 run python3 -B -m unittest discover -s scripts/tests -p test_test_executables.py
 run scripts/check-test-executables.py

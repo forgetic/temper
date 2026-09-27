@@ -57,8 +57,9 @@ cargo dev-test-quick
 ```
 
 The required pre-PR lane uses this same alias after `cargo dev-test-build`.
-The repository-local kache configuration bypasses caching for the three custom
-`harness = false` targets that kache 0.11 cannot classify as executables.
+The shared host runs kache 0.26.3 or newer and caches custom `harness = false`
+targets too. [Maintain the build cache](maintain-build-cache.md) describes how
+Codex, Temper engineers, and CI share it and how to diagnose slow rebuilds.
 
 To prebuild every workspace test harness and integration-test binary without
 running tests:

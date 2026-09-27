@@ -232,14 +232,9 @@ fn candidate_workspace_roots(base_dir: &Path) -> Vec<PathBuf> {
             push_unique(&mut roots, root);
         }
     }
-    push_unique(
-        &mut roots,
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".")),
-    );
+    // Fixture roots belong to the runtime workspace. Embedding the compiler's
+    // checkout here makes the library (and all its dependents) differ between
+    // agent workspaces and CI, and can load fixtures from an unrelated tree.
     roots
 }
 
