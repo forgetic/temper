@@ -48,7 +48,7 @@ Ordered smallest-blast-radius first:
 - `reference-delivery.json` is the evolving planning fixture; `ci-delivery.json`
   is the stable executor/safety fixture. Extend the stable one only when an
   execution capability it exercises actually lands.
-- Docs ≤150 lines (split before 350); Rust source/test files ≤600 lines.
+- Docs ≤150 lines (split before 350); Rust files within the caps in `AGENTS.md`.
 - Land green: `cargo fmt --all`, `cargo dev-clippy`, `cargo dev-check`, tests.
 
 ## Phases
