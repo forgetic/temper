@@ -31,6 +31,7 @@ The script runs these commands in order and stops on the first failure:
 2. `cargo depgraph-check check`
 3. `scripts/check-rust-file-size.sh`
 4. `scripts/check-no-ambient-env.sh`
+   and the cross-checkout build-cache/GC regression
 5. `cargo dev-test-build`
 6. Test executable integrity regressions and native-header checks
 7. `cargo dev-test-quick`

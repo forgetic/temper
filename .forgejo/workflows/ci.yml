@@ -11,7 +11,7 @@ on:
       - synchronize
       - reopened
 
-# Builds are cached transparently by the kache daemon (rustc-wrapper in
+# Builds are cached transparently by kache >= 0.26.3 (rustc-wrapper in
 # ~/.cargo/config.toml on the host runner), so a clean checkout still gets warm
 # builds for everything that emits real artifacts (rlibs, test executables, the
 # final binary). A persistent host workspace also lets successive CI runs reuse
@@ -25,8 +25,7 @@ on:
 #   2. Every cargo invocation on the build/test/lint cache path uses the SAME
 #      `--all-targets` scope so feature unification matches and the cached lib
 #      artifacts key-match across steps (see the comment in .cargo/config.toml).
-#      clippy/check still recompile their own zero-byte `.rmeta` leaves, which
-#      kache cannot cache, but that leaf cost is small. The scenario manifest
+#      kache also caches Clippy units. The scenario manifest
 #      check and deterministic benchmark harness below are checked-in CLI lanes
 #      after the build step, so they do not change that cache choreography. The
 #      validation-grade live scenario lane requires an explicit scenario path;
@@ -95,8 +94,20 @@ jobs:
         # support may read std::env::{var,var_os,vars,args}. Fails fast on a new
         # stray reader. Compiles nothing.
         run: scripts/check-no-ambient-env.sh
+      - name: Build cache configuration
+        run: |
+          kache --version
+          kache stats
+          python3 scripts/prepare-build-cache.py
+          python3 -B -m unittest discover -s scripts/tests -p test_build_cache.py
+          echo "TEMPER_CI_BUILD_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
       - name: Build
         run: cargo dev-test-build
+      - name: Build cache report
+        if: ${{ always() && env.TEMPER_CI_BUILD_STARTED_AT != '' }}
+        run: |
+          elapsed="$(( $(date +%s) - TEMPER_CI_BUILD_STARTED_AT + 1 ))"
+          kache report --root "$PWD" --since "${elapsed}s" --record
       - name: Test executable integrity
         # Obtain binary paths without executing harnesses: a damaged retained
         # output can otherwise look like a successful suite with zero tests.

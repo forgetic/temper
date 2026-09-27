@@ -21,9 +21,9 @@
 # `dev-scenario-validate-feature` resolves exactly one feature mapping and runs
 # it through the validation-grade live manifest topology.
 #
-# (clippy/check still produce zero-byte leaf `.rmeta` that kache cannot cache,
-# so the leaf check-only targets always recompile; that cost is small and
-# unavoidable. The real win is the shared, cacheable lib compiles below.)
+# The shared host uses kache >= 0.26.3, which also caches Clippy units and
+# preserves executable permissions for custom test harnesses. Keep the Cargo
+# wrapper and daemon on the same version; see docs/how-to/maintain-build-cache.md.
 #
 # `dev-test-full` is the exception: it runs the tiny `temper-dev` driver, which
 # sequences the quick lane and the explicit e2e capstone lane. That keeps the
