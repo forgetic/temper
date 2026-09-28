@@ -203,9 +203,9 @@ Actions (`GITHUB_API_URL`, `GITHUB_REPOSITORY`, `GITHUB_SHA`, `GITHUB_TOKEN`).
 
 ### Script variables
 
-`scripts/check-rust-file-size.sh` supports `RUST_FILE_SIZE_HARD_MAX_LOC`
-(default `800`), `RUST_FILE_SIZE_JUSTIFICATION_LOC` (default `600`),
-`RUST_FILE_SIZE_ALLOWLIST`, and `RUST_FILE_SIZE_JUSTIFICATIONS`.
+`scripts/check-rust-file-size.sh` supports `RUST_FILE_SIZE_MAX_LOC` (default
+`800`), `RUST_TEST_FILE_SIZE_MAX_LOC` (default `1200`), and
+`RUST_FILE_SIZE_ALLOWLIST` (default `scripts/rust-file-size-allowlist.txt`).
 `scripts/check-no-ambient-env.sh` has an internal `AMBIENT_ENV_ALLOWLIST` shell
 variable, but exporting that name before running the script has no effect.
 

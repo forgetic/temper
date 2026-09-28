@@ -18,7 +18,7 @@ loop). This doc is the durable record of the plan and progress.
 - Primitive-extending phases write an ADR first (flagged below). These ADRs
   encode design decisions the human flagged during scoping; the roadmap's
   approval greenlights drafting them.
-- Keep docs ≤150 lines (split before 350) and Rust files ≤600 lines.
+- Keep docs ≤150 lines (split before 350) and Rust files within the caps in `AGENTS.md`.
 
 ## Phases
 

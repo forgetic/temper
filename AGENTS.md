@@ -5,14 +5,17 @@ load only the context relevant to their task.
 
 ## Rust file organization rules
 
-All LOC figures below are to be intended with blank lines excluded.
+LOC figures exclude blank lines. Small files keep agent context per read
+bounded and let parallel PRs touch disjoint files.
 
-- Keep handwritten Rust source files under 300 LOC when practical.
-- Files over 400 LOC should usually be split.
-- Files over 500 LOC require a short justification in the PR.
-- Files over 600 LOC are not allowed unless explicitly allowlisted.
-- Exemptions: generated code, large test fixtures, snapshot tests, bindings, and data tables.
-- Prefer splitting by domain responsibility, not by arbitrary item type.
+- Hard cap: 800 LOC for source files, 1200 LOC for test files (files under a
+  `tests/` directory, or named `tests.rs` or `*_tests.rs`). CI enforces this
+  with `scripts/check-rust-file-size.sh`; there is no soft tier below the cap.
+- Exemptions: generated code, large test fixtures, snapshot tests, bindings, and
+  data tables. List the path in `scripts/rust-file-size-allowlist.txt`. The
+  check fails on entries that are missing or back under the cap, so remove them.
+- When a file approaches the cap, split it by domain responsibility, not by item
+  type, and not by moving assertions into a sibling file to dodge the number.
 - Keep lib.rs, main.rs, and mod.rs as thin facades: declarations, wiring, and re-exports only.
 - Keep functions/methods below 75 LOC where practical.
 
