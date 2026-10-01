@@ -23,7 +23,11 @@ review. Section 10.1 says which is which.
 - **Three layers, three crates.** `io` (kernel operations and their
   buffers), `protocol` (bytes to typed messages and back), `model` (domain
   logic). The crate graph is the layer diagram: the model crate does not
-  depend on io, so it cannot name a file descriptor.
+  depend on io, so it cannot name a file descriptor. Below its top-level
+  crate, a large model is a tree of sub-model crates (4.5).
+- **The model is complete.** It runs the service's whole behaviour in a
+  world of models and fakes, with no protocol and no io. The protocol layer
+  translates between bytes and model entities, and decides nothing.
 - **Step functions are sans-io, and the compiler knows it.** Step crates
   are `#![no_std]` with `alloc`: no syscalls, no clock, no threads, no
   printing, no hash maps with random seeds. Time and randomness are inputs;
@@ -215,7 +219,7 @@ and a step that cannot block cannot stall the loop.
 crate      depends on
 lib        nothing
 io         lib
-model      lib
+model      lib                   and its sub-models (4.5)
 protocol   lib, io, model        the one crate that sees both vocabularies
 service    lib, io, protocol, model
 shell      service, io-uring, libc
@@ -228,6 +232,15 @@ sim        service
 - **The model never parses.** Bytes are untrusted until the protocol layer
   has turned them into typed, size-bounded messages. Structure inside a
   payload (JSON in a body) is one more protocol machine, not model code.
+- **The model is complete.** Everything a peer can cause arrives as a
+  model entity, and everything the model wants done leaves as one, so a
+  world of models and fakes runs the service's whole behaviour with no
+  protocol and no io (section 11). The protocol layer only translates
+  between bytes and model entities: it decides nothing, and it never sits
+  between two pieces of model logic. Structure the domain acts on is
+  decoded on the way in, all of it: a tool call inside an LLM's answer
+  reaches the model as a typed call, not as JSON to be sent back down for
+  decoding later.
 - **Policy above, mechanism below.** The model decides the deadline and
   whether to retry; the protocol layer runs the timer and the attempt.
 - **A lower layer absorbs mechanics, not information.** The model still
@@ -358,6 +371,27 @@ Two shapes cross this boundary:
   simulator catches a missing one. Wire correlation ids stay in the
   protocol layer; opcodes and statuses cross as domain enumerations. The
   model knows nothing about connections.
+
+### 4.5 Sub-models
+
+A model too large for one crate is a tree of sub-models under one
+top-level model crate.
+
+- **Each sub-model is a step machine of its own:** its own vocabulary,
+  limits, worst case, state machines, entry points and `MAX_OUT`, and its
+  own tests. It depends on lib and on its children, never on a sibling or
+  a parent.
+- **A parent owns its children's states and routes between them** within
+  its step. Hand-offs inside the model are short and acyclic, so a step
+  completes them before it returns; its `MAX_OUT` follows from its
+  children's along the longest chain.
+- **Siblings share no domain types.** The parent translates between their
+  vocabularies with small total functions; an exhaustive match makes a
+  change on either side break the build in one place.
+- **Only the top-level model faces the protocol layer,** and its worst case
+  is the sum of its sub-models'.
+- **Each sub-model has a world of its own** (section 11), and so does the
+  top-level model.
 
 ## 5. Entities, handles and lifecycle
 
@@ -949,6 +983,13 @@ disallowed-macros = [
 
 ## 11. Testing
 
+- **Model worlds.** Each model, and each sub-model (4.5), runs in a world
+  of its own: the model, the clock, the seeds, and fakes standing in for
+  its neighbours (another party's model, a filesystem), with no protocol
+  and no io. A fake shares no domain types with what it stands in for; the
+  world translates between them, as a protocol layer would. Model worlds
+  come first and test behaviour; the simulator below comes with the lower
+  layers and tests mechanics.
 - **Deterministic simulation.** The simulator drives `service::iterate`,
   the function the shell runs, and plays everything around it: the ring
   (it reads submissions, writes into op buffers through io's API, and
@@ -983,9 +1024,10 @@ Before code:
    table, demands and deadlines per state.
 
 Then, in order: lib (handles, slabs, queues, cursors, deadline table);
-the model, unit-tested by feeding events and inspecting requests; the
-protocol layer, fuzzed alone; the io layer, the service and the shell
-last, with the simulator standing in for the kernel until then.
+the model, unit-tested by feeding events and inspecting requests, and run
+in model worlds (section 11); the protocol layer, fuzzed alone; the io
+layer, the service and the shell last, with the simulator standing in for
+the kernel until then.
 
 ```
 Cargo.toml     workspace: profiles and lints
@@ -994,7 +1036,7 @@ lib/           Id, Slab, Token, ReplyTo, Queue, Stack, ByteRing, Reader, Writer,
                Deadlines, Time, Duration, Rng, Env
 io/            io::up, io::down: sockets, operations, transit memory
 protocol/      protocol::up, protocol::down: machines, codecs
-model/         model::step: domain machines
+model/         model::step: domain machines, with any sub-models below it (4.5)
 service/       the three layers wired together; service::iterate
 shell/         main, the ring adapter (the only unsafe), clock, seed, spawn
 sim/           simulated ring and clock, fault schedules, counting allocator
