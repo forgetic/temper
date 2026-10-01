@@ -1,0 +1,13 @@
+[package]
+name = "temper-agent-model"
+description = "The model layer of the temper coding agent: LLM sessions, sans-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+temper-lib.workspace = true
+
+[lints]
+workspace = true
