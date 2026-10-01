@@ -4,6 +4,7 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::mem::size_of;
 use core::slice;
 
 /// A sequence that grows up to a capacity fixed when it is made, and refuses
@@ -19,6 +20,13 @@ impl<T> List<T> {
     pub fn with_capacity(capacity: u32) -> List<T> {
         let size = usize::try_from(capacity).expect("a u32 fits in a usize");
         List { items: Vec::with_capacity(size), capacity }
+    }
+
+    /// The heap a list of `capacity` takes for its items, or `None` past a
+    /// `u64`. What the items own is theirs to count.
+    #[must_use]
+    pub fn worst_case(capacity: u32) -> Option<u64> {
+        u64::try_from(size_of::<T>()).ok()?.checked_mul(u64::from(capacity))
     }
 
     #[must_use]

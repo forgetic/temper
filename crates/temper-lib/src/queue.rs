@@ -4,6 +4,7 @@
 
 use alloc::collections::VecDeque;
 use alloc::collections::vec_deque;
+use core::mem::size_of;
 
 /// A first-in, first-out queue that never grows past its capacity.
 #[derive(Debug)]
@@ -17,6 +18,13 @@ impl<T> Queue<T> {
     pub fn with_capacity(capacity: u32) -> Queue<T> {
         let size = usize::try_from(capacity).expect("a u32 fits in a usize");
         Queue { items: VecDeque::with_capacity(size), capacity }
+    }
+
+    /// The heap a queue of `capacity` takes for its items, or `None` past a
+    /// `u64`. What the items own is theirs to count.
+    #[must_use]
+    pub fn worst_case(capacity: u32) -> Option<u64> {
+        u64::try_from(size_of::<T>()).ok()?.checked_mul(u64::from(capacity))
     }
 
     #[must_use]

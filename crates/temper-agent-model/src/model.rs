@@ -3,7 +3,7 @@
 use temper_lib::{Deadlines, Env, Queue, Rng, Slab, Time};
 
 use crate::boundary::{Event, Request};
-use crate::limits::Limits;
+use crate::limits::{self, Limits};
 use crate::session::{self, Alarm, Session};
 
 /// The most requests an entry point emits per call. The loop reserves this
@@ -22,7 +22,7 @@ impl Model {
     /// A model with room for `limits`, drawing randomness from `seed`.
     #[must_use]
     pub fn new(limits: &Limits, seed: u64) -> Model {
-        let alarms = limits.sessions.checked_mul(2).expect("worst_case accepted the limits");
+        let alarms = limits::alarms(limits).expect("worst_case accepted the limits");
         Model {
             sessions: Slab::with_capacity(limits.sessions),
             alarms: Deadlines::with_capacity(alarms),

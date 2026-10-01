@@ -1,6 +1,4 @@
-use core::mem::size_of;
-
-use temper_lib::{Duration, Time};
+use temper_lib::{Deadlines, Duration, List, Slab};
 
 use crate::llm::Message;
 use crate::session::{Alarm, Session};
@@ -36,15 +34,19 @@ pub struct Limits {
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
 /// if it does not fit a `u64` or the limits cannot be honoured.
 ///
-/// It counts entities and payloads, not allocator overhead. The prompts of
-/// calls in flight are copies held by the protocol layer, which counts them.
+/// It counts the containers, their bookkeeping included, and the payloads, not
+/// allocator overhead. The prompts of calls in flight are copies held by the
+/// protocol layer, which counts them.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
-    // Every session may have two alarms armed, each indexed twice.
-    let alarms = limits.sessions.checked_mul(2)?;
-    let alarm = u64::try_from(size_of::<(Time, Alarm)>().checked_add(size_of::<(Alarm, Time)>())?).ok()?;
-    let transcript = u64::try_from(size_of::<Message>()).ok()?.checked_mul(u64::from(limits.messages))?;
-    let session =
-        u64::try_from(size_of::<Session>()).ok()?.checked_add(transcript)?.checked_add(limits.session_bytes)?;
-    u64::from(limits.sessions).checked_mul(session)?.checked_add(u64::from(alarms).checked_mul(alarm)?)
+    let sessions = Slab::<Session>::worst_case(limits.sessions)?;
+    let alarms = Deadlines::<Alarm>::worst_case(alarms(limits)?)?;
+    // Each session owns its transcript's list and up to its byte limit.
+    let session = List::<Message>::worst_case(limits.messages)?.checked_add(limits.session_bytes)?;
+    sessions.checked_add(alarms)?.checked_add(u64::from(limits.sessions).checked_mul(session)?)
+}
+
+/// The alarm table's capacity: every session may have two alarms armed.
+pub(crate) fn alarms(limits: &Limits) -> Option<u32> {
+    limits.sessions.checked_mul(2)
 }

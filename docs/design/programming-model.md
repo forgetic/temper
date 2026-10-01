@@ -502,8 +502,11 @@ follow_state(conn, id, env, timers, down);  // demand and progress deadline, in 
   full slab is a refusal at that layer's entrance, which is where the model
   wants refusals anyway (section 7). Handles are slot index plus
   generation.
-- **Queues and tables are sized at startup:** every `Queue`, ready list and
-  deadline table.
+- **Queues and tables are bounded at startup:** every `Queue`, ready list and
+  deadline table has a capacity from the limits and refuses past it. Slabs
+  and queues allocate that capacity up front; a table may allocate as it
+  fills (`lib::Deadlines` is a pair of B-trees), and its worst case counts
+  its container overhead, not just its entries.
 - **Bytes live on the heap as `Box<[u8]>`,** allocated at their final
   length after the length has been checked against the limits. A
   `Box<[u8]>` cannot grow, has one owner, and keeps its address when it is
@@ -598,8 +601,8 @@ resident size above the live bytes.
 ### 6.4 The worst case
 
 ```
-worst case =   Σ over entity kinds:  capacity × (entity size + the bytes each may hold)
-             + queues and tables:    capacity × record size
+worst case =   Σ over entity kinds:  slab + capacity × the bytes each entity may hold
+             + queues and tables:    their containers
              + the provided-buffer region
              + the model's stored-data limit
 ```
@@ -607,9 +610,13 @@ worst case =   Σ over entity kinds:  capacity × (entity size + the bytes each 
 Each layer exports `fn worst_case(limits: &Limits) -> Option<u64>`
 (checked arithmetic, `None` on overflow), and the shell refuses to start
 when the sum exceeds the configured memory. An allocation failure is then
-a bug or fragmentation, never load. The formula counts payload bytes, not
-allocator overhead: leave headroom, and measure the resident size under
-load before trusting it. The simulator checks the formula at every
+a bug or fragmentation, never load. A layer adds up what its containers
+report, not `size_of` times a capacity: each lib container has its own
+`worst_case(capacity)` (`Slab`, `Queue`, `List`, `Deadlines`), which counts
+its bookkeeping too, a slab's slot tags and free lists, a deadline table's
+tree nodes. The formula counts containers and payload bytes, not allocator
+overhead: leave headroom, and measure the resident size under load before
+trusting it. The simulator checks the formula at every
 iteration (section 11).
 
 If the worst case forces the limits too low for a service, the fallback is
