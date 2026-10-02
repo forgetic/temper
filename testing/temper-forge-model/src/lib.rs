@@ -8,7 +8,8 @@
 //! engine makes moves the branch the next fetch sees (engine-model.md,
 //! sections 12 and 14).
 //!
-//! Calls come up from its protocol layer as [`Event::Call`], each by a user
+//! Calls come up from its protocol layer as [`Event::Call`] (the `boundary`
+//! module states the contract), each by a user
 //! (the engine, a person, CI: the forge treats them alike) about one
 //! repository, and each is answered with exactly one [`Request::Reply`],
 //! after a latency drawn from the configuration, sometimes late. A call is
@@ -25,11 +26,15 @@
 //! The forge moves on its own too. CI reports on every commit that becomes a
 //! head, by chance or as its content cues (the `ci` module); a repository's
 //! subscriber hears of each change by webhook, as [`Request::Hook`], after a
-//! drawn latency, late, or never (the `hooks` module); and a world can have
-//! another party advance a branch ([`advance`]). Everything that changes is
-//! observed, content and all, for a referee (testing-pyramid.md, 5.2): a
-//! bounded queue a world drains ([`Model::pop_observation`]); and
-//! [`Model::inspect`] reads the store at settle.
+//! drawn latency, late, or never (the `hooks` module). A world sets it up,
+//! and acts on it from outside its API, with free functions (the `scenario`
+//! module: [`repository`], [`grant`], [`commit`], [`advance`], ...).
+//! Everything that changes is observed, content and all, and so is every
+//! write the forge refused, for a referee (testing-pyramid.md, 5.2): a
+//! bounded queue a world drains ([`Model::pop_observation`]).
+//! [`Model::inspect`] reads the store at settle, [`Model::tally`] counts
+//! what the forge did and refused, and [`Model::room`] says what room is
+//! left, so a world can tell a forge that filled up from one that works.
 //!
 //! Its vocabulary ([`api`]) is its own: it shares nothing with the engine's
 //! model, the worker's, or the git a working tree keeps. Between them sits a

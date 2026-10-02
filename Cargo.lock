@@ -141,6 +141,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-forge-model-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-forge-model",
+ "temper-lib",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-lib"
 version = "0.0.0"
 
