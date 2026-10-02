@@ -18,7 +18,9 @@ use crate::path::{Name, Path};
 pub enum Call {
     /// Read the file at `path`: its lines after the first `skip`, at most
     /// `lines` of them if given, within the tools' limit on what a read
-    /// answers with.
+    /// answers with. Any read counts as reading the file at the version io
+    /// loaded, however little of it the window shows: a change needs the
+    /// current version seen, not all of it.
     Read { path: Path, skip: u32, lines: Option<u32> },
     /// List the directory at `path`.
     List { path: Path },
@@ -82,7 +84,8 @@ pub enum Outcome {
     /// A read: `content` is the lines after the first `skipped`, `lines` of
     /// them, of the `total` the file has. They are whole lines, but for a
     /// line longer than what a read answers with, which is `cut` at that
-    /// limit.
+    /// limit; a read moves by whole lines, so the rest of a cut line cannot
+    /// be read (a search, or a command, can reach it).
     Read { content: Box<[u8]>, skipped: u32, lines: u32, total: u32, cut: bool },
     /// A listing: the directory's first entries in name order, and how many
     /// `more` it has.

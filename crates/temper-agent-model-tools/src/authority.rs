@@ -85,9 +85,11 @@ pub(crate) struct Located {
     pub(crate) writable: bool,
 }
 
-/// The checkout for `authority`, or `None` if it does not fit `limits`: too
-/// many repositories, a path longer than the tools take, an environment
-/// larger than they take, or a variable that cannot be one.
+/// The checkout for `authority`, or `None` if it does not fit `limits` or
+/// cannot be one: too many repositories, two at one mount (which would make
+/// writability depend on their order) or with one root, a path longer than
+/// the tools take, an environment larger than they take, or a variable that
+/// cannot be one.
 pub(crate) fn admit(authority: Authority, limits: &Limits) -> Option<Checkout> {
     let repos = u32::try_from(authority.repos.len()).ok()?;
     if repos > limits.repos {
@@ -100,11 +102,16 @@ pub(crate) fn admit(authority: Authority, limits: &Limits) -> Option<Checkout> {
     if env_cost(&authority.env)? > u64::from(limits.env_bytes) {
         return None;
     }
-    let mut mounts = List::with_capacity(repos);
+    let mut mounts: List<Mount> = List::with_capacity(repos);
     let mut roots = List::with_capacity(repos);
     for repo in &authority.repos {
         let names = path::refs(&repo.mount)?;
         let at = path::join(names.as_slice(), limits.path_bytes)?;
+        for other in mounts.as_slice() {
+            if other.at == at || other.root == repo.root {
+                return None;
+            }
+        }
         let mount = Mount { at, root: repo.root, writable: repo.writable };
         mounts.push(mount).expect("room for every repository");
         roots.push(Root { root: repo.root, writable: repo.writable }).expect("room for every repository");

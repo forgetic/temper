@@ -383,6 +383,19 @@ fn opens_beyond_the_kit_slots_are_refused_as_busy() {
 #[test]
 fn authorities_beyond_the_limits_are_refused_as_invalid() {
     invalid(Limits { repos: 2, ..LIMITS }, authority(ALL));
+    // Two repositories at one mount, or with one root.
+    let mut twice = authority(ALL);
+    twice.repos = Box::new([
+        Repo { mount: names(b"/work/temper"), root: Token::new(1), writable: false },
+        Repo { mount: names(b"/work/temper"), root: Token::new(2), writable: true },
+    ]);
+    invalid(LIMITS, twice);
+    let mut shared = authority(ALL);
+    shared.repos = Box::new([
+        Repo { mount: names(b"/work/temper"), root: Token::new(1), writable: true },
+        Repo { mount: names(b"/work/docs"), root: Token::new(1), writable: false },
+    ]);
+    invalid(LIMITS, shared);
     // The vendored library's mount, work/temper/vendor/lib, is 22 bytes.
     invalid(Limits { path_bytes: 21, ..LIMITS }, authority(ALL));
     let mut deep = authority(ALL);
