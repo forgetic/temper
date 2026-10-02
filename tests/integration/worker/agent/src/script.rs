@@ -35,12 +35,19 @@ pub enum Said {
     Fact {
         text: Vec<u8>,
     },
+    /// It withdraws its call `name`, past its own deadline for it.
+    Withdraw {
+        name: u64,
+    },
     /// It started an operation that may run for `span`.
     Long {
         span: Duration,
     },
-    /// It waits for its next inbound event.
-    Waiting,
+    LongDone,
+    /// It waits for its next inbound event, having read `heard`.
+    Waiting {
+        heard: u64,
+    },
     Ended {
         outcome: Vec<u8>,
     },
@@ -80,6 +87,7 @@ pub enum Answer {
     Pushed { done: bool },
     Unavailable,
     Busy,
+    Withdrawn,
     TooLarge,
 }
 
@@ -269,6 +277,8 @@ pub struct Agent {
     /// Inbound events heard and not yet taken.
     events: u32,
     last_event: Option<u64>,
+    /// Inbound events it has read.
+    heard: u64,
     obeys_cancel: bool,
     obeys_terminate: bool,
     slow_exit: bool,
@@ -299,6 +309,7 @@ impl Agent {
             awaiting: BTreeMap::new(),
             events: 0,
             last_event: None,
+            heard: 0,
             obeys_cancel,
             obeys_terminate,
             slow_exit,
@@ -347,6 +358,7 @@ impl Agent {
                 let place = u64::from_be_bytes(place);
                 assert!(self.last_event < Some(place), "inbound events come once each, in the order sent");
                 self.last_event = Some(place);
+                self.heard += 1;
                 if self.phase == Phase::Waiting {
                     self.write(now, Said::Fact { text: b"woken".to_vec() }, &mut acts);
                     self.phase = Phase::Working;
@@ -395,7 +407,8 @@ impl Agent {
         match self.phase {
             Phase::Working => self.step(now, &mut acts),
             Phase::Long => {
-                self.write(now, Said::Fact { text: b"checked".to_vec() }, &mut acts);
+                self.write(now, Said::LongDone, &mut acts);
+                self.long_until = now;
                 self.phase = Phase::Working;
                 self.next(&mut acts);
             }
@@ -457,7 +470,7 @@ impl Agent {
                 self.write(now, Said::Fact { text: b"took".to_vec() }, acts);
                 self.next(acts);
             } else {
-                self.write(now, Said::Waiting, acts);
+                self.write(now, Said::Waiting { heard: self.heard }, acts);
                 self.phase = Phase::Waiting;
                 let idle = script.idle.draw(&mut self.rng);
                 self.wake(idle, acts);

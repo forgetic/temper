@@ -5,7 +5,8 @@
 //! translations of the channel ([`crate::translate`]), and plays io's
 //! contracts:
 //!
-//! - A spawn takes a while, and may fail. A send reaches the agent through
+//! - A spawn takes a while, and may fail; io gives up on one at its
+//!   deadline. A send reaches the agent through
 //!   the pipe after a while, and fails at once if the agent no longer reads
 //!   its channel. A read is a demand: it ends with the next message the agent
 //!   wrote once it is through the pipe, as malformed if it is garbage, or
@@ -87,6 +88,8 @@ pub enum Member {
 pub struct Tally {
     pub spawns: u32,
     pub unspawned: u32,
+    /// Spawns io gave up at their deadline.
+    pub late_spawns: u32,
     pub children: u32,
     /// Children alive after the agent's process exited.
     pub orphans: u32,
@@ -195,7 +198,7 @@ impl Tree {
     /// Takes one of the model's io requests.
     pub fn take(&mut self, now: Time, request: Request) -> Vec<Out> {
         match request {
-            Request::Spawn { owner, workspace: _ } => self.spawn(owner),
+            Request::Spawn { owner, workspace: _, deadline } => self.spawn(now, owner, deadline),
             Request::Send { owner, process, message } => {
                 self.tally.sends += 1;
                 let pipe = self.script.pipe.draw(&mut self.rng);
@@ -247,6 +250,7 @@ impl Tree {
             }
             Request::Started { .. }
             | Request::Called { .. }
+            | Request::Withdrawn { .. }
             | Request::Waiting { .. }
             | Request::Told { .. }
             | Request::Finished { .. }
@@ -281,11 +285,19 @@ impl Tree {
         }
     }
 
-    fn spawn(&mut self, owner: Token) -> Vec<Out> {
+    fn spawn(&mut self, now: Time, owner: Token, deadline: Time) -> Vec<Out> {
         self.tally.spawns += 1;
         let after = self.script.spawn.draw(&mut self.rng);
         let len = self.rng.below(self.script.detail + 1);
         let detail = vec![b'e'; usize::try_from(len).expect("fits")];
+        let left = deadline.saturating_since(now);
+        if after > left {
+            // io gives up at the deadline, and nothing of it is left.
+            self.tally.unspawned += 1;
+            self.tally.late_spawns += 1;
+            let event = Event::Unspawned { owner, detail: detail.into_boxed_slice() };
+            return vec![Out::Model { after: left, event }];
+        }
         if self.rng.chance(self.script.unspawned) {
             self.tally.unspawned += 1;
             let event = Event::Unspawned { owner, detail: detail.into_boxed_slice() };

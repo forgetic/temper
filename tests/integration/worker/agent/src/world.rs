@@ -53,7 +53,9 @@ impl Settings {
                 fact_bytes: 32,
                 outcome_bytes: 64,
                 detail_bytes: 32,
+                spawn_timeout: Duration::from_secs(1),
                 no_progress: Duration::from_secs(10),
+                long_span: Duration::from_secs(120),
                 wall_time: Duration::from_secs(900),
                 grace: Duration::from_secs(5),
                 kill_after: Duration::from_secs(2),
@@ -250,8 +252,13 @@ struct Mirror {
     /// Its tree was terminated.
     terminating: bool,
     /// The names of its calls in flight, as the model passed them on and sent
-    /// their answers down.
+    /// their answers down; those the client has not answered, and those of
+    /// them the run withdrew.
     flight: BTreeSet<Token>,
+    asked: BTreeSet<Token>,
+    withdrawn: BTreeSet<Token>,
+    /// Inbound events the model sent down.
+    sent: u64,
     /// When it first had a reason to stop.
     first_stop: Option<Time>,
     /// io's requests in flight.
@@ -287,6 +294,10 @@ enum Made {
         client: Token,
         call: Token,
     },
+    Withdrawn {
+        client: Token,
+        call: Token,
+    },
     Said,
     Finished {
         client: Token,
@@ -306,13 +317,16 @@ enum Made {
     Spawn {
         owner: Token,
     },
-    /// A send, with the call it answers, and whether the model answered it
-    /// itself as busy, or as too large.
+    /// A send, with the call it answers, whether the model answered it
+    /// itself as busy, or as too large; or whether it is an event, or the
+    /// cancel.
     Send {
         owner: Token,
         answer: Option<Token>,
         busy: bool,
         too_large: bool,
+        event: bool,
+        cancel: bool,
     },
     Io {
         owner: Token,
@@ -473,7 +487,16 @@ impl World {
                 }
                 Taken::Other
             }
-            Event::Deliver { .. } | Event::Answer { .. } => Taken::Other,
+            Event::Answer { agent, call, reply: _ } => {
+                if let Some(mirror) = self.mirrors.get_mut(agent)
+                    && mirror.listening
+                {
+                    mirror.asked.remove(call);
+                    mirror.withdrawn.remove(call);
+                }
+                Taken::Other
+            }
+            Event::Deliver { .. } => Taken::Other,
             Event::Spawned { owner, .. } | Event::Unspawned { owner, .. } => {
                 self.ended(*owner, Kind::Spawn);
                 Taken::Other
@@ -535,9 +558,20 @@ impl World {
         if mirror.finished {
             return Verdict::Breach("after the finish");
         }
+        if !mirror.listening {
+            return Verdict::Fine;
+        }
         match message {
-            Up::Call { call, .. } if mirror.listening && mirror.flight.contains(call) => Verdict::Breach("reused name"),
-            Up::Call { .. } | Up::Fact { .. } | Up::Long { .. } | Up::Waiting | Up::Finish { .. } => Verdict::Fine,
+            Up::Call { call, .. } if mirror.flight.contains(call) => Verdict::Breach("reused name"),
+            Up::Withdraw { call } if mirror.withdrawn.contains(call) => Verdict::Breach("withdrawn twice"),
+            Up::Waiting { heard } if *heard > mirror.sent => Verdict::Breach("heard too much"),
+            Up::Call { .. }
+            | Up::Withdraw { .. }
+            | Up::Fact { .. }
+            | Up::Long { .. }
+            | Up::LongDone
+            | Up::Waiting { .. }
+            | Up::Finish { .. } => Verdict::Fine,
         }
     }
 
@@ -582,6 +616,7 @@ impl World {
                     }
                     Made::Started { .. }
                     | Made::Called { .. }
+                    | Made::Withdrawn { .. }
                     | Made::Said
                     | Made::Finished { .. }
                     | Made::Faulted { .. }
@@ -631,6 +666,13 @@ impl World {
                 let mirror = self.mirror_of(client);
                 assert!(mirror.listening, "a call is passed on only while the run listens");
                 assert!(mirror.flight.insert(call), "a call reusing a name in flight is never passed on");
+                mirror.asked.insert(call);
+            }
+            Made::Withdrawn { client, call } => {
+                let mirror = self.mirror_of(client);
+                assert!(mirror.listening, "a withdraw is passed on only while the run listens");
+                assert!(mirror.asked.contains(&call), "only a call the client has to answer is withdrawn");
+                assert!(mirror.withdrawn.insert(call), "a call is withdrawn once");
             }
             Made::Said => {}
             Made::Finished { client, kind } => {
@@ -675,10 +717,15 @@ impl World {
                 }
             }
             Made::Spawn { owner } => self.opened(owner, Kind::Spawn),
-            Made::Send { owner, answer, busy, too_large } => {
+            Made::Send { owner, answer, busy, too_large, event, cancel } => {
                 self.opened(owner, Kind::Send);
+                let mirror = self.mirrors.get_mut(&owner).expect("mirrored");
                 if let Some(call) = answer {
-                    self.mirrors.get_mut(&owner).expect("mirrored").flight.remove(&call);
+                    mirror.flight.remove(&call);
+                }
+                mirror.sent += u64::from(event);
+                if cancel {
+                    mirror.first_stop.get_or_insert(now);
                 }
                 self.stats.busy += u32::from(busy);
                 self.stats.too_large += u32::from(too_large);
@@ -751,6 +798,7 @@ impl World {
         match request {
             Request::Started { .. }
             | Request::Called { .. }
+            | Request::Withdrawn { .. }
             | Request::Waiting { .. }
             | Request::Told { .. }
             | Request::Finished { .. }
@@ -867,6 +915,7 @@ impl Made {
             Made::Faulted { client: _, fault } => *fault == Fault::Rules,
             Made::Started { .. }
             | Made::Called { .. }
+            | Made::Withdrawn { .. }
             | Made::Said
             | Made::Finished { .. }
             | Made::Bounced { .. }
@@ -890,6 +939,9 @@ impl Mirror {
             stopped: false,
             terminating: false,
             flight: BTreeSet::new(),
+            asked: BTreeSet::new(),
+            withdrawn: BTreeSet::new(),
+            sent: 0,
             first_stop: None,
             pending: BTreeMap::new(),
         }
@@ -900,6 +952,7 @@ fn made(request: &Request) -> Made {
     match request {
         Request::Started { client, agent } => Made::Started { client: *client, agent: *agent },
         Request::Called { client, call, ask: _ } => Made::Called { client: *client, call: *call },
+        Request::Withdrawn { client, call } => Made::Withdrawn { client: *client, call: *call },
         Request::Waiting { .. } | Request::Told { .. } => Made::Said,
         Request::Finished { client, finish } => {
             let kind = match finish {
@@ -912,17 +965,24 @@ fn made(request: &Request) -> Made {
         Request::Faulted { client, fault } => Made::Faulted { client: *client, fault: *fault },
         Request::Bounced { client: _, bounce } => Made::Bounced { bounce: *bounce },
         Request::Gone { client, end, detail: _ } => Made::Gone { client: *client, end: *end },
-        Request::Spawn { owner, workspace: _ } => Made::Spawn { owner: *owner },
+        Request::Spawn { owner, workspace: _, deadline: _ } => Made::Spawn { owner: *owner },
         Request::Send { owner, process: _, message } => {
             let (answer, busy, too_large) = match message {
                 Down::Answer { call, reply } => match reply {
                     Reply::Busy => (Some(*call), true, false),
                     Reply::TooLarge => (Some(*call), false, true),
-                    Reply::Relayed { .. } | Reply::Pushed(_) | Reply::Unavailable => (Some(*call), false, false),
+                    Reply::Relayed { .. } | Reply::Pushed(_) | Reply::Unavailable | Reply::Withdrawn => {
+                        (Some(*call), false, false)
+                    }
                 },
                 Down::Start { .. } | Down::Event { .. } | Down::Cancel => (None, false, false),
             };
-            Made::Send { owner: *owner, answer, busy, too_large }
+            let (event, cancel) = match message {
+                Down::Event { .. } => (true, false),
+                Down::Cancel => (false, true),
+                Down::Start { .. } | Down::Answer { .. } => (false, false),
+            };
+            Made::Send { owner: *owner, answer, busy, too_large, event, cancel }
         }
         Request::Read { owner, .. } => Made::Io { owner: *owner, kind: Kind::Read },
         Request::Signal { owner, process: _, signal } => Made::Signal { owner: *owner, signal: *signal },
@@ -941,7 +1001,8 @@ fn oversized(message: &Up, limits: &Limits) -> bool {
             len(body) > limits.call_bytes
         }
         Up::Fact { fact } => len(fact) > limits.fact_bytes,
-        Up::Long { .. } | Up::Waiting => false,
+        Up::Long { span } => *span > limits.long_span,
+        Up::Withdraw { .. } | Up::LongDone | Up::Waiting { .. } => false,
         Up::Finish { finish } => match finish {
             Finish::Ended { outcome } => len(outcome) > limits.outcome_bytes,
             Finish::Parked { snapshot } => {
@@ -961,6 +1022,7 @@ fn fact_kind(fact: Fact) -> &'static str {
         Fact::Started { .. } => "started",
         Fact::Finished { .. } => "finished",
         Fact::Cancelled { .. } => "cancelled",
+        Fact::Overdue { .. } => "overdue",
         Fact::Faulted { .. } => "faulted",
         Fact::Terminated { .. } => "terminated",
         Fact::Killed { .. } => "killed",

@@ -11,11 +11,16 @@
 //!
 //! Up, the channel's rules, which the agent sub-model enforces:
 //!
-//! - Until the run says how it finishes, it may make host calls, tell facts,
-//!   report a long operation and say that it waits for an inbound event, in
-//!   any order. A host call is named by the run, and its name is in flight
-//!   from the call until its answer is sent down: a call that reuses a name
-//!   in flight breaks the rules.
+//! - Until the run says how it finishes, it may make host calls, withdraw
+//!   them, tell facts, report long operations and say that it waits for an
+//!   inbound event, in any order. A host call is named by the run, and its
+//!   name is in flight from the call until its answer is sent down: a call
+//!   that reuses a name in flight breaks the rules, and so does withdrawing a
+//!   call twice while the client has yet to answer it. A withdraw that finds
+//!   no call waiting for the client crossed its answer on the way, and is
+//!   dropped.
+//! - A long operation announces at most `Limits::long_span`, and a run that
+//!   waits says it has read no more inbound events than were sent down to it.
 //! - [`Up::Finish`] (ended, parked or failed) is the run's last word: anything
 //!   after it breaks the rules.
 //! - Every payload is within the agent sub-model's limits, and a message the
@@ -33,16 +38,23 @@ pub enum Up {
     /// A host call, which the run names `call`: answered by exactly one
     /// [`Down::Answer`].
     Call { call: Token, ask: Ask },
+    /// The run withdraws its call `call`, its own deadline for it having
+    /// passed. The call stays in flight until its answer, which still comes,
+    /// once: as withdrawn, or with what came of it.
+    Withdraw { call: Token },
     /// A fact of the run, for the engine: passed on as it is, best effort. It
     /// counts as progress.
     Fact { fact: Box<[u8]> },
     /// The run started an operation that may run for up to `span`, such as
-    /// the repository's checks: the watchdog waits until then, and its
-    /// no-progress clock runs from there. It counts as progress.
+    /// the repository's checks: the watchdog waits until then, or until the
+    /// run says it is done, and its no-progress clock runs from there.
     Long { span: Duration },
-    /// The run waits for its next inbound event: the watchdog's clock pauses
-    /// until one is delivered.
-    Waiting,
+    /// The long operation the run reported is done.
+    LongDone,
+    /// The run waits for its next inbound event, having read `heard` of those
+    /// sent down to it: the watchdog's clock pauses until one is delivered,
+    /// if it has read them all.
+    Waiting { heard: u64 },
     /// How the run finishes: its last word. Its process exits next.
     Finish { finish: Finish },
 }
@@ -83,6 +95,8 @@ pub enum Reply {
     Unavailable,
     /// The run has as many calls in flight as it may: nothing was done.
     Busy,
+    /// The run withdrew the call: nothing more is done for it.
+    Withdrawn,
     /// The answer holds more bytes than may go down: it was dropped.
     TooLarge,
 }

@@ -123,9 +123,15 @@ fn hung_runs_are_stopped_by_the_watchdog() {
 fn runs_that_keep_making_progress_are_stopped_only_by_their_wall_time() {
     let mut settings = only(Fates { overrun: 1, ..NONE });
     settings.agent.wall_time = temper_lib::Duration::from_secs(200);
+    // Some wind down when cancelled; the rest are faulted past the grace.
+    settings.script.deaf_to_cancel = 500;
     let stats = run(&settings).stats();
-    assert!(stats.client.started > 0, "{stats:?}");
-    assert_eq!(count(&stats.faults, "wall time"), stats.client.started, "{stats:?}");
+    let started = stats.client.started;
+    assert!(started > 0, "{stats:?}");
+    assert_eq!(count(&stats.facts, "overdue"), started, "every run is cancelled for its wall time: {stats:?}");
+    let (failed, faulted) = (count(&stats.finishes, "failed"), count(&stats.faults, "wall time"));
+    assert!(failed > 0 && faulted > 0, "{stats:?}");
+    assert_eq!(failed + faulted, started, "and says it was cancelled, or is faulted for it: {stats:?}");
     assert_eq!(count(&stats.faults, "no progress"), 0, "{stats:?}");
 }
 

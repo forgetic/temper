@@ -9,20 +9,26 @@
 //!   [`Event::Spawn`] is ended by exactly one [`Request::Gone`], once the
 //!   agent's process has exited and its tree is empty, or at once if it was
 //!   refused or could not be spawned; before it, [`Request::Started`] names
-//!   the agent if it was spawned. In between, the run's host calls come up
-//!   ([`Request::Called`]), each answered by the client with exactly one
-//!   [`Event::Answer`]; the run says it waits ([`Request::Waiting`]) and tells
-//!   facts ([`Request::Told`], best effort for the parent to forward); and the
-//!   client hears at most one of [`Request::Finished`], how the run says it
-//!   finishes, and [`Request::Faulted`], how the agent failed while its run
-//!   was live. [`Event::Deliver`], [`Event::Answer`] and [`Event::Stop`] are
-//!   notices, sent at any time while the client holds the agent's name: an
-//!   agent that has gone drops them, as a stale handle is; one that has
-//!   stopped talking to its run drops answers, bounces inbound events
-//!   ([`Request::Bounced`]) and takes a stop as already asked.
+//!   the agent if it was spawned, and a client that wants a spawning agent
+//!   stopped waits for one or the other. In between, the run's host calls
+//!   come up ([`Request::Called`]), each answered by the client with exactly
+//!   one [`Event::Answer`], even once the run has withdrawn it
+//!   ([`Request::Withdrawn`]); the run says it waits ([`Request::Waiting`])
+//!   and tells facts ([`Request::Told`], best effort for the parent to
+//!   forward); and the client hears at most one of [`Request::Finished`], how
+//!   the run says it finishes, and [`Request::Faulted`], how the agent failed
+//!   while its run was live. [`Event::Deliver`], [`Event::Answer`] and
+//!   [`Event::Stop`] are notices, sent at any time while the client holds the
+//!   agent's name: an agent that has gone drops them, as a stale handle is;
+//!   one that has stopped talking to its run drops answers, bounces inbound
+//!   events ([`Request::Bounced`]) and takes a stop as already asked. The
+//!   watchdog pauses while a call waits for the client's answer, so what
+//!   bounds a relayed call is the run's own deadline for it: past it, the
+//!   run withdraws the call, and the client answers it at once.
 //! - io's, through the protocol layer, which speaks the channel over the
 //!   process's pipes and runs the process tree. A [`Request::Spawn`] is ended
-//!   by exactly one [`Event::Spawned`] or [`Event::Unspawned`]; a
+//!   by exactly one [`Event::Spawned`] or [`Event::Unspawned`], by its
+//!   deadline; a
 //!   [`Request::Send`] by one [`Event::Sent`] or [`Event::Unsent`]; a
 //!   [`Request::Read`], a demand for the next message up, by one
 //!   [`Event::Received`], [`Event::Malformed`] or [`Event::Hangup`]; a
@@ -43,7 +49,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Token;
+use temper_lib::{Time, Token};
 
 use crate::channel::{Ask, Down, Finish, Reply, Up};
 
@@ -66,8 +72,8 @@ pub enum Event {
     /// Terminal for `Spawn`: the process runs, and `process` names it from now
     /// on.
     Spawned { owner: Token, process: Token },
-    /// Terminal for `Spawn`: the process could not be spawned, and nothing of
-    /// it is held. `detail` is for operators.
+    /// Terminal for `Spawn`: the process could not be spawned by its
+    /// deadline, and nothing of it is held. `detail` is for operators.
     Unspawned { owner: Token, detail: Box<[u8]> },
     /// Terminal for `Send`: the message went down.
     Sent { owner: Token },
@@ -101,6 +107,10 @@ pub enum Request {
     /// To the client: a host call of the run, `call` being the run's name for
     /// it. Answered by exactly one `Answer`.
     Called { client: Token, call: Token, ask: Ask },
+    /// To the client: the run withdrew its call `call`, not yet answered. The
+    /// client answers it all the same, once: at once as withdrawn, or with
+    /// what came of it once that has settled.
+    Withdrawn { client: Token, call: Token },
     /// To the client: the run waits for its next inbound event.
     Waiting { client: Token },
     /// To the client: a fact of the run, as it is, to forward best effort.
@@ -116,8 +126,9 @@ pub enum Request {
     /// `detail` is for operators, never for an LLM.
     Gone { client: Token, end: End, detail: Box<[u8]> },
     /// Spawn the agent in a contained process tree, in the workspace
-    /// `workspace`, where the client's repositories sit.
-    Spawn { owner: Token, workspace: Token },
+    /// `workspace`, where the client's repositories sit, giving up at
+    /// `deadline`.
+    Spawn { owner: Token, workspace: Token, deadline: Time },
     /// Send `message` down the channel of `process`.
     Send { owner: Token, process: Token, message: Down },
     /// Read the next message up the channel of `process`.

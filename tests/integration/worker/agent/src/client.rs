@@ -9,7 +9,8 @@
 //!   its place in the order sent, and stops some agents at a random moment.
 //! - It answers each host call once, after a while (sometimes slowly, past
 //!   the no-progress deadline): a push with how it went, a relayed call with
-//!   an answer, sometimes one too large to go down.
+//!   an answer, sometimes one too large to go down. A relayed call the run
+//!   withdraws it answers at once, as withdrawn; a push, when it settles.
 //! - Once told how an agent's run finishes or how the agent failed, it
 //!   mostly stops it, as the host does when a run leaves live.
 //! - What it sends after an agent has gone is sent all the same, as a stale
@@ -19,7 +20,7 @@
 //! else is said of it, hears at most one finish or fault, and has gone once,
 //! last; and a spawn beyond the limits is refused for it, once.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use temper_lib::{Duration, Rng, Token};
 use temper_worker_model_agent::channel::{Ask, Push, Reply};
@@ -70,9 +71,21 @@ pub enum Out {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Plan {
     Spawn,
-    Deliver { client: Token, place: u64 },
-    Stop { client: Token },
-    Answer { client: Token, call: Token, push: bool },
+    Deliver {
+        client: Token,
+        place: u64,
+    },
+    Stop {
+        client: Token,
+    },
+    /// Answer the call `call`, the client's `serial`th: a later call that
+    /// reuses the name is another.
+    Answer {
+        client: Token,
+        call: Token,
+        serial: u64,
+        push: bool,
+    },
 }
 
 /// What the client counted.
@@ -88,6 +101,7 @@ pub struct Tally {
     pub slow: u32,
     pub oversized: u32,
     pub waiting: u32,
+    pub withdrawn: u32,
     pub told: u32,
     pub stops: u32,
     /// Deliveries, answers and stops sent to an agent that had gone.
@@ -102,8 +116,9 @@ struct Spawned {
     /// How it was told the run finishes or the agent failed, if it was.
     told: bool,
     gone: bool,
-    /// Its calls not yet answered.
-    calls: BTreeSet<Token>,
+    /// Its calls not yet answered, each with its serial and whether it is a
+    /// push.
+    calls: BTreeMap<Token, (u64, bool)>,
 }
 
 pub struct Client {
@@ -155,10 +170,14 @@ impl Client {
                 self.tally.stops += 1;
                 vec![Out::Model(Event::Stop { agent })]
             }
-            Plan::Answer { client, call, push } => {
-                let agent = self.agent(client);
+            Plan::Answer { client, call, serial, push } => {
                 let spawned = self.spawned.get_mut(&client).expect("a call of a spawned agent");
-                assert!(spawned.calls.remove(&call), "each call is answered once");
+                // A relay the run withdrew was answered as it did.
+                if spawned.calls.get(&call) != Some(&(serial, push)) {
+                    return Vec::new();
+                }
+                spawned.calls.remove(&call);
+                let agent = self.agent(client);
                 let reply = if push {
                     let outcomes = [Push::Done, Push::Moved, Push::Failed, Push::Nothing];
                     Reply::Pushed(outcomes[usize::try_from(self.rng.below(4)).expect("fits")])
@@ -197,7 +216,7 @@ impl Client {
         }
         let charter = vec![b'c'; usize::try_from(charter_len).expect("fits")].into_boxed_slice();
         let spawn = Spawn { workspace: Token::new(1000 + client.raw()), charter, snapshot };
-        let spawned = Spawned { invalid, agent: None, told: false, gone: false, calls: BTreeSet::new() };
+        let spawned = Spawned { invalid, agent: None, told: false, gone: false, calls: BTreeMap::new() };
         self.spawned.insert(client, spawned);
         let mut outs = vec![Out::Model(Event::Spawn { client, spawn })];
         if self.tally.spawns < self.script.spawns {
@@ -235,16 +254,30 @@ impl Client {
                     Ask::Relay { .. } => false,
                 };
                 let slow = self.rng.chance(self.script.slow);
-                let spawned = self.started(client);
-                assert!(spawned.calls.insert(call), "a call's name is not in flight twice");
                 self.tally.calls += 1;
+                let serial = u64::from(self.tally.calls);
+                let spawned = self.started(client);
+                let fresh = spawned.calls.insert(call, (serial, push)).is_none();
+                assert!(fresh, "a call's name is not in flight twice");
                 let after = if slow {
                     self.tally.slow += 1;
                     self.script.slow_answer.draw(&mut self.rng)
                 } else {
                     self.script.answer.draw(&mut self.rng)
                 };
-                outs.push(Out::Later { after, plan: Plan::Answer { client, call, push } });
+                outs.push(Out::Later { after, plan: Plan::Answer { client, call, serial, push } });
+            }
+            Request::Withdrawn { client, call } => {
+                self.tally.withdrawn += 1;
+                let spawned = self.started(client);
+                let (_, push) = *spawned.calls.get(&call).expect("a call withdrawn is one the client has to answer");
+                // A relay is answered at once; a push when it has settled, as
+                // planned.
+                if !push {
+                    spawned.calls.remove(&call);
+                    let agent = spawned.agent.expect("started");
+                    outs.push(Out::Model(Event::Answer { agent, call, reply: Reply::Withdrawn }));
+                }
             }
             Request::Waiting { client } => {
                 self.started(client);

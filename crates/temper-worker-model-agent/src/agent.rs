@@ -2,41 +2,47 @@
 //! (worker-model.md, section 6).
 //!
 //! A `Spawn` takes a slot, or is refused at the entrance, and has io spawn
-//! the agent in a contained process tree. Once it runs, its run's start
-//! message goes down first and the run is live: inbound events and the
-//! answers to its host calls go down as the client gives them, one message in
-//! flight at a time and the rest waiting in order in the run's outbox; what
-//! the run says comes up one message per read, checked against the channel's
-//! rules (the `channel` module) as it comes. Host calls go to the client, and
-//! so do the run's facts, its waiting, and how it finishes, after which
-//! anything more it says breaks the rules. A call beyond the run's limit is
-//! answered as busy at the entrance, and nothing more is read until that
-//! answer is sent down, so the outbox always has room for what a message may
-//! cause.
+//! the agent in a contained process tree, within a deadline. Once it runs, its
+//! run's start message goes down first and the run is live: inbound events
+//! and the answers to its host calls go down as the client gives them, one
+//! message in flight at a time and the rest waiting in order in the run's
+//! outbox; what the run says comes up one message per read, checked against
+//! the channel's rules (the `channel` module) as it comes. Host calls and
+//! their withdrawals go to the client, and so do the run's facts, its waiting,
+//! and how it finishes, after which anything more it says breaks the rules. A
+//! call beyond the run's limit is answered as busy at the entrance, its answer
+//! going down ahead of the outbox: one busy answer may wait while the run is
+//! read on, and while a second waits behind it nothing more is read, so what
+//! one message may cause always has room (programming-model.md, 7).
 //!
 //! The watchdog runs while the run is live. Every message counts as progress,
 //! and silence for `Limits::no_progress` while its clock runs fails the agent.
-//! The clock pauses while the run waits for an inbound event (from its
-//! `Waiting` until the client delivers one) and while a call of its waits for
-//! the client's answer, and runs afresh as it resumes; a long operation the
-//! run reports holds it until the operation's deadline. The wall time runs
-//! from the spawn, whatever the run is doing.
+//! The clock pauses while the run waits for an inbound event, having read
+//! every one sent down to it and with none waiting to go (from its `Waiting`
+//! until the client delivers one, or the run calls or starts a long
+//! operation), and while a call of its waits for the client's answer; it runs
+//! afresh as it resumes. A long operation the run reports holds it until the
+//! operation's deadline, or until the run says it is done.
 //!
 //! Stopping is cancel, then kill. The client's stop sends the cancel down,
 //! behind what waits, and the run winds down on its own within
-//! `Limits::grace`; a run that says how it finishes is given the same grace to
-//! exit. Past the grace the tree is terminated, and past `Limits::kill_after`
-//! after that, killed. A fault (a broken rule, the watchdog, or a run that
-//! stopped talking without saying how it finishes) terminates the tree at
-//! once. A process that exits, or stops reading its channel, before its run
-//! has said how it finishes is drained: what it wrote is read, a finish among
-//! it, until the channel up ends or the grace is up.
+//! `Limits::grace`; so does the wall time, which is owed to the client as the
+//! agent's fault if the run does not say how it finishes. A run that says how
+//! it finishes is given the same grace to exit. Past the grace the tree is
+//! terminated, and past `Limits::kill_after` after that, killed. A broken rule
+//! or the watchdog terminates the tree at once, and so does a live run that
+//! hangs up its channel without saying how it finishes. A process that exits,
+//! or stops reading its channel, before its run has said how it finishes is
+//! drained instead: what it wrote is read, a finish among it, until the
+//! channel up ends or the grace is up; a drained channel that ends is waited
+//! for within the rest of the grace, as the process has exited, or soon will.
 //!
 //! The client hears at most one of `Finished` and `Faulted`, and a fault only
 //! while the run is live: once the client has stopped it, or the run has said
 //! how it finishes, a fault still stops the agent, and only a fact tells of
-//! it. A run that finishes after a stop is heard: how it finishes is its own
-//! to say.
+//! it. A run that finishes after a stop is heard, and so is one that finishes
+//! while it is being terminated or killed, as long as the client has heard
+//! nothing yet: how it finishes is its own to say.
 //!
 //! An agent has gone, and the client is told so, only once its process has
 //! exited and its tree is empty (io's `Exited` and `Reaped`), the channel up
@@ -45,7 +51,9 @@
 //!
 //! A transition table, by state; what is not listed is unreachable by the
 //! boundary's contract (one terminal per request, `Exited` before `Reaped`,
-//! the client naming an agent only once it has started):
+//! the client naming an agent only once it has started). "Owed" is the fault
+//! told if the run does not say how it finishes: none once the client has
+//! stopped the agent.
 //!
 //! ```text
 //! state        event                          next          requests
@@ -55,49 +63,53 @@
 //! Spawning     spawned                        Live          started, wait, reap, send: start
 //!              unspawned                      Closed        gone: unspawned
 //! Live         received: a call               Live          called, or a busy answer down
+//!              received: a withdraw           Live          withdrawn, or (dropped)
 //!              received: a fact               Live          told
-//!              received: long                 Live
+//!              received: long, long done      Live
 //!              received: waiting              Live          waiting
 //!              received: finish               Exiting       finished
 //!              received: a broken rule        Terminating   faulted: rules, terminate
 //!              malformed                      Terminating   faulted: rules, terminate
 //!              hangup                         Terminating   faulted: exited, terminate
-//!              exited, unsent                 Draining
+//!              exited, unsent                 Draining      (owed: exited)
 //!              deliver                        Live          (the event down), or bounced:
 //!                                                             too large, full
 //!              answer                         Live          (the answer down)
 //!              stop                           Cancelled     (the cancel down)
 //!              watchdog                       Terminating   faulted: no progress, terminate
-//!              wall time                      Terminating   faulted: wall time, terminate
+//!              wall time                      Cancelled     (the cancel down; owed: wall time)
 //! Cancelled    received: a call               Cancelled     called, or a busy answer down
+//!              received: a withdraw           Cancelled     withdrawn, or (dropped)
 //!              received: a fact               Cancelled     told
-//!              received: long, waiting        Cancelled
+//!              received: long, long done,     Cancelled
+//!                waiting
 //!              received: finish               Exiting       finished
-//!              received: a broken rule        Terminating   terminate
-//!              malformed                      Terminating   terminate
-//!              hangup                         Exiting
+//!              received: a broken rule        Terminating   faulted: rules if owed, terminate
+//!              malformed                      Terminating   faulted: rules if owed, terminate
+//!              hangup                         Exiting       faulted: what is owed
 //!              exited, unsent                 Draining
 //!              deliver                        Cancelled     bounced: ending
 //!              answer                         Cancelled     (the answer down)
-//!              stop                           Cancelled
-//!              grace                          Terminating   terminate
+//!              stop                           Cancelled     (nothing owed)
+//!              grace                          Terminating   faulted: what is owed, terminate
 //! Draining     received: a fact               Draining      told
-//!              received: a call, long,        Draining      (dropped: nothing hears its
-//!                waiting                                      answer)
+//!              received: a call, a withdraw,  Draining      (dropped: nothing hears its
+//!                long, long done, waiting                     answer)
 //!              received: finish               Exiting       finished
-//!              received: a broken rule        Terminating   faulted: rules if live, terminate
-//!              malformed                      Terminating   faulted: rules if live, terminate
-//!              hangup                         Exiting       faulted: exited if live
+//!              received: a broken rule        Terminating   faulted: rules if owed, terminate
+//!              malformed                      Terminating   faulted: rules if owed, terminate
+//!              hangup                         Exiting       faulted: what is owed
 //!              deliver                        Draining      bounced: ending
 //!              answer                         Draining      (dropped)
-//!              stop                           Draining      (no longer live)
-//!              grace                          Terminating   faulted: exited if live, terminate
+//!              stop                           Draining      (nothing owed)
+//!              grace                          Terminating   faulted: what is owed, terminate
 //! Exiting      received, malformed            Terminating   terminate (it broke the rules)
 //!              hangup, exited                 Exiting
 //!              deliver                        Exiting       bounced: ending
 //!              answer, stop                   Exiting       (dropped)
 //!              grace                          Terminating   terminate
-//! Terminating  received                       Terminating   (dropped)
+//! Terminating  received: finish, nothing told Terminating   finished
+//!              received                       Terminating   (dropped)
 //!              malformed, hangup, exited      Terminating
 //!              deliver                        Terminating   bounced: ending
 //!              answer, stop                   Terminating   (dropped)
@@ -122,7 +134,7 @@ use temper_lib::{Deadlines, Env, Id, Queue, Set, Slab, Time, Token};
 use crate::boundary::{Bounce, End, Fault, Invalid, Request, Signal, Spawn};
 use crate::channel::{Ask, Down, Finish, Reply, Up};
 use crate::facts::{Fact, Facts};
-use crate::limits::{self, Limits};
+use crate::limits::{self, BUSY, Limits};
 use crate::model::Model;
 
 #[derive(Debug)]
@@ -150,22 +162,23 @@ enum State {
     /// Its run is live: the channel is open both ways, and the watchdog and
     /// the wall time run.
     Live { process: Process, channel: Channel, watch: Watch },
-    /// The client stopped it: the cancel goes down, and the run winds down on
-    /// its own until `until`.
-    Cancelled { process: Process, channel: Channel, until: Time },
+    /// The client stopped it, or its wall time ran out: the cancel goes down,
+    /// and the run winds down on its own until `until`. `owed` is the fault
+    /// the client is told if the run does not say how it finishes.
+    Cancelled { process: Process, channel: Channel, until: Time, owed: Option<Fault> },
     /// Its process exited, or stopped reading its channel, before its run said
-    /// how it finishes: what it wrote is read until `until`. `live` while the
-    /// client has not stopped it, and the agent's fault is told if no finish
-    /// comes.
-    Draining { process: Process, until: Time, live: bool },
+    /// how it finishes: what it wrote is read until `until`, and `owed` told
+    /// if no finish comes.
+    Draining { process: Process, until: Time, owed: Option<Fault> },
     /// Its run has nothing more to say: it said how it finishes, or its
-    /// channel ended once it was stopped. Its process goes on its own until
-    /// `until`.
-    Exiting { process: Process, until: Time },
+    /// channel ended once it had left live. Its process goes on its own until
+    /// `until`. `told` once the client has heard how the run finishes or how
+    /// the agent failed.
+    Exiting { process: Process, until: Time, told: bool },
     /// Its tree was told to exit, and is killed at `until`.
-    Terminating { process: Process, until: Time },
+    Terminating { process: Process, until: Time, told: bool },
     /// Its tree was killed.
-    Killing { process: Process },
+    Killing { process: Process, told: bool },
     /// Terminal: holds nothing.
     Closed,
 }
@@ -205,14 +218,18 @@ struct Channel {
     outbox: Queue<Down>,
     /// Inbound events among them.
     events: u32,
-    /// A call answered as busy at the entrance: its answer goes down next, and
-    /// nothing more is read until it has.
-    busy: Option<Token>,
+    /// Inbound events sent down so far.
+    sent: u64,
+    /// Calls answered as busy at the entrance: their answers go down ahead of
+    /// the outbox, and while two wait, nothing more is read.
+    busy: Queue<Token>,
     /// The names of the run's calls in flight, from the call until its answer
     /// is sent down.
     flight: Set<Token>,
     /// Those the client has not answered yet.
     asked: Set<Token>,
+    /// Those of them the run withdrew.
+    withdrawn: Set<Token>,
 }
 
 /// The watchdog's view of a live run.
@@ -222,7 +239,7 @@ struct Watch {
     seen: Time,
     /// Until when a long operation it reported may run.
     held: Time,
-    /// It waits for its next inbound event.
+    /// It waits for its next inbound event, having read every one sent.
     waiting: bool,
     /// When its wall time is up.
     wall: Time,
@@ -259,7 +276,8 @@ pub(crate) fn spawn(model: &mut Model, env: &Env<Limits>, client: Token, spawn: 
     }
     let agent = Agent { client, state: State::Spawning { charter, snapshot } };
     let id = model.agents.insert(agent).expect("checked for room above");
-    out.push(Request::Spawn { owner: id.token(), workspace });
+    let deadline = env.now.saturating_add(limits.spawn_timeout);
+    out.push(Request::Spawn { owner: id.token(), workspace, deadline });
 }
 
 pub(crate) fn deliver(model: &mut Model, env: &Env<Limits>, agent: Token, event: Box<[u8]>, out: &mut Queue<Request>) {
@@ -306,9 +324,9 @@ pub(crate) fn answer(
             let watch = if channel.asked.is_empty() { Watch { seen: env.now, ..watch } } else { watch };
             State::Live { process, channel, watch }
         }
-        State::Cancelled { process, mut channel, until } => {
+        State::Cancelled { process, mut channel, until, owed } => {
             answered(&mut channel, call, reply);
-            State::Cancelled { process, channel, until }
+            State::Cancelled { process, channel, until, owed }
         }
         // It no longer listens: the answer is dropped.
         state
@@ -327,13 +345,17 @@ pub(crate) fn stop(model: &mut Model, env: &Env<Limits>, agent: Token, out: &mut
     let client = entry.client;
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Live { process, channel, watch: _ } => cancel(client, process, channel, env, facts),
-        State::Draining { process, until, live: _ } => State::Draining { process, until, live: false },
+        State::Live { process, channel, watch: _ } => {
+            facts.push(Fact::Cancelled { client });
+            cancel(process, channel, None, env)
+        }
+        // The client has stopped it: nothing is owed to it any more.
+        State::Cancelled { process, channel, until, owed: _ } => {
+            State::Cancelled { process, channel, until, owed: None }
+        }
+        State::Draining { process, until, owed: _ } => State::Draining { process, until, owed: None },
         // It is stopping already.
-        state @ (State::Cancelled { .. }
-        | State::Exiting { .. }
-        | State::Terminating { .. }
-        | State::Killing { .. }) => state,
+        state @ (State::Exiting { .. } | State::Terminating { .. } | State::Killing { .. }) => state,
         State::Spawning { .. } | State::Closed => unreachable!("an addressed agent has started and not gone"),
     };
     follow(model, env, id, out);
@@ -405,10 +427,8 @@ pub(crate) fn unsent(model: &mut Model, env: &Env<Limits>, owner: Token, out: &m
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         // It no longer reads its channel: what it wrote is drained.
-        State::Live { process, channel: _, watch: _ } => {
-            State::Draining { process, until: env.now.saturating_add(env.limits.grace), live: true }
-        }
-        State::Cancelled { process, channel: _, until } => State::Draining { process, until, live: false },
+        State::Live { process, channel: _, watch: _ } => drain(process, env),
+        State::Cancelled { process, channel: _, until, owed } => State::Draining { process, until, owed },
         state
         @ (State::Draining { .. } | State::Exiting { .. } | State::Terminating { .. } | State::Killing { .. }) => state,
         State::Spawning { .. } | State::Closed => unreachable!("only a spawned agent sends"),
@@ -428,30 +448,41 @@ pub(crate) fn received(model: &mut Model, env: &Env<Limits>, owner: Token, messa
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Live { process, channel, watch } => {
-            if broken(&message, Some(&channel.flight), limits) {
+            if broken(&message, Some(&channel), limits) {
                 fail(names, process, Fault::Rules, true, env, facts, out)
             } else {
                 heard(names.client, process, channel, watch, message, env, facts, out)
             }
         }
-        State::Cancelled { process, channel, until } => {
-            if broken(&message, Some(&channel.flight), limits) {
-                fail(names, process, Fault::Rules, false, env, facts, out)
+        State::Cancelled { process, channel, until, owed } => {
+            if broken(&message, Some(&channel), limits) {
+                fail(names, process, Fault::Rules, owed.is_some(), env, facts, out)
             } else {
-                wound(names.client, process, channel, until, message, facts, out)
+                wound(names.client, process, channel, until, owed, message, facts, out)
             }
         }
-        State::Draining { process, until, live } => {
+        State::Draining { process, until, owed } => {
             if broken(&message, None, limits) {
-                fail(names, process, Fault::Rules, live, env, facts, out)
+                fail(names, process, Fault::Rules, owed.is_some(), env, facts, out)
             } else {
-                drained(names.client, process, until, live, message, facts, out)
+                drained(names.client, process, until, owed, message, facts, out)
             }
         }
         // Its run has said all it may: anything more breaks the rules.
-        State::Exiting { process, until: _ } => fail(names, process, Fault::Rules, false, env, facts, out),
-        // What a tree being stopped writes is read to the end, and dropped.
-        state @ (State::Terminating { .. } | State::Killing { .. }) => state,
+        State::Exiting { process, until: _, told } => {
+            tell_fault(names.client, Fault::Rules, false, facts, out);
+            terminate(names, process, told, env, facts, out)
+        }
+        // What a tree being stopped writes is read to the end, and dropped,
+        // but for a finish the client may still hear.
+        State::Terminating { process, until, told } => {
+            let told = late(names.client, told, message, limits, facts, out);
+            State::Terminating { process, until, told }
+        }
+        State::Killing { process, told } => {
+            let told = late(names.client, told, message, limits, facts, out);
+            State::Killing { process, told }
+        }
         State::Spawning { .. } | State::Closed => unreachable!("only a spawned agent reads"),
     };
     follow(model, env, id, out);
@@ -466,9 +497,12 @@ pub(crate) fn malformed(model: &mut Model, env: &Env<Limits>, owner: Token, out:
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Live { process, .. } => fail(names, process, Fault::Rules, true, env, facts, out),
-        State::Draining { process, until: _, live } => fail(names, process, Fault::Rules, live, env, facts, out),
-        State::Cancelled { process, .. } | State::Exiting { process, .. } => {
-            fail(names, process, Fault::Rules, false, env, facts, out)
+        State::Cancelled { process, owed, .. } | State::Draining { process, owed, .. } => {
+            fail(names, process, Fault::Rules, owed.is_some(), env, facts, out)
+        }
+        State::Exiting { process, until: _, told } => {
+            tell_fault(names.client, Fault::Rules, false, facts, out);
+            terminate(names, process, told, env, facts, out)
         }
         state @ (State::Terminating { .. } | State::Killing { .. }) => state,
         State::Spawning { .. } | State::Closed => unreachable!("only a spawned agent reads"),
@@ -486,12 +520,10 @@ pub(crate) fn hangup(model: &mut Model, env: &Env<Limits>, owner: Token, out: &m
     entry.state = match state {
         // It stopped talking without saying how its run finishes.
         State::Live { process, .. } => fail(names, process, Fault::Exited, true, env, facts, out),
-        State::Cancelled { process, channel: _, until } => State::Exiting { process, until },
-        State::Draining { process, until, live } => {
-            if live {
-                fault(names.client, Fault::Exited, true, facts, out);
-            }
-            State::Exiting { process, until }
+        // It has left live: it is waited for within the rest of its grace.
+        State::Cancelled { process, until, owed, .. } | State::Draining { process, until, owed } => {
+            owe(names.client, owed, facts, out);
+            State::Exiting { process, until, told: owed.is_some() }
         }
         state @ (State::Exiting { .. } | State::Terminating { .. } | State::Killing { .. }) => state,
         State::Spawning { .. } | State::Closed => unreachable!("only a spawned agent reads"),
@@ -516,10 +548,8 @@ pub(crate) fn exited(model: &mut Model, env: &Env<Limits>, owner: Token, out: &m
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         // What it wrote before it went is drained.
-        State::Live { process, channel: _, watch: _ } => {
-            State::Draining { process, until: env.now.saturating_add(env.limits.grace), live: true }
-        }
-        State::Cancelled { process, channel: _, until } => State::Draining { process, until, live: false },
+        State::Live { process, channel: _, watch: _ } => drain(process, env),
+        State::Cancelled { process, channel: _, until, owed } => State::Draining { process, until, owed },
         state
         @ (State::Draining { .. } | State::Exiting { .. } | State::Terminating { .. } | State::Killing { .. }) => state,
         State::Spawning { .. } | State::Closed => unreachable!("only a spawned agent is waited for"),
@@ -538,11 +568,44 @@ pub(crate) fn reaped(model: &mut Model, env: &Env<Limits>, owner: Token, detail:
 }
 
 pub(crate) fn watchdog(model: &mut Model, env: &Env<Limits>, id: Id<Agent>, out: &mut Queue<Request>) {
-    expired(model, env, id, Fault::NoProgress, out);
+    let Model { agents, alarms: _, facts } = model;
+    let entry = agents.get_mut(id).expect("an agent's alarms are cancelled before it is retired");
+    let names = Names { owner: id.token(), client: entry.client };
+    let state = mem::replace(&mut entry.state, State::Closed);
+    entry.state = match state {
+        State::Live { process, .. } => fail(names, process, Fault::NoProgress, true, env, facts, out),
+        State::Spawning { .. }
+        | State::Cancelled { .. }
+        | State::Draining { .. }
+        | State::Exiting { .. }
+        | State::Terminating { .. }
+        | State::Killing { .. }
+        | State::Closed => unreachable!("the watchdog runs only while the run is live"),
+    };
+    follow(model, env, id, out);
 }
 
 pub(crate) fn wall(model: &mut Model, env: &Env<Limits>, id: Id<Agent>, out: &mut Queue<Request>) {
-    expired(model, env, id, Fault::WallTime, out);
+    let Model { agents, alarms: _, facts } = model;
+    let entry = agents.get_mut(id).expect("an agent's alarms are cancelled before it is retired");
+    let client = entry.client;
+    let state = mem::replace(&mut entry.state, State::Closed);
+    entry.state = match state {
+        // The run is alive: it is cancelled, and may wind down and say how it
+        // finishes.
+        State::Live { process, channel, watch: _ } => {
+            facts.push(Fact::Overdue { client });
+            cancel(process, channel, Some(Fault::WallTime), env)
+        }
+        State::Spawning { .. }
+        | State::Cancelled { .. }
+        | State::Draining { .. }
+        | State::Exiting { .. }
+        | State::Terminating { .. }
+        | State::Killing { .. }
+        | State::Closed => unreachable!("the wall time runs only while the run is live"),
+    };
+    follow(model, env, id, out);
 }
 
 pub(crate) fn grace(model: &mut Model, env: &Env<Limits>, id: Id<Agent>, out: &mut Queue<Request>) {
@@ -551,37 +614,15 @@ pub(crate) fn grace(model: &mut Model, env: &Env<Limits>, id: Id<Agent>, out: &m
     let names = Names { owner: id.token(), client: entry.client };
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Cancelled { process, .. } | State::Exiting { process, .. } => terminate(names, process, env, facts, out),
-        State::Draining { process, until: _, live } => {
-            if live {
-                fault(names.client, Fault::Exited, true, facts, out);
-            }
-            terminate(names, process, env, facts, out)
+        State::Cancelled { process, owed, .. } | State::Draining { process, owed, .. } => {
+            owe(names.client, owed, facts, out);
+            terminate(names, process, owed.is_some(), env, facts, out)
         }
-        State::Terminating { process, until: _ } => kill(names, process, facts, out),
+        State::Exiting { process, until: _, told } => terminate(names, process, told, env, facts, out),
+        State::Terminating { process, until: _, told } => kill(names, process, told, facts, out),
         State::Spawning { .. } | State::Live { .. } | State::Killing { .. } | State::Closed => {
             unreachable!("the grace runs only while an agent is stopping, until it is killed")
         }
-    };
-    follow(model, env, id, out);
-}
-
-/// The watchdog or the wall time, firing while the run is live: the agent
-/// failed for `fault`.
-fn expired(model: &mut Model, env: &Env<Limits>, id: Id<Agent>, fault: Fault, out: &mut Queue<Request>) {
-    let Model { agents, alarms: _, facts } = model;
-    let entry = agents.get_mut(id).expect("an agent's alarms are cancelled before it is retired");
-    let names = Names { owner: id.token(), client: entry.client };
-    let state = mem::replace(&mut entry.state, State::Closed);
-    entry.state = match state {
-        State::Live { process, .. } => fail(names, process, fault, true, env, facts, out),
-        State::Spawning { .. }
-        | State::Cancelled { .. }
-        | State::Draining { .. }
-        | State::Exiting { .. }
-        | State::Terminating { .. }
-        | State::Killing { .. }
-        | State::Closed => unreachable!("the watchdog and the wall time run only while the run is live"),
     };
     follow(model, env, id, out);
 }
@@ -610,7 +651,7 @@ fn process_of(state: &mut State) -> &mut Process {
         | State::Draining { process, .. }
         | State::Exiting { process, .. }
         | State::Terminating { process, .. }
-        | State::Killing { process } => process,
+        | State::Killing { process, .. } => process,
         State::Spawning { .. } | State::Closed => {
             unreachable!("io ends requests only for a spawned agent, which lives until they have ended")
         }
@@ -631,6 +672,7 @@ fn follow(model: &mut Model, env: &Env<Limits>, id: Id<Agent>, out: &mut Queue<R
     flow(id.token(), &mut entry.state, out);
     settle(entry, facts, out);
     let (watchdog, wall, grace) = timers(&entry.state, &env.limits);
+    // Cancelled before the grace is armed: two alarms an agent at most.
     set(alarms, Alarm::Watchdog { agent: id }, watchdog);
     set(alarms, Alarm::Wall { agent: id }, wall);
     set(alarms, Alarm::Grace { agent: id }, grace);
@@ -650,19 +692,19 @@ fn follow(model: &mut Model, env: &Env<Limits>, id: Id<Agent>, out: &mut Queue<R
 }
 
 /// What a state implies for the channel: while the run listens, the next
-/// message waiting goes down once none is in flight, a busy answer first; and
+/// message waiting goes down once none is in flight, busy answers first; and
 /// in every state the next message up is read once none is being read, until
-/// the channel up ends, but while a busy answer waits.
+/// the channel up ends, but while two busy answers wait.
 fn flow(owner: Token, state: &mut State, out: &mut Queue<Request>) {
     let (process, reads) = match state {
         State::Live { process, channel, .. } | State::Cancelled { process, channel, .. } => {
             send_next(owner, process, channel, out);
-            (process, channel.busy.is_none())
+            (process, channel.busy.len() < BUSY)
         }
         State::Draining { process, .. }
         | State::Exiting { process, .. }
         | State::Terminating { process, .. }
-        | State::Killing { process } => (process, true),
+        | State::Killing { process, .. } => (process, true),
         State::Spawning { .. } | State::Closed => return,
     };
     if reads && process.reading == Reading::Idle {
@@ -675,7 +717,7 @@ fn send_next(owner: Token, process: &mut Process, channel: &mut Channel, out: &m
     if process.sending {
         return;
     }
-    let message = match channel.busy.take() {
+    let message = match channel.busy.pop() {
         Some(call) => Down::Answer { call, reply: Reply::Busy },
         None => {
             let Some(message) = channel.outbox.pop() else {
@@ -689,11 +731,14 @@ fn send_next(owner: Token, process: &mut Process, channel: &mut Channel, out: &m
     process.sending = true;
 }
 
-/// What leaves the outbox for the channel: an event no longer waits, and an
-/// answer's call is no longer in flight.
+/// What leaves the outbox for the channel: an event no longer waits, and is
+/// sent; an answer's call is no longer in flight.
 fn leaving(channel: &mut Channel, message: &Down) {
     match message {
-        Down::Event { .. } => channel.events = channel.events.checked_sub(1).expect("the events waiting are counted"),
+        Down::Event { .. } => {
+            channel.events = channel.events.checked_sub(1).expect("the events waiting are counted");
+            channel.sent = channel.sent.saturating_add(1);
+        }
         Down::Answer { call, reply: _ } => {
             let flying = channel.flight.remove(call);
             assert!(flying, "a call is in flight until its answer goes down");
@@ -708,7 +753,7 @@ fn leaving(channel: &mut Channel, message: &Down) {
 /// flight. The client is told, with the detail of its end.
 fn settle(entry: &mut Agent, facts: &mut Facts, out: &mut Queue<Request>) {
     let settled = match &entry.state {
-        State::Exiting { process, .. } | State::Terminating { process, .. } | State::Killing { process } => {
+        State::Exiting { process, .. } | State::Terminating { process, .. } | State::Killing { process, .. } => {
             gone(process)
         }
         State::Spawning { .. }
@@ -722,7 +767,7 @@ fn settle(entry: &mut Agent, facts: &mut Facts, out: &mut Queue<Request>) {
     }
     let state = mem::replace(&mut entry.state, State::Closed);
     let detail = match state {
-        State::Exiting { process, .. } | State::Terminating { process, .. } | State::Killing { process } => {
+        State::Exiting { process, .. } | State::Terminating { process, .. } | State::Killing { process, .. } => {
             process.reaped.expect("a process that has gone was reaped")
         }
         State::Spawning { .. }
@@ -784,22 +829,26 @@ fn start(
     facts: &mut Facts,
     out: &mut Queue<Request>,
 ) -> State {
-    let (owner, client, limits, now) = (names.owner, names.client, &env.limits, env.now);
-    out.push(Request::Started { client, agent: owner });
+    let owner = names.owner;
+    let limits = &env.limits;
+    out.push(Request::Started { client: names.client, agent: owner });
     out.push(Request::Wait { owner, process });
     out.push(Request::Reap { owner, process });
     out.push(Request::Send { owner, process, message: Down::Start { charter, snapshot } });
-    facts.push(Fact::Started { client });
+    facts.push(Fact::Started { client: names.client });
     let outbox = limits::outbox(limits).expect("worst_case accepted the limits");
     let process =
         Process { name: process, reading: Reading::Idle, sending: true, signals: 0, exited: false, reaped: None };
     let channel = Channel {
         outbox: Queue::with_capacity(outbox),
         events: 0,
-        busy: None,
+        sent: 0,
+        busy: Queue::with_capacity(BUSY),
         flight: Set::with_capacity(limits.calls),
         asked: Set::with_capacity(limits.calls),
+        withdrawn: Set::with_capacity(limits.calls),
     };
+    let now = env.now;
     let watch = Watch { seen: now, held: now, waiting: false, wall: now.saturating_add(limits.wall_time) };
     State::Live { process, channel, watch }
 }
@@ -834,14 +883,21 @@ fn delivered(
 fn answered(channel: &mut Channel, call: Token, reply: Reply) {
     let asked = channel.asked.remove(&call);
     assert!(asked, "the client answers each call it was told of, once");
+    channel.withdrawn.remove(&call);
     channel.outbox.push(Down::Answer { call, reply });
 }
 
-/// Live, stop: the cancel goes down behind what waits.
-fn cancel(client: Token, process: Process, mut channel: Channel, env: &Env<Limits>, facts: &mut Facts) -> State {
+/// Live, stop or wall time: the cancel goes down behind what waits, and
+/// `owed` is told if the run does not say how it finishes.
+fn cancel(process: Process, mut channel: Channel, owed: Option<Fault>, env: &Env<Limits>) -> State {
     channel.outbox.push(Down::Cancel);
-    facts.push(Fact::Cancelled { client });
-    State::Cancelled { process, channel, until: env.now.saturating_add(env.limits.grace) }
+    State::Cancelled { process, channel, until: env.now.saturating_add(env.limits.grace), owed }
+}
+
+/// Live, exited or unsent: what it wrote is drained for the grace, and the
+/// exit is owed if no finish comes.
+fn drain(process: Process, env: &Env<Limits>) -> State {
+    State::Draining { process, until: env.now.saturating_add(env.limits.grace), owed: Some(Fault::Exited) }
 }
 
 /// Live, received a message within the rules: whatever it is, it is progress.
@@ -859,11 +915,21 @@ fn heard(
     let now = env.now;
     watch.seen = now;
     match message {
-        Up::Call { call, ask } => called(client, &mut channel, call, ask, out),
+        Up::Call { call, ask } => {
+            watch.waiting = false;
+            called(client, &mut channel, call, ask, out);
+        }
+        Up::Withdraw { call } => withdrew(client, &mut channel, call, out),
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
-        Up::Long { span } => watch.held = watch.held.max(now.saturating_add(span)),
-        Up::Waiting => {
-            watch.waiting = true;
+        Up::Long { span } => {
+            watch.waiting = false;
+            watch.held = watch.held.max(now.saturating_add(span));
+        }
+        Up::LongDone => watch.held = now,
+        Up::Waiting { heard } => {
+            // A wait that crossed an event on its way is no wait: the run is
+            // about to read it.
+            watch.waiting = heard == channel.sent && channel.events == 0;
             out.push(Request::Waiting { client });
         }
         Up::Finish { finish } => {
@@ -875,47 +941,71 @@ fn heard(
 
 /// Cancelled, received a message within the rules: the run winds down, and
 /// the watchdog no longer runs.
+#[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn wound(
     client: Token,
     process: Process,
     mut channel: Channel,
     until: Time,
+    owed: Option<Fault>,
     message: Up,
     facts: &mut Facts,
     out: &mut Queue<Request>,
 ) -> State {
     match message {
         Up::Call { call, ask } => called(client, &mut channel, call, ask, out),
+        Up::Withdraw { call } => withdrew(client, &mut channel, call, out),
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
-        Up::Long { span: _ } | Up::Waiting => {}
+        Up::Long { span: _ } | Up::LongDone | Up::Waiting { heard: _ } => {}
         Up::Finish { finish } => return finished(client, process, finish, until, facts, out),
     }
-    State::Cancelled { process, channel, until }
+    State::Cancelled { process, channel, until, owed }
 }
 
 /// Draining, received a message within the rules: what the run wrote before
-/// it went. Nothing would hear an answer to a call.
+/// it went. Nothing would hear an answer to a call, nor of its withdrawal.
 fn drained(
     client: Token,
     process: Process,
     until: Time,
-    live: bool,
+    owed: Option<Fault>,
     message: Up,
     facts: &mut Facts,
     out: &mut Queue<Request>,
 ) -> State {
     match message {
-        Up::Call { .. } | Up::Long { span: _ } | Up::Waiting => {}
+        Up::Call { .. } | Up::Withdraw { .. } | Up::Long { .. } | Up::LongDone | Up::Waiting { .. } => {}
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
         Up::Finish { finish } => return finished(client, process, finish, until, facts, out),
     }
-    State::Draining { process, until, live }
+    State::Draining { process, until, owed }
+}
+
+/// Terminating or Killing, received: dropped, but for a finish within the
+/// limits that the client may still hear, having heard neither how the run
+/// finishes nor how the agent failed. Whether it has heard one now.
+fn late(client: Token, told: bool, message: Up, limits: &Limits, facts: &mut Facts, out: &mut Queue<Request>) -> bool {
+    if told || broken(&message, None, limits) {
+        return told;
+    }
+    match message {
+        Up::Finish { finish } => {
+            facts.push(Fact::Finished { client });
+            out.push(Request::Finished { client, finish });
+            true
+        }
+        Up::Call { .. }
+        | Up::Withdraw { .. }
+        | Up::Fact { .. }
+        | Up::Long { .. }
+        | Up::LongDone
+        | Up::Waiting { .. } => told,
+    }
 }
 
 /// A host call within the rules goes to the client, or, if the run has as
 /// many in flight as it may, is answered as busy.
 fn called(client: Token, channel: &mut Channel, call: Token, ask: Ask, out: &mut Queue<Request>) {
-    assert!(channel.busy.is_none(), "nothing is read while a busy answer waits to go down");
     match channel.flight.insert(call) {
         Ok(fresh) => {
             assert!(fresh, "a call reusing a name in flight breaks the rules");
@@ -923,8 +1013,20 @@ fn called(client: Token, channel: &mut Channel, call: Token, ask: Ask, out: &mut
             assert!(asked == Ok(true), "the calls asked are among those in flight");
             out.push(Request::Called { client, call, ask });
         }
-        Err(call) => channel.busy = Some(call),
+        Err(call) => channel.busy.push(call),
     }
+}
+
+/// A withdraw within the rules: the client hears of it while it has the call
+/// to answer. Otherwise the call's answer is on its way down, or crossed the
+/// withdraw, and there is nothing to tell.
+fn withdrew(client: Token, channel: &mut Channel, call: Token, out: &mut Queue<Request>) {
+    if !channel.asked.contains(&call) {
+        return;
+    }
+    let fresh = channel.withdrawn.insert(call);
+    assert!(fresh == Ok(true), "a call withdrawn twice breaks the rules; the withdrawn are among those asked");
+    out.push(Request::Withdrawn { client, call });
 }
 
 /// The run said how it finishes: its last word. Its process exits on its own
@@ -939,7 +1041,7 @@ fn finished(
 ) -> State {
     facts.push(Fact::Finished { client });
     out.push(Request::Finished { client, finish });
-    State::Exiting { process, until }
+    State::Exiting { process, until, told: true }
 }
 
 /// The agent failed for `fault`, told to the client if `told`: its tree is
@@ -953,11 +1055,18 @@ fn fail(
     facts: &mut Facts,
     out: &mut Queue<Request>,
 ) -> State {
-    self::fault(names.client, fault, told, facts, out);
-    terminate(names, process, env, facts, out)
+    tell_fault(names.client, fault, told, facts, out);
+    terminate(names, process, told, env, facts, out)
 }
 
-fn fault(client: Token, fault: Fault, told: bool, facts: &mut Facts, out: &mut Queue<Request>) {
+/// The fault the client is owed, if it is: told now.
+fn owe(client: Token, owed: Option<Fault>, facts: &mut Facts, out: &mut Queue<Request>) {
+    if let Some(fault) = owed {
+        tell_fault(client, fault, true, facts, out);
+    }
+}
+
+fn tell_fault(client: Token, fault: Fault, told: bool, facts: &mut Facts, out: &mut Queue<Request>) {
     facts.push(Fact::Faulted { client, fault });
     if told {
         out.push(Request::Faulted { client, fault });
@@ -968,20 +1077,21 @@ fn fault(client: Token, fault: Fault, told: bool, facts: &mut Facts, out: &mut Q
 fn terminate(
     names: Names,
     mut process: Process,
+    told: bool,
     env: &Env<Limits>,
     facts: &mut Facts,
     out: &mut Queue<Request>,
 ) -> State {
     signal(names.owner, &mut process, Signal::Terminate, out);
     facts.push(Fact::Terminated { client: names.client });
-    State::Terminating { process, until: env.now.saturating_add(env.limits.kill_after) }
+    State::Terminating { process, until: env.now.saturating_add(env.limits.kill_after), told }
 }
 
 /// Terminating, grace: its tree is killed.
-fn kill(names: Names, mut process: Process, facts: &mut Facts, out: &mut Queue<Request>) -> State {
+fn kill(names: Names, mut process: Process, told: bool, facts: &mut Facts, out: &mut Queue<Request>) -> State {
     signal(names.owner, &mut process, Signal::Kill, out);
     facts.push(Fact::Killed { client: names.client });
-    State::Killing { process }
+    State::Killing { process, told }
 }
 
 fn signal(owner: Token, process: &mut Process, signal: Signal, out: &mut Queue<Request>) {
@@ -989,13 +1099,15 @@ fn signal(owner: Token, process: &mut Process, signal: Signal, out: &mut Queue<R
     process.signals = process.signals.checked_add(1).expect("a tree is signalled twice at most");
 }
 
-/// Whether a message breaks the channel's rules: a payload beyond the limits,
-/// or, while the run's calls are in `flight`, a call reusing a name in flight.
-fn broken(message: &Up, flight: Option<&Set<Token>>, limits: &Limits) -> bool {
+/// Whether a message breaks the channel's rules: a payload or a span beyond
+/// the limits, or, while the run listens on `channel`, a call reusing a name
+/// in flight, a call withdrawn twice before its answer, or a wait that claims
+/// more events than were sent down.
+fn broken(message: &Up, channel: Option<&Channel>, limits: &Limits) -> bool {
     match message {
         Up::Call { call, ask } => {
-            let reused = match flight {
-                Some(flight) => flight.contains(call),
+            let reused = match channel {
+                Some(channel) => channel.flight.contains(call),
                 None => false,
             };
             let body = match ask {
@@ -1004,8 +1116,17 @@ fn broken(message: &Up, flight: Option<&Set<Token>>, limits: &Limits) -> bool {
             };
             reused || !within(body, limits.call_bytes)
         }
+        Up::Withdraw { call } => match channel {
+            Some(channel) => channel.withdrawn.contains(call),
+            None => false,
+        },
         Up::Fact { fact } => !within(fact, limits.fact_bytes),
-        Up::Long { span: _ } | Up::Waiting => false,
+        Up::Long { span } => *span > limits.long_span,
+        Up::LongDone => false,
+        Up::Waiting { heard } => match channel {
+            Some(channel) => *heard > channel.sent,
+            None => false,
+        },
         Up::Finish { finish } => match finish {
             Finish::Ended { outcome } => !within(outcome, limits.outcome_bytes),
             Finish::Parked { snapshot } => !within_optional(snapshot.as_deref(), limits.snapshot_bytes),
@@ -1025,7 +1146,7 @@ fn bounded(reply: Reply, limits: &Limits) -> Reply {
                 Reply::TooLarge
             }
         }
-        reply @ (Reply::Pushed(_) | Reply::Unavailable | Reply::Busy | Reply::TooLarge) => reply,
+        reply @ (Reply::Pushed(_) | Reply::Unavailable | Reply::Busy | Reply::Withdrawn | Reply::TooLarge) => reply,
     }
 }
 

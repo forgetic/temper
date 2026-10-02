@@ -22,7 +22,9 @@ const LIMITS: Limits = Limits {
     fact_bytes: 8,
     outcome_bytes: 8,
     detail_bytes: 4,
+    spawn_timeout: Duration::from_secs(1),
     no_progress: Duration::from_secs(10),
+    long_span: Duration::from_secs(60),
     wall_time: Duration::from_secs(100),
     grace: Duration::from_secs(5),
     kill_after: Duration::from_secs(2),
@@ -100,10 +102,11 @@ impl Harness {
     /// Spawns an agent for `client`: its process is being spawned.
     fn spawning(&mut self, client: u64) -> Token {
         let emitted = self.spawn(client, b"charter", Some(bytes(b"snap")));
-        let [Request::Spawn { owner, workspace }] = &*emitted else {
+        let [Request::Spawn { owner, workspace, deadline }] = &*emitted else {
             panic!("expected a spawn, got {emitted:?}");
         };
         assert_eq!(*workspace, token(client, 100));
+        assert_eq!(*deadline, self.env.now.saturating_add(LIMITS.spawn_timeout), "io has a deadline to spawn it");
         *owner
     }
 
@@ -197,6 +200,10 @@ fn signal(a: Names, signal: Signal) -> Request {
     Request::Signal { owner: a.agent, process: a.process, signal }
 }
 
+fn busy(a: Names, call: u64) -> Request {
+    send(a, Down::Answer { call: Token::new(call), reply: Reply::Busy })
+}
+
 fn faulted(a: Names, fault: Fault) -> Request {
     Request::Faulted { client: a.client, fault }
 }
@@ -273,7 +280,7 @@ fn a_live_run_calls_tells_waits_and_finishes() {
     h.call(a, 7);
     let emitted = h.say(a, Up::Fact { fact: bytes(b"tool") });
     assert_eq!(&*emitted, [Request::Told { client: a.client, fact: bytes(b"tool") }, read(a)]);
-    let emitted = h.say(a, Up::Waiting);
+    let emitted = h.say(a, Up::Waiting { heard: 0 });
     assert_eq!(&*emitted, [Request::Waiting { client: a.client }, read(a)]);
     let emitted = h.say(a, Up::Finish { finish: Finish::Parked { snapshot: Some(bytes(b"snap")) } });
     let finish = Finish::Parked { snapshot: Some(bytes(b"snap")) };
@@ -294,24 +301,25 @@ fn a_run_may_fail_as_it_reports_it() {
 }
 
 #[test]
-fn a_call_beyond_the_runs_limit_is_answered_busy_before_anything_more_is_read() {
+fn a_call_beyond_the_runs_limit_is_answered_busy_and_a_second_pauses_reading() {
     let mut h = Harness::new(LIMITS);
     let a = h.live(1);
     h.call(a, 1);
     h.call(a, 2);
-    // The third goes down as busy at once, and the next read waits for it.
-    let emitted = h.say(a, Up::Call { call: Token::new(3), ask: Ask::Push { message: bytes(b"m") } });
-    let busy = Down::Answer { call: Token::new(3), reply: Reply::Busy };
-    assert_eq!(&*emitted, [send(a, busy), read(a)]);
-    // While a send is in flight, a busy answer waits, and nothing is read.
+    // The third goes down as busy at once, and the run is read on.
+    assert_eq!(
+        &*h.say(a, Up::Call { call: Token::new(3), ask: Ask::Push { message: bytes(b"m") } }),
+        [busy(a, 3), read(a)]
+    );
     let emitted = h.answer(a, 1, Reply::Pushed(Push::Done));
     assert!(emitted.is_empty(), "the answer waits for the send in flight: {emitted:?}");
-    let emitted = h.say(a, Up::Call { call: Token::new(4), ask: Ask::Push { message: bytes(b"m") } });
-    assert!(emitted.is_empty(), "busy waits behind the send in flight, and no read: {emitted:?}");
-    let emitted = h.sent(a);
-    assert_eq!(&*emitted, [send(a, Down::Answer { call: Token::new(4), reply: Reply::Busy }), read(a)]);
-    let emitted = h.sent(a);
-    assert_eq!(&*emitted, [send(a, Down::Answer { call: Token::new(1), reply: Reply::Pushed(Push::Done) })]);
+    // One busy answer may wait, and the run is still read.
+    assert_eq!(&*h.say(a, Up::Call { call: Token::new(4), ask: Ask::Push { message: bytes(b"m") } }), [read(a)]);
+    // A second waits behind it, and nothing more is read until one goes.
+    assert!(h.say(a, Up::Call { call: Token::new(5), ask: Ask::Push { message: bytes(b"m") } }).is_empty());
+    assert_eq!(&*h.sent(a), [busy(a, 4), read(a)]);
+    assert_eq!(&*h.sent(a), [busy(a, 5)]);
+    assert_eq!(&*h.sent(a), [send(a, Down::Answer { call: Token::new(1), reply: Reply::Pushed(Push::Done) })]);
     assert!(h.sent(a).is_empty());
     // Call 1's answer has gone down: its name is free again, and the run has
     // room for one more call.
@@ -468,18 +476,42 @@ fn the_clock_pauses_while_a_call_waits_for_the_client() {
 }
 
 #[test]
-fn the_clock_pauses_while_the_run_waits_for_an_inbound_event() {
+fn the_clock_pauses_while_the_run_waits_having_read_every_event() {
     let mut h = Harness::new(LIMITS);
     let a = h.live(1);
-    h.say(a, Up::Waiting);
+    h.say(a, Up::Waiting { heard: 0 });
     h.at(1);
     h.say(a, Up::Fact { fact: bytes(b"yielded") });
     assert_eq!(h.model.next_deadline(), Some(secs(100)), "facts do not end the wait");
     h.at(80);
-    h.deliver(a, b"hello");
+    assert_eq!(&*h.deliver(a, b"hello"), [send(a, Down::Event { event: bytes(b"hello") })]);
     assert_eq!(h.model.next_deadline(), Some(secs(90)), "an event ends it");
-    let emitted = h.fire_at(90);
-    assert_eq!(&*emitted, [faulted(a, Fault::NoProgress), signal(a, Signal::Terminate)]);
+    h.sent(a);
+    // A wait that crossed the event on its way is no wait.
+    h.at(81);
+    h.say(a, Up::Waiting { heard: 0 });
+    assert_eq!(h.model.next_deadline(), Some(secs(91)), "the run has an event to read");
+    h.say(a, Up::Waiting { heard: 1 });
+    assert_eq!(h.model.next_deadline(), Some(secs(100)), "it has read every one");
+    // A call ends a wait, and so does a long operation.
+    h.at(83);
+    h.call(a, 1);
+    h.at(84);
+    h.answer(a, 1, Reply::Unavailable);
+    h.sent(a);
+    assert_eq!(h.model.next_deadline(), Some(secs(94)), "the call ended the wait");
+    h.say(a, Up::Waiting { heard: 1 });
+    h.at(85);
+    h.say(a, Up::Long { span: Duration::from_secs(2) });
+    assert_eq!(h.model.next_deadline(), Some(secs(97)), "the long operation ended it, and holds the clock");
+    // An event waiting to go down: no wait either.
+    assert_eq!(h.deliver(a, b"x").len(), 1, "it goes down");
+    assert!(h.deliver(a, b"y").is_empty(), "it waits");
+    h.say(a, Up::Waiting { heard: 2 });
+    assert_eq!(h.model.next_deadline(), Some(secs(97)));
+    // A run that says it has read more than was sent breaks the rules.
+    let emitted = h.say(a, Up::Waiting { heard: 3 });
+    assert_eq!(&*emitted, [faulted(a, Fault::Rules), signal(a, Signal::Terminate), read(a)]);
 }
 
 #[test]
@@ -497,13 +529,99 @@ fn a_long_operation_holds_the_clock_until_its_deadline() {
     assert_eq!(h.model.next_deadline(), Some(secs(80)));
 }
 
+/// A live run, waiting, past its wall time: cancelled.
+fn overdue(h: &mut Harness) -> Names {
+    let a = h.live(1);
+    h.say(a, Up::Waiting { heard: 0 });
+    assert_eq!(&*h.fire_at(100), [send(a, Down::Cancel)], "it is cancelled first");
+    a
+}
+
 #[test]
-fn the_wall_time_stops_a_run_whatever_it_does() {
+fn the_wall_time_cancels_a_run_and_its_finish_stands() {
+    let mut h = Harness::new(LIMITS);
+    let a = overdue(&mut h);
+    h.sent(a);
+    assert_eq!(&*h.finish(a), [finished(a), read(a)], "nothing is owed once it says how it finishes");
+    h.goes(a);
+}
+
+#[test]
+fn a_run_past_its_wall_time_that_does_not_finish_is_faulted_past_the_grace() {
+    let mut h = Harness::new(LIMITS);
+    let a = overdue(&mut h);
+    h.sent(a);
+    assert_eq!(&*h.fire_at(105), [faulted(a, Fault::WallTime), signal(a, Signal::Terminate)]);
+}
+
+#[test]
+fn a_run_past_its_wall_time_that_hangs_up_is_faulted_at_once() {
+    let mut h = Harness::new(LIMITS);
+    let a = overdue(&mut h);
+    assert_eq!(&*h.step(Event::Hangup { owner: a.agent }), [faulted(a, Fault::WallTime)]);
+    assert_eq!(h.model.next_deadline(), Some(secs(105)), "waited for within the rest of the grace");
+    assert_eq!(&*h.fire_at(105), [signal(a, Signal::Terminate)], "the fault was told already");
+}
+
+#[test]
+fn a_stop_past_the_wall_time_takes_the_fault_back() {
+    let mut h = Harness::new(LIMITS);
+    let a = overdue(&mut h);
+    assert!(h.stop(a).is_empty());
+    let breach = Up::Fact { fact: bytes(&[b'x'; 9]) };
+    assert_eq!(&*h.say(a, breach), [signal(a, Signal::Terminate), read(a)], "a breach goes untold");
+}
+
+#[test]
+fn a_breach_while_the_wall_time_winds_a_run_down_is_told() {
     let mut h = Harness::new(LIMITS);
     let a = h.live(1);
-    h.say(a, Up::Waiting);
-    let emitted = h.fire_at(100);
-    assert_eq!(&*emitted, [faulted(a, Fault::WallTime), signal(a, Signal::Terminate)]);
+    h.say(a, Up::Waiting { heard: 0 });
+    h.fire_at(100);
+    let emitted = h.step(Event::Malformed { owner: a.agent });
+    assert_eq!(&*emitted, [faulted(a, Fault::Rules), signal(a, Signal::Terminate)]);
+}
+
+// Withdrawn calls and long operations.
+
+#[test]
+fn a_withdrawn_call_is_still_answered_once() {
+    let mut h = Harness::new(LIMITS);
+    let a = h.live(1);
+    h.call(a, 1);
+    let emitted = h.say(a, Up::Withdraw { call: Token::new(1) });
+    assert_eq!(&*emitted, [Request::Withdrawn { client: a.client, call: Token::new(1) }, read(a)]);
+    assert_eq!(h.model.next_deadline(), Some(secs(100)), "the call still waits for the client");
+    let emitted = h.answer(a, 1, Reply::Withdrawn);
+    assert_eq!(&*emitted, [send(a, Down::Answer { call: Token::new(1), reply: Reply::Withdrawn })]);
+    // A withdraw that crossed its answer is dropped.
+    assert_eq!(&*h.say(a, Up::Withdraw { call: Token::new(1) }), [read(a)]);
+    h.sent(a);
+    assert_eq!(&*h.say(a, Up::Withdraw { call: Token::new(1) }), [read(a)]);
+    assert_eq!(&*h.say(a, Up::Withdraw { call: Token::new(9) }), [read(a)], "and one of no call");
+}
+
+#[test]
+fn a_call_withdrawn_twice_before_its_answer_breaks_the_rules() {
+    let mut h = Harness::new(LIMITS);
+    let a = h.live(1);
+    h.call(a, 1);
+    h.say(a, Up::Withdraw { call: Token::new(1) });
+    let emitted = h.say(a, Up::Withdraw { call: Token::new(1) });
+    assert_eq!(&*emitted, [faulted(a, Fault::Rules), signal(a, Signal::Terminate), read(a)]);
+}
+
+#[test]
+fn a_long_operation_is_bounded_and_ends_when_done() {
+    let mut h = Harness::new(LIMITS);
+    let a = h.live(1);
+    h.say(a, Up::Long { span: Duration::from_secs(60) });
+    assert_eq!(h.model.next_deadline(), Some(secs(70)));
+    h.at(5);
+    h.say(a, Up::LongDone);
+    assert_eq!(h.model.next_deadline(), Some(secs(15)), "done: the clock runs from now");
+    let emitted = h.say(a, Up::Long { span: Duration::from_secs(61) });
+    assert_eq!(&*emitted, [faulted(a, Fault::Rules), signal(a, Signal::Terminate), read(a)]);
 }
 
 // Draining: an exit before the finish.
@@ -520,7 +638,7 @@ fn a_finish_read_after_the_exit_is_heard() {
     );
     let call = Up::Call { call: Token::new(1), ask: Ask::Relay { body: bytes(b"r") } };
     assert_eq!(&*h.say(a, call), [read(a)], "a call is dropped: nothing would hear its answer");
-    assert_eq!(&*h.say(a, Up::Waiting), [read(a)]);
+    assert_eq!(&*h.say(a, Up::Waiting { heard: 0 }), [read(a)]);
     assert_eq!(&*h.deliver(a, b"x"), [Request::Bounced { client: a.client, bounce: Bounce::Ending }]);
     assert_eq!(&*h.finish(a), [finished(a), read(a)]);
     assert!(h.step(Event::Hangup { owner: a.agent }).is_empty());
@@ -597,7 +715,7 @@ fn a_cancelled_run_still_calls_and_tells_until_it_finishes() {
         &*h.say(a, Up::Fact { fact: bytes(b"f") }),
         [Request::Told { client: a.client, fact: bytes(b"f") }, read(a)]
     );
-    assert_eq!(&*h.say(a, Up::Waiting), [read(a)], "the watchdog no longer runs");
+    assert_eq!(&*h.say(a, Up::Waiting { heard: 0 }), [read(a)], "the watchdog no longer runs");
     assert_eq!(&*h.say(a, Up::Long { span: Duration::from_secs(1) }), [read(a)]);
     let emitted = h.answer(a, 1, Reply::Unavailable);
     assert_eq!(&*emitted, [send(a, Down::Answer { call: Token::new(1), reply: Reply::Unavailable })]);
@@ -634,16 +752,29 @@ fn a_cancelled_run_past_the_grace_is_terminated_then_killed() {
     h.sent(a);
     assert_eq!(&*h.fire_at(5), [signal(a, Signal::Terminate)]);
     assert_eq!(&*h.say(a, Up::Fact { fact: bytes(b"late") }), [read(a)], "what it says now is dropped");
+    assert_eq!(&*h.finish(a), [finished(a), read(a)], "but for a finish, its first word the client hears");
     assert_eq!(&*h.fire_at(7), [signal(a, Signal::Kill)]);
+    assert_eq!(&*h.finish(a), [read(a)], "a second is dropped");
     assert_eq!(&*h.stop(a), [], "a stop changes nothing");
     assert!(h.answer(a, 1, Reply::Busy).is_empty(), "an answer is dropped");
-    assert_eq!(&*h.say(a, Up::Waiting), [read(a)], "what it says is dropped");
+    assert_eq!(&*h.say(a, Up::Waiting { heard: 0 }), [read(a)], "what it says is dropped");
     assert_eq!(&*h.deliver(a, b"x"), [Request::Bounced { client: a.client, bounce: Bounce::Ending }]);
     assert!(h.step(Event::Malformed { owner: a.agent }).is_empty());
     assert!(h.step(Event::Exited { owner: a.agent }).is_empty());
     assert!(h.step(Event::Reaped { owner: a.agent, detail: bytes(b"") }).is_empty(), "signals in flight");
     assert!(h.step(Event::Signalled { owner: a.agent }).is_empty(), "a signal in flight");
     assert_eq!(&*h.step(Event::Signalled { owner: a.agent }), [gone(a, b"")]);
+}
+
+#[test]
+fn a_finish_after_a_fault_is_dropped_while_terminating_and_killing() {
+    let mut h = Harness::new(LIMITS);
+    let a = h.live(1);
+    let emitted = h.say(a, Up::Fact { fact: bytes(&[b'x'; 9]) });
+    assert_eq!(&*emitted, [faulted(a, Fault::Rules), signal(a, Signal::Terminate), read(a)]);
+    assert_eq!(&*h.finish(a), [read(a)], "the client heard the fault first");
+    assert_eq!(&*h.fire_at(2), [signal(a, Signal::Kill)]);
+    assert_eq!(&*h.finish(a), [read(a)], "nor while killing");
 }
 
 #[test]

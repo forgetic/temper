@@ -22,8 +22,11 @@ pub enum Fact {
     Finished { client: Token },
     /// The client stopped it: its run was cancelled.
     Cancelled { client: Token },
-    /// It failed, for `fault`: the watchdog fired, or it broke the rules or
-    /// exited. The client is told only while its run was live.
+    /// Its wall time ran out: its run was cancelled.
+    Overdue { client: Token },
+    /// It failed, for `fault`: the watchdog fired, it broke the rules, or it
+    /// exited or outlived its wall time without saying how its run finishes.
+    /// The client is told only while its run was live.
     Faulted { client: Token, fault: Fault },
     /// Its tree was told to exit, past the grace or for a fault.
     Terminated { client: Token },

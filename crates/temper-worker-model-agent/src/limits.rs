@@ -34,10 +34,16 @@ pub struct Limits {
     pub outcome_bytes: u64,
     /// The most bytes of detail kept for operators: the tail of what io gives.
     pub detail_bytes: u32,
+    /// How long io has to spawn an agent.
+    pub spawn_timeout: Duration,
     /// How long a run may go without progress while its watchdog's clock
     /// runs.
     pub no_progress: Duration,
-    /// How long a run may live, from its spawn, whatever it is doing.
+    /// The longest a long operation may announce. A longer one breaks the
+    /// channel's rules.
+    pub long_span: Duration,
+    /// How long a run may live, from its spawn, whatever it is doing. Past
+    /// it, the run is cancelled, then terminated and killed past the grace.
     pub wall_time: Duration,
     /// How long a run has to go on its own once it is cancelled, has said how
     /// it finishes or has exited, before its tree is terminated.
@@ -55,8 +61,9 @@ pub struct Limits {
 /// It counts the containers, their bookkeeping included, and the payloads, not
 /// allocator overhead. An agent holds its charter and snapshot until its
 /// process has spawned, then, while its run listens, the messages waiting to
-/// go down and the names of its calls in flight; and the detail of its end
-/// once its tree is empty. What comes up (host calls, facts, how the run
+/// go down, the busy answers, and the names of its calls in flight, those the
+/// client has not answered and those the run withdrew; and the detail of its
+/// end once its tree is empty. What comes up (host calls, facts, how the run
 /// finishes) is moved into a request in the step it arrives in, and what goes
 /// down is moved into a send: either is its receiver's to count.
 #[must_use]
@@ -67,16 +74,23 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let spawning = limits.charter_bytes.checked_add(limits.snapshot_bytes)?;
     let events = u64::from(limits.events).checked_mul(limits.event_bytes)?;
     let answers = u64::from(limits.calls).checked_mul(limits.answer_bytes)?;
-    let names = Set::<Token>::worst_case(limits.calls)?.checked_mul(2)?;
-    let listening =
-        Queue::<Down>::worst_case(outbox(limits)?)?.checked_add(names)?.checked_add(events)?.checked_add(answers)?;
+    let names = Set::<Token>::worst_case(limits.calls)?.checked_mul(3)?;
+    let busy = Queue::<Token>::worst_case(BUSY)?;
+    let outbox = Queue::<Down>::worst_case(outbox(limits)?)?;
+    let listening = outbox.checked_add(busy)?.checked_add(names)?.checked_add(events)?.checked_add(answers)?;
     let agent = spawning.max(listening).checked_add(u64::from(limits.detail_bytes))?;
     let held = u64::from(limits.agents).checked_mul(agent)?;
     agents.checked_add(alarms)?.checked_add(facts)?.checked_add(held)
 }
 
+/// Busy answers that may wait to go down: one, with room kept for it, and a
+/// second, behind which nothing more is read.
+pub(crate) const BUSY: u32 = 2;
+
 /// The alarm table's capacity: an agent has two alarms armed at most, its
-/// watchdog and its wall time.
+/// watchdog and its wall time while its run is live. Its grace runs only once
+/// it has left live, and `follow` cancels the other two before it arms the
+/// grace, so the three are never armed together.
 pub(crate) fn alarms(limits: &Limits) -> Option<u32> {
     limits.agents.checked_mul(2)
 }

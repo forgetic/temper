@@ -29,6 +29,7 @@ fn answer(reply: Reply) -> Answer {
         Reply::Pushed(push) => Answer::Pushed { done: push == Push::Done },
         Reply::Unavailable => Answer::Unavailable,
         Reply::Busy => Answer::Busy,
+        Reply::Withdrawn => Answer::Withdrawn,
         Reply::TooLarge => Answer::TooLarge,
     }
 }
@@ -43,8 +44,10 @@ pub fn up(owner: Token, said: Said) -> Event {
             Up::Call { call: Token::new(name), ask }
         }
         Said::Fact { text } => Up::Fact { fact: text.into_boxed_slice() },
+        Said::Withdraw { name } => Up::Withdraw { call: Token::new(name) },
         Said::Long { span } => Up::Long { span },
-        Said::Waiting => Up::Waiting,
+        Said::LongDone => Up::LongDone,
+        Said::Waiting { heard } => Up::Waiting { heard },
         Said::Ended { outcome } => Up::Finish { finish: Finish::Ended { outcome: outcome.into_boxed_slice() } },
         Said::Parked { snapshot } => {
             Up::Finish { finish: Finish::Parked { snapshot: snapshot.map(Vec::into_boxed_slice) } }

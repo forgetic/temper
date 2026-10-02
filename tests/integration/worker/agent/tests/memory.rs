@@ -26,7 +26,9 @@ const LIMITS: Limits = Limits {
     fact_bytes: 64,
     outcome_bytes: 256,
     detail_bytes: 128,
+    spawn_timeout: Duration::from_secs(1),
     no_progress: Duration::from_secs(10),
+    long_span: Duration::from_secs(60),
     wall_time: Duration::from_secs(100),
     grace: Duration::from_secs(5),
     kill_after: Duration::from_secs(2),
@@ -94,7 +96,7 @@ impl Measured {
         while let Some(request) = self.out.pop() {
             asked.push(match request {
                 Request::Started { agent, .. } => Asked::Started { agent },
-                Request::Called { .. } => Asked::Called,
+                Request::Called { .. } | Request::Withdrawn { .. } => Asked::Called,
                 Request::Spawn { owner, .. } => Asked::Spawn { owner },
                 Request::Send { .. } => Asked::Send,
                 Request::Read { .. } => Asked::Read,
@@ -223,15 +225,22 @@ fn paths(limits: Limits) {
     }
     let ask = Ask::Push { message: bytes(limits.call_bytes) };
     let busy = agent.say(owner, Up::Call { call: Token::new(99), ask });
-    assert!(busy.is_empty(), "the busy answer waits behind the start, and nothing is read");
-    assert_eq!(agent.step(Event::Sent { owner }), [Asked::Send, Asked::Read], "the busy answer goes down");
+    assert_eq!(busy, [Asked::Read], "the busy answer waits behind the start, and the run is read on");
+    let ask = Ask::Push { message: bytes(limits.call_bytes) };
+    let second = agent.say(owner, Up::Call { call: Token::new(98), ask });
+    assert!(second.is_empty(), "a second busy answer waits too, and nothing more is read");
+    assert_eq!(agent.step(Event::Sent { owner }), [Asked::Send, Asked::Read], "a busy answer goes down");
+    assert_eq!(agent.step(Event::Sent { owner }), [Asked::Send], "and the other");
     assert_eq!(
         agent.step(Event::Deliver { agent: owner, event: bytes(limits.event_bytes + 1) }),
         [Asked::Bounced(Bounce::TooLarge)]
     );
     // Spawned at 12s, after the hung agent's kill.
     let wall = 12 + limits.wall_time.as_nanos() / 1_000_000_000;
-    assert_eq!(agent.fire(wall), [Asked::Faulted(Fault::WallTime), Asked::Signal(Signal::Terminate)]);
+    assert!(agent.fire(wall).is_empty(), "the cancel waits behind the busy answer");
+    assert_eq!(agent.step(Event::Sent { owner }), [Asked::Send], "the cancel goes down");
+    let grace = wall + limits.grace.as_nanos() / 1_000_000_000;
+    assert_eq!(agent.fire(grace), [Asked::Faulted(Fault::WallTime), Asked::Signal(Signal::Terminate)]);
     let late = Up::Finish { finish: Finish::Ended { outcome: bytes(limits.outcome_bytes) } };
     assert!(!agent.say(owner, late).is_empty(), "dropped, and read on");
     assert!(agent.step(Event::Stop { agent: owner }).is_empty());
