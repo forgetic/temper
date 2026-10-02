@@ -742,6 +742,13 @@ fn a_chatting_session_runs_when_woken_and_resumes_its_snapshot() {
 }
 
 #[test]
+fn a_session_whose_claimed_turn_failed_runs_again_unwoken() {
+    let failed = claimed(session("a"), Why::Turn);
+    let failed = Record { progress: Progress { last_run: Some(Time::from_nanos(200)), ..failed.progress }, ..failed };
+    assert_eq!(ran(&failed, &facts()).why, Why::Turn);
+}
+
+#[test]
 fn a_supervising_session_starts_fresh_and_ends_with_its_goal() {
     let supervising = Record { goal: Some(goal()), ..record(session("a")) };
     let parked = Facts { woken: true, snapshot: true, children: HALF, ..facts() };

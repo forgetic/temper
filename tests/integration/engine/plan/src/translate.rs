@@ -37,6 +37,8 @@ pub enum Heard {
     Dependency,
     /// Its own pull request: CI, a review, a push.
     Own,
+    /// An item it subscribes to, changing.
+    Subscribed,
 }
 
 /// An inbox event, as the plan reads it.
@@ -47,6 +49,7 @@ pub fn inbound(heard: Heard, at: Time) -> Inbound {
         Heard::Child => Source::Child,
         Heard::Dependency => Source::Dependency,
         Heard::Own => Source::Own,
+        Heard::Subscribed => Source::Subscribed,
     };
     Inbound { source, at }
 }

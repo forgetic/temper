@@ -12,6 +12,11 @@ use crate::referee::{Referee, Seen};
 use crate::script::{self, Script};
 use crate::translate::{self, Heard, approvals_needed, commit, count};
 
+/// The most lines a world's trace holds, and deliveries it has in flight: a
+/// seed that runs away fails fast, with its seed, rather than eat memory.
+const MOST_LINES: usize = 400_000;
+const MOST_IN_FLIGHT: u32 = 20_000;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     /// Seeds the world, which seeds the referee.
@@ -53,7 +58,7 @@ impl Settings {
                 tasks: 2,
                 events: 16,
                 repairs: 3,
-                rebases: 6,
+                rebases: 16,
                 rejections: 3,
                 stall: Duration::from_secs(3 * 86_400),
                 budget: script::BUDGET,
@@ -64,6 +69,8 @@ impl Settings {
                 steps: (2, 6),
                 changes: 400,
                 waits: 150,
+                sessions: 0,
+                shuffles: 0,
                 grows: 0,
                 dependencies: 400,
                 agent_reviews: 300,
@@ -77,6 +84,7 @@ impl Settings {
                 verdicts: 0,
                 run: Span::millis(60_000, 1_800_000),
                 ci_fails: 0,
+                ci_silent: 0,
                 ci: Span::millis(60_000, 900_000),
                 conflicts: 0,
                 mergeable: Span::millis(1_000, 30_000),
@@ -86,6 +94,10 @@ impl Settings {
                 proposals: 0,
                 closes: 0,
                 pushes: 0,
+                hand_merges: 0,
+                releases: 0,
+                noise: 0,
+                finishes: 500,
             },
             attempts: 3,
             backoff: Span::millis(10_000, 600_000),
@@ -102,6 +114,7 @@ impl Settings {
         let calm = Settings::calm(seed);
         Settings {
             goals: 3,
+            limits: Limits { rebases: 4, ..calm.limits },
             script: Script {
                 grows: 300,
                 gates: 250,
@@ -117,8 +130,14 @@ impl Settings {
                 changes_asked: 150,
                 rejects: 80,
                 proposals: 300,
-                closes: 10,
+                closes: 40,
                 pushes: 150,
+                hand_merges: 30,
+                sessions: 120,
+                shuffles: 400,
+                ci_silent: 40,
+                releases: 500,
+                noise: 400,
                 ..calm.script
             },
             restarts: 150,
@@ -171,7 +190,6 @@ struct Life {
     failures: u32,
     /// What came in since its inbox position.
     inbox: Vec<(Heard, Time)>,
-    last_turn: Time,
     /// When an alarm is armed for it, if one is.
     alarm: Option<Time>,
     /// Not before then: a failed run's backoff.
@@ -185,13 +203,12 @@ struct Life {
 }
 
 impl Life {
-    fn new(now: Time) -> Life {
+    fn new() -> Life {
         Life {
             phase: Phase::Idle,
             attempts: 0,
             failures: 0,
             inbox: Vec::new(),
-            last_turn: now,
             alarm: None,
             retry: None,
             snapshot: false,
@@ -224,10 +241,14 @@ enum Delivery {
     PushBase { repository: u32, base: Vec<u8> },
     /// A person pushes to an item's branch.
     PushBranch { item: u64 },
+    /// A person merges an item's pull request by hand.
+    HandMerge { item: u64 },
     /// An item's alarm.
     Alarm { item: u64 },
-    /// A person writes to a chatting session.
+    /// A person writes to a session.
     Message { item: u64 },
+    /// A person releases a held item.
+    Release { item: u64 },
 }
 
 /// What a write comes from: an engine action, or an outcome.
@@ -268,6 +289,10 @@ pub struct World {
     held: Vec<(u64, &'static str)>,
     /// Whether an item acted in the last pass: the loop goes round again.
     acted: bool,
+    /// Deliveries in flight.
+    in_flight: u32,
+    /// Releases each item had from people.
+    releases: BTreeMap<u64, u32>,
 
     stats: Stats,
     trace: Trace,
@@ -294,13 +319,15 @@ impl World {
             tasks: 0,
             held: Vec::new(),
             acted: false,
+            in_flight: 0,
+            releases: BTreeMap::new(),
             stats: Stats::default(),
             trace: Trace::default(),
         };
         let mut at = Time::ZERO;
         for _ in 0..settings.goals {
             at = at.saturating_add(settings.spacing.draw(&mut world.rng));
-            world.wire.send(at, Delivery::Begin);
+            world.send(at, Delivery::Begin);
         }
         world
     }
@@ -341,7 +368,7 @@ impl World {
             assert!(next > self.now, "time moves forward");
             self.now = next;
         }
-        panic!("the world did not settle in {iterations} iterations");
+        panic!("seed {}: the world did not settle in {iterations} iterations", self.settings.seed);
     }
 
     /// One iteration: what is due arrives, the referee's deadlines fire, and
@@ -349,6 +376,7 @@ impl World {
     fn iterate(&mut self) {
         self.env.now = self.now;
         while let Some(delivery) = self.wire.next(self.now) {
+            self.in_flight -= 1;
             self.deliver(delivery);
         }
         self.referee.fire(self.now, &self.forge);
@@ -365,7 +393,15 @@ impl World {
     }
 
     fn log(&mut self, line: impl std::fmt::Display) {
+        assert!(self.trace.lines().len() < MOST_LINES, "seed {}: the trace passed its bound", self.settings.seed);
         self.trace.log(self.now, line);
+    }
+
+    /// Sends `delivery`, due at `at`.
+    fn send(&mut self, at: Time, delivery: Delivery) {
+        assert!(self.in_flight < MOST_IN_FLIGHT, "seed {}: too many deliveries in flight", self.settings.seed);
+        self.in_flight += 1;
+        self.wire.send(at, delivery);
     }
 
     fn observe(&mut self, seen: &Seen) {
@@ -412,12 +448,12 @@ impl World {
             }
             Due::Act(action) => {
                 self.log(format_args!("item {number}: {action:?}"));
-                self.write(number, Origin::Action, writes);
+                self.act(number, writes);
                 true
             }
             Due::Done => {
                 self.log(format_args!("item {number}: done"));
-                self.write(number, Origin::Action, writes);
+                self.act(number, writes);
                 true
             }
             Due::Hold(hold) => {
@@ -440,7 +476,12 @@ impl World {
         };
         let last = item.record.progress.last_run.unwrap_or(item.created);
         match plan::wake(&self.env, &spec.wake, &inbox, last) {
-            Woken::Now => true,
+            Woken::Now => {
+                if inbox.len() > usize::try_from(self.settings.limits.events).expect("fits") {
+                    self.path("woken by a message behind many events");
+                }
+                true
+            }
             Woken::At(at) => {
                 self.alarm(number, at);
                 false
@@ -457,7 +498,7 @@ impl World {
                 if !self.lives[&number].asked {
                     self.life(number).asked = true;
                     let at = self.later(self.settings.script.people);
-                    self.wire.send(at, Delivery::Decide { item: number });
+                    self.send(at, Delivery::Decide { item: number });
                 }
             }
             Waits::Time
@@ -476,7 +517,7 @@ impl World {
             return;
         }
         self.life(number).alarm = Some(at);
-        self.wire.send(at, Delivery::Alarm { item: number });
+        self.send(at, Delivery::Alarm { item: number });
     }
 
     fn later(&mut self, span: Span) -> Time {
@@ -485,12 +526,10 @@ impl World {
 
     /// Starts a run for item `number`.
     fn start(&mut self, number: u64, why: Why, resume: bool) {
-        let now = self.now;
         let life = self.life(number);
         life.attempts += 1;
         let attempt = life.attempts;
         life.phase = Phase::Running { attempt, relayed: life.inbox.len() };
-        life.last_turn = now;
         self.runs.open((number, attempt), why);
         self.observe(&Seen::Ran(number));
         self.path(format!("run: {}", why_name(why)));
@@ -499,14 +538,19 @@ impl World {
         }
         self.log(format_args!("item {number}: run {attempt}, {}", why_name(why)));
         let at = self.later(self.settings.script.run);
-        self.wire.send(at, Delivery::Ends { item: number, attempt });
+        self.send(at, Delivery::Ends { item: number, attempt });
         // A person may push to the branch of a change under review: the
-        // verdict comes back on a head that is no longer the branch's.
-        if let Why::Review { .. } = why
-            && self.rng.chance(self.settings.script.pushes)
-        {
-            let during = self.now.saturating_add(Duration::from_millis(1));
-            self.wire.send(during, Delivery::PushBranch { item: number });
+        // verdict comes back on a head that is no longer the branch's. Or
+        // merge the change by hand while a run works on it.
+        let during = self.now.saturating_add(Duration::from_millis(1));
+        match why {
+            Why::Review { .. } if self.rng.chance(self.settings.script.pushes) => {
+                self.send(during, Delivery::PushBranch { item: number });
+            }
+            Why::Review { .. } | Why::Repair(_) if self.rng.chance(self.settings.script.hand_merges) => {
+                self.send(during, Delivery::HandMerge { item: number });
+            }
+            Why::Review { .. } | Why::Repair(_) | Why::Work | Why::Produce | Why::Turn => {}
         }
     }
 
@@ -545,10 +589,22 @@ impl World {
                 self.path("base moved by a person");
                 self.base_moved(repository, &base, head);
             }
+            Delivery::Release { item } => self.release(item, "a person"),
             Delivery::Message { item } => {
                 if !self.forge.is_closed(item) {
                     self.heard(item, Heard::Message);
                     self.log(format_args!("item {item}: a person writes"));
+                }
+            }
+            Delivery::HandMerge { item } => {
+                let pull = self.forge.pulls.get_mut(&item).expect("a pull request opened");
+                if pull.state == State::Open {
+                    pull.state = State::Merged;
+                    let (repository, base) = (pull.repository, pull.base.clone());
+                    let head = self.forge.move_base(repository, &base);
+                    self.path("merged by a person");
+                    self.log(format_args!("item {item}: a person merges it by hand"));
+                    self.base_moved(repository, &base, head);
                 }
             }
             Delivery::PushBranch { item } => {
@@ -586,7 +642,7 @@ impl World {
             decision: None,
         };
         let (number, _) = self.forge.create(None, item);
-        let mut life = Life::new(self.now);
+        let mut life = Life::new();
         life.inbox.push((Heard::Message, self.now));
         self.lives.insert(number, life);
         self.stats.items += 1;
@@ -637,7 +693,7 @@ impl World {
                     self.path("proposed");
                     self.life(number).phase = Phase::Proposed { attempt, outcome, relayed };
                     let at = self.later(self.settings.script.people);
-                    self.wire.send(at, Delivery::Proposal { item: number, attempt });
+                    self.send(at, Delivery::Proposal { item: number, attempt });
                     return;
                 }
                 let kind = kind(&outcome);
@@ -718,13 +774,16 @@ impl World {
                 Outcome::Verdict { head, verdict }
             }
             Why::Turn => {
+                if item.goal.is_some() {
+                    return self.step_turn(number);
+                }
                 if item.record.goal.is_none() {
                     if self.tasks < self.settings.tasks && self.rng.chance(script.tasks) {
                         self.tasks += 1;
                         self.serial += 1;
                         // The person answers, and the conversation goes on.
                         let at = self.later(script.people);
-                        self.wire.send(at, Delivery::Message { item: number });
+                        self.send(at, Delivery::Message { item: number });
                         return Outcome::Tasks(Box::new([script::task(&mut self.rng, &script, self.serial)]));
                     }
                     let invalid = !self.lives[&number].fixing && self.rng.chance(script.invalid);
@@ -745,6 +804,11 @@ impl World {
                 {
                     return Outcome::Steps(steps);
                 }
+                if let Some(held) = self.held_step(number)
+                    && self.rng.chance(script.releases)
+                {
+                    return Outcome::Release { step: held };
+                }
                 if room && self.tasks < self.settings.tasks && self.rng.chance(script.tasks) {
                     self.tasks += 1;
                     self.serial += 1;
@@ -753,6 +817,38 @@ impl World {
                 Outcome::Reply
             }
         }
+    }
+
+    /// The turn of a session step in a plan: its last, or a reply, after
+    /// which a person writes to it again. Before they do, the items it
+    /// subscribes to may change many times, which its rule does not name.
+    fn step_turn(&mut self, number: u64) -> Outcome {
+        let script = self.settings.script;
+        if self.rng.chance(script.finishes) {
+            return Outcome::Finished;
+        }
+        if self.rng.chance(script.noise) {
+            let now = self.now;
+            let events = usize::try_from(self.settings.limits.events).expect("fits") * 3;
+            let life = self.life(number);
+            for _ in 0..events {
+                life.inbox.push((Heard::Subscribed, now));
+            }
+            self.path("inbox: noise before a message");
+        }
+        let at = self.later(script.people);
+        self.send(at, Delivery::Message { item: number });
+        Outcome::Reply
+    }
+
+    /// The name of a held step of the goal of session `number`.
+    fn held_step(&self, number: u64) -> Option<Box<[u8]>> {
+        for item in self.forge.items.values() {
+            if item.goal == Some(number) && item.held.is_some() && item.closed.is_none() {
+                return Some(item.record.step.name.clone());
+            }
+        }
+        None
     }
 
     /// Steps added to the plan of the goal item `number` is under, or
@@ -783,10 +879,42 @@ impl World {
         (applied, drain(&mut out))
     }
 
+    /// Makes an engine action's writes. The referee may restart the engine
+    /// after some of them: the plan is asked again what is due, from the
+    /// forge as it is.
+    fn act(&mut self, number: u64, writes: Vec<Write>) {
+        if self.referee.restarts() && !writes.is_empty() {
+            let landed = self.landed(&writes);
+            self.write(number, Origin::Action, landed);
+            self.restart(number);
+            return;
+        }
+        self.write(number, Origin::Action, writes);
+    }
+
+    /// The writes that land before a restart: those before a drawn one.
+    fn landed(&mut self, writes: &[Write]) -> Vec<Write> {
+        let count = u64::try_from(writes.len()).expect("fits");
+        let landed = usize::try_from(self.rng.below(count)).expect("fits");
+        writes[..landed].to_vec()
+    }
+
+    /// The engine restarts: what it kept in memory and not on the forge is
+    /// lost (its alarms, whom it asked), and it reads the rest back.
+    fn restart(&mut self, number: u64) {
+        self.path("engine restarts");
+        self.log(format_args!("item {number}: the engine restarts"));
+        for life in self.lives.values_mut() {
+            life.alarm = None;
+            life.asked = false;
+        }
+    }
+
     /// Makes an outcome's writes, its record's last, and moves its item's
     /// inbox position past the events its run took. The referee may restart
-    /// the engine after the forge's writes: it applies the outcome again from
-    /// its start, finding what it made by its keys.
+    /// the engine after some of them, between the records' writes too: it
+    /// reads the item's record back, applies the outcome again from its
+    /// start, and finds what it made by its keys.
     #[expect(clippy::too_many_arguments, reason = "what an outcome's application needs, kept together")]
     fn commit(
         &mut self,
@@ -801,26 +929,28 @@ impl World {
     ) {
         let origin = Origin::Outcome { attempt, kind, accepted };
         let mut writes = writes;
-        if self.referee.restarts() {
-            let mut forge_writes = Vec::new();
-            for write in &writes {
-                match write {
-                    Write::Progress(_) | Write::Goal(_) => {}
-                    Write::Create { .. }
-                    | Write::OpenPull { .. }
-                    | Write::ReopenPull
-                    | Write::Merge { .. }
-                    | Write::Close
-                    | Write::DeleteBranch
-                    | Write::Release { .. } => forge_writes.push(write.clone()),
-                }
-            }
-            self.write(number, origin, forge_writes);
+        if self.referee.restarts() && !writes.is_empty() {
+            // Every write may have landed, and the engine not have noted the
+            // application done.
+            let count = u64::try_from(writes.len()).expect("fits");
+            let landed = usize::try_from(self.rng.below(count + 1)).expect("fits");
+            let all = landed == writes.len();
+            let landed = writes[..landed].to_vec();
+            let goal_landed = landed.iter().any(is_goal);
+            self.write(number, origin, landed);
+            self.restart(number);
             self.path("engine restarts as it applies");
-            self.log(format_args!("item {number}: the engine restarts"));
+            if goal_landed {
+                self.path("engine restarts between the goal's record and the step's");
+            }
             let (again, rewrites) = self.apply(number, outcome);
             match again {
                 Applied::Writes { .. } => writes = rewrites,
+                // Applied whole, it may find its step finished.
+                Applied::Stale(stale) if all => {
+                    self.path(format!("stale: {}", stale_name(stale)));
+                    writes = Vec::new();
+                }
                 Applied::Stale(_) | Applied::Invalid(_) => {
                     panic!("item {number}'s outcome applies again as it did: {again:?}")
                 }
@@ -952,7 +1082,7 @@ impl World {
             self.path("found by its key");
             return made;
         }
-        self.lives.insert(made, Life::new(self.now));
+        self.lives.insert(made, Life::new());
         self.stats.items += 1;
         self.observe(&Seen::Made(made));
         if goal.is_none() {
@@ -964,6 +1094,11 @@ impl World {
     }
 
     fn open_pull(&mut self, number: u64, base: &[u8]) {
+        if self.forge.pulls.contains_key(&number) {
+            // Keyed by its branch: the one opened before is found.
+            self.path("pull request found by its branch");
+            return;
+        }
         let repository = self.forge.item(number).repository;
         let pull = Pull {
             repository,
@@ -974,7 +1109,7 @@ impl World {
             changes: std::collections::BTreeSet::new(),
             conflicts: BTreeMap::new(),
         };
-        assert!(self.forge.pulls.insert(number, pull).is_none(), "item {number}'s pull request is opened once");
+        self.forge.pulls.insert(number, pull);
         self.path("pull request opened");
         self.observe(&Seen::PullOpened(number));
         self.watch(number, true);
@@ -988,20 +1123,24 @@ impl World {
         let pull = &self.forge.pulls[&number];
         let (repository, base_name) = (pull.repository, pull.base.clone());
         let base = self.forge.base(repository, &base_name);
-        let at = self.later(script.ci);
-        self.wire.send(at, Delivery::Ci { item: number, head });
+        if self.rng.chance(script.ci_silent) {
+            self.path("ci: silent");
+        } else {
+            let at = self.later(script.ci);
+            self.send(at, Delivery::Ci { item: number, head });
+        }
         let at = self.later(script.mergeable);
-        self.wire.send(at, Delivery::Mergeable { item: number, head, base });
+        self.send(at, Delivery::Mergeable { item: number, head, base });
         if !opened {
             return;
         }
         if self.rng.chance(script.closes) {
             let at = self.later(script.people);
-            self.wire.send(at, Delivery::ClosePull { item: number });
+            self.send(at, Delivery::ClosePull { item: number });
         }
         if self.rng.chance(script.pushes) {
             let at = self.later(script.people);
-            self.wire.send(at, Delivery::PushBase { repository, base: base_name });
+            self.send(at, Delivery::PushBase { repository, base: base_name });
         }
     }
 
@@ -1011,15 +1150,18 @@ impl World {
         pull.ci.insert(head, passed);
         self.path(if passed { "ci: passed" } else { "ci: failed" });
         let needed = approvals_needed(&self.forge.item(number).record.step);
-        if passed && needed > 0 {
+        let drive_by = self.rng.chance(self.settings.script.changes_asked);
+        if passed && (needed > 0 || drive_by) {
             let at = self.later(self.settings.script.people);
-            self.wire.send(at, Delivery::Review { item: number, head });
+            self.send(at, Delivery::Review { item: number, head });
         }
     }
 
     fn review(&mut self, number: u64, head: u64) {
-        let asks = self.rng.chance(self.settings.script.changes_asked);
         let needed = approvals_needed(&self.forge.item(number).record.step);
+        // Nobody needs to approve a change an agent reviews: a person who
+        // reviews it anyway asks for changes.
+        let asks = needed == 0 || self.rng.chance(self.settings.script.changes_asked);
         let pull = self.forge.pulls.get_mut(&number).expect("a pull request opened");
         if pull.state != State::Open {
             return;
@@ -1057,29 +1199,40 @@ impl World {
         for item in self.forge.open_into(repository, base) {
             let pushed = self.forge.item(item).branch.expect("a pull request has a head");
             let at = self.later(self.settings.script.mergeable);
-            self.wire.send(at, Delivery::Mergeable { item, head: pushed.head, base: head });
+            self.send(at, Delivery::Mergeable { item, head: pushed.head, base: head });
         }
     }
 
     /// The goal of item `number` releases its step named `step`, if it is
-    /// held: the plan says what the release writes.
+    /// held.
     fn release_step(&mut self, number: u64, step: &[u8]) {
         let goal = self.forge.item(number).goal.unwrap_or(number);
-        let Some(held) = translate::named(&self.forge, goal, step) else {
-            return;
-        };
-        if self.forge.item(held).held.is_none() {
+        if let Some(held) = translate::named(&self.forge, goal, step) {
+            self.release(held, "its goal's session");
+        }
+    }
+
+    /// Releases item `held`, if it is held: the plan says what the release
+    /// writes. A person who releases a change that stalled runs its CI
+    /// again.
+    fn release(&mut self, held: u64, by: &str) {
+        if self.forge.item(held).held.is_none() || self.forge.is_closed(held) {
             return;
         }
+        let stalled = self.forge.item(held).held == Some("stalled");
         let facts = translate::facts(&self.forge, held, self.lives[&held].snapshot, false);
         let mut out = Queue::with_capacity(plan::max_out(&self.settings.limits));
         plan::release(&self.env, &self.forge.item(held).record, &facts, &mut out);
         let writes = drain(&mut out);
         self.forge.item_mut(held).held = None;
         self.life(held).phase = Phase::Idle;
-        self.path("released");
-        self.log(format_args!("item {held}: released"));
+        self.path(format!("released by {by}"));
+        self.log(format_args!("item {held}: released by {by}"));
         self.write(held, Origin::Action, writes);
+        if stalled && let Some(pushed) = self.forge.item(held).branch {
+            let at = self.later(self.settings.script.ci);
+            self.send(at, Delivery::Ci { item: held, head: pushed.head });
+        }
     }
 
     /// Closes item `number`: its step is done. Its parent and the steps after
@@ -1101,6 +1254,12 @@ impl World {
         self.observe(&Seen::Ended(number));
         if let Some(parent) = self.forge.item(number).parent {
             self.heard(parent, Heard::Child);
+        }
+        let released = self.releases.get(&number).copied().unwrap_or(0);
+        if released < 2 && self.rng.chance(self.settings.script.releases) {
+            self.releases.insert(number, released + 1);
+            let at = self.later(self.settings.script.people);
+            self.send(at, Delivery::Release { item: number });
         }
     }
 
@@ -1178,6 +1337,21 @@ fn drain(out: &mut Queue<Write>) -> Vec<Write> {
         writes.push(write);
     }
     writes
+}
+
+/// Whether `write` is of a goal's record.
+fn is_goal(write: &Write) -> bool {
+    match write {
+        Write::Goal(_) => true,
+        Write::Create { .. }
+        | Write::OpenPull { .. }
+        | Write::ReopenPull
+        | Write::Merge { .. }
+        | Write::Close
+        | Write::DeleteBranch
+        | Write::Progress(_)
+        | Write::Release { .. } => false,
+    }
 }
 
 fn kind(outcome: &Outcome) -> Kind {

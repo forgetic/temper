@@ -10,7 +10,7 @@
 //!          time: done once it has passed, after the last dependency done
 //! session  (it finished, or supervises a goal whose steps are all done)
 //!            ─► its children done ─► done
-//!          gate: accepted? ─► its first turn, or woken ─► run
+//!          gate: accepted? ─► its first turn, a retry, or woken ─► run
 //! change   no branch ─► run: produce
 //!          branch, no pull request ─► open it
 //!          pull request merged ─► done | closed unmerged ─► hold
@@ -303,7 +303,11 @@ fn session(
     if let Some(due) = acceptance(record, facts) {
         return due;
     }
-    if record.progress.last_run.is_some() && !facts.woken {
+    // Its first turn needs no wake, and nor does a turn claimed whose
+    // outcome was never applied (its run failed, or the engine restarted):
+    // the retry takes the same events.
+    let retry = record.progress.running.is_some();
+    if record.progress.last_run.is_some() && !retry && !facts.woken {
         return nothing(Waits::Wake);
     }
     let resume = facts.snapshot

@@ -47,7 +47,11 @@ fn changes_are_repaired_until_they_land_or_run_out_of_repairs() {
         assert!(path(&stats, &format!("run: repair, {repair}")) > 0, "{repair}: {stats:?}");
     }
     assert!(path(&stats, "merged") > 0, "{stats:?}");
-    assert!(ending(&stats, "goal: done") + ending(&stats, "goal: held, repairs") == 4, "{stats:?}");
+    assert!(
+        ending(&stats, "goal: done") + ending(&stats, "goal: held, repairs") + ending(&stats, "goal: held, rebases")
+            == 4,
+        "{stats:?}"
+    );
 }
 
 #[test]
@@ -74,7 +78,7 @@ fn invalid_plans_are_feedback_and_fixed() {
 fn an_application_interrupted_by_a_restart_finds_what_it_made() {
     let calm = Settings::calm(5);
     let settings = Settings {
-        restarts: 1000,
+        restarts: 500,
         script: Script { grows: 500, growth: 500, tasks: 500, ..calm.script },
         tasks: 2,
         ..calm
@@ -102,18 +106,21 @@ fn a_seed_replays_to_the_same_run() {
 }
 
 /// Every way a goal or a task ends.
-const ENDINGS: [&str; 7] = [
+const ENDINGS: [&str; 10] = [
     "goal: done",
     "goal: held, rejected",
     "goal: held, repairs",
+    "goal: held, rebases",
     "goal: held, pull request closed",
     "goal: held, escalated",
+    "goal: held, stalled",
     "goal: held, attempts",
     "task: done",
+    "task: held, escalated",
 ];
 
 /// The paths a sweep takes, each at least once.
-const PATHS: [&str; 18] = [
+const PATHS: [&str; 32] = [
     "run: work",
     "run: produce",
     "run: review",
@@ -123,15 +130,29 @@ const PATHS: [&str; 18] = [
     "run: repair, base moved",
     "run: repair, conflicts",
     "run: resumes a snapshot",
+    "outcome: finished",
+    "outcome: release",
+    "outcome: tasks",
     "invalid",
+    "invalid once accepted",
     "stale: moved",
+    "stale: landed",
+    "stale: closed",
     "proposal rejected",
     "growth: within",
     "growth: accepted beyond",
+    "engine restarts",
     "engine restarts as it applies",
+    "engine restarts between the goal's record and the step's",
     "found by its key",
+    "pull request reopened",
+    "decision: accepted",
     "decision: rejected",
-    "outcome: tasks",
+    "released by a person",
+    "released by its goal's session",
+    "ci: silent",
+    "inbox: noise before a message",
+    "woken by a message behind many events",
 ];
 
 #[test]

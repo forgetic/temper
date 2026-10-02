@@ -19,6 +19,11 @@ pub struct Script {
     pub changes: u32,
     /// A step is a wait.
     pub waits: u32,
+    /// A step is a session.
+    pub sessions: u32,
+    /// A plan lists its steps shuffled, some before the steps they come
+    /// after.
+    pub shuffles: u32,
     /// An agent step may grow its plan.
     pub grows: u32,
     /// A step comes after each step before it.
@@ -45,6 +50,9 @@ pub struct Script {
     pub run: Span,
     /// CI fails on a head.
     pub ci_fails: u32,
+    /// CI never reports on a head, until a person releases the change it
+    /// stalled and runs it again.
+    pub ci_silent: u32,
     /// How long CI takes on a head.
     pub ci: Span,
     /// A head conflicts with its base.
@@ -63,6 +71,15 @@ pub struct Script {
     pub closes: u32,
     /// A person pushes to a branch a pull request lands into while it is open.
     pub pushes: u32,
+    /// A person merges a change by hand while a run works on it.
+    pub hand_merges: u32,
+    /// A person releases a held item, at most twice for each.
+    pub releases: u32,
+    /// A session step's inbox fills with events its rule does not name
+    /// before a person writes to it.
+    pub noise: u32,
+    /// A session step's turn is its last.
+    pub finishes: u32,
 }
 
 /// The deployment: two repositories; changes land into `main` or `feat` of
@@ -100,6 +117,14 @@ pub const SESSION_WAKE: Wake = Wake {
     on: Sources { own: false, related: true, subscribed: false, messages: true },
     every: None,
     batch: Batch { count: 2, age: Some(Duration::from_secs(1_800)) },
+};
+
+/// A session step in a plan wakes on a person's message, and on the items
+/// it subscribes to only in batches of many.
+const STEP_SESSION_WAKE: Wake = Wake {
+    on: Sources { own: false, related: false, subscribed: false, messages: true },
+    every: None,
+    batch: Batch { count: 1, age: None },
 };
 
 fn charter(rng: &mut Rng) -> Charter {
@@ -145,9 +170,21 @@ pub fn plan(rng: &mut Rng, script: &Script, steps_most: u32, dependencies: u32, 
                 after.push(earlier.clone());
             }
         }
-        let step = drawn(rng, script, name.clone(), after, true);
+        let step = if rng.chance(script.sessions) {
+            session_step(rng, name.clone(), after)
+        } else {
+            drawn(rng, script, name.clone(), after, true)
+        };
         names.push(name);
         steps.push(step);
+    }
+    if rng.chance(script.shuffles) {
+        // Listed in another order, a step may come before those it comes
+        // after.
+        for index in (1..steps.len()).rev() {
+            let other = usize::try_from(rng.below(u64::try_from(index + 1).expect("fits"))).expect("fits");
+            steps.swap(index, other);
+        }
     }
     if invalid && let Some(first) = steps.first_mut() {
         let wrong = if rng.chance(500) { first.name.clone() } else { bytes("nowhere") };
@@ -160,11 +197,22 @@ pub fn plan(rng: &mut Rng, script: &Script, steps_most: u32, dependencies: u32, 
             agents: 2,
             changes: 2,
             waits: 1,
-            sessions: 0,
+            sessions: 1,
             repositories: Box::new([Repository(0)]),
             into: Box::new([Target { repository: Repository(0), base: bytes("feat") }]),
         },
         budget,
+    }
+}
+
+/// A session step named `name`, coming after `after`.
+fn session_step(rng: &mut Rng, name: Box<[u8]>, after: Vec<Box<[u8]>>) -> Step {
+    Step {
+        name,
+        repository: Repository(0),
+        work: Work::Session(SessionSpec { charter: charter(rng), resume: Resume::Default, wake: STEP_SESSION_WAKE }),
+        after: after.into_boxed_slice(),
+        gates: Box::new([]),
     }
 }
 
