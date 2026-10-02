@@ -1,7 +1,8 @@
-use temper_lib::{Deadlines, Duration, List, Slab};
+use temper_lib::{Deadlines, Duration, List, Queue, Slab};
 
 use crate::budget::Budget;
 use crate::call::Calls;
+use crate::facts::Fact;
 use crate::prepare::Guide;
 use crate::run::{Alarm, Conversation, Run};
 
@@ -54,6 +55,9 @@ pub struct Limits {
     pub check_timeout: Duration,
     /// The most bytes of a failed check's output the LLM is shown: its tail.
     pub check_tail: u32,
+    /// Facts kept until the parent drains them. Beyond them, facts are
+    /// dropped and counted.
+    pub facts: u32,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
@@ -78,5 +82,6 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // A call landing a change holds it; a sub-agent's call, its answer.
     let call = limits.outcome_bytes.max(u64::from(limits.answer_bytes));
     let calls = Calls::worst_case(limits.calls)?.checked_add(u64::from(limits.calls).checked_mul(call)?)?;
-    runs.checked_add(conversations)?.checked_add(alarms)?.checked_add(held)?.checked_add(calls)
+    let facts = Queue::<Fact>::worst_case(limits.facts)?;
+    runs.checked_add(conversations)?.checked_add(alarms)?.checked_add(held)?.checked_add(calls)?.checked_add(facts)
 }

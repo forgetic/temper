@@ -102,6 +102,7 @@ impl Settings {
                 outcome_bytes: 4096,
                 check_timeout: Duration::from_secs(600),
                 check_tail: 256,
+                facts: 64,
             },
             worker: worker::Config {
                 jobs: 4,
@@ -366,6 +367,8 @@ pub struct World {
     landing: BTreeSet<Token>,
     /// The states cancels and deadlines found runs in, and how many times.
     cancel_cells: BTreeMap<&'static str, u32>,
+    /// The facts the run told, by kind.
+    facts: BTreeMap<&'static str, u32>,
     deadline_cells: BTreeMap<&'static str, u32>,
     iteration: u64,
     /// The run the last request answered, for the iteration's attribution;
@@ -420,6 +423,7 @@ impl World {
             conversation_of_peer: BTreeMap::new(),
             landing: BTreeSet::new(),
             cancel_cells: BTreeMap::new(),
+            facts: BTreeMap::new(),
             deadline_cells: BTreeMap::new(),
             iteration: 0,
             just_answered: None,
@@ -548,6 +552,11 @@ impl World {
         }
         while let Some(request) = self.worker_out.pop() {
             self.worker_request(request);
+        }
+
+        // The facts the run told, drained at the world's pace.
+        while let Some(fact) = self.run.pop_fact() {
+            self.fact(fact);
         }
 
         // The reclaim point.
@@ -1013,6 +1022,33 @@ impl World {
         }
     }
 
+    /// A fact the run told: of a run it admitted, and a conversation it
+    /// opened.
+    fn fact(&mut self, fact: run::facts::Fact) {
+        use run::facts::Fact;
+        let (Fact::Admitted { run }
+        | Fact::Prepared { run, .. }
+        | Fact::Opened { run, .. }
+        | Fact::Ended { run, .. }
+        | Fact::Called { run, .. }
+        | Fact::Returned { run, .. }
+        | Fact::CheckStarted { run, .. }
+        | Fact::CheckFinished { run, .. }
+        | Fact::Pushed { run, .. }
+        | Fact::Answered { run, .. }) = fact;
+        assert!(self.views.contains_key(&run), "a fact is of a run that was admitted");
+        if let Fact::Opened { conversation, .. } | Fact::Ended { conversation, .. } = fact {
+            assert!(self.opens.contains_key(&conversation), "a fact is of a conversation that was opened");
+        }
+        *self.facts.entry(kind(&fact)).or_insert(0) += 1;
+    }
+
+    /// The facts the run told, by kind, and how many it dropped.
+    #[must_use]
+    pub fn facts(&self) -> (&BTreeMap<&'static str, u32>, u64) {
+        (&self.facts, self.run.facts_lost())
+    }
+
     /// Hands the run `event`, and with the configured chance, the worker's
     /// cancel of its run right before or right after it.
     fn hand(&mut self, event: run::Event) {
@@ -1168,6 +1204,23 @@ impl World {
 
     fn log(&mut self, line: &str) {
         self.trace.push(format!("{:>16} {line}", self.now.as_nanos()));
+    }
+}
+
+/// A fact's kind, to count it by.
+fn kind(fact: &run::facts::Fact) -> &'static str {
+    use run::facts::Fact;
+    match fact {
+        Fact::Admitted { .. } => "admitted",
+        Fact::Prepared { .. } => "prepared",
+        Fact::Opened { .. } => "opened",
+        Fact::Ended { .. } => "ended",
+        Fact::Called { .. } => "called",
+        Fact::Returned { .. } => "returned",
+        Fact::CheckStarted { .. } => "check started",
+        Fact::CheckFinished { .. } => "check finished",
+        Fact::Pushed { .. } => "pushed",
+        Fact::Answered { .. } => "answered",
     }
 }
 

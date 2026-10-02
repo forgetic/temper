@@ -108,7 +108,9 @@ pub enum Request {
     Abort { owner: Token },
     /// To the worker: checks of the run it names `worker` are running until
     /// `deadline` at the latest, so its watchdog waits that long. A notice,
-    /// with no terminal.
+    /// with no terminal. It is a request, not only a fact (`CheckStarted`),
+    /// because the watchdog decides on it, and nothing may depend on whether
+    /// a fact is kept.
     Checking { worker: Token, deadline: Time },
     /// To the worker, a host call: commit what the checkout of the run it
     /// names `worker` holds, exactly as it is, and push it, with `change`'s

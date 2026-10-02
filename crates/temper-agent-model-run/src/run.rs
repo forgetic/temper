@@ -98,6 +98,7 @@ use crate::boundary::{
 use crate::budget::{Exhausted, Spend};
 use crate::call::{Call, Calls, Work};
 use crate::charter::{self, Charter, Families, count};
+use crate::facts::{Asked, Fact};
 use crate::land::{self, Settled};
 use crate::limits::Limits;
 use crate::model::Model;
@@ -201,7 +202,7 @@ pub(crate) fn start(
     charter: Charter,
     out: &mut Queue<Request>,
 ) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+    let Model { runs, conversations, calls: _, alarms, facts } = model;
     // A charter that can never fit is invalid, room or not: busy invites a
     // retry.
     if let Err(invalid) = charter::check(&charter, &env.limits) {
@@ -228,6 +229,7 @@ pub(crate) fn start(
         state: State::Closed,
     };
     let id = runs.insert(run).expect("checked for room above");
+    facts.about(id.token());
     let families = Families::of(&runs.get(id).expect("inserted above").charter.grants);
     let conversation =
         Conversation { run: id, asker: None, families, depth: 0, spent: Spend::ZERO, calls: 0, phase: Phase::Pending };
@@ -242,8 +244,9 @@ pub(crate) fn start(
 }
 
 pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, read: Read, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+    let Model { runs, conversations, calls: _, alarms, facts } = model;
     let id = Id::<Run>::from_token(owner);
+    facts.about(owner);
     let run = runs.get_mut(id).expect("a run lives until its look in flight has ended");
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
@@ -260,8 +263,9 @@ pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, read: Rea
 }
 
 pub(crate) fn probed(model: &mut Model, env: &Env<Limits>, owner: Token, executable: bool, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+    let Model { runs, conversations, calls: _, alarms, facts } = model;
     let id = Id::<Run>::from_token(owner);
+    facts.about(owner);
     let run = runs.get_mut(id).expect("a run lives until its look in flight has ended");
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
@@ -278,12 +282,13 @@ pub(crate) fn probed(model: &mut Model, env: &Env<Limits>, owner: Token, executa
 }
 
 pub(crate) fn cancel(model: &mut Model, run: Token, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+    let Model { runs, conversations, calls: _, alarms, facts } = model;
     let id = Id::<Run>::from_token(run);
     // A cancel travels down, so it may name a run that has answered and gone.
     let Some(run) = runs.get_mut(id) else {
         return;
     };
+    facts.about(id.token());
     let cancelled = Ending::Failed(Failure::Cancelled);
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
@@ -303,6 +308,7 @@ pub(crate) fn cancel(model: &mut Model, run: Token, out: &mut Queue<Request>) {
 pub(crate) fn started(model: &mut Model, conversation: Token, peer: Token, out: &mut Queue<Request>) {
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = model.conversations.get_mut(id).expect("a conversation lives until it has ended");
+    model.facts.about(conversation.run.token());
     let phase = mem::replace(&mut conversation.phase, Phase::Closed);
     conversation.phase = match phase {
         Phase::Opening => Phase::Running { peer },
@@ -321,9 +327,10 @@ pub(crate) fn yielded(
     text: &[u8],
     out: &mut Queue<Request>,
 ) {
-    let Model { runs, conversations, calls, alarms } = model;
+    let Model { runs, conversations, calls, alarms, facts } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get(id).expect("a conversation lives until it has ended");
+    facts.about(conversation.run.token());
     let peer = match &conversation.phase {
         Phase::Running { peer } => *peer,
         // The yield crossed the run's close: there is nothing left to decide.
@@ -366,7 +373,7 @@ pub(crate) fn yielded(
 }
 
 pub(crate) fn used(model: &mut Model, conversation: Token, spend: Spend, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+    let Model { runs, conversations, calls: _, alarms, facts } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get_mut(id).expect("a conversation lives until it has ended");
     match &conversation.phase {
@@ -377,6 +384,7 @@ pub(crate) fn used(model: &mut Model, conversation: Token, spend: Spend, out: &m
     }
     conversation.spent = conversation.spent.saturating_add(spend);
     let (run_id, child) = (conversation.run, conversation.asker.is_some());
+    facts.about(run_id.token());
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     run.spent = run.spent.saturating_add(spend);
     let state = mem::replace(&mut run.state, State::Closed);
@@ -411,7 +419,7 @@ pub(crate) fn delegated(
     ask: Ask,
     out: &mut Queue<Request>,
 ) {
-    let Model { runs, conversations, calls, alarms } = model;
+    let Model { runs, conversations, calls, alarms, facts } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get(id).expect("a conversation lives until it has ended");
     match &conversation.phase {
@@ -421,6 +429,12 @@ pub(crate) fn delegated(
         }
     }
     let run_id = conversation.run;
+    facts.about(run_id.token());
+    let asked = match &ask {
+        Ask::Finish { .. } => Asked::Finish,
+        Ask::SubAgent { .. } => Asked::SubAgent,
+    };
+    facts.push(Fact::Called { run: run_id.token(), conversation: id.token(), call, ask: asked });
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
@@ -465,6 +479,7 @@ pub(crate) fn withdraw(model: &mut Model, conversation: Token, call: Token, out:
         return;
     };
     let call = model.calls.get_mut(id).expect("a named call lives");
+    model.facts.about(call.run.token());
     match &mut call.work {
         Work::Landing(landing) => land::withdraw(landing, id, out),
         Work::Child(child) => {
@@ -479,6 +494,8 @@ pub(crate) fn checked(model: &mut Model, env: &Env<Limits>, owner: Token, ran: R
     let id = Id::<Call>::from_token(owner);
     let call = model.calls.get_mut(id).expect("a call lives until it returns");
     let run = model.runs.get(call.run).expect("a run lives until its calls have returned");
+    model.facts.about(call.run.token());
+    model.facts.push(Fact::CheckFinished { run: call.run.token(), exit: ran.exit });
     let settled = match &mut call.work {
         Work::Landing(landing) => land::checked(landing, id, call.owner, run, may_finish(&run.state), ran, env, out),
         Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
@@ -489,6 +506,7 @@ pub(crate) fn checked(model: &mut Model, env: &Env<Limits>, owner: Token, ran: R
 pub(crate) fn aborted(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
     let id = Id::<Call>::from_token(owner);
     let call = model.calls.get_mut(id).expect("a call lives until it returns");
+    model.facts.about(call.run.token());
     let settled = match &mut call.work {
         Work::Landing(landing) => land::aborted(landing, call.owner, out),
         Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
@@ -500,6 +518,8 @@ pub(crate) fn pushed(model: &mut Model, owner: Token, push: Push, out: &mut Queu
     let id = Id::<Call>::from_token(owner);
     let call = model.calls.get_mut(id).expect("a call lives until it returns");
     let run = model.runs.get(call.run).expect("a run lives until its calls have returned");
+    model.facts.about(call.run.token());
+    model.facts.push(Fact::Pushed { run: call.run.token(), push });
     let settled = match &mut call.work {
         Work::Landing(landing) => land::pushed(landing, call.owner, may_finish(&run.state), push, out),
         Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
@@ -510,6 +530,7 @@ pub(crate) fn pushed(model: &mut Model, owner: Token, push: Push, out: &mut Queu
 pub(crate) fn host_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
     let id = Id::<Call>::from_token(owner);
     let call = model.calls.get_mut(id).expect("a call lives until it returns");
+    model.facts.about(call.run.token());
     let settled = match &mut call.work {
         Work::Landing(landing) => land::host_cancelled(landing, call.owner, out),
         Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
@@ -518,7 +539,7 @@ pub(crate) fn host_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Re
 }
 
 pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spend, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls, alarms } = model;
+    let Model { runs, conversations, calls, alarms, facts } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get_mut(id).expect("a conversation lives until it has ended");
     assert!(conversation.calls == 0, "a conversation ends once its calls have returned");
@@ -531,6 +552,8 @@ pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spe
     // them is counted now.
     let unaccounted = spend.saturating_sub(conversation.spent);
     let (run_id, asker) = (conversation.run, conversation.asker);
+    facts.about(run_id.token());
+    facts.push(Fact::Ended { run: run_id.token(), conversation: id.token(), end });
     conversations.retire(id);
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     run.spent = run.spent.saturating_add(unaccounted);
@@ -564,8 +587,9 @@ pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spe
 }
 
 pub(crate) fn deadline(model: &mut Model, id: Id<Run>, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+    let Model { runs, conversations, calls: _, alarms, facts } = model;
     let run = runs.get_mut(id).expect("an alarm is cancelled before its run closes");
+    facts.about(id.token());
     let failure = Failure::Budget(Exhausted::Time);
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
@@ -580,6 +604,22 @@ pub(crate) fn deadline(model: &mut Model, id: Id<Run>, out: &mut Queue<Request>)
         }
     };
     follow(runs, alarms, id);
+}
+
+/// How deep the conversation `conversation` is, and for main what its run
+/// found in its checkout (its guides, and its repositories with checks), for
+/// their facts.
+pub(crate) fn opened(
+    runs: &Slab<Run>,
+    conversations: &Slab<Conversation>,
+    conversation: Token,
+) -> (u32, Option<(u32, u32)>) {
+    let conversation = conversations.get(Id::from_token(conversation)).expect("a conversation is told of as it opens");
+    if conversation.depth > 0 {
+        return (conversation.depth, None);
+    }
+    let run = runs.get(conversation.run).expect("a run outlives its conversations");
+    (0, Some((run.found.guides.len(), run.found.checks.len())))
 }
 
 /// What a run's state implies, applied after every transition: whether its
@@ -614,7 +654,7 @@ fn may_finish(state: &State) -> bool {
 /// The landing of the call `id` has settled, as `settled` says: the run goes
 /// on, or finishes.
 fn settle(model: &mut Model, id: Id<Call>, settled: Settled, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls, alarms } = model;
+    let Model { runs, conversations, calls, alarms, facts: _ } = model;
     if settled == Settled::Going {
         return;
     }

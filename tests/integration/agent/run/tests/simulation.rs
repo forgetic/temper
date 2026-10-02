@@ -395,6 +395,7 @@ fn noisy(seed: u64) -> Settings {
         depth: small(pick(0, 3)),
         run_conversations: small(pick(1, 4)),
         answer_bytes: small(pick(0, 200)),
+        facts: small(pick(0, 64)),
         ..run
     };
     let worker = Config { agents: small(pick(0, 1000)), ..worker };
@@ -538,4 +539,24 @@ fn a_cancelled_run_closes_its_sub_agents_down_the_tree() {
             "{answer:?}"
         );
     }
+}
+
+/// The facts a run tells say what it did, and whether they are kept changes
+/// nothing: a world whose fact queue keeps none runs as one whose queue has
+/// room for every fact.
+#[test]
+fn facts_tell_what_runs_did_and_nothing_depends_on_them() {
+    let settings = asking(40);
+    let settings = Settings { checkout: Checkouts { checks: 1000, ..settings.checkout }, ..settings };
+    let roomy = settled(&Settings { run: Limits { facts: 100_000, ..settings.run }, ..settings });
+    let tight = settled(&Settings { run: Limits { facts: 0, ..settings.run }, ..settings });
+    assert_eq!(roomy.trace(), tight.trace());
+    let (told, lost) = roomy.facts();
+    let stats = roomy.stats();
+    assert_eq!(lost, 0);
+    assert_eq!(told.get("opened"), Some(&stats.opens));
+    assert_eq!(told.get("admitted"), told.get("answered"), "every run admitted answers once: {told:?}");
+    assert!(told.get("called").is_some_and(|called| *called == told["returned"]), "every call returns: {told:?}");
+    let (_, lost) = tight.facts();
+    assert!(lost > 0, "a tight queue drops facts");
 }

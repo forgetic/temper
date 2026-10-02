@@ -5,6 +5,7 @@ use alloc::boxed::Box;
 use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
+use crate::facts::{Answered, Asked, Fact, Return};
 use crate::outcome::{
     Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Problem, Problems, Verdict, VerdictRule,
 };
@@ -50,6 +51,7 @@ const LIMITS: Limits = Limits {
     outcome_bytes: 1024,
     check_timeout: Duration::from_secs(300),
     check_tail: 4096,
+    facts: 64,
 };
 
 /// The model, its environment, and room for one step's output.
@@ -1038,4 +1040,59 @@ fn a_sub_agent_that_spends_past_the_budget_winds_the_run_down() {
     drop(h.step(Event::Ended { conversation: child, end: End::Closed, spend: spend(BUDGET.input + 1) }));
     let emitted = h.step(Event::Ended { conversation: main, end: End::Closed, spend: Spend::ZERO });
     assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Input), spend(BUDGET.input + 1))));
+}
+
+// Facts.
+
+/// The facts the model holds, oldest first.
+fn facts(h: &mut Harness) -> Box<[Fact]> {
+    let mut facts = List::with_capacity(LIMITS.facts);
+    for _ in 0..LIMITS.facts {
+        let Some(fact) = h.model.pop_fact() else { break };
+        facts.push(fact).expect("room for every fact kept");
+    }
+    facts.into_boxed()
+}
+
+#[test]
+fn a_run_tells_what_it_did_as_content_free_facts() {
+    let mut h = Harness::new(LIMITS);
+    let emitted = h.start(1, agents());
+    let [Request::Admitted { run, .. }, Request::Read { .. }] = &*emitted else { panic!("expected a read") };
+    let run = *run;
+    drop(h.step(Event::Read { owner: run, read: Read::Bytes { bytes: bytes(b"Be kind."), whole: true } }));
+    let main = Token::new(0);
+    drop(h.step(Event::Started { conversation: main, peer: Token::new(100) }));
+    let (child, _) = h.child(main, 7, families(true, false, false), 101);
+    drop(h.step(Event::Yielded { conversation: child, stop: Stop::EndTurn, text: bytes(b"done") }));
+    drop(h.step(Event::Ended { conversation: child, end: End::Closed, spend: Spend::ZERO }));
+    drop(h.step(finish(main, 8, verdict(b"approve", Box::new([])))));
+    drop(h.step(Event::Ended { conversation: main, end: End::Closed, spend: Spend::ZERO }));
+    let told = facts(&mut h);
+    let expected = [
+        Fact::Admitted { run },
+        Fact::Prepared { run, guides: 1, checks: 0 },
+        Fact::Opened { run, conversation: main, depth: 0 },
+        Fact::Called { run, conversation: main, call: Token::new(7), ask: Asked::SubAgent },
+        Fact::Opened { run, conversation: child, depth: 1 },
+        Fact::Ended { run, conversation: child, end: End::Closed },
+        Fact::Returned { run, call: Token::new(7), result: Return::Answered },
+        Fact::Called { run, conversation: main, call: Token::new(8), ask: Asked::Finish },
+        Fact::Returned { run, call: Token::new(8), result: Return::Accepted },
+        Fact::Ended { run, conversation: main, end: End::Closed },
+        Fact::Answered { run, answer: Answered::Accepted },
+    ];
+    assert_eq!(&*told, &expected);
+    assert_eq!(h.model.facts_lost(), 0);
+}
+
+#[test]
+fn facts_that_do_not_fit_are_dropped_and_counted_and_change_nothing() {
+    let mut h = Harness::new(Limits { facts: 2, ..LIMITS });
+    let (run, conversation) = h.running(1, 100);
+    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, cancelled()));
+    assert_eq!(facts(&mut h).len(), 2);
+    assert_eq!(h.model.facts_lost(), 3, "opened, ended and answered did not fit");
 }

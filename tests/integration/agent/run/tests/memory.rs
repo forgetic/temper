@@ -100,6 +100,7 @@ const LIMITS: Limits = Limits {
     outcome_bytes: 256,
     check_timeout: Duration::from_secs(60),
     check_tail: 1024,
+    facts: 16,
 };
 
 /// A charter that holds exactly `held` bytes, as the run counts them: one of

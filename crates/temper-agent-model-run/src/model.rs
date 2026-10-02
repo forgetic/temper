@@ -4,6 +4,7 @@ use temper_lib::{Deadlines, Env, Queue, Slab, Time};
 
 use crate::boundary::{Event, Request};
 use crate::call::Calls;
+use crate::facts::{self, Fact, Facts};
 use crate::limits::Limits;
 use crate::run::{self, Alarm, Conversation, Run};
 
@@ -21,6 +22,7 @@ pub struct Model {
     /// Calls of conversations to the run.
     pub(crate) calls: Calls,
     pub(crate) alarms: Deadlines<Alarm>,
+    pub(crate) facts: Facts,
 }
 
 impl Model {
@@ -32,6 +34,7 @@ impl Model {
             conversations: Slab::with_capacity(limits.conversations),
             calls: Calls::with_capacity(limits.calls),
             alarms: Deadlines::with_capacity(limits.runs),
+            facts: Facts::with_capacity(limits.facts),
         }
     }
 
@@ -70,6 +73,19 @@ impl Model {
         self.calls.len()
     }
 
+    /// The oldest fact not yet drained. The parent drains them at its own
+    /// pace; what does not fit meanwhile is dropped and counted.
+    pub fn pop_fact(&mut self) -> Option<Fact> {
+        self.facts.pop()
+    }
+
+    /// How many facts were dropped for want of room, since the model was
+    /// made.
+    #[must_use]
+    pub fn facts_lost(&self) -> u64 {
+        self.facts.lost()
+    }
+
     /// The reclaim point: frees what closed in this iteration.
     pub fn reclaim(&mut self) {
         self.runs.reclaim();
@@ -80,6 +96,13 @@ impl Model {
 
 /// Handles one event, emitting at most [`MAX_OUT`] requests.
 pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
+    model.facts.begin();
+    let mark = out.len();
+    take(model, env, event, out);
+    facts::tell(&mut model.facts, &model.runs, &model.conversations, out, mark);
+}
+
+fn take(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Start { reply_to, worker, charter } => run::start(model, env, reply_to, worker, charter, out),
         Event::Cancel { run } => run::cancel(model, run, out),
@@ -106,7 +129,10 @@ pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     let Some(alarm) = model.alarms.expire(env.now) else {
         return;
     };
+    model.facts.begin();
+    let mark = out.len();
     match alarm {
         Alarm::Deadline { run } => run::deadline(model, run, out),
     }
+    facts::tell(&mut model.facts, &model.runs, &model.conversations, out, mark);
 }
