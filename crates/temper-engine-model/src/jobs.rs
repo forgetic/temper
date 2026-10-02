@@ -1305,7 +1305,7 @@ fn written(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<f
         }
         // Its base moved under it since the working set read it: the head
         // conflicts, as if it had been read so, and is the change's to
-        // repair (engine-model.md, 5.1).
+        // repair (engine-model.md, 5.3).
         Err(forge::Failure::Forge(api::Error::Conflict)) if merging(model, id).is_some() => {
             let head = merging(model, id);
             get_mut(model, id).conflicted = head;

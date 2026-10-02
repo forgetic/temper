@@ -341,8 +341,10 @@ fn a_forge_that_fills_fails_the_world() {
 /// it has read that the first moved the base under the second. The forge
 /// refuses the second merge for a conflict, and the engine holds its item for
 /// a write that failed for good, where a conflict is the change's to repair
-/// (engine-model.md, 5.1; the plan's `Repair::Conflicts`), as it does when it
-/// reads the conflict before it merges.
+/// (engine-model.md, 5.3; the plan's `Repair::Conflicts`), as it does when it
+/// reads the conflict before it merges: the change runs again, or, as a run
+/// in this world cannot truly rebase, is held once it has rebased as often
+/// as the plan allows.
 #[test]
 fn a_merge_refused_for_a_conflict_sends_the_change_back_for_repair() {
     let hand = |checks| Hand {
@@ -357,11 +359,18 @@ fn a_merge_refused_for_a_conflict_sends_the_change_back_for_repair() {
     world.run(ITERATIONS);
 
     assert_eq!(world.stats().merged, 1, "the second merge was refused\n{}", trace(&world));
+    let runs = runs(&world);
+    let mut sent_back = false;
     for item in world.items() {
         let record = world.mirror().record(deployment::name(item.repository), item.number);
         let phase = record.map(|record| record.lifecycle.phase);
         assert_ne!(phase, Some(Phase::Held { why: Hold::Writes, outcome: None }), "{item:?}");
+        // Held for rebases, the plan's code 3.
+        let rebased = matches!(phase, Some(Phase::Held { why: Hold::Plan { reason: 3 }, .. }));
+        let again = runs.iter().filter(|run| run.item == item).count() > 1;
+        sent_back |= rebased || again;
     }
+    assert!(sent_back, "the refused change runs again for its conflict\n{}", trace(&world));
 }
 
 #[test]

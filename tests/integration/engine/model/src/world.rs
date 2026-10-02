@@ -580,9 +580,28 @@ impl World {
                 self.answer(call, Err(engine_api::Error::Timeout), Box::new([]));
             }
             Delivery::Engine { life, event } => {
-                if life == self.life {
-                    self.stage.push(event);
+                if life != self.life {
+                    return;
                 }
+                match &event {
+                    // The store's answer reaches the engine that asked: its
+                    // operation ends here, once.
+                    Event::Stored { owner, .. } => {
+                        self.stores.end((life, *owner));
+                    }
+                    Event::Answered { .. }
+                    | Event::Hint { .. }
+                    | Event::Hello { .. }
+                    | Event::Lost { .. }
+                    | Event::Answer { .. }
+                    | Event::Relay { .. }
+                    | Event::Bounced { .. }
+                    | Event::Told { .. }
+                    | Event::Ask { .. }
+                    | Event::Unwatch { .. }
+                    | Event::Delivered { .. } => {}
+                }
+                self.stage.push(event);
             }
             Delivery::Down { worker, channel, down } => {
                 if self.workers[worker].channel() != Some(channel) {
@@ -1000,7 +1019,6 @@ impl World {
                 if stored == engine::Stored::Failed {
                     self.end("store: failed");
                 }
-                self.stores.end((self.life, owner));
                 let event = Event::Stored { owner, stored };
                 self.send(self.now.saturating_add(after), Delivery::Engine { life: self.life, event });
             }
@@ -1039,6 +1057,12 @@ impl World {
             self.withdraw(key);
         }
         self.owned = Ledger::new("engine's forge call");
+        // What the store was asked by the engine that stopped is answered to
+        // no one.
+        let stores: Vec<(u64, Token)> = self.stores.keys().copied().collect();
+        for key in stores {
+            self.stores.end(key);
+        }
         let asks: Vec<u64> = self.asks.keys().copied().collect();
         for name in asks {
             let (asker, _, _) = self.asks.end(name);
