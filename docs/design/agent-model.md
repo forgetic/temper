@@ -31,8 +31,8 @@ what is still open is listed in section 9.
   charter: the brief, the tools granted, the repositories it may write, the
   outcomes it may produce, its budget.
 - **Any model, any provider.** The charter names the model a run starts
-  with; the sessions a run opens may use any endpoint the agent is
-  configured with, so a sub-agent can run on another model or another
+  with, and the others its sub-agents may use, on any endpoint the agent
+  is configured with, so a sub-agent can run on another model or another
   provider. The conversation vocabulary is provider-neutral; each
   provider's API is the protocol layer's business.
 - **Failures are visible.** The LLM sees what went wrong, bounded in size:
@@ -112,10 +112,10 @@ assignment:
 - **Budget.** Turns, tokens and wall time for the whole run, across all
   its sessions. It is checked at the entrance against the agent's
   `Limits`; a run that asks for more is refused.
-- **LLM.** The endpoint and model the main session starts with: a starting
-  point, not a limit. The agent is configured with endpoints (a provider
-  and its credentials, held by the protocol layer), and the run may open
-  other sessions on any of them, with any model they serve.
+- **LLMs.** The endpoint and model the main session runs on, and the
+  others a run may use for sub-agents (section 5). The agent is configured
+  with endpoints (a provider and its credentials, held by the protocol
+  layer); a charter only names them.
 
 ### 4.2 What a run does
 
@@ -127,15 +127,17 @@ assignment:
    tools, and the run decides what happens next: nudge the LLM ("you have
    not finished"), pass on a new inbound message, or close it.
 4. **Serves delegated tools:** finishing, forge reads, sub-agents, and the
-   outlets its charter grants.
+   outlets its charter grants. It runs each call's deadline: a call that
+   times out returns only once what it started has settled (a child
+   ended, a landing aborted), so nothing it started is still writing.
 5. **Judges** a declared outcome against the outcome spec. A violation goes
    back to the LLM as a tool error it can fix; it does not end the run.
 6. **Accounts** every session it opens against one budget, and winds down
    when the budget runs out.
 7. **Ends once.** It closes its sessions, waits for what is in flight to
    settle, and answers the worker: an accepted outcome, or a typed failure
-   (model, budget, policy, cancelled) the worker can act on. A cancel from
-   the worker takes the same path.
+   (model, budget, policy, cancelled, stale) the worker can act on. A
+   cancel from the worker takes the same path.
 8. **Reports** facts as it goes (section 7).
 
 Only a run opens sessions, so ownership is a tree: a run owns its
@@ -213,7 +215,9 @@ charters or outcomes.
 
 - **Turn by turn.** It calls the LLM, runs the tools the LLM asks for,
   sends their results back, and repeats until the LLM yields, a limit ends
-  it, or its opener closes it.
+  it, or its opener closes it. A session that yields has not ended: its
+  opener continues it with a new message, or closes it. Calls in the
+  answer it yielded with are answered as not run when it continues.
 - **Provider-neutral.** A session talks to the endpoint and model it was
   opened with, and nothing in it depends on which provider that is.
 - **Retries are policy.** It classifies a failed call (overloaded, rate
@@ -225,12 +229,19 @@ charters or outcomes.
   read or write. Adjacent reads in one turn run together, a write runs
   alone, and results go back in call order. A sub-agent's effect follows
   from its grants.
+- **No chains within a step.** An answer that comes back in the step that
+  asked for it (a call the tools refuse at their entrance, one the run
+  answers at once) waits on the ready list (programming-model.md, 2), so
+  what one step emits and holds stays bounded.
 - **Everything in flight can be stopped.** Every tool call has a deadline,
   and an opener can abort its session, which cancels what is in flight and
   waits for it to settle (programming-model.md, 5.3).
 - **Budgets:** turns, tokens (input, output, cache reads and writes, as the
   provider counts them) and time, given by the run at open; bytes held,
-  against the agent's limits.
+  against the agent's limits. Crossing a budget stops the next completion,
+  not the turn in flight: the calls of the completion that crossed it
+  still run and settle. Time is the exception: when it runs out, the
+  session closes at once.
 - **Owned and delegated tools.** A session runs the tools it owns through
   its tools sub-model, and delegates the rest: to its opener (finish, forge
   reads, outlets, sub-agents) or out of the model (MCP calls, as opaque
@@ -241,8 +252,9 @@ charters or outcomes.
 
 A sub-agent is a delegated tool call that the run serves by opening
 another session: the same checkout, its own grants (often read-only), a
-model and provider of its own, a budget carved from the run's. When the child ends, its final
-message is the parent's tool result.
+budget carved from the run's, and one of the LLMs the charter lists
+(4.1), which the asking LLM may name; otherwise the child runs on main's.
+When the child ends, its final message is the parent's tool result.
 
 ## 6. Tools
 
@@ -266,14 +278,22 @@ search, write, edit and shell.
   checked against the real file when writing, so a change made meanwhile
   by another session, or by anything else, is caught.
 - **Confined.** Paths resolve inside the checkout's repositories, and
-  writes land only in writable ones.
+  writes land only in writable ones. Writes and edits follow no symbolic
+  link on any part of their path, so a change lands in the repository its
+  path names, and a path with a `.git` part, in any case, is refused.
 - **Bounded and visible.** Each tool's output has a size limit set here,
   and a failure comes back with its output (a failing test's tail, an edit
   that matched nothing), not a fixed message.
-- **Search** is `rg`, run as a contained process. A code graph served over
-  MCP (codebase-memory-mcp) complements it, as a tool source of its own.
-- **Shell** runs in a contained process tree (io), with a deadline, a
-  captured tail of its output, and an environment without credentials.
+- **Search** is `rg`, run as a contained process: no configuration, the
+  pattern and glob passed so that neither reads as an option, an empty
+  environment, and read-only repositories. A code graph served over MCP
+  (codebase-memory-mcp) complements it, as a tool source of its own.
+- **Shell** runs in a contained process tree (io), with a deadline, the
+  head and tail of its output captured, and an environment without
+  credentials. The tree's view of the checkout is the confinement: a
+  command writes only the writable repositories, and only with the modify
+  grant, and every git directory is read-only to it, since the worker
+  commits the checked tree and the LLM needs no git writes.
 
 ## 7. Facts
 
@@ -298,16 +318,15 @@ to be designed after it:
   cancels and the run's host calls.
 - **MCP servers,** over a child process's pipes.
 - **Files and processes,** through io: contained process trees,
-  environments without credentials, file reads and atomic writes.
+  environments without credentials, file reads and atomic writes. The run
+  reads `AGENTS.md` as text, UTF-8 cut at a character boundary, and a
+  file that is not text counts as no guide.
 
 ## 9. Open questions
 
 - **Checking that a change exists:** the run could ask the worker before
   accepting a change, or leave it to the worker's final check. Add it if it
   proves needed.
-- **Choosing models:** who picks a sub-agent's model and provider: the
-  run's policy, the parent LLM when it asks for the sub-agent, or the LLM
-  within limits the charter sets.
 - **Facts and the layers below** (sections 7 and 8).
 - **Long-lived runs:** what a run puts in its snapshot. The engine keeps
   snapshots as a cache and addresses a run through its item
