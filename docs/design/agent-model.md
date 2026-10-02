@@ -94,7 +94,8 @@ What the worker gives a run when it starts it, most of it from the engine's
 assignment:
 
 - **Brief.** Text for the LLM: the work item and its lineage, the role's
-  charter, the action's guidance, rendered by the engine, which holds the
+  charter, the action's guidance, the index of the notes in its scope
+  (engine-model.md, section 10), rendered by the engine, which holds the
   forge and the workflow. The agent adds what it finds in the checkout
   (the repository's `AGENTS.md`) and the sections about its own mechanics
   (its tools, its checkout, how to finish), because those are what it
@@ -154,8 +155,9 @@ runs use one of each.
   request is just the first event.
 - **Outlets:** delegated tools that act through the worker, and through
   the engine where they touch the forge: finish, and later reply to a
-  human, comment, open an issue, propose a change, wait for an event.
-  Which outlets a run has is part of its grants.
+  human, comment, open an issue, propose a change, write a note, wait for
+  an event. Which outlets a run has is part of its grants. Recalling a
+  note is a forge read.
 
 | Agent | Inbound | Outlets | Ends when |
 |---|---|---|---|
