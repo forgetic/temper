@@ -345,6 +345,12 @@ impl Checkout {
         self.nodes.retain(|path, _| path != at && !path.starts_with(&beneath));
     }
 
+    /// Whether anything is at `at`, not following links.
+    #[must_use]
+    pub fn exists(&self, at: &[u8]) -> bool {
+        self.nodes.contains_key(at)
+    }
+
     /// What the file at `at` holds, not following links.
     #[must_use]
     pub fn content(&self, at: &[u8]) -> Option<&[u8]> {

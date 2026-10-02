@@ -17,6 +17,7 @@ members = [
     "tests/integration/agent/session",
     "tests/integration/agent/tools",
     "tests/integration/checkout",
+    "tests/integration/worker/checkout",
     "tests/integration/worker/host",
     "tests/integration/world",
 ]
