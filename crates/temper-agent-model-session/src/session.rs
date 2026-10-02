@@ -5,15 +5,16 @@
 //! for tools, the session runs them and sends their results back, in call
 //! order, in another call. They run in batches: adjacent calls that read run
 //! together, up to `Limits::parallel_tools`, and a call that writes runs
-//! alone; each run has a token of its own, and carries its deadline, which
+//! alone. Each run has a token of its own and carries its deadline, which
 //! whoever runs it races: a call that runs out of time comes back as such,
 //! and goes to the LLM like any other result. A call the protocol layer could
-//! not decode is answered with its problem, and nothing runs for it. When the LLM stops calling
-//! tools, the session yields to its opener, which continues it with a new user
-//! message or closes it; the message goes back after a result for each call
-//! the yielded answer made but did not wait for. A session ends once, and only
-//! once nothing it asked for is in flight: closing cancels what is, and waits
-//! for it to settle (5.3).
+//! not decode is answered with its problem as it is reached, and nothing runs
+//! for it; a message with no owned call goes straight back. When the LLM
+//! stops calling tools, the session yields to its opener, which continues it
+//! with a new user message or closes it; the message goes back after a result
+//! for each call the yielded answer made but did not wait for. A session ends
+//! once, and only once nothing it asked for is in flight: closing cancels
+//! what is, and waits for it to settle (5.3).
 //!
 //! The transition table. Every other cell is unreachable by the boundary's
 //! contract: one terminal event per request, a request only from the states
@@ -21,41 +22,41 @@
 //! session.
 //!
 //! ```text
-//! state          event or alarm               next
-//! (none)         open, admitted               Calling      opened; call the LLM
-//!                open, busy or invalid        (none)       ended: busy, invalid
-//! Calling        completed, tool use          Tooling      run the first batch
-//!                completed, otherwise         Yielded      yielded
-//!                failed, transient            Backoff
-//!                failed, otherwise            Closed       ended: failed
-//!                close, expiry                Closing      cancel the call, wait for it
-//! Backoff        retry                        Calling      call again
-//!                close, expiry                Closed       ended: closed, out of time
-//! Tooling        tool done, batch running     Tooling      keep the result
-//!                tool done, more calls        Tooling      run the next batch
-//!                tool done, no more           Calling      send the results
-//!                close, expiry                Closing      cancel the batch, wait for each run
-//! Yielded        continue                     Calling      call with the message
-//!                close, expiry                Closed       ended: closed, out of time
-//! Closing        what it waits for ends       Closed       ended
-//!                a run ends, others pending   Closing      wait for the rest
-//!                close                        Closing      (already closing)
-//! Closed         continue, close              Closed       (dropped: the handle is stale)
+//! state     event or alarm             next      requests
+//! (none)    open, admitted             Calling   opened, complete
+//!           open, busy or invalid      (none)    ended: busy, invalid
+//! Calling   completed, tool use        Tooling   used, the first batch's tools
+//!           completed, otherwise       Yielded   used, yielded
+//!           failed, transient          Backoff
+//!           failed, otherwise          Closed    ended: failed
+//!           close, expiry              Closing   cancel
+//! Backoff   retry                      Calling   complete
+//!           close, expiry              Closed    ended: closed, budget (time)
+//! Tooling   tool done, batch running   Tooling
+//!           tool done, more calls      Tooling   the next batch's tools
+//!           tool done, no more         Calling   complete
+//!           close, expiry              Closing   a cancel for each run
+//! Yielded   continue                   Calling   complete
+//!           close, expiry              Closed    ended: closed, budget (time)
+//! Closing   completed                  Closed    used, ended
+//!           failed, cancelled          Closed    ended
+//!           a run ends, others pending Closing
+//!           the last run ends          Closed    ended
+//!           close                      Closing   (already closing)
+//! Closed    continue, close            Closed    (dropped: the handle is stale)
 //! ```
 //!
-//! Invalid calls are answered as they are reached, in Calling or Tooling, and a
-//! message with no owned call goes straight back.
-//!
-//! Every completion that comes back is reported to the opener as `Used`, in
-//! Calling and in Closing alike. Before it calls the LLM, the session checks
-//! its budget, and ends instead, naming the dimension, if its turns, input or
-//! output tokens are used up, if the last completion took cache reads or
-//! writes past their budget, or if its time has run out. So it never starts a
-//! completion it may not pay for, and the turn that crossed a budget still
-//! runs its tools and keeps their results. Only time does not wait: its
-//! expiry closes the session at once. A byte limit that a completion, a
-//! tool's result or a new message would cross ends the session in place of
-//! the transition it would have made.
+//! Wherever the table calls the LLM (`complete`), the session first checks its
+//! budget and its transcript, and ends instead: as out of budget, naming the
+//! dimension, if its turns, input or output tokens are used up, if the last
+//! completion took cache reads or writes past their budget, or if its time has
+//! run out; and as transcript full if there is no room for the answer. So it
+//! never starts a completion it may not pay for or could not keep, and the
+//! turn that crossed a budget still runs its tools and keeps their results.
+//! Only time does not wait: its expiry closes the session at once. A
+//! completion, a result or a new message that does not fit the byte limit
+//! ends the session as transcript full in place of the transition it would
+//! have made, cancelling the rest of the batch.
 //!
 //! The expiry alarm, set for when the time budget runs out, runs in Calling,
 //! Backoff, Tooling and Yielded; the retry alarm in Backoff. Both follow from
