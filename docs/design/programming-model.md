@@ -646,12 +646,12 @@ Each layer exports `fn worst_case(limits: &Limits) -> Option<u64>`
 when the sum exceeds the configured memory. An allocation failure is then
 a bug or fragmentation, never load. A layer adds up what its containers
 report, not `size_of` times a capacity: each lib container has its own
-`worst_case(capacity)` (`Slab`, `Queue`, `List`, `Deadlines`), which counts
-its bookkeeping too, a slab's slot tags and free lists, a deadline table's
-tree nodes. The formula counts containers and payload bytes, not allocator
-overhead: leave headroom, and measure the resident size under load before
-trusting it. The simulator checks the formula at every
-iteration (section 11).
+`worst_case(capacity)` (`Slab`, `Queue`, `List`, `Map`, `Set`,
+`Deadlines`), which counts its bookkeeping too: a slab's slot tags and
+free lists, the tree nodes of a map, a set or a deadline table. The
+formula counts containers and payload bytes, not allocator overhead: leave
+headroom, and measure the resident size under load before trusting it. The
+simulator checks the formula at every iteration (section 11).
 
 If the worst case forces the limits too low for a service, the fallback is
 a byte budget for the large consumers, each kept in the layer that owns
@@ -756,8 +756,10 @@ the state, and one place arms and re-arms it (5.4), not every handler.
   anything is set aside for the body; the machine is header, body,
   dispatch.
 - **Encoding is sized too:** compute the message's length,
-  `Writer::new(len)`, write the fields, `finish()`. Writing past the end or
-  finishing short is an assertion: the length is the service's own.
+  `Writer::new(len)`, write the fields, `finish()`. The length is the
+  service's own, so the caller expects every write to fit (a write past
+  the end is refused whole, writing nothing), and finishing short is an
+  assertion.
 - **Lengths are never trusted by construction.** No `[]` indexing and no
   `as` on anything a peer sent: the `Reader` returns `Option`, a narrowing
   is `u32::try_from`, and a failure is a framing error, not a panic.
@@ -858,8 +860,11 @@ Step code (io, protocol, model, service) uses:
   exists once.
 - `assert!`, `unreachable!("why")`, `expect("the invariant relied on")`.
 - From lib: `Id<T>`, `Slab<T>`, `Token`, `ReplyTo`, `Queue<T>`,
-  `Stack<T>`, `ByteRing`, `Reader`, `Writer`, `bytes::copy_of`,
-  `Deadlines`, `Time`, `Duration`, `Rng`, `Env<L>`.
+  `List<T>`, `Map<K, V>` and `Set<K>` (bounded and ordered, over
+  B-trees), `Stack<T>`, `ByteRing`, `Reader`, `Writer` (sized),
+  `bytes::copy_of`, the byte search `bytes::find`, `find_from` and
+  `count` (linear time, no allocation), `Deadlines`, `Time`, `Duration`,
+  `Rng`, `Env<L>`.
 
 lib uses the same, plus generic types, lifetime parameters on its cursors,
 hand-written impls of std traits for its own types, `Vec` inside its
@@ -1032,8 +1037,8 @@ the kernel until then.
 ```
 Cargo.toml     workspace: profiles and lints
 clippy.toml    disallowed types and macros for the step crates
-lib/           Id, Slab, Token, ReplyTo, Queue, Stack, ByteRing, Reader, Writer,
-               Deadlines, Time, Duration, Rng, Env
+lib/           Id, Slab, Token, ReplyTo, Queue, List, Map, Set, Stack, ByteRing,
+               Reader, Writer, bytes, Deadlines, Time, Duration, Rng, Env
 io/            io::up, io::down: sockets, operations, transit memory
 protocol/      protocol::up, protocol::down: machines, codecs
 model/         model::step: domain machines, with any sub-models below it (4.5)
