@@ -1,0 +1,88 @@
+use temper_lib::{Deadlines, Duration, Queue, Set, Slab, Token};
+
+use crate::agent::{Agent, Alarm};
+use crate::channel::Down;
+use crate::facts::Fact;
+
+/// The agent sub-model's limits (section 7), handed by its parent to every
+/// step read-only.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Limits {
+    /// Agent processes at once: the process slots. A spawn beyond them is
+    /// refused as busy.
+    pub agents: u32,
+    /// The most bytes of a charter.
+    pub charter_bytes: u64,
+    /// The most bytes of a snapshot: a spawn's, or a parked run's.
+    pub snapshot_bytes: u64,
+    /// The most bytes of an inbound event. A larger one is bounced.
+    pub event_bytes: u64,
+    /// Inbound events that may wait to go down to one run. Beyond them, an
+    /// event is bounced.
+    pub events: u32,
+    /// Host calls a run may have in flight, from the call until its answer is
+    /// sent down. A call beyond them is answered as busy.
+    pub calls: u32,
+    /// The most bytes of a host call's body or message.
+    pub call_bytes: u64,
+    /// The most bytes of an answer to a host call. A larger one goes down as
+    /// too large.
+    pub answer_bytes: u64,
+    /// The most bytes of a fact.
+    pub fact_bytes: u64,
+    /// The most bytes of a run's declared outcome.
+    pub outcome_bytes: u64,
+    /// The most bytes of detail kept for operators: the tail of what io gives.
+    pub detail_bytes: u32,
+    /// How long a run may go without progress while its watchdog's clock
+    /// runs.
+    pub no_progress: Duration,
+    /// How long a run may live, from its spawn, whatever it is doing.
+    pub wall_time: Duration,
+    /// How long a run has to go on its own once it is cancelled, has said how
+    /// it finishes or has exited, before its tree is terminated.
+    pub grace: Duration,
+    /// How long a terminated tree has before it is killed.
+    pub kill_after: Duration,
+    /// Facts kept until the parent drains them. Beyond them, facts are
+    /// dropped and counted.
+    pub facts: u32,
+}
+
+/// The most memory the model holds under `limits`, in bytes (6.4), or `None`
+/// if it does not fit a `u64`.
+///
+/// It counts the containers, their bookkeeping included, and the payloads, not
+/// allocator overhead. An agent holds its charter and snapshot until its
+/// process has spawned, then, while its run listens, the messages waiting to
+/// go down and the names of its calls in flight; and the detail of its end
+/// once its tree is empty. What comes up (host calls, facts, how the run
+/// finishes) is moved into a request in the step it arrives in, and what goes
+/// down is moved into a send: either is its receiver's to count.
+#[must_use]
+pub fn worst_case(limits: &Limits) -> Option<u64> {
+    let agents = Slab::<Agent>::worst_case(limits.agents)?;
+    let alarms = Deadlines::<Alarm>::worst_case(alarms(limits)?)?;
+    let facts = Queue::<Fact>::worst_case(limits.facts)?;
+    let spawning = limits.charter_bytes.checked_add(limits.snapshot_bytes)?;
+    let events = u64::from(limits.events).checked_mul(limits.event_bytes)?;
+    let answers = u64::from(limits.calls).checked_mul(limits.answer_bytes)?;
+    let names = Set::<Token>::worst_case(limits.calls)?.checked_mul(2)?;
+    let listening =
+        Queue::<Down>::worst_case(outbox(limits)?)?.checked_add(names)?.checked_add(events)?.checked_add(answers)?;
+    let agent = spawning.max(listening).checked_add(u64::from(limits.detail_bytes))?;
+    let held = u64::from(limits.agents).checked_mul(agent)?;
+    agents.checked_add(alarms)?.checked_add(facts)?.checked_add(held)
+}
+
+/// The alarm table's capacity: an agent has two alarms armed at most, its
+/// watchdog and its wall time.
+pub(crate) fn alarms(limits: &Limits) -> Option<u32> {
+    limits.agents.checked_mul(2)
+}
+
+/// The room of a run's outbox: every inbound event that may wait, an answer
+/// for every call in flight, and the cancel.
+pub(crate) fn outbox(limits: &Limits) -> Option<u32> {
+    limits.events.checked_add(limits.calls)?.checked_add(1)
+}

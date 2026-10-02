@@ -109,6 +109,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-worker-model-agent"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+]
+
+[[package]]
 name = "temper-worker-model-checkout"
 version = "0.0.0"
 dependencies = [
