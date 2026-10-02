@@ -31,8 +31,11 @@ pub enum Fact {
     /// adopted.
     Stray,
     /// An attempt not adopted in time, not the claim of its run, or listed
-    /// beyond the room, was cancelled; or a kept answer was forgotten.
+    /// beyond the room, was cancelled.
     Fenced,
+    /// A stray's kept answer not adopted in time, or cancelled, was
+    /// forgotten.
+    Forgotten,
     /// An attempt's answer went to the parent.
     Answered { answer: Answer },
     /// A worker refused an attempt as busy: it is placed again.

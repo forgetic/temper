@@ -786,7 +786,7 @@ fn forgotten(
     facts: &mut Facts,
     out: &mut Queue<Request>,
 ) -> State {
-    facts.push(Fact::Fenced);
+    facts.push(Fact::Forgotten);
     out.push(Request::Drop { payload });
     match at {
         Where::On(channel) => acknowledged(channel, names, channels, out),

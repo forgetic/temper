@@ -21,19 +21,25 @@ fn ending(stats: &Stats, ending: &str) -> u32 {
 }
 
 #[test]
-fn a_calm_world_settles_with_every_run_answered() {
-    let world = run(&Settings::calm(1));
-    let stats = world.stats();
-    assert!(stats.starts >= 12, "every item starts: {stats:?}");
-    assert!(stats.admitted > 0 && stats.calls > 0 && stats.replies > 0 && stats.delivered > 0, "{stats:?}");
+fn calm_worlds_settle_with_every_run_answered() {
+    let mut endings = BTreeMap::new();
+    for seed in 0..5 {
+        let world = run(&Settings::calm(seed));
+        let stats = world.stats();
+        assert!(stats.starts >= 12, "every item starts: {stats:?}");
+        assert!(stats.admitted > 0 && stats.calls > 0 && stats.replies > 0 && stats.delivered > 0, "{stats:?}");
+        for name in ["lost", "cancelled", "replaced", "fenced", "stray", "busy", "refused", "turned away"] {
+            assert_eq!(ending(&stats, name), 0, "nothing goes wrong in a calm world: {stats:?}");
+        }
+        let (ends, sent) = world.judged();
+        assert!(ends > 0 && sent > 0, "the referee judged something");
+        for (ending, count) in stats.endings {
+            *endings.entry(ending).or_insert(0) += count;
+        }
+    }
     for name in ["ended", "parked", "failed"] {
-        assert!(ending(&stats, name) > 0, "{name} reached: {stats:?}");
+        assert!(endings.get(name).copied().unwrap_or(0) > 0, "{name} reached: {endings:?}");
     }
-    for name in ["lost", "cancelled", "replaced", "fenced", "stray"] {
-        assert_eq!(ending(&stats, name), 0, "nothing goes wrong in a calm world: {stats:?}");
-    }
-    let (ends, sent) = world.judged();
-    assert!(ends > 0 && sent > 0, "the referee judged something");
 }
 
 #[test]
@@ -61,7 +67,9 @@ fn workers_back_within_the_grace_keep_their_runs() {
         let calm = Settings::calm(seed);
         let settings = Settings { drops: 3, away: Span::millis(100, 5000), run: Span::millis(5000, 20_000), ..calm };
         let stats = run(&settings).stats();
-        assert_eq!(ending(&stats, "lost"), 0, "seed {seed}: nothing is lost: {stats:?}");
+        // An assignment in flight as its channel drops is lost, and only
+        // presumed so past the grace: no worker hosted it.
+        assert_eq!(stats.lost_hosted, 0, "seed {seed}: nothing a worker hosts is lost: {stats:?}");
     }
 }
 

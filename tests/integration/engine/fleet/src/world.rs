@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_engine_model_fleet::{
     self as fleet, Answer, Event, Fact, Hello, Hosted, Limits, Model, Phase, Request, Undelivered, Withdrawal,
@@ -31,7 +31,7 @@ pub const LIMITS: Limits = Limits {
 
 /// How a world's attempts ended and what the fleet did on the way, by kind,
 /// for the sweep.
-pub const ENDINGS: [&str; 15] = [
+pub const ENDINGS: [&str; 22] = [
     "ended",
     "parked",
     "failed",
@@ -39,14 +39,21 @@ pub const ENDINGS: [&str; 15] = [
     "lost",
     "cancelled",
     "replaced",
+    "refused",
+    "busy",
     "found",
     "stray",
+    "listed",
+    "kept",
+    "forgotten",
+    "heard again",
     "fenced",
     "duplicate",
     "dropped",
     "undelivered",
     "bounced",
     "adopted",
+    "turned away",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,6 +75,12 @@ pub struct Settings {
     pub parks: u32,
     pub fails: u32,
     pub invalid: u32,
+    /// Per mille the assignments a worker hosting a run already refuses as
+    /// busy, as if momentarily full by its own measure.
+    pub busy: u32,
+    /// How long the parent takes to make an answer durable before it
+    /// acknowledges it.
+    pub durable: Span,
     /// The time between a run's host calls; per mille those that come with
     /// a fact; how long a run waits for a call's answer, and how long the
     /// parent takes to give one.
@@ -100,6 +113,8 @@ pub struct Settings {
     pub horizon: Duration,
     pub never_back: u32,
     pub away: Span,
+    /// Per mille the workers back at once, before the fleet hears they left.
+    pub quick: u32,
     /// Engine restarts, before `horizon`, and how long the parent takes to
     /// read its claims back after one.
     pub restarts: u32,
@@ -127,6 +142,8 @@ impl Settings {
             parks: 150,
             fails: 150,
             invalid: 0,
+            busy: 0,
+            durable: Span::millis(10, 2000),
             call_gap: Span::millis(200, 2000),
             facts: 300,
             call_wait: Duration::from_secs(5),
@@ -146,6 +163,7 @@ impl Settings {
             horizon: Duration::from_secs(30),
             never_back: 0,
             away: Span::millis(1000, 30_000),
+            quick: 0,
             restarts: 0,
             read: Span::millis(100, 5000),
             worker_grace: Duration::from_secs(15),
@@ -162,8 +180,11 @@ impl Settings {
         let mut chance = |most: u64| u32::try_from(rng.below(most + 1)).expect("a chance per mille");
         let calm = Settings::calm(seed);
         let workers = 2 + chance(3);
+        // As many workers as the fleet takes, half the time: one back before
+        // its loss is heard is turned away.
+        let fewer = chance(1) == 0;
         Settings {
-            workers: 1 + chance(u64::from(workers) - 1),
+            workers: if fewer { 1 + chance(u64::from(workers) - 1) } else { workers },
             slots: 1 + chance(2),
             items: 4 + chance(16),
             item_gap: Span::millis(1, 100 + u64::from(chance(3000))),
@@ -172,6 +193,8 @@ impl Settings {
             parks: chance(300),
             fails: chance(300),
             invalid: chance(100),
+            busy: chance(150),
+            durable: Span::millis(1, 10 + u64::from(chance(8000))),
             call_gap: Span::millis(10, 100 + u64::from(chance(3000))),
             facts: chance(1000),
             serve: Span::millis(1, 10 + u64::from(chance(6000))),
@@ -181,8 +204,11 @@ impl Settings {
             replaces: chance(150),
             timeout: Duration::from_secs(10 + u64::from(chance(50))),
             latency: Span::millis(1, 1 + u64::from(chance(500))),
+            redial: Span::millis(1, 1 + u64::from(chance(1000))),
             drops: chance(4),
             never_back: chance(300),
+            away: Span::millis(1, 1000 + u64::from(chance(30_000))),
+            quick: chance(800),
             restarts: chance(1),
             read: Span::millis(1, 100 + u64::from(chance(30_000))),
             limits: Limits { workers, attempts: 4 + chance(12), calls: 1 + chance(6), facts: 4 + chance(60), ..LIMITS },
@@ -203,6 +229,7 @@ impl Settings {
             .saturating_add(self.read.max)
             .saturating_add(fault.saturating_mul(faults))
             .saturating_add(self.wind_down.max)
+            .saturating_add(self.durable.max)
             .saturating_add(self.redial.max)
             .saturating_add(Duration::from_secs(1))
     }
@@ -225,6 +252,8 @@ pub struct Stats {
     pub inbound: u32,
     pub delivered: u32,
     pub told: u32,
+    /// Attempts presumed lost that a worker had admitted.
+    pub lost_hosted: u32,
     /// Hellos said, workers turned away, channels dropped, restarts.
     pub hellos: u32,
     pub refused: u32,
@@ -316,6 +345,12 @@ pub(crate) enum Delivery {
     /// The parent has read its claims back after a restart.
     Adopt {
         epoch: u64,
+    },
+    /// The parent has made an attempt's answer durable.
+    Durable {
+        epoch: u64,
+        item: usize,
+        attempt: u64,
     },
 }
 
@@ -424,6 +459,8 @@ struct Item {
 #[derive(Clone, Copy, Debug)]
 struct Open {
     cancelled: bool,
+    /// Its answer, heard and not yet durable.
+    answered: Option<Kind>,
     /// Made before the engine restarted, and not adopted since: the fleet
     /// does not know it.
     stale: bool,
@@ -438,6 +475,11 @@ pub struct World {
     pub(crate) stage: Stage<Limits, Event, Request>,
     /// Counts the engine's restarts: the fleet incarnation.
     pub(crate) epoch: u64,
+    /// The parent has loaded its claims in this incarnation: it starts
+    /// attempts only once it has.
+    loaded: bool,
+    /// Attempts adopted in this iteration, whose kept answer comes at once.
+    adopting: Vec<u64>,
 
     /// Deliveries in flight, whose count names runs, attempts, channels,
     /// calls, payloads and answers too.
@@ -451,6 +493,8 @@ pub struct World {
     calls: Ledger<u64, ()>,
     relays: Ledger<u64, ()>,
     pub(crate) payloads: Ledger<u64, Payload>,
+    /// Attempts a worker admitted.
+    pub(crate) admitted: BTreeSet<(u64, u64)>,
 
     pub(crate) referee: Referee<Fleet>,
     pub(crate) stats: Stats,
@@ -475,6 +519,8 @@ impl World {
             model: Model::new(&settings.limits),
             stage: Stage::new(settings.limits, max_out, max_out + SLACK),
             epoch: 0,
+            loaded: true,
+            adopting: Vec::new(),
             wire: Schedule::new(),
             in_flight: 0,
             channels: BTreeMap::new(),
@@ -483,6 +529,7 @@ impl World {
             calls: Ledger::new("start or adoption"),
             relays: Ledger::new("relayed call"),
             payloads: Ledger::new("payload"),
+            admitted: BTreeSet::new(),
             referee: Referee::new(Fleet::new(settings.bound())),
             stats: Stats::default(),
             trace: Trace::default(),
@@ -514,8 +561,13 @@ impl World {
         for _ in 0..settings.drops {
             let at = world.moment();
             let worker = usize::try_from(world.below(settings.workers)).expect("a worker's index");
-            let back =
-                if world.rng.chance(settings.never_back) { None } else { Some(settings.away.draw(&mut world.rng)) };
+            let back = if world.rng.chance(settings.never_back) {
+                None
+            } else if world.rng.chance(settings.quick) {
+                Some(Duration::from_millis(1))
+            } else {
+                Some(settings.away.draw(&mut world.rng))
+            };
             world.referee.inject(at, Stimulus::Drop { worker, back });
         }
         for _ in 0..settings.restarts {
@@ -604,6 +656,7 @@ impl World {
             self.fact(fact);
         }
         self.referee.assert_holding(self.settings.seed);
+        self.adopting.clear();
         // The reclaim point.
         self.model.reclaim();
     }
@@ -722,6 +775,7 @@ impl World {
     fn restart(&mut self) {
         self.stats.restarts += 1;
         self.epoch += 1;
+        self.loaded = false;
         self.model = Model::new(&self.settings.limits);
         self.stage.inbox.clear();
         self.calls = Ledger::new("start or adoption");
@@ -795,6 +849,11 @@ impl World {
             Delivery::Adopt { epoch } => {
                 if epoch == self.epoch {
                     self.adopt();
+                }
+            }
+            Delivery::Durable { epoch, item, attempt } => {
+                if epoch == self.epoch {
+                    self.durable(item, attempt);
                 }
             }
         }
@@ -891,8 +950,10 @@ impl World {
                         panic!("seed {}: an answer's payload is the worker's answer", self.settings.seed)
                     }
                 };
+                if self.adopting.contains(&attempt.raw()) {
+                    self.end("kept");
+                }
                 self.ended(to, run, attempt, End::Answered(said));
-                self.stage.push(Event::Acknowledge { run, attempt });
             }
             Request::Listed { .. } => self.end("listed"),
             Request::Lost { to, run, attempt } => self.ended(to, run, attempt, End::Lost),
@@ -946,8 +1007,9 @@ impl World {
             Fact::Duplicate => self.end("duplicate"),
             Fact::Dropped => self.end("dropped"),
             Fact::Busy => self.end("busy"),
+            Fact::Forgotten => self.end("forgotten"),
+            Fact::TurnedAway => self.end("turned away"),
             Fact::Hello { .. }
-            | Fact::TurnedAway
             | Fact::Lost { .. }
             | Fact::Refused { .. }
             | Fact::Placed
@@ -969,6 +1031,11 @@ impl World {
         if entry.done || entry.claim.is_some() {
             return;
         }
+        if !self.loaded {
+            // Claims first: nothing starts before the cold read is done.
+            self.after(self.settings.backoff, Delivery::Start { item });
+            return;
+        }
         if entry.starts == 0 {
             self.items[item].done = true;
             return;
@@ -977,7 +1044,7 @@ impl World {
         let attempt = self.wire.name();
         let entry = &mut self.items[item];
         entry.starts -= 1;
-        entry.open.insert(attempt, Open { cancelled: false, stale: false });
+        entry.open.insert(attempt, Open { cancelled: false, answered: None, stale: false });
         entry.claim = Some(attempt);
         self.stats.starts += 1;
         self.calls.open(attempt, ());
@@ -1004,10 +1071,14 @@ impl World {
         let Some(open) = self.items[item].open.get_mut(&attempt) else {
             return;
         };
-        if open.cancelled {
+        if open.cancelled || open.answered.is_some() {
             return;
         }
         open.cancelled = true;
+        if open.stale {
+            // Not adopted yet: the adoption cancels it.
+            return;
+        }
         self.observe(Seen::Cancelled { run, attempt });
         self.stage.push(Event::Cancel { run: Token::new(run), attempt: Token::new(attempt) });
     }
@@ -1037,7 +1108,7 @@ impl World {
         let Some(open) = entry.open.get(&attempt) else {
             return false;
         };
-        entry.claim == Some(attempt) && !open.cancelled && !open.stale
+        entry.claim == Some(attempt) && !open.cancelled && !open.stale && open.answered.is_none()
     }
 
     /// The fleet placed the parent's claim: it sends inbound events to it.
@@ -1058,8 +1129,8 @@ impl World {
         self.stage.push(Event::Inbound { run: Token::new(run), attempt: Token::new(attempt), event });
     }
 
-    /// An attempt's call ended: the parent's record moves on, if it was the
-    /// claim.
+    /// An attempt's call ended. An answer is made durable before the record
+    /// moves on, and acknowledged then; any other end moves it on at once.
     fn ended(&mut self, to: ReplyTo, run: Token, attempt: Token, end: End) {
         let (run, attempt) = (run.raw(), attempt.raw());
         assert_eq!(to.into_token().raw(), attempt, "a start's call is named by its attempt");
@@ -1069,7 +1140,7 @@ impl World {
             End::Answered(Said { kind: Kind::Ended, .. }) => "ended",
             End::Answered(Said { kind: Kind::Parked, .. }) => "parked",
             End::Answered(Said { kind: Kind::Failed, .. }) => "failed",
-            End::Answered(Said { kind: Kind::Busy, .. }) => "busy",
+            End::Answered(Said { kind: Kind::Busy, .. }) => "busy answered",
             End::Answered(Said { kind: Kind::Invalid, .. }) => "invalid",
             End::Lost => "lost",
             End::Cancelled => "cancelled",
@@ -1077,18 +1148,55 @@ impl World {
             End::Refused => "refused",
         };
         self.end(ending);
+        if end == End::Lost && self.admitted.contains(&(run, attempt)) {
+            self.stats.lost_hosted += 1;
+        }
         let item = self.item_of(run);
+        match end {
+            End::Answered(said) => {
+                let open = self.items[item].open.get_mut(&attempt).expect("an answer ends an attempt the record holds");
+                let again = open.answered.is_some();
+                open.answered = Some(said.kind);
+                if again {
+                    // Heard again after a restart, not yet durable then.
+                    self.end("heard again");
+                }
+                let epoch = self.epoch;
+                self.after(self.settings.durable, Delivery::Durable { epoch, item, attempt });
+            }
+            End::Lost | End::Cancelled | End::Replaced | End::Refused => self.release(item, attempt, false),
+        }
+    }
+
+    /// The answer of `attempt` is durable: the record moves on, and the
+    /// fleet hears that its worker may forget it.
+    fn durable(&mut self, item: usize, attempt: u64) {
+        let run = self.items[item].run;
+        let Some(Open { answered: Some(kind), .. }) = self.items[item].open.get(&attempt).copied() else {
+            return;
+        };
+        self.observe(Seen::Durable { run, attempt });
+        self.stage.push(Event::Acknowledge { run: Token::new(run), attempt: Token::new(attempt) });
+        let done = match kind {
+            Kind::Ended => true,
+            Kind::Parked | Kind::Failed | Kind::Busy | Kind::Invalid => false,
+        };
+        self.release(item, attempt, done);
+    }
+
+    /// The record lets `attempt` go, and if it was the claim, the item is
+    /// `done`, or starts again after a backoff.
+    fn release(&mut self, item: usize, attempt: u64, done: bool) {
         let entry = &mut self.items[item];
         entry.open.remove(&attempt);
         if entry.claim != Some(attempt) {
             return;
         }
         entry.claim = None;
-        match end {
-            End::Answered(Said { kind: Kind::Ended, .. }) => entry.done = true,
-            End::Answered(_) | End::Lost | End::Cancelled | End::Replaced | End::Refused => {
-                self.after(self.settings.backoff, Delivery::Start { item });
-            }
+        if done {
+            entry.done = true;
+        } else {
+            self.after(self.settings.backoff, Delivery::Start { item });
         }
     }
 
@@ -1109,18 +1217,22 @@ impl World {
             for (attempt, cancelled) in stale {
                 self.stats.adoptions += 1;
                 self.end("adopted");
+                self.adopting.push(attempt);
                 self.calls.open(attempt, ());
                 let token = Token::new(attempt);
                 self.stage.push(Event::Adopt { reply_to: ReplyTo::new(token), run, attempt: token });
                 if cancelled {
+                    self.observe(Seen::Cancelled { run: run.raw(), attempt });
                     self.stage.push(Event::Cancel { run, attempt: token });
                 }
                 let at = self.now.saturating_add(self.settings.timeout);
                 self.send(at, Delivery::Timeout { item, attempt });
             }
         }
-        // The cold read is done: strays' graces run from now.
+        // The cold read is done: strays' graces run from now, and the parent
+        // starts attempts again.
         self.stage.push(Event::Loaded);
+        self.loaded = true;
     }
 }
 

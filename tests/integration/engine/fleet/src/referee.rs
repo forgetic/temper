@@ -9,11 +9,15 @@
 //!   for the engine counted;
 //! - never two live attempts of a run's workstream: no worker is assigned an
 //!   attempt of a run while any worker hosts another of it, and no attempt
-//!   is assigned twice;
+//!   is assigned again once a worker admitted it (a busy refusal admits
+//!   nothing, and the attempt is assigned again);
 //! - nothing reaches a worker for an attempt the parent cancelled, or that
 //!   ended (answered, presumed lost or withdrawn), but a cancel;
-//! - every attempt the parent starts ends once: with the answer its worker
-//!   gave, or presumed lost, withdrawn or refused, never two of these.
+//! - every attempt the parent starts ends with the answer its worker gave,
+//!   or presumed lost, withdrawn or refused; and once its answer is durable
+//!   it ends no more (before, a restart may hand it on again);
+//! - a worker forgets an answer only once the parent has made it durable,
+//!   or no longer claims its attempt.
 //!
 //! Liveness, as deadlines of its own: every attempt the parent starts ends
 //! within a bound the world sets.
@@ -80,6 +84,10 @@ pub enum Seen {
     Assigned { worker: usize, slots: u32, hosting: u32, run: u64, attempt: u64, admitted: bool },
     /// A worker answered the attempt, once, its run gone if it was hosted.
     Answered { run: u64, attempt: u64, said: Said },
+    /// The parent made the attempt's answer durable.
+    Durable { run: u64, attempt: u64 },
+    /// A worker forgot the attempt's answer, acknowledged.
+    Forgot { run: u64, attempt: u64 },
 }
 
 /// What the referee expects to happen.
@@ -107,13 +115,16 @@ pub struct Fleet {
     /// The live attempt of each run on the workers, from its admission to
     /// its answer.
     live: BTreeMap<u64, u64>,
-    /// Attempts assigned so far.
-    assigned: BTreeSet<(u64, u64)>,
+    /// Attempts a worker admitted so far.
+    admitted: BTreeSet<(u64, u64)>,
     /// What each attempt's worker answered.
     said: BTreeMap<(u64, u64), Said>,
-    /// Attempts the parent cancelled, and those that ended.
+    /// Attempts the parent cancelled; those that ended for good (lost,
+    /// withdrawn, refused, or answered durably); and those its record
+    /// claims.
     cancelled: BTreeSet<(u64, u64)>,
     ended: BTreeSet<(u64, u64)>,
+    claimed: BTreeSet<(u64, u64)>,
     /// Ends and messages judged.
     pub ends: u64,
     pub sent: u64,
@@ -126,10 +137,11 @@ impl Fleet {
         Fleet {
             within,
             live: BTreeMap::new(),
-            assigned: BTreeSet::new(),
+            admitted: BTreeSet::new(),
             said: BTreeMap::new(),
             cancelled: BTreeSet::new(),
             ended: BTreeSet::new(),
+            claimed: BTreeSet::new(),
             ends: 0,
             sent: 0,
         }
@@ -143,23 +155,35 @@ impl Expectations for Fleet {
 
     fn observe(&mut self, seen: Seen, judge: &mut Judge<Expected, Stimulus>) {
         match seen {
-            Seen::Started { run, attempt } => judge.expect(Expected::End { run, attempt }, self.within),
+            Seen::Started { run, attempt } => {
+                self.claimed.insert((run, attempt));
+                judge.expect(Expected::End { run, attempt }, self.within);
+            }
             Seen::Cancelled { run, attempt } => {
                 self.cancelled.insert((run, attempt));
             }
             Seen::Ended { run, attempt, end } => {
                 self.ends += 1;
                 judge.meet(&Expected::End { run, attempt });
-                let first = self.ended.insert((run, attempt));
-                judge.check(first, format_args!("attempt {attempt} of run {run} ends once, ending {end:?}"));
-                if let End::Answered(said) = end {
-                    let given = self.said.get(&(run, attempt));
-                    judge.check(
-                        given == Some(&said),
-                        format_args!(
-                            "attempt {attempt} of run {run} ends with what its worker answered: {said:?}, not {given:?}"
-                        ),
-                    );
+                let after = self.ended.contains(&(run, attempt));
+                judge.check(
+                    !after,
+                    format_args!("attempt {attempt} of run {run} ends no more once ended, ending {end:?}"),
+                );
+                match end {
+                    End::Answered(said) => {
+                        let given = self.said.get(&(run, attempt));
+                        judge.check(
+                            given == Some(&said),
+                            format_args!(
+                                "attempt {attempt} of run {run} ends with what its worker answered: {said:?}, not {given:?}"
+                            ),
+                        );
+                    }
+                    End::Lost | End::Cancelled | End::Replaced | End::Refused => {
+                        self.ended.insert((run, attempt));
+                        self.claimed.remove(&(run, attempt));
+                    }
                 }
             }
             Seen::Sent { run, attempt, down } => {
@@ -180,14 +204,15 @@ impl Expectations for Fleet {
                     hosting < slots,
                     format_args!("worker {worker} is assigned no more runs than its {slots} slots"),
                 );
-                let fresh = self.assigned.insert((run, attempt));
-                judge.check(fresh, format_args!("attempt {attempt} of run {run} is assigned once"));
+                let fresh = !self.admitted.contains(&(run, attempt));
+                judge.check(fresh, format_args!("attempt {attempt} of run {run} is not assigned once admitted"));
                 let other = self.live.get(&run).copied();
                 judge.check(
                     other.is_none(),
                     format_args!("attempt {attempt} of run {run} is assigned while attempt {other:?} is live"),
                 );
                 if admitted {
+                    self.admitted.insert((run, attempt));
                     self.live.insert(run, attempt);
                 }
             }
@@ -197,6 +222,16 @@ impl Expectations for Fleet {
                 }
                 let first = self.said.insert((run, attempt), said).is_none();
                 judge.check(first, format_args!("a worker answers attempt {attempt} of run {run} once"));
+            }
+            Seen::Durable { run, attempt } => {
+                self.ended.insert((run, attempt));
+                self.claimed.remove(&(run, attempt));
+            }
+            Seen::Forgot { run, attempt } => {
+                judge.check(
+                    !self.claimed.contains(&(run, attempt)),
+                    format_args!("a worker forgets attempt {attempt} of run {run}'s answer only once it is durable"),
+                );
             }
         }
     }

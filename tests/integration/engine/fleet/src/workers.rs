@@ -58,7 +58,9 @@ impl World {
                 }
             }
             Message::Acknowledge { run, attempt } => {
-                self.workers[worker].held.remove(&(run, attempt));
+                if self.workers[worker].held.remove(&(run, attempt)).is_some() {
+                    self.observe(Seen::Forgot { run, attempt });
+                }
             }
         }
     }
@@ -74,7 +76,10 @@ impl World {
         }
         let slots = entry.slots;
         let hosting = u32::try_from(entry.runs.len() + entry.held.len()).expect("a few runs");
-        let busy = hosting >= slots || entry.runs.keys().any(|(other, _)| *other == run);
+        let full = hosting >= slots || entry.runs.keys().any(|(other, _)| *other == run);
+        // A worker hosting a run may be fuller than it said, by its own
+        // measure: it frees a slot as that run ends.
+        let busy = full || (!entry.runs.is_empty() && self.rng.chance(self.settings.busy));
         let invalid = !busy && self.rng.chance(self.settings.invalid);
         let admitted = !busy && !invalid;
         self.observe(Seen::Assigned { worker, slots, hosting, run, attempt, admitted });
@@ -82,11 +87,16 @@ impl World {
             // A refusal goes once, and keeps nothing.
             let kind = if busy { Kind::Busy } else { Kind::Invalid };
             let said = Said { kind, nonce: self.wire.name() };
-            self.observe(Seen::Answered { run, attempt, said });
+            if !busy {
+                // A busy refusal is not the attempt's answer: it is assigned
+                // again.
+                self.observe(Seen::Answered { run, attempt, said });
+            }
             self.say(channel, Up::Answer { run, attempt, said });
             return;
         }
         self.stats.admitted += 1;
+        self.admitted.insert((run, attempt));
         let plan = if self.rng.chance(self.settings.parks) {
             Kind::Parked
         } else if self.rng.chance(self.settings.fails) {
