@@ -1,9 +1,10 @@
 //! What the LLMs do: scripts the fake provider plays, each cued by a word in
 //! a conversation's system text. A run's main conversation is cued by its
-//! job's word, which the world writes at the top of the first repository's
-//! `AGENTS.md` (the run puts the guides it finds in every system text, after
-//! the brief); a sub-agent by the word its asker writes at the start of its
-//! brief (which comes first). A job with no word is played at random.
+//! job's word, which starts the `AGENTS.md` of the job's repository on the
+//! forge (the run puts the guides it finds in every system text, after the
+//! brief, in the checkout's order); a sub-agent by the word its asker writes
+//! at the start of its brief (which comes first). A job with no word is
+//! played at random.
 //!
 //! The scripts follow the fixture ([`crate::fixture`]): the answer in
 //! `src/lib.rs` is 42 and the checks want 43.

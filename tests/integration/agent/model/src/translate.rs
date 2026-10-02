@@ -1,20 +1,17 @@
-//! The mappings between the agent's vocabulary and its neighbours': what the
-//! protocol layers on each side, and the wire between them, do without the
-//! bytes. Toward the worker, its charters, pushes and answers; toward the LLM
-//! provider, the prompts and completions, with the schemas of the tools the
+//! The mappings between the agent's vocabulary and the LLM provider's: what
+//! the protocol layers on each side, and the wire between them, do without
+//! the bytes. The prompts and completions, with the schemas of the tools the
 //! agent offers, the decoding of the calls the LLM writes into typed calls and
-//! asks, and the rendering of what came of them as text.
+//! asks, and the rendering of what came of them as text. The channel to the
+//! worker is [`crate::channel`]'s.
 
 use std::collections::BTreeMap;
 
 use temper_agent_model::llm::{self as agent, Decoded, Served};
 use temper_agent_model::run::charter;
-use temper_agent_model::run::outcome::VerdictRule;
-use temper_agent_model::run::outcome::{Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Verdict};
+use temper_agent_model::run::outcome::{Change, Child, Declared, Field, Verdict};
 use temper_agent_model::run::{self, Ask, Spend};
 use temper_agent_model::tools::{Call, Exit, Grants, Name, Outcome, Part, Path};
-use temper_fake_worker_model::api as worker;
-use temper_lib::Token;
 use temper_llm_model::api as provider;
 
 /// The tools the agent's side offers, by name: the family that grants each,
@@ -42,117 +39,6 @@ enum Family {
     Inspect,
     Modify,
     Shell,
-}
-
-/// The run's charter for the worker's, its repositories at `roots`, as io
-/// names them.
-#[must_use]
-pub fn charter(charter: worker::Charter, roots: &[Token]) -> run::Charter {
-    let worker::Charter {
-        brief,
-        repositories,
-        tools,
-        forge,
-        agents,
-        outlets,
-        outcome,
-        budget,
-        endpoint,
-        model,
-        max_tokens,
-        models,
-    } = charter;
-    let repositories = repositories.into_iter().zip(roots).map(|(found, root)| repository(found, *root)).collect();
-    run::Charter {
-        brief,
-        checkout: charter::Checkout { repositories },
-        grants: charter::Grants {
-            tools: charter::Tools { inspect: tools.read, modify: tools.write, shell: tools.shell },
-            forge,
-            agents,
-            outlets: outlets.into_iter().map(|name| charter::Outlet { name }).collect(),
-        },
-        outcome: OutcomeSpec {
-            change: outcome.change.then_some(ChangeSpec { checks: outcome.checks }),
-            verdicts: outcome.verdicts.into_iter().map(verdict).collect(),
-        },
-        budget: self::budget(budget),
-        llm: charter::Llm { endpoint: charter::Endpoint(endpoint), model, max_tokens },
-        models: models
-            .into_iter()
-            .map(|model| charter::Llm { endpoint: charter::Endpoint(endpoint), model, max_tokens })
-            .collect(),
-    }
-}
-
-/// The run's budget for the worker's.
-#[must_use]
-pub fn budget(budget: worker::Budget) -> run::Budget {
-    run::Budget {
-        turns: budget.turns,
-        input: budget.input_tokens,
-        output: budget.output_tokens,
-        cache_read: budget.cache_read_tokens,
-        cache_write: budget.cache_write_tokens,
-        time: budget.wall_time,
-    }
-}
-
-fn repository(repository: worker::Repository, root: Token) -> charter::Repository {
-    let worker::Repository { name, path: _, writable } = repository;
-    charter::Repository { name, root, writable }
-}
-
-fn verdict(verdict: worker::Verdict) -> VerdictRule {
-    let worker::Verdict { name, min_children, max_children, kinds, fields } = verdict;
-    VerdictRule { name, children: Children { min: min_children, max: max_children }, kinds, fields }
-}
-
-/// The worker's change for the run's.
-#[must_use]
-pub fn change(change: Change) -> worker::Change {
-    let Change { title, body } = change;
-    worker::Change { title, body }
-}
-
-/// The run's push for the worker's.
-#[must_use]
-pub fn push(pushed: worker::Pushed) -> run::Push {
-    match pushed {
-        worker::Pushed::Done => run::Push::Done,
-        worker::Pushed::Moved => run::Push::Moved,
-        worker::Pushed::Failed => run::Push::Failed,
-    }
-}
-
-/// The worker's answer for the run's.
-#[must_use]
-pub fn answer(answer: &run::Answer) -> worker::Answer {
-    match answer {
-        run::Answer::Refused(run::Refusal::Busy) => worker::Answer::Busy,
-        run::Answer::Refused(run::Refusal::Invalid(_)) => worker::Answer::Invalid,
-        run::Answer::Accepted { outcome: _, spent } => worker::Answer::Done { usage: usage(*spent) },
-        run::Answer::Failed { failure, spent } => {
-            let reason = match failure {
-                run::Failure::Model(_) => worker::Reason::Model,
-                run::Failure::Budget(_) => worker::Reason::Budget,
-                run::Failure::Policy(run::Policy::Unfinished { .. }) => worker::Reason::Unfinished,
-                run::Failure::Cancelled => worker::Reason::Cancelled,
-                run::Failure::Stale => worker::Reason::Stale,
-            };
-            worker::Answer::Failed { reason, usage: usage(*spent) }
-        }
-    }
-}
-
-fn usage(spent: Spend) -> worker::Usage {
-    worker::Usage {
-        turns: spent.turns,
-        input_tokens: spent.input,
-        output_tokens: spent.output,
-        cache_read_tokens: spent.cache_read,
-        cache_write_tokens: spent.cache_write,
-    }
 }
 
 /// The provider's query for an agent's prompt: the schemas of the tools its

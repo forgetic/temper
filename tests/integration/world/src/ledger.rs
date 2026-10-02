@@ -56,6 +56,11 @@ impl<K: Ord + Copy + Debug, V> Ledger<K, V> {
         self.open.values()
     }
 
+    /// The keys of the requests in flight, in order.
+    pub fn keys(&self) -> btree_map::Keys<'_, K, V> {
+        self.open.keys()
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.open.is_empty()
