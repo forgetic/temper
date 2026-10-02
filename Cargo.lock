@@ -11,6 +11,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-agent-model-run"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+]
+
+[[package]]
 name = "temper-agent-model-session"
 version = "0.0.0"
 dependencies = [

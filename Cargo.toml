@@ -5,6 +5,7 @@ resolver = "3"
 members = [
     "crates/temper-lib",
     "crates/temper-agent-model",
+    "crates/temper-agent-model-run",
     "crates/temper-agent-model-session",
     "testing/temper-llm-model",
     "tests/integration/agent/session",
@@ -19,6 +20,7 @@ publish = false
 [workspace.dependencies]
 temper-lib = { path = "crates/temper-lib" }
 temper-agent-model = { path = "crates/temper-agent-model" }
+temper-agent-model-run = { path = "crates/temper-agent-model-run" }
 temper-agent-model-session = { path = "crates/temper-agent-model-session" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 
