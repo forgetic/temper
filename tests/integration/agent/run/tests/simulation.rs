@@ -377,6 +377,7 @@ fn noisy(seed: u64) -> Settings {
         asks: small(pick(0, 300)),
         bad_asks: small(pick(0, 300)),
         shares: small(pick(0, 500)),
+        parallel: small(pick(1, 4)),
         changes: small(pick(0, 1000)),
         good: small(pick(0, 1000)),
         yields: small(pick(0, 500)),
@@ -522,7 +523,7 @@ fn asking(seed: u64) -> Settings {
     let calm = Settings::calm(seed);
     Settings {
         worker: Config { agents: 1000, ..calm.worker },
-        partner: Script { asks: 300, finishes: 50, yields: 100, ..calm.partner },
+        partner: Script { asks: 300, finishes: 50, yields: 100, parallel: 3, ..calm.partner },
         ..calm
     }
 }
@@ -532,6 +533,12 @@ fn sub_agents_answer_their_askers_and_end_before_their_calls_return() {
     let world = settled(&asking(30));
     let stats = world.stats();
     assert!(stats.children > 4 && stats.partner.answered > 0, "{stats:?}");
+}
+
+#[test]
+fn read_only_sub_agents_asked_in_one_turn_run_side_by_side() {
+    let stats = settled(&asking(34)).stats();
+    assert!(stats.peak > 2 && stats.partner.answered > 2, "{stats:?}");
 }
 
 #[test]

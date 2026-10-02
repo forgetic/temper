@@ -133,6 +133,7 @@ impl Settings {
                 yields: 200,
                 bad_asks: 0,
                 shares: 0,
+                parallel: 1,
                 changes: 500,
                 good: 1000,
                 odd_stops: 0,
@@ -177,6 +178,8 @@ pub struct Stats {
     pub children: u32,
     pub says: u32,
     pub closes: u32,
+    /// The most conversations a run had live at once.
+    pub peak: u32,
     /// What the partner counted.
     pub partner: Tally,
 }
@@ -297,8 +300,9 @@ struct Made {
     run: Option<Token>,
     requests: u32,
     cancel: Option<(Token, &'static str)>,
-    /// The call, if the step took an ask for a sub-agent.
-    asked: Option<Token>,
+    /// The call, if the step took an ask for a sub-agent, and what its run had
+    /// left as it took it.
+    asked: Option<(Token, run::Budget)>,
 }
 
 /// A conversation's call, as the world tracks it.
@@ -370,10 +374,11 @@ pub struct World {
     deadline_cells: BTreeMap<&'static str, u32>,
     iteration: u64,
     /// The run the last request answered, for the iteration's attribution;
-    /// the call the step being attributed took, if it asked for a sub-agent;
-    /// and the sub-agent each such call opened, until it returns.
+    /// the call the step being attributed took, if it asked for a sub-agent,
+    /// with what its run had left then; and the sub-agent each such call
+    /// opened, until it returns.
     just_answered: Option<Token>,
-    asked: Option<Token>,
+    asked: Option<(Token, run::Budget)>,
     child_of_call: BTreeMap<Token, Token>,
 
     stats: Stats,
@@ -495,8 +500,11 @@ impl World {
             self.log(&format!("run <- {event:?}"));
             let run = self.run_of(&event);
             let cancel = self.note(&event, run);
+            // What the run has left as it takes an ask, before what else it
+            // takes in this iteration is counted.
             let asked = if let run::Event::Delegated { call, ask: run::Ask::SubAgent { .. }, .. } = &event {
-                Some(*call)
+                let left = run.map(|run| self.views[&run].budget_left(self.now));
+                left.map(|left| (*call, left))
             } else {
                 None
             };
@@ -824,14 +832,15 @@ impl World {
         let view = self.views.get_mut(&run).expect("a run is admitted before it opens a conversation");
         view.live += 1;
         view.peak = view.peak.max(view.live);
+        self.stats.peak = self.stats.peak.max(view.peak);
         match self.asked.take() {
             None => {
                 assert!(view.main.is_none(), "a run opens main once, and sub-agents when asked");
                 view.main = Some(conversation);
             }
-            Some(call) => {
-                // A sub-agent's share is within what its run has left.
-                let left = view.budget_left(self.now);
+            Some((call, left)) => {
+                // A sub-agent's share is within what its run had left as it
+                // took the ask.
                 let share = opening.budget;
                 assert!(
                     share.turns <= left.turns

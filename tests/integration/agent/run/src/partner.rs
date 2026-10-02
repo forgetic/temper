@@ -9,12 +9,16 @@
 //! - A started conversation takes turns, each a `Used` once its latency has
 //!   passed. After each, the script draws what the LLM does next: fail
 //!   (`Ended` with a fault), call `finish` (`Delegated`, then wait for its
-//!   `Return`), ask for a sub-agent (the same), yield (`Yielded`, then wait
-//!   for `Say` or `Close`), or carry on. A finish declares an outcome that
-//!   fits the fake worker's charters or one that breaks them, a change or a
-//!   verdict. An ask may want more than the asker has, or an LLM the charter
-//!   does not list, and may ask for a small share. A sub-agent may not
-//!   finish: where main would, it yields its answer.
+//!   `Return`), ask for sub-agents (the same, for each), yield (`Yielded`,
+//!   then wait for `Say` or `Close`), or carry on. A finish declares an
+//!   outcome that fits the fake worker's charters or one that breaks them, a
+//!   change or a verdict. An ask may want more than the asker has, or an LLM
+//!   the charter does not list, and may ask for a small share. A sub-agent
+//!   may not finish: where main would, it yields its answer.
+//! - A write runs alone, as a session runs it: a finish, or an ask for a
+//!   sub-agent that may modify or run commands. Asks for sub-agents that may
+//!   only look are read-only, and a turn may make several, which the session
+//!   runs side by side: the LLM carries on once they have all returned.
 //! - It keeps to its share of the budget as a session keeps to its ceilings:
 //!   it starts a turn only while turns, input and output each have some left; after a turn that went past any part of its share, it
 //!   settles that turn's call, if it made one, and ends out of budget. It
@@ -66,6 +70,8 @@ pub struct Script {
     /// and that it asks for a small share.
     pub bad_asks: u32,
     pub shares: u32,
+    /// The most read-only asks a turn makes at once.
+    pub parallel: u32,
     /// Of finishes, the chance, per mille, that the outcome is a change
     /// rather than a verdict, and that it fits the fake worker's charters.
     pub changes: u32,
@@ -159,13 +165,14 @@ enum Phase {
     Turning,
     /// Waiting for `Say` or `Close`: its wake is the expiry.
     Yielded,
-    /// Its call `call` (a finish, or an ask for a sub-agent) is in flight,
-    /// with no wake: the run returns it by the conversation's expiry. `over`
-    /// is the part of the share the turn that called it went past, if any.
-    Calling { call: Token, over: Option<Exhausted> },
-    /// Closed, it withdrew its call `call`, and waits for its return; then it
-    /// settles.
-    Withdrawn { call: Token },
+    /// Its `pending` calls (a finish, or asks for sub-agents) are in flight,
+    /// with no wake: the run returns them by the conversation's expiry.
+    /// `over` is the part of the share the turn that called went past, if
+    /// any.
+    Calling { pending: u32, over: Option<Exhausted> },
+    /// Closed, it withdrew its `pending` calls, and waits for them to return;
+    /// then it settles.
+    Withdrawn { pending: u32 },
     /// Closed, settling: its wake ends it. `in_flight` says a turn was.
     Closing { in_flight: bool },
 }
@@ -257,12 +264,16 @@ impl Partner {
         let in_flight = match talk.phase {
             Phase::Turning => true,
             Phase::Yielded => false,
-            // It withdraws its call in flight and waits for it to return,
+            // It withdraws its calls in flight and waits for them to return,
             // with no wake.
-            Phase::Calling { call, over: _ } => {
-                talk.phase = Phase::Withdrawn { call };
-                out.push(Out::Event(Event::Withdraw { conversation, call }));
-                self.tally.withdrawn += 1;
+            Phase::Calling { pending, over: _ } => {
+                talk.phase = Phase::Withdrawn { pending };
+                for (call, of) in &self.calls {
+                    if *of == peer {
+                        out.push(Out::Event(Event::Withdraw { conversation, call: *call }));
+                        self.tally.withdrawn += 1;
+                    }
+                }
                 return;
             }
             Phase::Withdrawn { .. } | Phase::Closing { .. } => panic!("the run closes a conversation once"),
@@ -271,9 +282,9 @@ impl Partner {
         self.wake(now.saturating_add(settle), peer, out);
     }
 
-    /// The run's answer to the finish `call`.
+    /// The run's answer to the call `call`.
     pub fn returned(&mut self, now: Time, call: Token, result: &Returned, out: &mut Vec<Out>) {
-        let peer = self.calls.remove(&call).expect("a return names a finish in flight");
+        let peer = self.calls.remove(&call).expect("a return names a call in flight");
         match result {
             Returned::Accepted => self.tally.accepted += 1,
             Returned::Rejected { .. } => self.tally.rejected += 1,
@@ -293,16 +304,17 @@ impl Partner {
             assert!(now >= expires, "a call times out only once its deadline has passed");
         }
         match talk.phase {
-            Phase::Calling { call: calling, over } => {
-                assert_eq!(calling, call, "a conversation has one call in flight");
-                match over {
-                    Some(exhausted) => self.end(peer, End::Budget(exhausted), out),
-                    None if now >= expires => self.end(peer, End::Budget(Exhausted::Time), out),
-                    None => self.carry_on(now, peer, out),
-                }
+            Phase::Calling { pending, over } if pending > 1 => {
+                talk.phase = Phase::Calling { pending: pending - 1, over }
             }
-            Phase::Withdrawn { call: withdrawn } => {
-                assert_eq!(withdrawn, call, "a conversation has one call in flight");
+            Phase::Withdrawn { pending } if pending > 1 => talk.phase = Phase::Withdrawn { pending: pending - 1 },
+            // Its last call in flight returned.
+            Phase::Calling { pending: _, over } => match over {
+                Some(exhausted) => self.end(peer, End::Budget(exhausted), out),
+                None if now >= expires => self.end(peer, End::Budget(Exhausted::Time), out),
+                None => self.carry_on(now, peer, out),
+            },
+            Phase::Withdrawn { pending: _ } => {
                 let settle = self.draw(self.script.settle);
                 let talk = self.talks.get_mut(&peer).expect("a live conversation");
                 talk.phase = Phase::Closing { in_flight: false };
@@ -387,18 +399,34 @@ impl Partner {
     fn finish(&mut self, peer: Token, over: Option<Exhausted>, out: &mut Vec<Out>) {
         let outcome = self.outcome();
         self.tally.finishes += 1;
-        self.call(peer, over, Ask::Finish { outcome }, out);
+        let asks = [Ask::Finish { outcome }];
+        self.call(peer, over, asks, out);
     }
 
-    /// The LLM asks for a sub-agent, as the script draws it.
+    /// The LLM asks for sub-agents, as the script draws them: one, or several
+    /// that may only look.
     fn ask(&mut self, peer: Token, out: &mut Vec<Out>) {
+        let count = self.rng.between(1, u64::from(self.script.parallel.max(1)));
+        let asks: Vec<Ask> = (0..count).map(|_| self.sub_agent(peer, count > 1)).collect();
+        self.tally.asks += u32::try_from(count).expect("a few");
+        self.call(peer, None, asks, out);
+    }
+
+    /// An ask for a sub-agent, as the script draws it: `read_only`, if it may
+    /// only look.
+    fn sub_agent(&mut self, peer: Token, read_only: bool) -> Ask {
         let own = self.talks[&peer].families;
         let bad = self.rng.chance(self.script.bad_asks);
         let mut families = Families { agents: self.rng.chance(500) && own.agents, ..own };
+        if read_only {
+            families.tools.modify = false;
+            families.tools.shell = false;
+        }
         let mut llm = if self.rng.chance(300) { Some(b"fake-2"[..].into()) } else { None };
         if bad {
-            // More than it has, if it lacks anything; else an unknown LLM.
-            if own.tools.shell && own.tools.modify {
+            // More than it has, if it lacks anything and may want it; else an
+            // unknown LLM.
+            if read_only || (own.tools.shell && own.tools.modify) {
                 llm = Some(b"fake-9"[..].into());
             } else {
                 families.tools.shell = true;
@@ -417,19 +445,24 @@ impl Partner {
             None
         };
         let brief = b"Look into the parser, and say what you found."[..].into();
-        self.tally.asks += 1;
-        self.call(peer, None, Ask::SubAgent { brief, families, llm, share }, out);
+        Ask::SubAgent { brief, families, llm, share }
     }
 
-    /// The LLM's turn called the run for `ask`, `over` its share if it went
-    /// past it. The call is due by the conversation's expiry.
-    fn call(&mut self, peer: Token, over: Option<Exhausted>, ask: Ask, out: &mut Vec<Out>) {
-        let call = self.mint();
+    /// The LLM's turn called the run for `asks`, side by side, `over` its
+    /// share if it went past it. Each call is due by the conversation's
+    /// expiry.
+    fn call(&mut self, peer: Token, over: Option<Exhausted>, asks: impl IntoIterator<Item = Ask>, out: &mut Vec<Out>) {
+        let mut pending = 0;
+        for ask in asks {
+            let call = self.mint();
+            let talk = &self.talks[&peer];
+            let (conversation, deadline) = (talk.conversation, talk.expires);
+            self.calls.insert(call, peer);
+            out.push(Out::Event(Event::Delegated { conversation, call, ask, deadline }));
+            pending += 1;
+        }
         let talk = self.talks.get_mut(&peer).expect("a live conversation calls");
-        talk.phase = Phase::Calling { call, over };
-        let (conversation, deadline) = (talk.conversation, talk.expires);
-        self.calls.insert(call, peer);
-        out.push(Out::Event(Event::Delegated { conversation, call, ask, deadline }));
+        talk.phase = Phase::Calling { pending, over };
     }
 
     /// An outcome to declare: a change or a verdict, one that fits the fake
