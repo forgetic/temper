@@ -7,8 +7,9 @@
 //! and its budget; when it calls `finish`, the run judges the outcome, and
 //! lands a change (the `land` module). It works until how it ends is decided;
 //! then it closes main, waits for main to end, and answers. The first ending
-//! decided wins, and the run answers only once nothing it started is still in
-//! flight.
+//! decided wins, but for a change that lands: once it is pushed, it is on the
+//! forge, and the run finishes with it whatever it was winding down for. The
+//! run answers only once nothing it started is still in flight.
 //!
 //! A run that spends past its budget does not cut main off mid-turn: main
 //! keeps the turn in flight (Over), and is closed at its next turn or yield,
@@ -52,7 +53,8 @@
 //!            deadline                      Winding    close main: out of budget
 //!            cancel                        Winding    close main: cancelled
 //!            main ended                    Closed     answer: how main ended
-//! Winding    used, cancel, landed          Winding
+//! Winding    landed: pushed                Winding    (accepted)
+//!            used, cancel, landed          Winding
 //!            finish                        Winding    return: cancelled
 //!            main ended                    Closed     answer: the ending decided
 //! Closed     cancel                        Closed
@@ -519,11 +521,10 @@ pub(crate) fn aborted(model: &mut Model, owner: Token, out: &mut Queue<Request>)
 pub(crate) fn pushed(model: &mut Model, owner: Token, push: Push, out: &mut Queue<Request>) {
     let id = Id::<Call>::from_token(owner);
     let call = model.calls.get_mut(id).expect("a call lives until it returns");
-    let run = model.runs.get(call.run).expect("a run lives until its calls have returned");
     model.facts.about(call.run.token());
     model.facts.push(Fact::Pushed { run: call.run.token(), push });
     let settled = match &mut call.work {
-        Work::Landing(landing) => land::pushed(landing, call.owner, may_finish(&run.state), push, out),
+        Work::Landing(landing) => land::pushed(landing, call.owner, push, out),
         Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
     };
     settle(model, id, settled, out);
@@ -672,8 +673,13 @@ fn settle(model: &mut Model, id: Id<Call>, settled: Settled, out: &mut Queue<Req
             State::Working { reply_to, main } | State::Over { reply_to, main, exhausted: _ } => {
                 wind_down(conversations, reply_to, main, Ending::Accepted(Declared::Change(change)), out)
             }
-            State::Preparing { .. } | State::Stopping { .. } | State::Winding { .. } | State::Closed => {
-                unreachable!("a change is accepted only while its run may finish")
+            // The change is on the forge, whatever the run was winding down
+            // for: main is closing already.
+            State::Winding { reply_to, ending: _ } => {
+                State::Winding { reply_to, ending: Ending::Accepted(Declared::Change(change)) }
+            }
+            State::Preparing { .. } | State::Stopping { .. } | State::Closed => {
+                unreachable!("a run lands a change only once it has opened main, and before it answers")
             }
         },
         Settled::Refused => {

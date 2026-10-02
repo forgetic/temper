@@ -17,8 +17,10 @@
 //! push is a fast-forward from where the run started, so no later one can
 //! land, and the LLM cannot fix that. The call is its conversation's:
 //! a withdraw stops what is in flight, and the call returns once that has
-//! settled. A change is accepted only once it is pushed, and only while its
-//! run may still finish.
+//! settled. A change is accepted only once it is pushed, and once it is
+//! pushed it is accepted, whatever its run is winding down for meanwhile: it
+//! is on the forge. Checks that pass once the run may no longer finish push
+//! nothing.
 //!
 //! ```text
 //! state      event                        next       emits
@@ -141,23 +143,15 @@ pub(crate) fn aborted(landing: &mut Landing, owner: Token, out: &mut Queue<Reque
 }
 
 /// The push of a call its conversation names `owner` ended as `push`.
-/// `may_finish` says whether its run may still finish.
-pub(crate) fn pushed(
-    landing: &mut Landing,
-    owner: Token,
-    may_finish: bool,
-    push: Push,
-    out: &mut Queue<Request>,
-) -> Settled {
+pub(crate) fn pushed(landing: &mut Landing, owner: Token, push: Push, out: &mut Queue<Request>) -> Settled {
     let stage = mem::replace(&mut landing.stage, Stage::Closed);
     match stage {
         // A push that won the race with a withdraw has landed all the same.
         Stage::Pushing | Stage::Unpushing => match push {
-            Push::Done if may_finish => {
+            Push::Done => {
                 let change = landing.change.clone();
                 back(owner, Returned::Accepted, Settled::Pushed(change), out)
             }
-            Push::Done => back(owner, Returned::Cancelled, Settled::Cancelled, out),
             Push::Moved => back(owner, Returned::Moved, Settled::Stale, out),
             Push::Failed => back(owner, Returned::Unpushed, Settled::Refused, out),
         },

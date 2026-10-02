@@ -845,9 +845,10 @@ impl World {
         let start = self.starts.get_mut(&owner).expect("an answer is to a start that was made");
         assert!(start.answer.is_none(), "a start is answered once");
         assert_within(&start.budget, &answer, self.partner.turn_max());
-        if let run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. } = &answer {
-            assert!(self.pushed.contains(&owner), "a change is accepted only once it is pushed");
-        }
+        // A change is accepted only once it is pushed, and once it is pushed,
+        // whatever the run was winding down for.
+        let change = matches!(&answer, run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. });
+        assert_eq!(change, self.pushed.contains(&owner), "a change is accepted if and only if it is pushed");
         // A run answers once its main conversation, if it opened one, and
         // every other conversation it opened have ended.
         if let Some(run) = self.run_of_owner.get(&owner) {

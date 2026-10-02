@@ -780,7 +780,7 @@ fn a_cancel_while_a_change_is_checked_stops_the_checks_once_main_withdraws_its_c
 }
 
 #[test]
-fn a_cancel_while_a_change_is_pushed_wins_over_the_push() {
+fn a_push_that_lands_while_a_cancel_closes_main_wins_over_it() {
     let mut h = Harness::new(LIMITS);
     let (run, conversation) = h.coding(1, 100);
     let owner = h.land(conversation, 7);
@@ -788,10 +788,11 @@ fn a_cancel_while_a_change_is_pushed_wins_over_the_push() {
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
     assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
     assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(7) }), &[Request::CancelHost { owner }]);
-    // The push won the race with its cancel, and loses to the run's.
-    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(7, Returned::Cancelled)]);
+    // The push won the race with its cancel: the change is on the forge.
+    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(7, Returned::Accepted)]);
     let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
-    assert_eq!(answered(emitted), (1, cancelled()));
+    let accepted = Answer::Accepted { outcome: Declared::Change(change()), spent: Spend::ZERO };
+    assert_eq!(answered(emitted), (1, accepted));
 
     // Or the cancel wins its race.
     let (run, conversation) = h.coding(2, 101);
@@ -803,6 +804,49 @@ fn a_cancel_while_a_change_is_pushed_wins_over_the_push() {
     assert_eq!(&*h.step(Event::HostCancelled { owner }), &[returned(8, Returned::Cancelled)]);
     let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
     assert_eq!(answered(emitted), (2, cancelled()));
+}
+
+#[test]
+fn a_push_that_lands_after_the_deadline_wins_over_it() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    h.after(BUDGET.time);
+    assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(100) }]);
+    // The push lands before main withdraws its call.
+    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(7, Returned::Accepted)]);
+    assert!(h.step(Event::Withdraw { conversation, call: Token::new(7) }).is_empty(), "returned already");
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    let accepted = Answer::Accepted { outcome: Declared::Change(change()), spent: Spend::ZERO };
+    assert_eq!(answered(emitted), (1, accepted));
+
+    // Over the budget, too.
+    let (_, conversation) = h.coding(2, 101);
+    drop(h.step(Event::Used { conversation, spend: spend(BUDGET.input + 1) }));
+    let owner = h.land(conversation, 8);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    h.after(BUDGET.time);
+    assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(101) }]);
+    assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(8) }), &[Request::CancelHost { owner }]);
+    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(8, Returned::Accepted)]);
+    let total = spend(BUDGET.input + 1);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: total });
+    assert_eq!(answered(emitted), (2, Answer::Accepted { outcome: Declared::Change(change()), spent: total }));
+}
+
+#[test]
+fn checks_that_pass_once_the_run_winds_down_push_nothing() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    h.after(BUDGET.time);
+    assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(100) }]);
+    assert_eq!(&*h.step(Event::Checked { owner, ran: ran(0, b"") }), &[returned(7, Returned::Cancelled)]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Time), Spend::ZERO)));
 }
 
 #[test]
