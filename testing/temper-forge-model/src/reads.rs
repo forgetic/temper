@@ -23,6 +23,16 @@ pub(crate) fn read(model: &Model, limits: &Limits, id: Id<Repository>, read: &Re
         }
         Read::Item { number, after } => item(repository, limits, *number, *after),
         Read::Pull { number } => pulls::view(model, limits, repository, *number),
+        Read::PullFor { head, base } => match repository.newest_pull(head, base) {
+            Some(number) => pulls::view(model, limits, repository, number),
+            None => Err(Error::Missing(What::Pull)),
+        },
+        Read::Statuses { commit } => {
+            if !repository.has.contains(commit) {
+                return Err(Error::Missing(What::Commit));
+            }
+            Ok(Answer::Statuses(pulls::statuses(repository, limits, *commit)))
+        }
         Read::Permission { user } => Ok(Answer::Permission(repository.permission(*user))),
         Read::Branch { branch } => match repository.branches.get(&**branch) {
             Some(&commit) => Ok(Answer::Commit(commit)),

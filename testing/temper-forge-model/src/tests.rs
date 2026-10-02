@@ -382,6 +382,16 @@ fn repository() -> Box<[u8]> {
     copy_of(REPOSITORY)
 }
 
+/// CI reported a commit pending.
+fn pending(commit: u64) -> Observation {
+    Observation::Reported { repository: repository(), commit, context: copy_of(b"ci"), state: Check::Pending, by: CI }
+}
+
+/// The engine moved a branch.
+fn moved(branch: &[u8], from: Option<u64>, to: u64) -> Observation {
+    Observation::Moved { repository: repository(), branch: copy_of(branch), from, to, by: ENGINE }
+}
+
 fn numbers(list: &List<u64>) -> &[u64] {
     list.as_slice()
 }
@@ -804,6 +814,17 @@ fn a_merge_at_a_head_that_moved_is_stale() {
 }
 
 #[test]
+fn a_merge_of_what_the_base_has_already_is_refused() {
+    let mut h = Harness::new(CALM);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    h.push(MAINTAINER, MAIN, work).expect("pushed to the base directly");
+    assert!(!h.pull(1).mergeable);
+    assert_eq!(h.call(ENGINE, merge(1, work)), Err(Error::NothingToMerge));
+}
+
+#[test]
 fn protection_wants_green_ci_and_approvals_on_the_exact_head() {
     let mut setup = setup();
     setup.protection = Some(Protection { branch: copy_of(MAIN), contexts: names(&[b"ci"]), approvals: 1 });
@@ -1184,4 +1205,122 @@ fn observations_beyond_the_queue_are_dropped_and_counted() {
     assert_eq!(h.model.observations_lost(), 1);
     h.issue(PERSON, b"more");
     assert_eq!(h.observations().len(), 1, "room again once drained");
+}
+
+#[test]
+fn a_pull_request_is_found_by_its_branches_and_statuses_by_their_commit() {
+    let mut h = Harness::new(CALM);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    let find = read(Read::PullFor { head: copy_of(b"work"), base: copy_of(MAIN) });
+    assert_eq!(h.call(PERSON, find.clone()), Err(Error::Missing(What::Pull)));
+    h.open(b"work").expect("opened");
+    h.ok(ENGINE, write(Write::Close { number: 1 }));
+    h.open(b"work").expect("opened again");
+    let Answer::Pull(pull) = h.ok(PERSON, find.clone()) else {
+        unreachable!("a pull request");
+    };
+    assert_eq!((pull.number, pull.state), (2, State::Open), "the newest");
+    h.ok(ENGINE, write(Write::Close { number: 2 }));
+    let Answer::Pull(pull) = h.ok(PERSON, find) else {
+        unreachable!("a pull request");
+    };
+    assert_eq!((pull.number, pull.state), (2, State::Closed), "open or not");
+    h.settle();
+    let Answer::Statuses(statuses) = h.ok(PERSON, read(Read::Statuses { commit: work })) else {
+        unreachable!("statuses");
+    };
+    assert_eq!(statuses.len(), 1);
+    assert_eq!((&*statuses[0].context, statuses[0].state), (&b"ci"[..], Check::Passed));
+    assert_eq!(h.ok(PERSON, read(Read::Statuses { commit: FIRST })), Answer::Statuses(Box::new([])), "never a head");
+    assert_eq!(h.call(PERSON, read(Read::Statuses { commit: 99 })), Err(Error::Missing(What::Commit)));
+}
+
+#[test]
+fn observations_and_webhooks_follow_branches_pull_requests_and_the_wiki() {
+    let mut setup = setup();
+    setup.checks.silent = 1000;
+    let mut h = Harness::with(CALM, setup);
+    h.ok(ENGINE, define(b"later"));
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    let more = h.commit(work, &[(b"src", b"two")]);
+    h.push(ENGINE, b"work", more).expect("pushed");
+    h.ok(MAINTAINER, review(1, Verdict::Approve));
+    let Answer::Merged(merged) = h.ok(ENGINE, merge(1, more)) else {
+        unreachable!("merged");
+    };
+    h.ok(ENGINE, delete_branch(b"work"));
+    h.ok(ENGINE, put(b"home", b"notes"));
+    h.ok(ENGINE, write(Write::DeletePage { name: copy_of(b"home") }));
+    let expected = [
+        Observation::Defined { repository: repository(), label: copy_of(b"later"), by: ENGINE },
+        moved(b"work", None, work),
+        pending(work),
+        Observation::Opened {
+            repository: repository(),
+            number: 1,
+            kind: Kind::Pull,
+            title: copy_of(b"change"),
+            body: copy_of(b"body"),
+            labels: names(&[]),
+            by: ENGINE,
+        },
+        moved(b"work", Some(work), more),
+        pending(more),
+        Observation::Reviewed {
+            repository: repository(),
+            number: 1,
+            commit: more,
+            verdict: Verdict::Approve,
+            body: copy_of(b"looked"),
+            by: MAINTAINER,
+        },
+        Observation::Merged { repository: repository(), number: 1, head: more, commit: merged, by: ENGINE },
+        moved(MAIN, Some(FIRST), merged),
+        pending(merged),
+        Observation::Deleted { repository: repository(), branch: copy_of(b"work"), at: more, by: ENGINE },
+        Observation::Wiki {
+            repository: repository(),
+            name: copy_of(b"home"),
+            content: Some(copy_of(b"notes")),
+            revision: 1,
+            by: ENGINE,
+        },
+        Observation::Wiki { repository: repository(), name: copy_of(b"home"), content: None, revision: 2, by: ENGINE },
+    ];
+    assert_eq!(h.observations().as_slice(), expected);
+    let number = h.issue(PERSON, b"talk");
+    let id = h.comment(PERSON, number, b"oops");
+    h.ok(PERSON, write(Write::DeleteComment { id }));
+    h.ok(PERSON, write(Write::Close { number }));
+    h.ok(PERSON, write(Write::Reopen { number }));
+    let observed = h.observations();
+    let tail = observed.as_slice().get(2..).expect("the comment and its state");
+    let expected = [
+        Observation::Removed { repository: repository(), number, id, by: PERSON },
+        Observation::Closed { repository: repository(), number, by: PERSON },
+        Observation::Reopened { repository: repository(), number, by: PERSON },
+    ];
+    assert_eq!(tail, expected);
+    h.settle();
+    let heard = h.heard();
+    for (hook, times) in [
+        ((Change::Push, None), 4),
+        ((Change::Status, None), 3),
+        ((Change::Pull, Some(1)), 3),
+        ((Change::Review, Some(1)), 1),
+        ((Change::Wiki, None), 2),
+        ((Change::Issue, Some(number)), 3),
+        ((Change::Comment, Some(number)), 2),
+    ] {
+        let mut count: u32 = 0;
+        for &other in &heard {
+            if other == hook {
+                count = count.checked_add(1).expect("few");
+            }
+        }
+        assert_eq!(count, times, "each change heard once, a pull request's new head too");
+    }
 }

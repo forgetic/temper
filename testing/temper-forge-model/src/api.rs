@@ -51,6 +51,12 @@ pub enum Read {
     /// The pull request `number`, its reviews and the statuses on its head.
     /// Answered by [`Answer::Pull`].
     Pull { number: u64 },
+    /// The newest pull request, open or not, that merges `head` into
+    /// `base`. Answered by [`Answer::Pull`].
+    PullFor { head: Box<[u8]>, base: Box<[u8]> },
+    /// The latest status of each context on `commit`, which the repository
+    /// has. Answered by [`Answer::Statuses`].
+    Statuses { commit: u64 },
     /// The permission of `user`. Answered by [`Answer::Permission`].
     Permission { user: u64 },
     /// Where `branch` is. Answered by [`Answer::Commit`].
@@ -196,6 +202,8 @@ pub enum Answer {
         more: bool,
     },
     Pull(Pull),
+    /// In their contexts' order.
+    Statuses(Box<[Status]>),
     Permission(Permission),
     /// Where a branch is, or what a fetch fetched.
     Commit(u64),

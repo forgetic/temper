@@ -193,14 +193,7 @@ pub(crate) fn view(model: &Model, limits: &Limits, repository: &Repository, numb
     for review in &pull.reviews {
         reviews.push(review.clone()).expect("a list as long as the reviews");
     }
-    let mut statuses = List::with_capacity(limits.contexts);
-    if let Some(on) = repository.statuses.get(&pull.commit) {
-        for (context, status) in on {
-            let view =
-                StatusView { context: copy_of(context), state: status.state, author: status.author, at: status.at };
-            statuses.push(view).expect("no more contexts than the limits");
-        }
-    }
+    let statuses = statuses(repository, limits, pull.commit);
     Ok(Answer::Pull(PullView {
         number,
         state: item.state,
@@ -211,8 +204,21 @@ pub(crate) fn view(model: &Model, limits: &Limits, repository: &Repository, numb
         merged: pull.merged,
         mergeable,
         reviews: reviews.into_boxed(),
-        statuses: statuses.into_boxed(),
+        statuses,
     }))
+}
+
+/// The latest status of each context on `commit`, in their contexts' order.
+pub(crate) fn statuses(repository: &Repository, limits: &Limits, commit: u64) -> Box<[StatusView]> {
+    let mut statuses = List::with_capacity(limits.contexts);
+    if let Some(on) = repository.statuses.get(&commit) {
+        for (context, status) in on {
+            let view =
+                StatusView { context: copy_of(context), state: status.state, author: status.author, at: status.at };
+            statuses.push(view).expect("no more contexts than the limits");
+        }
+    }
+    statuses.into_boxed()
 }
 
 /// Whether the base's protection, if it has one, lets the pull request

@@ -219,6 +219,21 @@ impl Repository {
         None
     }
 
+    /// The newest pull request, open or not, that merges `head` into `base`,
+    /// if there is one.
+    pub(crate) fn newest_pull(&self, head: &[u8], base: &[u8]) -> Option<u64> {
+        let mut newest = None;
+        for (&number, item) in &self.items {
+            if let Some(pull) = &item.pull
+                && *pull.head == *head
+                && *pull.base == *base
+            {
+                newest = Some(number);
+            }
+        }
+        newest
+    }
+
     /// The open pull requests whose head is `commit`.
     pub(crate) fn heads(&self, commit: u64) -> List<u64> {
         let mut numbers = List::with_capacity(self.items.len());
