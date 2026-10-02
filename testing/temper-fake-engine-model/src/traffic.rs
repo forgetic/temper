@@ -2,18 +2,21 @@
 //! they relay to it.
 //!
 //! - **Inbound events** go to a live attempt at drawn moments, up to the
-//!   configured number; one bounced for want of room may be sent again. A
-//!   cancelled attempt gets none.
+//!   configured number; one bounced for want of room may be sent again,
+//!   within that number. A cancelled attempt gets none.
 //! - **Cancels** go to some attempts at a drawn moment, and again to those a
 //!   hello lists but the engine no longer keeps. Some go late, to attempts
 //!   that have answered; and some inbound events go to attempts their items
 //!   have replaced. A worker must drop both.
 //! - **Relayed calls** from a live attempt are answered once, after a drawn
-//!   latency, with an opaque body or an error, even if the attempt has
-//!   answered meanwhile. Those of an attempt the engine has cancelled or
-//!   presumed lost are dropped as they come (engine-model.md, section 8),
-//!   and so are those whose worker is out of contact past the grace when
-//!   their answer falls due.
+//!   latency, with an opaque body, error-shaped by chance, even if the
+//!   attempt has answered meanwhile. A call whose worker is out of contact
+//!   past the grace when its answer falls due is dropped.
+//!
+//! Attempts are fenced (engine-model.md, section 8): a call or a bounce for
+//! an attempt that has answered, was cancelled or was presumed lost is
+//! counted and dropped as it comes. A worker may still send them, queued
+//! before the attempt's answer or in flight when its channel dropped.
 //!
 //! Nothing is sent to a worker out of contact: an alarm that falls due
 //! meanwhile fires again later, while its attempt is still out; traffic for
@@ -32,7 +35,7 @@ use core::mem;
 
 use temper_lib::{Env, Id, Queue, Token};
 
-use crate::api::{Bounce, Reply};
+use crate::api::Bounce;
 use crate::charter;
 use crate::fleet::{self, Contact};
 use crate::model::{Alarm, Config, Model, Request};
@@ -44,6 +47,12 @@ const EVENT: &[u8] = b"A person says: please also update the changelog. ";
 /// What a relayed call's answer says, over and over.
 const ANSWER: &[u8] = b"Issue 42: the parser fails on empty input. ";
 
+/// What a relayed call's error says, over and over.
+const ERROR: &[u8] = b"error: the forge could not be read. ";
+
+/// Why the calls in flight always fit: see [`Config::calls`].
+const CALLS: &str = "config.calls covers the worker's calls in flight, and those closed until the reclaim point";
+
 /// A relayed call being answered.
 #[derive(Debug)]
 pub(crate) enum Call {
@@ -54,8 +63,8 @@ pub(crate) enum Call {
     Closed,
 }
 
-/// The attempt's inbound alarm: an event, if it is live and its worker in
-/// contact.
+/// The attempt's inbound alarm: an event, if it is live, its worker in
+/// contact, and it has not had as many as configured.
 pub(crate) fn inbound(model: &mut Model, env: &Env<Config>, attempt: Token, out: &mut Queue<Request>) {
     let config = &env.limits;
     let Model { attempts, workers, timers, rng, tally, .. } = model;
@@ -65,7 +74,10 @@ pub(crate) fn inbound(model: &mut Model, env: &Env<Config>, attempt: Token, out:
         Attempted::Cancelled => return,
         Attempted::Lost => unreachable!("an attempt's alarms stop once it is lost"),
     }
-    let send = match fleet::contact(workers, record.worker) {
+    if record.sent >= config.inbound {
+        return;
+    }
+    let again = match fleet::contact(workers, record.worker) {
         Contact::Up => {
             let event = charter::text(EVENT, rng.between(u64::from(config.event_min), u64::from(config.event_max)));
             out.push(Request::Inbound { worker: record.worker, run: record.item.token(), attempt, event });
@@ -76,7 +88,7 @@ pub(crate) fn inbound(model: &mut Model, env: &Env<Config>, attempt: Token, out:
         Contact::Lost => true,
         Contact::Gone => unreachable!("an attempt on a worker gone is lost"),
     };
-    if send {
+    if again {
         let at = after(env, rng.between(config.inbound_min.as_nanos(), config.inbound_max.as_nanos()));
         timers.arm(Alarm::Inbound(attempt), at).expect("a timer per attempt");
     }
@@ -87,24 +99,24 @@ pub(crate) fn cancel(model: &mut Model, env: &Env<Config>, attempt: Token, out: 
     let config = &env.limits;
     let Model { attempts, workers, timers, rng, tally, .. } = model;
     let record = attempts.get_mut(&attempt).expect("an attempt's alarms stop once it answers");
-    record.state = match mem::replace(&mut record.state, Attempted::Lost) {
-        Attempted::Live => match fleet::contact(workers, record.worker) {
-            Contact::Up => {
-                out.push(Request::Cancel { worker: record.worker, run: record.item.token(), attempt });
-                tally.cancels = tally.cancels.saturating_add(1);
-                Attempted::Cancelled
-            }
-            Contact::Lost => {
-                let at = after(env, rng.between(config.cancel_min.as_nanos(), config.cancel_max.as_nanos()));
-                timers.arm(Alarm::Cancel(attempt), at).expect("a timer per attempt");
-                Attempted::Live
-            }
-            Contact::Gone => unreachable!("an attempt on a worker gone is lost"),
-        },
+    match record.state {
+        Attempted::Live => {}
         Attempted::Cancelled | Attempted::Lost => {
             unreachable!("an attempt's cancel alarm stops once it is cancelled or lost")
         }
-    };
+    }
+    match fleet::contact(workers, record.worker) {
+        Contact::Up => {
+            out.push(Request::Cancel { worker: record.worker, run: record.item.token(), attempt });
+            tally.cancels = tally.cancels.saturating_add(1);
+            record.state = Attempted::Cancelled;
+        }
+        Contact::Lost => {
+            let at = after(env, rng.between(config.cancel_min.as_nanos(), config.cancel_max.as_nanos()));
+            timers.arm(Alarm::Cancel(attempt), at).expect("a timer per attempt");
+        }
+        Contact::Gone => unreachable!("an attempt on a worker gone is lost"),
+    }
 }
 
 /// From the ready list: cancels an attempt a hello listed, if it has not
@@ -154,22 +166,24 @@ pub(crate) fn stale(
 }
 
 /// An inbound event was bounced: one bounced for want of room may be sent
-/// again, while its attempt is live.
-pub(crate) fn bounced(model: &mut Model, env: &Env<Config>, run: Token, attempt: Token, bounce: Bounce) {
+/// again, while its attempt is live and has had fewer than configured.
+/// A bounce for a fenced attempt is dropped.
+pub(crate) fn bounced(model: &mut Model, env: &Env<Config>, worker: Token, run: Token, attempt: Token, bounce: Bounce) {
     let config = &env.limits;
-    work::check_made(model.made, attempt);
-    let record = model.attempts.get(&attempt).expect("an attempt bounces events before it answers");
-    assert!(record.item == Id::from_token(run), "a bounce names its attempt's run");
+    match work::state(model, worker, run, attempt) {
+        Some(Attempted::Live) => {}
+        Some(Attempted::Cancelled | Attempted::Lost) | None => {
+            model.tally.fenced = model.tally.fenced.saturating_add(1);
+            return;
+        }
+    }
     model.tally.bounced = model.tally.bounced.saturating_add(1);
     match bounce {
         Bounce::Full => {}
         Bounce::TooLarge | Bounce::Ending => return,
     }
-    match record.state {
-        Attempted::Live => {}
-        Attempted::Cancelled | Attempted::Lost => return,
-    }
-    if model.rng.chance(config.resends) {
+    let sent = model.attempts.get(&attempt).expect("a live attempt has not answered").sent;
+    if sent < config.inbound && model.rng.chance(config.resends) {
         let at = after(env, model.rng.between(config.inbound_min.as_nanos(), config.inbound_max.as_nanos()));
         model.timers.arm(Alarm::Inbound(attempt), at).expect("a timer per attempt");
         model.tally.resent = model.tally.resent.saturating_add(1);
@@ -177,22 +191,19 @@ pub(crate) fn bounced(model: &mut Model, env: &Env<Config>, run: Token, attempt:
 }
 
 /// A relayed call: answered later if its attempt is live, else dropped.
-pub(crate) fn relay(model: &mut Model, env: &Env<Config>, run: Token, attempt: Token, call: Token) {
+pub(crate) fn relay(model: &mut Model, env: &Env<Config>, worker: Token, run: Token, attempt: Token, call: Token) {
     let config = &env.limits;
-    work::check_made(model.made, attempt);
-    let record = model.attempts.get(&attempt).expect("an attempt relays calls before it answers");
-    assert!(record.item == Id::from_token(run), "a call names its attempt's run");
-    model.tally.relayed = model.tally.relayed.saturating_add(1);
-    match record.state {
-        Attempted::Live => {}
-        Attempted::Cancelled | Attempted::Lost => {
-            model.tally.dropped = model.tally.dropped.saturating_add(1);
+    match work::state(model, worker, run, attempt) {
+        Some(Attempted::Live) => {}
+        Some(Attempted::Cancelled | Attempted::Lost) | None => {
+            model.tally.fenced = model.tally.fenced.saturating_add(1);
             return;
         }
     }
-    assert!(model.named.insert((attempt, call)) == Ok(true), "a run names its calls in flight apart");
-    let waiting = Call::Waiting { worker: record.worker, run, attempt, call };
-    let id = model.calls.insert(waiting).expect("room for every call in flight");
+    model.tally.relayed = model.tally.relayed.saturating_add(1);
+    let fresh = model.named.insert((attempt, call)).expect(CALLS);
+    assert!(fresh, "a run names its calls in flight apart");
+    let id = model.calls.insert(Call::Waiting { worker, run, attempt, call }).expect(CALLS);
     let at = after(env, model.rng.between(config.relay_min.as_nanos(), config.relay_max.as_nanos()));
     model.timers.arm(Alarm::Call(id), at).expect("a timer per call");
 }
@@ -205,14 +216,14 @@ pub(crate) fn reply(model: &mut Model, env: &Env<Config>, id: Id<Call>, out: &mu
     *pending = match mem::replace(pending, Call::Closed) {
         Call::Waiting { worker, run, attempt, call } => match fleet::contact(workers, worker) {
             Contact::Up => {
-                let reply = if rng.chance(config.relay_errors) {
+                let len = rng.between(u64::from(config.answer_min), u64::from(config.answer_max));
+                let answer = if rng.chance(config.relay_errors) {
                     tally.errors = tally.errors.saturating_add(1);
-                    Reply::Error
+                    charter::text(ERROR, len)
                 } else {
-                    let len = rng.between(u64::from(config.answer_min), u64::from(config.answer_max));
-                    Reply::Answer { body: charter::text(ANSWER, len) }
+                    charter::text(ANSWER, len)
                 };
-                out.push(Request::Relayed { worker, run, attempt, call, reply });
+                out.push(Request::Relayed { worker, run, attempt, call, answer });
                 tally.replies = tally.replies.saturating_add(1);
                 named.remove(&(attempt, call));
                 Call::Closed

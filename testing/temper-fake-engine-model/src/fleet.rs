@@ -14,17 +14,21 @@
 //! Gone   hello           Up
 //! ```
 //!
-//! A hello lists what the worker hosts. Each listed attempt the engine has
-//! out is kept, by the `keeps` chance, or cancelled; one it had cancelled is
-//! cancelled again, and one it presumed lost is cancelled, its item having
-//! moved on. Each attempt out on the worker that it does not list is presumed
-//! lost.
+//! A hello lists what the worker hosts, each run with its phase. A run whose
+//! answer the worker holds, answered while the channel was down, is kept: the
+//! answer follows the hello. Of the others, an attempt the engine has out is
+//! kept, by the `keeps` chance, or cancelled; one it had cancelled is
+//! cancelled again, the first cancel having maybe been lost, and one it
+//! presumed lost is cancelled, its item having moved on. A listed attempt
+//! takes one of the worker's slots until it answers, a lost one too. Each
+//! attempt out on the worker that it does not list is presumed lost, and a
+//! listing of an attempt that has answered is counted and dropped.
 
 use core::mem;
 
-use temper_lib::{Env, Id, Map, Set, Token};
+use temper_lib::{Env, Map, Set, Token};
 
-use crate::api::Hello;
+use crate::api::{Hello, Hosted, Phase};
 use crate::model::{Alarm, Config, Model};
 use crate::work::{self, Attempted};
 
@@ -33,7 +37,8 @@ use crate::work::{self, Attempted};
 pub(crate) struct Worker {
     /// How many runs it hosts at once, as it last said.
     slots: u32,
-    /// Its attempts not answered yet, those presumed lost aside.
+    /// The attempts it holds, as far as the engine knows: those out on it and
+    /// not answered yet, and those presumed lost that it listed since.
     pub(crate) placed: Set<Token>,
     pub(crate) contact: Contact,
 }
@@ -85,42 +90,41 @@ pub(crate) fn hello(model: &mut Model, env: &Env<Config>, worker: Token, hello: 
         assert!(room.is_ok(), "room for every worker the world has");
     }
     model.timers.cancel(Alarm::Grace(worker));
-    let mut heard = Set::with_capacity(u32::try_from(hosting.len()).expect("a worker's runs fit a u32"));
-    for hosted in &hosting {
-        work::check_made(model.made, hosted.attempt);
-        let record =
-            model.attempts.get_mut(&hosted.attempt).expect("a worker hosts only attempts that have not answered");
-        assert!(record.item == Id::from_token(hosted.run), "a hosted attempt is of its run");
-        assert!(record.worker == worker, "a worker hosts only the attempts it was given");
-        assert!(heard.insert(hosted.attempt) == Ok(true), "a worker lists each attempt once");
-        let cancel = match record.state {
-            Attempted::Live => {
-                let cancel = !model.rng.chance(config.keeps);
-                if cancel {
-                    record.state = Attempted::Cancelled;
-                    model.timers.cancel(Alarm::Cancel(hosted.attempt));
-                }
-                cancel
-            }
-            Attempted::Cancelled | Attempted::Lost => true,
+    let mut heard = Set::with_capacity(config.items);
+    for &Hosted { run, attempt, phase } in &hosting {
+        let Some(state) = work::state(model, worker, run, attempt) else {
+            model.tally.fenced = model.tally.fenced.saturating_add(1);
+            continue;
         };
-        if cancel {
-            assert!(model.cancels.insert(hosted.attempt).is_ok(), "room for a cancel per attempt");
+        let fresh = heard.insert(attempt).expect("a worker hosts one attempt of a run at a time");
+        assert!(fresh, "a worker lists each attempt once");
+        match phase {
+            Phase::Answered => continue,
+            Phase::Preparing | Phase::Starting | Phase::Active | Phase::Waiting | Phase::Ending => {}
         }
+        match state {
+            Attempted::Live => {
+                if model.rng.chance(config.keeps) {
+                    continue;
+                }
+                model.attempts.get_mut(&attempt).expect("a listed attempt has not answered").state =
+                    Attempted::Cancelled;
+                model.timers.cancel(Alarm::Cancel(attempt));
+            }
+            Attempted::Cancelled | Attempted::Lost => {}
+        }
+        assert!(model.cancels.insert(attempt).is_ok(), "room for a cancel per attempt");
     }
     let record = model.workers.get_mut(&worker).expect("a worker is known once it said hello");
     record.slots = slots;
     record.contact = Contact::Up;
     let placed = mem::replace(&mut record.placed, Set::with_capacity(config.items));
-    let mut kept = Set::with_capacity(config.items);
     for &attempt in &placed {
-        if heard.contains(&attempt) {
-            assert!(kept.insert(attempt).is_ok(), "room for an attempt per item");
-        } else {
+        if !heard.contains(&attempt) {
             work::lose(model, env, attempt);
         }
     }
-    model.workers.get_mut(&worker).expect("a worker is known once it said hello").placed = kept;
+    model.workers.get_mut(&worker).expect("a worker is known once it said hello").placed = heard;
     model.tally.hellos = model.tally.hellos.saturating_add(1);
 }
 
@@ -138,7 +142,8 @@ pub(crate) fn lost(model: &mut Model, env: &Env<Config>, worker: Token) {
     };
 }
 
-/// Lost, grace: every attempt out on the worker is presumed lost.
+/// Lost, grace: every attempt out on the worker is presumed lost, and it
+/// holds none the engine knows of.
 pub(crate) fn grace(model: &mut Model, env: &Env<Config>, worker: Token) {
     let config = &env.limits;
     let record = model.workers.get_mut(&worker).expect("a worker is known once it said hello");

@@ -24,17 +24,22 @@
 //! Live       inbound alarm                  Live       inbound (the alarm again, while events last)
 //!            cancel alarm                   Cancelled  cancel
 //!            hello: listed, not kept        Cancelled  cancel (from the ready list)
-//!            hello: listed, kept            Live
+//!            hello: listed, kept or held    Live
 //!            hello: not listed, or grace    Lost
 //!            answered                       (gone)     (a late cancel, by chance)
-//! Cancelled  hello: listed                  Cancelled  cancel again (the first may have been lost)
+//! Cancelled  hello: listed                  Cancelled  cancel again, unless held (the first may have been lost)
 //!            hello: not listed, or grace    Lost
 //!            answered                       (gone)     (a late cancel, by chance)
-//! Lost       hello: listed                  Lost       cancel (its item has moved on)
-//!            answered                       (gone)     (counted late, and dropped)
+//! Lost       hello: listed                  Lost       cancel, unless held (its item has moved on)
+//!            answered                       (gone)     (counted late)
 //! ```
 //!
+//! "Held" is a run whose answer its worker holds, which follows the hello.
 //! While its worker is out of contact, an attempt's alarms fire again later.
+//! Calls, bounces and listings for an attempt that has answered, was
+//! cancelled or was presumed lost are counted and dropped (attempts are
+//! fenced); an answer to an attempt that has answered, or for one never made,
+//! is a bug.
 //!
 //! A failure is retried by the `transient` chance when a retry may get past
 //! it, and by the `permanent` chance when it may not; a busy refusal always
@@ -100,7 +105,7 @@ pub(crate) struct Attempt {
     pub(crate) state: Attempted,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum Attempted {
     /// Out on its worker.
     Live,
@@ -141,6 +146,17 @@ pub(crate) fn writable(workspace: &Workspace) -> bool {
 /// Asserts the engine made `attempt`: attempts are numbered from one.
 pub(crate) fn check_made(made: u64, attempt: Token) {
     assert!(attempt.raw() > 0 && attempt.raw() <= made, "the engine hears only of attempts it made");
+}
+
+/// The state of `attempt`, which traffic from `worker` names as the run
+/// `run`'s, or `None` if it has answered. Asserts the engine made it, for that
+/// run, on that worker.
+pub(crate) fn state(model: &Model, worker: Token, run: Token, attempt: Token) -> Option<Attempted> {
+    check_made(model.made, attempt);
+    let record = model.attempts.get(&attempt)?;
+    assert!(record.item == Id::from_token(run), "traffic names its attempt's run");
+    assert!(record.worker == worker, "an attempt's traffic comes from the worker it was assigned to");
+    Some(record.state)
 }
 
 /// Waiting, its alarm: the item is due. It waits for a free slot, unless no
@@ -221,13 +237,20 @@ pub(crate) fn place(model: &mut Model, env: &Env<Config>, id: Id<Item>, worker: 
 }
 
 /// Placed, answered: what the answer leads to.
-pub(crate) fn answered(model: &mut Model, env: &Env<Config>, run: Token, attempt: Token, answer: Answer) {
+pub(crate) fn answered(
+    model: &mut Model,
+    env: &Env<Config>,
+    worker: Token,
+    run: Token,
+    attempt: Token,
+    answer: Answer,
+) {
     let config = &env.limits;
-    check_made(model.made, attempt);
-    let record = model.attempts.remove(&attempt).expect("an attempt is answered once");
-    assert!(record.item == Id::from_token(run), "an answer names its attempt's run");
+    assert!(state(model, worker, run, attempt).is_some(), "an attempt is answered once");
+    let record = model.attempts.remove(&attempt).expect("an attempt not answered has a record");
     model.timers.cancel(Alarm::Inbound(attempt));
     model.timers.cancel(Alarm::Cancel(attempt));
+    let held = model.workers.get_mut(&worker).expect("a worker is known once it said hello").placed.remove(&attempt);
     let cancelled = match record.state {
         Attempted::Live => false,
         Attempted::Cancelled => true,
@@ -236,8 +259,7 @@ pub(crate) fn answered(model: &mut Model, env: &Env<Config>, run: Token, attempt
             return;
         }
     };
-    let worker = model.workers.get_mut(&record.worker).expect("a worker is known once it said hello");
-    assert!(worker.placed.remove(&attempt), "an attempt out is on its worker");
+    assert!(held, "an attempt out is held by its worker");
     if model.rng.chance(config.late_cancels) {
         let at = after(env, model.rng.between(config.cancel_min.as_nanos(), config.cancel_max.as_nanos()));
         let late = Alarm::Late { worker: record.worker, run, attempt };
@@ -285,15 +307,17 @@ pub(crate) fn answered(model: &mut Model, env: &Env<Config>, run: Token, attempt
 
 /// The attempt `attempt` is presumed lost with its worker's contact: its item
 /// is retried as after a failure a retry may get past, unless the engine had
-/// cancelled it. Its worker no longer counts it.
+/// cancelled it. One lost already stays so. The caller no longer counts it
+/// against its worker's slots.
 pub(crate) fn lose(model: &mut Model, env: &Env<Config>, attempt: Token) {
     let config = &env.limits;
-    let record = model.attempts.get_mut(&attempt).expect("an attempt out has not answered");
-    let cancelled = match mem::replace(&mut record.state, Attempted::Lost) {
+    let record = model.attempts.get_mut(&attempt).expect("an attempt held has not answered");
+    let cancelled = match record.state {
         Attempted::Live => false,
         Attempted::Cancelled => true,
-        Attempted::Lost => unreachable!("a lost attempt is no longer out"),
+        Attempted::Lost => return,
     };
+    record.state = Attempted::Lost;
     let id = record.item;
     model.timers.cancel(Alarm::Inbound(attempt));
     model.timers.cancel(Alarm::Cancel(attempt));

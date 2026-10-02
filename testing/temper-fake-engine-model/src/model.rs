@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 
 use temper_lib::{Deadlines, Duration, Env, Id, Map, Queue, Rng, Set, Slab, Time, Token};
 
-use crate::api::{Answer, Assignment, Bounce, Hello, Reply};
+use crate::api::{Answer, Assignment, Bounce, Hello};
 use crate::charter;
 use crate::fleet::{self, Worker};
 use crate::traffic::{self, Call};
@@ -102,10 +102,12 @@ pub struct Config {
     pub stale: u32,
     pub cancel_min: Duration,
     pub cancel_max: Duration,
-    /// The most relayed calls in flight at once. Each is answered after a
-    /// delay drawn from `relay_min..=relay_max`, with an error by the
-    /// `relay_errors` chance, else with a body of a length drawn from
-    /// `answer_min..=answer_max`.
+    /// The most relayed calls held at once. It must cover the worker's
+    /// limits: its slots times the calls a run may have in flight, plus the
+    /// calls answered in an iteration, held until the reclaim point. Each is
+    /// answered after a delay drawn from `relay_min..=relay_max`, with an
+    /// opaque body of a length drawn from `answer_min..=answer_max`,
+    /// error-shaped by the `relay_errors` chance.
     pub calls: u32,
     pub relay_min: Duration,
     pub relay_max: Duration,
@@ -135,19 +137,19 @@ pub enum Event {
     Hello { worker: Token, hello: Hello },
     /// The channel to the worker `worker` dropped.
     Lost { worker: Token },
-    /// Terminal for `Assign`: the answer for the run `run`'s attempt
-    /// `attempt`.
-    Answered { run: Token, attempt: Token, answer: Answer },
-    /// A host call of the run `run`'s attempt `attempt`, which the worker
-    /// names `call`: a forge read or an outlet, relayed as it is. Answered by
-    /// at most one `Relayed`.
-    Relay { run: Token, attempt: Token, call: Token, body: Box<[u8]> },
-    /// An inbound event for the run `run`'s attempt `attempt` was not passed
-    /// on, for `bounce`.
-    Bounced { run: Token, attempt: Token, bounce: Bounce },
-    /// A fact of the run `run`'s attempt `attempt`, forwarded best effort:
-    /// only counted.
-    Fact { run: Token, attempt: Token },
+    /// Terminal for `Assign`: the answer of the worker `worker` for the run
+    /// `run`'s attempt `attempt`.
+    Answered { worker: Token, run: Token, attempt: Token, answer: Answer },
+    /// A host call of the run `run`'s attempt `attempt` on the worker
+    /// `worker`, which names it `call`: a forge read or an outlet, relayed as
+    /// it is. Answered by at most one `Relayed`.
+    Relay { worker: Token, run: Token, attempt: Token, call: Token, body: Box<[u8]> },
+    /// The worker `worker` did not pass on an inbound event for the run
+    /// `run`'s attempt `attempt`, for `bounce`.
+    Bounced { worker: Token, run: Token, attempt: Token, bounce: Bounce },
+    /// A fact of the run `run`'s attempt `attempt` on the worker `worker`,
+    /// forwarded best effort: only counted.
+    Fact { worker: Token, run: Token, attempt: Token },
 }
 
 /// model -> protocol
@@ -162,8 +164,8 @@ pub enum Request {
     /// has not already.
     Cancel { worker: Token, run: Token, attempt: Token },
     /// The answer to the relayed call `call` of the run `run`'s attempt
-    /// `attempt`: at most one per call.
-    Relayed { worker: Token, run: Token, attempt: Token, call: Token, reply: Reply },
+    /// `attempt`, opaque: at most one per call.
+    Relayed { worker: Token, run: Token, attempt: Token, call: Token, answer: Box<[u8]> },
 }
 
 /// What the fake has done and heard, for a world to check at settle.
@@ -200,12 +202,15 @@ pub struct Tally {
     /// Inbound events bounced, and those sent again.
     pub bounced: u32,
     pub resent: u32,
-    /// Relayed calls heard; answered, errors among them; and those never
-    /// answered, the attempt cancelled or lost, or the worker gone.
+    /// Relayed calls taken; answered, error-shaped ones among them; and those
+    /// never answered, their worker out of contact past the grace.
     pub relayed: u32,
     pub replies: u32,
     pub errors: u32,
     pub dropped: u32,
+    /// Calls, bounces and hello listings for attempts that had answered, were
+    /// cancelled or were presumed lost, dropped as they came.
+    pub fenced: u32,
     /// Repositories the answers say landed a change, and saved work.
     pub landed: u32,
     pub saved: u32,
@@ -254,6 +259,7 @@ impl Tally {
         replies: 0,
         errors: 0,
         dropped: 0,
+        fenced: 0,
         landed: 0,
         saved: 0,
         facts: 0,
@@ -359,7 +365,9 @@ impl Model {
         self.items.len()
     }
 
-    /// Assignments not answered yet, those presumed lost aside.
+    /// Attempts the workers hold, as far as the engine knows: assignments not
+    /// answered yet, those presumed lost aside unless a worker listed them
+    /// since.
     #[must_use]
     pub fn outstanding(&self) -> u32 {
         let mut outstanding: u32 = 0;
@@ -407,11 +415,12 @@ pub fn step(model: &mut Model, env: &Env<Config>, event: Event, _out: &mut Queue
     match event {
         Event::Hello { worker, hello } => fleet::hello(model, env, worker, hello),
         Event::Lost { worker } => fleet::lost(model, env, worker),
-        Event::Answered { run, attempt, answer } => work::answered(model, env, run, attempt, answer),
-        Event::Relay { run, attempt, call, body: _ } => traffic::relay(model, env, run, attempt, call),
-        Event::Bounced { run, attempt, bounce } => traffic::bounced(model, env, run, attempt, bounce),
-        Event::Fact { run: _, attempt } => {
-            work::check_made(model.made, attempt);
+        Event::Answered { worker, run, attempt, answer } => work::answered(model, env, worker, run, attempt, answer),
+        Event::Relay { worker, run, attempt, call, body: _ } => traffic::relay(model, env, worker, run, attempt, call),
+        Event::Bounced { worker, run, attempt, bounce } => traffic::bounced(model, env, worker, run, attempt, bounce),
+        Event::Fact { worker, run, attempt } => {
+            // Checked as any traffic, then only counted, from fenced attempts too.
+            work::state(model, worker, run, attempt);
             model.tally.facts = model.tally.facts.saturating_add(1);
         }
     }

@@ -94,6 +94,23 @@ pub struct Hello {
 pub struct Hosted {
     pub run: Token,
     pub attempt: Token,
+    pub phase: Phase,
+}
+
+/// Where a hosted run is in its lifecycle (worker-model.md, 4.2).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Phase {
+    Preparing,
+    Starting,
+    /// Its agent is at work.
+    Active,
+    /// It yielded, and waits for its next inbound event.
+    Waiting,
+    /// How it ends is decided, and it answers next.
+    Ending,
+    /// It answered while the channel was down: the worker holds the answer,
+    /// which follows the hello.
+    Answered,
 }
 
 /// A worker's answer for an attempt.
@@ -212,15 +229,6 @@ pub enum Bounce {
     Full,
     /// The run is ending.
     Ending,
-}
-
-/// The engine's answer to a relayed call.
-#[derive(PartialEq, Eq, Hash, Debug)]
-pub enum Reply {
-    /// What the call asked for, opaque.
-    Answer { body: Box<[u8]> },
-    /// The engine could not do what the call asked.
-    Error,
 }
 
 /// What a run is given (agent-model.md, 4.1), less its repositories, which

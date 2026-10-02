@@ -7,7 +7,7 @@ use temper_lib::{Duration, Env, List, Queue, Rng, Time, Token};
 
 use crate::api::{
     Access, AgentFailure, Answer, Assignment, Bounce, Budget, Cause, Charter, Failure, Hello, Hosted, Landing, Outcome,
-    Preparation, Refusal, Reply, RunFailure, Start, Tools, Verdict, Work, Workspace,
+    Phase, Preparation, Refusal, RunFailure, Start, Tools, Verdict, Work, Workspace,
 };
 use crate::{Config, Event, MAX_OUT, Model, Origin, Request, charter, fire, resume, step, workspace};
 
@@ -130,7 +130,7 @@ impl Harness {
     }
 
     fn answer(&mut self, assignment: &Assignment, answer: Answer) {
-        self.step(Event::Answered { run: assignment.run, attempt: assignment.attempt, answer });
+        self.step(Event::Answered { worker: WORKER, run: assignment.run, attempt: assignment.attempt, answer });
     }
 
     /// The next due item's assignment, after its retry or wake alarm.
@@ -156,8 +156,9 @@ fn failed(failure: Failure) -> Answer {
     Answer::Failed { failure, work: nothing() }
 }
 
+/// The attempt of `assignment`, as its worker reports it, at work.
 fn hosted(assignment: &Assignment) -> Hosted {
-    Hosted { run: assignment.run, attempt: assignment.attempt }
+    Hosted { run: assignment.run, attempt: assignment.attempt, phase: Phase::Active }
 }
 
 fn cancel(assignment: &Assignment) -> Request {
@@ -165,7 +166,8 @@ fn cancel(assignment: &Assignment) -> Request {
 }
 
 fn relay(assignment: &Assignment, call: u64) -> Event {
-    Event::Relay { run: assignment.run, attempt: assignment.attempt, call: Token::new(call), body: copy_of(b"read") }
+    let (run, attempt) = (assignment.run, assignment.attempt);
+    Event::Relay { worker: WORKER, run, attempt, call: Token::new(call), body: copy_of(b"read") }
 }
 
 #[test]
@@ -337,25 +339,24 @@ fn a_retry_sends_stale_traffic_to_the_attempt_it_replaced() {
 }
 
 #[test]
-fn inbound_events_go_to_a_live_attempt_and_one_bounced_for_room_is_sent_again() {
+fn inbound_events_go_to_a_live_attempt_and_one_bounced_for_room_is_sent_again_within_the_number() {
     let mut h = Harness::new(Config { inbound: 2, resends: 1000, ..config() });
     let assignment = h.assign_first();
-    for _ in 0_u32..2 {
-        let Some(Request::Inbound { attempt, .. }) = h.next() else {
-            panic!("expected an inbound event");
-        };
-        assert_eq!(attempt, assignment.attempt);
-    }
-    assert_eq!(h.model.next_deadline(), None, "no more events than configured");
     let (run, attempt) = (assignment.run, assignment.attempt);
-    h.step(Event::Bounced { run, attempt, bounce: Bounce::TooLarge });
-    assert_eq!(h.model.next_deadline(), None, "an event too large is not sent again");
-    h.step(Event::Bounced { run, attempt, bounce: Bounce::Full });
+    let Some(Request::Inbound { attempt: first, .. }) = h.next() else {
+        panic!("expected an inbound event");
+    };
+    assert_eq!(first, attempt);
+    h.step(Event::Bounced { worker: WORKER, run, attempt, bounce: Bounce::TooLarge });
+    h.step(Event::Bounced { worker: WORKER, run, attempt, bounce: Bounce::Full });
     let Some(Request::Inbound { .. }) = h.next() else {
         panic!("expected the event sent again");
     };
+    assert_eq!(h.model.next_deadline(), None, "no more events than configured");
+    h.step(Event::Bounced { worker: WORKER, run, attempt, bounce: Bounce::Full });
+    assert_eq!(h.model.next_deadline(), None, "not sent again past the number configured");
     let tally = h.model.tally();
-    assert_eq!((tally.inbound, tally.bounced, tally.resent), (3, 2, 1));
+    assert_eq!((tally.inbound, tally.bounced, tally.resent), (2, 3, 1));
 }
 
 #[test]
@@ -363,9 +364,9 @@ fn a_relayed_call_is_answered_once_after_its_latency() {
     let mut h = Harness::new(config());
     let assignment = h.assign_first();
     h.step(relay(&assignment, 5));
-    let reply = Reply::Answer { body: copy_of(b"Issue 42") };
+    let answer = copy_of(b"Issue 42");
     let (run, attempt, call) = (assignment.run, assignment.attempt, Token::new(5));
-    assert_eq!(h.next(), Some(Request::Relayed { worker: WORKER, run, attempt, call, reply }));
+    assert_eq!(h.next(), Some(Request::Relayed { worker: WORKER, run, attempt, call, answer }));
     h.model.reclaim();
     assert_eq!(h.model.calls(), 0);
     assert_eq!(h.model.next_deadline(), None);
@@ -378,21 +379,29 @@ fn a_relayed_call_may_be_answered_with_an_error() {
     let mut h = Harness::new(Config { relay_errors: 1000, ..config() });
     let assignment = h.assign_first();
     h.step(relay(&assignment, 5));
-    let Some(Request::Relayed { reply, .. }) = h.next() else {
+    let Some(Request::Relayed { answer, .. }) = h.next() else {
         panic!("expected a relayed answer");
     };
-    assert_eq!(reply, Reply::Error);
+    assert_eq!(&*answer, b"error: t", "error-shaped, of the length drawn");
     assert_eq!(h.model.tally().errors, 1);
 }
 
 #[test]
-fn the_calls_of_a_cancelled_attempt_are_dropped() {
+fn traffic_for_a_fenced_attempt_is_counted_and_dropped() {
     let mut h = Harness::new(Config { cancels: 1000, ..config() });
     let assignment = h.assign_first();
+    let (run, attempt) = (assignment.run, assignment.attempt);
     assert_eq!(h.next(), Some(cancel(&assignment)));
     h.step(relay(&assignment, 5));
-    assert_eq!(h.model.tally().dropped, 1);
+    h.answer(&assignment, failed(Failure::Cancelled(Cause::Engine)));
+    h.step(relay(&assignment, 6));
+    h.step(Event::Bounced { worker: WORKER, run, attempt, bounce: Bounce::Ending });
+    h.step(Event::Fact { worker: WORKER, run, attempt });
+    h.hello(WORKER, 1, &[hosted(&assignment)]);
+    let tally = h.model.tally();
+    assert_eq!((tally.fenced, tally.relayed, tally.bounced, tally.facts), (4, 0, 0, 1));
     assert_eq!(h.model.next_deadline(), None);
+    assert!(!h.model.is_ready(), "nothing to cancel");
 }
 
 #[test]
@@ -457,24 +466,44 @@ fn a_reconnect_without_a_run_presumes_it_lost() {
 }
 
 #[test]
-fn a_reconnect_reporting_an_attempt_presumed_lost_cancels_it() {
+fn a_reconnect_reporting_an_attempt_presumed_lost_cancels_it_and_keeps_its_slot_until_it_answers() {
     let mut h = Harness::new(config());
     let first = h.assign_first();
     h.step(Event::Lost { worker: WORKER });
     assert_eq!(h.next(), None, "the grace runs out");
     h.hello(WORKER, 1, &[hosted(&first)]);
     assert_eq!(h.resume(), Some(cancel(&first)));
-    let second = h.assign_next();
+    assert_eq!(h.next(), None, "the retry falls due");
+    assert!(!h.model.is_ready(), "the worker's one slot holds the lost attempt");
+    assert_eq!(h.model.outstanding(), 1);
+    h.answer(&first, failed(Failure::Cancelled(Cause::Engine)));
+    let second = assigned(h.resume());
     assert_eq!(second.attempt, Token::new(2));
+    assert_eq!(h.model.tally().late, 1);
+}
+
+#[test]
+fn a_held_answer_reported_on_reconnecting_is_kept_and_taken_once() {
+    let mut h = Harness::new(Config { keeps: 0, ..config() });
+    let assignment = h.assign_first();
+    h.step(Event::Lost { worker: WORKER });
+    let held = Hosted { phase: Phase::Answered, ..hosted(&assignment) };
+    h.hello(WORKER, 1, &[held]);
+    assert!(!h.model.is_ready(), "a run whose answer is held is not cancelled");
+    h.answer(&assignment, Answer::Ended { outcome: copy_of(b"done"), work: nothing() });
+    let tally = h.model.tally();
+    assert_eq!((tally.ended, tally.late, tally.lost, tally.cancels, tally.endings.finished), (1, 0, 0, 0, 1));
+    assert_eq!(h.model.outstanding(), 0);
+    assert_eq!(h.model.next_deadline(), None);
 }
 
 #[test]
 fn facts_are_only_counted() {
     let mut h = Harness::new(config());
     let assignment = h.assign_first();
-    h.step(Event::Fact { run: assignment.run, attempt: assignment.attempt });
+    h.step(Event::Fact { worker: WORKER, run: assignment.run, attempt: assignment.attempt });
     h.answer(&assignment, Answer::Ended { outcome: copy_of(b"done"), work: nothing() });
-    h.step(Event::Fact { run: assignment.run, attempt: assignment.attempt });
+    h.step(Event::Fact { worker: WORKER, run: assignment.run, attempt: assignment.attempt });
     assert_eq!(h.model.tally().facts, 2);
 }
 
@@ -492,7 +521,7 @@ fn an_attempt_answered_twice_is_a_bug() {
 fn an_attempt_never_made_is_a_bug() {
     let mut h = Harness::new(config());
     let assignment = h.assign_first();
-    h.step(Event::Fact { run: assignment.run, attempt: Token::new(2) });
+    h.step(Event::Fact { worker: WORKER, run: assignment.run, attempt: Token::new(2) });
 }
 
 #[test]
@@ -513,7 +542,25 @@ fn a_call_named_twice_in_flight_is_a_bug() {
 }
 
 #[test]
-#[should_panic(expected = "a worker hosts only the attempts it was given")]
+#[should_panic(expected = "an attempt's traffic comes from the worker it was assigned to")]
+fn an_answer_from_another_worker_is_a_bug() {
+    let mut h = Harness::new(config());
+    let assignment = h.assign_first();
+    let (run, attempt) = (assignment.run, assignment.attempt);
+    h.step(Event::Answered { worker: Token::new(2), run, attempt, answer: Answer::Refused(Refusal::Busy) });
+}
+
+#[test]
+#[should_panic(expected = "config.calls covers the worker's calls in flight")]
+fn calls_past_the_configured_number_are_a_bug() {
+    let mut h = Harness::new(Config { calls: 1, ..config() });
+    let assignment = h.assign_first();
+    h.step(relay(&assignment, 5));
+    h.step(relay(&assignment, 6));
+}
+
+#[test]
+#[should_panic(expected = "an attempt's traffic comes from the worker it was assigned to")]
 fn a_worker_reporting_anothers_attempt_is_a_bug() {
     let mut h = Harness::new(config());
     let assignment = h.assign_first();
