@@ -30,6 +30,9 @@ section 9 what is not built yet, and section 10 what is still open.
   the face it shows changes. A scenario written for the fakes (an LLM's
   script, repositories on the forge, what people do) runs unchanged at
   every tier where those fakes appear (section 5).
+- **The test is a step too.** A scenario's expectations run in the loop
+  as a step machine, the referee, which watches what the fakes see, arms
+  the test's deadlines and ends the test (section 5.2).
 - **Deterministic up to the simulator.** Every tier but the top one owns
   the clock, the seeds and everything around temper, so a seed replays to
   the same run. The top tier trades replay for the real kernel, the real
@@ -120,9 +123,10 @@ engine, the worker and the agents it spawns. The machine is real: a
 sandbox directory, inside the containment production uses (agent-model.md,
 section 6; worker-model.md, section 8), with real git, rg and sh. It
 shows what only the real kernel and real programs can: the ring adapter,
-the containment of process trees, git's actual output. It does not
-replay. A failure found there is rerun as a scenario lower down, where it
-does.
+the containment of process trees, git's actual output. The referee
+(section 5.2) judges it and ends it, as at every tier, its deadlines on
+the wall clock. It does not replay. A failure found there is rerun as a
+scenario lower down, where it does.
 
 ## 3. Neighbours and their faces
 
@@ -193,10 +197,11 @@ slow trickle.
 ### 4.2 The forge
 
 The fake forge holds what temper meets on a forge: repositories, issues,
-pull requests, comments, labels, reviews, CI, merges and webhooks; and the
-git a worker clones, fetches and pushes. Both live in one store, so a
-branch the worker pushes is the head the engine reads through the API,
-and a merge the engine asks for moves the branch the next fetch sees.
+pull requests, comments, labels, reviews, CI, merges, wikis and webhooks;
+and the git a worker clones, fetches and pushes. Both live in one store,
+so a branch the worker pushes is the head the engine reads through the
+API, and a merge the engine asks for moves the branch the next fetch
+sees.
 
 - **A model first.** The engine's worlds need one (engine-model.md,
   section 14): CI that passes, fails or never reports; merges that
@@ -280,6 +285,8 @@ real ones never do.
 
 ## 5. Scenarios
 
+### 5.1 Setting one up
+
 A scenario is what a test sets up in the fakes' own terms, with a seed:
 each conversation's script for the LLM, the repositories on the forge
 with their files and checks, the items and the people, and the faults to
@@ -290,6 +297,48 @@ follows.
 Since a fake's model is the same at every tier, a scenario runs at every
 tier its fakes reach. A failure found high up, in the real loop say, is
 rerun lower down, where it replays.
+
+### 5.2 The referee
+
+A scenario's expectations are a step machine of their own, the referee.
+It runs in the loop beside everything else, at every tier.
+
+```
+observations ──► referee ──► a verdict: passed, failed and why, or stop
+(fakes, facts)      │   └──► stimuli: the network drops, a component restarts
+                    └── deadlines of its own: the test's time limits
+```
+
+- **The same shape as every step:** its own state, `env.now`, events in,
+  requests out, and a deadline table of its own, whose earliest deadline
+  the shell's one ring timeout covers as it covers every layer's
+  (programming-style.md, section 9). In the tiers that replay, its
+  deadlines are simulated time, so "within two hours" takes milliseconds;
+  in the real loop the same deadline is wall time.
+- **It steps on what it observes,** and on its own timers, not on every
+  iteration, so its work per iteration stays bounded.
+- **It watches from outside.** It sees what the fakes saw (a push, a pull
+  request, a comment, a call to the LLM) and the facts temper emits, never
+  a service's state. What it sees is then the same at every tier, whether
+  an agent runs in the loop or as a process of its own, so a scenario's
+  expectations are written once and run wherever the scenario runs.
+- **Two kinds of expectation.** Safety, what must always or never happen
+  (nothing lands on a default branch without green CI; no forge
+  credential reaches an agent), is checked on every observation.
+  Liveness, what must happen by a deadline (a pull request opened, with
+  green CI, within the hour), is a deadline armed; one that fires fails
+  the test, listing what is still pending.
+- **It ends the test:** passed, once every expectation is met and nothing
+  is in flight; or failed, reported with the seed where the tier replays
+  and with the trace in the real loop.
+- **It injects what belongs to no fake,** at moments of the scenario: the
+  network dropping, a component restarting, a worker told to shut down.
+
+The referee is not where a tier's boundary contracts go. One terminal per
+request, each operation's deadline and identity, and the invariants once
+things settle are seen differently at each tier, so they stay in each
+tier's harness (section 6). What a scenario expects of the system as a
+whole goes in the referee, and travels with the scenario.
 
 ## 6. What the tiers check
 
@@ -305,7 +354,9 @@ Every world, and the simulator, checks (programming-style.md, 11):
 - **Replay:** a seed replays to the same trace.
 - **Transition coverage:** function coverage of the handlers over a run.
 
-The fakes check their clients as they go (section 4). The protocol tiers
+These are the harness's. The referee checks the scenario's expectations
+on top, at every tier, the real loop included (section 5.2), and the
+fakes check their clients as they go (section 4). The protocol tiers
 add fuzzing of each machine. The real loop adds that production's
 containment holds: a stopped run's process tree is empty, and a command
 cannot write a git directory.

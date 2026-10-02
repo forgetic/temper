@@ -31,8 +31,9 @@ in section 15. How the engine is tested, and the fakes around it, is in
   rules are the deployment's, and a plan can add to them but never loosen
   them, which is what makes plans written by agents safe to run.
 - **Temper learns.** Notes keep what runs and people learn, scoped to the
-  deployment, a repository or a goal. Every brief lists the notes in its
-  scope, and a run recalls the ones it needs (section 10).
+  deployment, a repository or a goal, in the forge's wiki. Every brief
+  lists the notes in its scope, and a run recalls the ones it needs
+  (section 10).
 - **Level-triggered.** What is due follows from the forge's state, not
   from the events that announced it. Webhooks are hints that make the
   engine look sooner; polling is the backstop. Before writing, the engine
@@ -385,9 +386,13 @@ agent at a terminal.
   references. The scope is the deployment, a repository or a goal; the
   references name items, closed ones included. Each entry says who wrote
   it: a person, or a run and the item it ran for.
-- **On the forge,** like everything that must last, where people can read,
-  correct and delete entries. Notes are hints: where a note and the forge
-  disagree, the forge is right.
+- **In the forge's wiki,** like everything that must last and belongs to
+  no one item (section 12), where people can read, correct and delete
+  entries: a page per entry, whose first line is its description. A
+  repository's notes are in its wiki, a goal's under the goal's own path
+  in its repository's wiki, and the deployment's in the wiki of a
+  repository the deployment names as its home. Notes are hints: where a
+  note and the forge disagree, the forge is right.
 - **Written through an outlet.** A run writes a note with its `note`
   outlet, which the engine applies like any outcome (4.4): keyed,
   repeat-safe and checked by the rules, which may want a person to accept
@@ -432,6 +437,10 @@ way to change it. It holds live work, not the forge: what it holds, and
 what it costs to start, grow with the work in progress, never with the
 forge's history. Anything else, closed items included, is a read away.
 
+- **Items and the wiki.** What belongs to an item is on the item: its
+  record, its outcomes, its transcript, all of which end with it. State
+  that belongs to no one item or repository and has no lifecycle, such as
+  notes, is in the forge's wiki.
 - **A working set, not a copy.** It holds what the engine's decisions
   need about the items that are not done: their records, their pull
   requests' heads, CI and reviews on those heads, whether their
@@ -484,10 +493,10 @@ What the protocol and io layers owe the model, to be designed after it:
 The engine's world runs the model against fakes that share none of its
 types (programming-style.md, section 11):
 
-- **a forge** with issues, pull requests, comments and labels; CI that
-  passes, fails or never reports; reviews; merges that conflict; webhooks
-  that come late or not at all; requests that fail or hit a rate limit;
-  and people who comment and edit;
+- **a forge** with issues, pull requests, comments, labels and wikis; CI
+  that passes, fails or never reports; reviews; merges that conflict;
+  webhooks that come late or not at all; requests that fail or hit a rate
+  limit; and people who comment and edit;
 - **workers** hosting scripted runs: outcomes, failures, yields, parks,
   lost contact and reconnection;
 - **people** who chat, accept and reject plans, release held work, and
@@ -504,11 +513,12 @@ services as the engine's protocol and io layers are built.
 
 - **People on the forge:** whether a person's messages are written with
   their own forge credentials or by the engine on their behalf.
-- **Notes on the forge:** what form they take (an issue per scope with
-  an entry per comment, a wiki, files), and how a search reaches entries
-  when there are many.
-- **Where templates live:** deployment configuration first; later, a
-  repository the engine reads through the forge's API.
+- **Notes in the wiki:** how a search reaches entries when there are
+  many; and how the engine reaches a wiki on a forge whose API has none
+  (GitHub's wikis are git repositories only, and the engine otherwise
+  never touches git).
+- **Where templates live:** deployment configuration first; later the
+  wiki, as state that belongs to no one item.
 - **The rules' vocabulary,** and what an envelope can bound, settled as
   they are built.
 - **Snapshots:** their size limit and how long the engine keeps them
