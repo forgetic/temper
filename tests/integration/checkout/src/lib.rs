@@ -11,6 +11,12 @@
 //! and is refused; relative links are followed, up to a limit. Every change to
 //! a file gives it a new version, never reused, as a file renamed into place
 //! gets a new inode.
+//!
+//! Beside it, [`git`] is a fake forge's git, whose working trees are
+//! directories of the checkout, for the worker's model worlds: what an agent's
+//! tools write there is what the worker commits.
+
+pub mod git;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
@@ -368,6 +374,39 @@ impl Checkout {
             }
         }
         files
+    }
+
+    /// Every file beneath the directory `at`, by its path from `at`, with its
+    /// content.
+    #[must_use]
+    pub fn tree(&self, at: &[u8]) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        let beneath = [at, b"/"].concat();
+        let mut tree = BTreeMap::new();
+        for (path, node) in self.nodes.range(beneath.clone()..) {
+            let Some(name) = path.strip_prefix(beneath.as_slice()) else {
+                break;
+            };
+            match node {
+                Node::File { content, .. } => drop(tree.insert(name.to_vec(), content.clone())),
+                Node::Directory | Node::Link { .. } | Node::Special => {}
+            }
+        }
+        tree
+    }
+
+    /// Makes what is beneath the directory `at` exactly `tree`, by paths from
+    /// `at`, as a checkout does: everything there is removed first, but for a
+    /// git directory right beneath it (`.git`, in any ASCII case), which stays
+    /// as it is.
+    pub fn replace_tree(&mut self, at: &[u8], tree: &BTreeMap<Vec<u8>, Vec<u8>>) {
+        let beneath = [at, b"/"].concat();
+        self.nodes.retain(|path, _| match path.strip_prefix(beneath.as_slice()) {
+            Some(name) => name.split(|byte| *byte == b'/').next().is_some_and(|top| top.eq_ignore_ascii_case(b".git")),
+            None => true,
+        });
+        for (path, content) in tree {
+            self.write(&[at, b"/", path].concat(), content);
+        }
     }
 
     // What io does for the model, beneath a root.
