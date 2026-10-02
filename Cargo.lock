@@ -84,6 +84,13 @@ name = "temper-checkout-fake"
 version = "0.0.0"
 
 [[package]]
+name = "temper-fake-engine-model"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+]
+
+[[package]]
 name = "temper-fake-worker-model"
 version = "0.0.0"
 dependencies = [
