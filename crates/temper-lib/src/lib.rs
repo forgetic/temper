@@ -1,7 +1,8 @@
 //! The building blocks every step crate shares (programming-model.md, 10.2):
 //! typed handles and the slabs that issue them, bounded queues, lists, maps and
-//! sets, the per-layer deadline table, time, randomness, the tokens that cross
-//! layer boundaries, and the environment a step reads.
+//! sets, the per-layer deadline table, a writer for sized bytes, time,
+//! randomness, the tokens that cross layer boundaries, and the environment a
+//! step reads.
 //!
 //! Application code does not hand-roll data structures: what is missing goes
 //! here, written once and tested hard.
@@ -24,6 +25,7 @@ mod set;
 mod slab;
 mod time;
 mod token;
+mod writer;
 
 pub use deadlines::Deadlines;
 pub use env::Env;
@@ -36,3 +38,4 @@ pub use set::Set;
 pub use slab::Slab;
 pub use time::{Duration, Time};
 pub use token::{ReplyTo, Token};
+pub use writer::{Overflow, Writer};
