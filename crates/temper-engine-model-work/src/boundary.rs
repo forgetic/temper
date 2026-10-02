@@ -174,8 +174,11 @@ pub enum Read {
     Record(Lifecycle),
     /// It does not decode: a person mangled it. The item is held for a
     /// person. Its attempts are counted from the highest an outcome posted on
-    /// it names (they are keyed by their attempt), so a later claim never
-    /// names an attempt whose outcome is there already.
+    /// it names (they are keyed by their attempt), and from what the workers
+    /// list of it ([`Event::Listed`]), so a later claim names no attempt
+    /// whose outcome is there already or that a worker still holds; the
+    /// parent lets no release of it through before the workers have listed
+    /// what they hold, the fleet's grace after its cold read.
     Mangled { attempts: u64 },
 }
 

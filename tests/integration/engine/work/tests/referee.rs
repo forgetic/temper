@@ -118,3 +118,66 @@ fn a_restart_is_injected_at_its_moment_and_forgets_holds_the_records_do_not_show
     referee.observe(at(11), Seen::Taken { item: ITEM }, &mut Vec::new());
     let Verdict::Open { .. } = referee.verdict() else { panic!("it is to end: {:?}", referee.verdict()) };
 }
+
+#[test]
+fn an_outcome_applied_other_than_its_record_says_or_after_its_commit_fails_the_run() {
+    let mut referee = claimed();
+    let apply = |attempt, outcome| Seen::Apply { item: ITEM, attempt, outcome };
+    referee.observe(at(4), apply(1, 42), &mut Vec::new());
+    let failed = why(&referee);
+    assert!(failed.starts_with("an outcome is applied as its record says"), "{failed}");
+
+    let mut referee = claimed();
+    referee.observe(at(4), recorded(Phase::Applying { outcome: 42 }, 1), &mut Vec::new());
+    referee.observe(at(5), apply(1, 42), &mut Vec::new());
+    // Held keeping it, then released: applied again, as the record says.
+    let kept = Phase::Held { why: Hold::Writes, outcome: Some(42) };
+    referee.observe(at(6), recorded(kept, 1), &mut Vec::new());
+    referee.observe(at(7), Seen::Released { item: ITEM }, &mut Vec::new());
+    referee.observe(at(8), recorded(Phase::Applying { outcome: 42 }, 1), &mut Vec::new());
+    referee.observe(at(9), apply(1, 42), &mut Vec::new());
+    let Verdict::Open { .. } = referee.verdict() else { panic!("applied as the record says: {:?}", referee.verdict()) };
+    // Committed, it is never applied again.
+    referee.observe(at(10), recorded(Phase::Waiting, 1), &mut Vec::new());
+    referee.observe(at(11), recorded(Phase::Applying { outcome: 42 }, 1), &mut Vec::new());
+    referee.observe(at(12), apply(1, 42), &mut Vec::new());
+    assert_eq!(why(&referee), "an outcome is applied at most once: Item { repository: 0, number: 7 } 1 committed");
+}
+
+#[test]
+fn an_engine_action_made_during_a_run_fails_the_run() {
+    let mut referee = claimed();
+    referee.observe(at(4), Seen::Act { item: ITEM }, &mut Vec::new());
+    let why = why(&referee);
+    assert!(why.starts_with("an engine action is made between runs"), "{why}");
+}
+
+#[test]
+fn an_answer_forgotten_before_it_is_on_the_forge_fails_the_run() {
+    let mut referee = claimed();
+    referee.observe(at(4), Seen::Forgot { item: ITEM, attempt: 1 }, &mut Vec::new());
+    let failed = why(&referee);
+    assert!(failed.starts_with("an answer is forgotten only once it is on the forge, or fenced"), "{failed}");
+
+    let mut referee = claimed();
+    referee.observe(at(4), recorded(Phase::Parked, 1), &mut Vec::new());
+    referee.observe(at(5), Seen::Forgot { item: ITEM, attempt: 1 }, &mut Vec::new());
+    referee.observe(at(6), recorded(Phase::Claimed, 2), &mut Vec::new());
+    // A stray's of an earlier attempt, fenced by the claim of a later one.
+    referee.observe(at(7), Seen::Forgot { item: ITEM, attempt: 1 }, &mut Vec::new());
+    let Verdict::Open { .. } = referee.verdict() else { panic!("on the forge, or fenced: {:?}", referee.verdict()) };
+}
+
+#[test]
+fn a_record_read_mangled_counts_its_attempts_from_its_outcomes() {
+    let mut referee = claimed();
+    referee.observe(at(4), Seen::Started { item: ITEM, attempt: 1 }, &mut Vec::new());
+    referee.observe(at(5), Seen::Finished { item: ITEM, attempt: 1 }, &mut Vec::new());
+    referee.observe(at(6), Seen::Mangled { item: ITEM, attempts: 0 }, &mut Vec::new());
+    referee.observe(at(7), Seen::Restarted, &mut Vec::new());
+    // Released once the workers listed nothing of it: the count starts over.
+    referee.observe(at(8), Seen::Released { item: ITEM }, &mut Vec::new());
+    referee.observe(at(9), recorded(Phase::Claimed, 1), &mut Vec::new());
+    referee.observe(at(10), Seen::Started { item: ITEM, attempt: 1 }, &mut Vec::new());
+    let Verdict::Open { .. } = referee.verdict() else { panic!("counted again: {:?}", referee.verdict()) };
+}

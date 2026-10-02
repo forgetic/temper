@@ -42,7 +42,7 @@
 //!               inbox                        -           (the parent's to decide)
 //! Writing     written                        as `next`   acknowledge an answer that waits;
 //!                                                        due, apply, or left
-//!             written: failed                Held        acknowledge an answer that waits
+//!             written: failed                Held        (keeping the answer that waits)
 //!             answered: the one it waits
 //!               to acknowledge               Writing     (its acknowledgement follows)
 //! Claiming    written                        Running     start
@@ -86,7 +86,9 @@
 //! Backoff     alarm                          Asking      due
 //! Held        release                        Writing     released, write: applying (then
 //!                                                        apply) the outcome it keeps,
-//!                                                        or waiting (then ask)
+//!                                                        or waiting (then ask); then
+//!                                                        acknowledge an answer it keeps
+//!             answered: the one it keeps     Held        (its acknowledgement follows)
 //!             listed                         Held        (a mangled record's attempts)
 //! any other   stop                           as it was   refused: idle
 //!             release                        as it was   refused: unheld
@@ -98,7 +100,9 @@
 //! An answer of the attempt in flight is acknowledged once it is on the
 //! forge: an outcome once the record says it is being applied, a park or a
 //! failure once the record says so; until then a copy of it is dropped
-//! without a word, never called stale, so its worker keeps it. A stopped
+//! without a word, never called stale, so its worker keeps it. If that
+//! record cannot be written, the item is held keeping the answer, which the
+//! write that releases it acknowledges. A stopped
 //! run's answer still counts: an outcome is applied (what landed is the
 //! truth), and then the item is held rather than waiting. A hold keeps the
 //! outcome that is not wholly applied (one waiting for a person's
@@ -169,8 +173,10 @@ enum State {
     Acting { done: bool },
     /// It claims again, or asks what is due, once `until` has passed.
     Backoff { until: Time },
-    /// Held for a person, keeping the outcome not wholly applied yet.
-    Held { why: Hold, outcome: Option<u64> },
+    /// Held for a person, keeping `behind` the outcome not wholly applied
+    /// yet, and the answer it has not acknowledged, whose record could not be
+    /// written: the write that releases it acknowledges it.
+    Held { why: Hold, behind: Behind },
     /// Terminal: its step is done.
     Closed,
 }
@@ -253,7 +259,7 @@ pub(crate) fn take(
     let entry = tracked.get_mut(id).expect("just taken in");
     entry.state = match read {
         Read::New => writing(entry, id, Phase::Waiting, Next::Ask, Behind::NOTHING, out),
-        Read::Mangled { .. } => held(facts, item, Hold::Record, None),
+        Read::Mangled { .. } => held(facts, item, Hold::Record, Behind::NOTHING),
         Read::Record(Lifecycle { phase, .. }) => match phase {
             Phase::Waiting | Phase::Parked => ask(entry, id, out),
             Phase::Retrying(class) => State::Backoff { until: backoff(entry.failures, class, env, rng) },
@@ -262,7 +268,7 @@ pub(crate) fn take(
                 State::Running { stopped: false }
             }
             Phase::Applying { outcome } => apply(entry, id, outcome, false, out),
-            Phase::Held { why, outcome } => held(facts, item, why, outcome),
+            Phase::Held { why, outcome } => held(facts, item, why, Behind { ack: None, outcome }),
             Phase::Done => unreachable!("refused above: a done item is not live"),
         },
     };
@@ -307,7 +313,7 @@ pub(crate) fn release(model: &mut Model, reply_to: ReplyTo, item: Item, out: &mu
     let entry = tracked.get_mut(id).expect("a named item is tracked");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Held { why: _, outcome } => released(entry, id, facts, reply_to, outcome, out),
+        State::Held { why: _, behind } => released(entry, id, facts, reply_to, behind, out),
         state @ (State::Writing { .. }
         | State::Claiming { .. }
         | State::Asking { .. }
@@ -469,6 +475,7 @@ pub(crate) fn answered(
         // follows once it is, and its worker keeps it until then.
         State::Recording { stopped } if attempt == entry.attempts => State::Recording { stopped },
         State::Writing { next, behind } if behind.ack == Some(attempt) => State::Writing { next, behind },
+        State::Held { why, behind } if behind.ack == Some(attempt) => State::Held { why, behind },
         state @ (State::Writing { .. }
         | State::Claiming { .. }
         | State::Asking { .. }
@@ -520,18 +527,20 @@ pub(crate) fn written(model: &mut Model, env: &Env<Limits>, owner: Token, wrote:
     let entry = tracked.get_mut(id).expect("a token travelling up is never stale");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Writing { next, behind } => {
-            if let Some(attempt) = behind.ack {
-                out.push(Request::Acknowledge { item: entry.item, attempt });
+        State::Writing { next, behind } => match wrote {
+            Wrote::Done => {
+                if let Some(attempt) = behind.ack {
+                    out.push(Request::Acknowledge { item: entry.item, attempt });
+                }
+                proceed(entry, id, env, rng, facts, next, out)
             }
-            match wrote {
-                Wrote::Done => proceed(entry, id, env, rng, facts, next, out),
-                Wrote::Failed => held(facts, entry.item, Hold::Record, behind.outcome),
-            }
-        }
+            // Not on the forge: the answer it would have made durable is not
+            // acknowledged, and its worker keeps it.
+            Wrote::Failed => held(facts, entry.item, Hold::Record, behind),
+        },
         State::Claiming { run, stopped } => match wrote {
             Wrote::Done => claimed(entry, id, run, stopped, out),
-            Wrote::Failed => held(facts, entry.item, Hold::Record, None),
+            Wrote::Failed => held(facts, entry.item, Hold::Record, Behind::NOTHING),
         },
         State::Asking { .. }
         | State::Waiting { .. }
@@ -735,10 +744,11 @@ fn hold(
     writing(entry, id, Phase::Held { why, outcome }, Next::Held { why, outcome }, behind, out)
 }
 
-/// The item is held, as its record says, or as it cannot.
-fn held(facts: &mut Facts, item: Item, why: Hold, outcome: Option<u64>) -> State {
+/// The item is held, as its record says, or as it cannot, keeping what the
+/// hold leaves `behind`.
+fn held(facts: &mut Facts, item: Item, why: Hold, behind: Behind) -> State {
     facts.push(Fact::Held { item, why });
-    State::Held { why, outcome }
+    State::Held { why, behind }
 }
 
 /// Applies the outcome posted as the comment `outcome`.
@@ -762,7 +772,7 @@ fn proceed(
         Next::Apply { outcome, stopped } => apply(entry, id, outcome, stopped, out),
         Next::Backoff { class } => State::Backoff { until: backoff(entry.failures, class, env, rng) },
         Next::Pause => State::Backoff { until: pause(entry.refusals, env, rng) },
-        Next::Held { why, outcome } => held(facts, entry.item, why, outcome),
+        Next::Held { why, outcome } => held(facts, entry.item, why, Behind { ack: None, outcome }),
         Next::Leave => State::Closed,
     }
 }
@@ -947,26 +957,27 @@ fn stale(
 }
 
 /// Held, release: the outcome the hold keeps is applied again; an item that
-/// keeps none is due again, with its failures forgiven.
+/// keeps none is due again, with its failures forgiven. An answer it has not
+/// acknowledged is, once the release's record is written.
 fn released(
     entry: &mut Tracked,
     id: Id<Tracked>,
     facts: &mut Facts,
     reply_to: ReplyTo,
-    outcome: Option<u64>,
+    behind: Behind,
     out: &mut Queue<Request>,
 ) -> State {
     out.push(Request::Released { to: reply_to });
     facts.push(Fact::Released { item: entry.item });
     entry.refusals = 0;
-    match outcome {
+    match behind.outcome {
         Some(outcome) => {
             let next = Next::Apply { outcome, stopped: false };
-            writing(entry, id, Phase::Applying { outcome }, next, Behind::outcome(outcome), out)
+            writing(entry, id, Phase::Applying { outcome }, next, behind, out)
         }
         None => {
             entry.failures = Failures::NONE;
-            writing(entry, id, Phase::Waiting, Next::Ask, Behind::NOTHING, out)
+            writing(entry, id, Phase::Waiting, Next::Ask, behind, out)
         }
     }
 }

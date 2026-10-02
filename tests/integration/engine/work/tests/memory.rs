@@ -236,6 +236,11 @@ fn paths(limits: Limits) {
         let asked = hub.step(Event::Answered { item: item(2), attempt: 2, answer });
         hub.written(asked);
     }
+    // Refused before anything ran: it pauses, and claims again.
+    let asked = hub.step(Event::Answered { item: item(2), attempt: 2, answer: Answer::Refused });
+    hub.written(asked);
+    // The mangled one learns of an attempt a worker holds.
+    hub.step(Event::Listed { item: item(6), attempt: 9 });
     // The claimed one, adopted: inbound events kept until it is placed;
     // stopped, then presumed lost by the fleet, and held.
     hub.step(Event::Undelivered { item: item(3), attempt: 1, event: Token::new(9) });

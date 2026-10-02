@@ -546,21 +546,24 @@ fn an_outcome_whose_writes_fail_or_cannot_be_posted_holds_its_item() {
 }
 
 #[test]
-fn a_record_that_cannot_be_written_holds_the_item_and_still_frees_the_worker() {
+fn a_record_that_cannot_be_written_holds_the_item_and_its_answer_until_a_write_lands() {
     let mut h = Harness::new(LIMITS);
     let (owner, attempt) = h.running(ITEM);
     h.step(Event::Answered { item: ITEM, attempt, answer: Answer::Ended { outcome: OUTCOME } });
     h.step(Event::Recorded { owner, comment: Some(COMMENT) });
-    assert_eq!(
-        &*h.step(Event::Written { owner, wrote: Wrote::Failed }),
-        [Request::Acknowledge { item: ITEM, attempt }]
-    );
+    assert!(h.step(Event::Written { owner, wrote: Wrote::Failed }).is_empty(), "not on the forge: not acknowledged");
     let held = Fact::Held { item: ITEM, why: Hold::Record };
     assert!(h.facts().contains(&held));
-    // The hold keeps the outcome: released, it is applied.
+    assert!(h.step(outcome_of(attempt)).is_empty(), "a copy is never stale: its worker keeps it");
+    // The hold keeps the outcome and the answer: released, the record says
+    // it applies, the answer is acknowledged, and the outcome applied.
     let asked = h.release(ITEM);
     let [Request::Released { .. }, Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
     assert_eq!(lifecycle.phase, Phase::Applying { outcome: COMMENT });
+    assert_eq!(
+        &*h.step(Event::Written { owner, wrote: Wrote::Done }),
+        [Request::Acknowledge { item: ITEM, attempt }, Request::Apply { owner, item: ITEM, attempt, outcome: COMMENT }]
+    );
 }
 
 #[test]

@@ -57,12 +57,60 @@ fn runs_that_fail_are_retried_and_then_held_and_people_release_them() {
 
 #[test]
 fn outcomes_stale_invalid_or_waiting_for_acceptance_are_judged_again_once_accepted() {
-    let settings = Settings { stale: 150, invalid: 150, accepting: 300, releases: 1000, ..Settings::calm(4) };
+    let mut endings = BTreeSet::new();
+    for seed in 0..5 {
+        let settings = Settings { stale: 150, invalid: 150, accepting: 300, releases: 1000, ..Settings::calm(seed) };
+        let world = run(&settings);
+        endings.extend(world.stats().endings.keys().copied());
+        let (applies, _) = world.judged_answers();
+        assert!(applies > 0, "seed {seed}: the referee judged applications");
+    }
+    for ending in ["stale", "invalid", "held: acceptance", "released"] {
+        assert!(endings.contains(ending), "{ending}: {endings:?}");
+    }
+}
+
+#[test]
+fn a_fleet_that_refuses_and_hands_back_undelivered_events_counts_no_failure() {
+    let settings = Settings { refusals: 300, drops: 300, returns: 1000, messages: 60, ..Settings::calm(8) };
     let world = run(&settings);
     let stats = world.stats();
-    for ending in ["stale", "invalid", "held: acceptance", "released"] {
-        assert!(count(&stats, ending) > 0, "{ending}: {stats:?}");
+    assert!(count(&stats, "refused") > 0 && count(&stats, "undelivered") > 0, "{stats:?}");
+    assert_eq!(count(&stats, "held: failures"), 0, "a refusal is no failure: {stats:?}");
+    assert_eq!(world.ended(), (stats.items, 0), "{stats:?}");
+}
+
+#[test]
+fn people_stop_runs_whose_claims_are_being_written() {
+    let mut stopped = 0;
+    for seed in 0..10 {
+        let settings = Settings { stops: 20, latency: Span::millis(200, 2000), ..Settings::calm(seed) };
+        let stats = run(&settings).stats();
+        stopped += count(&stats, "stopped claiming");
     }
+    assert!(stopped > 0, "a stop came while a claim was written");
+}
+
+#[test]
+fn a_mangled_record_holds_its_item_until_a_person_mends_it() {
+    let mut mangled = 0;
+    let mut listed = 0;
+    for seed in 0..20 {
+        let settings = Settings {
+            mangles: 2,
+            restarts: 2,
+            restart_gap: Span::millis(5000, 15_000),
+            drops: 0,
+            ..Settings::calm(seed)
+        };
+        let world = run(&settings);
+        let stats = world.stats();
+        mangled += count(&stats, "mangled");
+        listed += count(&stats, "listed");
+        let (done, held) = world.ended();
+        assert_eq!(done + held, stats.items, "seed {seed}: {stats:?}");
+    }
+    assert!(mangled > 0 && listed > 0, "records were read mangled, and strays listed: {mangled}, {listed}");
 }
 
 #[test]
@@ -140,14 +188,17 @@ fn facts_change_nothing() {
 #[test]
 fn random_worlds_settle_with_every_ending_reached() {
     let mut endings = BTreeSet::new();
-    let (mut starts, mut asks) = (0, 0);
+    let (mut starts, mut asks, mut applies, mut forgets) = (0, 0, 0, 0);
     for seed in 0..150 {
         let world = run(&Settings::random(seed));
         endings.extend(world.stats().endings.keys().copied());
-        let judged = world.judged();
-        (starts, asks) = (starts + judged.0, asks + judged.1);
+        let (runs, decisions) = world.judged();
+        let (applications, forgotten) = world.judged_answers();
+        (starts, asks, applies, forgets) =
+            (starts + runs, asks + decisions, applies + applications, forgets + forgotten);
     }
     let missed: Vec<&str> = ENDINGS.iter().copied().filter(|ending| !endings.contains(ending)).collect();
     assert!(missed.is_empty(), "every ending was reached: {missed:?} were not");
     assert!(starts > 1000 && asks > 1000, "the referee judged runs and decisions: {starts}, {asks}");
+    assert!(applies > 500 && forgets > 1000, "the referee judged applications and answers: {applies}, {forgets}");
 }
