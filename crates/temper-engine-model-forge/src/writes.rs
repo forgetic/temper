@@ -13,24 +13,38 @@
 //! - **Creations are keyed.** An issue carries its key inside it, a comment
 //!   too, a pull request is keyed by its branches, and a record is the one
 //!   record of the engine's on its item. A creation whose attempt may have
-//!   been made (it timed out, or its answer was lost) is looked for before it
-//!   is tried again: issues updated since the first attempt went out, a
-//!   page at a time; the item's comments after the last the working set had
-//!   passed; the pull request for its branches. So is one the parent asks for
-//!   again after a restart ([`crate::Event::Write`]'s `resumed`).
+//!   been made (it timed out) is looked for before it is tried again: among
+//!   the issues the engine opened that were updated since the newest time
+//!   the repository's listings had shown as the write began, a page at a
+//!   time; among the item's comments after the last the working set had
+//!   passed as it began; the pull request for its branches; the item's
+//!   comments for a record of the engine's. So is one the parent asks for
+//!   again ([`crate::Event::Write`]'s `resumed`), from after its cause, which
+//!   the parent names, as nothing in the working set says where an earlier
+//!   life's attempt went. A record found is the engine's own: one this write
+//!   made is done, and one an earlier write made is edited, so the record
+//!   says what this write carries.
 //! - **Sets are written as sets,** and edits and deletions are the same
-//!   whenever they land: tried again as they are. A deletion that finds
-//!   nothing after an attempt that may have been made is done.
+//!   whenever they land: tried again as they are. Labels are the engine's
+//!   own: those wanted are added and the others it owns removed, so a label
+//!   a person sets is never taken off. A deletion that finds nothing after an
+//!   attempt that may have been made is done.
 //! - **A merge names its head.** One whose attempt may have been made reads
 //!   the pull request: merged at that head, it is done.
-//! - **A record is read afresh before it is edited** (engine-model.md, 4.4):
-//!   one someone else changed or deleted since it was last read is not
-//!   written over, and the parent hears what it now is. A record write aims at
-//!   the record as the working set knew it when the parent asked for the
-//!   write, or as the record writes before it in its lane left it, so one
-//!   asked for before the parent heard of a change fails as well. After an
-//!   edit that may have been made, it is edited again without the check,
-//!   which would find the engine's own edit.
+//! - **A record is read afresh before it is edited** (engine-model.md, 4.4),
+//!   **and a wiki page before it is written:** one someone else changed or
+//!   deleted since it was last read is not written over, and the parent hears
+//!   what it now is. A record write aims at the record as the working set
+//!   knew it when the parent asked for the write, or as the record writes
+//!   before it in its lane left it, so one asked for before the parent heard
+//!   of a change fails as well. Each record or page written carries a nonce
+//!   of its write, so that the read after an attempt that may have been made
+//!   tells the write's own landing, or that of an earlier write of its lane
+//!   that gave up, from someone else's change.
+//! - **What may land late is waited out.** A call that timed out may still
+//!   take effect until `Limits::lifetime` after it went out: the write makes
+//!   its next call no sooner, and a write that gives up holds its lane until
+//!   then, so nothing of its lane lands before it.
 //!
 //! Its reads go out with the parent's fresh reads, ahead of the writes, and
 //! the writes ahead of keeping up. A failure that may pass (unavailable, a
@@ -48,38 +62,49 @@
 //!          write, its lane busy           Queued
 //!          write, otherwise               Due       (its first call)
 //! Queued   the lane's last write closes   Due
-//! Check    a record as last read          Make
-//!          a record changed or gone       Done      wrote: edited
+//! Check    a record or page as last read  Make
+//!          one this write made            Done      wrote
+//!          a record an earlier write of   Make
+//!            its lane may have made
+//!          a record or page changed       Done      wrote: edited, revised
+//!            or gone
 //!          a merge made at its head       Done      wrote: merged
 //!          a pull request open at it      Make
 //! Make     made                           Done      wrote
+//!          labels added, some to remove   Unlabel
 //!          timed out                      Waiting   (then Find, Check or Make)
 //!          exists (a pull request)        Find
 //!          missing (a deletion), after    Done      wrote: done
 //!            an attempt that may be made
-//! Find     found                          Done      wrote
+//! Unlabel  removed                        Done      wrote
+//! Find     found, made by this write      Done      wrote
+//!          a record of an earlier write   Make      (edits it)
 //!          more to look at                Find
 //!          not made                       Make
 //! Busy     failed, rate                   Busy      (queued again)
 //!          failed, may pass               Waiting   (or Done, attempts spent)
 //!          failed, otherwise              Done      wrote: the error
 //! Waiting  alarm                          Due
-//! Done     (settled)                      Closed    (the lane's next is due)
+//! Done     its last call may still land   Holding   wrote
+//!          otherwise                      Closed    wrote (the lane's next
+//!                                                     is due)
+//! Holding  alarm                          Closed    (the lane's next is due)
 //! ```
 
 use alloc::boxed::Box;
 use core::mem;
 
 use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Queue, Rng, Slab, Time, Token};
+use temper_lib::{Env, Id, List, Queue, Rng, Slab, Time, Token};
 
 use crate::api::{self, Answer, Body, Error, Kind, Mark, Op, State as Open};
-use crate::boundary::{Content, Failure, Item, Position, Record, Request, Write, Written};
+use crate::boundary::{Cause, Content, Failure, Item, Position, Record, Request, Write, Written};
 use crate::calls::{self, Purpose};
 use crate::facts::{Fact, Priority};
 use crate::items::{self, copy_labels};
 use crate::limits::Limits;
 use crate::model::{Alarm, Model};
+use crate::scans;
 
 /// A write in hand.
 #[derive(Debug)]
@@ -89,23 +114,27 @@ pub(crate) struct Writing {
     lane: Lane,
     /// The next write of its lane, which waits for this one to close.
     next: Option<Id<Writing>>,
-    resumed: bool,
+    resumed: Option<Cause>,
     /// Whether what it created was found made by an earlier attempt.
     found: bool,
-    /// Attempts that failed and may pass, and whether the last may have been
-    /// made.
+    /// Attempts that failed and may pass, whether a write call of it may
+    /// have been made without its answer, and when its last call went out.
     attempts: u32,
     ambiguous: bool,
+    sent: Time,
     /// Where a creation an earlier attempt made is looked for: issues updated
-    /// since `since`, comments after `from`.
+    /// since `since`, the forge's time, and comments after `from`.
     since: Time,
     from: u64,
+    /// The nonce a record or a wiki page it writes carries.
+    nonce: u64,
     /// A record's: the comment it edits and its revision as last read, or
-    /// none to post one; the inbox position it carries; and the position a
-    /// record write before it carried that may have landed.
+    /// none to post one; the inbox position it carries; and the nonce of a
+    /// record write before it that gave up after an attempt that may have
+    /// landed.
     target: Option<Target>,
     position: Position,
-    uncertain: Option<Position>,
+    uncertain: Option<u64>,
     state: State,
 }
 
@@ -134,17 +163,23 @@ enum State {
     Waiting { phase: Phase, until: Time },
     /// The parent is to hear `result`, and the working set the record found.
     Done { result: Result<Written, Failure>, record: Option<Record> },
+    /// Answered: it holds its lane until its last call, which timed out, can
+    /// no longer land.
+    Holding { until: Time },
     /// Terminal: holds nothing.
     Closed,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Phase {
-    /// Reading the record afresh before it is edited; or the pull request
-    /// after a merge that may have been made.
+    /// Reading afresh before writing: a record before it is edited, a wiki
+    /// page before it is written; or the pull request after a merge that may
+    /// have been made.
     Check,
-    /// The write itself.
+    /// The write itself; for labels, adding those wanted.
     Make,
+    /// Removing the labels the engine owns that are not wanted.
+    Unlabel,
     /// Looking for what an earlier attempt made: issues updated at or after
     /// `since`, the `page`th page; or comments after `after`; or the pull
     /// request for its branches.
@@ -158,10 +193,10 @@ pub(crate) fn write(
     env: &Env<Limits>,
     owner: Token,
     write: Write,
-    resumed: bool,
+    resumed: Option<Cause>,
     out: &mut Queue<Request>,
 ) {
-    if !valid(&write, &env.limits) {
+    if !valid(&write, &env.limits, &model.owned) {
         out.push(Request::Wrote { owner, result: Err(Failure::Invalid) });
         return;
     }
@@ -188,6 +223,7 @@ pub(crate) fn write(
         | Write::DeletePage { .. } => (None, Position::START, None),
     };
     let lane = lane(&write);
+    let nonce = model.rng.next_u64();
     let writing = Writing {
         owner,
         write,
@@ -197,8 +233,10 @@ pub(crate) fn write(
         found: false,
         attempts: 0,
         ambiguous: false,
-        since: env.now,
+        sent: Time::ZERO,
+        since: Time::ZERO,
         from: 0,
+        nonce,
         target,
         position,
         uncertain,
@@ -221,10 +259,18 @@ pub(crate) fn write(
 /// it is now, and asks for its first call.
 fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
     let writing = model.writes.get(id).expect("a write lives until it closes");
-    let item = subject(&writing.write);
-    let from = match item {
-        Some(item) => items::passed(model, item),
-        None => 0,
+    // Where what it makes would be found: after its cause, if the parent
+    // names one; otherwise after what the forge had shown before it began.
+    let (since, from) = match writing.resumed {
+        Some(cause) => (cause.at, cause.comment),
+        None => {
+            let since = scans::clock(model, repository(&writing.write));
+            let from = match subject(&writing.write) {
+                Some(item) => items::passed(model, item),
+                None => 0,
+            };
+            (since, from)
+        }
     };
     let known = match &writing.write {
         Write::Record { item, .. } => items::record(model, *item),
@@ -238,65 +284,92 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
         | Write::PutPage { .. }
         | Write::DeletePage { .. } => None,
     };
+    let unwanted = unwanted(&model.owned, &env.limits, &model.writes.get(id).expect("a write lives").write);
     let writing = model.writes.get_mut(id).expect("a write lives until it closes");
-    writing.since = env.now;
-    // A record that may have been posted is looked for from the first
-    // comment: the working set may have passed it since.
-    writing.from = match writing.uncertain {
-        Some(_) => 0,
-        None => from,
-    };
+    writing.since = since;
+    writing.from = from;
     if let Some((_, position, _)) = known {
         // It carries the position taken as it goes; it aims at the record as
         // it was when it was asked for, or as the writes before it in its lane
         // left it.
         writing.position = position;
     }
+    let resumed = writing.resumed.is_some();
     let phase = match &writing.write {
         Write::Record { .. } => match writing.target {
             Some(_) => Phase::Check,
-            None if writing.resumed || writing.uncertain.is_some() => find(writing),
+            None if resumed || writing.uncertain.is_some() => find(writing),
             None => Phase::Make,
         },
         Write::CreateIssue { .. } | Write::Comment { .. } | Write::OpenPull { .. } => {
-            if writing.resumed {
+            if resumed {
                 find(writing)
             } else {
                 Phase::Make
             }
         }
         Write::Merge { .. } => {
-            if writing.resumed {
+            if resumed {
                 Phase::Check
             } else {
                 Phase::Make
             }
         }
-        Write::SetLabels { .. }
-        | Write::Close { .. }
-        | Write::DeleteBranch { .. }
-        | Write::PutPage { .. }
-        | Write::DeletePage { .. } => Phase::Make,
+        Write::PutPage { .. } => Phase::Check,
+        Write::SetLabels { labels, .. } => {
+            if labels.is_empty() && !unwanted.is_empty() {
+                Phase::Unlabel
+            } else {
+                Phase::Make
+            }
+        }
+        Write::Close { .. } | Write::DeleteBranch { .. } | Write::DeletePage { .. } => Phase::Make,
     };
     writing.state = State::Due { phase };
     ask(model, id);
 }
 
-/// The first page of looking for what an earlier attempt made.
+/// The first page of looking for what an earlier attempt made: a record
+/// among all its item's comments, anything else after where the write
+/// began.
 fn find(writing: &Writing) -> Phase {
-    Phase::Find { since: writing.since, page: 1, after: writing.from }
+    let after = match writing.write {
+        Write::Record { .. } => 0,
+        Write::CreateIssue { .. }
+        | Write::Comment { .. }
+        | Write::SetLabels { .. }
+        | Write::OpenPull { .. }
+        | Write::Merge { .. }
+        | Write::Close { .. }
+        | Write::DeleteBranch { .. }
+        | Write::PutPage { .. }
+        | Write::DeletePage { .. } => writing.from,
+    };
+    Phase::Find { since: writing.since, page: 1, after }
 }
 
-/// A backoff ended: the call is tried again.
-pub(crate) fn retry(model: &mut Model, id: Id<Writing>) {
+/// The write `id`'s call goes out at `now`.
+pub(crate) fn sent(model: &mut Model, id: Id<Writing>, now: Time) {
+    model.writes.get_mut(id).expect("a write lives until its call is answered").sent = now;
+}
+
+/// A write's alarm: a backoff ended, and the call is tried again; or the
+/// lane it held is free.
+pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
     let writing = model.writes.get_mut(id).expect("an alarm is cancelled as its write closes");
-    writing.state = match mem::replace(&mut writing.state, State::Closed) {
-        State::Waiting { phase, until: _ } => State::Due { phase },
-        State::Queued | State::Due { .. } | State::Busy { .. } | State::Done { .. } | State::Closed => {
-            unreachable!("the backoff's alarm runs while it waits")
+    match mem::replace(&mut writing.state, State::Closed) {
+        State::Waiting { phase, until: _ } => {
+            writing.state = State::Due { phase };
+            ask(model, id);
         }
-    };
-    ask(model, id);
+        State::Holding { until } => {
+            assert!(env.now >= until, "the hold's alarm is armed for its end");
+            close(model, env, id);
+        }
+        State::Queued | State::Due { .. } | State::Busy { .. } | State::Done { .. } | State::Closed => {
+            unreachable!("a write's alarm runs while it waits or holds its lane")
+        }
+    }
 }
 
 /// Terminal for the write `id`'s call.
@@ -308,37 +381,48 @@ pub(crate) fn answered(
     out: &mut Queue<Request>,
 ) {
     let engine = model.config.engine;
+    let unwanted = unwanted(&model.owned, &env.limits, &model.writes.get(id).expect("a write lives").write);
     let writing = model.writes.get_mut(id).expect("a write lives until its call is answered");
     let state = mem::replace(&mut writing.state, State::Closed);
     writing.state = match state {
         State::Busy { phase } => match phase {
             Phase::Check => checked(writing, engine, env, &mut model.rng, result),
-            Phase::Make => made(writing, env, &mut model.rng, result),
+            Phase::Make | Phase::Unlabel => made(writing, env, &mut model.rng, phase, !unwanted.is_empty(), result),
             Phase::Find { since, page, after } => {
                 searched(writing, engine, env, &mut model.rng, since, page, after, result)
             }
         },
-        State::Queued | State::Due { .. } | State::Waiting { .. } | State::Done { .. } | State::Closed => {
-            unreachable!("a write's terminal comes while its call is out")
-        }
+        State::Queued
+        | State::Due { .. }
+        | State::Waiting { .. }
+        | State::Done { .. }
+        | State::Holding { .. }
+        | State::Closed => unreachable!("a write's terminal comes while its call is out"),
     };
     conclude(model, env, id, out);
 }
 
 /// What the write `id`'s call asks, as it goes out.
-pub(crate) fn op(model: &Model, id: Id<Writing>) -> (u32, Op) {
+pub(crate) fn op(model: &Model, env: &Env<Limits>, id: Id<Writing>) -> (u32, Op) {
     let writing = model.writes.get(id).expect("a write lives until its call is answered");
     let phase = match writing.state {
         State::Busy { phase } => phase,
-        State::Queued | State::Due { .. } | State::Waiting { .. } | State::Done { .. } | State::Closed => {
-            unreachable!("a write's call goes out while it is busy")
-        }
+        State::Queued
+        | State::Due { .. }
+        | State::Waiting { .. }
+        | State::Done { .. }
+        | State::Holding { .. }
+        | State::Closed => unreachable!("a write's call goes out while it is busy"),
     };
     let repository = repository(&writing.write);
     let op = match phase {
         Phase::Check => check_op(writing),
         Phase::Make => make_op(writing),
-        Phase::Find { since, page, after } => find_op(writing, since, page, after),
+        Phase::Unlabel => Op::RemoveLabels {
+            number: subject_number(&writing.write),
+            labels: unwanted(&model.owned, &env.limits, &writing.write),
+        },
+        Phase::Find { since, page, after } => find_op(writing, model.config.engine, since, page, after),
     };
     (repository, op)
 }
@@ -350,14 +434,14 @@ fn check_op(writing: &Writing) -> Op {
             Op::Comment { number: item.number, id: target.comment }
         }
         Write::Merge { item, .. } => Op::Pull { number: item.number, reviews: 0 },
+        Write::PutPage { name, .. } => Op::Page { name: copy_of(name) },
         Write::CreateIssue { .. }
         | Write::Comment { .. }
         | Write::SetLabels { .. }
         | Write::OpenPull { .. }
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
-        | Write::PutPage { .. }
-        | Write::DeletePage { .. } => unreachable!("only a record and a merge are checked"),
+        | Write::DeletePage { .. } => unreachable!("only a record, a page and a merge are checked"),
     }
 }
 
@@ -373,29 +457,31 @@ fn make_op(writing: &Writing) -> Op {
             Op::Post { number: item.number, key: Some(copy_of(key)), body: body_of(body) }
         }
         Write::Record { item, payload } => {
-            let body = Body::Record { payload: *payload, position: writing.position };
+            let body = Body::Record { payload: *payload, position: writing.position, nonce: writing.nonce };
             match writing.target {
                 Some(target) => Op::EditComment { number: item.number, id: target.comment, body },
                 None => Op::Post { number: item.number, key: None, body },
             }
         }
-        Write::SetLabels { item, labels } => Op::SetLabels { number: item.number, labels: copy_labels(labels) },
+        Write::SetLabels { item, labels } => Op::AddLabels { number: item.number, labels: copy_labels(labels) },
         Write::OpenPull { repository: _, title, body, head, base } => {
             Op::OpenPull { title: copy_of(title), body: body_of(body), head: copy_of(head), base: copy_of(base) }
         }
         Write::Merge { item, head } => Op::Merge { number: item.number, head: *head },
         Write::Close { item } => Op::Close { number: item.number },
         Write::DeleteBranch { repository: _, branch } => Op::DeleteBranch { branch: copy_of(branch) },
-        Write::PutPage { repository: _, name, content } => {
-            Op::PutPage { name: copy_of(name), content: body_of(content) }
+        Write::PutPage { repository: _, name, content, revision: _ } => {
+            Op::PutPage { name: copy_of(name), content: body_of(content), nonce: writing.nonce }
         }
         Write::DeletePage { repository: _, name } => Op::DeletePage { name: copy_of(name) },
     }
 }
 
-fn find_op(writing: &Writing, since: Time, page: u32, after: u64) -> Op {
+fn find_op(writing: &Writing, engine: u64, since: Time, page: u32, after: u64) -> Op {
     match &writing.write {
-        Write::CreateIssue { .. } => Op::Items { state: None, kind: Some(Kind::Issue), label: None, since, page },
+        Write::CreateIssue { .. } => {
+            Op::Items { state: None, kind: Some(Kind::Issue), label: None, author: Some(engine), since, page }
+        }
         Write::Comment { item, .. } | Write::Record { item, .. } => Op::Item { number: item.number, after },
         Write::OpenPull { head, base, .. } => Op::PullFor { head: copy_of(head), base: copy_of(base) },
         Write::SetLabels { .. }
@@ -417,7 +503,8 @@ fn body_of(content: &Content) -> Body {
 // Cell handlers: each takes the source state's data by value and returns the
 // target state.
 
-/// Check, read: a record as last read is edited, one changed is not; a merge
+/// Check, read: a record or a page as last read is written, one this write
+/// made is done, one changed by someone else is not written over; a merge
 /// made at its head is done, one still open at it is tried.
 fn checked(
     writing: &mut Writing,
@@ -428,21 +515,7 @@ fn checked(
 ) -> State {
     let answer = match result {
         Ok(answer) => answer,
-        Err(Error::Missing) => match writing.write {
-            Write::Record { .. } => {
-                let record = Record::Missing;
-                return State::Done { result: Err(Failure::Edited { record }), record: Some(record) };
-            }
-            Write::CreateIssue { .. }
-            | Write::Comment { .. }
-            | Write::SetLabels { .. }
-            | Write::OpenPull { .. }
-            | Write::Merge { .. }
-            | Write::Close { .. }
-            | Write::DeleteBranch { .. }
-            | Write::PutPage { .. }
-            | Write::DeletePage { .. } => return refused(Error::Missing),
-        },
+        Err(Error::Missing) => return gone(writing),
         Err(error) => return failed(writing, env, rng, Phase::Check, error),
     };
     match &writing.write {
@@ -452,24 +525,34 @@ fn checked(
             if comment.revision == target.revision {
                 return State::Due { phase: Phase::Make };
             }
-            // A record write of the engine's that may have landed: the record
-            // saying what it carried is its own.
-            let ours = match comment.mark {
-                Mark::Record(position) => comment.author == engine && writing.uncertain == Some(position),
-                Mark::None | Mark::Key(_) | Mark::Mangled => false,
+            // A record of the engine's saying the nonce of a write that may
+            // have landed: this one's, which is done; or an earlier one's of
+            // its lane, which this one writes over.
+            let nonce = match comment.mark {
+                Mark::Record { nonce, .. } if comment.author == engine => Some(nonce),
+                Mark::Record { .. } | Mark::None | Mark::Key(_) | Mark::Mangled => None,
             };
-            if ours {
+            if nonce == Some(writing.nonce) {
+                let record =
+                    Record::Found { comment: comment.id, revision: comment.revision, position: writing.position };
+                return State::Done { result: Ok(Written::Done), record: Some(record) };
+            }
+            if nonce.is_some() && nonce == writing.uncertain {
+                writing.target = Some(Target { comment: comment.id, revision: comment.revision });
                 return State::Due { phase: Phase::Make };
             }
-            let record = match comment.mark {
-                Mark::Record(position) if comment.author == engine => {
-                    Record::Found { comment: comment.id, revision: comment.revision, position }
-                }
-                Mark::Record(_) | Mark::Mangled | Mark::None | Mark::Key(_) => {
-                    Record::Mangled { comment: comment.id, revision: comment.revision }
-                }
-            };
+            let record = found(&comment, engine);
             State::Done { result: Err(Failure::Edited { record }), record: Some(record) }
+        }
+        Write::PutPage { revision, .. } => {
+            let page = api::page(answer);
+            if Some(page.revision) == *revision {
+                return State::Due { phase: Phase::Make };
+            }
+            if page.nonce == Some(writing.nonce) {
+                return State::Done { result: Ok(Written::Revision(page.revision)), record: None };
+            }
+            State::Done { result: Err(Failure::Revised { revision: Some(page.revision) }), record: None }
         }
         Write::Merge { head, .. } => {
             let pull = api::pull(answer);
@@ -488,35 +571,76 @@ fn checked(
         | Write::OpenPull { .. }
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
-        | Write::PutPage { .. }
-        | Write::DeletePage { .. } => unreachable!("only a record and a merge are checked"),
+        | Write::DeletePage { .. } => unreachable!("only a record, a page and a merge are checked"),
     }
 }
 
-/// Make, answered: done; or what an attempt that may have been made, or a
-/// refusal, calls for.
-fn made(writing: &mut Writing, env: &Env<Limits>, rng: &mut Rng, result: Result<Answer, Error>) -> State {
+/// Check, missing: a record deleted is not posted again unasked; a page is
+/// written if it was to be made, and is not if someone deleted it.
+fn gone(writing: &Writing) -> State {
+    match &writing.write {
+        Write::Record { .. } => {
+            let record = Record::Missing;
+            State::Done { result: Err(Failure::Edited { record }), record: Some(record) }
+        }
+        Write::PutPage { revision, .. } => match revision {
+            None => State::Due { phase: Phase::Make },
+            Some(_) => State::Done { result: Err(Failure::Revised { revision: None }), record: None },
+        },
+        Write::CreateIssue { .. }
+        | Write::Comment { .. }
+        | Write::SetLabels { .. }
+        | Write::OpenPull { .. }
+        | Write::Merge { .. }
+        | Write::Close { .. }
+        | Write::DeleteBranch { .. }
+        | Write::DeletePage { .. } => refused(Error::Missing),
+    }
+}
+
+/// The record a comment of the engine's, or someone else's, holds.
+fn found(comment: &api::Comment, engine: u64) -> Record {
+    match comment.mark {
+        Mark::Record { position, .. } if comment.author == engine => {
+            Record::Found { comment: comment.id, revision: comment.revision, position }
+        }
+        Mark::Record { .. } | Mark::Mangled | Mark::None | Mark::Key(_) => {
+            Record::Mangled { comment: comment.id, revision: comment.revision }
+        }
+    }
+}
+
+/// Make or Unlabel, answered: done, or the labels left to remove; or what
+/// an attempt that may have been made, or a refusal, calls for.
+fn made(
+    writing: &mut Writing,
+    env: &Env<Limits>,
+    rng: &mut Rng,
+    phase: Phase,
+    unlabel: bool,
+    result: Result<Answer, Error>,
+) -> State {
     let error = match result {
+        Ok(Answer::Done) if phase == Phase::Make && unlabel && is_labels(&writing.write) => {
+            return State::Due { phase: Phase::Unlabel };
+        }
         Ok(answer) => return done(writing, answer),
         Err(error) => error,
     };
     match error {
         Error::Timeout => {
             writing.ambiguous = true;
-            let phase = match &writing.write {
+            let next = match &writing.write {
                 Write::CreateIssue { .. } | Write::Comment { .. } | Write::OpenPull { .. } => find(writing),
                 Write::Record { .. } => match writing.target {
-                    Some(_) => Phase::Make,
+                    Some(_) => Phase::Check,
                     None => find(writing),
                 },
-                Write::Merge { .. } => Phase::Check,
-                Write::SetLabels { .. }
-                | Write::Close { .. }
-                | Write::DeleteBranch { .. }
-                | Write::PutPage { .. }
-                | Write::DeletePage { .. } => Phase::Make,
+                Write::Merge { .. } | Write::PutPage { .. } => Phase::Check,
+                Write::SetLabels { .. } => phase,
+                Write::Close { .. } | Write::DeleteBranch { .. } | Write::DeletePage { .. } => Phase::Make,
             };
-            failed(writing, env, rng, phase, error)
+            failed(writing, env, rng, next, error)
         }
         Error::Exists => match writing.write {
             Write::OpenPull { .. } => State::Due { phase: find(writing) },
@@ -566,7 +690,7 @@ fn made(writing: &mut Writing, env: &Env<Limits>, rng: &mut Rng, result: Result<
         | Error::Closed
         | Error::Stale
         | Error::Conflict
-        | Error::Protected => failed(writing, env, rng, Phase::Make, error),
+        | Error::Protected => failed(writing, env, rng, phase, error),
     }
 }
 
@@ -599,10 +723,12 @@ fn searched(
         },
         Err(error) => return failed(writing, env, rng, Phase::Find { since, page, after }, error),
     };
+    let most = page_size(&env.limits);
     match &writing.write {
         Write::CreateIssue { key, .. } => {
             let (items, more) = api::items(answer);
-            for summary in &items {
+            let items = items.get(..most).unwrap_or(&items);
+            for summary in items {
                 let keyed = match &summary.key {
                     Some(found) => **found == **key,
                     None => false,
@@ -623,19 +749,20 @@ fn searched(
         }
         Write::Comment { key, .. } => {
             let (_, comments, more) = api::item(answer);
+            let comments = comments.get(..most).unwrap_or(&comments);
             let mut last = after;
-            for comment in &comments {
-                last = comment.id;
+            for comment in comments {
+                last = last.max(comment.id);
                 let keyed = match &comment.mark {
                     Mark::Key(found) => **found == **key,
-                    Mark::None | Mark::Record(_) | Mark::Mangled => false,
+                    Mark::None | Mark::Record { .. } | Mark::Mangled => false,
                 };
                 if keyed && comment.author == engine {
                     writing.found = true;
                     return State::Done { result: Ok(Written::Commented(comment.id)), record: None };
                 }
             }
-            if more {
+            if more && last > after {
                 State::Due { phase: Phase::Find { since, page, after: last } }
             } else {
                 State::Due { phase: Phase::Make }
@@ -643,27 +770,8 @@ fn searched(
         }
         Write::Record { .. } => {
             let (_, comments, more) = api::item(answer);
-            let mut last = after;
-            for comment in &comments {
-                last = comment.id;
-                if comment.author != engine {
-                    continue;
-                }
-                let record = match comment.mark {
-                    Mark::Record(position) => {
-                        Record::Found { comment: comment.id, revision: comment.revision, position }
-                    }
-                    Mark::Mangled => Record::Mangled { comment: comment.id, revision: comment.revision },
-                    Mark::None | Mark::Key(_) => continue,
-                };
-                writing.found = true;
-                return State::Done { result: Ok(Written::Done), record: Some(record) };
-            }
-            if more {
-                State::Due { phase: Phase::Find { since, page, after: last } }
-            } else {
-                State::Due { phase: Phase::Make }
-            }
+            let comments = comments.get(..most).unwrap_or(&comments);
+            found_record(writing, engine, comments, more, since, page, after)
         }
         Write::OpenPull { .. } => {
             let pull = api::pull(answer);
@@ -680,6 +788,52 @@ fn searched(
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
         | Write::DeletePage { .. } => unreachable!("only creations are looked for"),
+    }
+}
+
+/// Find, a page of a record's item's comments: a record of the engine's this
+/// write made is done; one an earlier write made is edited; a mangled one is
+/// not written over.
+fn found_record(
+    writing: &mut Writing,
+    engine: u64,
+    comments: &[api::Comment],
+    more: bool,
+    since: Time,
+    page: u32,
+    after: u64,
+) -> State {
+    let mut last = after;
+    for comment in comments {
+        last = last.max(comment.id);
+        if comment.author != engine {
+            continue;
+        }
+        match comment.mark {
+            Mark::Record { nonce, position: _ } if nonce == writing.nonce => {
+                // This write's own post landed.
+                writing.found = true;
+                let record =
+                    Record::Found { comment: comment.id, revision: comment.revision, position: writing.position };
+                return State::Done { result: Ok(Written::Done), record: Some(record) };
+            }
+            Mark::Record { .. } => {
+                // An earlier write's: this one edits it, so that the
+                // record says what this one carries.
+                writing.target = Some(Target { comment: comment.id, revision: comment.revision });
+                return State::Due { phase: Phase::Make };
+            }
+            Mark::Mangled => {
+                let record = Record::Mangled { comment: comment.id, revision: comment.revision };
+                return State::Done { result: Err(Failure::Edited { record }), record: Some(record) };
+            }
+            Mark::None | Mark::Key(_) => {}
+        }
+    }
+    if more && last > after {
+        State::Due { phase: Phase::Find { since, page, after: last } }
+    } else {
+        State::Due { phase: Phase::Make }
     }
 }
 
@@ -723,7 +877,8 @@ fn done(writing: &Writing, answer: Answer) -> State {
 
 /// A call failed: queued again at once for the rate, whose reset holds every
 /// call; tried again after a backoff if it may pass, until the attempts run
-/// out; the answer otherwise.
+/// out, and no sooner than a write that timed out can still land; the answer
+/// otherwise.
 fn failed(writing: &mut Writing, env: &Env<Limits>, rng: &mut Rng, phase: Phase, error: Error) -> State {
     match error {
         Error::RateLimited { .. } => State::Due { phase },
@@ -732,7 +887,10 @@ fn failed(writing: &mut Writing, env: &Env<Limits>, rng: &mut Rng, phase: Phase,
             if writing.attempts >= env.limits.attempts {
                 return refused(error);
             }
-            let until = env.now.saturating_add(items::backoff(&env.limits, rng, writing.attempts));
+            let mut until = env.now.saturating_add(items::backoff(&env.limits, rng, writing.attempts));
+            if error == Error::Timeout {
+                until = until.max(writing.sent.saturating_add(env.limits.lifetime));
+            }
             State::Waiting { phase, until }
         }
         Error::Forbidden
@@ -754,8 +912,8 @@ fn refused(error: Error) -> State {
 }
 
 /// Applied after every transition: a call due is queued; a write done
-/// answers the parent, and closes, and the next of its lane starts; then the
-/// backoff's alarm runs only while it waits.
+/// answers the parent, and closes or holds its lane; then the backoff's
+/// alarm runs only while it waits.
 fn conclude(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Queue<Request>) {
     let writing = model.writes.get_mut(id).expect("a write lives until it closes");
     match mem::replace(&mut writing.state, State::Closed) {
@@ -771,13 +929,13 @@ fn conclude(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Que
         }
         State::Queued => writing.state = State::Queued,
         State::Busy { phase } => writing.state = State::Busy { phase },
-        State::Closed => unreachable!("a write is concluded while it lives"),
+        State::Holding { .. } | State::Closed => unreachable!("a write is concluded while it is in hand"),
     }
 }
 
 /// A write done: the working set hears what it found of its item's record,
 /// and so do the record writes queued after it; the parent hears how it went;
-/// and it closes.
+/// and it closes, or holds its lane while its last call may still land.
 fn answer(
     model: &mut Model,
     env: &Env<Limits>,
@@ -787,8 +945,7 @@ fn answer(
     out: &mut Queue<Request>,
 ) {
     let writing = model.writes.get(id).expect("a write lives until it closes");
-    let (owner, found, next, position, ambiguous) =
-        (writing.owner, writing.found, writing.next, writing.position, writing.ambiguous);
+    let (owner, found, next, nonce, sent) = (writing.owner, writing.found, writing.next, writing.nonce, writing.sent);
     let recording = match writing.write {
         Write::Record { item, .. } => Some(item),
         Write::CreateIssue { .. }
@@ -801,6 +958,8 @@ fn answer(
         | Write::PutPage { .. }
         | Write::DeletePage { .. } => None,
     };
+    // Given up after a call that may still land.
+    let pending = result == Err(Failure::Forge(Error::Timeout));
     if found {
         model.facts.push(Fact::Found { owner });
     }
@@ -813,21 +972,18 @@ fn answer(
                 }
             }
             None => {
-                // Given up after an attempt that may have landed: the record
-                // may now say what this one carried.
-                let gave_up = match result {
-                    Err(Failure::Forge(_)) => ambiguous,
-                    Ok(_) | Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Edited { .. }) => false,
-                };
-                if gave_up {
-                    items::uncertain(model, item, position);
-                    follow_record(&mut model.writes, next, None, Some(position), env.limits.writes);
+                // The record may now say what this one carried.
+                if pending {
+                    items::uncertain(model, item, nonce);
+                    follow_record(&mut model.writes, next, None, Some(nonce), env.limits.writes);
                 }
             }
         }
         match result {
             Err(Failure::Edited { .. }) => model.facts.push(Fact::Edited { item }),
-            Ok(_) | Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Forge(_)) => {}
+            Ok(_)
+            | Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Revised { .. } | Failure::Forge(_)) => {
+            }
         }
     }
     match result {
@@ -835,6 +991,13 @@ fn answer(
         Err(_) => model.facts.push(Fact::Unwritten { owner }),
     }
     out.push(Request::Wrote { owner, result });
+    let until = sent.saturating_add(env.limits.lifetime);
+    if pending && env.now < until {
+        let writing = model.writes.get_mut(id).expect("a write lives until it closes");
+        writing.state = State::Holding { until };
+        model.alarms.arm(Alarm::Write(id), until).expect("an alarm per write fits");
+        return;
+    }
     close(model, env, id);
 }
 
@@ -843,13 +1006,16 @@ fn ask(model: &mut Model, id: Id<Writing>) {
     let writing = model.writes.get_mut(id).expect("a write lives until it closes");
     let phase = match writing.state {
         State::Due { phase } => phase,
-        State::Queued | State::Busy { .. } | State::Waiting { .. } | State::Done { .. } | State::Closed => {
-            unreachable!("a write asks for a call when one is due")
-        }
+        State::Queued
+        | State::Busy { .. }
+        | State::Waiting { .. }
+        | State::Done { .. }
+        | State::Holding { .. }
+        | State::Closed => unreachable!("a write asks for a call when one is due"),
     };
     let priority = match phase {
         Phase::Check | Phase::Find { .. } => Priority::Fresh,
-        Phase::Make => Priority::Write,
+        Phase::Make | Phase::Unlabel => Priority::Write,
     };
     calls::queue(&mut model.calls, Purpose::Write(id), priority);
     writing.state = State::Busy { phase };
@@ -860,6 +1026,7 @@ fn ask(model: &mut Model, id: Id<Writing>) {
 fn close(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
     let writing = model.writes.get_mut(id).expect("a write lives until it closes");
     let (lane, next) = (writing.lane, writing.next);
+    writing.state = State::Closed;
     model.alarms.cancel(Alarm::Write(id));
     model.writes.retire(id);
     match next {
@@ -873,15 +1040,15 @@ fn close(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
 
 /// A write posted or edited its item's record, which is now `record`: the
 /// record writes queued after it in its lane aim at it. Or it gave up after
-/// an attempt carrying `uncertain` that may have landed: they take a record
-/// saying it as their own. A record found changed by someone else is not
-/// passed on: the writes asked for before the parent heard of it fail as this
-/// one did.
+/// an attempt carrying the nonce `uncertain` that may have landed: they take
+/// a record saying it as their own. A record found changed by someone else is
+/// not passed on: the writes asked for before the parent heard of it fail as
+/// this one did.
 fn follow_record(
     writes: &mut Slab<Writing>,
     next: Option<Id<Writing>>,
     record: Option<Record>,
-    uncertain: Option<Position>,
+    uncertain: Option<u64>,
     most: u32,
 ) {
     let mut next = next;
@@ -920,6 +1087,59 @@ fn target_of(record: Record) -> Option<Target> {
         Record::Mangled { comment, revision } | Record::Found { comment, revision, .. } => {
             Some(Target { comment, revision })
         }
+    }
+}
+
+fn is_labels(write: &Write) -> bool {
+    match write {
+        Write::SetLabels { .. } => true,
+        Write::CreateIssue { .. }
+        | Write::Comment { .. }
+        | Write::Record { .. }
+        | Write::OpenPull { .. }
+        | Write::Merge { .. }
+        | Write::Close { .. }
+        | Write::DeleteBranch { .. }
+        | Write::PutPage { .. }
+        | Write::DeletePage { .. } => false,
+    }
+}
+
+/// The labels the engine owns, of `owned`, that a label write does not
+/// want, which it removes; none for any other write.
+fn unwanted(owned: &[Box<[u8]>], limits: &Limits, write: &Write) -> Box<[Box<[u8]>]> {
+    let labels = match write {
+        Write::SetLabels { labels, .. } => labels,
+        Write::CreateIssue { .. }
+        | Write::Comment { .. }
+        | Write::Record { .. }
+        | Write::OpenPull { .. }
+        | Write::Merge { .. }
+        | Write::Close { .. }
+        | Write::DeleteBranch { .. }
+        | Write::PutPage { .. }
+        | Write::DeletePage { .. } => return Box::new([]),
+    };
+    let mut unwanted = List::with_capacity(limits.labels.saturating_add(2));
+    for label in owned {
+        let mut wanted = false;
+        for kept in labels {
+            if **kept == **label {
+                wanted = true;
+            }
+        }
+        if !wanted {
+            unwanted.push(copy_of(label)).expect("as many as the labels the engine owns");
+        }
+    }
+    unwanted.into_boxed()
+}
+
+/// The number of the item a write is about, if it is about one.
+fn subject_number(write: &Write) -> u64 {
+    match subject(write) {
+        Some(item) => item.number,
+        None => unreachable!("only a write about an item names one"),
     }
 }
 
@@ -963,8 +1183,8 @@ fn repository(write: &Write) -> u32 {
 }
 
 /// Whether a write is within the limits, about the deployment's
-/// repositories.
-fn valid(write: &Write, limits: &Limits) -> bool {
+/// repositories, setting only labels the engine owns.
+fn valid(write: &Write, limits: &Limits, owned: &[Box<[u8]>]) -> bool {
     if repository(write) >= limits.repositories {
         return false;
     }
@@ -975,12 +1195,14 @@ fn valid(write: &Write, limits: &Limits) -> bool {
         }
         Write::Comment { item: _, key, body } => fits(key, name) && content(body, limits),
         Write::Record { .. } | Write::Merge { .. } | Write::Close { .. } => true,
-        Write::SetLabels { item: _, labels } => labelled(labels, limits),
+        Write::SetLabels { item: _, labels } => labelled(labels, limits) && owns(owned, labels),
         Write::OpenPull { repository: _, title, body, head, base } => {
             fits(title, limits.title_bytes) && content(body, limits) && fits(head, name) && fits(base, name)
         }
         Write::DeleteBranch { repository: _, branch } => fits(branch, name),
-        Write::PutPage { repository: _, name: page, content: body } => fits(page, name) && content(body, limits),
+        Write::PutPage { repository: _, name: page, content: body, revision: _ } => {
+            fits(page, name) && content(body, limits)
+        }
         Write::DeletePage { repository: _, name: page } => fits(page, name),
     }
 }
@@ -1012,4 +1234,24 @@ fn labelled(labels: &[Box<[u8]>], limits: &Limits) -> bool {
         }
     }
     true
+}
+
+/// Whether the engine owns each of `labels`, as `owned` says.
+fn owns(owned: &[Box<[u8]>], labels: &[Box<[u8]>]) -> bool {
+    for label in labels {
+        let mut ours = false;
+        for kept in owned {
+            if **kept == **label {
+                ours = true;
+            }
+        }
+        if !ours {
+            return false;
+        }
+    }
+    true
+}
+
+fn page_size(limits: &Limits) -> usize {
+    usize::try_from(limits.page).expect("a u32 fits in a usize")
 }

@@ -6,9 +6,12 @@
 //! it is for; its operation is built as it goes out, from its owner's state,
 //! so a retry carries what is true then.
 //!
-//! Calls go out one per [`crate::resume`], while all of these hold: one is
-//! queued; fewer than `Limits::calls` are out; the budget's window is not
-//! spent; and no rate-limit refusal is waiting for its reset. The window
+//! Calls go out one per [`crate::resume`], while all of these hold: the
+//! model has begun; one is queued; fewer than `Limits::calls` are out; the
+//! budget's window is not spent; and no rate-limit refusal is waiting for its
+//! reset. A model begins at its first moment, held as a refusal would hold
+//! it until `Limits::lifetime` later, so that what an engine before it asked
+//! for has landed before it reads the forge. The window
 //! holds `Limits::rate` calls, starting with the first call after the last
 //! window ended, as the forge's own does. A refusal for the rate stops every
 //! call until the reset it names, and the refused call is queued again.
@@ -72,6 +75,8 @@ pub(crate) struct Calls {
     out: u32,
     limit: u32,
     budget: Budget,
+    /// Whether the model's first moment has come.
+    woken: bool,
 }
 
 /// The request budget: calls left in the window and when it ends, whether
@@ -96,6 +101,7 @@ impl Calls {
             out: 0,
             limit,
             budget: Budget { left: 0, ends: Time::ZERO, spent: false, reset: None },
+            woken: false,
         }
     }
 
@@ -110,7 +116,7 @@ impl Calls {
     /// Whether a call may go out: see the module doc.
     pub(crate) fn is_ready(&self) -> bool {
         let queued = !(self.fresh.is_empty() && self.write.is_empty() && self.keep.is_empty() && self.slow.is_empty());
-        queued && !self.budget.spent && self.budget.reset.is_none() && self.out < self.limit
+        self.woken && queued && !self.budget.spent && self.budget.reset.is_none() && self.out < self.limit
     }
 
     pub(crate) fn reclaim(&mut self) {
@@ -150,7 +156,11 @@ pub(crate) fn send(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request
     let (purpose, priority) = (call.purpose, call.priority);
     model.calls.out = model.calls.out.saturating_add(1);
     spend(model, env);
-    let (repository, op) = build(model, purpose);
+    let (repository, op) = build(model, env, purpose);
+    match purpose {
+        Purpose::Write(owner) => writes::sent(model, owner, env.now),
+        Purpose::Read(_) | Purpose::Item(_) | Purpose::Listing(_) | Purpose::Slow(_) => {}
+    }
     model.facts.push(Fact::Sent { priority });
     out.push(Request::Call { call: id.token(), repository, op });
 }
@@ -186,13 +196,24 @@ fn spend(model: &mut Model, env: &Env<Limits>) {
 }
 
 /// What a call asks, from its owner's state as it goes out.
-fn build(model: &Model, purpose: Purpose) -> (u32, Op) {
+fn build(model: &Model, env: &Env<Limits>, purpose: Purpose) -> (u32, Op) {
     match purpose {
         Purpose::Read(id) => reads::op(model, id),
-        Purpose::Write(id) => writes::op(model, id),
+        Purpose::Write(id) => writes::op(model, env, id),
         Purpose::Item(id) => items::op(model, id),
         Purpose::Listing(repository) => scans::op(model, repository),
         Purpose::Slow(repository) => scans::slow_op(model, repository),
+    }
+}
+
+/// The model's first moment: it begins, and holds its calls until nothing a
+/// model before it asked for can still land.
+pub(crate) fn wake(model: &mut Model, env: &Env<Limits>) {
+    model.calls.woken = true;
+    let until = env.now.saturating_add(env.limits.lifetime);
+    if until > env.now {
+        model.calls.budget.reset = Some(until);
+        model.alarms.arm(Alarm::Reset, until).expect("the budget's alarms fit");
     }
 }
 

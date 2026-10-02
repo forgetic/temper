@@ -4,10 +4,12 @@ use alloc::boxed::Box;
 
 use temper_lib::{Duration, Env, List, Queue, Time, Token};
 
-use crate::api::{Answer, Body, Check, Comment, Error, Kind, Mark, Op, Pull, Review, State, Status, Summary, Verdict};
+use crate::api::{
+    Answer, Body, Check, Comment, Error, Kind, Mark, Op, Page, Pull, Review, State, Status, Summary, Verdict,
+};
 use crate::{
-    Ci, Config, Content, Event, Fact, Failure, Item, Level, Limits, Model, News, Position, Priority, Read, Record,
-    Request, View, Write, Written, fire, max_out, resume, step, worst_case,
+    Cause, Ci, Config, Content, Event, Fact, Failure, Item, Level, Limits, Model, News, Position, Priority, Read,
+    Record, Request, View, Write, Written, fire, max_out, resume, step, worst_case,
 };
 
 /// The engine's forge user, and a person's.
@@ -35,18 +37,24 @@ const LIMITS: Limits = Limits {
     backoff: Duration::from_secs(1),
     backoff_max: Duration::from_secs(8),
     attempts: 3,
+    lifetime: Duration::ZERO,
     facts: 256,
 };
 
 const TRACKING: &[u8] = b"temper";
 const HAND_IN: &[u8] = b"hand-in";
+/// The labels the engine projects; others are people's.
+const PROJECTED: [&[u8]; 2] = [b"a", b"b"];
+
+/// What caused a write the parent asks for again.
+const CAUSE: Cause = Cause { comment: 50, at: Time::ZERO.saturating_add(Duration::from_secs(20)) };
 
 /// A head's commit.
 const HEAD: [u8; 32] = [7; 32];
 const OTHER: [u8; 32] = [8; 32];
 
 fn config() -> Config {
-    Config { engine: ENGINE, tracking: bytes(TRACKING), hand_in: bytes(HAND_IN) }
+    Config { engine: ENGINE, tracking: bytes(TRACKING), hand_in: bytes(HAND_IN), projected: labels(&PROJECTED) }
 }
 
 /// The model, its environment, and room for one step's output.
@@ -179,6 +187,7 @@ impl Harness {
             state: Some(State::Open),
             kind: Some(Kind::Issue),
             label: Some(bytes(HAND_IN)),
+            author: None,
             since: Time::ZERO,
             page: 1,
         };
@@ -260,7 +269,8 @@ fn lists_changes(op: &Op) -> bool {
         | Op::CreateIssue { .. }
         | Op::Post { .. }
         | Op::EditComment { .. }
-        | Op::SetLabels { .. }
+        | Op::AddLabels { .. }
+        | Op::RemoveLabels { .. }
         | Op::OpenPull { .. }
         | Op::Merge { .. }
         | Op::Close { .. }
@@ -330,7 +340,7 @@ fn comment(id: u64, author: u64) -> Comment {
 /// is the comment's id and the item's number.
 fn record(id: u64, number: u64, position: Position) -> Comment {
     let revision = id.saturating_add(number);
-    Comment { id, author: ENGINE, revision, mark: Mark::Record(position), body: bytes(b"record") }
+    Comment { id, author: ENGINE, revision, mark: Mark::Record { position, nonce: 0 }, body: bytes(b"record") }
 }
 
 fn comments(list: &[Comment]) -> Box<[Comment]> {
@@ -339,7 +349,7 @@ fn comments(list: &[Comment]) -> Box<[Comment]> {
         let mark = match &comment.mark {
             Mark::None => Mark::None,
             Mark::Key(key) => Mark::Key(key.clone()),
-            Mark::Record(position) => Mark::Record(*position),
+            Mark::Record { position, nonce } => Mark::Record { position: *position, nonce: *nonce },
             Mark::Mangled => Mark::Mangled,
         };
         copy.push(Comment { mark, body: comment.body.clone(), ..*comment }).expect("room");
@@ -358,11 +368,18 @@ fn item_page(item: Summary, comments: Box<[Comment]>, more: bool) -> Result<Answ
 }
 
 fn tracked_listing(page: u32) -> Op {
-    Op::Items { state: Some(State::Open), kind: None, label: Some(bytes(TRACKING)), since: Time::ZERO, page }
+    Op::Items {
+        state: Some(State::Open),
+        kind: None,
+        label: Some(bytes(TRACKING)),
+        author: None,
+        since: Time::ZERO,
+        page,
+    }
 }
 
 fn changes(since: u64, page: u32) -> Op {
-    Op::Items { state: None, kind: None, label: None, since: at(since), page }
+    Op::Items { state: None, kind: None, label: None, author: None, since: at(since), page }
 }
 
 fn item(number: u64) -> Item {
@@ -504,7 +521,13 @@ fn a_record_of_someone_else_is_not_the_engines() {
     let mut h = Harness::started(LIMITS);
     h.step(Event::Track { item: item(9) });
     let read = h.send_one();
-    let forged = Comment { id: 2, author: PERSON, revision: 2, mark: Mark::Record(Position::START), body: bytes(b"!") };
+    let forged = Comment {
+        id: 2,
+        author: PERSON,
+        revision: 2,
+        mark: Mark::Record { position: Position::START, nonce: 0 },
+        body: bytes(b"!"),
+    };
     let told = h.answer(&read, item_page(issue(9, &[TRACKING], 4), comments(&[forged]), false));
     let view = View { kind: Kind::Issue, labels: labels(&[TRACKING]), record: Record::Missing };
     assert_eq!(
@@ -743,7 +766,8 @@ fn the_slow_pass_finds_an_item_whose_tracking_label_was_removed() {
             | Op::CreateIssue { .. }
             | Op::Post { .. }
             | Op::EditComment { .. }
-            | Op::SetLabels { .. }
+            | Op::AddLabels { .. }
+            | Op::RemoveLabels { .. }
             | Op::OpenPull { .. }
             | Op::Merge { .. }
             | Op::Close { .. }
@@ -804,15 +828,15 @@ fn reads_and_writes_beyond_the_limits_or_the_room_are_refused_at_the_entrance() 
     assert_eq!(*busy, [Request::Read { owner, result: Err(Failure::Busy) }], "two reads at once");
     let labels = labels(&[b"a", b"b", b"c", b"d"]);
     let many = Write::SetLabels { item: item(1), labels };
-    let refused = h.step(Event::Write { owner, write: many, resumed: false });
+    let refused = h.step(Event::Write { owner, write: many, resumed: None });
     assert_eq!(*refused, [Request::Wrote { owner, result: Err(Failure::Invalid) }], "more labels than the limits");
     let record = Write::Record { item: item(1), payload: Token::new(2) };
-    let unknown = h.step(Event::Write { owner, write: record, resumed: false });
+    let unknown = h.step(Event::Write { owner, write: record, resumed: None });
     assert_eq!(*unknown, [Request::Wrote { owner, result: Err(Failure::Unknown) }], "a record of an item not held");
     for number in 1..=3 {
-        h.step(Event::Write { owner, write: Write::Close { item: item(number) }, resumed: false });
+        h.step(Event::Write { owner, write: Write::Close { item: item(number) }, resumed: None });
     }
-    let busy = h.step(Event::Write { owner, write: Write::Close { item: item(4) }, resumed: false });
+    let busy = h.step(Event::Write { owner, write: Write::Close { item: item(4) }, resumed: None });
     assert_eq!(*busy, [Request::Wrote { owner, result: Err(Failure::Busy) }], "three writes at once");
 }
 
@@ -822,7 +846,7 @@ fn reads_and_writes_beyond_the_limits_or_the_room_are_refused_at_the_entrance() 
 fn fresh_reads_go_out_first_are_tried_again_and_answered_once() {
     let mut h = Harness::started(LIMITS);
     let owner = Token::new(4);
-    h.step(Event::Write { owner: Token::new(5), write: Write::Close { item: item(1) }, resumed: false });
+    h.step(Event::Write { owner: Token::new(5), write: Write::Close { item: item(1) }, resumed: None });
     h.step(Event::Read { owner, read: Read::Pull { item: item(9) } });
     let sent = h.send();
     assert_eq!(sent[0].op, Op::Pull { number: 9, reviews: 0 }, "the read before the write: {sent:?}");
@@ -865,32 +889,73 @@ fn set_labels(names: &[&[u8]]) -> Write {
     Write::SetLabels { item: item(1), labels: labels(names) }
 }
 
+/// The nonce a record or a wiki page written carries.
+fn nonce(op: &Op) -> u64 {
+    if let Op::PutPage { nonce, .. } = op {
+        return *nonce;
+    }
+    let (Op::Post { body, .. } | Op::EditComment { body, .. }) = op else {
+        panic!("a record written: {op:?}");
+    };
+    let Body::Record { nonce, .. } = body else {
+        panic!("a record written: {op:?}");
+    };
+    *nonce
+}
+
+/// The engine's record as the comment `id` on the item `number`, saying
+/// `position`, made by the write of `nonce`, at `revision`.
+fn written(id: u64, revision: u64, position: Position, nonce: u64) -> Comment {
+    Comment { id, author: ENGINE, revision, mark: Mark::Record { position, nonce }, body: bytes(b"record") }
+}
+
 #[test]
 fn writes_about_one_item_go_one_at_a_time_in_order() {
     let mut h = Harness::started(LIMITS);
-    h.step(Event::Write { owner: Token::new(1), write: set_labels(&[b"a"]), resumed: false });
-    h.step(Event::Write { owner: Token::new(2), write: set_labels(&[b"b"]), resumed: false });
-    h.step(Event::Write { owner: Token::new(3), write: Write::Close { item: item(2) }, resumed: false });
+    h.step(Event::Write { owner: Token::new(1), write: set_labels(&[TRACKING, b"a"]), resumed: None });
+    h.step(Event::Write { owner: Token::new(2), write: set_labels(&[TRACKING, b"b"]), resumed: None });
+    h.step(Event::Write { owner: Token::new(3), write: Write::Close { item: item(2) }, resumed: None });
     let sent = h.send();
     assert_eq!(sent.len(), 2, "one per item: {sent:?}");
-    assert_eq!(sent[0].op, Op::SetLabels { number: 1, labels: labels(&[b"a"]) }, "the first of its lane");
+    let add = Op::AddLabels { number: 1, labels: labels(&[TRACKING, b"a"]) };
+    assert_eq!(sent[0].op, add, "the first of its lane");
     assert_eq!(sent[1].op, Op::Close { number: 2 }, "the other item's");
     let told = h.answer(&sent[0], Err(Error::Timeout));
     assert!(told.is_empty(), "a set is written again after a backoff");
     h.at(2);
     h.fire();
     let again = h.send_one();
-    assert_eq!(again.op, Op::SetLabels { number: 1, labels: labels(&[b"a"]) }, "the same set, still first");
-    let told = h.answer(&again, Ok(Answer::Done));
+    assert_eq!(again.op, add, "the same set, still first");
+    assert!(h.answer(&again, Ok(Answer::Done)).is_empty(), "added; the rest to remove");
+    let remove = h.send_one();
+    assert_eq!(remove.op, Op::RemoveLabels { number: 1, labels: labels(&[HAND_IN, b"b"]) }, "the others it owns");
+    let told = h.answer(&remove, Ok(Answer::Done));
     assert_eq!(*told, [Request::Wrote { owner: Token::new(1), result: Ok(Written::Done) }], "done");
     let next = h.send_one();
-    assert_eq!(next.op, Op::SetLabels { number: 1, labels: labels(&[b"b"]) }, "then the next of its lane");
+    assert_eq!(next.op, Op::AddLabels { number: 1, labels: labels(&[TRACKING, b"b"]) }, "then the next of its lane");
+}
+
+#[test]
+fn labels_people_set_are_never_written() {
+    let mut h = Harness::started(LIMITS);
+    let owner = Token::new(1);
+    let told = h.step(Event::Write { owner, write: set_labels(&[TRACKING, b"bug"]), resumed: None });
+    assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Invalid) }], "not the engine's to set");
+    h.step(Event::Write { owner, write: set_labels(&[]), resumed: None });
+    let remove = h.send_one();
+    let ours = labels(&[TRACKING, HAND_IN, b"a", b"b"]);
+    assert_eq!(remove.op, Op::RemoveLabels { number: 1, labels: ours }, "none wanted: those it owns removed");
+    let told = h.answer(&remove, Ok(Answer::Done));
+    assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Done) }], "done");
 }
 
 #[test]
 fn an_issue_whose_creation_timed_out_is_found_by_its_key_before_it_is_tried_again() {
     let mut h = Harness::started(LIMITS);
-    h.at(10);
+    // The forge's clock is behind the engine's: what the listings show is
+    // what the find goes by.
+    h.pass(30, &[issue(3, &[], 7)]);
+    h.at(31);
     let owner = Token::new(1);
     let create = Write::CreateIssue {
         repository: 0,
@@ -899,7 +964,7 @@ fn an_issue_whose_creation_timed_out_is_found_by_its_key_before_it_is_tried_agai
         body: Content::Payload(Token::new(9)),
         labels: labels(&[TRACKING]),
     };
-    h.step(Event::Write { owner, write: create, resumed: false });
+    h.step(Event::Write { owner, write: create, resumed: None });
     let made = h.send_one();
     assert_eq!(
         made.op,
@@ -912,14 +977,16 @@ fn an_issue_whose_creation_timed_out_is_found_by_its_key_before_it_is_tried_agai
         "the payload named by its token"
     );
     h.answer(&made, Err(Error::Timeout));
-    h.at(13);
+    h.at(34);
     h.fire();
     let find = h.send_one();
-    let since = at(10);
-    assert_eq!(find.op, Op::Items { state: None, kind: Some(Kind::Issue), label: None, since, page: 1 }, "look");
-    let mut other = issue(11, &[], 11);
+    let issues =
+        Op::Items { state: None, kind: Some(Kind::Issue), label: None, author: Some(ENGINE), since: at(7), page: 1 };
+    assert_eq!(find.op, issues, "the engine's, since the newest time the forge showed");
+    let mut other = issue(11, &[], 8);
+    other.author = ENGINE;
     other.key = Some(bytes(b"k0"));
-    let mut ours = issue(12, &[TRACKING], 11);
+    let mut ours = issue(12, &[TRACKING], 8);
     ours.author = ENGINE;
     ours.key = Some(bytes(b"k1"));
     let told = h.answer(&find, page(Box::new([other, ours]), false));
@@ -929,12 +996,49 @@ fn an_issue_whose_creation_timed_out_is_found_by_its_key_before_it_is_tried_agai
 }
 
 #[test]
+fn a_resumed_creation_is_looked_for_after_its_cause_not_where_the_working_set_is() {
+    let mut h = Harness::new(LIMITS);
+    // The record read since the restart has passed the engine's comments.
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    h.at(40);
+    let owner = Token::new(1);
+    let create = Write::CreateIssue {
+        repository: 0,
+        key: bytes(b"k1"),
+        title: bytes(b"task"),
+        body: Content::Text(bytes(b"what")),
+        labels: labels(&[]),
+    };
+    h.step(Event::Write { owner, write: create, resumed: Some(CAUSE) });
+    let find = h.send_one();
+    let issues =
+        Op::Items { state: None, kind: Some(Kind::Issue), label: None, author: Some(ENGINE), since: CAUSE.at, page: 1 };
+    assert_eq!(find.op, issues, "issues the engine opened since its cause");
+    h.answer(&find, page(Box::new([]), false));
+    let made = h.send_one();
+    let create = Op::CreateIssue {
+        key: bytes(b"k1"),
+        title: bytes(b"task"),
+        body: Body::Text(bytes(b"what")),
+        labels: labels(&[]),
+    };
+    assert_eq!(made.op, create, "not found: made");
+    let owner = Token::new(2);
+    let reply = Write::Comment { item: item(5), key: bytes(b"reply"), body: Content::Text(bytes(b"hi")) };
+    h.step(Event::Write { owner, write: reply, resumed: Some(CAUSE) });
+    let find = h.send_for(&Op::Item { number: 5, after: CAUSE.comment });
+    let keyed = Comment { id: 60, author: ENGINE, revision: 1, mark: Mark::Key(bytes(b"reply")), body: bytes(b"x") };
+    let told = h.answer(&find, item_page(issue(5, &[TRACKING], 1), comments(&[keyed]), false));
+    assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Commented(60)) }], "found before the record");
+}
+
+#[test]
 fn a_comment_not_found_after_a_timeout_is_posted_again() {
     let mut h = Harness::new(LIMITS);
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
     let owner = Token::new(1);
     let write = Write::Comment { item: item(5), key: bytes(b"reply"), body: Content::Text(bytes(b"hello")) };
-    h.step(Event::Write { owner, write, resumed: false });
+    h.step(Event::Write { owner, write, resumed: None });
     let made = h.send_one();
     let post = Op::Post { number: 5, key: Some(bytes(b"reply")), body: Body::Text(bytes(b"hello")) };
     assert_eq!(made.op, post, "posted with its key");
@@ -963,7 +1067,7 @@ fn a_resumed_creation_is_looked_for_first_and_a_pull_request_by_its_branches() {
         head: bytes(b"change"),
         base: bytes(b"main"),
     };
-    h.step(Event::Write { owner, write: open, resumed: true });
+    h.step(Event::Write { owner, write: open, resumed: Some(CAUSE) });
     let find = h.send_one();
     assert_eq!(find.op, Op::PullFor { head: bytes(b"change"), base: bytes(b"main") }, "looked for first");
     let told = h.answer(&find, Ok(Answer::Pull(pull(4, HEAD, &[], &[]))));
@@ -975,7 +1079,7 @@ fn a_resumed_creation_is_looked_for_first_and_a_pull_request_by_its_branches() {
         head: bytes(b"other"),
         base: bytes(b"main"),
     };
-    h.step(Event::Write { owner, write: open, resumed: false });
+    h.step(Event::Write { owner, write: open, resumed: None });
     let made = h.send_one();
     let told = h.answer(&made, Err(Error::Exists));
     assert!(told.is_empty(), "one exists for its branches: looked for");
@@ -987,7 +1091,7 @@ fn a_resumed_creation_is_looked_for_first_and_a_pull_request_by_its_branches() {
 fn a_merge_that_timed_out_is_done_if_the_pull_request_merged_at_its_head() {
     let mut h = Harness::started(LIMITS);
     let owner = Token::new(1);
-    h.step(Event::Write { owner, write: Write::Merge { item: item(4), head: HEAD }, resumed: false });
+    h.step(Event::Write { owner, write: Write::Merge { item: item(4), head: HEAD }, resumed: None });
     let made = h.send_one();
     assert_eq!(made.op, Op::Merge { number: 4, head: HEAD }, "at its head");
     h.answer(&made, Err(Error::Timeout));
@@ -1006,7 +1110,7 @@ fn a_merge_that_timed_out_is_done_if_the_pull_request_merged_at_its_head() {
 fn a_deletion_that_finds_nothing_after_a_timeout_is_done() {
     let mut h = Harness::started(LIMITS);
     let owner = Token::new(1);
-    h.step(Event::Write { owner, write: Write::DeletePage { repository: 0, name: bytes(b"n") }, resumed: false });
+    h.step(Event::Write { owner, write: Write::DeletePage { repository: 0, name: bytes(b"n") }, resumed: None });
     let made = h.send_one();
     h.answer(&made, Err(Error::Timeout));
     h.at(3);
@@ -1014,7 +1118,7 @@ fn a_deletion_that_finds_nothing_after_a_timeout_is_done() {
     let again = h.send_one();
     let told = h.answer(&again, Err(Error::Missing));
     assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Done) }], "done");
-    h.step(Event::Write { owner, write: Write::DeletePage { repository: 0, name: bytes(b"m") }, resumed: false });
+    h.step(Event::Write { owner, write: Write::DeletePage { repository: 0, name: bytes(b"m") }, resumed: None });
     let made = h.send_one();
     let told = h.answer(&made, Err(Error::Missing));
     assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Forge(Error::Missing)) }], "never there");
@@ -1024,7 +1128,7 @@ fn a_deletion_that_finds_nothing_after_a_timeout_is_done() {
 fn a_write_failing_for_a_while_gives_up_after_its_attempts_and_the_rate_counts_none() {
     let mut h = Harness::started(LIMITS);
     let owner = Token::new(1);
-    h.step(Event::Write { owner, write: Write::Close { item: item(1) }, resumed: false });
+    h.step(Event::Write { owner, write: Write::Close { item: item(1) }, resumed: None });
     let sent = h.send_one();
     h.answer(&sent, Err(Error::RateLimited { reset: at(5) }));
     assert!(h.send().is_empty(), "nothing goes out until the reset");
@@ -1052,35 +1156,90 @@ fn a_record_is_posted_once_then_edited_after_a_fresh_read_carrying_the_position_
     h.step(Event::Took { item: item(9), through: 1 });
     let owner = Token::new(1);
     let payload = Token::new(77);
-    h.step(Event::Write { owner, write: Write::Record { item: item(9), payload }, resumed: false });
+    h.step(Event::Write { owner, write: Write::Record { item: item(9), payload }, resumed: None });
     let post = h.send_one();
     let position = Position { comment: 1, ..Position::START };
-    assert_eq!(post.op, Op::Post { number: 9, key: None, body: Body::Record { payload, position } }, "posted");
+    let mine = nonce(&post.op);
+    assert_eq!(post.op, Op::Post { number: 9, key: None, body: Body::Record { payload, position, nonce: mine } });
     h.answer(&post, Err(Error::Timeout));
     h.at(3);
     h.fire();
     let find = h.send_one();
-    assert_eq!(find.op, Op::Item { number: 9, after: 1 }, "looked for");
-    let told = h.answer(&find, item_page(issue(9, &[HAND_IN], 4), comments(&[record(2, 9, position)]), false));
+    assert_eq!(find.op, Op::Item { number: 9, after: 0 }, "looked for among all its comments");
+    let landed = written(2, 11, position, mine);
+    let told = h.answer(&find, item_page(issue(9, &[HAND_IN], 4), comments(&[landed]), false));
     assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Done) }], "found, not posted twice");
-    h.step(Event::Write { owner, write: Write::Record { item: item(9), payload }, resumed: false });
+    h.step(Event::Write { owner, write: Write::Record { item: item(9), payload }, resumed: None });
     let check = h.send_one();
     assert_eq!(check.op, Op::Comment { number: 9, id: 2 }, "read afresh before it is edited");
-    h.answer(&check, Ok(Answer::Comment(record(2, 9, position))));
+    h.answer(&check, Ok(Answer::Comment(written(2, 11, position, mine))));
     let edit = h.send_one();
-    assert_eq!(edit.op, Op::EditComment { number: 9, id: 2, body: Body::Record { payload, position } }, "edited");
+    let second = nonce(&edit.op);
+    assert_ne!(second, mine, "a nonce per write");
+    assert_eq!(edit.op, Op::EditComment { number: 9, id: 2, body: Body::Record { payload, position, nonce: second } });
     let told = h.answer(&edit, Ok(Answer::Edited { revision: 50 }));
     assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Done) }], "done");
-    h.step(Event::Write { owner, write: Write::Record { item: item(9), payload }, resumed: false });
+    h.step(Event::Write { owner, write: Write::Record { item: item(9), payload }, resumed: None });
     let check = h.send_one();
-    let mut edited = record(2, 9, position);
-    edited.revision = 50;
-    h.answer(&check, Ok(Answer::Comment(edited)));
-    assert_eq!(
-        h.send_one().op,
-        Op::EditComment { number: 9, id: 2, body: Body::Record { payload, position } },
-        "its own revision"
-    );
+    h.answer(&check, Ok(Answer::Comment(written(2, 50, position, second))));
+    let edit = h.send_one();
+    let body = Body::Record { payload, position, nonce: nonce(&edit.op) };
+    assert_eq!(edit.op, Op::EditComment { number: 9, id: 2, body }, "its own revision");
+}
+
+#[test]
+fn a_record_post_that_finds_an_earlier_writes_record_edits_it_with_its_own() {
+    let mut h = Harness::started(LIMITS);
+    h.step(Event::Track { item: item(9) });
+    let read = h.send_one();
+    h.answer(&read, item_page(issue(9, &[TRACKING], 4), Box::new([]), false));
+    let owner = Token::new(1);
+    let payload = Token::new(77);
+    // Asked for again after a restart: a record an earlier life posted may
+    // have landed since the item was read.
+    h.step(Event::Write { owner, write: Write::Record { item: item(9), payload }, resumed: Some(CAUSE) });
+    let find = h.send_one();
+    assert_eq!(find.op, Op::Item { number: 9, after: 0 }, "looked for first");
+    let theirs = written(3, 30, Position::START, 4_242);
+    h.answer(&find, item_page(issue(9, &[TRACKING], 4), comments(&[comment(2, PERSON), theirs]), false));
+    let edit = h.send_one();
+    let mine = nonce(&edit.op);
+    let body = Body::Record { payload, position: Position::START, nonce: mine };
+    assert_eq!(edit.op, Op::EditComment { number: 9, id: 3, body }, "the record found says what this write carries");
+    let told = h.answer(&edit, Ok(Answer::Edited { revision: 31 }));
+    assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Done) }], "done");
+    let record = Record::Found { comment: 3, revision: 31, position: Position::START };
+    let owner = Token::new(2);
+    h.step(Event::Write { owner, write: Write::Record { item: item(9), payload }, resumed: None });
+    assert_eq!(h.send_one().op, Op::Comment { number: 9, id: 3 }, "the next edits it: {record:?}");
+}
+
+#[test]
+fn a_record_edit_that_timed_out_is_read_before_it_is_tried_again() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    let payload = Token::new(3);
+    // Landed: done, once read.
+    let owner = Token::new(1);
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: None });
+    let check = h.send_one();
+    h.answer(&check, Ok(Answer::Comment(record(100, 5, Position::START))));
+    let edit = h.send_one();
+    let mine = nonce(&edit.op);
+    h.answer(&edit, Err(Error::Timeout));
+    h.at(3);
+    h.fire();
+    let check = h.send_one();
+    assert_eq!(check.op, Op::Comment { number: 5, id: 100 }, "read, not edited blind");
+    let told = h.answer(&check, Ok(Answer::Comment(written(100, 7, Position::START, mine))));
+    assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Done) }], "its own edit landed");
+    // A person edited the record since, keeping its block: not written over.
+    let owner = Token::new(2);
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: None });
+    let check = h.send_one();
+    let told = h.answer(&check, Ok(Answer::Comment(written(100, 8, Position::START, mine))));
+    let record = Record::Found { comment: 100, revision: 8, position: Position::START };
+    assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Edited { record }) }], "someone else's change");
 }
 
 #[test]
@@ -1089,7 +1248,7 @@ fn a_record_someone_else_changed_is_not_written_over() {
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
     let owner = Token::new(1);
     let write = Write::Record { item: item(5), payload: Token::new(3) };
-    h.step(Event::Write { owner, write, resumed: false });
+    h.step(Event::Write { owner, write, resumed: None });
     let check = h.send_one();
     assert_eq!(check.op, Op::Comment { number: 5, id: 100 }, "read afresh");
     let mangled = Comment { id: 100, author: ENGINE, revision: 999, mark: Mark::Mangled, body: bytes(b"?") };
@@ -1098,16 +1257,93 @@ fn a_record_someone_else_changed_is_not_written_over() {
     assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Edited { record }) }], "held for a person");
     assert!(h.facts().contains(&Fact::Edited { item: item(5) }), "told as a fact");
     // The parent, released by a person, writes over the record as it now is.
-    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload: Token::new(3) }, resumed: false });
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload: Token::new(3) }, resumed: None });
     let check = h.send_one();
     let mangled = Comment { id: 100, author: ENGINE, revision: 999, mark: Mark::Mangled, body: bytes(b"?") };
     h.answer(&check, Ok(Answer::Comment(mangled)));
-    let edit = Op::EditComment {
-        number: 5,
-        id: 100,
-        body: Body::Record { payload: Token::new(3), position: Position::START },
+    let edit = h.send_one();
+    let body = Body::Record { payload: Token::new(3), position: Position::START, nonce: nonce(&edit.op) };
+    assert_eq!(edit.op, Op::EditComment { number: 5, id: 100, body }, "edited over the record it last read");
+}
+
+#[test]
+fn a_wiki_page_is_written_only_at_the_revision_last_read() {
+    let mut h = Harness::started(LIMITS);
+    let page_at = |revision: u64, nonce: Option<u64>| {
+        Ok(Answer::Page(Page { name: bytes(b"n"), content: bytes(b"c"), revision, nonce }))
     };
-    assert_eq!(h.send_one().op, edit, "edited over the record it last read");
+    let owner = Token::new(1);
+    let put =
+        Write::PutPage { repository: 0, name: bytes(b"n"), content: Content::Text(bytes(b"new")), revision: Some(4) };
+    h.step(Event::Write { owner, write: put, resumed: None });
+    let check = h.send_one();
+    assert_eq!(check.op, Op::Page { name: bytes(b"n") }, "read afresh");
+    h.answer(&check, page_at(4, None));
+    let made = h.send_one();
+    let mine = nonce(&made.op);
+    assert_eq!(made.op, Op::PutPage { name: bytes(b"n"), content: Body::Text(bytes(b"new")), nonce: mine });
+    h.answer(&made, Err(Error::Timeout));
+    h.at(3);
+    h.fire();
+    let check = h.send_one();
+    let told = h.answer(&check, page_at(6, Some(mine)));
+    assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Revision(6)) }], "its own write landed");
+    let owner = Token::new(2);
+    let put =
+        Write::PutPage { repository: 0, name: bytes(b"n"), content: Content::Text(bytes(b"again")), revision: Some(6) };
+    h.step(Event::Write { owner, write: put, resumed: None });
+    let check = h.send_one();
+    let told = h.answer(&check, page_at(7, None));
+    assert_eq!(
+        *told,
+        [Request::Wrote { owner, result: Err(Failure::Revised { revision: Some(7) }) }],
+        "not written over"
+    );
+    let owner = Token::new(3);
+    let put =
+        Write::PutPage { repository: 0, name: bytes(b"m"), content: Content::Text(bytes(b"new")), revision: None };
+    h.step(Event::Write { owner, write: put, resumed: None });
+    let check = h.send_one();
+    h.answer(&check, Err(Error::Missing));
+    let made = h.send_one();
+    let put = Op::PutPage { name: bytes(b"m"), content: Body::Text(bytes(b"new")), nonce: nonce(&made.op) };
+    assert_eq!(made.op, put, "none there: made");
+}
+
+#[test]
+fn a_write_that_timed_out_waits_until_it_can_no_longer_land() {
+    let limits = Limits { lifetime: Duration::from_secs(20), ..LIMITS };
+    let mut h = Harness::new(limits);
+    assert!(h.fire().is_empty(), "its first moment");
+    assert!(h.send().is_empty(), "no call until what an earlier life asked for has landed");
+    h.at(20);
+    h.fire();
+    assert!(!h.send().is_empty(), "the cold start, then");
+    h.at(30);
+    let owner = Token::new(1);
+    h.step(Event::Write { owner, write: set_labels(&[TRACKING]), resumed: None });
+    h.step(Event::Write { owner: Token::new(2), write: set_labels(&[TRACKING, b"a"]), resumed: None });
+    let add = h.send_for(&Op::AddLabels { number: 1, labels: labels(&[TRACKING]) });
+    h.answer(&add, Err(Error::Timeout));
+    h.at(33);
+    h.fire();
+    assert!(h.send().is_empty(), "not tried again while the first may land");
+    h.at(50);
+    h.fire();
+    let again = h.send_one();
+    assert_eq!(again.op, add.op, "tried again once it cannot");
+    h.answer(&again, Err(Error::Timeout));
+    h.at(70);
+    h.fire();
+    let last = h.send_one();
+    let told = h.answer(&last, Err(Error::Timeout));
+    assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Forge(Error::Timeout)) }], "gave up");
+    h.at(80);
+    h.fire();
+    assert!(h.send().is_empty(), "its lane is held while its last call may land");
+    h.at(90);
+    h.fire();
+    assert_eq!(h.send_one().op, Op::AddLabels { number: 1, labels: labels(&[TRACKING, b"a"]) }, "then the next");
 }
 
 // The budget.
@@ -1138,7 +1374,7 @@ fn calls_go_out_by_priority_and_no_more_than_the_limit_at_once() {
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
     h.at(30);
     h.fire();
-    h.step(Event::Write { owner: Token::new(1), write: Write::Close { item: item(1) }, resumed: false });
+    h.step(Event::Write { owner: Token::new(1), write: Write::Close { item: item(1) }, resumed: None });
     h.step(Event::Read { owner: Token::new(2), read: Read::Pull { item: item(2) } });
     let sent = h.send();
     assert_eq!(sent.len(), 2, "two at once: {sent:?}");
@@ -1157,7 +1393,7 @@ fn a_rate_limit_refusal_holds_every_call_until_its_reset() {
     let owner = Token::new(1);
     h.step(Event::Read { owner, read: Read::Pull { item: item(1) } });
     let sent = h.send_one();
-    h.step(Event::Write { owner, write: Write::Close { item: item(2) }, resumed: false });
+    h.step(Event::Write { owner, write: Write::Close { item: item(2) }, resumed: None });
     let told = h.answer(&sent, Err(Error::RateLimited { reset: at(40) }));
     assert!(told.is_empty(), "the read waits");
     assert!(h.send().is_empty(), "nothing goes out before the reset");
@@ -1200,34 +1436,31 @@ fn a_record_edit_that_gave_up_after_a_timeout_leaves_the_record_its_own_to_the_n
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
     let owner = Token::new(1);
     let payload = Token::new(3);
-    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: false });
-    let check = h.send_one();
-    h.answer(&check, Ok(Answer::Comment(record(100, 5, Position::START))));
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: None });
+    let mut check = h.send_one();
+    let mut mine = 0;
     for secs in [3, 10, 30] {
+        h.answer(&check, Ok(Answer::Comment(record(100, 5, Position::START))));
         let edit = h.send_one();
-        assert_eq!(
-            edit.op,
-            Op::EditComment { number: 5, id: 100, body: Body::Record { payload, position: Position::START } }
-        );
+        mine = nonce(&edit.op);
+        let body = Body::Record { payload, position: Position::START, nonce: mine };
+        assert_eq!(edit.op, Op::EditComment { number: 5, id: 100, body });
         let told = h.answer(&edit, Err(Error::Timeout));
         if secs == 30 {
             assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Forge(Error::Timeout)) }], "gave up");
         } else {
             h.at(secs);
             h.fire();
+            check = h.send_one();
+            assert_eq!(check.op, Op::Comment { number: 5, id: 100 }, "read before it is tried again");
         }
     }
     // The edit may have landed: the record says what it carried, at a
     // revision not known.
-    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: false });
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: None });
     let check = h.sends_for(&Op::Comment { number: 5, id: 100 });
-    let mut landed = record(100, 5, Position::START);
-    landed.revision = 999;
-    h.answer(&check, Ok(Answer::Comment(landed)));
+    h.answer(&check, Ok(Answer::Comment(written(100, 999, Position::START, mine))));
     let edit = h.send_one();
-    assert_eq!(
-        edit.op,
-        Op::EditComment { number: 5, id: 100, body: Body::Record { payload, position: Position::START } },
-        "its own: edited, not held"
-    );
+    let body = Body::Record { payload, position: Position::START, nonce: nonce(&edit.op) };
+    assert_eq!(edit.op, Op::EditComment { number: 5, id: 100, body }, "its own: edited, not held");
 }

@@ -25,9 +25,17 @@
 //!   reading it afresh before it is written.
 //! - **Markers.** A creation's key goes inside what it creates, as a marker
 //!   the protocol layer writes and finds again ([`Summary::key`],
-//!   [`Mark::Key`]); so does the engine's record, whose inbox position is this
-//!   sub-model's part ([`Mark::Record`]). The rest of the record is the
-//!   parent's, named by a token ([`Body::Record`]).
+//!   [`Mark::Key`]); so does the engine's record, whose inbox position and
+//!   the nonce of the write that made it are this sub-model's part
+//!   ([`Mark::Record`]), and the nonce of the write that made a wiki page
+//!   ([`Page::nonce`]). The rest of the record is the parent's, named by a
+//!   token ([`Body::Record`]).
+//! - **Failures.** A call the protocol layer could not send, or the forge
+//!   refused before it read it, fails as [`Error::Unavailable`]: nothing was
+//!   done. Any failure after the call may have reached the forge (a server
+//!   error, a dropped connection, no answer in time) is an
+//!   [`Error::Timeout`]: it may have been done, and may still take effect
+//!   until `Limits::lifetime` after it went out.
 //! - **Revisions.** A comment's revision changes whenever its body does, so
 //!   that an edit is seen when the comment is next read; the answer to a
 //!   comment posted or edited says the revision it made.
@@ -42,10 +50,17 @@ use crate::boundary::Position;
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Op {
     /// A page of the items in `state` (either, if `None`) of `kind` (either,
-    /// if `None`) carrying `label` (any, if `None`), updated at or after
-    /// `since`, least recently updated first: the `page`th, from 1. Answered
-    /// by [`Answer::Items`].
-    Items { state: Option<State>, kind: Option<Kind>, label: Option<Box<[u8]>>, since: Time, page: u32 },
+    /// if `None`) carrying `label` (any, if `None`), opened by `author`
+    /// (anyone, if `None`), updated at or after `since`, least recently
+    /// updated first: the `page`th, from 1. Answered by [`Answer::Items`].
+    Items {
+        state: Option<State>,
+        kind: Option<Kind>,
+        label: Option<Box<[u8]>>,
+        author: Option<u64>,
+        since: Time,
+        page: u32,
+    },
     /// The item `number`, and a page of its comments with ids above `after`,
     /// oldest first. Answered by [`Answer::Item`].
     Item { number: u64, after: u64 },
@@ -81,9 +96,12 @@ pub enum Op {
     /// Edits the comment `id` on the item `number`. Answered by
     /// [`Answer::Edited`].
     EditComment { number: u64, id: u64, body: Body },
-    /// Makes the labels of the item `number` exactly `labels`. Answered by
-    /// [`Answer::Done`].
-    SetLabels { number: u64, labels: Box<[Box<[u8]>]> },
+    /// Adds `labels` to the item `number`, leaving those it carries. Answered
+    /// by [`Answer::Done`].
+    AddLabels { number: u64, labels: Box<[Box<[u8]>]> },
+    /// Removes `labels` from the item `number`, those it does not carry
+    /// aside. Answered by [`Answer::Done`].
+    RemoveLabels { number: u64, labels: Box<[Box<[u8]>]> },
     /// Opens a pull request to merge `head` into `base`. Answered by
     /// [`Answer::Created`].
     OpenPull { title: Box<[u8]>, body: Body, head: Box<[u8]>, base: Box<[u8]> },
@@ -94,9 +112,9 @@ pub enum Op {
     Close { number: u64 },
     /// Deletes `branch`. Answered by [`Answer::Done`].
     DeleteBranch { branch: Box<[u8]> },
-    /// Creates or replaces the wiki page `name`. Answered by
-    /// [`Answer::Revision`].
-    PutPage { name: Box<[u8]>, content: Body },
+    /// Creates or replaces the wiki page `name`, with `nonce` inside it.
+    /// Answered by [`Answer::Revision`].
+    PutPage { name: Box<[u8]>, content: Body, nonce: u64 },
     /// Deletes the wiki page `name`. Answered by [`Answer::Done`].
     DeletePage { name: Box<[u8]> },
 }
@@ -108,11 +126,12 @@ pub enum Op {
 pub enum Body {
     Text(Box<[u8]>),
     Payload(Token),
-    /// The engine's record: the parent's part, named by `payload`, and the
-    /// inbox position, this sub-model's.
+    /// The engine's record: the parent's part, named by `payload`, and this
+    /// sub-model's: the inbox position, and the nonce of the write.
     Record {
         payload: Token,
         position: Position,
+        nonce: u64,
     },
 }
 
@@ -164,10 +183,12 @@ pub enum Answer {
 /// Why a call failed.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Error {
-    /// The forge failed, or the protocol layer could not send it: nothing was
-    /// done. Worth retrying.
+    /// The protocol layer could not send it, or the forge refused it before
+    /// reading it: nothing was done. Worth retrying.
     Unavailable,
-    /// No answer in time: what was asked may have been done.
+    /// It may have reached the forge, and failed after (a server error, a
+    /// dropped connection, no answer in time): what was asked may have been
+    /// done, or may still be.
     Timeout,
     /// Too many calls: none is taken until `reset`, the forge's time.
     RateLimited { reset: Time },
@@ -251,8 +272,9 @@ pub enum Mark {
     None,
     /// A creation's key.
     Key(Box<[u8]>),
-    /// A record, and this sub-model's part of it.
-    Record(Position),
+    /// A record, and this sub-model's part of it: the inbox position, and
+    /// the nonce of the write that made it.
+    Record { position: Position, nonce: u64 },
     /// A record that does not decode.
     Mangled,
 }
@@ -309,6 +331,8 @@ pub struct Page {
     pub name: Box<[u8]>,
     pub content: Box<[u8]>,
     pub revision: u64,
+    /// The nonce of the engine's write that made this revision, if one did.
+    pub nonce: Option<u64>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -401,5 +425,26 @@ pub(crate) fn pull(answer: Answer) -> Pull {
         | Answer::Merged(_)
         | Answer::Revision(_)
         | Answer::Done => unreachable!("a pull request's read is answered with the pull request"),
+    }
+}
+
+/// The answer to [`Op::Page`].
+pub(crate) fn page(answer: Answer) -> Page {
+    match answer {
+        Answer::Page(page) => page,
+        Answer::Items { .. }
+        | Answer::Item { .. }
+        | Answer::Comment(_)
+        | Answer::Pull(_)
+        | Answer::Statuses(_)
+        | Answer::Permission(_)
+        | Answer::Commit(_)
+        | Answer::Pages { .. }
+        | Answer::Created(_)
+        | Answer::Commented { .. }
+        | Answer::Edited { .. }
+        | Answer::Merged(_)
+        | Answer::Revision(_)
+        | Answer::Done => unreachable!("a wiki page's read is answered with the page"),
     }
 }

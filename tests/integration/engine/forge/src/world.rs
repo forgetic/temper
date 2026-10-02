@@ -29,6 +29,8 @@ pub const HAND_IN: &[u8] = b"temper:hand-in";
 pub const WORKING: &[u8] = b"temper:working";
 pub const WAITING: &[u8] = b"temper:waiting";
 pub const LABELS: [&[u8]; 6] = [TRACKING, HAND_IN, WORKING, WAITING, b"bug", b"feature"];
+/// The labels the engine owns: the only ones it adds or removes.
+pub const OWNED: [&[u8]; 4] = [TRACKING, HAND_IN, WORKING, WAITING];
 
 /// Room in the sub-model's output queue beyond what one step may emit.
 const SLACK: u32 = 2;
@@ -65,6 +67,32 @@ pub const ENDINGS: [&str; 23] = [
     "limited",
 ];
 
+/// The sub-model's limits in a calm world: room for everything.
+const CALM: Limits = Limits {
+    repositories: 2,
+    items: 16,
+    labels: 6,
+    inbox: 8,
+    reads: 4,
+    writes: 8,
+    calls: 6,
+    page: 8,
+    name_bytes: 48,
+    title_bytes: 32,
+    body_bytes: 96,
+    rate: 120,
+    window: Duration::from_secs(60),
+    poll: Duration::from_secs(30),
+    hinted: Duration::from_secs(2),
+    resolution: Duration::from_secs(1),
+    slow: Duration::from_secs(120),
+    backoff: Duration::from_millis(500),
+    backoff_max: Duration::from_secs(10),
+    attempts: 5,
+    lifetime: Duration::from_secs(12),
+    facts: 64,
+};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     pub seed: u64,
@@ -89,29 +117,7 @@ impl Settings {
     pub const fn calm(seed: u64) -> Settings {
         Settings {
             seed,
-            limits: Limits {
-                repositories: 2,
-                items: 16,
-                labels: 6,
-                inbox: 8,
-                reads: 4,
-                writes: 8,
-                calls: 6,
-                page: 8,
-                name_bytes: 48,
-                title_bytes: 32,
-                body_bytes: 96,
-                rate: 120,
-                window: Duration::from_secs(60),
-                poll: Duration::from_secs(30),
-                hinted: Duration::from_secs(2),
-                resolution: Duration::from_secs(1),
-                slow: Duration::from_secs(120),
-                backoff: Duration::from_millis(500),
-                backoff_max: Duration::from_secs(10),
-                attempts: 5,
-                facts: 64,
-            },
+            limits: CALM,
             forge: Config {
                 limits: forge::Limits {
                     repositories: 2,
@@ -750,6 +756,7 @@ impl World {
                     Ok(Written::Merged(_)) => "wrote: merged",
                     Ok(Written::Revision(_) | Written::Done) => "wrote",
                     Err(Failure::Edited { .. }) => "wrote: edited",
+                    Err(Failure::Revised { .. }) => "wrote: revised",
                     Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Forge(_)) => "wrote: failed",
                 };
                 if let Err(failure) = result {
@@ -916,7 +923,12 @@ impl World {
 
 /// The deployment's forge configuration.
 fn deployment() -> Deployment {
-    Deployment { engine: ENGINE, tracking: TRACKING.into(), hand_in: HAND_IN.into() }
+    Deployment {
+        engine: ENGINE,
+        tracking: TRACKING.into(),
+        hand_in: HAND_IN.into(),
+        projected: Box::new([WORKING.into(), WAITING.into()]),
+    }
 }
 
 fn describe(event: &Event) -> String {

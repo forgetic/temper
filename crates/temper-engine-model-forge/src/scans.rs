@@ -153,6 +153,15 @@ pub(crate) fn start(model: &mut Model, limits: &Limits) {
     }
 }
 
+/// The newest updated time `repository`'s listings have shown, the forge's:
+/// what is made on the forge from now on is updated no earlier.
+pub(crate) fn clock(model: &Model, repository: u32) -> Time {
+    match scan(model, repository).mark {
+        Some(mark) => mark,
+        None => Time::ZERO,
+    }
+}
+
 /// The passes `repository`'s listings have begun.
 pub(crate) fn passes(model: &Model, repository: u32) -> u64 {
     scan(model, repository).passes
@@ -249,6 +258,7 @@ pub(crate) fn op(model: &Model, repository: u32) -> (u32, Op) {
                 state: Some(Open::Open),
                 kind: None,
                 label: Some(copy_of(&model.config.tracking)),
+                author: None,
                 since,
                 page,
             },
@@ -256,10 +266,11 @@ pub(crate) fn op(model: &Model, repository: u32) -> (u32, Op) {
                 state: Some(Open::Open),
                 kind: Some(Kind::Issue),
                 label: Some(copy_of(&model.config.hand_in)),
+                author: None,
                 since,
                 page,
             },
-            Listing::Changes => Op::Items { state: None, kind: None, label: None, since, page },
+            Listing::Changes => Op::Items { state: None, kind: None, label: None, author: None, since, page },
         },
         Pass::Idle | Pass::Waiting { .. } => unreachable!("a listing goes out while it is asked for"),
     };
@@ -444,7 +455,7 @@ pub(crate) fn slow_op(model: &Model, repository: u32) -> (u32, Op) {
     let scan = scan(model, repository);
     let op = match scan.slow {
         Slow::Listing { page, call: _ } => {
-            Op::Items { state: Some(Open::Open), kind: None, label: None, since: Time::ZERO, page }
+            Op::Items { state: Some(Open::Open), kind: None, label: None, author: None, since: Time::ZERO, page }
         }
         Slow::Probing { at, after, .. } => {
             let number = *scan.candidates.get(at).expect("a candidate probed is listed");
@@ -519,7 +530,7 @@ fn probed(model: &mut Model, env: &Env<Limits>, repository: u32, next: u32, at: 
     for comment in &comments {
         last = comment.id;
         let record = match comment.mark {
-            Mark::Record(_) | Mark::Mangled => comment.author == engine,
+            Mark::Record { .. } | Mark::Mangled => comment.author == engine,
             Mark::None | Mark::Key(_) => false,
         };
         if record {

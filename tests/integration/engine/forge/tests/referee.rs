@@ -3,7 +3,7 @@
 
 use temper_engine_model_forge::Item;
 use temper_engine_model_forge_tests::referee::{Forge, Planned, Seen};
-use temper_engine_model_forge_tests::{ENGINE, REPOSITORIES, TRACKING, translate};
+use temper_engine_model_forge_tests::{ENGINE, REPOSITORIES, TRACKING, WAITING, WORKING, translate};
 use temper_forge_model::Observation;
 use temper_forge_model::api::Kind;
 use temper_lib::{Duration, Time};
@@ -89,7 +89,7 @@ fn a_creation_made_twice_for_one_key_fails_the_run() {
 fn a_second_record_on_an_item_fails_the_run() {
     let mut referee = referee();
     referee.observe(at(0), Seen::Planned { plan: 1, write: Planned::Record { item: ITEM } }, &mut Vec::new());
-    let record = translate::recorded(temper_engine_model_forge::Position::START, b"the record");
+    let record = translate::recorded(temper_engine_model_forge::Position::START, 1, b"the record");
     referee.observe(at(1), commented(3, &record, ENGINE), &mut Vec::new());
     referee.observe(at(2), commented(4, &record, ENGINE), &mut Vec::new());
     assert_eq!(why(&referee), "one record per item: Item { repository: 0, number: 5 }");
@@ -98,19 +98,30 @@ fn a_second_record_on_an_item_fails_the_run() {
 #[test]
 fn labels_landing_out_of_the_order_planned_fail_the_run() {
     let mut referee = referee();
-    referee.observe(at(0), set(1, &[TRACKING, b"a"]), &mut Vec::new());
-    referee.observe(at(0), set(2, &[TRACKING, b"b"]), &mut Vec::new());
-    referee.observe(at(1), labelled(&[TRACKING, b"b"], ENGINE), &mut Vec::new());
-    referee.observe(at(2), labelled(&[TRACKING, b"a"], ENGINE), &mut Vec::new());
+    referee.observe(at(0), set(1, &[TRACKING, WORKING]), &mut Vec::new());
+    referee.observe(at(0), set(2, &[TRACKING, WAITING]), &mut Vec::new());
+    referee.observe(at(1), labelled(&[TRACKING, WAITING], ENGINE), &mut Vec::new());
+    referee.observe(at(2), labelled(&[TRACKING, WORKING], ENGINE), &mut Vec::new());
     assert!(why(&referee).starts_with("labels land in the order planned"), "{:?}", referee.verdict());
+}
+
+#[test]
+fn an_engine_label_change_of_a_label_it_does_not_own_fails_the_run() {
+    let mut referee = referee();
+    referee.observe(at(0), labelled(&[b"bug"], PERSON), &mut Vec::new());
+    referee.observe(at(0), set(1, &[TRACKING]), &mut Vec::new());
+    referee.observe(at(1), labelled(&[b"bug", TRACKING], ENGINE), &mut Vec::new());
+    assert!(matches!(referee.verdict(), Verdict::Passed), "a person's label left alone: {:?}", referee.verdict());
+    referee.observe(at(2), labelled(&[TRACKING], ENGINE), &mut Vec::new());
+    assert!(why(&referee).starts_with("the engine changes only labels it owns"), "{:?}", referee.verdict());
 }
 
 #[test]
 fn an_item_not_ending_with_the_last_set_written_fails_the_run() {
     let mut referee = referee();
-    referee.observe(at(0), set(1, &[TRACKING, b"a"]), &mut Vec::new());
-    referee.observe(at(0), set(2, &[TRACKING, b"b"]), &mut Vec::new());
-    referee.observe(at(1), labelled(&[TRACKING, b"a"], ENGINE), &mut Vec::new());
+    referee.observe(at(0), set(1, &[TRACKING, WORKING]), &mut Vec::new());
+    referee.observe(at(0), set(2, &[TRACKING, WAITING]), &mut Vec::new());
+    referee.observe(at(1), labelled(&[TRACKING, WORKING], ENGINE), &mut Vec::new());
     referee.observe(at(2), Seen::Wrote { plan: 1, written: true, edited: false }, &mut Vec::new());
     referee.observe(at(3), Seen::Wrote { plan: 2, written: true, edited: false }, &mut Vec::new());
     referee.observe(at(4), Seen::Settled, &mut Vec::new());

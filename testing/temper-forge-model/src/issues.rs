@@ -268,6 +268,79 @@ pub(crate) fn label(
     Ok(Answer::Done)
 }
 
+/// Adds `labels` to the item `number`, leaving those it carries. Adding
+/// what it carries already changes nothing.
+pub(crate) fn add_labels(
+    model: &mut Model,
+    env: &Env<Config>,
+    id: Id<Repository>,
+    user: u64,
+    number: u64,
+    labels: Box<[Box<[u8]>]>,
+) -> Result<Answer, Error> {
+    let limits = &env.limits.limits;
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    repository.require(user, Permission::Write)?;
+    repository.item(number)?;
+    fit_names(&labels, limits.labels, limits)?;
+    let added = repository.label_set(limits, labels)?;
+    let item = repository.item_mut(number)?;
+    let mut changed = false;
+    for label in &added {
+        if !item.labels.contains(&**label) {
+            if item.labels.insert(copy_of(label)).is_err() {
+                return Err(Error::TooLarge);
+            }
+            changed = true;
+        }
+    }
+    if changed {
+        relabelled(model, env, id, user, number);
+    }
+    Ok(Answer::Done)
+}
+
+/// Removes `labels` from the item `number`, those it does not carry aside.
+/// Removing what it does not carry changes nothing.
+pub(crate) fn remove_labels(
+    model: &mut Model,
+    env: &Env<Config>,
+    id: Id<Repository>,
+    user: u64,
+    number: u64,
+    labels: Box<[Box<[u8]>]>,
+) -> Result<Answer, Error> {
+    let limits = &env.limits.limits;
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    repository.require(user, Permission::Write)?;
+    repository.item(number)?;
+    fit_names(&labels, limits.labels, limits)?;
+    let item = repository.item_mut(number)?;
+    let mut changed = false;
+    for label in &labels {
+        if item.labels.remove(&**label) {
+            changed = true;
+        }
+    }
+    if changed {
+        relabelled(model, env, id, user, number);
+    }
+    Ok(Answer::Done)
+}
+
+/// The labels of the item `number` changed, as `user`: it is updated, and
+/// the change observed and heard.
+fn relabelled(model: &mut Model, env: &Env<Config>, id: Id<Repository>, user: u64, number: u64) {
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    let item = repository.items.get(&number).expect("an item relabelled");
+    let observed = names(&item.labels);
+    let change = change(item.kind());
+    repository.touch(number, model::clock(env));
+    let observation =
+        Observation::Labelled { repository: copy_of(&repository.name), number, labels: observed, by: user };
+    model::changed(model, env, id, observation, Hook::item(change, number));
+}
+
 /// Defines the label `name`.
 pub(crate) fn define(
     model: &mut Model,

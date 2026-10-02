@@ -8,7 +8,7 @@ use temper_engine_model_forge::api::{
     Summary, Verdict,
 };
 use temper_engine_model_forge::{
-    Config, Content, Event, Item, Limits, Model, Position, Read, Request, Write, fire, max_out, resume, step,
+    Cause, Config, Content, Event, Item, Limits, Model, Position, Read, Request, Write, fire, max_out, resume, step,
     worst_case,
 };
 use temper_lib::{Duration, Env, Queue, Rng, Time, Token};
@@ -40,6 +40,7 @@ const LIMITS: Limits = Limits {
     backoff: Duration::from_secs(1),
     backoff_max: Duration::from_secs(4),
     attempts: 3,
+    lifetime: Duration::from_secs(4),
     facts: 16,
 };
 
@@ -87,7 +88,11 @@ fn asked(op: &Op) -> Asked {
         Op::EditComment { .. } => Asked::Edited,
         Op::Merge { .. } => Asked::Merged,
         Op::PutPage { content, .. } => Asked::Revision { put: matches!(content, Body::Payload(_)) },
-        Op::SetLabels { .. } | Op::Close { .. } | Op::DeleteBranch { .. } | Op::DeletePage { .. } => Asked::Done,
+        Op::AddLabels { .. }
+        | Op::RemoveLabels { .. }
+        | Op::Close { .. }
+        | Op::DeleteBranch { .. }
+        | Op::DeletePage { .. } => Asked::Done,
     }
 }
 
@@ -107,7 +112,12 @@ impl Measured {
     fn new(limits: Limits) -> Measured {
         let bound = worst_case(&limits).expect("the test limits fit");
         let meter = Meter::new();
-        let config = Config { engine: ENGINE, tracking: name(&limits, b't'), hand_in: name(&limits, b'h') };
+        let config = Config {
+            engine: ENGINE,
+            tracking: name(&limits, b't'),
+            hand_in: name(&limits, b'h'),
+            projected: labels(&limits),
+        };
         let model = Model::new(&limits, config, 7);
         let out = Queue::with_capacity(max_out(&limits));
         Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, owners: 0 }
@@ -195,12 +205,15 @@ fn comments(limits: &Limits, after: u64, record: bool) -> Box<[Comment]> {
             let (author, mark) = if record && nth == 1 {
                 (
                     ENGINE,
-                    Mark::Record(Position {
-                        comment: after,
-                        reviews: 0,
-                        head: Some([1; 32]),
-                        ci: temper_engine_model_forge::Ci::Pending,
-                    }),
+                    Mark::Record {
+                        position: Position {
+                            comment: after,
+                            reviews: 0,
+                            head: Some([1; 32]),
+                            ci: temper_engine_model_forge::Ci::Pending,
+                        },
+                        nonce: id,
+                    },
                 )
             } else {
                 (9, Mark::Key(name(limits, b'k')))
@@ -266,9 +279,12 @@ fn answer(limits: &Limits, rng: &mut Rng, now: u64, op: Asked) -> Result<Answer,
             pages: (0..limits.page).map(|_| PageName { name: name(limits, b'p'), revision: 1 }).collect(),
             next: Some(name(limits, b'p')),
         },
-        Asked::Page => {
-            Answer::Page(Page { name: name(limits, b'p'), content: bytes(limits.body_bytes, b'w'), revision: 1 })
-        }
+        Asked::Page => Answer::Page(Page {
+            name: name(limits, b'p'),
+            content: bytes(limits.body_bytes, b'w'),
+            revision: 1,
+            nonce: Some(3),
+        }),
         Asked::Created => Answer::Created(rng.below(50)),
         Asked::Commented => Answer::Commented { id: rng.below(50), revision: 7 },
         Asked::Edited => Answer::Edited { revision: 8 },
@@ -303,7 +319,7 @@ fn writes(limits: &Limits, item: Item, payload: Token) -> Vec<Write> {
         Write::Merge { item, head: [2; 32] },
         Write::Close { item },
         Write::DeleteBranch { repository: 0, branch: name(limits, b'h') },
-        Write::PutPage { repository: 0, name: name(limits, b'p'), content: text() },
+        Write::PutPage { repository: 0, name: name(limits, b'p'), content: text(), revision: Some(1) },
         Write::DeletePage { repository: 0, name: name(limits, b'p') },
     ]
 }
@@ -361,7 +377,9 @@ fn run(limits: Limits, seed: u64, rounds: u64) -> (Measured, u64) {
                 let payload = model.owner();
                 let all = writes(&limits, item, payload);
                 let write = all.into_iter().nth(usize::try_from(rng.below(10)).expect("few")).expect("ten");
-                Event::Write { owner: model.owner(), write, resumed: rng.chance(300) }
+                let resumed =
+                    if rng.chance(300) { Some(Cause { comment: rng.below(9), at: Time::ZERO }) } else { None };
+                Event::Write { owner: model.owner(), write, resumed }
             }
         };
         pending.extend(model.step(event));
@@ -403,9 +421,21 @@ fn the_sub_model_full_to_its_limits_stays_within_its_worst_case() {
 #[test]
 fn bodies_of_payloads_are_named_not_held() {
     let mut model = Measured::new(LIMITS);
-    let write = Write::PutPage { repository: 0, name: name(&LIMITS, b'p'), content: Content::Payload(Token::new(5)) };
+    // Its first moment, and the wait for what an earlier life asked for.
+    model.turn();
+    model.env.now = Time::ZERO.saturating_add(LIMITS.lifetime);
+    let write = Write::PutPage {
+        repository: 0,
+        name: name(&LIMITS, b'p'),
+        content: Content::Payload(Token::new(5)),
+        revision: None,
+    };
     let owner = model.owner();
-    let calls = model.step(Event::Write { owner, write, resumed: false });
+    let calls = model.step(Event::Write { owner, write, resumed: None });
+    assert!(calls.is_empty(), "calls go out on resume");
+    let calls = model.turn();
+    let check = calls.iter().find(|call| call.op == Asked::Page).expect("the page read first");
+    let calls = model.step(Event::Answered { call: check.call, result: Err(Error::Missing) });
     assert!(calls.is_empty(), "calls go out on resume");
     let calls = model.turn();
     let put = calls.iter().find(|call| matches!(call.op, Asked::Revision { .. })).expect("the write went out");

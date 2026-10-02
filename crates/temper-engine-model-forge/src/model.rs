@@ -3,6 +3,7 @@
 
 use alloc::boxed::Box;
 
+use temper_lib::bytes::copy_of;
 use temper_lib::{Deadlines, Env, Id, List, Map, Queue, Rng, Slab, Time};
 
 use crate::boundary::Level;
@@ -39,12 +40,19 @@ pub struct Config {
     /// `name_bytes`.
     pub tracking: Box<[u8]>,
     pub hand_in: Box<[u8]>,
+    /// The labels the engine projects from its records (4.1), as many as the
+    /// limits' `labels` at most. With the two above, they are the labels it
+    /// owns: the only ones it adds or removes.
+    pub projected: Box<[Box<[u8]>]>,
 }
 
 /// The forge sub-model's state.
 #[derive(Debug)]
 pub struct Model {
     pub(crate) config: Config,
+    /// The labels the engine owns: the tracking and hand-in labels, and those
+    /// it projects.
+    pub(crate) owned: Box<[Box<[u8]>]>,
     /// The working set, and its items by their names.
     pub(crate) entries: Slab<Entry>,
     pub(crate) index: Map<Item, Id<Entry>>,
@@ -76,6 +84,9 @@ pub(crate) struct Loading {
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Alarm {
+    /// The model's first moment: it begins, once the calls of a model before
+    /// it can no longer land.
+    Wake,
     /// The budget's window ends.
     Window,
     /// The forge's rate limit resets.
@@ -94,16 +105,29 @@ pub(crate) enum Alarm {
 impl Model {
     /// A model with room for `limits` and the deployment's `config`, drawing
     /// its jitter from `seed`. It starts cold: each repository's first
-    /// listing is due at once.
+    /// listing is due at once, but no call goes out until `Limits::lifetime`
+    /// after its first moment, when nothing an engine before it asked for
+    /// can still land.
     #[must_use]
     pub fn new(limits: &Limits, config: Config, seed: u64) -> Model {
         assert!(limits::worst_case(limits).is_some(), "the shell refuses limits it cannot provision");
         let name = usize::try_from(limits.name_bytes).expect("a u32 fits in a usize");
+        let labels = usize::try_from(limits.labels).expect("a u32 fits in a usize");
         assert!(config.tracking.len() <= name && config.hand_in.len() <= name, "labels within the limits");
+        assert!(config.projected.len() <= labels, "projected labels within the limits");
+        let mut owned = List::with_capacity(limits.labels.saturating_add(2));
+        for label in [&config.tracking, &config.hand_in] {
+            owned.push(copy_of(label)).expect("room for the labels the engine owns");
+        }
+        for label in &config.projected {
+            assert!(label.len() <= name, "labels within the limits");
+            owned.push(copy_of(label)).expect("room for the labels the engine owns");
+        }
         let calls = limits::calls(limits).expect("worst_case accepted the limits");
         let alarms = limits::alarms(limits).expect("worst_case accepted the limits");
         let mut model = Model {
             config,
+            owned: owned.into_boxed(),
             entries: Slab::with_capacity(limits.items),
             index: Map::with_capacity(limits.items),
             pulls: Map::with_capacity(limits.items),
@@ -117,6 +141,7 @@ impl Model {
             facts: Facts::with_capacity(limits.facts),
             loading: Loading { listing: limits.repositories, finding: 0, told: false },
         };
+        model.alarms.arm(Alarm::Wake, Time::ZERO).expect("the model's first alarm fits");
         scans::start(&mut model, limits);
         model
     }
@@ -235,13 +260,14 @@ pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
         return;
     };
     match alarm {
+        Alarm::Wake => calls::wake(model, env),
         Alarm::Window => calls::window(model, env),
         Alarm::Reset => calls::reset(model, env),
         Alarm::Poll(repository) => scans::poll(model, env, repository),
         Alarm::Slow(repository) => scans::slow(model, repository),
         Alarm::Item(id) => items::retry(model, env, id),
         Alarm::Read(id) => reads::retry(model, env, id),
-        Alarm::Write(id) => writes::retry(model, id),
+        Alarm::Write(id) => writes::retry(model, env, id),
     }
     loaded(model, out);
 }

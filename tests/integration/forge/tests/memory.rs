@@ -298,7 +298,15 @@ fn a_forge_filled_to_its_limits_stays_within_its_worst_case() {
     let repository = name(b'r', 0);
     let big = [
         Op::Read(Read::Tree { commit: firsts[0] }),
-        Op::Read(Read::Items { state: None, kind: None, labels: Box::new([]), since: Time::ZERO, page: 2, limit: 0 }),
+        Op::Read(Read::Items {
+            state: None,
+            kind: None,
+            labels: Box::new([]),
+            author: None,
+            since: Time::ZERO,
+            page: 2,
+            limit: 0,
+        }),
         Op::Read(Read::Pull { number: 1 }),
     ];
     for op in big {

@@ -42,12 +42,21 @@ pub enum Op {
 pub enum Read {
     /// The page `page` (from one) of `limit` items (the most a page holds,
     /// if zero or more) in `state` (either, if `None`) of `kind` (either, if
-    /// `None`) that carry every label of `labels` and were updated at or
+    /// `None`) that carry every label of `labels`, were opened by `author`
+    /// (anyone, if `None`: Forgejo's `created_by`) and were updated at or
     /// after `since`, at the forge's resolution: least recently updated
     /// first, then by number, as Forgejo pages them. Answered by
     /// [`Answer::Items`]. Pages are offsets into an order that moves: see
     /// the `reads` module for what a pass over them finds.
-    Items { state: Option<State>, kind: Option<Kind>, labels: Box<[Box<[u8]>]>, since: Time, page: u32, limit: u32 },
+    Items {
+        state: Option<State>,
+        kind: Option<Kind>,
+        labels: Box<[Box<[u8]>]>,
+        author: Option<u64>,
+        since: Time,
+        page: u32,
+        limit: u32,
+    },
     /// The item `number` and a page of its comments with ids above `after`.
     /// Answered by [`Answer::Item`].
     Item { number: u64, after: u64 },
@@ -128,6 +137,18 @@ pub enum Write {
     /// Makes the labels of the item `number` exactly `labels`, which are
     /// defined. Needs write permission.
     SetLabels {
+        number: u64,
+        labels: Box<[Box<[u8]>]>,
+    },
+    /// Adds `labels`, which are defined, to the item `number`, leaving those
+    /// it carries. Needs write permission.
+    AddLabels {
+        number: u64,
+        labels: Box<[Box<[u8]>]>,
+    },
+    /// Removes `labels` from the item `number`, those it does not carry
+    /// aside, as Forgejo removes one label a call. Needs write permission.
+    RemoveLabels {
         number: u64,
         labels: Box<[Box<[u8]>]>,
     },

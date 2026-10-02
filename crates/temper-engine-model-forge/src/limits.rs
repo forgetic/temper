@@ -66,6 +66,13 @@ pub struct Limits {
     pub backoff: Duration,
     pub backoff_max: Duration,
     pub attempts: u32,
+    /// The longest a call may still take effect after it went out: the
+    /// protocol layer's deadline for an answer, and what the forge may take
+    /// to act on what reached it. A write whose call timed out makes no call
+    /// before then, and holds its lane until then if it gives up; and a new
+    /// model makes none until this long after its first moment, so nothing
+    /// an engine before it asked for lands after it has read the forge.
+    pub lifetime: Duration,
     /// Facts kept until the parent drains them. Beyond them, facts are
     /// dropped and counted.
     pub facts: u32,
@@ -79,11 +86,12 @@ pub(crate) fn calls(limits: &Limits) -> Option<u32> {
     limits.reads.checked_add(limits.writes)?.checked_add(limits.items)?.checked_add(listings)
 }
 
-/// The alarms armed at most: the budget's two, one per repository for each of
-/// its passes, and one per item, read and write for a backoff.
+/// The alarms armed at most: the first moment's, the budget's two, one per
+/// repository for each of its passes, and one per item, read and write for a
+/// backoff or a hold.
 pub(crate) fn alarms(limits: &Limits) -> Option<u32> {
     let passes = limits.repositories.checked_mul(2)?;
-    2_u32.checked_add(passes)?.checked_add(limits.items)?.checked_add(limits.reads)?.checked_add(limits.writes)
+    3_u32.checked_add(passes)?.checked_add(limits.items)?.checked_add(limits.reads)?.checked_add(limits.writes)
 }
 
 /// The most bytes a set of labels holds, its pointers included.
@@ -93,12 +101,13 @@ pub(crate) fn labels_bytes(limits: &Limits) -> Option<u64> {
 }
 
 /// The most bytes a write holds besides itself: a title, a body, labels, and
-/// two names (a key, or a pull request's branches, or a page's name).
+/// two names (a key, or a pull request's branches, or a page's name); and the
+/// labels it removes, made as its call goes out.
 fn write_bytes(limits: &Limits) -> Option<u64> {
     let names = u64::from(limits.name_bytes).checked_mul(2)?;
     u64::from(limits.title_bytes)
         .checked_add(u64::from(limits.body_bytes))?
-        .checked_add(labels_bytes(limits)?)?
+        .checked_add(labels_bytes(limits)?.checked_mul(2)?)?
         .checked_add(names)
 }
 
@@ -135,7 +144,7 @@ fn size(bytes: usize) -> Option<u64> {
 /// It counts the containers, their bookkeeping included, and the payloads,
 /// not allocator overhead: each item's labels and inbox, each write's
 /// payload, each read's names, each repository's slow-pass candidates, the
-/// two labels of its configuration, and the answer a step takes in, which it
+/// labels of its configuration, and the answer a step takes in, which it
 /// holds until the step ends. What it hands up (an answer, a view, labels) is
 /// made in the step that hands it, and is its receiver's to count.
 #[must_use]
@@ -159,7 +168,10 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(u64::from(limits.repositories).checked_mul(candidates)?)?;
     let alarms = Deadlines::<Alarm>::worst_case(alarms(limits)?)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
-    let config = names;
+    // The two labels configured and those projected, and the labels owned: a
+    // copy of the three.
+    let owned = Limits { labels: limits.labels.checked_add(2)?, ..*limits };
+    let config = names.checked_add(labels_bytes(limits)?)?.checked_add(labels_bytes(&owned)?)?;
     held.checked_add(items)?
         .checked_add(answer_bytes(limits)?)?
         .checked_add(writes)?

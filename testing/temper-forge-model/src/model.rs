@@ -397,6 +397,8 @@ fn execute(model: &mut Model, env: &Env<Config>, user: u64, repository: &[u8], o
             Write::EditComment { id: comment, body } => issues::edit(model, env, id, user, comment, body),
             Write::DeleteComment { id: comment } => issues::remove(model, env, id, user, comment),
             Write::SetLabels { number, labels } => issues::label(model, env, id, user, number, labels),
+            Write::AddLabels { number, labels } => issues::add_labels(model, env, id, user, number, labels),
+            Write::RemoveLabels { number, labels } => issues::remove_labels(model, env, id, user, number, labels),
             Write::DefineLabel { name } => issues::define(model, env, id, user, name),
             Write::Close { number } => issues::close(model, env, id, user, number),
             Write::Reopen { number } => issues::reopen(model, env, id, user, number),

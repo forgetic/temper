@@ -39,8 +39,8 @@ pub(crate) fn read(model: &Model, config: &Config, id: Id<Repository>, read: &Re
     let limits = &config.limits;
     let repository = model.repositories.get(id).expect("a repository of the forge");
     match read {
-        Read::Items { state, kind, labels, since, page, limit } => {
-            Ok(items(repository, config, *state, *kind, labels, *since, *page, *limit))
+        Read::Items { state, kind, labels, author, since, page, limit } => {
+            Ok(items(repository, config, *state, *kind, labels, *author, *since, *page, *limit))
         }
         Read::Item { number, after } => item(repository, limits, *number, *after),
         Read::Comment { id } => {
@@ -104,6 +104,7 @@ fn items(
     state: Option<State>,
     kind: Option<Kind>,
     labels: &[Box<[u8]>],
+    author: Option<u64>,
     since: Time,
     page: u32,
     limit: u32,
@@ -125,6 +126,9 @@ fn items(
             None => true,
         } && match kind {
             Some(kind) => item.kind() == kind,
+            None => true,
+        } && match author {
+            Some(author) => item.author == author,
             None => true,
         } && item.has_labels(labels);
         if !wanted {

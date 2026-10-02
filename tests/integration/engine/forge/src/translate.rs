@@ -5,9 +5,10 @@
 //!
 //! - **Markers.** A key goes at the head of what it keys (an issue's body, a
 //!   comment), and a record at the head of its comment, its inbox position
-//!   written out; a body that starts as a record and does not decode is a
-//!   record mangled. A person's marker is read like any other: the sub-model
-//!   decides whose it is.
+//!   and its write's nonce written out; a body that starts as a record and
+//!   does not decode is a record mangled. A wiki page the engine writes
+//!   starts with its write's nonce. A person's marker is read like any
+//!   other: the sub-model decides whose it is.
 //! - **Payloads** the sub-model names by tokens are filled in by the parent as
 //!   the call goes out ([`Fill`]).
 //! - **Commits** are the fake's counts, in the first 8 bytes, big-endian.
@@ -26,6 +27,7 @@ use temper_lib::Token;
 
 const KEY: &[u8] = b"<!-- temper:key ";
 const RECORD: &[u8] = b"<!-- temper:record ";
+const NONCE: &[u8] = b"<!-- temper:nonce ";
 const END: &[u8] = b" -->\n";
 
 /// The payloads the parent names, by token: what it fills in as a call
@@ -100,9 +102,10 @@ pub fn keyed(key: &[u8], content: &[u8]) -> Vec<u8> {
     body
 }
 
-/// A record saying `position`, and the parent's `payload`.
+/// A record saying `position`, written by the write of `nonce`, and the
+/// parent's `payload`.
 #[must_use]
-pub fn recorded(position: Position, payload: &[u8]) -> Vec<u8> {
+pub fn recorded(position: Position, nonce: u64, payload: &[u8]) -> Vec<u8> {
     let head = match position.head {
         Some(head) => count(head).to_string(),
         None => "-".to_owned(),
@@ -114,7 +117,7 @@ pub fn recorded(position: Position, payload: &[u8]) -> Vec<u8> {
         Ci::Failed => 3,
     };
     let mut body = RECORD.to_vec();
-    body.extend_from_slice(format!("{} {} {head} {ci}", position.comment, position.reviews).as_bytes());
+    body.extend_from_slice(format!("{} {} {head} {ci} {nonce}", position.comment, position.reviews).as_bytes());
     body.extend_from_slice(END);
     body.extend_from_slice(payload);
     body
@@ -139,7 +142,7 @@ pub fn is_record(body: &[u8]) -> bool {
 pub fn mark(body: &[u8]) -> engine::Mark {
     if let Some(rest) = body.strip_prefix(RECORD) {
         return match position(rest) {
-            Some(position) => engine::Mark::Record(position),
+            Some((position, nonce)) => engine::Mark::Record { position, nonce },
             None => engine::Mark::Mangled,
         };
     }
@@ -149,8 +152,26 @@ pub fn mark(body: &[u8]) -> engine::Mark {
     }
 }
 
-/// The position a record's head says.
-fn position(rest: &[u8]) -> Option<Position> {
+/// A wiki page's `content`, written by the write of `nonce`.
+#[must_use]
+pub fn paged(nonce: u64, content: &[u8]) -> Vec<u8> {
+    let mut page = NONCE.to_vec();
+    page.extend_from_slice(nonce.to_string().as_bytes());
+    page.extend_from_slice(END);
+    page.extend_from_slice(content);
+    page
+}
+
+/// The nonce a wiki page starts with, if it starts with one.
+#[must_use]
+pub fn nonce_of(content: &[u8]) -> Option<u64> {
+    let rest = content.strip_prefix(NONCE)?;
+    let end = find(rest, END)?;
+    std::str::from_utf8(&rest[..end]).ok()?.parse().ok()
+}
+
+/// The position and the nonce a record's head says.
+fn position(rest: &[u8]) -> Option<(Position, u64)> {
     let end = find(rest, END)?;
     let text = std::str::from_utf8(&rest[..end]).ok()?;
     let mut fields = text.split(' ');
@@ -167,10 +188,11 @@ fn position(rest: &[u8]) -> Option<Position> {
         "3" => Ci::Failed,
         _ => return None,
     };
+    let nonce = fields.next()?.parse().ok()?;
     if fields.next().is_some() {
         return None;
     }
-    Some(Position { comment, reviews, head, ci })
+    Some((Position { comment, reviews, head, ci }, nonce))
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -193,7 +215,7 @@ fn body(body: engine::Body, fill: &Fill) -> Vec<u8> {
     match body {
         engine::Body::Text(text) => text.into_vec(),
         engine::Body::Payload(token) => payload(token, fill),
-        engine::Body::Record { payload: token, position } => recorded(position, &payload(token, fill)),
+        engine::Body::Record { payload: token, position, nonce } => recorded(position, nonce, &payload(token, fill)),
     }
 }
 
@@ -207,7 +229,7 @@ fn payload(token: Token, fill: &Fill) -> Vec<u8> {
 pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
     use forge::{Op, Read, Write};
     match op {
-        engine::Op::Items { state, kind, label, since, page: number } => {
+        engine::Op::Items { state, kind, label, author, since, page: number } => {
             let labels = match label {
                 Some(label) => vec![label].into_boxed_slice(),
                 None => Box::new([]),
@@ -216,6 +238,7 @@ pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
                 state: state.map(state_of),
                 kind: kind.map(kind_of),
                 labels,
+                author,
                 since,
                 page: number,
                 limit: page,
@@ -249,7 +272,8 @@ pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
             let revision = digest(&body);
             (Asked::Edit { revision }, Op::Write(Write::EditComment { id, body: body.into_boxed_slice() }))
         }
-        engine::Op::SetLabels { number, labels } => (Asked::Done, Op::Write(Write::SetLabels { number, labels })),
+        engine::Op::AddLabels { number, labels } => (Asked::Done, Op::Write(Write::AddLabels { number, labels })),
+        engine::Op::RemoveLabels { number, labels } => (Asked::Done, Op::Write(Write::RemoveLabels { number, labels })),
         engine::Op::OpenPull { title, body: content, head, base } => {
             let body = body(content, fill).into_boxed_slice();
             (Asked::Create, Op::Write(Write::OpenPull { title, body, head, base }))
@@ -257,8 +281,8 @@ pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
         engine::Op::Merge { number, head } => (Asked::Merge, Op::Write(Write::Merge { number, head: count(head) })),
         engine::Op::Close { number } => (Asked::Done, Op::Write(Write::Close { number })),
         engine::Op::DeleteBranch { branch } => (Asked::Done, Op::Write(Write::DeleteBranch { branch })),
-        engine::Op::PutPage { name, content } => {
-            let content = body(content, fill).into_boxed_slice();
+        engine::Op::PutPage { name, content, nonce } => {
+            let content = paged(nonce, &body(content, fill)).into_boxed_slice();
             (Asked::Revision, Op::Write(Write::PutPage { name, content }))
         }
         engine::Op::DeletePage { name } => (Asked::Done, Op::Write(Write::DeletePage { name })),
@@ -314,8 +338,9 @@ pub fn answer(
             next,
         },
         (Asked::Page, forge::Answer::Page(found)) => {
+            let nonce = nonce_of(&found.content);
             let content = cut(&found.content, limits.body_bytes);
-            engine::Answer::Page(engine::Page { name: found.name, content, revision: found.revision })
+            engine::Answer::Page(engine::Page { name: found.name, content, revision: found.revision, nonce })
         }
         (Asked::Create, forge::Answer::Created(number)) => engine::Answer::Created(number),
         (Asked::Post { revision }, forge::Answer::Commented(id)) => engine::Answer::Commented { id, revision },

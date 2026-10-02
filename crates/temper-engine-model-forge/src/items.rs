@@ -82,11 +82,10 @@ pub(crate) struct Entry {
     pull: Option<u64>,
     level: Option<Level>,
     told: Told,
-    /// Known from its first read; and the position a record write of the
-    /// engine's carried that may or may not have landed, whose revision is not
-    /// known.
+    /// Known from its first read; and the nonce of a record write of the
+    /// engine's that may or may not have landed, whose revision is not known.
     record: Option<Record>,
-    uncertain: Option<Position>,
+    uncertain: Option<u64>,
     /// The inbox position the parent took, which the next record written
     /// carries, and the one the news held reach.
     taken: Position,
@@ -471,7 +470,7 @@ fn found(
             continue;
         }
         match comment.mark {
-            Mark::Record(position) => {
+            Mark::Record { position, nonce: _ } => {
                 record = Some(Record::Found { comment: comment.id, revision: comment.revision, position });
                 break;
             }
@@ -860,9 +859,8 @@ fn follow(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
 }
 
 /// The record of `item` as the working set knows it, if it is held and read;
-/// the position taken; and the position of a record write that may have
-/// landed.
-pub(crate) fn record(model: &Model, item: Item) -> Option<(Record, Position, Option<Position>)> {
+/// the position taken; and the nonce of a record write that may have landed.
+pub(crate) fn record(model: &Model, item: Item) -> Option<(Record, Position, Option<u64>)> {
     let id = model.index.get(&item)?;
     let entry = model.entries.get(*id).expect("the index names live entries");
     Some((entry.record?, entry.taken, entry.uncertain))
@@ -881,15 +879,15 @@ pub(crate) fn recorded(model: &mut Model, item: Item, record: Record) {
     }
 }
 
-/// A record write of `item` carrying `position` gave up after an attempt
-/// that may have landed: what the record now is, is not known.
-pub(crate) fn uncertain(model: &mut Model, item: Item, position: Position) {
+/// A record write of `item` carrying `nonce` gave up after an attempt that
+/// may have landed: what the record now is, is not known.
+pub(crate) fn uncertain(model: &mut Model, item: Item, nonce: u64) {
     let Some(id) = model.index.get(&item) else {
         return;
     };
     let entry = model.entries.get_mut(*id).expect("the index names live entries");
     if entry.record.is_some() {
-        entry.uncertain = Some(position);
+        entry.uncertain = Some(nonce);
     }
 }
 

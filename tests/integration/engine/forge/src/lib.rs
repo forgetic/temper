@@ -47,4 +47,6 @@ pub mod translate;
 mod world;
 
 pub use temper_world::Span;
-pub use world::{ENDINGS, ENGINE, HAND_IN, LABELS, MAIN, REPOSITORIES, Settings, Stats, TRACKING, World};
+pub use world::{
+    ENDINGS, ENGINE, HAND_IN, LABELS, MAIN, OWNED, REPOSITORIES, Settings, Stats, TRACKING, WAITING, WORKING, World,
+};

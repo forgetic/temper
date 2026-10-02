@@ -308,7 +308,15 @@ impl Harness {
     /// The numbers on page `page` of the items in `state` carrying
     /// `labels`, and whether a later page has more.
     fn list(&mut self, user: u64, state: Option<State>, labels: &[&[u8]], page: u32) -> (List<u64>, bool) {
-        let op = read(Read::Items { state, kind: None, labels: names(labels), since: Time::ZERO, page, limit: 0 });
+        let op = read(Read::Items {
+            state,
+            kind: None,
+            labels: names(labels),
+            author: None,
+            since: Time::ZERO,
+            page,
+            limit: 0,
+        });
         let Answer::Items { items, more } = self.ok(user, op) else {
             unreachable!("a page of items");
         };
@@ -453,7 +461,15 @@ fn listings_page_least_recently_updated_first_by_page_number() {
     assert_eq!((numbers(&page), more), (&[1][..], false), "the comment moved the first last");
     assert_eq!(h.list(ENGINE, None, &[], 0).0.as_slice(), [2, 3], "a page before the first is the first");
     assert!(h.list(ENGINE, None, &[], 3).0.is_empty());
-    let one = read(Read::Items { state: None, kind: None, labels: names(&[]), since: Time::ZERO, page: 3, limit: 1 });
+    let one = read(Read::Items {
+        state: None,
+        kind: None,
+        labels: names(&[]),
+        author: None,
+        since: Time::ZERO,
+        page: 3,
+        limit: 1,
+    });
     let Answer::Items { items, more: false } = h.ok(ENGINE, one) else {
         unreachable!("the last page");
     };
@@ -492,7 +508,8 @@ fn listings_are_at_the_forges_resolution_with_since_inclusive_and_ties_by_number
     h.wait(Duration::from_secs(1));
     h.comment(PERSON, 2, b"later");
     let since = Time::ZERO.saturating_add(Duration::from_millis(2900));
-    let recent = read(Read::Items { state: None, kind: None, labels: names(&[]), since, page: 1, limit: 0 });
+    let recent =
+        read(Read::Items { state: None, kind: None, labels: names(&[]), author: None, since, page: 1, limit: 0 });
     let Answer::Items { items, more: false } = h.ok(ENGINE, recent) else {
         unreachable!("one page");
     };
@@ -542,14 +559,22 @@ fn listings_filter_by_state_kind_labels_and_time() {
         state: None,
         kind: Some(Kind::Pull),
         labels: names(&[]),
+        author: None,
         since: Time::ZERO,
         page: 1,
         limit: 0,
     });
     assert_eq!(h.ok(ENGINE, pulls), Answer::Items { items: Box::new([]), more: false });
     h.comment(PERSON, 2, b"later");
-    let recent =
-        read(Read::Items { state: None, kind: Some(Kind::Issue), labels: names(&[]), since, page: 1, limit: 0 });
+    let recent = read(Read::Items {
+        state: None,
+        kind: Some(Kind::Issue),
+        labels: names(&[]),
+        author: None,
+        since,
+        page: 1,
+        limit: 0,
+    });
     let Answer::Items { items, more: false } = h.ok(ENGINE, recent) else {
         unreachable!("one page");
     };
@@ -623,6 +648,58 @@ fn labels_are_defined_before_they_are_set_and_set_as_a_whole() {
     assert_eq!(h.ok(PERSON, create(b"t", b"", &[b"bug"])), Answer::Created(2));
     assert!(h.item(2).0.labels.is_empty(), "the labels of a user who may not label are dropped");
     assert_eq!(h.call(ENGINE, create(b"", b"body", &[])), Err(Error::Empty), "an issue has a title");
+}
+
+#[test]
+fn labels_are_added_and_removed_leaving_the_others() {
+    let mut h = Harness::new(CALM);
+    let number = h.issue(PERSON, b"triage");
+    let add = |labels: &[&[u8]]| write(Write::AddLabels { number, labels: names(labels) });
+    let remove = |labels: &[&[u8]]| write(Write::RemoveLabels { number, labels: names(labels) });
+    assert_eq!(h.call(PERSON, add(&[b"bug"])), Err(Error::Forbidden), "labelling needs write");
+    assert_eq!(h.call(ENGINE, add(&[b"later"])), Err(Error::Missing(What::Label)));
+    assert_eq!(h.ok(MAINTAINER, set_labels(number, &[b"bug"])), Answer::Done);
+    h.observations();
+    assert_eq!(h.ok(ENGINE, add(&[b"temper"])), Answer::Done);
+    assert_eq!(h.item(number).0.labels, names(&[b"bug", b"temper"]), "added beside the others");
+    let labelled =
+        Observation::Labelled { repository: repository(), number, labels: names(&[b"bug", b"temper"]), by: ENGINE };
+    assert_eq!(h.observations().as_slice(), [labelled], "observed");
+    let updated = h.item(number).0.updated;
+    h.wait(Duration::from_secs(5));
+    assert_eq!(h.ok(ENGINE, add(&[b"temper"])), Answer::Done);
+    assert_eq!(h.ok(ENGINE, remove(&[b"later"])), Answer::Done, "a label it does not carry");
+    assert_eq!(h.item(number).0.updated, updated, "what changes nothing moves nothing");
+    assert!(h.observations().is_empty(), "nor is observed");
+    assert_eq!(h.ok(ENGINE, remove(&[b"temper"])), Answer::Done);
+    assert_eq!(h.item(number).0.labels, names(&[b"bug"]), "removed, the others left");
+}
+
+#[test]
+fn listings_filter_by_who_opened_the_items() {
+    let mut h = Harness::new(CALM);
+    h.issue(ENGINE, b"ours");
+    h.issue(PERSON, b"theirs");
+    let by = |author: u64| {
+        read(Read::Items {
+            state: None,
+            kind: None,
+            labels: names(&[]),
+            author: Some(author),
+            since: Time::ZERO,
+            page: 1,
+            limit: 0,
+        })
+    };
+    let Answer::Items { items, more: false } = h.ok(PERSON, by(ENGINE)) else {
+        unreachable!("one page");
+    };
+    assert_eq!(items.len(), 1, "the engine's only");
+    assert_eq!(items[0].number, 1);
+    let Answer::Items { items, more: false } = h.ok(PERSON, by(PERSON)) else {
+        unreachable!("one page");
+    };
+    assert_eq!(items[0].number, 2, "the person's");
 }
 
 #[test]
@@ -1299,7 +1376,15 @@ fn run(seed: u64) -> Run {
             head: copy_of(b"work"),
             base: copy_of(MAIN),
         }),
-        read(Read::Items { state: None, kind: None, labels: names(&[]), since: Time::ZERO, page: 1, limit: 0 }),
+        read(Read::Items {
+            state: None,
+            kind: None,
+            labels: names(&[]),
+            author: None,
+            since: Time::ZERO,
+            page: 1,
+            limit: 0,
+        }),
         put(b"home", b"notes"),
         read(Read::Pull { number: 2 }),
     ] {
@@ -1757,6 +1842,7 @@ fn every_call_is_answered_once_under_every_fault() {
                         state: None,
                         kind: None,
                         labels: names(&[]),
+                        author: None,
                         since: Time::ZERO,
                         page: 1,
                         limit: 0,

@@ -5,10 +5,11 @@
 //! projects its labels (the tracking label on, the hand-in label off). Each
 //! item's news starts a run, which answers after a while: the parent takes
 //! the news and writes the record, the commit point, and now and then
-//! replies on the item, projects its labels, creates a task (keyed, tracked
-//! once made), starts a change (a worker pushes its branch, and the parent
-//! opens its pull request, keyed by the branch, and links it), writes a note
-//! in the wiki, reads the item afresh, or closes it. A change whose CI
+//! replies on the item, projects its labels (only those the engine owns),
+//! creates a task (keyed, tracked once made), starts a change (a worker
+//! pushes its branch, and the parent opens its pull request, keyed by the
+//! branch, and links it), writes a note in the wiki at the revision it reads
+//! first, reads the item afresh, or closes it. A change whose CI
 //! passes is read afresh and merged at its head, then its item closed and
 //! its branch deleted. A record that someone else changed holds its item
 //! until a person releases it, after a while, and the record is written
@@ -21,14 +22,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model_forge::api::{Answer, Check, State};
-use temper_engine_model_forge::{Content, Event, Failure, Item, News, Read, Record, Request, View, Write, Written};
-use temper_lib::{Duration, Rng, Token};
+use temper_engine_model_forge::api::{Answer, Check, Error, State};
+use temper_engine_model_forge::{
+    Cause, Content, Event, Failure, Item, News, Read, Record, Request, View, Write, Written,
+};
+use temper_lib::{Duration, Rng, Time, Token};
 use temper_world::Span;
 
 use crate::referee::Planned;
 use crate::translate::{self, Fill};
-use crate::world::{HAND_IN, MAIN, TRACKING, WAITING, WORKING};
+use crate::world::{MAIN, OWNED, TRACKING, WAITING, WORKING};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Script {
@@ -57,7 +60,7 @@ pub enum Action {
     /// An event for the sub-model.
     Model(Event),
     /// A write for the sub-model, which the referee hears is planned.
-    Write { owner: u64, write: Write, resumed: bool, plan: Planned },
+    Write { owner: u64, write: Write, resumed: Option<Cause>, plan: Planned },
     /// An item's run answers.
     Run(Item),
     /// A worker pushes the branch of `item`'s change.
@@ -87,7 +90,18 @@ enum Intent {
     Merge { item: Item, pull: u64, head: [u8; 32] },
     Close { item: Item },
     DeleteBranch { repository: u32, branch: Vec<u8> },
-    PutPage { repository: u32, name: Vec<u8> },
+    PutPage { repository: u32, name: Vec<u8>, revision: Option<u64> },
+}
+
+/// What a fresh read of the parent's is for.
+#[derive(Clone, Debug)]
+enum Reading {
+    /// The pull request of `item`'s change, to merge it.
+    Pull(Item),
+    /// A note, to write it at the revision read.
+    Note { repository: u32, name: Vec<u8> },
+    /// Nothing but the read.
+    Other,
 }
 
 /// An item the parent tracks.
@@ -118,8 +132,8 @@ pub struct Parent {
     /// Names reads, writes and payloads.
     tokens: u64,
     writes: BTreeMap<u64, Intent>,
-    /// The fresh reads in flight, by owner: the item whose change is read.
-    reads: BTreeMap<u64, Option<Item>>,
+    /// The fresh reads in flight, by owner, and what each is for.
+    reads: BTreeMap<u64, Reading>,
     resume: Vec<Intent>,
     changes: BTreeMap<Item, Change>,
     runs: u32,
@@ -212,23 +226,37 @@ impl Parent {
             Request::Loaded => {
                 for intent in std::mem::take(&mut self.resume) {
                     self.tally.resumed += 1;
-                    let write = self.write(intent, true);
+                    // Nothing in the world's parent records what caused it:
+                    // looked for from the first.
+                    let write = self.write(intent, Some(Cause { comment: 0, at: Time::ZERO }));
                     actions.push((Duration::ZERO, write));
                 }
             }
-            Request::Read { owner, result } => {
-                if let Some(Some(item)) = self.reads.remove(&owner.raw())
-                    && let Ok(Answer::Pull(pull)) = result
-                {
-                    let green =
-                        !pull.statuses.is_empty() && pull.statuses.iter().all(|status| status.check == Check::Passed);
-                    let open = pull.state == State::Open && pull.mergeable && pull.merged.is_none();
-                    if green && open && self.items.contains_key(&item) {
-                        let intent = Intent::Merge { item, pull: pull.number, head: pull.commit };
-                        actions.push((Duration::ZERO, self.write(intent, false)));
+            Request::Read { owner, result } => match self.reads.remove(&owner.raw()) {
+                Some(Reading::Pull(item)) => {
+                    if let Ok(Answer::Pull(pull)) = result {
+                        let green = !pull.statuses.is_empty()
+                            && pull.statuses.iter().all(|status| status.check == Check::Passed);
+                        let open = pull.state == State::Open && pull.mergeable && pull.merged.is_none();
+                        if green && open && self.items.contains_key(&item) {
+                            let intent = Intent::Merge { item, pull: pull.number, head: pull.commit };
+                            actions.push((Duration::ZERO, self.write(intent, None)));
+                        }
                     }
                 }
-            }
+                Some(Reading::Note { repository, name }) => {
+                    let revision = match result {
+                        Ok(Answer::Page(page)) => Some(Some(page.revision)),
+                        Err(Failure::Forge(Error::Missing)) => Some(None),
+                        Ok(_) | Err(_) => None,
+                    };
+                    if let Some(revision) = revision {
+                        let intent = Intent::PutPage { repository, name, revision };
+                        actions.push((Duration::ZERO, self.write(intent, None)));
+                    }
+                }
+                Some(Reading::Other) | None => {}
+            },
             Request::Wrote { owner, result } => self.wrote(owner.raw(), result, &mut actions),
         }
         actions
@@ -242,11 +270,11 @@ impl Parent {
             actions.push((Duration::ZERO, Action::Model(Event::Link { item, pull: Some(pull) })));
         }
         match view.record {
-            Record::Missing => actions.push((Duration::ZERO, self.write(Intent::Record { item }, false))),
+            Record::Missing => actions.push((Duration::ZERO, self.write(Intent::Record { item }, None))),
             Record::Mangled { .. } => self.hold(item, actions),
             Record::Found { .. } => {
                 if let Some(intent) = self.projection(item, false) {
-                    actions.push((Duration::ZERO, self.write(intent, false)));
+                    actions.push((Duration::ZERO, self.write(intent, None)));
                 }
             }
         }
@@ -269,7 +297,7 @@ impl Parent {
         {
             let pull = Item { repository: item.repository, number: *pull };
             let owner = self.token();
-            self.reads.insert(owner, Some(item));
+            self.reads.insert(owner, Reading::Pull(item));
             actions.push((
                 self.soon(),
                 Action::Model(Event::Read { owner: Token::new(owner), read: Read::Pull { item: pull } }),
@@ -285,7 +313,7 @@ impl Parent {
             Err(Failure::Busy) => {
                 // No room: asked again in a while.
                 let later = Duration::from_secs(5);
-                let write = self.write(intent, false);
+                let write = self.write(intent, None);
                 actions.push((later, write));
                 return;
             }
@@ -295,13 +323,13 @@ impl Parent {
                 }
                 return;
             }
-            Err(Failure::Invalid | Failure::Unknown | Failure::Forge(_)) => return,
+            Err(Failure::Invalid | Failure::Unknown | Failure::Revised { .. } | Failure::Forge(_)) => return,
             Ok(_) => {}
         }
         match (intent, *result) {
             (Intent::Record { item }, _) => {
                 if let Some(intent) = self.projection(item, false) {
-                    actions.push((Duration::ZERO, self.write(intent, false)));
+                    actions.push((Duration::ZERO, self.write(intent, None)));
                 }
             }
             (Intent::Task { repository, .. }, Ok(Written::Created(number))) => {
@@ -316,11 +344,11 @@ impl Parent {
             }
             (Intent::Merge { item, .. }, Ok(Written::Merged(_))) => {
                 self.tally.merges += 1;
-                actions.push((Duration::ZERO, self.write(Intent::Close { item }, false)));
+                actions.push((Duration::ZERO, self.write(Intent::Close { item }, None)));
                 if let Some(change) = self.changes.get(&item) {
                     let branch = change.branch.clone();
                     let intent = Intent::DeleteBranch { repository: item.repository, branch };
-                    actions.push((Duration::ZERO, self.write(intent, false)));
+                    actions.push((Duration::ZERO, self.write(intent, None)));
                 }
             }
             (
@@ -351,7 +379,7 @@ impl Parent {
         self.tally.runs += 1;
         actions.push((Duration::ZERO, Action::Model(Event::Took { item, through })));
         if !held.on_hold {
-            actions.push((Duration::ZERO, self.write(Intent::Record { item }, false)));
+            actions.push((Duration::ZERO, self.write(Intent::Record { item }, None)));
         }
         if self.runs == 0 {
             return actions;
@@ -359,16 +387,16 @@ impl Parent {
         self.runs -= 1;
         if self.rng.chance(self.script.replies) {
             let key = self.key(b"reply", item);
-            actions.push((self.soon(), self.write(Intent::Comment { item, key }, false)));
+            actions.push((self.soon(), self.write(Intent::Comment { item, key }, None)));
         }
         if self.rng.chance(self.script.projections)
             && let Some(intent) = self.projection(item, true)
         {
-            actions.push((self.soon(), self.write(intent, false)));
+            actions.push((self.soon(), self.write(intent, None)));
         }
         if self.rng.chance(self.script.tasks) {
             let key = self.key(b"task", item);
-            actions.push((self.soon(), self.write(Intent::Task { repository: item.repository, key }, false)));
+            actions.push((self.soon(), self.write(Intent::Task { repository: item.repository, key }, None)));
         }
         if self.rng.chance(self.script.changes) && !self.changes.contains_key(&item) {
             let branch = format!("change-{}", item.number).into_bytes();
@@ -377,11 +405,14 @@ impl Parent {
         }
         if self.rng.chance(self.script.notes) {
             let name = format!("note-{}", self.rng.below(4)).into_bytes();
-            actions.push((self.soon(), self.write(Intent::PutPage { repository: item.repository, name }, false)));
+            let owner = self.token();
+            self.reads.insert(owner, Reading::Note { repository: item.repository, name: name.clone() });
+            let read = Read::Page { repository: item.repository, name: name.into_boxed_slice() };
+            actions.push((self.soon(), Action::Model(Event::Read { owner: Token::new(owner), read })));
         }
         if self.rng.chance(self.script.reads) {
             let owner = self.token();
-            self.reads.insert(owner, None);
+            self.reads.insert(owner, Reading::Other);
             // The item afresh, or a note that may not be there.
             let read = if self.rng.chance(500) {
                 Read::Item { item, after: 0 }
@@ -392,7 +423,7 @@ impl Parent {
             actions.push((self.soon(), Action::Model(Event::Read { owner: Token::new(owner), read })));
         }
         if self.rng.chance(self.script.closes) {
-            actions.push((self.soon(), self.write(Intent::Close { item }, false)));
+            actions.push((self.soon(), self.write(Intent::Close { item }, None)));
         }
         actions
     }
@@ -402,7 +433,7 @@ impl Parent {
         if !self.items.contains_key(&item) {
             return Vec::new();
         }
-        vec![(Duration::ZERO, self.write(Intent::Open { item, branch }, false))]
+        vec![(Duration::ZERO, self.write(Intent::Open { item, branch }, None))]
     }
 
     /// A person released `item`: its record is written over.
@@ -414,7 +445,7 @@ impl Parent {
             return Vec::new();
         }
         held.on_hold = false;
-        vec![(Duration::ZERO, self.write(Intent::Record { item }, false))]
+        vec![(Duration::ZERO, self.write(Intent::Record { item }, None))]
     }
 
     /// Holds `item` for a person, who releases it after a while.
@@ -430,26 +461,20 @@ impl Parent {
         actions.push((self.script.release.draw(&mut self.rng), Action::Release(item)));
     }
 
-    /// The labels the record projects for `item`: the tracking label on, the
-    /// hand-in label off, a phase label (another one if `turn`), and the rest
-    /// as people set them; none if they are so already.
+    /// The labels the record projects for `item`, of those the engine owns:
+    /// the tracking label on, the hand-in label off, and a phase label
+    /// (another one if `turn`); none if they are so already. People's labels
+    /// are theirs.
     fn projection(&mut self, item: Item, turn: bool) -> Option<Intent> {
         let held = self.items.get(&item)?;
-        let mut labels: Vec<Vec<u8>> = vec![TRACKING.to_vec()];
-        let phase = if held.labels.iter().any(|label| label == WORKING) { WORKING } else { WAITING };
-        let phase = match (turn, phase == WORKING) {
-            (true, true) => WAITING,
-            (true, false) => WORKING,
-            (false, _) => phase,
-        };
-        labels.push(phase.to_vec());
-        for label in &held.labels {
-            let ours = [TRACKING, HAND_IN, WORKING, WAITING].contains(&label.as_slice());
-            if !ours && labels.len() < 4 {
-                labels.push(label.clone());
-            }
-        }
-        if labels == held.labels {
+        let working = held.labels.iter().any(|label| label == WORKING);
+        let phase = if working == turn { WAITING } else { WORKING };
+        // In order, as the forge keeps them.
+        let mut labels: Vec<Vec<u8>> = vec![TRACKING.to_vec(), phase.to_vec()];
+        labels.sort();
+        let owned: Vec<Vec<u8>> =
+            held.labels.iter().filter(|label| OWNED.contains(&label.as_slice())).cloned().collect();
+        if labels == owned {
             return None;
         }
         Some(Intent::Labels { item, labels })
@@ -457,7 +482,7 @@ impl Parent {
 
     /// The write `intent`, named by a new owner, and what the referee hears
     /// of it.
-    fn write(&mut self, intent: Intent, resumed: bool) -> Action {
+    fn write(&mut self, intent: Intent, resumed: Option<Cause>) -> Action {
         let owner = self.token();
         let write = match &intent {
             Intent::Record { item } => {
@@ -491,10 +516,11 @@ impl Parent {
             Intent::DeleteBranch { repository, branch } => {
                 Write::DeleteBranch { repository: *repository, branch: branch.clone().into_boxed_slice() }
             }
-            Intent::PutPage { repository, name } => Write::PutPage {
+            Intent::PutPage { repository, name, revision } => Write::PutPage {
                 repository: *repository,
                 name: name.clone().into_boxed_slice(),
                 content: Content::Text(b"what was learnt".to_vec().into_boxed_slice()),
+                revision: *revision,
             },
         };
         let plan = match &intent {
@@ -511,7 +537,9 @@ impl Parent {
             Intent::DeleteBranch { repository, branch } => {
                 Planned::DeleteBranch { repository: *repository, branch: branch.clone() }
             }
-            Intent::PutPage { repository, name } => Planned::PutPage { repository: *repository, name: name.clone() },
+            Intent::PutPage { repository, name, .. } => {
+                Planned::PutPage { repository: *repository, name: name.clone() }
+            }
         };
         self.writes.insert(owner, intent);
         Action::Write { owner, write, resumed, plan }

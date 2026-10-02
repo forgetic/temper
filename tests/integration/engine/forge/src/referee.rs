@@ -12,10 +12,12 @@
 //! - **No creation made twice.** One issue per key, one comment per key, one
 //!   record per item, one pull request per branch, whatever the faults and
 //!   restarts.
-//! - **Labels end as the last set written.** The engine's label writes on an
-//!   item land in the order the parent planned them, never an older set after
-//!   a newer one; and once the world settles, an item whose last planned set
-//!   was written carries it, unless someone else labelled it since.
+//! - **Labels end as the last set written.** The engine adds and removes
+//!   only the labels it owns, each change part of a set the parent planned,
+//!   in the order it planned them, never an older set after a newer one; and
+//!   once the world settles, the labels the engine owns on an item whose last
+//!   planned set was written are that set, unless someone else changed them
+//!   since.
 //! - **Every change reaches the working set within the polling bound**, even
 //!   when every webhook is lost: a person's comment on a tracked item is
 //!   news for it, a label change is told, a close makes it leave, within a
@@ -34,7 +36,7 @@ use temper_lib::{Duration, Time};
 use temper_world::{Expectations, Judge};
 
 use crate::translate;
-use crate::world::{ENGINE, REPOSITORIES};
+use crate::world::{ENGINE, OWNED, REPOSITORIES};
 
 /// A write the parent planned, as the referee matches it to what the forge
 /// sees.
@@ -139,7 +141,7 @@ pub struct Forge {
     records: BTreeSet<Item>,
     pulls: BTreeSet<(u32, Vec<u8>)>,
     /// Per item: the place of the plan of the last engine label write seen,
-    /// the labels it carries now and who set them last.
+    /// the labels it carries now and who last changed those the engine owns.
     labelled: BTreeMap<Item, u64>,
     labels: BTreeMap<Item, (Vec<Vec<u8>>, u64)>,
     /// The items whose record someone else edited since the engine last wrote
@@ -246,19 +248,8 @@ impl Forge {
                 judge.check(planned.is_some(), format_args!("a record edit the parent planned: {item:?}"));
                 self.touched.remove(&item);
             }
-            Observation::Labelled { repository, number, labels, by: _ } => {
-                let item = Item { repository: index(repository), number: *number };
-                let labels = set(labels.iter().map(|label| label.to_vec()).collect());
-                let last = self.labelled.get(&item).copied().unwrap_or(0);
-                let planned = self.planned(|plan| sets(plan, item, &labels));
-                judge.check(planned.is_some(), format_args!("labels the parent planned: {item:?} {labels:?}"));
-                // The plan this write is: the earliest of these labels not
-                // older than the last one seen.
-                let plan = self.plans.range(last..).find(|(_, (plan, _))| sets(plan, item, &labels));
-                judge.check(plan.is_some(), format_args!("labels land in the order planned: {item:?} {labels:?}"));
-                if let Some((plan, _)) = plan {
-                    self.labelled.insert(item, *plan);
-                }
+            Observation::Labelled { .. } => {
+                // Judged as the labels change, with what they were before.
             }
             Observation::Closed { repository, number, by: _ } => {
                 let item = Item { repository: index(repository), number: *number };
@@ -386,8 +377,80 @@ impl Forge {
         }
     }
 
-    /// The checks once the world has settled: the labels of each item whose
-    /// last planned set was written.
+    /// A change on the forge: whose it is, and what of it is judged.
+    fn forge(&mut self, observation: &Observation, judge: &mut Judge<Expected, Stimulus>) {
+        match observation {
+            Observation::Opened { repository, number, labels, by, .. } => {
+                let item = Item { repository: index(repository), number: *number };
+                self.labels.insert(item, (set(labels.iter().map(|label| label.to_vec()).collect()), *by));
+            }
+            Observation::Labelled { repository, number, labels, by } => {
+                let item = Item { repository: index(repository), number: *number };
+                let labels = set(labels.iter().map(|label| label.to_vec()).collect());
+                self.relabelled(item, labels, *by, judge);
+            }
+            Observation::Moved { .. }
+            | Observation::Deleted { .. }
+            | Observation::Closed { .. }
+            | Observation::Reopened { .. }
+            | Observation::Revised { .. }
+            | Observation::Depends { .. }
+            | Observation::Requested { .. }
+            | Observation::Defined { .. }
+            | Observation::Commented { .. }
+            | Observation::Edited { .. }
+            | Observation::Removed { .. }
+            | Observation::Reviewed { .. }
+            | Observation::Reported { .. }
+            | Observation::Merged { .. }
+            | Observation::Refused { .. }
+            | Observation::Rejected { .. }
+            | Observation::Wiki { .. } => {}
+        }
+        if by(observation) == ENGINE {
+            if let Observation::Labelled { repository, number, labels, .. } = observation {
+                let item = Item { repository: index(repository), number: *number };
+                self.label_change(item, labels, judge);
+            }
+            self.engine(observation, judge);
+        } else {
+            self.person(observation, judge);
+        }
+    }
+
+    /// The labels of `item` are now `labels`, changed by `by`: a change of
+    /// the engine's is one it owns, part of a set planned, not older than the
+    /// last it made.
+    fn relabelled(&mut self, item: Item, labels: Vec<Vec<u8>>, by: u64, judge: &mut Judge<Expected, Stimulus>) {
+        let (before, mut changer) = self.labels.remove(&item).unwrap_or_default();
+        let added: Vec<Vec<u8>> = labels.iter().filter(|label| !before.contains(label)).cloned().collect();
+        let removed: Vec<Vec<u8>> = before.iter().filter(|label| !labels.contains(label)).cloned().collect();
+        let owned = |label: &Vec<u8>| OWNED.contains(&label.as_slice());
+        if added.iter().chain(&removed).any(owned) {
+            changer = by;
+        }
+        if by == ENGINE {
+            let theirs: Vec<&Vec<u8>> = added.iter().chain(&removed).filter(|label| !owned(label)).collect();
+            judge.check(theirs.is_empty(), format_args!("the engine changes only labels it owns: {item:?} {theirs:?}"));
+            let planned = self.planned(|plan| explains(plan, item, &added, &removed));
+            judge.check(planned.is_some(), format_args!("labels the parent planned: {item:?} +{added:?} -{removed:?}"));
+            // The plan this change is part of: the earliest that explains it,
+            // not older than the last one seen.
+            let last = self.labelled.get(&item).copied().unwrap_or(0);
+            let plan = self.plans.range(last..).find(|(_, (plan, _))| explains(plan, item, &added, &removed));
+            judge.check(
+                plan.is_some(),
+                format_args!("labels land in the order planned: {item:?} +{added:?} -{removed:?}"),
+            );
+            if let Some((plan, _)) = plan {
+                self.labelled.insert(item, *plan);
+            }
+        }
+        self.labels.insert(item, (labels, changer));
+    }
+
+    /// The checks once the world has settled: the labels the engine owns of
+    /// each item whose last planned set was written.
     fn settled(&self, judge: &mut Judge<Expected, Stimulus>) {
         let mut last: BTreeMap<Item, (&Vec<Vec<u8>>, Option<bool>)> = BTreeMap::new();
         for (plan, written) in self.plans.values() {
@@ -402,10 +465,11 @@ impl Forge {
             let Some((now, by)) = self.labels.get(&item) else {
                 continue;
             };
+            let owned: Vec<Vec<u8>> = now.iter().filter(|label| OWNED.contains(&label.as_slice())).cloned().collect();
             if *by == ENGINE {
                 judge.check(
-                    now == labels,
-                    format_args!("{item:?} ends with the last set written: {now:?}, not {labels:?}"),
+                    owned == *labels,
+                    format_args!("{item:?} ends with the last set written: {owned:?}, not {labels:?}"),
                 );
             }
         }
@@ -448,22 +512,7 @@ impl Expectations for Forge {
                     }
                 }
             }
-            Seen::Forge(observation) => {
-                if let Observation::Labelled { repository, number, labels, by } = &observation {
-                    let item = Item { repository: index(repository), number: *number };
-                    let labels = set(labels.iter().map(|label| label.to_vec()).collect());
-                    self.labels.insert(item, (labels, *by));
-                }
-                if by(&observation) == ENGINE {
-                    if let Observation::Labelled { repository, number, labels, .. } = &observation {
-                        let item = Item { repository: index(repository), number: *number };
-                        self.label_change(item, labels, judge);
-                    }
-                    self.engine(&observation, judge);
-                } else {
-                    self.person(&observation, judge);
-                }
-            }
+            Seen::Forge(observation) => self.forge(&observation, judge),
             Seen::Announced { item, labels } => {
                 self.tracked.insert(item);
                 self.labels_told(item, &labels, judge);
@@ -545,9 +594,24 @@ fn index(name: &[u8]) -> u32 {
     u32::try_from(index).expect("few repositories")
 }
 
-/// Whether `plan` sets `item`'s labels to `labels`.
-fn sets(plan: &Planned, item: Item, labels: &[Vec<u8>]) -> bool {
-    if let Planned::SetLabels { item: of, labels: set } = plan { *of == item && set == labels } else { false }
+/// Whether `plan`, setting `item`'s labels, explains a change of them that
+/// added `added` and removed `removed`.
+fn explains(plan: &Planned, item: Item, added: &[Vec<u8>], removed: &[Vec<u8>]) -> bool {
+    match plan {
+        Planned::SetLabels { item: of, labels } => {
+            *of == item
+                && added.iter().all(|label| labels.contains(label))
+                && removed.iter().all(|label| !labels.contains(label))
+        }
+        Planned::CreateIssue { .. }
+        | Planned::Comment { .. }
+        | Planned::Record { .. }
+        | Planned::OpenPull { .. }
+        | Planned::Merge { .. }
+        | Planned::Close { .. }
+        | Planned::DeleteBranch { .. }
+        | Planned::PutPage { .. } => false,
+    }
 }
 
 /// Labels as a set, in order: the forge keeps them so.

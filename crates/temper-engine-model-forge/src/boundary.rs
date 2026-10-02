@@ -26,7 +26,7 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::Token;
+use temper_lib::{Time, Token};
 
 use crate::api::{Answer, Error, Kind, Op, Verdict};
 
@@ -59,10 +59,12 @@ pub enum Event {
     Hint { repository: u32, item: Option<u64>, commit: Option<[u8; 32]> },
     /// A fresh read, answered by one [`Request::Read`].
     Read { owner: Token, read: Read },
-    /// A write, answered by one [`Request::Wrote`]. `resumed` when it may
-    /// have been asked for before, by an engine that has since restarted: a
-    /// creation is then looked for by its key before it is tried.
-    Write { owner: Token, write: Write, resumed: bool },
+    /// A write, answered by one [`Request::Wrote`]. `resumed` names its
+    /// cause when it may have been asked for before: by an engine that has
+    /// since restarted, or by this one before the write failed as
+    /// [`Failure::Forge`] with [`Error::Timeout`]. A creation is then looked
+    /// for by its key, among what came after its cause, before it is tried.
+    Write { owner: Token, write: Write, resumed: Option<Cause> },
     /// Terminal for [`Request::Call`]: what the forge answered, or why it did
     /// not.
     Answered { call: Token, result: Result<Answer, Error> },
@@ -94,6 +96,16 @@ pub enum Request {
     /// The cold start is done: every item that carried the tracking label as
     /// it began has been read and announced, or did not fit.
     Loaded,
+}
+
+/// What caused a write, as the forge knows it: the comment `comment` (an
+/// outcome, a person's request), posted at `at`, the forge's time. What the
+/// write creates comes after it: a comment has a greater id (ids grow across
+/// the forge), an issue an updated time no earlier.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Cause {
+    pub comment: u64,
+    pub at: Time,
 }
 
 /// A fresh read, of the forge as it is now (engine-model.md, 4.4): fetched
@@ -150,7 +162,10 @@ pub enum Write {
     /// once a fresh read finds it as last read: a record someone else changed
     /// is not written over ([`Failure::Edited`]). Done as [`Written::Done`].
     Record { item: Item, payload: Token },
-    /// Makes `item`'s labels exactly `labels`. Done as [`Written::Done`].
+    /// Makes `item`'s labels among those the engine owns
+    /// ([`crate::Config`]) exactly `labels`, which it owns: they are added,
+    /// and the others it owns removed, while the labels people set stay as
+    /// they are. Done as [`Written::Done`].
     SetLabels { item: Item, labels: Box<[Box<[u8]>]> },
     /// Opens a pull request in `repository` to merge `head` into `base`,
     /// keyed by its branches. Done as [`Written::Created`].
@@ -162,9 +177,11 @@ pub enum Write {
     Close { item: Item },
     /// Deletes `branch` of `repository`. Done as [`Written::Done`].
     DeleteBranch { repository: u32, branch: Box<[u8]> },
-    /// Creates or replaces the wiki page `name` of `repository`. Done as
-    /// [`Written::Revision`].
-    PutPage { repository: u32, name: Box<[u8]>, content: Content },
+    /// Writes the wiki page `name` of `repository`, once a fresh read finds
+    /// it at `revision` as last read, or finds none if `None`: a page someone
+    /// else wrote or deleted since is not written over
+    /// ([`Failure::Revised`]). Done as [`Written::Revision`].
+    PutPage { repository: u32, name: Box<[u8]>, content: Content, revision: Option<u64> },
     /// Deletes the wiki page `name` of `repository`. Done as
     /// [`Written::Done`].
     DeletePage { repository: u32, name: Box<[u8]> },
@@ -208,6 +225,10 @@ pub enum Failure {
     /// A record that someone else changed, or deleted, since it was last
     /// read: it is now `record`, and was not written over.
     Edited { record: Record },
+    /// A wiki page that someone else wrote, or deleted, since it was last
+    /// read: it is now at `revision`, or gone if `None`, and was not written
+    /// over.
+    Revised { revision: Option<u64> },
     /// The forge refused it, or kept failing until the attempts ran out.
     Forge(Error),
 }

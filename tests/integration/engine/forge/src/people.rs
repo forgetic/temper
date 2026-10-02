@@ -231,6 +231,7 @@ fn open(forge: &Model, config: &Config, repository: usize) -> Vec<(u64, Kind, Ve
             state: Some(State::Open),
             kind: None,
             labels: Box::new([]),
+            author: None,
             since: Time::ZERO,
             page,
             limit: 0,

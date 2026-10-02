@@ -61,7 +61,7 @@ mod tests;
 mod writes;
 
 pub use boundary::{
-    Ci, Content, Event, Failure, Item, Level, News, Position, Read, Record, Request, View, Write, Written,
+    Cause, Ci, Content, Event, Failure, Item, Level, News, Position, Read, Record, Request, View, Write, Written,
 };
 pub use facts::{Fact, Priority};
 pub use limits::{Limits, worst_case};
