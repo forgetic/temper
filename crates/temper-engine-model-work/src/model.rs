@@ -7,16 +7,15 @@ use crate::facts::{Fact, Facts};
 use crate::limits::Limits;
 use crate::tracked::{self, Tracked};
 
-/// The most requests an entry point emits per call: the answer to a call and
-/// what it sets going (a record to write, a cancel), or an acknowledgement and
-/// the next request of the item it frees, or a snapshot to keep and a record
-/// to write. The parent reserves this much room in `out` before calling it.
-pub const MAX_OUT: u32 = 2;
-
-/// [`MAX_OUT`], under any limits: the hub's output does not grow with them.
+/// The most requests an entry point emits per call under `limits`: the
+/// answer to a call and what it sets going (a record to write, a cancel, an
+/// adoption), or an acknowledgement and the next request of the item it
+/// frees, or a snapshot to keep and a record to write; or, as a run is
+/// placed, every inbound event kept for it. The parent reserves this much
+/// room in `out` before calling it.
 #[must_use]
-pub const fn max_out(_limits: &Limits) -> u32 {
-    MAX_OUT
+pub const fn max_out(limits: &Limits) -> u32 {
+    if limits.undelivered > 2 { limits.undelivered } else { 2 }
 }
 
 /// The work hub's state.
@@ -88,14 +87,16 @@ impl Model {
     }
 }
 
-/// Handles one event, emitting at most [`MAX_OUT`] requests.
+/// Handles one event, emitting at most [`max_out`] requests.
 pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Take { reply_to, item, read } => tracked::take(model, env, reply_to, item, read, out),
         Event::Stop { reply_to, item } => tracked::stop(model, reply_to, item, out),
         Event::Release { reply_to, item } => tracked::release(model, reply_to, item, out),
         Event::Inbox { item, event, wake } => tracked::inbox(model, env, item, event, wake, out),
-        Event::Running { item, attempt } => tracked::running(model, item, attempt, out),
+        Event::Placed { item, attempt } => tracked::placed(model, item, attempt, out),
+        Event::Undelivered { item, attempt, event } => tracked::undelivered(model, item, attempt, event),
+        Event::Listed { item, attempt } => tracked::listed(model, item, attempt),
         Event::Answered { item, attempt, answer } => tracked::answered(model, env, item, attempt, answer, out),
         Event::Decided { owner, due } => tracked::decided(model, owner, due, out),
         Event::Written { owner, wrote } => tracked::written(model, env, owner, wrote, out),
@@ -106,11 +107,11 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
 }
 
 /// Fires the earliest alarm due at `env.now`, if there is one, emitting at most
-/// [`MAX_OUT`] requests. A stage fires its alarms after its input events, so
+/// [`max_out`] requests. A stage fires its alarms after its input events, so
 /// what arrived in the same iteration wins over a deadline that passed while
 /// the loop waited.
 pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     if let Some(id) = model.alarms.expire(env.now) {
-        tracked::alarm(model, env, id, out);
+        tracked::alarm(model, id, out);
     }
 }

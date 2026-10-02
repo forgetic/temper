@@ -125,7 +125,7 @@ struct Tracked {
 impl Tracked {
     fn held(&self) -> bool {
         let recorded = match self.record {
-            Some(Lifecycle { phase: Phase::Held(_), .. }) => true,
+            Some(Lifecycle { phase: Phase::Held { .. }, .. }) => true,
             Some(Lifecycle {
                 phase:
                     Phase::Waiting
@@ -151,7 +151,7 @@ impl Tracked {
                     | Phase::Retrying(_)
                     | Phase::Claimed
                     | Phase::Applying { .. }
-                    | Phase::Held(_),
+                    | Phase::Held { .. },
                 ..
             })
             | None => false,
@@ -201,7 +201,7 @@ impl Work {
                     | Phase::Parked
                     | Phase::Retrying(_)
                     | Phase::Applying { .. }
-                    | Phase::Held(_)
+                    | Phase::Held { .. }
                     | Phase::Done,
                 ..
             })

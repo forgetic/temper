@@ -1,4 +1,4 @@
-use temper_lib::{Deadlines, Duration, Id, Map, Queue, Slab};
+use temper_lib::{Deadlines, Duration, Id, Map, Queue, Slab, Token};
 
 use crate::boundary::{Class, Item};
 use crate::facts::Fact;
@@ -11,11 +11,12 @@ pub struct Limits {
     /// Items tracked at once: the working set, as the hub sees it. An item
     /// beyond them is refused at the entrance, and waits there.
     pub items: u32,
-    /// How long an item read claimed waits for a worker to say it still hosts
-    /// the attempt, before the run is presumed lost.
-    pub grace: Duration,
-    /// How each failure class is retried.
+    /// How each failure class is retried. A run refused before anything ran
+    /// is claimed again as a transient failure is retried, counting none.
     pub retries: Retries,
+    /// Inbound events kept for a run until it is placed, for each item. One
+    /// beyond them stays in the item's inbox, for the next run.
+    pub undelivered: u32,
     /// Facts kept until the parent drains them. Beyond them, facts are
     /// dropped and counted.
     pub facts: u32,
@@ -63,12 +64,14 @@ pub struct Retry {
 ///
 /// It counts the containers, their bookkeeping included, and not allocator
 /// overhead. An item holds no bytes: what it passes on is named by its
-/// parent's tokens, and its record's part is plain data.
+/// parent's tokens, and its record's part is plain data; it keeps the tokens
+/// of the inbound events its run has not taken yet.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let tracked = Slab::<Tracked>::worst_case(limits.items)?;
     let names = Map::<Item, Id<Tracked>>::worst_case(limits.items)?;
     let alarms = Deadlines::<Id<Tracked>>::worst_case(limits.items)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
-    tracked.checked_add(names)?.checked_add(alarms)?.checked_add(facts)
+    let undelivered = u64::from(limits.items).checked_mul(Queue::<Token>::worst_case(limits.undelivered)?)?;
+    tracked.checked_add(names)?.checked_add(alarms)?.checked_add(facts)?.checked_add(undelivered)
 }

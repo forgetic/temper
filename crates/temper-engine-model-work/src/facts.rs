@@ -19,14 +19,16 @@ pub enum Fact {
     Taken { item: Item },
     /// A run was claimed for it: the attempt `attempt`.
     Claimed { item: Item, attempt: u64 },
-    /// Its attempt runs on a worker.
-    Running { item: Item, attempt: u64 },
+    /// Its attempt is on a worker.
+    Placed { item: Item, attempt: u64 },
     /// Its attempt ended with an outcome.
     Ended { item: Item, attempt: u64 },
     /// Its attempt parked.
     Parked { item: Item, attempt: u64 },
     /// Its attempt failed, in `class`.
     Failed { item: Item, attempt: u64, class: Class },
+    /// Its attempt was refused before anything ran.
+    Refused { item: Item, attempt: u64 },
     /// An outcome's or an action's writes were made.
     Applied { item: Item },
     /// An outcome or an action was stale: nothing was made.

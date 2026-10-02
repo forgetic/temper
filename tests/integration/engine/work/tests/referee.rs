@@ -73,7 +73,7 @@ fn a_keyed_creation_made_twice_fails_the_run() {
 #[test]
 fn asking_what_is_due_for_a_held_item_fails_the_run_until_it_is_released() {
     let mut referee = claimed();
-    referee.observe(at(4), recorded(Phase::Held(Hold::Stopped), 1), &mut Vec::new());
+    referee.observe(at(4), recorded(Phase::Held { why: Hold::Stopped, outcome: None }, 1), &mut Vec::new());
     referee.observe(at(5), Seen::Released { item: ITEM }, &mut Vec::new());
     referee.observe(at(6), recorded(Phase::Waiting, 1), &mut Vec::new());
     referee.observe(at(7), Seen::Asked { item: ITEM }, &mut Vec::new());

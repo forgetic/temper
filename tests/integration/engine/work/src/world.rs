@@ -27,7 +27,7 @@ const RELEASES: u32 = 2;
 /// The hub's limits in the calm world: room for every item at once.
 pub const LIMITS: Limits = Limits {
     items: 16,
-    grace: Duration::from_secs(20),
+    undelivered: 4,
     retries: Retries {
         transient: Retry { retries: 3, base: Duration::from_secs(1), max: Duration::from_secs(8) },
         permanent: Retry { retries: 0, base: Duration::from_secs(1), max: Duration::from_secs(1) },
@@ -40,7 +40,7 @@ pub const LIMITS: Limits = Limits {
 };
 
 /// How a world's items and runs ended, by kind, for the sweep.
-pub const ENDINGS: [&str; 18] = [
+pub const ENDINGS: [&str; 17] = [
     "done",
     "held: plan",
     "held: failures",
@@ -57,7 +57,6 @@ pub const ENDINGS: [&str; 18] = [
     "adopted",
     "resumed",
     "full",
-    "stale answer",
     "cancelled",
 ];
 
@@ -253,6 +252,8 @@ enum Delivery {
     Drop { worker: usize },
     /// A worker reconnects, after its drop `episode`.
     Reconnect { worker: usize, episode: u64 },
+    /// The fleet's grace for a claim it adopts is over.
+    Adoption { item: Item, attempt: u64, generation: u64 },
     /// The fleet's grace for a worker that dropped is over.
     Grace { worker: usize, episode: u64, generation: u64 },
 }
@@ -355,6 +356,9 @@ struct Fleet {
     heard: BTreeMap<(Item, u64), usize>,
     /// Starts waiting for a worker to connect.
     queued: VecDeque<(Item, u64)>,
+    /// Claims read after a restart, until a worker says it hosts them or
+    /// holds their answers, or they are presumed lost.
+    adopting: BTreeSet<(Item, u64)>,
 }
 
 /// A call the parent made, until it is answered.
@@ -599,6 +603,11 @@ impl World {
             Delivery::Drop { worker } => self.drop_channel(worker),
             Delivery::Reconnect { worker, episode } => self.reconnect(worker, episode),
             Delivery::Grace { worker, episode, generation } => self.grace(worker, episode, generation),
+            Delivery::Adoption { item, attempt, generation } => {
+                if generation == self.generation && self.fleet.adopting.remove(&(item, attempt)) {
+                    self.lost(item, attempt);
+                }
+            }
         }
     }
 
@@ -643,6 +652,7 @@ impl World {
                 self.forge(item, Op::Act { owner, done }, self.settings.latency);
             }
             Request::Start { item, attempt, run: _ } => self.start(item, attempt),
+            Request::Adopt { item, attempt } => self.adopt(item, attempt),
             Request::Cancel { item, attempt } => self.tell_worker(item, attempt, Message::Cancel),
             Request::Relay { item, attempt, event: _ } => self.tell_worker(item, attempt, Message::Relay),
             Request::Keep { .. } => self.stats.kept += 1,
@@ -663,10 +673,10 @@ impl World {
     fn fact(&mut self, fact: Fact) {
         match fact {
             Fact::Held { why, .. } => self.end(match why {
-                Hold::Plan(_) => "held: plan",
+                Hold::Plan { .. } => "held: plan",
                 Hold::Failures(_) => "held: failures",
                 Hold::Stopped => "held: stopped",
-                Hold::Acceptance { .. } => "held: acceptance",
+                Hold::Acceptance => "held: acceptance",
                 Hold::Writes => "held: writes",
                 Hold::Record => "held: record",
             }),
@@ -677,7 +687,8 @@ impl World {
             Fact::Stale { .. } => self.end("stale"),
             Fact::Taken { .. }
             | Fact::Claimed { .. }
-            | Fact::Running { .. }
+            | Fact::Placed { .. }
+            | Fact::Refused { .. }
             | Fact::Ended { .. }
             | Fact::Failed { .. }
             | Fact::Applied { .. }
@@ -810,11 +821,11 @@ impl World {
     fn release(&mut self, item: Item) {
         let issue = self.issues.get_mut(&item).expect("a released item was handed in");
         match stands(issue.record) {
-            Stands::Held(Hold::Acceptance { .. }) => {
+            Stands::Held(Hold::Acceptance) => {
                 let attempts = issue.record.expect("held, so recorded").lifecycle.attempts;
                 issue.accepted.insert(attempts);
             }
-            Stands::Held(Hold::Plan(_) | Hold::Failures(_) | Hold::Stopped | Hold::Writes | Hold::Record)
+            Stands::Held(Hold::Plan { .. } | Hold::Failures(_) | Hold::Stopped | Hold::Writes | Hold::Record)
             | Stands::Live
             | Stands::Claimed
             | Stands::Applying
@@ -942,7 +953,7 @@ impl World {
         }
         if draw >= acts && draw < acts + settings.holds && issue.holds > 0 {
             issue.holds -= 1;
-            return Due::Hold { why: Token::new(1) };
+            return Due::Hold { reason: 1 };
         }
         Due::Run { run: Token::new(self.wire.name()) }
     }
@@ -1002,7 +1013,7 @@ impl World {
         }
         let plan = self.plans.entry(item).or_default();
         plan.progress += 1;
-        if judge.chance(settings.holds) { Applied::Made(Then::Hold(Token::new(2))) } else { Applied::Made(Then::Wait) }
+        if judge.chance(settings.holds) { Applied::Made(Then::Hold { reason: 2 }) } else { Applied::Made(Then::Wait) }
     }
 
     /// The parent makes an engine action's writes, keyed by the actions made
@@ -1130,7 +1141,7 @@ impl World {
             let at = Duration::from_nanos(self.rng.below(took.as_nanos().max(1)));
             self.schedule(self.now.saturating_add(at), Delivery::Drop { worker });
         }
-        self.tell_engine(worker, Event::Running { item, attempt });
+        self.tell_engine(worker, Event::Placed { item, attempt });
     }
 
     /// A worker cancels a run it hosts: it answers as cancelled soon, unless
@@ -1178,7 +1189,7 @@ impl World {
     /// The fleet hears `event` from `worker`, and hands it to the hub.
     fn tell_engine(&mut self, worker: usize, event: Event) {
         match &event {
-            Event::Running { item, attempt } => {
+            Event::Placed { item, attempt } => {
                 self.fleet.assigned.insert((*item, *attempt), worker);
             }
             Event::Answered { item, attempt, .. } => {
@@ -1189,6 +1200,8 @@ impl World {
             | Event::Stop { .. }
             | Event::Release { .. }
             | Event::Inbox { .. }
+            | Event::Undelivered { .. }
+            | Event::Listed { .. }
             | Event::Decided { .. }
             | Event::Written { .. }
             | Event::Recorded { .. }
@@ -1258,13 +1271,25 @@ impl World {
             }
         }
         for (item, attempt) in runs {
-            if self.generation > 0 && !self.fleet.assigned.contains_key(&(item, attempt)) {
+            if self.fleet.adopting.remove(&(item, attempt)) {
                 self.end("adopted");
+            } else if !self.fleet.assigned.contains_key(&(item, attempt)) {
+                // A stray no claim adopts: the fleet cancels it.
+                self.send(worker, item, attempt, Message::Cancel);
+                continue;
             }
-            self.tell_engine(worker, Event::Running { item, attempt });
+            self.tell_engine(worker, Event::Placed { item, attempt });
         }
         for ((item, attempt), answer) in answers {
-            self.answer_engine(worker, item, attempt, answer);
+            let known = self.fleet.adopting.remove(&(item, attempt))
+                || self.fleet.assigned.contains_key(&(item, attempt))
+                || self.fleet.heard.contains_key(&(item, attempt));
+            if known {
+                self.answer_engine(worker, item, attempt, answer);
+            } else {
+                // A stray's answer, fenced: the worker forgets it.
+                self.send(worker, item, attempt, Message::Forget);
+            }
         }
         while let Some((item, attempt)) = self.fleet.queued.pop_front() {
             self.assign(worker, item, attempt);
@@ -1283,6 +1308,15 @@ impl World {
         for (item, attempt) in assigned {
             self.lost(item, attempt);
         }
+    }
+
+    /// The fleet adopts a claim read after a restart: a worker is to say it
+    /// hosts it, or holds its answer, within the grace.
+    fn adopt(&mut self, item: Item, attempt: u64) {
+        self.fleet.adopting.insert((item, attempt));
+        let generation = self.generation;
+        let at = self.now.saturating_add(self.settings.grace);
+        self.schedule(at, Delivery::Adoption { item, attempt, generation });
     }
 
     fn lost(&mut self, item: Item, attempt: u64) {
@@ -1322,7 +1356,7 @@ impl World {
         self.generation += 1;
         self.refused.clear();
         self.observe(Seen::Restarted);
-        let grace = self.settings.limits.grace;
+        let grace = self.settings.grace;
         for worker in 0..self.workers.len() {
             if self.workers[worker].connected {
                 let returns = self.rng.chance(self.settings.returns);
@@ -1472,13 +1506,12 @@ impl World {
 /// engine restarting; each step of it a round of writes on a slow forge. With
 /// room to spare.
 fn end_within(settings: &Settings) -> Duration {
-    let limits = settings.limits;
     let write = settings.latency.max.saturating_mul(2).saturating_add(settings.lateness.max).saturating_mul(4);
     let round = settings
         .run_time
         .max
         .saturating_add(settings.grace.saturating_mul(2))
-        .saturating_add(limits.grace)
+        .saturating_add(settings.grace)
         .saturating_add(settings.wait.max)
         .saturating_add(write.saturating_mul(8));
     let retries = Duration::from_secs(8).saturating_add(round).saturating_mul(12);
@@ -1505,7 +1538,7 @@ fn stands(record: Option<Record>) -> Stands {
         Phase::Waiting | Phase::Parked | Phase::Retrying(_) => Stands::Live,
         Phase::Claimed => Stands::Claimed,
         Phase::Applying { .. } => Stands::Applying,
-        Phase::Held(why) => Stands::Held(why),
+        Phase::Held { why, .. } => Stands::Held(why),
         Phase::Done => Stands::Done,
     }
 }

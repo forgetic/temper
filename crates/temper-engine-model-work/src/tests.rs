@@ -5,8 +5,8 @@ use alloc::boxed::Box;
 use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::{
-    Acted, Answer, Applied, Class, Due, Event, Fact, Failures, Hold, Item, Lifecycle, Limits, MAX_OUT, Model, Phase,
-    Read, Refusal, Request, Retries, Retry, Then, Wrote, fire, step, worst_case,
+    Acted, Answer, Applied, Class, Due, Event, Fact, Failures, Hold, Item, Lifecycle, Limits, Model, Phase, Read,
+    Refusal, Request, Retries, Retry, Then, Wrote, fire, max_out, step, worst_case,
 };
 
 const SECOND: Duration = Duration::from_secs(1);
@@ -16,7 +16,6 @@ const RETRY: Retry = Retry { retries: 2, base: SECOND, max: Duration::from_secs(
 
 const LIMITS: Limits = Limits {
     items: 3,
-    grace: Duration::from_secs(30),
     retries: Retries {
         transient: RETRY,
         permanent: Retry { retries: 0, ..RETRY },
@@ -25,6 +24,7 @@ const LIMITS: Limits = Limits {
         lost: RETRY,
         invalid: Retry { retries: 1, ..RETRY },
     },
+    undelivered: 2,
     facts: 64,
 };
 
@@ -37,7 +37,8 @@ const ACTION: Token = Token::new(200);
 const OUTCOME: Token = Token::new(300);
 const SNAPSHOT: Token = Token::new(400);
 const EVENT: Token = Token::new(500);
-const WHY: Token = Token::new(600);
+/// The plan's reason to hold, as the parent codes it.
+const REASON: u32 = 6;
 
 /// The comment an outcome is posted as.
 const COMMENT: u64 = 42;
@@ -56,7 +57,7 @@ impl Harness {
     }
 
     fn seeded(limits: Limits, seed: u64) -> Harness {
-        let out = Queue::with_capacity(MAX_OUT);
+        let out = Queue::with_capacity(max_out(&limits));
         Harness { model: Model::new(&limits, seed), env: Env { now: Time::ZERO, limits }, out, calls: 0 }
     }
 
@@ -76,12 +77,13 @@ impl Harness {
     }
 
     fn drain(&mut self) -> Box<[Request]> {
-        let mut requests = List::with_capacity(MAX_OUT);
-        for _ in 0..MAX_OUT {
+        let most = max_out(&self.env.limits);
+        let mut requests = List::with_capacity(most);
+        for _ in 0..most {
             let Some(request) = self.out.pop() else { break };
-            requests.push(request).expect("room for MAX_OUT");
+            requests.push(request).expect("room for max_out");
         }
-        assert!(self.out.is_empty(), "a step emits at most MAX_OUT");
+        assert!(self.out.is_empty(), "a step emits at most max_out");
         // The iteration ends: the reclaim point.
         self.model.reclaim();
         requests.into_boxed()
@@ -98,7 +100,7 @@ impl Harness {
     fn take(&mut self, item: Item, read: Read) -> Box<[Request]> {
         let (reply_to, to) = self.reply();
         let asked = self.step(Event::Take { reply_to, item, read });
-        let mut rest = List::with_capacity(MAX_OUT);
+        let mut rest = List::with_capacity(max_out(&self.env.limits));
         let mut taken = false;
         for request in asked {
             if taken {
@@ -154,7 +156,7 @@ impl Harness {
         assert_eq!(written_as(&asked, Phase::Claimed, attempt), owner);
         let asked = self.step(Event::Written { owner, wrote: Wrote::Done });
         assert_eq!(&*asked, [Request::Start { item, attempt, run: RUN }], "the run starts once its claim is written");
-        assert!(self.step(Event::Running { item, attempt }).is_empty());
+        assert!(self.step(Event::Placed { item, attempt }).is_empty());
         (owner, attempt)
     }
 
@@ -192,6 +194,11 @@ fn written_as(asked: &[Request], phase: Phase, attempts: u64) -> Token {
     assert_eq!(lifecycle.phase, phase, "{asked:?}");
     assert_eq!(lifecycle.attempts, attempts, "{asked:?}");
     *owner
+}
+
+/// Held for `why`, keeping no outcome.
+fn held(why: Hold) -> Phase {
+    Phase::Held { why, outcome: None }
 }
 
 fn record(phase: Phase, attempts: u64) -> Read {
@@ -271,12 +278,11 @@ fn an_item_read_retrying_backs_off_again_from_its_failures() {
 }
 
 #[test]
-fn an_item_read_claimed_adopts_its_run_when_a_worker_says_it_still_hosts_it() {
+fn an_item_read_claimed_adopts_its_run_and_arms_no_grace_of_its_own() {
     let mut h = Harness::new(LIMITS);
-    assert!(h.take(ITEM, record(Phase::Claimed, 3)).is_empty(), "it waits for the fleet's word");
-    assert_eq!(h.model.next_deadline(), Some(at(30)), "within the grace");
-    assert!(h.step(Event::Running { item: ITEM, attempt: 3 }).is_empty());
-    assert_eq!(h.model.next_deadline(), None, "the word ends the grace");
+    assert_eq!(&*h.take(ITEM, record(Phase::Claimed, 3)), [Request::Adopt { item: ITEM, attempt: 3 }]);
+    assert_eq!(h.model.next_deadline(), None, "the fleet's grace runs the race");
+    assert!(h.step(Event::Placed { item: ITEM, attempt: 3 }).is_empty());
     // Its answer is the attempt in flight's.
     let answer = Answer::Ended { outcome: OUTCOME };
     let asked = h.step(Event::Answered { item: ITEM, attempt: 3, answer });
@@ -284,9 +290,9 @@ fn an_item_read_claimed_adopts_its_run_when_a_worker_says_it_still_hosts_it() {
 }
 
 #[test]
-fn an_item_read_claimed_takes_the_answer_a_worker_sends_again() {
+fn an_item_read_claimed_takes_the_answer_its_worker_kept() {
     let mut h = Harness::new(LIMITS);
-    assert!(h.take(ITEM, record(Phase::Claimed, 3)).is_empty());
+    assert_eq!(&*h.take(ITEM, record(Phase::Claimed, 3)), [Request::Adopt { item: ITEM, attempt: 3 }]);
     let asked = h.step(Event::Answered { item: ITEM, attempt: 3, answer: Answer::Parked { snapshot: None } });
     let [Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
     assert_eq!(lifecycle.phase, Phase::Parked);
@@ -295,11 +301,9 @@ fn an_item_read_claimed_takes_the_answer_a_worker_sends_again() {
 #[test]
 fn an_item_read_claimed_whose_worker_never_comes_back_is_retried_with_the_next_attempt() {
     let mut h = Harness::new(LIMITS);
-    assert!(h.take(ITEM, record(Phase::Claimed, 3)).is_empty());
-    let asked = h.fire_at(at(30));
-    let [Request::Cancel { item: ITEM, attempt: 3 }, Request::Write { owner, lifecycle, .. }] = &*asked else {
-        panic!("the attempt is cancelled, and presumed lost: {asked:?}")
-    };
+    assert_eq!(&*h.take(ITEM, record(Phase::Claimed, 3)), [Request::Adopt { item: ITEM, attempt: 3 }]);
+    let asked = h.step(Event::Answered { item: ITEM, attempt: 3, answer: Answer::Lost });
+    let [Request::Write { owner, lifecycle, .. }] = &*asked else { panic!("presumed lost: {asked:?}") };
     assert_eq!(lifecycle.phase, Phase::Retrying(Class::Lost));
     assert_eq!(lifecycle.failures.lost, 1);
     let owner = *owner;
@@ -308,8 +312,9 @@ fn an_item_read_claimed_whose_worker_never_comes_back_is_retried_with_the_next_a
     let asked = h.fire_at(until);
     assert_eq!(&*asked, [Request::Due { owner, item: ITEM }]);
     h.claim(owner, ITEM, 4);
-    // The lost attempt comes back: cancelled, and its answer dropped.
-    assert_eq!(&*h.step(Event::Running { item: ITEM, attempt: 3 }), [Request::Cancel { item: ITEM, attempt: 3 }]);
+    // The lost attempt is the fleet's to fence: anything of it that reaches
+    // the hub is stale.
+    assert!(h.step(Event::Placed { item: ITEM, attempt: 3 }).is_empty());
     let late = Event::Answered { item: ITEM, attempt: 3, answer: Answer::Failed(Class::Transient) };
     assert_eq!(&*h.step(late), [Request::Stale { item: ITEM, attempt: 3 }]);
 }
@@ -332,7 +337,7 @@ fn an_item_read_applying_applies_its_outcome_again() {
 fn an_item_read_held_waits_for_a_person() {
     let mut h = Harness::new(LIMITS);
     let why = Hold::Failures(Class::Agent);
-    assert!(h.take(ITEM, record(Phase::Held(why), 5)).is_empty());
+    assert!(h.take(ITEM, record(held(why), 5)).is_empty());
     let wake = Event::Inbox { item: ITEM, event: EVENT, wake: Some(Time::ZERO) };
     assert!(h.step(wake).is_empty(), "a held item is not due");
     assert_eq!(h.model.next_deadline(), None);
@@ -352,10 +357,10 @@ fn a_mangled_record_holds_the_item_and_its_attempts_follow_the_fleet() {
     let mut h = Harness::new(LIMITS);
     assert!(h.take(ITEM, Read::Mangled { attempts: 4 }).is_empty());
     // An attempt below the outcomes' is not counted.
-    assert_eq!(&*h.step(Event::Running { item: ITEM, attempt: 2 }), [Request::Cancel { item: ITEM, attempt: 2 }]);
-    // A worker still hosts an attempt of it: cancelled, since none is in
-    // flight, and counted.
-    assert_eq!(&*h.step(Event::Running { item: ITEM, attempt: 6 }), [Request::Cancel { item: ITEM, attempt: 6 }]);
+    assert!(h.step(Event::Listed { item: ITEM, attempt: 2 }).is_empty());
+    // A worker still holds an attempt of it, which no claim adopted:
+    // counted.
+    assert!(h.step(Event::Listed { item: ITEM, attempt: 6 }).is_empty());
     let asked = h.release(ITEM);
     let [Request::Released { .. }, Request::Write { owner, lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
     assert_eq!(lifecycle.attempts, 6);
@@ -399,8 +404,8 @@ fn a_wake_while_asking_is_kept_for_after_the_answer() {
 fn a_hold_the_plan_decides_is_written_then_held() {
     let mut h = Harness::new(LIMITS);
     let owner = h.waiting(ITEM);
-    let asked = h.step(Event::Decided { owner, due: Due::Hold { why: WHY } });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Plan(WHY)), 0), owner);
+    let asked = h.step(Event::Decided { owner, due: Due::Hold { reason: REASON } });
+    assert_eq!(written_as(&asked, held(Hold::Plan { reason: REASON }), 0), owner);
     assert!(h.step(Event::Written { owner, wrote: Wrote::Done }).is_empty());
     assert_eq!(&*h.stop(ITEM), [Request::Refused { to: ReplyTo::new(Token::new(h.calls)), refusal: Refusal::Idle }]);
 }
@@ -452,7 +457,7 @@ fn an_outcome_is_recorded_then_applied_and_the_record_s_update_is_the_commit_poi
         [
             Fact::Taken { item: ITEM },
             Fact::Claimed { item: ITEM, attempt: 1 },
-            Fact::Running { item: ITEM, attempt: 1 },
+            Fact::Placed { item: ITEM, attempt: 1 },
             Fact::Ended { item: ITEM, attempt: 1 },
             Fact::Applied { item: ITEM },
         ]
@@ -464,8 +469,8 @@ fn an_outcome_that_holds_its_item_is_committed_held() {
     let mut h = Harness::new(LIMITS);
     let (owner, attempt) = h.running(ITEM);
     h.ended(owner, ITEM, attempt);
-    let asked = h.step(Event::Applied { owner, applied: Applied::Made(Then::Hold(WHY)) });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Plan(WHY)), 1), owner);
+    let asked = h.step(Event::Applied { owner, applied: Applied::Made(Then::Hold { reason: REASON }) });
+    assert_eq!(written_as(&asked, held(Hold::Plan { reason: REASON }), 1), owner);
     assert!(h.step(Event::Written { owner, wrote: Wrote::Done }).is_empty());
 }
 
@@ -493,7 +498,7 @@ fn an_invalid_outcome_fails_its_run() {
     h.ended(owner, ITEM, 2);
     // One retry is all an invalid outcome gets.
     let asked = h.step(Event::Applied { owner, applied: Applied::Invalid });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Failures(Class::Invalid)), 2), owner);
+    assert_eq!(written_as(&asked, held(Hold::Failures(Class::Invalid)), 2), owner);
 }
 
 #[test]
@@ -502,8 +507,8 @@ fn an_outcome_awaiting_acceptance_is_applied_again_once_released() {
     let (owner, attempt) = h.running(ITEM);
     h.ended(owner, ITEM, attempt);
     let asked = h.step(Event::Applied { owner, applied: Applied::Accepting });
-    let why = Hold::Acceptance { outcome: Some(COMMENT) };
-    assert_eq!(written_as(&asked, Phase::Held(why), 1), owner);
+    let phase = Phase::Held { why: Hold::Acceptance, outcome: Some(COMMENT) };
+    assert_eq!(written_as(&asked, phase, 1), owner);
     assert!(h.step(Event::Written { owner, wrote: Wrote::Done }).is_empty());
     let asked = h.release(ITEM);
     let [Request::Released { .. }, Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
@@ -520,13 +525,23 @@ fn an_outcome_whose_writes_fail_or_cannot_be_posted_holds_its_item() {
     let (owner, attempt) = h.running(ITEM);
     h.ended(owner, ITEM, attempt);
     let asked = h.step(Event::Applied { owner, applied: Applied::Failed });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Writes), 1), owner);
+    let phase = Phase::Held { why: Hold::Writes, outcome: Some(COMMENT) };
+    assert_eq!(written_as(&asked, phase, 1), owner, "the outcome is kept, its writes not all made");
+    h.step(Event::Written { owner, wrote: Wrote::Done });
+    // Released, it is applied again: what was made is found.
+    let asked = h.release(ITEM);
+    let [Request::Released { .. }, Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
+    assert_eq!(lifecycle.phase, Phase::Applying { outcome: COMMENT });
+    assert_eq!(
+        &*h.step(Event::Written { owner, wrote: Wrote::Done }),
+        [Request::Apply { owner, item: ITEM, attempt: 1, outcome: COMMENT }]
+    );
 
     let mut h = Harness::new(LIMITS);
     let (owner, attempt) = h.running(ITEM);
     h.step(Event::Answered { item: ITEM, attempt, answer: Answer::Ended { outcome: OUTCOME } });
     let asked = h.step(Event::Recorded { owner, comment: None });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Writes), 1), owner);
+    assert_eq!(written_as(&asked, held(Hold::Writes), 1), owner, "nothing posted, nothing kept");
     assert_eq!(&*h.step(Event::Written { owner, wrote: Wrote::Done }), [Request::Acknowledge { item: ITEM, attempt }]);
 }
 
@@ -542,6 +557,22 @@ fn a_record_that_cannot_be_written_holds_the_item_and_still_frees_the_worker() {
     );
     let held = Fact::Held { item: ITEM, why: Hold::Record };
     assert!(h.facts().contains(&held));
+    // The hold keeps the outcome: released, it is applied.
+    let asked = h.release(ITEM);
+    let [Request::Released { .. }, Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
+    assert_eq!(lifecycle.phase, Phase::Applying { outcome: COMMENT });
+}
+
+#[test]
+fn a_commit_that_cannot_be_written_holds_the_outcome_to_apply_again() {
+    let mut h = Harness::new(LIMITS);
+    let (owner, attempt) = h.running(ITEM);
+    h.ended(owner, ITEM, attempt);
+    h.step(Event::Applied { owner, applied: Applied::Made(Then::Wait) });
+    assert!(h.step(Event::Written { owner, wrote: Wrote::Failed }).is_empty());
+    let asked = h.release(ITEM);
+    let [Request::Released { .. }, Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
+    assert_eq!(lifecycle.phase, Phase::Applying { outcome: COMMENT }, "its writes are found, then committed");
 }
 
 #[test]
@@ -594,7 +625,7 @@ fn every_failure_class_is_retried_as_often_as_it_allows_then_held() {
         }
         let attempt = u64::from(retries) + 1;
         let asked = h.step(Event::Answered { item: ITEM, attempt, answer: failure(class) });
-        assert_eq!(written_as(&asked, Phase::Held(Hold::Failures(class)), attempt), owner, "{class:?}");
+        assert_eq!(written_as(&asked, held(Hold::Failures(class)), attempt), owner, "{class:?}");
         h.step(Event::Written { owner, wrote: Wrote::Done });
         assert_eq!(h.model.next_deadline(), None, "a held item is never due");
         // A release forgives them.
@@ -683,7 +714,7 @@ fn an_engine_action_awaiting_acceptance_or_failing_holds_its_item() {
     let owner = h.waiting(ITEM);
     h.step(Event::Decided { owner, due: Due::Act { action: ACTION } });
     let asked = h.step(Event::Acted { owner, acted: Acted::Accepting });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Acceptance { outcome: None }), 0), owner);
+    assert_eq!(written_as(&asked, held(Hold::Acceptance), 0), owner);
     h.step(Event::Written { owner, wrote: Wrote::Done });
     // Released, it asks what is due: the action is decided again.
     let asked = h.release(ITEM);
@@ -692,7 +723,7 @@ fn an_engine_action_awaiting_acceptance_or_failing_holds_its_item() {
     assert_eq!(&*h.step(Event::Written { owner, wrote: Wrote::Done }), [Request::Due { owner, item: ITEM }]);
     h.step(Event::Decided { owner, due: Due::Done { action: ACTION } });
     let asked = h.step(Event::Acted { owner, acted: Acted::Failed });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Writes), 0), owner);
+    assert_eq!(written_as(&asked, held(Hold::Writes), 0), owner);
 }
 
 // People.
@@ -707,7 +738,7 @@ fn a_stop_cancels_the_run_once_and_holds_the_item_when_it_answers() {
     let [Request::Stopped { .. }] = &*asked else { panic!("cancelled once: {asked:?}") };
     assert!(h.step(Event::Inbox { item: ITEM, event: EVENT, wake: None }).is_empty(), "no relay to a stopped run");
     let asked = h.step(Event::Answered { item: ITEM, attempt, answer: Answer::Failed(Class::Run) });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Stopped), 1), owner);
+    assert_eq!(written_as(&asked, held(Hold::Stopped), 1), owner);
     assert_eq!(&*h.step(Event::Written { owner, wrote: Wrote::Done }), [Request::Acknowledge { item: ITEM, attempt }]);
 }
 
@@ -719,7 +750,7 @@ fn a_stop_while_the_claim_is_written_starts_nothing() {
     let asked = h.stop(ITEM);
     let [Request::Stopped { .. }] = &*asked else { panic!("{asked:?}") };
     let asked = h.step(Event::Written { owner, wrote: Wrote::Done });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Stopped), 1), owner);
+    assert_eq!(written_as(&asked, held(Hold::Stopped), 1), owner);
 }
 
 #[test]
@@ -745,7 +776,7 @@ fn a_run_s_outcome_crossing_a_cancel_is_still_applied_then_the_item_is_held() {
     h.stop(ITEM);
     h.ended(owner, ITEM, attempt);
     let asked = h.step(Event::Applied { owner, applied: Applied::Made(Then::Wait) });
-    assert_eq!(written_as(&asked, Phase::Held(Hold::Stopped), 1), owner);
+    assert_eq!(written_as(&asked, held(Hold::Stopped), 1), owner);
 }
 
 #[test]
@@ -755,7 +786,7 @@ fn a_parked_run_crossing_a_cancel_keeps_its_snapshot_and_is_held() {
     h.stop(ITEM);
     let asked = h.step(Event::Answered { item: ITEM, attempt, answer: Answer::Parked { snapshot: Some(SNAPSHOT) } });
     let [Request::Keep { .. }, Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
-    assert_eq!(lifecycle.phase, Phase::Held(Hold::Stopped));
+    assert_eq!(lifecycle.phase, held(Hold::Stopped));
 }
 
 #[test]
@@ -785,13 +816,22 @@ fn a_stale_answer_after_a_retry_is_dropped_and_the_retry_s_is_taken() {
     h.ended(owner, ITEM, 2);
 }
 
+/// The item's attempt `attempt` ended with an outcome.
+fn outcome_of(attempt: u64) -> Event {
+    Event::Answered { item: ITEM, attempt, answer: Answer::Ended { outcome: OUTCOME } }
+}
+
 #[test]
-fn an_answer_sent_again_while_the_first_is_recorded_is_dropped() {
+fn a_copy_of_an_answer_being_made_durable_is_never_stale() {
     let mut h = Harness::new(LIMITS);
-    let (_, attempt) = h.running(ITEM);
-    h.step(Event::Answered { item: ITEM, attempt, answer: Answer::Ended { outcome: OUTCOME } });
-    let again = Event::Answered { item: ITEM, attempt, answer: Answer::Ended { outcome: OUTCOME } };
-    assert_eq!(&*h.step(again), [Request::Stale { item: ITEM, attempt }]);
+    let (owner, attempt) = h.running(ITEM);
+    h.step(outcome_of(attempt));
+    assert!(h.step(outcome_of(attempt)).is_empty(), "posting it: its worker keeps it");
+    h.step(Event::Recorded { owner, comment: Some(COMMENT) });
+    assert!(h.step(outcome_of(attempt)).is_empty(), "writing that it applies: its worker keeps it");
+    h.step(Event::Written { owner, wrote: Wrote::Done });
+    let asked = h.step(outcome_of(attempt));
+    assert_eq!(&*asked, [Request::Stale { item: ITEM, attempt }], "on the forge: forgotten");
 }
 
 #[test]
@@ -799,19 +839,105 @@ fn answers_and_runs_of_items_not_taken_in_are_the_parent_s() {
     let mut h = Harness::new(LIMITS);
     let answer = Event::Answered { item: ITEM, attempt: 1, answer: Answer::Failed(Class::Run) };
     assert_eq!(&*h.step(answer), [Request::Stale { item: ITEM, attempt: 1 }]);
-    assert!(h.step(Event::Running { item: ITEM, attempt: 1 }).is_empty());
+    assert!(h.step(Event::Placed { item: ITEM, attempt: 1 }).is_empty());
+    assert!(h.step(Event::Undelivered { item: ITEM, attempt: 1, event: EVENT }).is_empty());
+    assert!(h.step(Event::Listed { item: ITEM, attempt: 1 }).is_empty());
     assert!(h.step(Event::Inbox { item: ITEM, event: EVENT, wake: Some(Time::ZERO) }).is_empty());
 }
 
 #[test]
-fn a_stopped_run_presumed_lost_holds_its_item() {
+fn a_stopped_adopted_run_is_cancelled_once_and_held_once_lost() {
     let mut h = Harness::new(LIMITS);
-    assert!(h.take(ITEM, record(Phase::Claimed, 2)).is_empty());
+    assert_eq!(&*h.take(ITEM, record(Phase::Claimed, 2)), [Request::Adopt { item: ITEM, attempt: 2 }]);
     let asked = h.stop(ITEM);
     let [Request::Stopped { .. }, Request::Cancel { attempt: 2, .. }] = &*asked else { panic!("{asked:?}") };
-    let asked = h.fire_at(at(30));
-    let [Request::Cancel { attempt: 2, .. }, Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
-    assert_eq!(lifecycle.phase, Phase::Held(Hold::Stopped));
+    let asked = h.stop(ITEM);
+    let [Request::Stopped { .. }] = &*asked else { panic!("cancelled once: {asked:?}") };
+    let asked = h.step(Event::Answered { item: ITEM, attempt: 2, answer: Answer::Lost });
+    let [Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
+    assert_eq!(lifecycle.phase, held(Hold::Stopped));
+}
+
+// Refusals and undelivered events.
+
+#[test]
+fn a_run_refused_before_anything_ran_counts_no_failure_and_is_claimed_again_after_a_pause() {
+    let mut h = Harness::new(LIMITS);
+    let owner = h.waiting(ITEM);
+    let mut ceiling = RETRY.base;
+    for attempt in 1..=4 {
+        h.step(Event::Decided { owner, due: Due::Run { run: RUN } });
+        h.step(Event::Written { owner, wrote: Wrote::Done });
+        h.env.now = at(attempt * 100);
+        let asked = h.step(Event::Answered { item: ITEM, attempt, answer: Answer::Refused });
+        let [Request::Write { lifecycle, .. }] = &*asked else { panic!("{asked:?}") };
+        assert_eq!(*lifecycle, Lifecycle { phase: Phase::Waiting, attempts: attempt, failures: Failures::NONE });
+        assert!(h.step(Event::Written { owner, wrote: Wrote::Done }).is_empty(), "nothing to acknowledge");
+        let until = h.model.next_deadline().expect("it pauses");
+        let wait = until.saturating_since(h.env.now);
+        let half = Duration::from_nanos(ceiling.as_nanos() / 2);
+        assert!(wait >= half && wait <= ceiling, "refusal {attempt}: {wait:?} within {half:?}..={ceiling:?}");
+        ceiling = ceiling.saturating_mul(2).min(RETRY.max);
+        assert_eq!(&*h.fire_at(until), [Request::Due { owner, item: ITEM }]);
+    }
+    // Once a run is placed, the next refusal pauses as the first did.
+    h.claim(owner, ITEM, 5);
+    h.env.now = at(1000);
+    h.step(Event::Answered { item: ITEM, attempt: 5, answer: Answer::Refused });
+    h.step(Event::Written { owner, wrote: Wrote::Done });
+    let wait = h.model.next_deadline().unwrap().saturating_since(h.env.now);
+    assert!(wait <= RETRY.base, "{wait:?}");
+}
+
+#[test]
+fn a_refused_run_a_person_stopped_is_held() {
+    let mut h = Harness::new(LIMITS);
+    let owner = h.waiting(ITEM);
+    h.step(Event::Decided { owner, due: Due::Run { run: RUN } });
+    h.step(Event::Written { owner, wrote: Wrote::Done });
+    h.stop(ITEM);
+    // Cancelled before a worker took it: nothing ran.
+    let asked = h.step(Event::Answered { item: ITEM, attempt: 1, answer: Answer::Refused });
+    assert_eq!(written_as(&asked, held(Hold::Stopped), 1), owner);
+}
+
+#[test]
+fn inbound_events_not_delivered_yet_are_kept_and_relayed_again_once_placed() {
+    let mut h = Harness::new(LIMITS);
+    let owner = h.waiting(ITEM);
+    h.step(Event::Decided { owner, due: Due::Run { run: RUN } });
+    h.step(Event::Written { owner, wrote: Wrote::Done });
+    let first = Token::new(501);
+    let second = Token::new(502);
+    for event in [first, second, Token::new(503)] {
+        let relayed = h.step(Event::Inbox { item: ITEM, event, wake: None });
+        assert_eq!(&*relayed, [Request::Relay { item: ITEM, attempt: 1, event }]);
+        assert!(h.step(Event::Undelivered { item: ITEM, attempt: 1, event }).is_empty());
+    }
+    // As many as the limits keep, in the order they came; the rest stays in
+    // the inbox.
+    assert_eq!(
+        &*h.step(Event::Placed { item: ITEM, attempt: 1 }),
+        [
+            Request::Relay { item: ITEM, attempt: 1, event: first },
+            Request::Relay { item: ITEM, attempt: 1, event: second },
+        ]
+    );
+    assert!(h.step(Event::Placed { item: ITEM, attempt: 1 }).is_empty(), "relayed once");
+    // Kept again while its worker is out of contact; gone with the run.
+    h.step(Event::Undelivered { item: ITEM, attempt: 1, event: first });
+    h.step(Event::Answered { item: ITEM, attempt: 1, answer: Answer::Failed(Class::Run) });
+    h.step(Event::Written { owner, wrote: Wrote::Done });
+    let until = h.model.next_deadline().unwrap();
+    h.fire_at(until);
+    h.step(Event::Decided { owner, due: Due::Run { run: RUN } });
+    h.step(Event::Written { owner, wrote: Wrote::Done });
+    assert!(h.step(Event::Placed { item: ITEM, attempt: 2 }).is_empty(), "the next run has its own");
+    // An event for an attempt not in flight, or a stopped one, is not kept.
+    h.step(Event::Undelivered { item: ITEM, attempt: 1, event: first });
+    h.stop(ITEM);
+    h.step(Event::Undelivered { item: ITEM, attempt: 2, event: second });
+    assert!(h.step(Event::Placed { item: ITEM, attempt: 2 }).is_empty());
 }
 
 // Bounds.

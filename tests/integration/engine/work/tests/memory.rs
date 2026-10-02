@@ -16,7 +16,7 @@ const RETRY: Retry = Retry { retries: 1, base: Duration::from_secs(1), max: Dura
 
 const LIMITS: Limits = Limits {
     items: 8,
-    grace: Duration::from_secs(30),
+    undelivered: 2,
     retries: Retries { transient: RETRY, permanent: RETRY, run: RETRY, agent: RETRY, lost: RETRY, invalid: RETRY },
     facts: 16,
 };
@@ -107,6 +107,7 @@ impl Measured {
                 | Request::Apply { .. }
                 | Request::Act { .. }
                 | Request::Start { .. }
+                | Request::Adopt { .. }
                 | Request::Cancel { .. }
                 | Request::Relay { .. }
                 | Request::Keep { .. }
@@ -144,6 +145,7 @@ fn owner(asked: &Asked) -> Token {
             | Request::Released { .. }
             | Request::Refused { .. }
             | Request::Start { .. }
+            | Request::Adopt { .. }
             | Request::Cancel { .. }
             | Request::Relay { .. }
             | Request::Keep { .. }
@@ -190,7 +192,7 @@ fn paths(limits: Limits) {
     hub.take(item(2), read(Phase::Retrying(Class::Run)));
     hub.take(item(3), read(Phase::Claimed));
     let applying = hub.take(item(4), read(Phase::Applying { outcome: 9 }));
-    hub.take(item(5), read(Phase::Held(Hold::Stopped)));
+    hub.take(item(5), read(Phase::Held { why: Hold::Stopped, outcome: None }));
     hub.take(item(6), Read::Mangled { attempts: 3 });
     // The one waiting runs: claimed, started, relayed to, answered with an
     // outcome, which is recorded and applied; then it waits for acceptance,
@@ -199,7 +201,7 @@ fn paths(limits: Limits) {
     let asked = hub.step(Event::Decided { owner, due: Due::Run { run: Token::new(1) } });
     let asked = hub.written(asked);
     assert!(matches!(asked, [Some(Request::Start { .. }), None, None, None]), "{asked:?}");
-    hub.step(Event::Running { item: the, attempt: 2 });
+    hub.step(Event::Placed { item: the, attempt: 2 });
     hub.step(Event::Inbox { item: the, event: Token::new(2), wake: None });
     let answer = Answer::Ended { outcome: Token::new(3) };
     hub.step(Event::Answered { item: the, attempt: 2, answer });
@@ -234,10 +236,13 @@ fn paths(limits: Limits) {
         let asked = hub.step(Event::Answered { item: item(2), attempt: 2, answer });
         hub.written(asked);
     }
-    // The claimed one: stopped, then presumed lost past its grace, and held.
+    // The claimed one, adopted: inbound events kept until it is placed;
+    // stopped, then presumed lost by the fleet, and held.
+    hub.step(Event::Undelivered { item: item(3), attempt: 1, event: Token::new(9) });
+    hub.step(Event::Placed { item: item(3), attempt: 1 });
     let reply_to = hub.reply();
     hub.step(Event::Stop { reply_to, item: item(3) });
-    let asked = hub.fire(at(30));
+    let asked = hub.step(Event::Answered { item: item(3), attempt: 1, answer: Answer::Lost });
     hub.written(asked);
     assert_eq!(hub.model.items(), 6, "the done one left");
 }

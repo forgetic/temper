@@ -19,22 +19,29 @@
 //!   at most one of them in flight at a time, so the writes of an item are
 //!   serialised.
 //! - Runs, named as the fleet names them: by their item and attempt
-//!   (engine-model.md, 4.2 and 8). A [`Request::Start`] is ended by exactly one
-//!   [`Event::Answered`] for its attempt, after an [`Event::Running`] once a
-//!   worker has taken it, unless it is lost first. Answers also come for
-//!   attempts this process never started (a worker reconnecting after the
-//!   engine restarted, an answer sent again): the hub takes the answer of the
-//!   attempt in flight, and says of every other one that it is
-//!   [`Request::Stale`]. It cancels an attempt a worker runs that is not the
-//!   one in flight. [`Request::Cancel`], [`Request::Relay`],
-//!   [`Request::Keep`], [`Request::Acknowledge`], [`Request::Stale`] and
-//!   [`Request::Left`] are notices.
+//!   (engine-model.md, 4.2 and 8). A [`Request::Start`] (a claim of this
+//!   process) or [`Request::Adopt`] (a claim read after a restart) is ended
+//!   by exactly one [`Event::Answered`] for its attempt, which the fleet
+//!   hands on without acknowledging; [`Event::Placed`] says before that the
+//!   attempt is on a worker, assigned or found there. The fleet runs every
+//!   race on a run (its grace, a cancel crossing an answer), and the hub has
+//!   no timer on one. The hub acknowledges the answer
+//!   ([`Request::Acknowledge`]) only once it is on the forge, and never says
+//!   of an answer it is still making durable that it is stale; an answer it
+//!   cannot take is [`Request::Stale`], which the fleet acknowledges just
+//!   the same. An inbound event the fleet could not deliver yet comes back
+//!   ([`Event::Undelivered`]), and the hub relays it again once the attempt
+//!   is placed. [`Event::Listed`] names an attempt a worker holds that no
+//!   claim adopted. [`Request::Cancel`] (sent once per attempt),
+//!   [`Request::Relay`], [`Request::Keep`], [`Request::Acknowledge`],
+//!   [`Request::Stale`] and [`Request::Left`] are notices.
 //!
 //! What the hub passes on without reading (the spec of a run that is due, the
-//! writes of an engine action, a run's outcome and snapshot, an inbox event,
-//! the plan's reason to hold an item) is named by tokens its parent issues,
-//! and echoed. What it decides on is typed: phases, attempts, failure classes,
-//! deadlines.
+//! writes of an engine action, a run's outcome and snapshot, an inbox event)
+//! is named by tokens its parent issues, and echoed. What it decides on, and
+//! what it writes into a record, is typed: phases, attempts, failure classes,
+//! hold reasons, deadlines; never a token, which means nothing after a
+//! restart.
 
 use temper_lib::{ReplyTo, Time, Token};
 
@@ -42,25 +49,39 @@ use temper_lib::{ReplyTo, Time, Token};
 #[derive(PartialEq, Eq, Debug)]
 pub enum Event {
     /// A call: take `item` in (engine-model.md, 4.6), from what its record
-    /// said as it was read, at a start or later.
+    /// said as it was read, at a start or later. After a restart, the parent
+    /// takes in first the items read claimed or applying, whose runs and
+    /// applications are under way.
     Take { reply_to: ReplyTo, item: Item, read: Read },
     /// A call, from a person: stop the item's run. A run whose claim is being
     /// written is not started; one in flight is cancelled. Either way the
     /// item is held once the run has answered.
     Stop { reply_to: ReplyTo, item: Item },
     /// A call, from a person: release the held item. It is due again; an
-    /// outcome held for a person's acceptance is applied again, and the
-    /// person's decision, on the forge by then, is read with it.
+    /// outcome it holds, posted and not wholly applied, is applied again (the
+    /// writes made already are found, and a person's decision, on the forge
+    /// by then, is read with it).
     Release { reply_to: ReplyTo, item: Item },
     /// From the forge, through the parent: an inbox event (4.3), which the
     /// parent names `event`. It is relayed to the item's run if one is in
     /// flight. Otherwise it wakes the item at `wake`, as its step's wake rule
     /// says (5.4): now or at a later time, or, if `None`, not by itself.
     Inbox { item: Item, event: Token, wake: Option<Time> },
-    /// From the fleet: the attempt runs on a worker, which took it, or which
-    /// says on reconnecting that it still hosts it.
-    Running { item: Item, attempt: u64 },
-    /// From the fleet: the attempt's answer. Terminal for `Start`.
+    /// From the fleet: the attempt is on a worker, assigned to it, or found
+    /// there after a restart. Inbound events that came back undelivered are
+    /// relayed to it again.
+    Placed { item: Item, attempt: u64 },
+    /// From the fleet: the inbound event the parent named `event` reached no
+    /// worker yet (the attempt waits to be placed, or its worker is out of
+    /// contact). The hub keeps it, as many as its limits allow, and relays it
+    /// again once the attempt is placed; past them, and once the run is gone,
+    /// it stays in the item's inbox, for the next run.
+    Undelivered { item: Item, attempt: u64, event: Token },
+    /// From the fleet: a worker holds the attempt, which no claim adopted. An
+    /// item whose record did not decode counts its attempts past it.
+    Listed { item: Item, attempt: u64 },
+    /// From the fleet: the attempt's answer, handed on and not acknowledged.
+    /// Terminal for `Start` and `Adopt`.
     Answered { item: Item, attempt: u64, answer: Answer },
     /// Terminal for `Due`: what the plan says is due for the item now.
     Decided { owner: Token, due: Due },
@@ -110,8 +131,12 @@ pub enum Request {
     /// named `run` as it was decided, its charter rendered now. The claim
     /// naming the attempt is written.
     Start { item: Item, attempt: u64, run: Token },
-    /// To the fleet: cancel the item's attempt `attempt`. If it was started,
-    /// its answer still comes.
+    /// To the fleet: adopt the item's attempt `attempt`, which its record
+    /// claims, read after a restart. A worker is to say it hosts it, or holds
+    /// its answer, within the fleet's grace, or it is presumed lost.
+    Adopt { item: Item, attempt: u64 },
+    /// To the fleet: cancel the item's attempt `attempt`, once. Its answer
+    /// still comes.
     Cancel { item: Item, attempt: u64 },
     /// To the fleet: the inbox event the parent named `event`, for the item's
     /// attempt `attempt`.
@@ -123,9 +148,8 @@ pub enum Request {
     /// forge, and its worker may forget it.
     Acknowledge { item: Item, attempt: u64 },
     /// To the fleet: an answer of the item's attempt `attempt`, which is not
-    /// the attempt in flight (it was replaced, presumed lost, or answered
-    /// already), is dropped. Its worker may forget it, and what the parent
-    /// keeps of it goes.
+    /// the attempt in flight nor one being made durable, is dropped. Its
+    /// worker may forget it, and what the parent keeps of it goes.
     Stale { item: Item, attempt: u64 },
     /// The item is done, its record says so, and the hub no longer tracks it.
     Left { item: Item },
@@ -187,8 +211,10 @@ pub enum Phase {
     /// The outcome of the claimed attempt, posted as the comment `outcome`, is
     /// being applied: a restart resumes it.
     Applying { outcome: u64 },
-    /// Held for a person, and why.
-    Held(Hold),
+    /// Held for a person, and why; with the outcome, posted as the comment
+    /// `outcome`, that is not wholly applied yet, which a release applies
+    /// again.
+    Held { why: Hold, outcome: Option<u64> },
     /// Its step is done, and the item closed.
     Done,
 }
@@ -196,16 +222,16 @@ pub enum Phase {
 /// Why an item is held for a person. A release puts it back to due.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Hold {
-    /// Its plan holds it, for a reason the parent names: one it can read back
-    /// from the record.
-    Plan(Token),
+    /// Its plan holds it, for the plan's reason, which the parent codes as
+    /// `reason`, a code that means the same after a restart.
+    Plan { reason: u32 },
     /// Its runs failed in this class more often than the class allows.
     Failures(Class),
     /// A person stopped its run.
     Stopped,
     /// The rules want a person's acceptance before the writes are made: of the
-    /// outcome posted as this comment, or of the engine action due if `None`.
-    Acceptance { outcome: Option<u64> },
+    /// outcome the hold keeps, or of the engine action due if it keeps none.
+    Acceptance,
     /// A write its outcome or action needed failed for good.
     Writes,
     /// Its record does not decode, or could not be written.
@@ -290,9 +316,15 @@ pub enum Answer {
     Parked { snapshot: Option<Token> },
     /// It failed, in `class`.
     Failed(Class),
-    /// Its worker was gone past the grace, and the run is presumed lost. No
-    /// worker answered, so there is nothing to acknowledge.
+    /// Its worker was gone past the grace, or no worker said it hosts the
+    /// attempt adopted, and the run is presumed lost. No worker answered, so
+    /// there is nothing to acknowledge.
     Lost,
+    /// Nothing ran: the fleet refused the attempt at its entrance, or it was
+    /// cancelled before a worker took it. Not a failure: the item claims
+    /// again after a backoff, unless a person stopped it. Nothing to
+    /// acknowledge.
+    Refused,
 }
 
 /// What is due for an item now (engine-model.md, 5.3), as the plan says.
@@ -310,8 +342,8 @@ pub enum Due {
     /// `action`, are made as an engine action's, and the record says done.
     Done { action: Token },
     /// Hold the item for a person, for the plan's reason, which the parent
-    /// names `why`.
-    Hold { why: Token },
+    /// codes as `reason`.
+    Hold { reason: u32 },
 }
 
 /// How a write of the record went. The forge sub-model retries what fails
@@ -345,8 +377,9 @@ pub enum Applied {
 pub enum Then {
     /// It waits for what is due next.
     Wait,
-    /// It is held for a person, for the plan's reason, which the parent names.
-    Hold(Token),
+    /// It is held for a person, for the plan's reason, which the parent codes
+    /// as `reason`.
+    Hold { reason: u32 },
 }
 
 /// What making an engine action's writes came to.
