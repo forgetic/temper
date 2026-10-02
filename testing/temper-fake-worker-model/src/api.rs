@@ -112,6 +112,8 @@ pub enum Reason {
     Unfinished,
     /// The worker cancelled it.
     Cancelled,
+    /// The branch moved since the run started: its change cannot land.
+    Stale,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

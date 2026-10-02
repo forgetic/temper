@@ -145,7 +145,8 @@ pub enum Returned {
     Rejected { problems: Problems },
     /// The checks of the repository `repository` failed, as `ran` says.
     ChecksFailed { repository: Box<[u8]>, ran: Ran },
-    /// The change was not pushed: its branch moved since the run started.
+    /// The change was not pushed: its branch moved since the run started, and
+    /// the run ends.
     Moved,
     /// The change was not pushed: the push failed.
     Unpushed,
@@ -225,14 +226,18 @@ pub struct Place {
     pub path: Box<[u8]>,
 }
 
-/// What a `Read` found.
+/// What a `Read` found. A file is read as text: io checks that it is UTF-8,
+/// so the model never parses, and cuts it at a character boundary, so what
+/// the run passes on to an LLM is text too.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Read {
-    /// The file's first bytes, at most as many as asked for; `whole` when
-    /// they are all of it.
-    Bytes { bytes: Box<[u8]>, whole: bool },
+    /// The file's first characters, in at most as many bytes as asked for,
+    /// cut where a character ends; `whole` when they are all of it.
+    Text { text: Box<[u8]>, whole: bool },
     /// Nothing is there, or not a regular file.
     Missing,
+    /// The file is not UTF-8 text.
+    NotText,
     /// io failed, or the deadline passed first.
     Failed,
 }
@@ -370,6 +375,10 @@ pub enum Failure {
     Policy(Policy),
     /// The worker cancelled the run.
     Cancelled,
+    /// The branch the change is pushed to moved since the run started: no
+    /// change this run makes can land, and the engine plans again from what
+    /// the forge holds now.
+    Stale,
 }
 
 /// The run's rules, as the LLM broke them.

@@ -12,8 +12,10 @@
 //! turn, has ended. The run asserts as much when a finish comes; while the
 //! change lands, main waits on its finish and asks for nothing.
 //!
-//! A failing check, or a push that finds the branch moved or fails, goes back
-//! to the LLM as feedback, and it carries on. The call is its conversation's:
+//! A failing check, or a push that fails, goes back to the LLM as feedback,
+//! and it carries on. A push that finds the branch moved ends the run: the
+//! push is a fast-forward from where the run started, so no later one can
+//! land, and the LLM cannot fix that. The call is its conversation's:
 //! a withdraw stops what is in flight, and the call returns once that has
 //! settled. A change is accepted only once it is pushed, and only while its
 //! run may still finish.
@@ -28,7 +30,7 @@
 //!            checked, failed              Closed     return: checks failed
 //!            withdraw                     Aborting   abort
 //! Aborting   checked, aborted             Closed     return: cancelled
-//! Pushing    pushed                       Closed     return: accepted, moved or unpushed
+//! Pushing    pushed                       Closed     return: accepted, moved (the run ends) or unpushed
 //!            withdraw                     Unpushing  cancel the host call
 //! Unpushing  pushed                       Closed     return: as for Pushing
 //!            host cancelled               Closed     return: cancelled
@@ -81,6 +83,8 @@ pub(crate) enum Settled {
     Pushed(Change),
     /// The change did not land: the LLM was told why.
     Refused,
+    /// The change cannot land: its branch moved since the run started.
+    Stale,
     /// The call returned with nothing decided.
     Cancelled,
 }
@@ -154,7 +158,7 @@ pub(crate) fn pushed(
                 back(owner, Returned::Accepted, Settled::Pushed(change), out)
             }
             Push::Done => back(owner, Returned::Cancelled, Settled::Cancelled, out),
-            Push::Moved => back(owner, Returned::Moved, Settled::Refused, out),
+            Push::Moved => back(owner, Returned::Moved, Settled::Stale, out),
             Push::Failed => back(owner, Returned::Unpushed, Settled::Refused, out),
         },
         Stage::Checking { .. } | Stage::Aborting | Stage::Closed => {

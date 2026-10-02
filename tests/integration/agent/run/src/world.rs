@@ -40,8 +40,8 @@ pub struct Settings {
     pub hop: Span,
     /// What the checkouts hold, and how io works on them.
     pub checkout: Checkouts,
-    /// The chance, per mille, that a check or a push in flight wins the race
-    /// with its cancel.
+    /// The chance, per mille, that a check in flight wins the race with its
+    /// abort. A push's race with its cancel is the fake worker's.
     pub races: u32,
     /// The chance, per mille, that as the run is handed an event, the worker's
     /// cancel of that event's run comes right before it or right after it.
@@ -59,6 +59,8 @@ pub struct Checkouts {
     /// times they fail before they pass: drawn from `0..=check_failures`.
     pub checks: u32,
     pub check_failures: u32,
+    /// The chance, per mille, that a guide is not UTF-8 text.
+    pub not_text: u32,
     /// How long io takes for each read or probe, and the chance, per mille,
     /// that it fails.
     pub io: Span,
@@ -128,7 +130,7 @@ impl Settings {
                 agents: 0,
                 push_min: Duration::from_millis(10),
                 push_max: Duration::from_millis(500),
-                moves: 0,
+                moved: 0,
                 push_failures: 0,
             },
             partner: Script {
@@ -158,6 +160,7 @@ impl Settings {
                 guide_max: 2000,
                 checks: 500,
                 check_failures: 0,
+                not_text: 0,
                 io: Span::millis(0, 50),
                 io_failures: 0,
                 check: Span::millis(100, 5_000),
@@ -223,6 +226,9 @@ enum Delivery {
         job: Token,
         change: worker::api::Change,
     },
+    CancelPush {
+        owner: Token,
+    },
     /// The run's requests reach its conversations.
     Open {
         conversation: Token,
@@ -263,6 +269,8 @@ enum Lane {
 /// answer once it has come.
 struct Start {
     budget: run::Budget,
+    /// The roots whose checks a change must pass, once its checkout is made.
+    checks: BTreeSet<Token>,
     answer: Option<run::Answer>,
 }
 
@@ -285,6 +293,10 @@ struct RunView {
     /// deadline came while it prepared or worked.
     decided: bool,
     spent: run::Spend,
+    /// The roots whose checks a change must pass before it is pushed: of the
+    /// writable repositories, when the spec wants checks, those with checks,
+    /// less those io failed to look in.
+    checks: BTreeSet<Token>,
     /// The iteration it answered in.
     answered: Option<u64>,
 }
@@ -306,11 +318,9 @@ struct Call {
     returned: bool,
 }
 
-/// A push, as the world tracks it: for which job, and whether the world, as
-/// the protocol layer, has answered its cancel already.
+/// A push, as the world tracks it: for which job.
 struct Pushing {
     job: Token,
-    cancelled: bool,
 }
 
 pub struct World {
@@ -346,15 +356,19 @@ pub struct World {
     executables: BTreeSet<(Token, Vec<u8>)>,
     failures: BTreeMap<Token, u64>,
     /// io's operations in flight, by their owners: the runs' looks and the
-    /// calls' checks, apart, as their tokens are of different kinds; and where
-    /// the result of each check in flight is on the wire.
+    /// calls' checks (with the root each runs in), apart, as their tokens are
+    /// of different kinds; and where the result of each check in flight is on
+    /// the wire.
     looks: BTreeSet<Token>,
-    checking: BTreeSet<Token>,
+    checking: BTreeMap<Token, Token>,
     checks: BTreeMap<Token, (Time, u64)>,
     /// Pushes in flight, by the run's owner; and the jobs whose runs pushed a
     /// change.
     pushes: BTreeMap<Token, Pushing>,
     pushed: BTreeSet<Token>,
+    /// The roots whose checks passed, for each landing call, until it pushes
+    /// or its run answers.
+    passed: BTreeMap<Token, BTreeSet<Token>>,
     /// The runs as the world sees them, by the run's names for them; which run
     /// each worker's name, conversation and landing call is of; the
     /// conversation each peer is; and the landing calls with a check or push
@@ -412,10 +426,11 @@ impl World {
             executables: BTreeSet::new(),
             failures: BTreeMap::new(),
             looks: BTreeSet::new(),
-            checking: BTreeSet::new(),
+            checking: BTreeMap::new(),
             checks: BTreeMap::new(),
             pushes: BTreeMap::new(),
             pushed: BTreeSet::new(),
+            passed: BTreeMap::new(),
             views: BTreeMap::new(),
             run_of_owner: BTreeMap::new(),
             run_of_conversation: BTreeMap::new(),
@@ -576,9 +591,10 @@ impl World {
         let mut current = current;
         match request {
             run::Request::Admitted { worker, run } => {
-                let budget = self.starts[&worker].budget;
+                let Start { budget, checks, .. } = &self.starts[&worker];
                 let view = RunView {
-                    budget,
+                    budget: *budget,
+                    checks: checks.clone(),
                     deadline: self.now.saturating_add(budget.time),
                     main: None,
                     started: false,
@@ -594,6 +610,8 @@ impl World {
             run::Request::Answer { to, answer } => {
                 let owner = self.answer(to, answer);
                 if let Some(&run) = self.run_of_owner.get(&owner) {
+                    // What its landings that did not push had passed.
+                    self.passed.retain(|call, _| self.run_of_call.get(call) != Some(&run));
                     self.views.get_mut(&run).expect("a view per admitted run").answered = Some(self.iteration);
                     self.just_answered = Some(run);
                 }
@@ -633,21 +651,22 @@ impl World {
             run::Request::Push { worker, owner, change } => {
                 self.run_of_call.insert(owner, current.expect("a push is made in a step about its run"));
                 self.landing.insert(owner);
-                let fresh = self.pushes.insert(owner, Pushing { job: worker, cancelled: false }).is_none();
+                let fresh = self.pushes.insert(owner, Pushing { job: worker }).is_none();
                 assert!(fresh, "a host call is in flight once");
+                // Checked is pushed: every repository whose checks the change
+                // must pass passed them, for this landing.
+                let passed = self.passed.remove(&owner).unwrap_or_default();
+                let run = &self.views[&self.run_of_call[&owner]];
+                assert!(run.checks.is_subset(&passed), "a change is pushed once every repository's checks passed it");
                 self.stats.pushes += 1;
                 self.send(Lane::Worker, Delivery::Push { owner, job: worker, change: translate::change(change) });
             }
             run::Request::CancelHost { owner } => {
                 self.stats.host_cancels += 1;
                 // A push the worker has answered already won the race; the
-                // protocol layer may also wait for one that is about to.
-                if let Some(pushing) = self.pushes.get_mut(&owner)
-                    && !pushing.cancelled
-                    && !self.rng.chance(self.settings.races)
-                {
-                    pushing.cancelled = true;
-                    self.send(Lane::Agent, Delivery::Host(run::Event::HostCancelled { owner }));
+                // worker decides the race for one still in flight.
+                if self.pushes.contains_key(&owner) {
+                    self.send(Lane::Worker, Delivery::CancelPush { owner });
                 }
             }
         }
@@ -661,11 +680,17 @@ impl World {
                 let (at_time, read) = match self.io_result(owner, deadline) {
                     Some(at_time) => {
                         let read = match self.files.get(&(at.root, at.path.to_vec())) {
-                            Some(content) => {
-                                let max = usize::try_from(max).expect("a u32 fits");
-                                let bytes = content[..content.len().min(max)].into();
-                                run::Read::Bytes { bytes, whole: content.len() <= max }
-                            }
+                            // io reads text, cut where a character ends.
+                            Some(content) => match std::str::from_utf8(content) {
+                                Ok(text) => {
+                                    let mut cut = text.len().min(usize::try_from(max).expect("a u32 fits"));
+                                    while !text.is_char_boundary(cut) {
+                                        cut -= 1;
+                                    }
+                                    run::Read::Text { text: text.as_bytes()[..cut].into(), whole: cut == text.len() }
+                                }
+                                Err(_) => run::Read::NotText,
+                            },
                             None => run::Read::Missing,
                         };
                         (at_time, read)
@@ -676,9 +701,12 @@ impl World {
                 self.schedule(at_time, Delivery::Io(run::Event::Read { owner, read }));
             }
             run::Request::Probe { owner, at, deadline } => {
-                let (at_time, executable) = match self.io_result(owner, deadline) {
-                    Some(at_time) => (at_time, self.executables.contains(&(at.root, at.path.to_vec()))),
-                    None => (deadline, false),
+                let (at_time, executable) = if let Some(at_time) = self.io_result(owner, deadline) {
+                    (at_time, self.executables.contains(&(at.root, at.path.to_vec())))
+                } else {
+                    // The run cannot know of checks io failed to find.
+                    self.views.get_mut(&owner).expect("a run looks once admitted").checks.remove(&at.root);
+                    (deadline, false)
                 };
                 self.stats.probes += 1;
                 self.schedule(at_time, Delivery::Io(run::Event::Probed { owner, executable }));
@@ -773,8 +801,9 @@ impl World {
             None if view.main.is_none() => "preparing",
             None if view.decided => "winding",
             None if !view.started => "opening",
-            None if landing => "landing",
+            // Past its budget is a state of the run's own, landing or not.
             None if view.budget_spent() => "over",
+            None if landing => "landing",
             None => "working",
         }
     }
@@ -861,7 +890,7 @@ impl World {
     /// Runs the checks at `program` as io would: they fail as many times as
     /// their repository was given, then pass, unless they outlast `deadline`.
     fn check(&mut self, owner: Token, program: &run::Place, deadline: Time, tail: u32) {
-        assert!(self.checking.insert(owner), "a call has one check in flight at a time");
+        assert!(self.checking.insert(owner, program.root).is_none(), "a call has one check in flight at a time");
         assert!(self.executables.contains(&(program.root, program.path.to_vec())), "checks are run where found");
         self.stats.checks += 1;
         let at = self.now.saturating_add(self.draw(self.settings.checkout.check));
@@ -902,7 +931,19 @@ impl World {
             let root = Token::new(self.serial);
             if self.rng.chance(settings.guides) {
                 let len = usize::try_from(self.rng.between(1, u64::from(settings.guide_max))).expect("small");
-                let guide = b"Keep changes small, and run the tests. ".iter().copied().cycle().take(len).collect();
+                // Text with characters of more than one byte, so a cut may
+                // fall inside one; or, now and then, not text at all.
+                let mut guide = String::new();
+                for c in "Keep changes small — and run the tests, où qu'ils soient. ".chars().cycle() {
+                    if guide.len() + c.len_utf8() > len {
+                        break;
+                    }
+                    guide.push(c);
+                }
+                let mut guide = guide.into_bytes();
+                if self.rng.chance(settings.not_text) {
+                    guide.insert(0, 0xff);
+                }
                 self.files.insert((root, b"AGENTS.md".to_vec()), guide);
             }
             if self.rng.chance(settings.checks) {
@@ -919,7 +960,7 @@ impl World {
     fn worker_request(&mut self, request: worker::Request) {
         match request {
             worker::Request::Start { owner, charter } => {
-                let start = Start { budget: translate::budget(charter.budget), answer: None };
+                let start = Start { budget: translate::budget(charter.budget), checks: BTreeSet::new(), answer: None };
                 assert!(self.starts.insert(owner, start).is_none(), "jobs have distinct names");
                 self.stats.starts += 1;
                 self.send(Lane::Agent, Delivery::Start { owner, charter });
@@ -930,16 +971,17 @@ impl World {
             }
             worker::Request::Pushed { to, pushed } => {
                 let owner = to.into_token();
-                let Pushing { job, cancelled } = self.pushes.remove(&owner).expect("the worker answers a push made");
-                // The cancel was answered already: the answer is late.
-                if cancelled {
-                    return;
-                }
+                let Pushing { job } = self.pushes.remove(&owner).expect("the worker answers a push made");
                 let push = translate::push(pushed);
                 if push == run::Push::Done {
                     self.pushed.insert(job);
                 }
                 self.send(Lane::Agent, Delivery::Host(run::Event::Pushed { owner, push }));
+            }
+            worker::Request::PushCancelled { to } => {
+                let owner = to.into_token();
+                self.pushes.remove(&owner).expect("the worker answers a push made");
+                self.send(Lane::Agent, Delivery::Host(run::Event::HostCancelled { owner }));
             }
         }
     }
@@ -954,6 +996,15 @@ impl World {
                 Delivery::Start { owner, charter } => {
                     let roots = self.checkout(charter.repositories.len());
                     let charter = translate::charter(charter, &roots);
+                    let wants = matches!(charter.outcome.change, Some(run::outcome::ChangeSpec { checks: true }));
+                    let mut checks = BTreeSet::new();
+                    for repository in &charter.checkout.repositories {
+                        let executable = (repository.root, b".temper/pre-pr".to_vec());
+                        if wants && repository.writable && self.executables.contains(&executable) {
+                            checks.insert(repository.root);
+                        }
+                    }
+                    self.starts.get_mut(&owner).expect("a start is tracked").checks = checks;
                     self.run_in.push_back(run::Event::Start { reply_to: ReplyTo::new(owner), worker: owner, charter });
                 }
                 Delivery::Cancel { run } => self.run_in.push_back(run::Event::Cancel { run }),
@@ -966,8 +1017,9 @@ impl World {
                     self.worker_in.push_back(worker::Event::Checking { job, deadline });
                 }
                 Delivery::Push { owner, job, change } => {
-                    self.worker_in.push_back(worker::Event::Push { reply_to: ReplyTo::new(owner), job, change });
+                    self.worker_in.push_back(worker::Event::Push { reply_to: ReplyTo::new(owner), owner, job, change });
                 }
+                Delivery::CancelPush { owner } => self.worker_in.push_back(worker::Event::CancelPush { owner }),
                 Delivery::Open { conversation, opening } => {
                     let mut out = Vec::new();
                     self.partner.open(self.now, conversation, &opening, &mut out);
@@ -1000,9 +1052,19 @@ impl World {
                 Delivery::Io(event) => {
                     let answered = match &event {
                         run::Event::Read { owner, .. } | run::Event::Probed { owner, .. } => self.looks.remove(owner),
-                        run::Event::Checked { owner, .. } | run::Event::Aborted { owner } => {
+                        run::Event::Checked { owner, ran } => {
                             self.checks.remove(owner);
-                            self.checking.remove(owner)
+                            let root = self.checking.remove(owner);
+                            if let Some(root) = root
+                                && matches!(ran.exit, run::Exit::Code { code: 0 })
+                            {
+                                self.passed.entry(*owner).or_default().insert(root);
+                            }
+                            root.is_some()
+                        }
+                        run::Event::Aborted { owner } => {
+                            self.checks.remove(owner);
+                            self.checking.remove(owner).is_some()
                         }
                         run::Event::Start { .. }
                         | run::Event::Cancel { .. }
@@ -1156,6 +1218,7 @@ impl World {
             "io answered every operation"
         );
         assert!(self.pushes.is_empty(), "every push was answered");
+        assert!(self.passed.is_empty(), "every landing call returned");
         assert!(self.child_of_call.is_empty(), "every sub-agent's call returned");
         assert!(self.wire.is_empty() && self.run_in.is_empty() && self.worker_in.is_empty(), "nothing is on its way");
         let mut answered = run::Spend::ZERO;

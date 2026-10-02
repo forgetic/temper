@@ -192,7 +192,7 @@ fn an_admitted_run_reads_its_checkout_then_opens_main_with_the_whole_budget() {
     assert_eq!((*max, *deadline), (LIMITS.guide_bytes, Time::ZERO.saturating_add(LIMITS.io_timeout)));
     assert_eq!((h.model.runs(), h.model.conversations()), (1, 1), "main has its slot from the start");
 
-    let read = Read::Bytes { bytes: bytes(b"Run the tests."), whole: true };
+    let read = Read::Text { text: bytes(b"Run the tests."), whole: true };
     let emitted = h.step(Event::Read { owner: *run, read });
     let [Request::Open { conversation: _, opening }] = &*emitted else {
         panic!("expected main to open, got {emitted:?}");
@@ -397,6 +397,16 @@ fn an_llm_whose_last_stop_shows_a_fault_fails_the_run_with_it() {
         let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
         assert_eq!(answered(emitted), (1, failed(Failure::Model(fault), Spend::ZERO)));
     }
+}
+
+#[test]
+fn an_llm_with_no_input_or_output_left_is_not_nudged() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.running(1, 100);
+    drop(h.step(Event::Used { conversation, spend: spend(BUDGET.input) }));
+    assert_eq!(&*h.step(end_turn(conversation)), &[Request::Close { peer: Token::new(100) }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: spend(BUDGET.input) });
+    assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Input), spend(BUDGET.input))));
 }
 
 #[test]
@@ -606,19 +616,44 @@ fn a_change_that_fails_its_checks_or_its_push_goes_back_to_the_llm() {
     let emitted = h.step(Event::Checked { owner, ran: failing });
     let failing = Ran { exit: Exit::Code { code: 1 }, output: bytes(b"test parse ... FAILED"), cut: 12 };
     assert_eq!(&*emitted, &[returned(7, Returned::ChecksFailed { repository: bytes(b"temper"), ran: failing })]);
-    // A returned call is reclaimed before its conversation can call again,
-    // which takes a completion.
-    h.model.reclaim();
     let owner = h.land(conversation, 8);
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
-    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Moved }), &[returned(8, Returned::Moved)]);
-    h.model.reclaim();
-    let owner = h.land(conversation, 9);
-    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
-    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
-    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Failed }), &[returned(9, Returned::Unpushed)]);
+    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Failed }), &[returned(8, Returned::Unpushed)]);
     assert!(h.step(end_turn(conversation)).len() == 1, "the run goes on: a nudge");
+}
+
+#[test]
+fn a_change_whose_branch_moved_ends_the_run_as_stale() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    let emitted = h.step(Event::Pushed { owner, push: Push::Moved });
+    assert_eq!(&*emitted, &[returned(7, Returned::Moved), Request::Close { peer: Token::new(100) }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, failed(Failure::Stale, Spend::ZERO)));
+}
+
+#[test]
+fn past_the_budget_the_deadline_fails_the_run_for_the_part_it_went_past() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.running(1, 100);
+    drop(h.step(Event::Used { conversation, spend: spend(BUDGET.input + 1) }));
+    h.after(BUDGET.time);
+    assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(100) }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: spend(BUDGET.input + 1) });
+    assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Input), spend(BUDGET.input + 1))));
+}
+
+#[test]
+fn a_guide_that_is_not_text_is_not_there() {
+    let mut h = Harness::new(LIMITS);
+    let run = h.prepare(1);
+    let emitted = h.step(Event::Read { owner: run, read: Read::NotText });
+    let [Request::Open { opening, .. }] = &*emitted else { panic!("expected main to open, got {emitted:?}") };
+    assert_eq!(opening.system, super::prompt::system(&charter(), &Found::with_capacity(1)));
 }
 
 #[test]
@@ -1060,7 +1095,7 @@ fn a_run_tells_what_it_did_as_content_free_facts() {
     let emitted = h.start(1, agents());
     let [Request::Admitted { run, .. }, Request::Read { .. }] = &*emitted else { panic!("expected a read") };
     let run = *run;
-    drop(h.step(Event::Read { owner: run, read: Read::Bytes { bytes: bytes(b"Be kind."), whole: true } }));
+    drop(h.step(Event::Read { owner: run, read: Read::Text { text: bytes(b"Be kind."), whole: true } }));
     let main = Token::new(0);
     drop(h.step(Event::Started { conversation: main, peer: Token::new(100) }));
     let (child, _) = h.child(main, 7, families(true, false, false), 101);

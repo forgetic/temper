@@ -18,12 +18,15 @@
 //! has decided how it ends: the agent ignores both, which is what they test.
 //!
 //! A push is answered after a latency drawn from the configuration: the
-//! branch has moved, for as many pushes as the job drew when it started;
-//! then, with the configured chance, the push fails; otherwise it is done.
+//! branch has moved, for every push of a job that drew so when it started
+//! (a push is a fast-forward from where the run started, so a moved branch
+//! stays moved); else, with the configured chance, the push fails; otherwise
+//! it is done. A push cancelled before then is answered as cancelled, and
+//! changes nothing.
 
 use core::mem;
 
-use temper_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Rng, Slab, Time, Token};
+use temper_lib::{Deadlines, Duration, Env, Id, Map, Queue, ReplyTo, Rng, Slab, Time, Token};
 
 use crate::api::{Answer, Change, Charter, Pushed};
 use crate::charter;
@@ -74,9 +77,9 @@ pub struct Config {
     /// The time to push, drawn from `push_min..=push_max`.
     pub push_min: Duration,
     pub push_max: Duration,
-    /// How many of a job's pushes find the branch moved: drawn from
-    /// `0..=moves` when it starts.
-    pub moves: u32,
+    /// The chance, per mille, that a job's branch moves before its run
+    /// pushes: every push of that job finds it moved.
+    pub moved: u32,
     /// The chance, per mille, that a push fails.
     pub push_failures: u32,
 }
@@ -88,9 +91,13 @@ pub enum Event {
     Admitted { owner: Token, run: Token },
     /// Terminal for `Start`: the agent's answer for the job `owner`.
     Answered { owner: Token, answer: Answer },
-    /// A call from the run of the job `job`: push `change`. Answered by one
-    /// `Pushed`.
-    Push { reply_to: ReplyTo, job: Token, change: Change },
+    /// A call from the run of the job `job`, which names it `owner`: push
+    /// `change`. Answered by one `Pushed`, or `PushCancelled` after a
+    /// `CancelPush` if the cancel wins.
+    Push { reply_to: ReplyTo, owner: Token, job: Token, change: Change },
+    /// The run abandons its push `owner`. A push answered already is not in
+    /// flight, and the cancel changes nothing.
+    CancelPush { owner: Token },
     /// The run of the job `job` runs checks until `deadline` at the latest.
     Checking { job: Token, deadline: Time },
 }
@@ -104,6 +111,8 @@ pub enum Request {
     Cancel { run: Token },
     /// The answer to a `Push`: exactly one per push.
     Pushed { to: ReplyTo, pushed: Pushed },
+    /// The answer to a `Push` whose cancel came first.
+    PushCancelled { to: ReplyTo },
 }
 
 /// The fake worker's state.
@@ -111,6 +120,8 @@ pub enum Request {
 pub struct Model {
     jobs: Slab<Job>,
     pushes: Slab<Pushing>,
+    /// The pushes in flight, by the runs' names for them.
+    named: Map<Token, Id<Pushing>>,
     /// When each job starts or its run is cancelled, and when each push is
     /// answered.
     timers: Deadlines<Alarm>,
@@ -123,8 +134,8 @@ pub struct Model {
 
 #[derive(Debug)]
 struct Job {
-    /// Pushes left that find the branch moved.
-    moves: u32,
+    /// Whether its branch moved before its run pushed.
+    moved: bool,
     state: State,
 }
 
@@ -148,8 +159,9 @@ enum State {
 /// A push being served.
 #[derive(Debug)]
 enum Pushing {
-    /// Its answer is decided, and goes out when its timer fires.
-    Waiting { reply_to: ReplyTo, pushed: Pushed },
+    /// The push of the job `job`, which its run names `owner`, answered when
+    /// its timer fires.
+    Waiting { reply_to: ReplyTo, owner: Token, job: Id<Job> },
     /// Terminal: holds nothing.
     Closed,
 }
@@ -167,6 +179,7 @@ impl Model {
         let mut model = Model {
             jobs: Slab::with_capacity(config.jobs),
             pushes: Slab::with_capacity(config.jobs),
+            named: Map::with_capacity(config.jobs),
             timers: Deadlines::with_capacity(config.jobs.saturating_mul(2)),
             rng: Rng::new(seed),
             answered: 0,
@@ -174,9 +187,8 @@ impl Model {
             checking: 0,
         };
         for _ in 0..config.jobs {
-            let moves =
-                u32::try_from(model.rng.below(u64::from(config.moves).saturating_add(1))).expect("drawn below a u32");
-            let id = model.jobs.insert(Job { moves, state: State::Waiting }).expect("a slot per job");
+            let moved = model.rng.chance(config.moved);
+            let id = model.jobs.insert(Job { moved, state: State::Waiting }).expect("a slot per job");
             let at = Time::ZERO.saturating_add(Duration::from_nanos(model.rng.below(config.window.as_nanos())));
             model.timers.arm(Alarm::Job(id), at).expect("a timer per job");
         }
@@ -230,11 +242,12 @@ impl Model {
 }
 
 /// Handles one event, emitting at most [`MAX_OUT`] requests.
-pub fn step(model: &mut Model, env: &Env<Config>, event: Event, _out: &mut Queue<Request>) {
+pub fn step(model: &mut Model, env: &Env<Config>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Admitted { owner, run } => admitted(model, env, owner, run),
         Event::Answered { owner, answer: _ } => answered(model, env, owner),
-        Event::Push { reply_to, job, change: _ } => push(model, env, reply_to, job),
+        Event::Push { reply_to, owner, job, change: _ } => push(model, env, reply_to, owner, job),
+        Event::CancelPush { owner } => cancel_push(model, owner, out),
         Event::Checking { job: _, deadline: _ } => model.checking = model.checking.saturating_add(1),
     }
 }
@@ -248,15 +261,25 @@ pub fn fire(model: &mut Model, env: &Env<Config>, out: &mut Queue<Request>) {
     match alarm {
         Alarm::Job(id) => job_alarm(model, env, id, out),
         Alarm::Push(id) => {
-            let pushing = model.pushes.get_mut(id).expect("a push lives until its timer fires");
+            let Model { jobs, pushes, named, rng, .. } = model;
+            let pushing = pushes.get_mut(id).expect("a push lives until its timer fires");
             *pushing = match mem::replace(pushing, Pushing::Closed) {
-                Pushing::Waiting { reply_to, pushed } => {
+                Pushing::Waiting { reply_to, owner, job } => {
+                    let job = jobs.get(job).expect("a job lives until its run, which waits on its push, answers");
+                    let pushed = if job.moved {
+                        Pushed::Moved
+                    } else if rng.chance(env.limits.push_failures) {
+                        Pushed::Failed
+                    } else {
+                        Pushed::Done
+                    };
                     out.push(Request::Pushed { to: reply_to, pushed });
+                    named.remove(&owner);
                     Pushing::Closed
                 }
                 Pushing::Closed => unreachable!("a closed push has no timer"),
             };
-            model.pushes.retire(id);
+            pushes.retire(id);
         }
     }
 }
@@ -352,27 +375,40 @@ fn answered(model: &mut Model, env: &Env<Config>, owner: Token) {
     follow(&mut model.jobs, id);
 }
 
-/// A push from the run of `job`: decided now, answered later.
-fn push(model: &mut Model, env: &Env<Config>, reply_to: ReplyTo, job: Token) {
+/// A push from the run of `job`, which names it `owner`: answered later.
+fn push(model: &mut Model, env: &Env<Config>, reply_to: ReplyTo, owner: Token, job: Token) {
     let config = &env.limits;
-    let job = model.jobs.get_mut(Id::from_token(job)).expect("a job lives until its run is answered");
-    match job.state {
+    let job = Id::from_token(job);
+    match model.jobs.get(job).expect("a job lives until its run is answered").state {
         State::Running { .. } | State::Cancelling { .. } => {}
         State::Waiting | State::Starting | State::Lingering { .. } | State::Closed => {
             unreachable!("a run pushes once it is admitted, before it answers")
         }
     }
-    let pushed = if job.moves > 0 {
-        job.moves = job.moves.saturating_sub(1);
-        Pushed::Moved
-    } else if model.rng.chance(config.push_failures) {
-        Pushed::Failed
-    } else {
-        Pushed::Done
-    };
     model.pushed = model.pushed.saturating_add(1);
-    let id = model.pushes.insert(Pushing::Waiting { reply_to, pushed }).expect("a run pushes one change at a time");
+    let pushing = Pushing::Waiting { reply_to, owner, job };
+    let id = model.pushes.insert(pushing).expect("a run pushes one change at a time");
+    let fresh = model.named.insert(owner, id).expect("a name per push");
+    assert!(fresh.is_none(), "a run names its pushes apart");
     let latency = model.rng.between(config.push_min.as_nanos(), config.push_max.as_nanos());
     let at = env.now.saturating_add(Duration::from_nanos(latency));
     model.timers.arm(Alarm::Push(id), at).expect("a timer per push");
+}
+
+/// The run abandons its push `owner`: if it is in flight, it is answered as
+/// cancelled, and its outcome is never decided.
+fn cancel_push(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
+    let Some(id) = model.named.remove(&owner) else {
+        return;
+    };
+    let pushing = model.pushes.get_mut(id).expect("a named push lives");
+    *pushing = match mem::replace(pushing, Pushing::Closed) {
+        Pushing::Waiting { reply_to, owner: _, job: _ } => {
+            out.push(Request::PushCancelled { to: reply_to });
+            Pushing::Closed
+        }
+        Pushing::Closed => unreachable!("a closed push has no name"),
+    };
+    model.timers.cancel(Alarm::Push(id));
+    model.pushes.retire(id);
 }

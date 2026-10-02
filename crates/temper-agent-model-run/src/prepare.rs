@@ -9,7 +9,8 @@
 //!   run before a change is pushed. No executable, no checks.
 //!
 //! One operation at a time, in the checkout's order, each with its deadline.
-//! A file that is missing, or that io fails to read, is simply not there.
+//! A file that is missing, that is not text, or that io fails to read, is
+//! simply not there.
 
 use alloc::boxed::Box;
 
@@ -104,12 +105,12 @@ pub(crate) fn request(charter: &Charter, step: Step, owner: Token, now: Time, li
 pub(crate) fn guide(found: &mut Found, step: Step, read: Read, limits: &Limits) {
     assert!(step.look == Look::Guide, "a read answers a guide's step");
     match read {
-        Read::Bytes { bytes, whole } => {
-            assert!(count(bytes.len()) <= limits.guide_bytes, "io reads no more than it is asked for");
-            let guide = Guide { repository: step.repository, text: bytes, whole };
+        Read::Text { text, whole } => {
+            assert!(count(text.len()) <= limits.guide_bytes, "io reads no more than it is asked for");
+            let guide = Guide { repository: step.repository, text, whole };
             found.guides.push(guide).expect("room for a guide per repository");
         }
-        Read::Missing | Read::Failed => {}
+        Read::Missing | Read::NotText | Read::Failed => {}
     }
 }
 

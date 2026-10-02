@@ -191,11 +191,11 @@ fn a_main_conversation_refused_at_its_entrance_refuses_its_run() {
 }
 
 /// A world where the LLM finishes, with outcomes that fit, and changes land
-/// after their checks fail a time or two and their branch moves once.
+/// after their checks fail a time or two.
 fn finishing(seed: u64) -> Settings {
     let calm = Settings::calm(seed);
     Settings {
-        worker: Config { moves: 1, writable: 1000, changes: 1000, checks: 1000, verdicts: 1000, ..calm.worker },
+        worker: Config { writable: 1000, changes: 1000, checks: 1000, verdicts: 1000, ..calm.worker },
         partner: Script { finishes: 300, yields: 0, ..calm.partner },
         checkout: Checkouts { checks: 1000, check_failures: 2, ..calm.checkout },
         ..calm
@@ -217,8 +217,23 @@ fn changes_land_after_their_checks_pass_and_their_push_goes_through() {
     let world = settled(&Settings { partner: Script { changes: 1000, ..settings.partner }, ..settings });
     let stats = world.stats();
     assert_eq!(stats.partner.accepted, 4, "{stats:?}");
-    assert!(stats.partner.checks_failed > 0 && stats.partner.moved > 0, "{stats:?}");
+    assert!(stats.partner.checks_failed > 0, "{stats:?}");
     assert!(world.trace().iter().any(|line| line.contains("Checking {")), "the worker hears of each check");
+}
+
+#[test]
+fn a_change_whose_branch_moved_ends_its_run_as_stale() {
+    let settings = finishing(19);
+    let world = settled(&Settings {
+        worker: Config { moved: 1000, ..settings.worker },
+        partner: Script { changes: 1000, ..settings.partner },
+        ..settings
+    });
+    let stats = world.stats();
+    assert!(stats.partner.moved > 0 && stats.partner.accepted == 0, "{stats:?}");
+    for answer in answers(&world) {
+        assert!(matches!(answer, Answer::Failed { failure: Failure::Stale, .. }), "{answer:?}");
+    }
 }
 
 #[test]
@@ -286,6 +301,7 @@ fn random_worlds_settle_with_every_start_answered_once() {
                     Failure::Budget(_) => "tokens",
                     Failure::Policy(Policy::Unfinished { .. }) => "unfinished",
                     Failure::Cancelled => "cancelled",
+                    Failure::Stale => "stale",
                 },
             };
             seen.insert(kind);
@@ -298,6 +314,7 @@ fn random_worlds_settle_with_every_start_answered_once() {
         "conversation invalid",
         "fault",
         "invalid",
+        "stale",
         "stopped",
         "time",
         "tokens",
@@ -347,7 +364,7 @@ fn noisy(seed: u64) -> Settings {
         late_cancels: small(pick(0, 300)),
         push_min: Duration::ZERO,
         push_max: Duration::from_millis(pick(0, 3_000)),
-        moves: small(pick(0, 2)),
+        moved: small(pick(0, 300)),
         push_failures: small(pick(0, 200)),
         ..worker
     };
@@ -376,6 +393,7 @@ fn noisy(seed: u64) -> Settings {
         guide_max: small(pick(1, 3000)),
         checks: small(pick(0, 1000)),
         check_failures: small(pick(0, 3)),
+        not_text: small(pick(0, 300)),
         io: Span::millis(0, pick(0, 6_000)),
         io_failures: small(pick(0, 200)),
         check: Span::millis(0, pick(0, 20_000)),
@@ -479,7 +497,25 @@ fn deadlines_find_runs_in_every_state_they_run_in() {
         let settings = Settings { worker, checkout, partner, hop: Span::millis(0, 1_500), ..calm };
         tally(&settled(&settings), &mut cancels, &mut deadlines);
     }
-    for cell in ["preparing", "opening", "working"] {
+    // And as changes are checked and pushed, and as the LLM spends past its
+    // budget.
+    for seed in 50..56 {
+        let landing = finishing(seed);
+        let run = Limits { runs: 16, conversations: 16, calls: 16, ..landing.run };
+        let worker = Config {
+            jobs: 16,
+            time_min: Duration::from_secs(2),
+            time_max: Duration::from_secs(15),
+            tokens_min: 2_000,
+            tokens_max: 8_000,
+            ..landing.worker
+        };
+        let partner = Script { changes: 1000, turn: Span::millis(100, 2_000), ..landing.partner };
+        let checkout = Checkouts { check: Span::millis(2_000, 8_000), check_failures: 3, ..landing.checkout };
+        let settings = Settings { run, worker, partner, checkout, hop: Span::millis(0, 1_500), ..landing };
+        tally(&settled(&settings), &mut cancels, &mut deadlines);
+    }
+    for cell in ["preparing", "opening", "working", "landing", "over"] {
         assert!(deadlines.get(cell).is_some_and(|count| *count > 0), "no deadline found a run {cell}: {deadlines:?}");
     }
 }

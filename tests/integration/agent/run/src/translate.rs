@@ -92,6 +92,7 @@ pub fn answer(answer: &run::Answer) -> worker::Answer {
                 run::Failure::Budget(_) => worker::Reason::Budget,
                 run::Failure::Policy(run::Policy::Unfinished { .. }) => worker::Reason::Unfinished,
                 run::Failure::Cancelled => worker::Reason::Cancelled,
+                run::Failure::Stale => worker::Reason::Stale,
             };
             worker::Answer::Failed { reason, usage: usage(*spent) }
         }

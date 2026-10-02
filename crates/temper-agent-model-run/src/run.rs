@@ -38,6 +38,7 @@
 //!            finish, a change              Working    (landing)
 //!            landed: pushed                Winding    close main: accepted
 //!            landed: refused               Working
+//!            landed: moved                 Winding    close main: stale
 //!            deadline                      Winding    close main: out of time
 //!            cancel                        Winding    close main: cancelled
 //!            main ended                    Closed     answer: how main ended
@@ -47,6 +48,7 @@
 //!            finish, a change              Over       (landing)
 //!            landed: pushed                Winding    close main: accepted
 //!            landed: refused               Winding    close main: out of budget
+//!            landed: moved                 Winding    close main: stale
 //!            deadline                      Winding    close main: out of budget
 //!            cancel                        Winding    close main: cancelled
 //!            main ended                    Closed     answer: how main ended
@@ -686,6 +688,15 @@ fn settle(model: &mut Model, id: Id<Call>, settled: Settled, out: &mut Queue<Req
                 }
             }
         }
+        Settled::Stale => match state {
+            State::Working { reply_to, main } | State::Over { reply_to, main, exhausted: _ } => {
+                wind_down(conversations, reply_to, main, Ending::Failed(Failure::Stale), out)
+            }
+            state @ State::Winding { .. } => state,
+            State::Preparing { .. } | State::Stopping { .. } | State::Closed => {
+                unreachable!("a run lands a change only once it has opened main, and before it answers")
+            }
+        },
         Settled::Going | Settled::Cancelled => state,
     };
     follow(runs, alarms, run_id);
@@ -999,8 +1010,18 @@ fn nudge(run: &mut Run, stop: Stop, limits: &Limits) -> Result<(), Failure> {
     if run.nudges >= limits.nudges {
         return Err(unfinished(stop, run.nudges, run.rejected));
     }
-    if run.spent.turns >= run.charter.budget.turns {
+    // Room to start a turn, as a conversation's ceilings have it: some
+    // turns, input and output left.
+    let spent = run.spent;
+    let budget = &run.charter.budget;
+    if spent.turns >= budget.turns {
         return Err(Failure::Budget(Exhausted::Turns));
+    }
+    if spent.input >= budget.input {
+        return Err(Failure::Budget(Exhausted::Input));
+    }
+    if spent.output >= budget.output {
+        return Err(Failure::Budget(Exhausted::Output));
     }
     run.nudges = run.nudges.saturating_add(1);
     Ok(())

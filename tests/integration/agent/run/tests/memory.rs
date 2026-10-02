@@ -196,7 +196,7 @@ fn fill(limits: Limits) {
         let [Asked::Other, Asked::Read { owner }] = step(start)[..] else {
             panic!("a charter of exactly the byte limit is admitted");
         };
-        let read = Read::Bytes { bytes: bytes(u64::from(limits.guide_bytes)), whole: false };
+        let read = Read::Text { text: bytes(u64::from(limits.guide_bytes)), whole: false };
         let [Asked::Probe { owner }] = step(Event::Read { owner, read })[..] else {
             panic!("the run looks for the checks of its writable repository");
         };
