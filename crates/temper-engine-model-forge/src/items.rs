@@ -60,7 +60,7 @@ use core::mem;
 use temper_lib::bytes::copy_of;
 use temper_lib::{Duration, Env, Id, List, Queue, Rng, Slab, Time};
 
-use crate::api::{self, Answer, Check, Comment, Error, Kind, Mark, Op, Pull, State as Open, Status, Summary, Verdict};
+use crate::api::{self, Answer, Check, Comment, Error, Kind, Mark, Op, Pull, State as Open, Status, Summary};
 use crate::boundary::{Ci, Item, Level, News, Position, Record, Request, View};
 use crate::calls::{self, Calls, Purpose};
 use crate::facts::{Fact, Priority};
@@ -424,7 +424,7 @@ pub(crate) fn op(model: &Model, id: Id<Entry>) -> (u32, Op) {
         State::Busy { phase, .. } => match phase {
             Phase::Finding { after } => Op::Item { number, after },
             Phase::Reading => Op::Item { number, after: entry.announced.comment },
-            Phase::Pulling { number } => Op::Pull { number },
+            Phase::Pulling { number } => Op::Pull { number, reviews: entry.announced.reviews },
         },
         State::Due { .. } | State::Waiting { .. } | State::Idle | State::Gone | State::Closed => {
             unreachable!("an entry's call goes out while it is busy")
@@ -578,13 +578,21 @@ fn pulled(
         open: pull.state == Open::Open,
         merged: pull.merged,
         mergeable: pull.mergeable,
-        approvals: verdicts(&pull, Verdict::Approve),
-        changes: verdicts(&pull, Verdict::RequestChanges),
     };
     entry.level = Some(level);
     if review_news(entry, &pull, out) {
         entry.stale.pull = true;
         return State::Idle;
+    }
+    if pull.more {
+        // More reviews than a page: read on, the state told with the last.
+        return match entry.inbox.room() {
+            0 => {
+                entry.stale.pull = true;
+                State::Idle
+            }
+            _ => State::Due { phase: Phase::Pulling { number }, attempt: 0 },
+        };
     }
     let told = Told { open: level.open, merged: level.merged, mergeable: level.mergeable };
     let quiet = entry.announced.head == Some(level.commit) && entry.announced.ci == level.ci && entry.told == told;
@@ -618,6 +626,7 @@ fn failed(env: &Env<Limits>, rng: &mut Rng, phase: Phase, attempt: u32, error: E
         Error::Unavailable
         | Error::Timeout
         | Error::TooLarge
+        | Error::Empty
         | Error::Full
         | Error::Exists
         | Error::NothingToMerge
@@ -652,15 +661,11 @@ fn comment_news(entry: &mut Entry, engine: u64, comments: &[Comment], out: &mut 
     false
 }
 
-/// The reviews of `pull` after those taken, told while the inbox has room.
-/// Says whether it stopped for room.
+/// The reviews of `pull`, a page of those after the ones it was read after,
+/// told while the inbox has room. Says whether it stopped for room.
 fn review_news(entry: &mut Entry, pull: &Pull, out: &mut Queue<Request>) -> bool {
-    let mut index = 0_u32;
     for review in &pull.reviews {
-        index = index.saturating_add(1);
-        if index <= entry.announced.reviews {
-            continue;
-        }
+        let index = entry.announced.reviews.saturating_add(1);
         if entry.inbox.room() == 0 {
             return true;
         }
@@ -728,17 +733,6 @@ fn ci(statuses: &[Status]) -> Ci {
         };
     }
     ci
-}
-
-/// The reviews of the pull request's head with `verdict`.
-fn verdicts(pull: &Pull, verdict: Verdict) -> u32 {
-    let mut count = 0_u32;
-    for review in &pull.reviews {
-        if review.commit == pull.commit && review.verdict == verdict {
-            count = count.saturating_add(1);
-        }
-    }
-    count
 }
 
 fn page(limits: &Limits) -> usize {

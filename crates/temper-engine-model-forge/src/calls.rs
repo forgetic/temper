@@ -241,6 +241,7 @@ pub(crate) fn answered(
             | Error::Forbidden
             | Error::Missing
             | Error::TooLarge
+            | Error::Empty
             | Error::Full
             | Error::Exists
             | Error::NothingToMerge

@@ -287,7 +287,4 @@ pub struct Level {
     pub open: bool,
     pub merged: Option<[u8; 32]>,
     pub mergeable: bool,
-    /// Reviews of the head that approve it, and that ask for changes.
-    pub approvals: u32,
-    pub changes: u32,
 }

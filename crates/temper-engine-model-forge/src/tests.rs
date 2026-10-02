@@ -30,6 +30,7 @@ const LIMITS: Limits = Limits {
     window: Duration::from_secs(60),
     poll: Duration::from_secs(30),
     hinted: Duration::from_secs(2),
+    resolution: Duration::from_secs(1),
     slow: Duration::from_secs(600),
     backoff: Duration::from_secs(1),
     backoff_max: Duration::from_secs(8),
@@ -371,6 +372,7 @@ fn pull(number: u64, commit: [u8; 32], checks: &[Check], reviews: &[(u64, Verdic
         merged: None,
         mergeable: true,
         reviews: list.into_boxed(),
+        more: false,
         statuses: statuses.into_boxed(),
     }
 }
@@ -563,6 +565,26 @@ fn a_listing_pages_by_time_and_by_number_only_within_one_time() {
 }
 
 #[test]
+fn a_pass_that_paged_by_number_and_moved_meanwhile_lists_that_time_again() {
+    let mut h = Harness::started(LIMITS);
+    h.at(30);
+    h.fire();
+    let sent = h.send();
+    h.answer(&sent[0], page(copies(&[issue(1, &[], 4), issue(2, &[], 4), issue(3, &[], 4)]), true));
+    let next = h.send_one();
+    assert_eq!(next.op, changes(4, 1), "by time");
+    h.answer(&next, page(copies(&[issue(1, &[], 4), issue(2, &[], 4), issue(3, &[], 4)]), true));
+    let next = h.send_one();
+    assert_eq!(next.op, changes(4, 2), "by number within one time");
+    // An item changed as the pass ran: one of the time it paged at may have
+    // shifted onto the page it had read.
+    h.answer(&next, page(copies(&[issue(4, &[], 4), issue(1, &[], 30)]), false));
+    h.at(60);
+    h.fire();
+    assert_eq!(h.send()[0].op, changes(4, 1), "from the time it paged at, again");
+}
+
+#[test]
 fn labels_changed_are_told_and_a_closed_item_leaves() {
     let mut h = Harness::new(LIMITS);
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
@@ -606,7 +628,7 @@ fn pull_requests_whose_ci_has_not_settled_are_read_every_pass_and_on_a_status_hi
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
     h.step(Event::Link { item: item(5), pull: Some(9) });
     let read = h.send_one();
-    assert_eq!(read.op, Op::Pull { number: 9 }, "the linked pull request is read");
+    assert_eq!(read.op, Op::Pull { number: 9, reviews: 0 }, "the linked pull request is read");
     let told = h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, &[Check::Pending], &[]))));
     let level = News::Pull { commit: HEAD, ci: Ci::Pending, open: true, merged: None, mergeable: true };
     assert_eq!(*told, [news(5, 1, level)], "its head and CI are news");
@@ -619,20 +641,11 @@ fn pull_requests_whose_ci_has_not_settled_are_read_every_pass_and_on_a_status_hi
     assert!(sent.is_empty(), "settled CI is not read again: {sent:?}");
     h.step(Event::Hint { repository: 0, item: None, commit: Some(HEAD) });
     let read = h.send_one();
-    assert_eq!(read.op, Op::Pull { number: 9 }, "a status on its head reads it again");
+    assert_eq!(read.op, Op::Pull { number: 9, reviews: 0 }, "a status on its head reads it again");
     h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, &[Check::Failed], &[]))));
     assert_eq!(
         h.model.pull(item(5)),
-        Some(Level {
-            number: 9,
-            commit: HEAD,
-            ci: Ci::Failed,
-            open: true,
-            merged: None,
-            mergeable: true,
-            approvals: 0,
-            changes: 0
-        }),
+        Some(Level { number: 9, commit: HEAD, ci: Ci::Failed, open: true, merged: None, mergeable: true }),
         "the level as last read"
     );
 }
@@ -645,9 +658,11 @@ fn reviews_after_those_taken_are_news_and_a_linked_pull_request_listed_is_read()
     let read = h.send_one();
     h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, &[Check::Passed], &[]))));
     let (_, sent) = h.pass(30, &[summary(9, Kind::Pull, State::Open, &[], 25)]);
-    assert_eq!(sent[0].op, Op::Pull { number: 9 }, "the linked pull request changed: read");
+    assert_eq!(sent[0].op, Op::Pull { number: 9, reviews: 0 }, "the linked pull request changed: read");
     let reviews = [(PERSON, Verdict::Approve), (8, Verdict::RequestChanges)];
-    let told = h.answer(&sent[0], Ok(Answer::Pull(pull(9, HEAD, &[Check::Passed], &reviews))));
+    let mut page = pull(9, HEAD, &[Check::Passed], &reviews);
+    page.more = true;
+    let told = h.answer(&sent[0], Ok(Answer::Pull(page)));
     assert_eq!(
         *told,
         [
@@ -656,6 +671,12 @@ fn reviews_after_those_taken_are_news_and_a_linked_pull_request_listed_is_read()
         ],
         "each review is news"
     );
+    assert!(h.send().is_empty(), "the inbox is full: the rest waits");
+    h.step(Event::Took { item: item(5), through: 3 });
+    let next = h.send_one();
+    assert_eq!(next.op, Op::Pull { number: 9, reviews: 2 }, "the reviews after those told");
+    let told = h.answer(&next, Ok(Answer::Pull(pull(9, HEAD, &[Check::Passed], &[(PERSON, Verdict::Comment)]))));
+    assert_eq!(*told, [news(5, 4, News::Review { author: PERSON, verdict: Verdict::Comment, commit: HEAD })], "and on");
 }
 
 #[test]
@@ -789,7 +810,7 @@ fn fresh_reads_go_out_first_are_tried_again_and_answered_once() {
     h.step(Event::Write { owner: Token::new(5), write: Write::Close { item: item(1) }, resumed: false });
     h.step(Event::Read { owner, read: Read::Pull { item: item(9) } });
     let sent = h.send();
-    assert_eq!(sent[0].op, Op::Pull { number: 9 }, "the read before the write: {sent:?}");
+    assert_eq!(sent[0].op, Op::Pull { number: 9, reviews: 0 }, "the read before the write: {sent:?}");
     assert_eq!(sent[1].op, Op::Close { number: 1 }, "then the write");
     assert!(h.answer(&sent[0], Err(Error::Unavailable)).is_empty(), "tried again");
     h.at(2);
@@ -958,7 +979,7 @@ fn a_merge_that_timed_out_is_done_if_the_pull_request_merged_at_its_head() {
     h.at(3);
     h.fire();
     let check = h.send_one();
-    assert_eq!(check.op, Op::Pull { number: 4 }, "checked");
+    assert_eq!(check.op, Op::Pull { number: 4, reviews: 0 }, "checked");
     let mut merged = pull(4, HEAD, &[Check::Passed], &[]);
     merged.state = State::Closed;
     merged.merged = Some(OTHER);
@@ -1085,7 +1106,7 @@ fn the_budget_spends_its_window_then_waits_for_it_to_end() {
     h.step(Event::Read { owner: Token::new(1), read: Read::Pull { item: item(1) } });
     let sent = h.send();
     assert_eq!(sent.len(), 2, "a window's worth: {sent:?}");
-    assert_eq!(sent[0].op, Op::Pull { number: 1 }, "the read first");
+    assert_eq!(sent[0].op, Op::Pull { number: 1, reviews: 0 }, "the read first");
     assert!(h.send().is_empty(), "spent");
     assert_eq!(h.model.next_deadline(), Some(at(160)), "until the window ends");
     h.at(160);
@@ -1106,7 +1127,7 @@ fn calls_go_out_by_priority_and_no_more_than_the_limit_at_once() {
     h.step(Event::Read { owner: Token::new(2), read: Read::Pull { item: item(2) } });
     let sent = h.send();
     assert_eq!(sent.len(), 2, "two at once: {sent:?}");
-    assert_eq!(sent[0].op, Op::Pull { number: 2 }, "the fresh read first");
+    assert_eq!(sent[0].op, Op::Pull { number: 2, reviews: 0 }, "the fresh read first");
     assert_eq!(sent[1].op, Op::Close { number: 1 }, "then the write");
     h.answer(&sent[0], Ok(Answer::Pull(pull(2, HEAD, &[], &[]))));
     let next = h.send_one();
@@ -1131,7 +1152,7 @@ fn a_rate_limit_refusal_holds_every_call_until_its_reset() {
     h.at(40);
     h.fire();
     let sent = h.send();
-    assert_eq!(sent[0].op, Op::Pull { number: 1 }, "the read again, first: {sent:?}");
+    assert_eq!(sent[0].op, Op::Pull { number: 1, reviews: 0 }, "the read again, first: {sent:?}");
     assert!(h.facts().contains(&Fact::Limited { reset: at(40) }), "told as a fact");
 }
 

@@ -115,6 +115,7 @@ pub(crate) fn answered(
         Error::Forbidden
         | Error::Missing
         | Error::TooLarge
+        | Error::Empty
         | Error::Full
         | Error::Exists
         | Error::NothingToMerge
@@ -143,7 +144,7 @@ pub(crate) fn op(model: &Model, id: Id<Fetch>) -> (u32, Op) {
     let fetch = model.reads.get(id).expect("a read lives until its call is answered");
     match &fetch.read {
         Read::Item { item, after } => (item.repository, Op::Item { number: item.number, after: *after }),
-        Read::Pull { item } => (item.repository, Op::Pull { number: item.number }),
+        Read::Pull { item } => (item.repository, Op::Pull { number: item.number, reviews: 0 }),
         Read::PullFor { repository, head, base } => {
             (*repository, Op::PullFor { head: copy_of(head), base: copy_of(base) })
         }

@@ -25,7 +25,10 @@
 //! while a listing is paged moves to its end, and costs a duplicate, never a
 //! miss; a later pass begins at the newest time seen, inclusive, so what
 //! changed in that same second is listed again (see [`crate::items`] for how
-//! an item listed again at the same time is told apart).
+//! an item listed again at the same time is told apart). Paging by number can
+//! miss an item when another one of its time moves meanwhile: a pass that did
+//! both is followed by one from that time again (or, for the labels, by
+//! another listing of them).
 //!
 //! The slow pass lists every open item of a repository, a page every
 //! `Limits::slow`, by number, at the lowest priority, and reads each that is
@@ -71,11 +74,31 @@ pub(crate) struct Scan {
 enum Pass {
     /// None runs: the next is due at `Scan::due`.
     Idle,
-    /// A page of `listing` is asked for: items updated at or after `since`,
-    /// the `page`th; `newest` is the newest updated time the pass has seen.
-    Busy { listing: Listing, since: Time, page: u32, newest: Time, call: Id<Call>, attempt: u32 },
+    /// A page is asked for.
+    Busy { progress: Progress, call: Id<Call>, attempt: u32 },
     /// The last page failed: asked for again at `until`.
-    Waiting { listing: Listing, since: Time, page: u32, newest: Time, attempt: u32, until: Time },
+    Waiting { progress: Progress, attempt: u32, until: Time },
+}
+
+/// How far a pass is: the page of `listing` asked for, of the items updated
+/// at or after `since`, the `page`th; the newest updated time it has seen;
+/// the earliest time it paged by number at, and whether an item changed
+/// while it ran.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct Progress {
+    listing: Listing,
+    since: Time,
+    page: u32,
+    newest: Time,
+    tied: Option<Time>,
+    moved: bool,
+}
+
+impl Progress {
+    /// The first page of `listing` from `since`.
+    const fn first(listing: Listing, since: Time) -> Progress {
+        Progress { listing, since, page: 1, newest: since, tied: None, moved: false }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -184,9 +207,7 @@ pub(crate) fn poll(model: &mut Model, env: &Env<Limits>, repository: u32) {
     let scan = scan(model, repository);
     match scan.pass {
         Pass::Idle => begin(model, env, repository),
-        Pass::Waiting { listing, since, page, newest, attempt, until: _ } => {
-            ask(model, repository, listing, since, page, newest, attempt);
-        }
+        Pass::Waiting { progress, attempt, until: _ } => ask(model, repository, progress, attempt),
         Pass::Busy { .. } => unreachable!("the poll alarm runs while no listing is asked for"),
     }
 }
@@ -210,20 +231,20 @@ fn begin(model: &mut Model, env: &Env<Limits>, repository: u32) {
         Some(_) | None => (Listing::Tracked, Time::ZERO),
     };
     model.facts.push(Fact::Listing { repository });
-    ask(model, repository, listing, since, 1, since, 0);
+    ask(model, repository, Progress::first(listing, since), 0);
     items::poll_ci(model, repository, None);
 }
 
 /// Asks for a page of a listing.
-fn ask(model: &mut Model, repository: u32, listing: Listing, since: Time, page: u32, newest: Time, attempt: u32) {
+fn ask(model: &mut Model, repository: u32, progress: Progress, attempt: u32) {
     let call = calls::queue(&mut model.calls, Purpose::Listing(repository), Priority::Keep);
-    scan_mut(model, repository).pass = Pass::Busy { listing, since, page, newest, call, attempt };
+    scan_mut(model, repository).pass = Pass::Busy { progress, call, attempt };
 }
 
 /// What `repository`'s listing call asks, as it goes out.
 pub(crate) fn op(model: &Model, repository: u32) -> (u32, Op) {
     let op = match scan(model, repository).pass {
-        Pass::Busy { listing, since, page, .. } => match listing {
+        Pass::Busy { progress: Progress { listing, since, page, .. }, .. } => match listing {
             Listing::Tracked => Op::Items {
                 state: Some(Open::Open),
                 kind: None,
@@ -247,6 +268,12 @@ pub(crate) fn op(model: &Model, repository: u32) -> (u32, Op) {
 
 /// Terminal for `repository`'s listing call: each item listed is taken in
 /// turn, and the next page asked for, or the next listing, or the pass ends.
+///
+/// A pass that paged by number among items of one updated time, and moved
+/// meanwhile (an item it listed shows a time from after it began, at the
+/// forge's resolution), may have missed one of them, shifted onto a page it
+/// had read: its next pass starts from that time again, and a listing of the
+/// labels is repeated.
 pub(crate) fn answered(
     model: &mut Model,
     env: &Env<Limits>,
@@ -254,38 +281,60 @@ pub(crate) fn answered(
     result: Result<Answer, Error>,
     out: &mut Queue<Request>,
 ) {
-    let (listing, since, page, newest, attempt) = match scan(model, repository).pass {
-        Pass::Busy { listing, since, page, newest, call: _, attempt } => (listing, since, page, newest, attempt),
+    let (progress, attempt) = match scan(model, repository).pass {
+        Pass::Busy { progress, call: _, attempt } => (progress, attempt),
         Pass::Idle | Pass::Waiting { .. } => unreachable!("a listing's terminal comes while it is asked for"),
     };
     let (items, more) = match result {
         Ok(answer) => api::items(answer),
         Err(error) => {
-            failed(model, env, repository, listing, since, page, newest, attempt, error);
+            failed(model, env, repository, progress, attempt, error);
             return;
         }
     };
     let most = usize::try_from(env.limits.page).expect("a u32 fits in a usize");
     assert!(items.len() <= most, "the protocol layer brings a page at most");
-    let pass = scan(model, repository).passes;
-    let mut newest = newest;
+    let scan = scan(model, repository);
+    let (pass, began) = (scan.passes, scan.began);
+    let mut progress = progress;
     for summary in &items {
-        newest = newest.max(summary.updated);
+        progress.newest = progress.newest.max(summary.updated);
+        if summary.updated.saturating_add(env.limits.resolution) > began {
+            progress.moved = true;
+        }
         take(model, env, repository, summary, pass, out);
     }
     if more {
-        let (since, page) = match items.last() {
-            Some(last) if last.updated > since => (last.updated, 1),
-            Some(_) | None => (since, page.saturating_add(1)),
+        progress = match items.last() {
+            Some(last) if last.updated > progress.since => Progress { since: last.updated, page: 1, ..progress },
+            Some(_) | None => {
+                let tied = match progress.tied {
+                    Some(tied) => tied,
+                    None => progress.since,
+                };
+                Progress { page: progress.page.saturating_add(1), tied: Some(tied), ..progress }
+            }
         };
-        ask(model, repository, listing, since, page, newest, 0);
+        ask(model, repository, progress, 0);
         return;
     }
+    let missed = match progress.tied {
+        Some(tied) if progress.moved => Some(tied),
+        Some(_) | None => None,
+    };
     let scan = scan_mut(model, repository);
-    match listing {
-        Listing::Tracked => ask(model, repository, Listing::HandedIn, Time::ZERO, 1, newest, 0),
+    match progress.listing {
+        Listing::Tracked | Listing::HandedIn if missed.is_some() => {
+            // An item carrying the label may have been missed: listed again
+            // by the next pass.
+            scan.waiting = true;
+        }
+        Listing::Tracked | Listing::HandedIn | Listing::Changes => {}
+    }
+    match progress.listing {
+        Listing::Tracked => ask(model, repository, Progress::first(Listing::HandedIn, Time::ZERO), 0),
         Listing::HandedIn => match scan.mark {
-            Some(mark) => ask(model, repository, Listing::Changes, mark, 1, mark, 0),
+            Some(mark) => ask(model, repository, Progress::first(Listing::Changes, mark), 0),
             None => {
                 // The cold start is done: changes are listed from when it
                 // began.
@@ -295,9 +344,12 @@ pub(crate) fn answered(
             }
         },
         Listing::Changes => {
-            scan.mark = match scan.mark {
-                Some(mark) => Some(mark.max(newest)),
-                None => unreachable!("changes are listed once the cold start is done"),
+            let Some(mark) = scan.mark else {
+                unreachable!("changes are listed once the cold start is done");
+            };
+            scan.mark = match missed {
+                Some(tied) => Some(tied),
+                None => Some(mark.max(progress.newest)),
             };
             rest(model, env, repository);
         }
@@ -306,25 +358,15 @@ pub(crate) fn answered(
 
 /// A listing's page failed: asked for again at once for the rate, whose
 /// reset holds every call, or after a backoff.
-#[expect(clippy::too_many_arguments, reason = "the pass's state, taken apart")]
-fn failed(
-    model: &mut Model,
-    env: &Env<Limits>,
-    repository: u32,
-    listing: Listing,
-    since: Time,
-    page: u32,
-    newest: Time,
-    attempt: u32,
-    error: Error,
-) {
+fn failed(model: &mut Model, env: &Env<Limits>, repository: u32, progress: Progress, attempt: u32, error: Error) {
     match error {
-        Error::RateLimited { .. } => ask(model, repository, listing, since, page, newest, attempt),
+        Error::RateLimited { .. } => ask(model, repository, progress, attempt),
         Error::Unavailable
         | Error::Timeout
         | Error::Forbidden
         | Error::Missing
         | Error::TooLarge
+        | Error::Empty
         | Error::Full
         | Error::Exists
         | Error::NothingToMerge
@@ -334,7 +376,7 @@ fn failed(
         | Error::Protected => {
             let attempt = attempt.saturating_add(1);
             let until = env.now.saturating_add(items::backoff(&env.limits, &mut model.rng, attempt));
-            scan_mut(model, repository).pass = Pass::Waiting { listing, since, page, newest, attempt, until };
+            scan_mut(model, repository).pass = Pass::Waiting { progress, attempt, until };
             model.alarms.arm(Alarm::Poll(repository), until).expect("an alarm per repository fits");
         }
     }

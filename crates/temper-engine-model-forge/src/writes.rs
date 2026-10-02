@@ -25,9 +25,12 @@
 //!   the pull request: merged at that head, it is done.
 //! - **A record is read afresh before it is edited** (engine-model.md, 4.4):
 //!   one someone else changed or deleted since it was last read is not
-//!   written over, and the parent hears what it now is. After an edit that
-//!   may have been made, it is edited again without the check, which would
-//!   find the engine's own edit.
+//!   written over, and the parent hears what it now is. A record write aims at
+//!   the record as the working set knew it when the parent asked for the
+//!   write, or as the record writes before it in its lane left it, so one
+//!   asked for before the parent heard of a change fails as well. After an
+//!   edit that may have been made, it is edited again without the check,
+//!   which would find the engine's own edit.
 //!
 //! Its reads go out with the parent's fresh reads, ahead of the writes, and
 //! the writes ahead of keeping up. A failure that may pass (unavailable, a
@@ -68,7 +71,7 @@ use alloc::boxed::Box;
 use core::mem;
 
 use temper_lib::bytes::copy_of;
-use temper_lib::{Env, Id, Queue, Rng, Time, Token};
+use temper_lib::{Env, Id, Queue, Rng, Slab, Time, Token};
 
 use crate::api::{self, Answer, Body, Error, Kind, Mark, Op, State as Open};
 use crate::boundary::{Content, Failure, Item, Position, Record, Request, Write, Written};
@@ -235,10 +238,10 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
     let writing = model.writes.get_mut(id).expect("a write lives until it closes");
     writing.since = env.now;
     writing.from = from;
-    if let Some((record, position, _)) = known {
-        // Earlier writes of its lane may have posted the record since it was
-        // asked for.
-        writing.target = target_of(record);
+    if let Some((_, position, _)) = known {
+        // It carries the position taken as it goes; it aims at the record as
+        // it was when it was asked for, or as the writes before it in its lane
+        // left it.
         writing.position = position;
     }
     let phase = match &writing.write {
@@ -338,7 +341,7 @@ fn check_op(writing: &Writing) -> Op {
             let target = writing.target.expect("a record is checked when it has one");
             Op::Comment { number: item.number, id: target.comment }
         }
-        Write::Merge { item, .. } => Op::Pull { number: item.number },
+        Write::Merge { item, .. } => Op::Pull { number: item.number, reviews: 0 },
         Write::CreateIssue { .. }
         | Write::Comment { .. }
         | Write::SetLabels { .. }
@@ -540,6 +543,7 @@ fn made(writing: &mut Writing, env: &Env<Limits>, rng: &mut Rng, result: Result<
         | Error::Forbidden
         | Error::Missing
         | Error::TooLarge
+        | Error::Empty
         | Error::Full
         | Error::NothingToMerge
         | Error::Closed
@@ -717,6 +721,7 @@ fn failed(writing: &mut Writing, env: &Env<Limits>, rng: &mut Rng, phase: Phase,
         Error::Forbidden
         | Error::Missing
         | Error::TooLarge
+        | Error::Empty
         | Error::Full
         | Error::Exists
         | Error::NothingToMerge
@@ -748,7 +753,11 @@ fn conclude(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Que
             }
             if let Some(record) = record {
                 let item = subject(&writing.write).expect("a record is about an item");
+                let next = writing.next;
                 items::recorded(model, item, record);
+                if result.is_ok() {
+                    follow_record(&mut model.writes, next, record, env.limits.writes);
+                }
                 match result {
                     Err(Failure::Edited { .. }) => model.facts.push(Fact::Edited { item }),
                     Ok(_) | Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Forge(_)) => {}
@@ -802,6 +811,33 @@ fn close(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
             let last = model.lanes.remove(&lane);
             assert!(last == Some(id), "a lane's last write is the one closing with none after it");
         }
+    }
+}
+
+/// A write posted or edited its item's record, which is now `record`: the
+/// record writes queued after it in its lane aim at it. A record found
+/// changed by someone else is not passed on: the writes asked for before the
+/// parent heard of it fail as this one did.
+fn follow_record(writes: &mut Slab<Writing>, next: Option<Id<Writing>>, record: Record, most: u32) {
+    let mut next = next;
+    for _ in 0..most {
+        let Some(id) = next else {
+            return;
+        };
+        let writing = writes.get_mut(id).expect("a lane's writes live until they close");
+        match writing.write {
+            Write::Record { .. } => writing.target = target_of(record),
+            Write::CreateIssue { .. }
+            | Write::Comment { .. }
+            | Write::SetLabels { .. }
+            | Write::OpenPull { .. }
+            | Write::Merge { .. }
+            | Write::Close { .. }
+            | Write::DeleteBranch { .. }
+            | Write::PutPage { .. }
+            | Write::DeletePage { .. } => {}
+        }
+        next = writing.next;
     }
 }
 

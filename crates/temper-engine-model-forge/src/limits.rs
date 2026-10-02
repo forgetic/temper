@@ -51,6 +51,10 @@ pub struct Limits {
     /// listing began, which must be more than the forge's resolution.
     pub poll: Duration,
     pub hinted: Duration,
+    /// The resolution of the forge's times (a second on Forgejo): an item
+    /// listed at a time this close to a pass's start may have changed during
+    /// it.
+    pub resolution: Duration,
     /// The slow pass lists a page of a repository's open items every `slow`.
     pub slow: Duration,
     /// A call that failed for a while is tried again after a backoff drawn

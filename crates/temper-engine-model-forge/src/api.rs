@@ -52,11 +52,12 @@ pub enum Op {
     /// The comment `id` on the item `number`. Answered by
     /// [`Answer::Comment`].
     Comment { number: u64, id: u64 },
-    /// The pull request `number`: its head, its reviews, and the statuses on
-    /// its head. Answered by [`Answer::Pull`].
-    Pull { number: u64 },
-    /// The newest pull request, open or not, that merges `head` into `base`.
-    /// Answered by [`Answer::Pull`].
+    /// The pull request `number`: its head, the statuses on its head, and a
+    /// page of its reviews after the first `reviews`, oldest first. Answered
+    /// by [`Answer::Pull`].
+    Pull { number: u64, reviews: u32 },
+    /// The newest pull request, open or not, that merges `head` into `base`,
+    /// with the first page of its reviews. Answered by [`Answer::Pull`].
     PullFor { head: Box<[u8]>, base: Box<[u8]> },
     /// The latest status of each context on `commit`. Answered by
     /// [`Answer::Statuses`].
@@ -177,6 +178,8 @@ pub enum Error {
     Missing,
     /// Beyond the forge's limits.
     TooLarge,
+    /// A title or a body the forge requires is empty.
+    Empty,
     /// The repository holds as much of it as it may.
     Full,
     /// An open pull request has the same head and base.
@@ -255,8 +258,8 @@ pub enum Mark {
 }
 
 /// A pull request: its branches, its head commit, whether and how it
-/// merged, its reviews oldest first, and the latest status of each context on
-/// its head.
+/// merged, a page of its reviews oldest first and whether more follow, and the
+/// latest status of each context on its head.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Pull {
     pub number: u64,
@@ -267,6 +270,7 @@ pub struct Pull {
     pub merged: Option<[u8; 32]>,
     pub mergeable: bool,
     pub reviews: Box<[Review]>,
+    pub more: bool,
     pub statuses: Box<[Status]>,
 }
 
