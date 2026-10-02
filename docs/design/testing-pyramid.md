@@ -216,6 +216,64 @@ sees.
   subset (4.3) on the pushed tree, so a change that is wrong fails on the
   forge as it fails in the run.
 
+The model is built, as `testing/temper-forge-model`, a step crate with a
+vocabulary of its own. What building it settled:
+
+- **Forgejo-shaped, not better than Forgejo.** It refuses what Forgejo
+  refuses (too little permission, a label not defined, an empty title or
+  body, a stale head on merge, a merge its base's protection does not
+  allow), and keeps what Forgejo keeps and no more. Listings are
+  Forgejo's: the items updated at or after a time, at a second's
+  resolution, least recently updated first, paged by number, each page
+  read from the order as it is when its call arrives, so an item that
+  changes during a listing moves to its end and can shift another onto
+  a page already read. An item's updated time moves for what moves
+  Forgejo's (a comment, a review, its labels, its title or body, a push
+  to its head, closing, reopening, merging), not for a status on its
+  head nor for a comment edited or deleted; a configuration can make
+  either move it. A pending review is hidden until it is submitted, and
+  keeps the id it was started with. Stale approvals are dismissed only
+  where the protection says so, off by default as on Forgejo. Anyone
+  with write permission may edit or delete another's comment, as on
+  Forgejo's web, so a person can mangle the engine's record.
+- **Timing.** A call is decided as it arrives: refused for its user's
+  rate, failed before it is made, made and then timed out, or made, its
+  answer held for a drawn latency, sometimes late. A call may also time
+  out first and land afterwards, as a request a client gave up on can
+  still be acted on. The forge keeps a clock of its own, at its
+  resolution and skewed from the world's, and every time it shows is on
+  it. Webhooks name the branch and commit they are about, and come after
+  a drawn latency, late, out of order, or never.
+- **CI is drawn or cued by content.** When a commit becomes a head, each
+  of its repository's check contexts goes pending, then passes, fails or
+  never reports, by chance; or, where the repository configures a cue,
+  passes on a commit whose file at a path holds a marker, as the stand-in
+  until CI runs checks in the shell subset. A context may run again once
+  after it reported, so a head's CI can move after it settled. People
+  with write permission report statuses of their own.
+- **Merges** happen at an exact head, as a squash: one commit on the
+  base's tip, three-way from the newest commit head and base share, which
+  conflicts where both changed a path differently. A repository has at
+  most one protected branch, which takes a merge only with the statuses
+  and approvals its protection asks for, and refuses pushes, creation and
+  deletion. Deleting a branch closes the pull requests it was the head or
+  base of.
+- **Its git is the only forge git.** Commits live in the forge's one
+  store, named by a count so a seed replays to the same names, each a
+  parent and a tree; they carry no message. A working tree's git
+  (`temper-checkout-fake`) reaches the forge through a typed transport,
+  as real git reaches a remote across the network (4.3): the worker's and
+  the agent's worlds route it to the fake forge directly, answered in the
+  same instant, since io's latency already stands for the network and the
+  forge.
+- **Seen from outside.** Every change it makes is observed, content and
+  all, and so is every write it refused, in a bounded queue a world
+  drains for its referee (5.2); a world can also read its store at
+  settle, count what it did and refused, and ask how much room is left,
+  so that a forge that filled up is told from one that works. Needing
+  room, it forgets the statuses of the oldest commit no head shows;
+  commits it never forgets.
+
 ### 4.3 The machine
 
 The machine is the host temper's processes run on. It has three parts:
@@ -243,6 +301,11 @@ invocations temper makes need a face.
 The forge's git is not the machine's. The git program reaches the fake
 forge as real git does, across the network: through a typed transport
 that the world or the simulator routes, and over HTTP in the real loop.
+That split is built: `temper-checkout-fake` keeps working trees and
+their git directories, the commits a tree cloned, fetched or made among
+its files, while the forge keeps the repositories, and the transport
+carries git's calls between them (where a repository's branches are, a
+fetch, a push, a branch created for a base).
 
 **The shell subset.** An LLM can type any command, and no fake can run a
 real build. The machine's sh interprets a small subset of POSIX sh: a few
@@ -276,7 +339,8 @@ A fake of one of temper's components stands in for it in its neighbours'
 worlds until its real model exists, then retires, and the worlds meet the
 real component. A fake worker served until the worker's model was built;
 `testing/temper-fake-engine-model` serves the worker's worlds until the
-engine's model exists (engine-model.md, section 8).
+engine's model exists: its sub-models do, and its top level is being
+built (engine-model.md, section 16).
 
 Scripted stand-ins inside a world are another matter, and stay. The
 worker's worlds keep agents that hang, crash and break the channel's
@@ -340,6 +404,21 @@ things settle are seen differently at each tier, so they stay in each
 tier's harness (section 6). What a scenario expects of the system as a
 whole goes in the referee, and travels with the scenario.
 
+The referee is built in the shared harness, `tests/integration/world`,
+as ordinary Rust. Each world writes its scenario's expectations: what
+its referee observes, the names of what it expects to happen, the
+stimuli it may inject, and what it checks of each observation. Through
+them the referee checks safety and fails at once, arms a liveness
+expectation as a deadline, meets it, or withdraws and re-arms it; a
+liveness expectation whose deadline fires fails the test and is no
+longer pending, so meeting it later counts for nothing. A stimulus comes out when it is due, or at once from the
+observation that calls for it, so a world can inject it between two
+things it does, such as a restart between two writes. The verdict is
+passed, still open (and what is pending), stopped early by the
+scenario, or failed (when, why, and what was pending then). The agent's
+top-level world and every engine sub-model's world have one; the
+worker's worlds keep their checks inline.
+
 ## 6. What the tiers check
 
 Every world, and the simulator, checks (programming-style.md, 11):
@@ -366,10 +445,11 @@ cannot write a git directory.
 ```
 crates/*/src/tests.rs                       step tests
 testing/                                    fakes, as step crates
-tests/integration/world                     what every world shares: schedule, stage, ledger, trace, heap
-tests/integration/<component>/<sub-model>   sub-model worlds
+tests/integration/world                     what every world shares: schedule, stage, ledger, trace, heap, referee
+tests/integration/<component>/<sub-model>   sub-model worlds, the engine's in tests/integration/engine
 tests/integration/<component>/model         component and system worlds
-tests/integration/checkout                  the machine and the forge's git, today
+tests/integration/checkout                  the machine and working trees' git, today
+tests/integration/forge                     the fake forge's tests in ordinary Rust: its memory
 ```
 
 The protocol worlds, the simulator (`sim/`, programming-style.md,
@@ -382,8 +462,8 @@ As of 2026-10-02.
 
 | Tier | Built |
 |---|---|
-| step tests | every model crate, and lib |
-| model worlds | the agent's tools, session and run; the worker's checkout, agent and host; the whole worker |
+| step tests | every model crate, the fakes, and lib |
+| model worlds | the agent's tools, session and run; the worker's checkout, agent and host; the whole worker; the engine's work, plan, forge, fleet, brief, notes and views (the rules, which keep no state, by step tests alone) |
 | system worlds | the worker and the agent, in the agent's top-level world |
 | protocol worlds | none: no protocol layer exists |
 | simulator | none: no io layer, service or shell exists |
@@ -392,37 +472,42 @@ As of 2026-10-02.
 The fakes:
 
 - **LLM provider:** its model, `testing/temper-llm-model`.
-- **Engine:** its model, temporary, `testing/temper-fake-engine-model`.
-- **Forge:** git only, as `git::Forge` in `temper-checkout-fake`
-  (`tests/integration/checkout`): repositories of branches and commits,
-  fast-forward pushes, unreachable and refusing repositories, another
-  party moving a branch.
+- **Engine:** its model, temporary, `testing/temper-fake-engine-model`,
+  which the worker's worlds and the agent's top-level world meet.
+- **Forge:** its model, `testing/temper-forge-model` (4.2), with its git.
+  The forge sub-model's world runs against it, its translation standing
+  in for the protocol layer; the worker's and the agent's worlds reach its git
+  through the working trees' transport, with no latency or faults of its
+  own there, as io's stand for them. It has no inline review comments,
+  and no description or link on a status, which the worlds answer empty.
 - **Machine:** `temper-checkout-fake`, ordinary Rust rather than a step
   crate, at its model face only, through each world's translation. It has
-  files with versions, links and roots, and a search. A command is
-  matched whole and answered with canned output and file changes,
-  whatever the files hold. Agents are programs already, at the model
-  face: the agent's top-level world starts an agent model for each spawn,
-  with its channel on the process's pipes.
-- **People:** none.
+  files with versions, links and roots, a search, and the working trees'
+  git. A command is matched whole and answered with canned output and
+  file changes, whatever the files hold. Agents are programs already, at
+  the model face: the agent's top-level world starts an agent model for
+  each spawn, with its channel on the process's pipes.
+- **People:** none. The engine sub-models' worlds script what people do
+  through the parent they script.
 
 The checks:
 
-- **Memory** is measured in every world.
-- **Replay** is checked in the tools', the run's and the host's worlds,
-  and in the agent's top-level world.
+- **Memory** is measured in every world, and the fake forge's against its
+  worst case in `tests/integration/forge`.
+- **Replay** is checked in every world.
 - **Transition coverage** is not measured, and nothing is fuzzed yet, as
   there is no protocol machine.
-- **Scenario expectations** are checked inline in each world, beside its
-  contracts: the agent's top-level world checking that the engine records
-  the outcome the run accepted is one. There is no referee yet.
+- **Scenario expectations** are a referee's (5.2) in the agent's
+  top-level world and in every engine sub-model's world. The worker's
+  worlds, and the agent's tools', session's and run's, check theirs
+  inline, beside their contracts.
 
 ## 9. Not built yet
 
 By tier:
 
-- **Model worlds** for the engine and its sub-models, with the fake forge
-  and fake people (engine-model.md, section 14).
+- **Model worlds:** the engine's own, with its top level, which are being
+  built, and with fake people (engine-model.md, section 14).
 - **System worlds:** the engine, workers and agents together, with the
   fake LLM, the fake forge and fake people; several workers in one world
   (worker-model.md, section 11). The worker-and-agent world lacks what the
@@ -432,21 +517,23 @@ By tier:
 - **The simulator,** with the io layers, the services and the shells.
 - **The real loop:** a shell that drives every service in one loop, and
   the sandbox.
-- **The referee** (section 5.2), with the worlds' scenario-level checks
-  moved into it, so that they run at every tier.
-- **Checks:** replay in every world, transition coverage, fuzzing.
+- **The referee** in the worlds that still check their scenarios inline,
+  so that those checks run at every tier.
+- **Checks:** transition coverage, fuzzing.
 
 By fake:
 
 - **LLM provider:** its protocol and io layers.
-- **Forge:** its model beyond git (the API side), in one store with the
-  git now in `temper-checkout-fake`; then its protocol (Forgejo, GitHub,
-  webhooks, git over HTTP) and io layers.
-- **Machine:** split from the forge's git; a step crate; programs as step
-  machines with command-line faces; the shell subset; the io face and the
-  kernel face; the real loop's sandbox.
+- **Forge:** inline review comments, statuses' descriptions and links,
+  commit messages, more than one protected branch in a repository, and CI
+  that runs checks in the shell subset; then its protocol (Forgejo,
+  GitHub, webhooks, git over HTTP) and io layers.
+- **Machine:** a step crate; programs as step machines with command-line
+  faces; the shell subset; the io face and the kernel face; the real
+  loop's sandbox.
 - **People:** a model, then the client side of the web's protocol.
-- **Engine:** retired once the engine's model exists.
+- **Engine:** retired once the engine's top level exists, when the
+  worker's and the agent's worlds meet the real engine.
 
 ## 10. Open questions
 

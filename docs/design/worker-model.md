@@ -70,8 +70,11 @@ agent    LLM work: one run per agent process, reporting to the worker
   unavailable, and an attempt assigned again while the worker hosts it is
   dropped. A stale attempt can never act over a newer one.
 - **Answers are acknowledged.** The worker keeps each answer until the
-  engine acknowledges it, and sends it again after every hello; the engine
-  drops a duplicate for an attempt it already has, acknowledging it again.
+  engine acknowledges it, and sends it again after every hello. The
+  engine acknowledges an answer only once it has made it durable on the
+  forge (engine-model.md, 4.2): a copy that comes before then is dropped
+  unacknowledged, and one for an attempt the engine has finished with is
+  acknowledged again.
   An answer not yet acknowledged keeps its slot. A refusal goes once and
   keeps nothing: one lost with the channel reads as a lost attempt.
 - **Losing contact is survivable.** If the channel drops, runs go on for a
@@ -382,11 +385,13 @@ The fake engine is a step crate, as much of an engine as a worker meets,
 and temporary: the engine's model takes its place once it exists.
 
 testing-pyramid.md places these worlds among temper's tiers and tracks
-their fakes. Git and files are one fake today; the git is to move into
-the fake forge, in one store with its API, so that a branch the worker
-pushes is the head the engine reads, and the files are to become the
-machine, whose programs, git among them, grow command-line faces for the
-protocol layer to meet (testing-pyramid.md, sections 4.2 and 4.3).
+their fakes. The working trees' remotes are on the fake forge, in one
+store with its API, so that a branch the worker pushes is the head the
+engine reads; the worlds reach it through git's transport, answered in
+the same instant, since io's latency stands for the network and the
+forge. The files and working trees are to become the machine, whose
+programs, git among them, grow command-line faces for the protocol layer
+to meet (testing-pyramid.md, sections 4.2 and 4.3).
 
 ## 10. Open questions
 
@@ -395,9 +400,11 @@ protocol layer to meet (testing-pyramid.md, sections 4.2 and 4.3).
   a saved-work branch that exists finds it moved, so while one exists the
   engine starts runs from it, or deletes it first.
 - **Inbound acknowledgement:** the worker bounces an inbound event a run
-  could not take, and says nothing of those it delivered. The engine's
-  inbox position (engine-model.md, 4.3) could move on the run's answer,
-  or on an acknowledgement of each event the run has read.
+  could not take, saying why but not which event it was, and says nothing
+  of those it delivered. The engine moves an item's inbox position
+  (engine-model.md, 4.3) only past what a run took, so it needs to know
+  which: a bounce could carry the event's name, or the run's answer could
+  say how many events the run read.
 - **A push's message:** the worker commits the run's message whole, as
   the title; the channel could carry a change's title and body apart.
 - **Before the first channel:** the grace starts only when an open
@@ -430,7 +437,9 @@ yet, each to be designed before it is built:
   agent channel's framing, git invocations and their parsing, contained
   process trees, workspace directories.
 - **The engine.** The worker's worlds meet a fake one, temporary until
-  the engine's model exists (engine-model.md, section 8).
+  the engine's model exists: its sub-models are built, the fleet among
+  them, and its top level is being built (engine-model.md, sections 8
+  and 16).
 - **Saving periodically** (4.2), so a dying worker loses less: a run
   saves at park, at an unfinished end and at cancel only.
 - **Checks-only runs and code-graph indexing** (section 10).
