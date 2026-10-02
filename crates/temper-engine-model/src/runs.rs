@@ -556,6 +556,11 @@ pub(crate) fn acknowledge(model: &mut Model, env: &Env<Limits>, item: Item, atte
     forget(model, payload);
     let run = translate::run_of(item);
     route::fleet_step(model, env, fleet::Event::Acknowledge { run, attempt: Token::new(attempt) });
+    if let Some(id) = items::find(model, item)
+        && get(model, id).resave
+    {
+        items::aside(model, env, id);
+    }
 }
 
 /// The hub is done with the item: the forge sub-model lets it go.

@@ -45,6 +45,10 @@ const DELIVERIES: u32 = 20_000;
 /// The store's bound on the traces it keeps.
 const TRACES: usize = 100_000;
 
+/// The stories this world tells: every one of the engine's world but the
+/// plans' (`Plan`, `Grow`), whose scripts this world's workers do not play.
+pub const STORIES: [Story; 6] = [Story::Hello, Story::Fix, Story::Chat, Story::Notes, Story::Reject, Story::Stall];
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Settings {
     /// Seeds the world, which seeds the engine, the worker, the process trees
@@ -94,7 +98,7 @@ impl Settings {
             worker: LIMITS,
             engine: ENGINE_LIMITS,
             forge: FORGE,
-            stories: people::SWEPT.to_vec(),
+            stories: STORIES.to_vec(),
             people: Span::millis(1_000, 10_000),
             stops: 0,
             stop_after: Span::millis(1_000, 30_000),

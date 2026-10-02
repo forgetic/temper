@@ -49,13 +49,7 @@ pub enum Story {
     Stall,
 }
 
-/// The stories random worlds draw from. A plan's (`Plan`, `Grow`) runs on
-/// its own, calm: with other changes landing on the same branch at once,
-/// the engine sees its changes' base moved after every push (its top
-/// level's `base_moved` keeps comparing against a base read before the
-/// last), and rebases them until it holds them.
-pub const SWEPT: [Story; 6] = [Story::Hello, Story::Fix, Story::Chat, Story::Notes, Story::Reject, Story::Stall];
-
+/// Every story, which random worlds draw from.
 pub const STORIES: [Story; 8] =
     [Story::Hello, Story::Fix, Story::Chat, Story::Notes, Story::Plan, Story::Grow, Story::Reject, Story::Stall];
 

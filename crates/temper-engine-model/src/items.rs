@@ -99,6 +99,13 @@ pub(crate) struct Entry {
     pub(crate) conflicted: Option<[u8; 32]>,
     /// The permission the rules want of whoever accepts what it holds.
     pub(crate) wants: Option<Permission>,
+    /// The application that created it, waiting for its first record to be
+    /// written before it goes on.
+    pub(crate) holding: Option<Id<Entry>>,
+    /// Its records written on the side, in flight.
+    pub(crate) asides: u32,
+    /// A record written on the side waits to go again.
+    pub(crate) resave: bool,
     /// The person's call that opened it as a session, answered once its
     /// first record is written: a restart before then leaves it unanswered,
     /// and the call made again finds the issue by its key.
@@ -129,8 +136,11 @@ pub(crate) enum Job {
         owner: Token,
     },
     /// Writing the record.
+    /// Writing the record, tried again `retries` times so far after the
+    /// forge failed for a while.
     Writing {
         owner: Token,
+        retries: u32,
     },
     /// Posting the outcome the fleet's `outcome` carries.
     Recording {
@@ -311,6 +321,9 @@ impl Entry {
             merged: None,
             conflicted: None,
             wants: None,
+            holding: None,
+            asides: 0,
+            resave: false,
             opened: None,
         }
     }
@@ -534,10 +547,25 @@ pub(crate) fn drop_entry(model: &mut Model, id: Id<Entry>) {
     entry.taking = Taking::Gone;
     let item = entry.item;
     let opened = entry.opened.take();
+    let holding = entry.holding.take();
+    let lingers = entry.asides > 0;
     model.names.remove(&item);
-    model.items.retire(id);
+    if !lingers {
+        model.items.retire(id);
+    }
     if let Some(to) = opened {
         model.requests.push(Request::Reply { to, reply: Reply::Refused(Refusal::Failed) });
+    }
+    release_holder(model, holding);
+}
+
+/// The application that created an item goes on, once the item's first
+/// record is written or it is let go: from the ready list.
+fn release_holder(model: &mut Model, holding: Option<Id<Entry>>) {
+    if let Some(parent) = holding
+        && model.stalled.try_push(parent).is_err()
+    {
+        unreachable!("the ready list has room for every item");
     }
 }
 
@@ -545,7 +573,10 @@ pub(crate) fn drop_entry(model: &mut Model, id: Id<Entry>) {
 /// opened it is answered.
 pub(crate) fn recorded(model: &mut Model, id: Id<Entry>, written: bool) {
     let Some(entry) = model.items.get_mut(id) else { return };
+    let holding = entry.holding.take();
     let item = entry.item;
+    release_holder(model, holding);
+    let Some(entry) = model.items.get_mut(id) else { return };
     let Some(to) = entry.opened.take() else { return };
     let reply = if written { Reply::Opened { item } } else { Reply::Refused(Refusal::Failed) };
     model.requests.push(Request::Reply { to, reply });
@@ -627,19 +658,66 @@ pub(crate) fn mark(related: &mut Box<[Related]>, item: Item, now: Time) -> bool 
 
 /// Writes the item's record on the side, as its relations changed: it is
 /// composed as the call goes out, so it carries what its owners' parts say
-/// then.
+/// then. None goes while a run's answer is handed to the hub and not yet
+/// durable, since the inbox position it would carry has moved with what the
+/// run took: it goes once the answer is acknowledged.
 pub(crate) fn aside(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     let Some(entry) = model.items.get(id) else { return };
     if entry.step.is_none() || entry.closed || entry.taking != Taking::Taken {
         return;
     }
+    let handed = handing(model, entry.item);
     let item = translate::forge_item(entry.item);
-    let Ok(wait) = model.waits.insert(Wait::Aside { entry: Some(id) }) else {
+    let Some(entry) = model.items.get_mut(id) else { return };
+    // One at a time: the one in flight is followed by another once it ends.
+    if handed || entry.asides > 0 {
+        entry.resave = true;
+        return;
+    }
+    entry.resave = false;
+    entry.asides = entry.asides.saturating_add(1);
+    let Ok(wait) = model.waits.insert(Wait::Record { entry: id }) else {
         unreachable!("the waits have room for every item's write")
     };
     let owner = wait.token();
     let write = forge::Write::Record { item, payload: owner };
     route::forge_step(model, env, forge::Event::Write { owner, write, resumed: None });
+}
+
+/// Whether an answer of the item's runs is handed to the hub and not yet
+/// acknowledged.
+fn handing(model: &Model, item: Item) -> bool {
+    for (handed, _) in &model.handed {
+        if handed.0 == item {
+            return true;
+        }
+    }
+    false
+}
+
+/// A record written on the side ended. One the forge had no room for goes
+/// again from the ready list; one that failed otherwise is carried by the
+/// item's next record. An entry the hub is done with goes once its last is
+/// out.
+pub(crate) fn aside_written(model: &mut Model, id: Id<Entry>, result: Result<forge::Written, forge::Failure>) {
+    let Some(entry) = model.items.get_mut(id) else { return };
+    entry.asides = entry.asides.saturating_sub(1);
+    if entry.taking == Taking::Gone {
+        if entry.asides == 0 {
+            model.items.retire(id);
+        }
+        return;
+    }
+    let busy = match result {
+        Err(forge::Failure::Busy) => true,
+        Ok(_) | Err(_) => false,
+    };
+    if busy || entry.resave {
+        entry.resave = true;
+        if model.resaves.try_push(id).is_err() {
+            unreachable!("the ready list has room for every item's record");
+        }
+    }
 }
 
 /// Puts `inbound` in the item's inbox, and tells the hub: relayed to its run

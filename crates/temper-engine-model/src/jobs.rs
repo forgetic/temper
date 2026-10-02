@@ -310,6 +310,9 @@ fn count(related: &[Related]) -> plan::Relations {
     relations
 }
 
+/// How many times a record write the forge failed for a while goes again.
+const RECORD_RETRIES: u32 = 3;
+
 /// The hub writes the item's record: its part is `lifecycle`.
 pub(crate) fn write(model: &mut Model, env: &Env<Limits>, owner: Token, item: Item, lifecycle: work::Lifecycle) {
     let id = held(model, item);
@@ -336,7 +339,7 @@ pub(crate) fn write(model: &mut Model, env: &Env<Limits>, owner: Token, item: It
     let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
         unreachable!("the waits have room for every item's job")
     };
-    get_mut(model, id).job = Job::Writing { owner };
+    get_mut(model, id).job = Job::Writing { owner, retries: 0 };
     write_record(model, env, id, wait);
 }
 
@@ -1237,11 +1240,20 @@ pub(crate) fn wrote(
 ) {
     let Some(entry) = model.items.get(id) else { return };
     match &entry.job {
-        Job::Writing { owner, .. } => {
-            let owner = *owner;
+        Job::Writing { owner, retries } => {
+            let (owner, retries) = (*owner, *retries);
             let wrote = match result {
                 Ok(_) => work::Wrote::Done,
                 Err(forge::Failure::Busy) => return stall(model, id),
+                // The forge failed for a while, past the forge sub-model's
+                // own attempts: the record is what holds a run's answer, so
+                // it is tried again a few times before the item is held.
+                Err(forge::Failure::Forge(
+                    api::Error::Timeout | api::Error::Unavailable | api::Error::RateLimited { .. },
+                )) if retries < RECORD_RETRIES => {
+                    get_mut(model, id).job = Job::Writing { owner, retries: retries.saturating_add(1) };
+                    return stall(model, id);
+                }
                 Err(_) => work::Wrote::Failed,
             };
             items::recorded(model, id, wrote == work::Wrote::Done);
@@ -1313,9 +1325,13 @@ fn written(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<f
         }
         Err(_) => return finish(model, env, id, Finish::Failed),
     };
-    made(model, env, id, written);
+    let waits = made(model, env, id, written);
     advance(model, id);
-    next(model, env, id);
+    // An item it created goes on once its record is written: the
+    // application goes on then, from the ready list.
+    if !waits {
+        next(model, env, id);
+    }
 }
 
 /// Whether the write in hand deletes a branch, which is done if the branch is
@@ -1358,38 +1374,57 @@ fn in_hand(model: &Model, id: Id<Entry>) -> Option<&plan::Write> {
 
 /// What a write made changes in the top level's state: an item created is
 /// taken in, a pull request opened is linked.
-fn made(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, written: forge::Written) {
-    let Some(write) = in_hand(model, id) else { return };
+fn made(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, written: forge::Written) -> bool {
+    let Some(write) = in_hand(model, id) else { return false };
+    let number = match written {
+        forge::Written::Created(number) => Some(number),
+        forge::Written::Merged(_)
+        | forge::Written::Commented(_)
+        | forge::Written::Revision(_)
+        | forge::Written::Reviewed(_)
+        | forge::Written::Done => None,
+    };
     match write {
         plan::Write::Create { record, .. } => {
-            let forge::Written::Created(number) = written else { return };
+            let Some(number) = number else { return false };
             let record = plan::Record::clone(record);
-            created(model, env, id, record, number);
+            created(model, env, id, record, number)
         }
         plan::Write::OpenPull { .. } => {
-            let forge::Written::Created(number) = written else { return };
+            let Some(number) = number else { return false };
             let entry = get_mut(model, id);
             entry.relations.pull = Some(number);
             let item = translate::forge_item(entry.item);
             route::forge_step(model, env, forge::Event::Link { item, pull: Some(number) });
+            false
         }
         plan::Write::Merge { .. } => {
-            let forge::Written::Merged(commit) = written else { return };
-            get_mut(model, id).merged = Some(commit);
+            let commit = match written {
+                forge::Written::Merged(commit) => Some(commit),
+                forge::Written::Created(_)
+                | forge::Written::Commented(_)
+                | forge::Written::Revision(_)
+                | forge::Written::Reviewed(_)
+                | forge::Written::Done => None,
+            };
+            if let Some(commit) = commit {
+                get_mut(model, id).merged = Some(commit);
+            }
+            false
         }
         plan::Write::ReopenPull
         | plan::Write::Close
         | plan::Write::DeleteBranch
         | plan::Write::Progress(_)
         | plan::Write::Goal(_)
-        | plan::Write::Release { .. } => {}
+        | plan::Write::Release { .. } => false,
     }
 }
 
 /// An item an application made, for a step: held, its record's parts as the
 /// plan gave them, its dependencies among its goal's steps, and it joins
 /// its goal's steps, and the steps of the item that added it.
-fn created(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, record: plan::Record, number: u64) {
+fn created(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, record: plan::Record, number: u64) -> bool {
     let entry = get(model, id);
     let parent = entry.item;
     let supervising = match entry.staged.as_ref() {
@@ -1400,7 +1435,7 @@ fn created(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, record: plan::Re
     let item = Item { repository: record.step.repository.0, number };
     let name = copy_of(&record.step.name);
     let dependencies = resolve(model, goal, &record.step.after, &env.limits);
-    let Some(child) = items::hold(model, env, item) else { return };
+    let Some(child) = items::hold(model, env, item) else { return false };
     let child_entry = get_mut(model, child);
     if child_entry.step.is_none() {
         child_entry.step = Some(record);
@@ -1408,12 +1443,20 @@ fn created(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, record: plan::Re
         child_entry.relations.parent = Some(parent);
         child_entry.relations.dependencies = dependencies;
     }
+    // Its record is written before the application goes on: the step it
+    // carries is nowhere else, and a restart before then applies the outcome
+    // again, which finds the item by its key and takes it in again.
+    let unwritten = child_entry.taking != items::Taking::Taken;
+    if unwritten {
+        child_entry.holding = Some(id);
+    }
     if let Some(goal) = goal {
         join(model, goal, &name, item);
     }
     if goal != Some(parent) {
         join(model, parent, &name, item);
     }
+    unwritten
 }
 
 /// The items of the steps named `after`, among the goal's steps.
@@ -1469,12 +1512,10 @@ pub(crate) fn again(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
             let index = entry.asking;
             ask(model, env, id, index);
         }
-        Job::Writing { owner, .. } => {
-            let owner = *owner;
+        Job::Writing { .. } => {
             let Ok(wait) = model.waits.insert(Wait::Job { entry: id }) else {
                 unreachable!("the waits have room for every item's job")
             };
-            get_mut(model, id).job = Job::Writing { owner };
             write_record(model, env, id, wait);
         }
         Job::Recording { owner, outcome, resumed, .. } => {

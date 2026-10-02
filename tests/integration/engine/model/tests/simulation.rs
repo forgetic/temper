@@ -85,14 +85,6 @@ fn a_change_whose_ci_never_reports_stalls_and_is_held() {
 }
 
 #[test]
-fn every_story_but_the_plans_at_once_settles() {
-    let world = run(Settings::only(5, &temper_engine_model_tests::people::SWEPT));
-    for tale in 0..world.stories() {
-        assert!(closed(&world, tale), "story {tale} is done");
-    }
-}
-
-#[test]
 fn a_seed_replays_to_the_same_run() {
     let run = |seed: u64| {
         let world = run(Settings::random(seed));
@@ -112,11 +104,12 @@ fn facts_change_nothing() {
     }
 }
 
-/// Plans' changes landing on one branch beside others: the engine sees their
-/// base moved after every push, and rebases them until it holds them (see
-/// `people::SWEPT`).
+/// Every story at once: plans' changes land on one branch beside others,
+/// each rebased as the base moves under it.
 #[test]
-#[ignore = "the engine sees a change's base moved after every push once another lands"]
 fn every_story_at_once_settles() {
-    run(Settings::calm(5));
+    let world = run(Settings::calm(5));
+    for tale in 0..world.stories() {
+        assert!(closed(&world, tale), "story {tale} is done");
+    }
 }

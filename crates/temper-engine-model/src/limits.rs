@@ -75,12 +75,12 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(views::worst_case(&limits.views)?)?;
     let items = limits.work.items;
     let entry = entry_bytes(limits)?;
-    let table = Slab::<Entry>::worst_case(items)?
+    let table = Slab::<Entry>::worst_case(entries(limits)?)?
         .checked_add(Map::<work::Item, Id<Entry>>::worst_case(items)?)?
-        .checked_add(u64::from(items).checked_mul(entry)?)?;
+        .checked_add(u64::from(entries(limits)?).checked_mul(entry)?)?;
     let waited = Slab::<Wait>::worst_case(waits(limits)?)?
         .checked_add(u64::from(waits(limits)?).checked_mul(wait_bytes(limits)?)?)?;
-    let retried = Queue::<Id<Wait>>::worst_case(waits(limits)?)?;
+    let retried = Queue::<Id<Entry>>::worst_case(items)?.checked_add(Queue::<Id<Entry>>::worst_case(items)?)?;
     let carried = Slab::<Carried>::worst_case(carried(limits)?)?
         .checked_add(u64::from(carried(limits)?).checked_mul(u64::from(limits.text_bytes))?)?;
     let handed = Map::<(work::Item, u64), Token>::worst_case(limits.fleet.attempts)?;
@@ -163,6 +163,13 @@ fn wait_bytes(limits: &Limits) -> Option<u64> {
     Some(page.max(listing).max(u64::from(limits.text_bytes)))
 }
 
+/// The entries the table holds: one per item the hub holds, and as many
+/// again of items it is done with whose records written on the side are
+/// still on their way.
+pub(crate) fn entries(limits: &Limits) -> Option<u32> {
+    limits.work.items.checked_mul(2)
+}
+
 /// The inbox an entry keeps: as much news as the forge sub-model holds for
 /// an item, and its notices, merged: one for each related item done (its
 /// dependencies and its children), one for each child held, and a decision.
@@ -170,7 +177,8 @@ pub(crate) fn inbox(limits: &Limits) -> Option<u32> {
     limits.forge.inbox.checked_add(limits.plan.steps.checked_mul(3)?)?.checked_add(1)
 }
 
-/// What may wait for an answer at once: a step of each item's job, a read
+/// What may wait for an answer at once: a step of each item's job and its
+/// take, a record written on the side of each entry, a read
 /// of each section of each brief, an operation of the notes', a call of each
 /// run, people's calls, and the store's operations for snapshots and
 /// traces.
@@ -181,7 +189,8 @@ pub(crate) fn waits(limits: &Limits) -> Option<u32> {
     limits
         .work
         .items
-        .checked_mul(2)?
+        .checked_add(entries(limits)?)?
+        .checked_add(limits.work.items)?
         .checked_add(briefs)?
         .checked_add(notes)?
         .checked_add(limits.fleet.calls)?

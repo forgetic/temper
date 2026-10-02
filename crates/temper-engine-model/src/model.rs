@@ -50,6 +50,9 @@ pub struct Model {
     pub(crate) waits: Slab<Wait>,
     /// Items whose job the forge refused as busy: their stage goes again.
     pub(crate) stalled: Queue<Id<Entry>>,
+    /// Items whose record written on the side goes again: the forge refused
+    /// it as busy, or it changed while one was in flight.
+    pub(crate) resaves: Queue<Id<Entry>>,
     pub(crate) carried: Slab<Carried>,
     /// The answers handed to the hub and not yet acknowledged, by their
     /// item and attempt: the fleet's `Acknowledge` goes once the hub has
@@ -123,10 +126,11 @@ impl Model {
             notes: notes::Model::new(&limits.notes),
             views: views::Model::new(&limits.views, now),
             config,
-            items: Slab::with_capacity(items),
+            items: Slab::with_capacity(limits::entries(limits).expect("worst_case accepted the limits")),
             names: Map::with_capacity(items),
             waits: Slab::with_capacity(waits),
             stalled: Queue::with_capacity(items),
+            resaves: Queue::with_capacity(items),
             carried: Slab::with_capacity(carried),
             handed: Map::with_capacity(limits.fleet.attempts),
             held: Queue::with_capacity(items),
@@ -241,7 +245,11 @@ impl Model {
     /// events.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.forge.is_ready() || self.fleet.is_ready() || self.notes.is_ready() || !self.stalled.is_empty()
+        self.forge.is_ready()
+            || self.fleet.is_ready()
+            || self.notes.is_ready()
+            || !self.stalled.is_empty()
+            || !self.resaves.is_empty()
     }
 
     /// The oldest fact not drained yet, a sub-model's or the top level's.
@@ -337,6 +345,8 @@ pub fn resume(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
         route::notes_resume(model, env);
     } else if let Some(id) = model.stalled.pop() {
         crate::jobs::again(model, env, id);
+    } else if let Some(id) = model.resaves.pop() {
+        crate::items::aside(model, env, id);
     }
     settle(model, env, out);
 }

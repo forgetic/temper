@@ -53,6 +53,7 @@ pub(crate) fn take(model: &mut Model, token: Token) -> Option<Wait> {
         Wait::Done => None,
         Wait::Job { .. }
         | Wait::Take { .. }
+        | Wait::Record { .. }
         | Wait::Aside { .. }
         | Wait::Brief { .. }
         | Wait::Wiki { .. }
@@ -115,7 +116,7 @@ fn named(op: &api::Op) -> Option<Token> {
 /// for, the outcome it posts, or the page it writes.
 fn payload(model: &Model, token: Token) -> Option<Payload> {
     match model.waits.get(Id::from_token(token))? {
-        Wait::Job { entry } | Wait::Aside { entry: Some(entry) } | Wait::Take { entry, .. } => {
+        Wait::Job { entry } | Wait::Take { entry, .. } => {
             let entry = model.items.get(*entry)?;
             match &entry.job {
                 Job::Recording { outcome, .. } => Some(Payload::Outcome(runs::posted(model, *outcome)?)),
@@ -124,10 +125,13 @@ fn payload(model: &Model, token: Token) -> Option<Payload> {
                 }
             }
         }
+        // A record written on the side: an entry the hub is done with stays
+        // until its last such write has gone out.
+        Wait::Record { entry } => Some(Payload::Record(Box::new(model.items.get(*entry)?.record()?))),
         Wait::Wiki { op: Wiki::Create { page }, .. } | Wait::Wiki { op: Wiki::Edit { page, .. }, .. } => {
             Some(Payload::Page(page.clone()))
         }
-        Wait::Aside { entry: None }
+        Wait::Aside { .. }
         | Wait::Wiki { .. }
         | Wait::Brief { .. }
         | Wait::Relay { .. }
@@ -156,7 +160,7 @@ pub(crate) fn read(model: &mut Model, env: &Env<Limits>, owner: Token, result: R
             runs::serve_answer(model, env, to, served);
         }
         Wait::Person { to, person, ask } => people::read(model, env, to, person, ask, result),
-        Wait::Take { .. } | Wait::Aside { .. } | Wait::Views { .. } | Wait::Done => {}
+        Wait::Take { .. } | Wait::Record { .. } | Wait::Aside { .. } | Wait::Views { .. } | Wait::Done => {}
     }
 }
 
@@ -179,6 +183,7 @@ pub(crate) fn wrote(
             runs::serve_answer(model, env, to, served);
         }
         Wait::Person { to, person: _, ask } => people::wrote(model, env, to, ask, result),
+        Wait::Record { entry } => items::aside_written(model, entry, result),
         Wait::Take { .. } | Wait::Aside { .. } | Wait::Brief { .. } | Wait::Views { .. } | Wait::Done => {}
     }
 }
@@ -208,6 +213,7 @@ pub(crate) fn stored(model: &mut Model, env: &Env<Limits>, owner: Token, stored:
             }
         }
         Wait::Take { .. }
+        | Wait::Record { .. }
         | Wait::Aside { entry: None }
         | Wait::Brief { .. }
         | Wait::Wiki { .. }

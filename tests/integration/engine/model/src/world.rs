@@ -78,7 +78,7 @@ impl Settings {
                     dependencies: 8,
                     branches: 32,
                     commits: 256,
-                    files: 8,
+                    files: 32,
                     statuses: 64,
                     contexts: 2,
                     pages: 16,
@@ -183,7 +183,7 @@ impl Settings {
             ..calm.forge
         };
         let mut stories = Vec::new();
-        for story in people::SWEPT {
+        for story in people::STORIES {
             if rng.chance(600) {
                 stories.push(story);
             }
@@ -794,10 +794,13 @@ impl World {
             }
             Start::Commit { commit } => translate::count(*commit),
         };
+        // It merges its base before it pushes: its tree is the base's as it
+        // is now, with its own files, on top of where it started, so a
+        // change rebased onto a base that moved merges cleanly.
         let mut files: Vec<File> = self
             .forge
-            .object(tip)
-            .expect("the start's commit")
+            .object(main)
+            .expect("the base's commit")
             .tree
             .iter()
             .filter(|(path, _)| ***path != *CUE)

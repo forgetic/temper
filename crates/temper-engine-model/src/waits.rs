@@ -29,9 +29,11 @@ pub(crate) enum Wait {
     /// The hub's answer to taking the item in, its record `written` already
     /// or not.
     Take { entry: Id<Entry>, written: bool },
-    /// A record written on the side, as an item's relations change, or a
-    /// write whose outcome changes nothing (the labels of an item handed
-    /// in, a pull request opened again on a release).
+    /// An item's record written on the side, as its relations change.
+    Record { entry: Id<Entry> },
+    /// What changes nothing as it ends: a snapshot put in the store, a pull
+    /// request opened again on a release, a release a supervising session
+    /// made.
     Aside { entry: Option<Id<Entry>> },
     /// A brief's read of a section's source.
     Brief { owner: Token, bounds: Bounds, source: brief::Source },
@@ -113,6 +115,7 @@ impl Wait {
         match self {
             Wait::Job { entry } => Some(*entry),
             Wait::Take { .. }
+            | Wait::Record { .. }
             | Wait::Aside { .. }
             | Wait::Brief { .. }
             | Wait::Wiki { .. }
@@ -129,6 +132,7 @@ impl Wait {
             Wait::Relay { to } => Some(to),
             Wait::Job { .. }
             | Wait::Take { .. }
+            | Wait::Record { .. }
             | Wait::Aside { .. }
             | Wait::Brief { .. }
             | Wait::Wiki { .. }
@@ -144,6 +148,7 @@ impl Wait {
             Wait::Brief { owner, bounds, .. } => Some((*owner, *bounds)),
             Wait::Job { .. }
             | Wait::Take { .. }
+            | Wait::Record { .. }
             | Wait::Aside { .. }
             | Wait::Wiki { .. }
             | Wait::Relay { .. }

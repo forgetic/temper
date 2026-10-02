@@ -407,6 +407,7 @@ pub(crate) fn hub_answered(model: &mut Model, env: &Env<Limits>, to: ReplyTo, re
             reply(model, to, answer);
         }
         Wait::Job { .. }
+        | Wait::Record { .. }
         | Wait::Aside { .. }
         | Wait::Brief { .. }
         | Wait::Wiki { .. }
