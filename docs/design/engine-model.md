@@ -380,23 +380,24 @@ Nothing the engine decides depends on a fact arriving.
 ## 11. The forge
 
 The forge sub-model is the engine's knowledge of the forge and its only
-way to change it. It knows live work, not the forge: what it holds, and
+way to change it. It holds live work, not the forge: what it holds, and
 what it costs to start, grow with the work in progress, never with the
-forge's history.
+forge's history. Anything else, closed items included, is a read away.
 
 - **A working set, not a copy.** It holds what the engine's decisions
   need about the items that are not done: their records, their pull
   requests' heads, CI and reviews on those heads, whether their
   dependencies have finished. An item enters when the engine creates it
   or takes it in, and leaves once it is done, which on the forge means
-  closed. Closed issues and pull requests are never loaded, whether the
+  closed. Closed issues and pull requests are not held, whether the
   engine never tracked them or has finished with them.
 - **Bounded, and refused at the entrance.** The working set's capacity is
   a limit. When it is full, new work waits to be taken in; nothing already
   taken in is dropped.
 - **Everything else on demand.** Long comment threads, an item's history,
-  a finished dependency's outcome, whatever a run asks to read: fetched
-  when a brief or a run needs it, within a budget, and not kept.
+  a finished dependency's outcome, a closed item that new work refers to,
+  whatever a run asks to read: fetched when a brief or a run needs it,
+  within a budget, and not kept.
 - **Starting** reads what is live. The engine lists the open items that
   carry its label, and those that carry the label handing work to it
   (4.6), and reads the records of the ones that changed since its cache
