@@ -11,6 +11,7 @@ use temper_agent_model_run::{self as run, Ask, Charter};
 use temper_agent_model_session as session;
 use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
 
+use crate::limits;
 use crate::llm::{Block, Completion, Decoded, Message, Problem, Prompt, Returned, Role, Said, Served, Stop, Usage};
 use crate::tools::{self, Call, Name, Op, Part, Path, Place};
 use crate::{Event, Fact, Limits, Model, Request, fire, max_out, resume, step, worst_case};
@@ -435,6 +436,92 @@ fn a_sub_agent_opens_a_child_session_whose_last_message_answers_the_call() {
     assert_eq!(&**text, b"It is in main.rs.");
     h.model.reclaim();
     assert_eq!((h.model.peers(), h.model.flights(), h.model.tickets()), (1, 0, 1));
+}
+
+/// Main, admitted, whose LLM says `text` bytes and asks for two read-only
+/// sub-agents side by side: what that emitted.
+fn side_by_side(text: u32) -> (Harness, Box<[Request]>) {
+    let mut h = Harness::new();
+    let (_, main, _) = h.admit(7, charter());
+    let content = Box::new([
+        Said::Text { text: filler(text) },
+        served(b"a1", sub_agent(b"Look here.")),
+        served(b"a2", sub_agent(b"Look there.")),
+    ]);
+    let emitted = h.answer(main, content);
+    (h, emitted)
+}
+
+/// The sub-agents `emitted` opened, whose sessions call their LLMs.
+fn children(emitted: &[Request]) -> Option<[Token; 2]> {
+    let [Request::Complete { owner: first, .. }, Request::Complete { owner: second, .. }] = emitted else {
+        return None;
+    };
+    Some([*first, *second])
+}
+
+fn filler(len: u32) -> Box<[u8]> {
+    let mut text = List::with_capacity(len);
+    for _ in 0..len {
+        text.push(b'x').expect("room for the text");
+    }
+    text.into_boxed()
+}
+
+#[test]
+fn the_answers_a_full_session_cannot_take_are_held_uncharged_and_counted() {
+    // The longest text main takes with its calls, which leaves its
+    // transcript no room for their answers.
+    let (mut taken, mut refused) = (0_u32, u32::try_from(LIMITS.session.session_bytes).expect("small"));
+    assert!(children(&side_by_side(taken).1).is_some() && children(&side_by_side(refused).1).is_none());
+    for _ in 0..32_u32 {
+        let mid = taken + (refused - taken) / 2;
+        if mid == taken {
+            break;
+        }
+        if children(&side_by_side(mid).1).is_some() { taken = mid } else { refused = mid }
+    }
+    let (mut h, emitted) = side_by_side(taken);
+    let [first, second] = children(&emitted).expect("main took its message");
+
+    // Both answer with as much as the run passes on, in the same iteration.
+    let answer = filler(LIMITS.run.answer_bytes);
+    assert!(h.says(first, &answer).is_empty());
+    assert!(h.says(second, &answer).is_empty());
+    assert!(h.next().is_empty(), "the children close, and end");
+    for _ in 0..64_u32 {
+        if h.model.pop_fact().is_none() {
+            break;
+        }
+    }
+    assert_eq!((h.model.tickets(), h.model.flights()), (2, 2), "both answers wait on the ready list");
+
+    // The first does not fit: main abandons the batch, and takes the second
+    // only to settle it. Neither is charged, and main's peer holds both
+    // until main ends.
+    let emitted = h.next();
+    let [Request::Answer { to: _, answer: run::Answer::Failed { .. } }] = &*emitted else {
+        panic!("expected the run failed, got {emitted:?}");
+    };
+    let mut payloads = 0_u64;
+    let mut ended = false;
+    for _ in 0..64_u32 {
+        match h.model.pop_fact() {
+            Some(Fact::Session { fact: session::Fact::DelegateAnswered { opener: _, bytes, error: false } }) => {
+                payloads += bytes - u64::try_from(size_of::<run::Returned>()).expect("small");
+            }
+            Some(Fact::Session { fact: session::Fact::Ended { opener: _, end, .. } }) => {
+                ended = true;
+                assert_eq!(end, session::End::TranscriptFull);
+            }
+            Some(_) => {}
+            None => break,
+        }
+    }
+    assert!(ended, "main ended as its transcript is full");
+    let answers = u64::from(LIMITS.session.parallel_tools) * u64::from(LIMITS.run.answer_bytes);
+    assert_eq!(payloads, answers, "a batch of sub-agents' answers, each as long as the run passes on");
+    assert!(payloads <= limits::uncharged(&LIMITS).expect("the limits fit"), "counted by the top level");
 }
 
 #[test]

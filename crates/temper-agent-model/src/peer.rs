@@ -13,14 +13,15 @@
 //! answers, from the run's `Return` until the session ends, as they stay in
 //! its transcript and are copied into every prompt.
 //!
-//! Both are bounded by the session's byte limit, so that a peer holds no more
-//! than its session could: an answer is charged to the session at its fixed
-//! size plus its payload (the `bytes` of the session's `Answer`), and a
+//! Both are bounded by the session's byte limit, so that a peer holds little
+//! more than its session could: an answer is charged to the session at its
+//! fixed size plus its payload (the `bytes` of the session's `Answer`), and a
 //! session holds no more answers than fit its limit, besides those of the one
-//! batch that may arrive once it can take no more; and the asks a completion
-//! makes are held only while what they hold, counted the same way, fits the
-//! limit too. A call beyond that is handed to the session as too large, and
-//! answered so to the LLM.
+//! batch it waits for, which it has not charged: on the ready list until they
+//! reach it, or arriving once it is closing or has no room for them (see
+//! [`payload`]); and the asks a completion makes are held only while what
+//! they hold, counted the same way, fits the limit too. A call beyond that is
+//! handed to the session as too large, and answered so to the LLM.
 
 use core::mem::size_of;
 
@@ -241,6 +242,19 @@ fn ask_cost(ask: &Ask) -> Option<u64> {
         }
     };
     size(size_of::<Ask>())?.checked_add(payload)
+}
+
+/// The most an answer holds beyond its fixed size, as [`returned_cost`]
+/// counts it, under the run's `limits`, or `None` past a `u64`: a sub-agent's
+/// answer; a failed check's tail and its repository's name, which the charter
+/// holds; or the problems listed of an outcome rejected, each naming a field
+/// of the outcome spec, which the charter holds, or of the outcome declared.
+pub(crate) fn payload(limits: &run::Limits) -> Option<u64> {
+    let answered = u64::from(limits.answer_bytes);
+    let failed = u64::from(limits.check_tail).checked_add(limits.run_bytes)?;
+    let problem = size(size_of::<run::outcome::Problem>())?.checked_add(limits.run_bytes.max(limits.outcome_bytes))?;
+    let rejected = u64::from(run::outcome::Problems::LISTED).checked_mul(problem)?;
+    Some(answered.max(failed).max(rejected))
 }
 
 /// What an answer holds, as the session is charged for it: its fixed size,

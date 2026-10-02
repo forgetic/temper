@@ -26,8 +26,9 @@ pub struct Limits {
 /// that find peers and the delegated calls in flight, the ready list, the
 /// queues that hold what each sub-model emits in a step until it is routed,
 /// and the facts. A peer's asks hold at most its session's byte limit; its
-/// answers are charged to the session, and counted with it. What the queued
-/// requests own is counted where they end up.
+/// answers are charged to the session, and counted with it, but for those of
+/// the batch it waits for ([`uncharged`]). What the queued requests own is
+/// counted where they end up.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let Limits { run: run_limits, session: session_limits } = limits;
@@ -50,7 +51,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let peers = run_limits.conversations;
     let tickets = Map::<u64, Ask>::worst_case(peer::asks(session_limits))?
         .checked_add(session_limits.session_bytes)?
-        .checked_add(Map::<u64, run::Returned>::worst_case(peer::answers(session_limits))?)?;
+        .checked_add(Map::<u64, run::Returned>::worst_case(peer::answers(session_limits))?)?
+        .checked_add(uncharged(limits)?)?;
     let held = Slab::<Peer>::worst_case(peers)?.checked_add(u64::from(peers).checked_mul(tickets)?)?;
     let found = Map::<Token, Id<Peer>>::worst_case(peers)?.checked_mul(2)?;
     let flights = Map::<Token, Flight>::worst_case(flights(limits)?)?;
@@ -66,6 +68,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(run_out)?
         .checked_add(session_out)?
         .checked_add(facts)
+}
+
+/// What a peer holds of the run's answers that its session has not charged
+/// for: the payloads of the batch it waits for, each answer's from the run's
+/// `Return` until it reaches the session from the ready list, and for good
+/// once it reaches a session that is closing, or that has no room for it.
+/// The fixed size of their tickets is among a peer's answers.
+pub(crate) fn uncharged(limits: &Limits) -> Option<u64> {
+    u64::from(limits.session.parallel_tools).checked_mul(peer::payload(&limits.run)?)
 }
 
 /// Delegated calls in flight at once: a batch of each session.
