@@ -1460,7 +1460,8 @@ impl World {
         assert_eq!(self.worker.checkout().holds(), 0, "no workspace is held");
         assert_eq!(self.worker.workspaces(), 0, "every workspace asked for was released");
         assert_eq!(self.worker.agent().agents(), 0, "no agent is left");
-        assert_eq!(self.worker.held(), 0, "no answer is held");
+        assert_eq!(self.worker.held(), 0, "no answer is held: the engine acknowledged every one");
+        assert_eq!(self.worker.next_deadline(), None, "no alarm is armed");
         self.git.assert_settled();
         // The agents and their neighbours.
         for (id, process) in &self.processes {
