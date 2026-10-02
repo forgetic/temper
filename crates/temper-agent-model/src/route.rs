@@ -30,6 +30,7 @@ pub(crate) fn request(request: session::Request) -> Request {
     match request {
         session::Request::Opened { opener, session } => Request::Opened { opener, session },
         session::Request::Yielded { opener, stop, text } => Request::Yielded { opener, stop, text },
+        session::Request::Used { opener, usage } => Request::Used { opener, usage },
         session::Request::Ended { opener, end, turns, usage } => Request::Ended { opener, end, turns, usage },
         session::Request::Complete { owner, prompt, timeout } => Request::Complete { owner, prompt, timeout },
         session::Request::Cancel { owner } => Request::Cancel { owner },

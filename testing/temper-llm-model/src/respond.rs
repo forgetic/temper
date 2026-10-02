@@ -11,6 +11,10 @@
 //!   configured since the client last wrote, and the query offers tools, the
 //!   answer calls one of them, picked at random.
 //! - Otherwise the answer is the text "done".
+//! - An answer longer than the query's `max_tokens` is cut short there.
+//! - The prompt takes a token for every four bytes of text. All of it but the
+//!   last message is read from the cache, written by the call before; the
+//!   last message is read afresh, and cached for the next call.
 
 use alloc::boxed::Box;
 
@@ -32,21 +36,14 @@ pub(crate) fn respond(rng: &mut Rng, minted: &mut u64, config: &Config, query: &
     if !valid(&query.messages) {
         return Err(Error::InvalidRequest);
     }
-    let prompt_tokens = tokens(query);
     let roll = rng.below(1000);
     let refused = u64::from(config.refused);
     if roll < refused {
-        let usage = Usage { prompt_tokens, completion_tokens: 1 };
-        return Ok(Answer {
-            parts: Box::new([Part::Text { text: copy_of(b"no") }]),
-            finish: Finish::ContentFilter,
-            usage,
-        });
+        return Ok(answer(query, Box::new([Part::Text { text: copy_of(b"no") }]), Finish::ContentFilter, 1));
     }
     if roll < refused.saturating_add(u64::from(config.no_calls)) {
-        let usage = Usage { prompt_tokens, completion_tokens: 4 };
         let parts = Box::new([Part::Text { text: copy_of(b"let me call a tool") }]);
-        return Ok(Answer { parts, finish: Finish::ToolCalls, usage });
+        return Ok(answer(query, parts, Finish::ToolCalls, 4));
     }
     let tools = u64::try_from(query.tools.len()).expect("a usize fits in a u64");
     if tool_rounds(&query.messages) < config.tool_rounds && tools > 0 {
@@ -54,11 +51,41 @@ pub(crate) fn respond(rng: &mut Rng, minted: &mut u64, config: &Config, query: &
         let tool = query.tools.get(index).expect("picked below the tool count");
         *minted = minted.wrapping_add(1);
         let call = Part::ToolCall { id: call_id(*minted), name: tool.name.clone(), arguments: copy_of(b"{}") };
-        let usage = Usage { prompt_tokens, completion_tokens: 8 };
-        return Ok(Answer { parts: Box::new([call]), finish: Finish::ToolCalls, usage });
+        return Ok(answer(query, Box::new([call]), Finish::ToolCalls, 8));
     }
-    let usage = Usage { prompt_tokens, completion_tokens: 1 };
-    Ok(Answer { parts: Box::new([Part::Text { text: copy_of(b"done") }]), finish: Finish::Stop, usage })
+    let tokens = rng.between(1, config.answer_tokens.max(1).into());
+    Ok(answer(query, Box::new([Part::Text { text: copy_of(b"done") }]), Finish::Stop, tokens))
+}
+
+/// The answer of `parts`, which take `tokens` to say, cut short at the query's
+/// `max_tokens`.
+fn answer(query: &Query, parts: Box<[Part]>, finish: Finish, tokens: u64) -> Answer {
+    let most = u64::from(query.max_tokens);
+    if tokens > most {
+        let cut = Box::new([Part::Text { text: copy_of(b"do") }]);
+        return Answer { parts: cut, finish: Finish::Length, usage: usage(query, most) };
+    }
+    Answer { parts, finish, usage: usage(query, tokens) }
+}
+
+/// What a call with `completion_tokens` in its answer took: all of the prompt
+/// but its last message from the cache, which the call before wrote, and the
+/// last message afresh, which this call writes for the next.
+fn usage(query: &Query, completion_tokens: u64) -> Usage {
+    let mut cached = 0;
+    let mut fresh = len(&query.system);
+    if let Some((last, earlier)) = query.messages.split_last() {
+        // The first call has nothing cached, the system text included.
+        if !earlier.is_empty() {
+            cached = fresh;
+            fresh = 0;
+        }
+        for message in earlier {
+            cached = cached.saturating_add(text_of(message));
+        }
+        fresh = fresh.saturating_add(text_of(last));
+    }
+    Usage { prompt_tokens: fresh / 4, cached_tokens: cached / 4, cache_creation_tokens: fresh / 4, completion_tokens }
 }
 
 /// Whether the conversation ends with a user message whose tool outputs answer
@@ -170,20 +197,18 @@ fn calls_any(parts: &[Part]) -> bool {
     false
 }
 
-/// A rough token count: a token for every four bytes of text.
-fn tokens(query: &Query) -> u64 {
-    let mut bytes = len(&query.system);
-    for message in &query.messages {
-        for part in &message.parts {
-            let size = match part {
-                Part::Text { text } => len(text),
-                Part::ToolCall { id: _, name, arguments } => len(name).saturating_add(len(arguments)),
-                Part::ToolOutput { id: _, output, is_error: _ } => len(output),
-            };
-            bytes = bytes.saturating_add(size);
-        }
+/// The bytes of text in a message, which a rough count turns into tokens.
+fn text_of(message: &Message) -> u64 {
+    let mut bytes: u64 = 0;
+    for part in &message.parts {
+        let size = match part {
+            Part::Text { text } => len(text),
+            Part::ToolCall { id: _, name, arguments } => len(name).saturating_add(len(arguments)),
+            Part::ToolOutput { id: _, output, is_error: _ } => len(output),
+        };
+        bytes = bytes.saturating_add(size);
     }
-    bytes / 4
+    bytes
 }
 
 fn len(bytes: &[u8]) -> u64 {
@@ -223,6 +248,7 @@ mod tests {
         retry_after: Duration::ZERO,
         refused: 0,
         no_calls: 0,
+        answer_tokens: 1,
         tool_rounds: 1,
     };
 
@@ -310,6 +336,35 @@ mod tests {
         let answer = respond(&mut rng, &mut minted, &config, &first()).expect("a valid query");
         assert_eq!(answer.finish, Finish::ToolCalls);
         assert!(!super::calls_any(&answer.parts), "it names no tool");
+    }
+
+    #[test]
+    fn an_answer_longer_than_its_max_tokens_is_cut_short() {
+        let mut rng = Rng::new(1);
+        let mut minted = 0;
+        let mut first = query(Box::new([user(Box::new([text()]))]));
+        first.max_tokens = 3;
+        let answer = respond(&mut rng, &mut minted, &CONFIG, &first).expect("a valid query");
+        assert_eq!((answer.finish, answer.usage.completion_tokens), (Finish::Length, 3));
+        let config = Config { tool_rounds: 0, answer_tokens: 2, ..CONFIG };
+        let answer = respond(&mut rng, &mut minted, &config, &first).expect("a valid query");
+        assert_eq!(answer.finish, Finish::Stop);
+        assert!(answer.usage.completion_tokens <= 2, "within the configured answer");
+    }
+
+    #[test]
+    fn all_but_the_last_message_is_read_from_the_cache() {
+        let mut rng = Rng::new(1);
+        let mut minted = 0;
+        let asked = || user(Box::new([Part::Text { text: copy_of(b"12345678") }]));
+        let answer = respond(&mut rng, &mut minted, &CONFIG, &query(Box::new([asked()]))).expect("a valid query");
+        let usage = answer.usage;
+        assert_eq!((usage.prompt_tokens, usage.cached_tokens, usage.cache_creation_tokens), (2, 0, 2));
+        let messages = Box::new([asked(), assistant(answer.parts), user(Box::new([output(b"call_0000000000000001")]))]);
+        let usage = respond(&mut rng, &mut minted, &CONFIG, &query(messages)).expect("a valid query").usage;
+        // The prompt and the call ("ls", "{}") from the cache; the output "ok"
+        // afresh.
+        assert_eq!((usage.prompt_tokens, usage.cached_tokens, usage.cache_creation_tokens), (0, 3, 0));
     }
 
     #[test]

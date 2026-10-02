@@ -29,6 +29,9 @@ pub struct Config {
     /// The chance, per mille, that an answer says it calls tools and calls
     /// none.
     pub no_calls: u32,
+    /// The most tokens a final answer takes: each takes between one and this
+    /// many, and is cut short at the query's `max_tokens`.
+    pub answer_tokens: u32,
     /// Rounds of tool calls after each of the client's messages before the
     /// fake answers it.
     pub tool_rounds: u32,

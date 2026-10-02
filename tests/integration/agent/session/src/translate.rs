@@ -57,8 +57,13 @@ fn completion(answer: provider::Answer) -> agent::Completion {
         provider::Finish::Length => agent::Stop::MaxTokens,
         provider::Finish::ContentFilter => agent::Stop::Refusal,
     };
-    let usage =
-        agent::Usage { input_tokens: answer.usage.prompt_tokens, output_tokens: answer.usage.completion_tokens };
+    let provider::Usage { prompt_tokens, cached_tokens, cache_creation_tokens, completion_tokens } = answer.usage;
+    let usage = agent::Usage {
+        input_tokens: prompt_tokens,
+        output_tokens: completion_tokens,
+        cache_read_tokens: cached_tokens,
+        cache_write_tokens: cache_creation_tokens,
+    };
     agent::Completion { content: answer.parts.into_iter().map(block).collect(), stop, usage }
 }
 

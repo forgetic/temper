@@ -2,7 +2,8 @@
 //! (programming-model.md, 4.5): one conversation with an LLM, driven turn by
 //! turn, running the tools the LLM asks for. When the LLM stops calling tools
 //! the session yields to its opener, which continues it with a new message or
-//! closes it; a limit, a failure or the session's expiry ends it on its own.
+//! closes it; a failure, a limit or its budget (turns, tokens and time, given
+//! by the opener) ends it on its own.
 //!
 //! Sans-io: [`step`] and [`fire`] turn events into requests and change nothing
 //! but the [`Model`] they are given. Time and randomness are inputs; every
@@ -27,6 +28,6 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{End, Event, Request, Spec, ToolCall, Yield};
+pub use boundary::{Budget, Dimension, End, Event, Request, Spec, ToolCall, Yield};
 pub use limits::{Limits, worst_case};
 pub use model::{MAX_OUT, Model, fire, step};

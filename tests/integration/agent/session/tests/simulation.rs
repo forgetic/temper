@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 
 use temper_agent_model_session::llm::Failure;
-use temper_agent_model_session::{End, Limits, Yield};
-use temper_agent_model_session_tests::{Count, Ended, Settings, Span, World, spec};
+use temper_agent_model_session::{Budget, Dimension, End, Limits, Spec, Yield};
+use temper_agent_model_session_tests::{BUDGET, Count, Ended, Settings, Span, World, spec};
 use temper_lib::{Duration, Rng, Time};
 use temper_llm_model::Config;
 
@@ -26,6 +26,15 @@ fn turns(world: &World, opener: u64) -> u32 {
 /// The yields of a session: why, and what the LLM said.
 fn yields(world: &World, opener: u64) -> Vec<(Yield, &[u8])> {
     world.session(opener).yields.iter().map(|(stop, text)| (*stop, &**text)).collect()
+}
+
+/// The calm spec, with `budget`.
+fn budgeted(budget: Budget) -> Spec {
+    Spec { budget, ..spec(b"fix the build") }
+}
+
+fn out_of(spent: Dimension) -> End {
+    End::Budget { spent }
 }
 
 #[test]
@@ -130,10 +139,9 @@ fn calls_slower_than_their_timeout_time_out_and_their_late_answers_are_dropped()
 }
 
 #[test]
-fn an_expiring_session_cancels_its_call_in_flight() {
+fn a_session_out_of_time_cancels_its_call_in_flight() {
     let calm = Settings::calm(7);
     let settings = Settings {
-        agent: Limits { session_timeout: Duration::from_secs(10), ..calm.agent },
         provider: Config {
             latency_min: Duration::from_secs(30),
             latency_max: Duration::from_secs(30),
@@ -142,44 +150,34 @@ fn an_expiring_session_cancels_its_call_in_flight() {
         ..calm
     };
     let mut world = World::new(settings);
-    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    let opener = world.submit(Time::ZERO, budgeted(Budget { time: Duration::from_secs(10), ..BUDGET }));
     world.run(ITERATIONS);
 
-    assert_eq!(end(&world, opener), End::Expired);
+    assert_eq!(end(&world, opener), out_of(Dimension::Time));
     let stats = world.stats();
     assert_eq!((stats.cancels, stats.late_answers), (1, 1));
 }
 
 #[test]
-fn an_expiring_session_cancels_its_tool_in_flight() {
+fn a_session_out_of_time_cancels_its_tool_in_flight() {
     let calm = Settings::calm(8);
-    let settings = Settings {
-        agent: Limits { session_timeout: Duration::from_secs(10), ..calm.agent },
-        tool: Span::millis(60_000, 60_000),
-        ..calm
-    };
-    let mut world = World::new(settings);
-    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    let mut world = World::new(Settings { tool: Span::millis(60_000, 60_000), ..calm });
+    let opener = world.submit(Time::ZERO, budgeted(Budget { time: Duration::from_secs(10), ..BUDGET }));
     world.run(ITERATIONS);
 
-    assert_eq!((end(&world, opener), turns(&world, opener)), (End::Expired, 1));
+    assert_eq!((end(&world, opener), turns(&world, opener)), (out_of(Dimension::Time), 1));
     assert_eq!(world.stats().tool_cancels, 1);
 }
 
 #[test]
-fn a_session_left_yielded_expires_and_its_openers_late_close_is_dropped() {
+fn a_session_left_yielded_runs_out_of_time_and_its_openers_late_close_is_dropped() {
     let calm = Settings::calm(9);
-    let settings = Settings {
-        agent: Limits { session_timeout: Duration::from_secs(60), ..calm.agent },
-        think: Span::millis(3_600_000, 3_600_000),
-        ..calm
-    };
-    let mut world = World::new(settings);
-    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    let mut world = World::new(Settings { think: Span::millis(3_600_000, 3_600_000), ..calm });
+    let opener = world.submit(Time::ZERO, budgeted(Budget { time: Duration::from_secs(60), ..BUDGET }));
     world.run(ITERATIONS);
 
     assert_eq!(yields(&world, opener), [(Yield::Done, &b"done"[..])]);
-    assert_eq!(end(&world, opener), End::Expired);
+    assert_eq!(end(&world, opener), out_of(Dimension::Time));
     let stats = world.stats();
     assert_eq!((stats.closes, stats.stale), (1, 1));
 }
@@ -216,25 +214,65 @@ fn an_opener_that_closes_a_tooling_session_has_its_tool_cancelled() {
 }
 
 #[test]
-fn the_turn_limit_ends_a_session_that_keeps_calling_tools() {
+fn the_turn_budget_ends_a_session_that_keeps_calling_tools() {
     let calm = Settings::calm(12);
-    let settings = Settings {
-        agent: Limits { turns: 3, ..calm.agent },
-        provider: Config { tool_rounds: 100, ..calm.provider },
-        ..calm
-    };
-    let mut world = World::new(settings);
-    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    let mut world = World::new(Settings { provider: Config { tool_rounds: 100, ..calm.provider }, ..calm });
+    let opener = world.submit(Time::ZERO, budgeted(Budget { turns: 3, ..BUDGET }));
     world.run(ITERATIONS);
 
-    assert_eq!((end(&world, opener), turns(&world, opener)), (End::TurnLimit, 3));
+    // The tools of the last turn run; their results do not go back.
+    assert_eq!((end(&world, opener), turns(&world, opener)), (out_of(Dimension::Turns), 3));
+    assert_eq!(world.stats().tool_runs, 3);
+}
+
+#[test]
+fn the_output_budget_cuts_the_last_answer_short_and_ends_the_session() {
+    let calm = Settings::calm(15);
+    let settings =
+        Settings { provider: Config { answer_tokens: 50, ..calm.provider }, nudges: Count { min: 5, max: 5 }, ..calm };
+    let mut world = World::new(settings);
+    // Two tool calls take eight tokens each; the answer gets at most four, and
+    // the nudges whatever is left.
+    let opener = world.submit(Time::ZERO, budgeted(Budget { output: 20, ..BUDGET }));
+    world.run(ITERATIONS);
+
+    assert_eq!(end(&world, opener), out_of(Dimension::Output));
+    assert_eq!(yields(&world, opener).last(), Some(&(Yield::Truncated, &b"do"[..])));
+    assert_eq!(world.session(opener).usage.output_tokens, 20, "no more than the budget");
+}
+
+#[test]
+fn the_token_budgets_end_a_session_once_a_completion_uses_them_up() {
+    let calm = Settings::calm(16);
+    let settings = Settings { nudges: Count { min: 100, max: 100 }, ..calm };
+    let budgets = [
+        (Budget { input: 30, ..BUDGET }, Dimension::Input),
+        (Budget { cache_read: 100, ..BUDGET }, Dimension::CacheRead),
+        (Budget { cache_write: 30, ..BUDGET }, Dimension::CacheWrite),
+    ];
+    for (budget, spent) in budgets {
+        let mut world = World::new(settings);
+        let opener = world.submit(Time::ZERO, budgeted(budget));
+        world.run(ITERATIONS);
+        assert_eq!(end(&world, opener), out_of(spent), "{budget:?}");
+        assert!(turns(&world, opener) > 1, "{budget:?} pays for some turns");
+    }
+}
+
+#[test]
+fn a_spec_that_asks_for_more_than_the_limits_is_refused() {
+    let mut world = World::new(Settings::calm(17));
+    let opener = world.submit(Time::ZERO, budgeted(Budget { turns: BUDGET.turns + 1, ..BUDGET }));
+    world.run(ITERATIONS);
+    assert_eq!(end(&world, opener), End::Invalid);
 }
 
 #[test]
 fn a_seed_replays_to_the_same_run() {
     let replay = |seed| {
-        let mut world = World::new(noisy(seed));
-        submit_noisily(&mut world, seed);
+        let settings = noisy(seed);
+        let mut world = World::new(settings);
+        submit_noisily(&mut world, &settings, seed);
         world.run(ITERATIONS);
         (world.trace().to_vec(), world.stats(), world.now())
     };
@@ -254,8 +292,9 @@ fn random_worlds_settle_with_every_session_ended() {
     let mut stops = BTreeSet::new();
     let mut stale = 0;
     for seed in 0..300 {
-        let mut world = World::new(noisy(seed));
-        submit_noisily(&mut world, seed);
+        let settings = noisy(seed);
+        let mut world = World::new(settings);
+        submit_noisily(&mut world, &settings, seed);
         world.run(ITERATIONS);
         stale += world.stats().stale;
         for (_, session) in world.sessions() {
@@ -263,21 +302,33 @@ fn random_worlds_settle_with_every_session_ended() {
                 stops.insert(format!("{stop:?}"));
             }
             let kind = match session.ended.expect("every session ends").end {
-                End::Busy => "busy",
-                End::Invalid => "invalid",
-                End::Closed => "closed",
-                End::Failed { failure: Failure::TimedOut } => "timed out",
-                End::Failed { .. } => "failed",
-                End::Expired => "expired",
-                End::TurnLimit => "turn limit",
-                End::TranscriptFull => "transcript full",
+                End::Busy => "busy".into(),
+                End::Invalid => "invalid".into(),
+                End::Closed => "closed".into(),
+                End::Failed { failure: Failure::TimedOut } => "timed out".into(),
+                End::Failed { .. } => "failed".into(),
+                End::Budget { spent } => format!("{spent:?}"),
+                End::TranscriptFull => "transcript full".into(),
             };
             ends.insert(kind);
         }
     }
-    let expected = ["busy", "closed", "expired", "failed", "timed out", "transcript full", "turn limit"];
-    assert_eq!(ends, expected.into_iter().collect());
-    assert_eq!(stops, ["Done", "Malformed", "Refused"].into_iter().map(String::from).collect());
+    let expected = [
+        "busy",
+        "invalid",
+        "closed",
+        "failed",
+        "timed out",
+        "transcript full",
+        "Turns",
+        "Input",
+        "Output",
+        "CacheRead",
+        "CacheWrite",
+        "Time",
+    ];
+    assert_eq!(ends, expected.into_iter().map(String::from).collect());
+    assert_eq!(stops, ["Done", "Malformed", "Refused", "Truncated"].into_iter().map(String::from).collect());
     assert!(stale > 0, "some continues and closes reached sessions that had ended");
 }
 
@@ -298,12 +349,11 @@ fn noisy(seed: u64) -> Settings {
             sessions: pick(1, 4),
             messages: pick(4, 16),
             session_bytes: u64::from(pick(2_000, 8_000)),
-            turns: pick(1, 6),
+            budget: Budget { turns: pick(1, 6), time: session_timeout, ..BUDGET },
             retries: pick(0, 4),
             backoff_base: Duration::from_millis(50),
             backoff_max: Duration::from_secs(2),
             call_timeout,
-            session_timeout,
             ..calm.agent
         },
         provider: Config {
@@ -314,6 +364,7 @@ fn noisy(seed: u64) -> Settings {
             rate_limited: pick(0, 200),
             refused: pick(0, 100),
             no_calls: pick(0, 100),
+            answer_tokens: pick(1, 40),
             tool_rounds: pick(0, 5),
             ..calm.provider
         },
@@ -327,11 +378,33 @@ fn noisy(seed: u64) -> Settings {
     }
 }
 
-/// Up to eight sessions opened at random times in the first minute.
-fn submit_noisily(world: &mut World, seed: u64) {
+/// Up to eight sessions opened at random times in the first minute, each with
+/// a budget of its own, small enough to run out in any dimension, now and then
+/// empty in one, and now and then more than the limits allow.
+fn submit_noisily(world: &mut World, settings: &Settings, seed: u64) {
     let mut rng = Rng::new(seed.wrapping_add(2));
+    let most = settings.agent.budget;
     for _ in 0..rng.between(1, 8) {
         let at = Time::from_nanos(rng.between(0, 60_000_000_000));
-        world.submit(at, spec(b"make the tests pass"));
+        let turns = if rng.chance(50) { most.turns + 1 } else { most.turns };
+        let mut budget = Budget {
+            turns: u32::try_from(rng.between(1, turns.into())).expect("a small number"),
+            input: rng.between(5, 80),
+            output: rng.between(5, 150),
+            cache_read: rng.between(10, 600),
+            cache_write: rng.between(5, 80),
+            time: Duration::from_nanos(rng.between(1_000_000_000, most.time.as_nanos())),
+        };
+        if rng.chance(60) {
+            match rng.below(6) {
+                0 => budget.turns = 0,
+                1 => budget.input = 0,
+                2 => budget.output = 0,
+                3 => budget.cache_read = 0,
+                4 => budget.cache_write = 0,
+                _ => budget.time = Duration::ZERO,
+            }
+        }
+        world.submit(at, Spec { budget, ..spec(b"make the tests pass") });
     }
 }

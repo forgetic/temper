@@ -1,5 +1,6 @@
 use temper_lib::{Deadlines, Duration, List, Slab};
 
+use crate::boundary::Budget;
 use crate::llm::Message;
 use crate::session::{Alarm, Session};
 
@@ -14,8 +15,9 @@ pub struct Limits {
     /// Bytes a session holds: its spec, its transcript and the tool results
     /// it is collecting, each block counted at its fixed size plus its payload.
     pub session_bytes: u64,
-    /// Completions a session may receive.
-    pub turns: u32,
+    /// The largest budget a spec may ask for, dimension by dimension. Its time
+    /// is the longest a session may live.
+    pub budget: Budget,
     /// The largest `max_tokens` a spec may ask for.
     pub max_tokens: u32,
     /// Retries of a call that failed transiently, after which the session
@@ -28,8 +30,6 @@ pub struct Limits {
     pub backoff_max: Duration,
     /// How long the protocol layer gives each call.
     pub call_timeout: Duration,
-    /// How long a session may live, yielded or not.
-    pub session_timeout: Duration,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`

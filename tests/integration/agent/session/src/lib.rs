@@ -10,10 +10,11 @@
 //! that sees both io's and the model's ([`translate`]). It checks the boundary
 //! contracts as it goes (one terminal event per request, one end per open, a
 //! continue only to a yielded session, a yield or an end only with nothing in
-//! flight) and the universal invariants once it settles (no live entities,
-//! nothing in flight, every session ended).
+//! flight, no completion started past a session's budget, an end that adds up
+//! what was used) and the universal invariants once it settles (no live
+//! entities, nothing in flight, every session ended).
 
 pub mod translate;
 mod world;
 
-pub use world::{Count, Ended, Session, Settings, Span, Stats, World, spec};
+pub use world::{BUDGET, Count, Ended, Session, Settings, Span, Stats, World, spec};

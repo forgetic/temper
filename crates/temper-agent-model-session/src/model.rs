@@ -7,8 +7,9 @@ use crate::limits::{self, Limits};
 use crate::session::{self, Alarm, Session};
 
 /// The most requests an entry point emits per call: an admitted `Open` is
-/// answered with `Opened` and the session's first call. The parent reserves
-/// this much room in `out` before calling it.
+/// answered with `Opened` and the session's first call, and a completion with
+/// `Used` and what the session does next. The parent reserves this much room
+/// in `out` before calling it.
 pub const MAX_OUT: u32 = 2;
 
 /// The session sub-model's state.

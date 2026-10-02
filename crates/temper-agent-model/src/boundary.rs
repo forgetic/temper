@@ -8,9 +8,9 @@
 //!
 //! Two shapes cross it: a session's lifecycle (an [`Event::Open`] is answered
 //! by exactly one [`Request::Ended`], after an [`Request::Opened`] that names
-//! the session if it was admitted, and any number of [`Request::Yielded`] in
-//! between), and requests down with exactly one terminal event up (a
-//! [`Request::Complete`] is ended by one of [`Event::Completed`],
+//! the session if it was admitted, and any number of [`Request::Yielded`] and
+//! [`Request::Used`] in between), and requests down with exactly one terminal
+//! event up (a [`Request::Complete`] is ended by one of [`Event::Completed`],
 //! [`Event::Failed`] or [`Event::Cancelled`]). A request's `owner` is the
 //! session's token, echoed on its terminal event.
 
@@ -54,6 +54,9 @@ pub enum Request {
     /// The LLM stopped calling tools, saying `text`. The session waits for
     /// `Continue` or `Close`.
     Yielded { opener: Token, stop: Yield, text: Box<[u8]> },
+    /// A completion came back: one turn, and `usage` as the provider counts
+    /// it.
+    Used { opener: Token, usage: Usage },
     /// The session for `opener` has ended: exactly one per `Open`.
     Ended { opener: Token, end: End, turns: u32, usage: Usage },
     /// Ask an LLM for the next assistant message, giving up after `timeout`.

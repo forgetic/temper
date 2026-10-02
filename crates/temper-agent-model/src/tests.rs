@@ -8,20 +8,30 @@ use temper_agent_model_session as session;
 use temper_lib::{Duration, Env, Queue, Time, Token};
 
 use crate::llm::{Block, Completion, Endpoint, Failure, Message, Role, Stop, Tool, Usage};
-use crate::{End, Event, Limits, MAX_OUT, Model, Request, Spec, ToolCall, Yield, fire, step, worst_case};
+use crate::{
+    Budget, Dimension, End, Event, Limits, MAX_OUT, Model, Request, Spec, ToolCall, Yield, fire, step, worst_case,
+};
+
+const BUDGET: Budget = Budget {
+    turns: 4,
+    input: 1_000_000,
+    output: 1_000_000,
+    cache_read: 1_000_000,
+    cache_write: 1_000_000,
+    time: Duration::from_secs(600),
+};
 
 const LIMITS: Limits = Limits {
     session: session::Limits {
         sessions: 2,
         messages: 8,
         session_bytes: 65_536,
-        turns: 4,
+        budget: BUDGET,
         max_tokens: 1024,
         retries: 2,
         backoff_base: Duration::from_millis(100),
         backoff_max: Duration::from_secs(1),
         call_timeout: Duration::from_secs(30),
-        session_timeout: Duration::from_secs(600),
     },
 };
 
@@ -44,6 +54,14 @@ impl Harness {
     /// Steps the model with `event`, which emits at most one request.
     fn step(&mut self, event: Event) -> Option<Request> {
         step(&mut self.model, &self.env, event, &mut self.out);
+        self.one()
+    }
+
+    /// Steps the model with a completion, which comes back out as `Used` and
+    /// then what the session does next.
+    fn complete(&mut self, owner: Token, completion: Completion) -> Option<Request> {
+        step(&mut self.model, &self.env, Event::Completed { owner, completion }, &mut self.out);
+        assert_eq!(self.out.pop(), Some(Request::Used { opener: opener(), usage: usage() }));
         self.one()
     }
 
@@ -76,7 +94,7 @@ impl Harness {
     /// owner.
     fn open_tool(&mut self) -> Token {
         let owner = self.open();
-        let Some(Request::Tool { .. }) = self.step(Event::Completed { owner, completion: ls() }) else {
+        let Some(Request::Tool { .. }) = self.complete(owner, ls()) else {
             panic!("expected a tool run");
         };
         owner
@@ -86,14 +104,14 @@ impl Harness {
     /// session's name.
     fn open_yielded(&mut self) -> Token {
         let owner = self.open();
-        let Some(Request::Yielded { .. }) = self.step(Event::Completed { owner, completion: done() }) else {
+        let Some(Request::Yielded { .. }) = self.complete(owner, done()) else {
             panic!("expected a yield");
         };
         owner
     }
 
     fn expire(&mut self) {
-        self.env.now = self.env.now.checked_add(LIMITS.session.session_timeout).expect("the test stays in range");
+        self.env.now = self.env.now.checked_add(BUDGET.time).expect("the test stays in range");
     }
 }
 
@@ -113,11 +131,12 @@ fn spec() -> Spec {
         tools: Box::new([Tool { name: bytes(b"ls"), description: bytes(b"lists files"), schema: bytes(b"{}") }]),
         prompt: bytes(b"fix the bug"),
         max_tokens: 1024,
+        budget: BUDGET,
     }
 }
 
 fn usage() -> Usage {
-    Usage { input_tokens: 10, output_tokens: 5 }
+    Usage { input_tokens: 10, output_tokens: 5, cache_read_tokens: 3, cache_write_tokens: 2 }
 }
 
 /// The LLM asks for `ls`.
@@ -132,10 +151,14 @@ fn done() -> Completion {
 }
 
 fn ended(end: End, turns: u32) -> Request {
-    let usage =
-        Usage { input_tokens: 10_u64.saturating_mul(turns.into()), output_tokens: 5_u64.saturating_mul(turns.into()) };
-    Request::Ended { opener: opener(), end, turns, usage }
+    let mut total = Usage::ZERO;
+    for _ in 0..turns {
+        total = total.saturating_add(usage());
+    }
+    Request::Ended { opener: opener(), end, turns, usage: total }
 }
+
+const OUT_OF_TIME: End = End::Budget { spent: Dimension::Time };
 
 #[test]
 fn an_open_reaches_the_session_and_its_opening_and_call_come_back_out() {
@@ -152,14 +175,14 @@ fn an_open_reaches_the_session_and_its_opening_and_call_come_back_out() {
     let first = Message { role: Role::User, content: Box::new([Block::Text { text: bytes(b"fix the bug") }]) };
     assert_eq!(&*prompt.messages, &[first]);
     assert_eq!(h.model.sessions(), 1);
-    assert_eq!(h.model.next_deadline(), Some(Time::ZERO.saturating_add(LIMITS.session.session_timeout)));
+    assert_eq!(h.model.next_deadline(), Some(Time::ZERO.saturating_add(BUDGET.time)));
 }
 
 #[test]
 fn a_completion_reaches_the_session_and_its_tool_run_comes_back_out() {
     let mut h = Harness::new();
     let owner = h.open();
-    let request = h.step(Event::Completed { owner, completion: ls() });
+    let request = h.complete(owner, ls());
     assert_eq!(request, Some(Request::Tool { owner, call: ToolCall { name: bytes(b"ls"), input: bytes(b"{}") } }));
 }
 
@@ -179,10 +202,10 @@ fn a_tool_result_reaches_the_session_and_its_next_call_comes_back_out() {
 }
 
 #[test]
-fn a_yield_comes_back_out_and_a_continue_reaches_the_session() {
+fn a_yield_and_its_usage_come_back_out_and_a_continue_reaches_the_session() {
     let mut h = Harness::new();
     let owner = h.open();
-    let request = h.step(Event::Completed { owner, completion: done() });
+    let request = h.complete(owner, done());
     assert_eq!(request, Some(Request::Yielded { opener: opener(), stop: Yield::Done, text: bytes(b"done") }));
     let Some(Request::Complete { owner: next, prompt, timeout: _ }) =
         h.step(Event::Continue { session: owner, content: bytes(b"go on") })
@@ -219,7 +242,7 @@ fn an_expired_call_is_cancelled_and_its_cancellation_reaches_the_session() {
     let owner = h.open();
     h.expire();
     assert_eq!(h.fire(), Some(Request::Cancel { owner }));
-    assert_eq!(h.step(Event::Cancelled { owner }), Some(ended(End::Expired, 0)));
+    assert_eq!(h.step(Event::Cancelled { owner }), Some(ended(OUT_OF_TIME, 0)));
 }
 
 #[test]
@@ -228,7 +251,7 @@ fn an_expired_tool_run_is_cancelled_and_its_cancellation_reaches_the_session() {
     let owner = h.open_tool();
     h.expire();
     assert_eq!(h.fire(), Some(Request::CancelTool { owner }));
-    assert_eq!(h.step(Event::ToolCancelled { owner }), Some(ended(End::Expired, 1)));
+    assert_eq!(h.step(Event::ToolCancelled { owner }), Some(ended(OUT_OF_TIME, 1)));
 }
 
 #[test]

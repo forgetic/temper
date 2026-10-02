@@ -4,12 +4,13 @@
 //!
 //! Two shapes cross it. A session's lifecycle, with its opener: an
 //! [`Event::Open`] is answered by exactly one [`Request::Ended`], after an
-//! [`Request::Opened`] that names the session if it was admitted, and any number
-//! of [`Request::Yielded`] in between; the opener addresses the session by that
-//! name, and every record back carries the opener's token (4.2). And requests out
-//! with exactly one terminal event in (a [`Request::Complete`] is ended by one of
-//! [`Event::Completed`], [`Event::Failed`] or [`Event::Cancelled`]). A request's
-//! `owner` is the session's token, echoed on its terminal event.
+//! [`Request::Opened`] that names the session if it was admitted, and any
+//! number of [`Request::Yielded`] and [`Request::Used`] in between; the opener
+//! addresses the session by that name, and every record back carries the
+//! opener's token (4.2). And requests out with exactly one terminal event in
+//! (a [`Request::Complete`] is ended by one of [`Event::Completed`],
+//! [`Event::Failed`] or [`Event::Cancelled`]). A request's `owner` is the
+//! session's token, echoed on its terminal event.
 
 use alloc::boxed::Box;
 
@@ -50,11 +51,16 @@ pub enum Request {
     /// on.
     Opened { opener: Token, session: Token },
     /// The LLM stopped calling tools, saying `text` (its message's text blocks,
-    /// one after another). The session waits for `Continue` or `Close`.
+    /// one after another). The session waits for `Continue` or `Close`, and
+    /// its time budget keeps running.
     Yielded { opener: Token, stop: Yield, text: Box<[u8]> },
+    /// A completion came back: one turn, and `usage` as the provider counts
+    /// it. One per completion, the ones that win a race with a cancel
+    /// included.
+    Used { opener: Token, usage: Usage },
     /// The session for `opener` has ended, after `turns` completions that used
-    /// `usage`: exactly one per `Open`, once nothing the session asked for is
-    /// in flight.
+    /// `usage` (what its `Used` add up to): exactly one per `Open`, once
+    /// nothing the session asked for is in flight.
     Ended { opener: Token, end: End, turns: u32, usage: Usage },
     /// Ask an LLM for the next assistant message, giving up after `timeout`.
     Complete { owner: Token, prompt: Prompt, timeout: Duration },
@@ -79,8 +85,42 @@ pub struct Spec {
     pub tools: Box<[Tool]>,
     /// The first user message.
     pub prompt: Box<[u8]>,
-    /// The most tokens each answer may take.
+    /// The most tokens each answer may take, and fewer once the output budget
+    /// has less left.
     pub max_tokens: u32,
+    pub budget: Budget,
+}
+
+/// What a session may spend, from the moment it opens. Every dimension is
+/// within the session's `Limits`, or the spec is refused.
+///
+/// A session starts a completion only while it has turns, input and output
+/// tokens left (what it spent is below the budget) and its `time` has not run
+/// out; when it needs one it may not start, it ends. A completion's tokens are
+/// known only once it comes back, so it may take input and cache tokens past
+/// their budget: the session then ends at once. The output budget it cannot
+/// pass, as the answer's `max_tokens` is cut to what is left. A zero cache
+/// budget therefore ends a session only once a completion touches the
+/// cache.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Budget {
+    pub turns: u32,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub time: Duration,
+}
+
+/// A dimension of a [`Budget`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Dimension {
+    Turns,
+    Input,
+    Output,
+    CacheRead,
+    CacheWrite,
+    Time,
 }
 
 /// A tool to run, as the LLM asked for it. `input` is a JSON object.
@@ -114,10 +154,10 @@ pub enum End {
     Closed,
     /// A call failed, for good or after its retries ran out.
     Failed { failure: Failure },
-    /// The session used every completion it was allowed.
-    TurnLimit,
+    /// The session's budget ran out in the `spent` dimension: a completion
+    /// took it past its end, the session needed a completion the budget does
+    /// not leave room for, or its time is up.
+    Budget { spent: Dimension },
     /// The conversation outgrew the session's message or byte limit.
     TranscriptFull,
-    /// The session ran out of time.
-    Expired,
 }

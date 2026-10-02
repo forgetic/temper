@@ -69,9 +69,13 @@ pub enum Finish {
     ContentFilter,
 }
 
+/// Tokens a call took: the prompt's, read afresh or from the cache, the
+/// cache's new entries, and the answer's.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Usage {
     pub prompt_tokens: u64,
+    pub cached_tokens: u64,
+    pub cache_creation_tokens: u64,
     pub completion_tokens: u64,
 }
 

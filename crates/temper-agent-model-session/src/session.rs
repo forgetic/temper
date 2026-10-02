@@ -1,5 +1,5 @@
 //! LLM sessions: a conversation with an LLM, driven turn by turn until the LLM
-//! yields, a limit ends it, or its opener closes it.
+//! yields, a limit or the budget ends it, or its opener closes it.
 //!
 //! An `Open` opens a session and the session calls the LLM. While the LLM asks
 //! for tools, the session runs them one at a time and sends their results back
@@ -23,30 +23,36 @@
 //!                failed, otherwise            Closed       ended: failed
 //!                close, expiry                Closing      cancel the call
 //! Backoff        retry                        Calling      call again
-//!                close, expiry                Closed       ended: closed, expired
+//!                close, expiry                Closed       ended: closed, out of time
 //! Tooling        tool done, more tools        Tooling      run the next tool
 //!                tool done, last tool         Calling      send the results
 //!                close, expiry                Closing      cancel the tool
 //! Yielded        continue                     Calling      call with the new message
-//!                close, expiry                Closed       ended: closed, expired
+//!                close, expiry                Closed       ended: closed, out of time
 //! Closing        what was cancelled ends      Closed       ended
 //!                close                        Closing      (already closing)
 //! Closed         continue, close              Closed       (dropped: the handle is stale)
 //! ```
 //!
-//! A turn or byte limit that a completion, a tool's result or a new message
-//! would cross ends the session in place of the transition it would have made.
+//! Every completion that comes back is reported to the opener as `Used`, in
+//! Calling and in Closing alike, and checked against the budget: one that
+//! took a dimension past its end ends the session at once. Before it calls
+//! the LLM, the session checks that it has turns, input and output tokens and
+//! time left, and ends instead if not, so it never starts a completion it
+//! may not pay for. Either end names the dimension. A byte limit that a completion, a tool's result or a new message would
+//! cross ends the session in place of the transition it would have made.
 //!
-//! The expiry alarm runs in Calling, Backoff, Tooling and Yielded; the retry
-//! alarm in Backoff. Both follow from the state, in one place ([`follow`]),
-//! which also retires a session once it is Closed.
+//! The expiry alarm, set for when the time budget runs out, runs in Calling,
+//! Backoff, Tooling and Yielded; the retry alarm in Backoff. Both follow from
+//! the state, in one place ([`follow`]), which also retires a session once it
+//! is Closed.
 
 use alloc::boxed::Box;
 use core::mem::{self, size_of};
 
 use temper_lib::{Deadlines, Duration, Env, Id, List, Queue, Rng, Slab, Time, Token, Writer};
 
-use crate::boundary::{End, Request, Spec, ToolCall, Yield};
+use crate::boundary::{Budget, Dimension, End, Request, Spec, ToolCall, Yield};
 use crate::limits::Limits;
 use crate::llm::{Block, Completion, Endpoint, Failure, Message, Prompt, Role, Stop, Tool, Usage};
 use crate::model::Model;
@@ -71,10 +77,12 @@ struct Conversation {
     transcript: List<Message>,
     /// Bytes held, counted against `Limits::session_bytes`.
     bytes: u64,
-    /// Completions received.
+    /// What the session may spend, and what it has: completions received, and
+    /// the tokens they used.
+    budget: Budget,
     turns: u32,
     usage: Usage,
-    /// When the session expires.
+    /// When the time budget runs out.
     expires: Time,
 }
 
@@ -123,11 +131,13 @@ pub(crate) fn open(model: &mut Model, env: &Env<Limits>, opener: Token, spec: Sp
         out.push(refused(opener, End::Invalid));
         return;
     };
-    let session = Session { conversation, state: State::Calling { attempt: 0 } };
+    // Closed until the first call is made, which a budget just admitted pays
+    // for.
+    let session = Session { conversation, state: State::Closed };
     let id = model.sessions.insert(session).expect("checked for room above");
     out.push(Request::Opened { opener, session: id.token() });
-    let session = model.sessions.get(id).expect("inserted above");
-    out.push(complete(id, &session.conversation, &env.limits));
+    let session = model.sessions.get_mut(id).expect("inserted above");
+    session.state = call(&session.conversation, id, 0, env, out);
     follow(&mut model.sessions, &mut model.alarms, id);
 }
 
@@ -145,7 +155,7 @@ pub(crate) fn resume(
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
-        State::Yielded => resumed(conversation, id, content, &env.limits, out),
+        State::Yielded => resumed(conversation, id, content, env, out),
         State::Calling { .. } | State::Backoff { .. } | State::Tooling { .. } | State::Closing { .. } => {
             unreachable!("an opener continues a session only while it is yielded")
         }
@@ -183,8 +193,8 @@ pub(crate) fn completed(
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
-        State::Calling { attempt: _ } => answered(conversation, id, completion, &env.limits, out),
-        State::Closing { end } => finish(conversation, end, out),
+        State::Calling { attempt: _ } => answered(conversation, id, completion, env, out),
+        State::Closing { end } => answered_late(conversation, end, completion.usage, out),
         State::Backoff { .. } | State::Tooling { .. } | State::Yielded | State::Closed => {
             unreachable!("a completion ends a call in flight")
         }
@@ -236,7 +246,7 @@ pub(crate) fn tool_done(
     session.state = match state {
         State::Tooling { tools } => {
             let result = Block::ToolResult { id: call_id(conversation, tools.block), output, error };
-            tool_ran(conversation, id, tools, result, &env.limits, out)
+            tool_ran(conversation, id, tools, result, env, out)
         }
         State::Closing { end } => finish(conversation, end, out),
         State::Calling { .. } | State::Backoff { .. } | State::Yielded | State::Closed => {
@@ -263,9 +273,9 @@ pub(crate) fn expire(model: &mut Model, id: Id<Session>, out: &mut Queue<Request
     let session = model.sessions.get_mut(id).expect("an alarm is cancelled before its session closes");
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
-        State::Calling { attempt: _ } => cancel_call(id, End::Expired, out),
-        State::Backoff { attempt: _, until: _ } | State::Yielded => finish(&session.conversation, End::Expired, out),
-        State::Tooling { tools: _ } => cancel_tool(id, End::Expired, out),
+        State::Calling { attempt: _ } => cancel_call(id, OUT_OF_TIME, out),
+        State::Backoff { attempt: _, until: _ } | State::Yielded => finish(&session.conversation, OUT_OF_TIME, out),
+        State::Tooling { tools: _ } => cancel_tool(id, OUT_OF_TIME, out),
         State::Closing { .. } | State::Closed => {
             unreachable!("the expiry alarm runs only in Calling, Backoff, Tooling and Yielded")
         }
@@ -277,7 +287,7 @@ pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: 
     let session = model.sessions.get_mut(id).expect("an alarm is cancelled before its session closes");
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
-        State::Backoff { attempt, until: _ } => call(&session.conversation, id, attempt, &env.limits, out),
+        State::Backoff { attempt, until: _ } => call(&session.conversation, id, attempt, env, out),
         State::Calling { .. } | State::Tooling { .. } | State::Yielded | State::Closing { .. } | State::Closed => {
             unreachable!("the retry alarm runs only in Backoff")
         }
@@ -334,17 +344,27 @@ fn answered(
     conversation: &mut Conversation,
     id: Id<Session>,
     completion: Completion,
-    limits: &Limits,
+    env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
-    conversation.turns = conversation.turns.saturating_add(1);
-    conversation.usage = conversation.usage.saturating_add(completion.usage);
-    match completion.stop {
-        Stop::ToolUse => use_tools(conversation, id, completion.content, limits, out),
-        Stop::EndTurn => pause(conversation, Yield::Done, completion.content, limits, out),
-        Stop::MaxTokens => pause(conversation, Yield::Truncated, completion.content, limits, out),
-        Stop::Refusal => pause(conversation, Yield::Refused, completion.content, limits, out),
+    used(conversation, completion.usage, out);
+    if let Some(spent) = overspent(conversation) {
+        return finish(conversation, End::Budget { spent }, out);
     }
+    match completion.stop {
+        Stop::ToolUse => use_tools(conversation, id, completion.content, &env.limits, out),
+        Stop::EndTurn => pause(conversation, Yield::Done, completion.content, &env.limits, out),
+        Stop::MaxTokens => pause(conversation, Yield::Truncated, completion.content, &env.limits, out),
+        Stop::Refusal => pause(conversation, Yield::Refused, completion.content, &env.limits, out),
+    }
+}
+
+/// Closing, completed: the call won the race with its cancel. The session
+/// ends as it was going to, but the provider counted the tokens, and so does
+/// the session.
+fn answered_late(conversation: &mut Conversation, end: End, usage: Usage, out: &mut Queue<Request>) -> State {
+    used(conversation, usage, out);
+    finish(conversation, end, out)
 }
 
 /// Calling, completed with tool use: record the message and run its first tool.
@@ -359,10 +379,7 @@ fn use_tools(
         return pause(conversation, Yield::Malformed, content, limits, out);
     };
     let calls = tool_calls(&content).expect("blocks counted in a u32 count their calls in one");
-    // The results go back in another completion, and in another message.
-    if conversation.turns >= limits.turns {
-        return finish(conversation, End::TurnLimit, out);
-    }
+    // The results go back in another message.
     if conversation.transcript.room() < 2 || !charge(conversation, held(&content, calls), limits) {
         return finish(conversation, End::TranscriptFull, out);
     }
@@ -395,18 +412,15 @@ fn resumed(
     conversation: &mut Conversation,
     id: Id<Session>,
     text: Box<[u8]>,
-    limits: &Limits,
+    env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
-    if conversation.turns >= limits.turns {
-        return finish(conversation, End::TurnLimit, out);
-    }
     let content: Box<[Block]> = Box::new([Block::Text { text }]);
-    if conversation.transcript.room() == 0 || !charge(conversation, content_cost(&content), limits) {
+    if conversation.transcript.room() == 0 || !charge(conversation, content_cost(&content), &env.limits) {
         return finish(conversation, End::TranscriptFull, out);
     }
     conversation.transcript.push(Message { role: Role::User, content }).expect("checked for room above");
-    call(conversation, id, 0, limits, out)
+    call(conversation, id, 0, env, out)
 }
 
 /// Tooling, tool done: keep the result, then run the next tool or send the
@@ -416,11 +430,11 @@ fn tool_ran(
     id: Id<Session>,
     mut tools: Tools,
     result: Block,
-    limits: &Limits,
+    env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
     // The result's block was counted when the tools started.
-    if !charge(conversation, payload_cost(&result), limits) {
+    if !charge(conversation, payload_cost(&result), &env.limits) {
         return finish(conversation, End::TranscriptFull, out);
     }
     tools.results.push(result).expect("room for one result per tool call");
@@ -433,7 +447,7 @@ fn tool_ran(
         None => {
             let results = Message { role: Role::User, content: tools.results.into_boxed() };
             conversation.transcript.push(results).expect("room was checked when the tools started");
-            call(conversation, id, 0, limits, out)
+            call(conversation, id, 0, env, out)
         }
     }
 }
@@ -454,15 +468,19 @@ fn call_failed(
     }
 }
 
-/// Calls the LLM with the conversation so far.
+/// Calls the LLM with the conversation so far, if the budget pays for another
+/// completion; ends the session otherwise.
 fn call(
     conversation: &Conversation,
     id: Id<Session>,
     attempt: u32,
-    limits: &Limits,
+    env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
-    out.push(complete(id, conversation, limits));
+    if let Some(spent) = spent(conversation, env.now) {
+        return finish(conversation, End::Budget { spent }, out);
+    }
+    out.push(complete(id, conversation, &env.limits));
     State::Calling { attempt }
 }
 
@@ -476,6 +494,13 @@ fn cancel_tool(id: Id<Session>, end: End, out: &mut Queue<Request>) -> State {
     State::Closing { end }
 }
 
+/// Counts a completion that came back, and tells the opener.
+fn used(conversation: &mut Conversation, usage: Usage, out: &mut Queue<Request>) {
+    conversation.turns = conversation.turns.saturating_add(1);
+    conversation.usage = conversation.usage.saturating_add(usage);
+    out.push(Request::Used { opener: conversation.opener, usage });
+}
+
 /// Ends the session, telling its opener. Nothing may be in flight.
 fn finish(conversation: &Conversation, end: End, out: &mut Queue<Request>) -> State {
     let opener = conversation.opener;
@@ -485,6 +510,9 @@ fn finish(conversation: &Conversation, end: End, out: &mut Queue<Request>) -> St
 
 // Helpers.
 
+/// How a session ends when its time budget runs out.
+const OUT_OF_TIME: End = End::Budget { spent: Dimension::Time };
+
 /// The end of a session refused at the entrance, which never opened.
 fn refused(opener: Token, end: End) -> Request {
     Request::Ended { opener, end, turns: 0, usage: Usage::ZERO }
@@ -492,7 +520,7 @@ fn refused(opener: Token, end: End) -> Request {
 
 /// The conversation for `spec`, or `None` if the spec does not fit the limits.
 fn admit(opener: Token, spec: Spec, limits: &Limits, now: Time) -> Option<Conversation> {
-    if spec.max_tokens == 0 || spec.max_tokens > limits.max_tokens {
+    if spec.max_tokens == 0 || spec.max_tokens > limits.max_tokens || !affordable(&spec.budget, &limits.budget) {
         return None;
     }
     let content: Box<[Block]> = Box::new([Block::Text { text: spec.prompt }]);
@@ -511,22 +539,76 @@ fn admit(opener: Token, spec: Spec, limits: &Limits, now: Time) -> Option<Conver
         max_tokens: spec.max_tokens,
         transcript,
         bytes,
+        budget: spec.budget,
         turns: 0,
         usage: Usage::ZERO,
-        expires: now.saturating_add(limits.session_timeout),
+        expires: now.saturating_add(spec.budget.time),
     })
 }
 
-/// The request for the next assistant message. The conversation is copied: the
-/// session keeps it, and the protocol layer holds the copy (copy at emission).
+/// Whether `budget` asks for no more than `most` in any dimension.
+fn affordable(budget: &Budget, most: &Budget) -> bool {
+    budget.turns <= most.turns
+        && budget.input <= most.input
+        && budget.output <= most.output
+        && budget.cache_read <= most.cache_read
+        && budget.cache_write <= most.cache_write
+        && budget.time <= most.time
+}
+
+/// The first dimension that keeps the session from starting a completion at
+/// `now`, if any: its turns, its input or output tokens used up, or its time.
+fn spent(conversation: &Conversation, now: Time) -> Option<Dimension> {
+    let Conversation { budget, turns, usage, expires, .. } = conversation;
+    if *turns >= budget.turns {
+        return Some(Dimension::Turns);
+    }
+    if usage.input_tokens >= budget.input {
+        return Some(Dimension::Input);
+    }
+    if usage.output_tokens >= budget.output {
+        return Some(Dimension::Output);
+    }
+    if now >= *expires {
+        return Some(Dimension::Time);
+    }
+    None
+}
+
+/// The first dimension whose tokens a completion took past its budget, if any.
+/// No turn starts past its budget, and an answer's `max_tokens` is cut to the
+/// output left, but a call's input and cache tokens are known only once it
+/// comes back.
+fn overspent(conversation: &Conversation) -> Option<Dimension> {
+    let Conversation { budget, usage, .. } = conversation;
+    if usage.input_tokens > budget.input {
+        return Some(Dimension::Input);
+    }
+    if usage.output_tokens > budget.output {
+        return Some(Dimension::Output);
+    }
+    if usage.cache_read_tokens > budget.cache_read {
+        return Some(Dimension::CacheRead);
+    }
+    if usage.cache_write_tokens > budget.cache_write {
+        return Some(Dimension::CacheWrite);
+    }
+    None
+}
+
+/// The request for the next assistant message, its answer cut to the output
+/// budget left. The conversation is copied: the session keeps it, and the
+/// protocol layer holds the copy (copy at emission).
 fn complete(id: Id<Session>, conversation: &Conversation, limits: &Limits) -> Request {
+    let left = conversation.budget.output.saturating_sub(conversation.usage.output_tokens);
+    let max_tokens = u32::try_from(left).unwrap_or(u32::MAX).min(conversation.max_tokens);
     let prompt = Prompt {
         endpoint: conversation.endpoint,
         model: conversation.model.clone(),
         system: conversation.system.clone(),
         tools: conversation.tools.clone(),
         messages: conversation.transcript.to_boxed(),
-        max_tokens: conversation.max_tokens,
+        max_tokens,
     };
     Request::Complete { owner: id.token(), prompt, timeout: limits.call_timeout }
 }

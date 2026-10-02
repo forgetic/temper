@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_session as agent;
-use temper_agent_model_session::llm::{Endpoint, Failure, Tool, Usage};
+use temper_agent_model_session::llm::{Endpoint, Failure, Prompt, Tool, Usage};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_llm_model as provider;
 
@@ -13,6 +13,16 @@ const OUT: u32 = 4;
 
 /// What the fake opener says when it nudges a session on.
 const NUDGE: &[u8] = b"You have not finished: carry on.";
+
+/// The budget [`spec`] asks for: what the calm limits allow at most.
+pub const BUDGET: agent::Budget = agent::Budget {
+    turns: 16,
+    input: 1 << 20,
+    output: 1 << 20,
+    cache_read: 1 << 20,
+    cache_write: 1 << 20,
+    time: Duration::from_secs(1800),
+};
 
 /// Durations drawn uniformly from `min..=max`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -71,13 +81,12 @@ impl Settings {
                 sessions: 4,
                 messages: 32,
                 session_bytes: 1 << 20,
-                turns: 16,
+                budget: BUDGET,
                 max_tokens: 4096,
                 retries: 3,
                 backoff_base: Duration::from_millis(200),
                 backoff_max: Duration::from_secs(5),
                 call_timeout: Duration::from_secs(60),
-                session_timeout: Duration::from_secs(1800),
             },
             provider: provider::Config {
                 calls: 16,
@@ -88,6 +97,7 @@ impl Settings {
                 retry_after: Duration::from_secs(1),
                 refused: 0,
                 no_calls: 0,
+                answer_tokens: 1,
                 tool_rounds: 2,
             },
             network: Span::millis(1, 20),
@@ -101,7 +111,7 @@ impl Settings {
     }
 }
 
-/// A spec with two tools for the LLM to call.
+/// A spec with two tools for the LLM to call, and the calm budget.
 #[must_use]
 pub fn spec(prompt: &[u8]) -> agent::Spec {
     let tool = |name: &[u8], description: &[u8]| Tool {
@@ -116,6 +126,7 @@ pub fn spec(prompt: &[u8]) -> agent::Spec {
         tools: Box::new([tool(b"read_file", b"Reads a file."), tool(b"run_tests", b"Runs the tests.")]),
         prompt: prompt.into(),
         max_tokens: 1024,
+        budget: BUDGET,
     }
 }
 
@@ -151,8 +162,17 @@ pub struct Stats {
 pub struct Session {
     /// The session's name, once it opened.
     pub session: Option<Token>,
+    /// What it was opened with: its budget, and the most tokens an answer
+    /// may take.
+    pub budget: agent::Budget,
+    pub max_tokens: u32,
     /// Each time it yielded: why, and what the LLM said.
     pub yields: Vec<(agent::Yield, Box<[u8]>)>,
+    /// What its `Used` added up to: completions, and their tokens.
+    pub turns: u32,
+    pub usage: Usage,
+    /// When its time budget runs out, once it opened.
+    expires: Option<Time>,
     /// How it ended, once it has.
     pub ended: Option<Ended>,
     /// Nudges the opener has left to give.
@@ -224,8 +244,10 @@ pub struct World {
     tools: BTreeMap<Token, (Time, u64)>,
     /// Calls the provider has not answered yet.
     serving: BTreeSet<u64>,
-    /// The sessions opened, by the opener's name for each.
+    /// The sessions opened, by the opener's name for each, and the opener's
+    /// name for each session by the session's own while it lives.
     sessions: BTreeMap<u64, Session>,
+    openers: BTreeMap<Token, u64>,
 
     stats: Stats,
     trace: Vec<String>,
@@ -257,6 +279,7 @@ impl World {
             tools: BTreeMap::new(),
             serving: BTreeSet::new(),
             sessions: BTreeMap::new(),
+            openers: BTreeMap::new(),
             stats: Stats::default(),
             trace: Vec::new(),
         }
@@ -362,10 +385,12 @@ impl World {
         match request {
             agent::Request::Opened { opener, session } => self.opened(opener.raw(), session),
             agent::Request::Yielded { opener, stop, text } => self.yielded(opener.raw(), stop, text),
+            agent::Request::Used { opener, usage } => self.used(opener.raw(), usage),
             agent::Request::Ended { opener, end, turns, usage } => {
                 self.ended(opener.raw(), Ended { end, turns, usage });
             }
             agent::Request::Complete { owner, prompt, timeout } => {
+                self.affordable(owner, &prompt);
                 let call = self.next_serial();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
                 self.calls.insert(call, Call { owner, deadline });
@@ -407,6 +432,8 @@ impl World {
         let session = self.sessions.get_mut(&opener).expect("a session opens for an open that was sent");
         assert!(session.session.is_none() && session.ended.is_none(), "a session opens once, before it ends");
         session.session = Some(name);
+        session.expires = Some(self.now.saturating_add(session.budget.time));
+        self.openers.insert(name, opener);
         if session.abandon {
             let at = self.now.saturating_add(self.draw(self.settings.abandon_after));
             self.schedule(at, Delivery::Close { opener });
@@ -439,6 +466,32 @@ impl World {
         }
     }
 
+    /// A completion came back: the opener adds up what it used.
+    fn used(&mut self, opener: u64, usage: Usage) {
+        let session = self.sessions.get_mut(&opener).expect("a session reports to its opener");
+        assert!(session.session.is_some() && session.ended.is_none(), "a session uses tokens while it lives");
+        session.turns += 1;
+        session.usage = session.usage.saturating_add(usage);
+    }
+
+    /// The session that owns `owner` starts a completion: it must have turns,
+    /// input and output tokens and time left, no tokens past their budget,
+    /// and an answer that may take no more than the output budget left.
+    fn affordable(&self, owner: Token, prompt: &Prompt) {
+        let opener = self.openers.get(&owner).expect("a session calls the LLM while it lives");
+        let session = &self.sessions[opener];
+        let (budget, usage) = (&session.budget, &session.usage);
+        assert!(session.turns < budget.turns, "session {opener} starts no turn past its budget");
+        assert!(usage.input_tokens < budget.input, "session {opener} has input tokens left");
+        assert!(usage.output_tokens < budget.output, "session {opener} has output tokens left");
+        assert!(usage.cache_read_tokens <= budget.cache_read, "session {opener} is within its cache reads");
+        assert!(usage.cache_write_tokens <= budget.cache_write, "session {opener} is within its cache writes");
+        assert!(Some(self.now) < session.expires, "session {opener} has time left");
+        let left = budget.output - usage.output_tokens;
+        let most = u32::try_from(left).unwrap_or(u32::MAX).min(session.max_tokens);
+        assert_eq!(prompt.max_tokens, most, "session {opener}'s answer takes no more than the output budget left");
+    }
+
     fn ended(&mut self, opener: u64, ended: Ended) {
         let session = self.sessions.get(&opener).expect("a session ends for an open that was sent");
         assert!(session.ended.is_none(), "a session ends once");
@@ -446,11 +499,7 @@ impl World {
             agent::End::Busy | agent::End::Invalid => {
                 assert!(session.session.is_none(), "a session refused at the entrance never opened");
             }
-            agent::End::Closed
-            | agent::End::Failed { .. }
-            | agent::End::TurnLimit
-            | agent::End::TranscriptFull
-            | agent::End::Expired => {
+            agent::End::Closed | agent::End::Failed { .. } | agent::End::Budget { .. } | agent::End::TranscriptFull => {
                 let name = session.session.expect("a session that ran had opened");
                 assert!(self.idle(name), "a session ends once nothing it asked for is in flight");
             }
@@ -458,7 +507,28 @@ impl World {
         if ended.end == agent::End::Closed {
             assert!(session.closed, "a session ends as closed only when its opener closed it");
         }
+        if let agent::End::Budget { spent } = ended.end {
+            assert!(self.spent(session, spent), "session {opener} ended when its {spent:?} budget was spent");
+        }
+        assert_eq!((ended.turns, ended.usage), (session.turns, session.usage), "an end adds up what was used");
+        if let Some(name) = session.session {
+            self.openers.remove(&name);
+        }
         self.sessions.get_mut(&opener).expect("looked up above").ended = Some(ended);
+    }
+
+    /// Whether `session` has run out of its budget in `dimension` now: used it
+    /// up, for what gates a completion; gone past it, for the cache.
+    fn spent(&self, session: &Session, dimension: agent::Dimension) -> bool {
+        let (budget, usage) = (&session.budget, &session.usage);
+        match dimension {
+            agent::Dimension::Turns => session.turns >= budget.turns,
+            agent::Dimension::Input => usage.input_tokens >= budget.input,
+            agent::Dimension::Output => usage.output_tokens >= budget.output,
+            agent::Dimension::CacheRead => usage.cache_read_tokens > budget.cache_read,
+            agent::Dimension::CacheWrite => usage.cache_write_tokens > budget.cache_write,
+            agent::Dimension::Time => Some(self.now) >= session.expires,
+        }
     }
 
     /// Whether the session `name` has nothing in flight.
@@ -542,8 +612,20 @@ impl World {
         let Count { min, max } = self.settings.nudges;
         let nudges = u32::try_from(self.rng.between(min.into(), max.into())).expect("drawn between two u32s");
         let abandon = self.rng.chance(self.settings.abandon);
-        let session =
-            Session { session: None, yields: Vec::new(), ended: None, nudges, abandon, waiting: false, closed: false };
+        let session = Session {
+            session: None,
+            budget: spec.budget,
+            max_tokens: spec.max_tokens,
+            yields: Vec::new(),
+            turns: 0,
+            usage: Usage::ZERO,
+            expires: None,
+            ended: None,
+            nudges,
+            abandon,
+            waiting: false,
+            closed: false,
+        };
         assert!(self.sessions.insert(opener, session).is_none(), "openers have distinct names");
         self.agent_in.push_back(agent::Event::Open { opener: Token::new(opener), spec });
     }
@@ -639,11 +721,13 @@ fn describe_agent_request(request: &agent::Request) -> String {
         agent::Request::Yielded { opener, stop, text } => {
             format!("yielded {} {stop:?} {:?}", opener.raw(), String::from_utf8_lossy(text))
         }
+        agent::Request::Used { opener, usage } => format!("used {} {usage:?}", opener.raw()),
         agent::Request::Ended { opener, end, turns, usage } => {
             format!("ended {} {end:?} after {turns} turns, {usage:?}", opener.raw())
         }
         agent::Request::Complete { owner, prompt, timeout } => {
-            format!("complete {} with {} messages within {timeout:?}", owner.raw(), prompt.messages.len())
+            let (messages, most) = (prompt.messages.len(), prompt.max_tokens);
+            format!("complete {} with {messages} messages, at most {most} tokens, within {timeout:?}", owner.raw())
         }
         agent::Request::Cancel { owner } => format!("cancel {}", owner.raw()),
         agent::Request::Tool { owner, call } => {

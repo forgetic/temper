@@ -5,7 +5,7 @@
 use std::mem::size_of;
 
 use temper_agent_model_session::llm::{Block, Completion, Endpoint, Failure, Stop, Tool, Usage};
-use temper_agent_model_session::{Event, Limits, MAX_OUT, Model, Request, Spec, worst_case};
+use temper_agent_model_session::{Budget, Event, Limits, MAX_OUT, Model, Request, Spec, worst_case};
 use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
 
 /// Counts the heap each thread allocates, so that tests running side by side
@@ -71,13 +71,19 @@ const LIMITS: Limits = Limits {
     sessions: 1,
     messages: 3,
     session_bytes: 1024,
-    turns: 16,
+    budget: Budget {
+        turns: 16,
+        input: 1 << 20,
+        output: 1 << 20,
+        cache_read: 1 << 20,
+        cache_write: 1 << 20,
+        time: Duration::from_secs(3600),
+    },
     max_tokens: 1024,
     retries: 1,
     backoff_base: Duration::from_secs(60),
     backoff_max: Duration::from_secs(60),
     call_timeout: Duration::from_secs(30),
-    session_timeout: Duration::from_secs(3600),
 };
 
 /// What a step asked for last, without the payload.
@@ -117,6 +123,7 @@ fn fill(limits: Limits, route: Route) {
                 Request::Tool { .. } => Asked::Tool,
                 Request::Opened { .. }
                 | Request::Yielded { .. }
+                | Request::Used { .. }
                 | Request::Ended { .. }
                 | Request::Cancel { .. }
                 | Request::CancelTool { .. } => Asked::Other,
@@ -139,6 +146,7 @@ fn fill(limits: Limits, route: Route) {
             tools: Box::new([Tool { name: bytes(1), description: bytes(1), schema: bytes(1) }]),
             prompt: bytes(1),
             max_tokens: 1,
+            budget: limits.budget,
         };
         let spec_cost = 2 + (tool + 3) + (block + 1);
 
