@@ -34,6 +34,7 @@ const LIMITS: Limits = Limits {
         backoff_max: Duration::from_secs(1),
         call_timeout: Duration::from_secs(30),
         facts: 64,
+        parallel_tools: 2,
     },
 };
 
@@ -93,13 +94,13 @@ impl Harness {
     }
 
     /// Opens a session and has the LLM ask for `ls`, returning the session's
-    /// owner.
-    fn open_tool(&mut self) -> Token {
+    /// owner and the run's.
+    fn open_tool(&mut self) -> (Token, Token) {
         let owner = self.open();
-        let Some(Request::Tool { .. }) = self.complete(owner, ls()) else {
+        let Some(Request::Tool { owner: run, .. }) = self.complete(owner, ls()) else {
             panic!("expected a tool run");
         };
-        owner
+        (owner, run)
     }
 
     /// Opens a session and has the LLM finish its turn, returning the
@@ -196,16 +197,18 @@ fn an_open_reaches_the_session_and_its_opening_and_call_come_back_out() {
 fn a_completion_reaches_the_session_and_its_tool_run_comes_back_out() {
     let mut h = Harness::new();
     let owner = h.open();
-    let request = h.complete(owner, ls());
-    assert_eq!(request, Some(Request::Tool { owner, call: list() }));
+    let Some(Request::Tool { owner: _, call }) = h.complete(owner, ls()) else {
+        panic!("expected a tool run");
+    };
+    assert_eq!(call, list());
 }
 
 #[test]
 fn a_tool_result_reaches_the_session_and_its_next_call_comes_back_out() {
     let mut h = Harness::new();
-    let owner = h.open_tool();
+    let (owner, run) = h.open_tool();
     let Some(Request::Complete { owner: next, prompt, timeout: _ }) =
-        h.step(Event::ToolDone { owner, outcome: listed() })
+        h.step(Event::ToolDone { owner: run, outcome: listed() })
     else {
         panic!("expected a call");
     };
@@ -262,10 +265,10 @@ fn an_expired_call_is_cancelled_and_its_cancellation_reaches_the_session() {
 #[test]
 fn an_expired_tool_run_is_cancelled_and_its_cancellation_reaches_the_session() {
     let mut h = Harness::new();
-    let owner = h.open_tool();
+    let (_, run) = h.open_tool();
     h.expire();
-    assert_eq!(h.fire(), Some(Request::CancelTool { owner }));
-    assert_eq!(h.step(Event::ToolCancelled { owner }), Some(ended(OUT_OF_TIME, 1)));
+    assert_eq!(h.fire(), Some(Request::CancelTool { owner: run }));
+    assert_eq!(h.step(Event::ToolCancelled { owner: run }), Some(ended(OUT_OF_TIME, 1)));
 }
 
 #[test]

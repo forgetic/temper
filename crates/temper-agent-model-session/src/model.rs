@@ -4,19 +4,22 @@ use temper_lib::{Deadlines, Env, Queue, Rng, Slab, Time};
 
 use crate::boundary::{Event, Request};
 use crate::facts::{Fact, Facts};
-use crate::limits::{self, Limits};
-use crate::session::{self, Alarm, Session};
+use crate::limits::{self, Limits, MAX_PARALLEL};
+use crate::session::{self, Alarm, Run, Session};
 
-/// The most requests an entry point emits per call: an admitted `Open` is
-/// answered with `Opened` and the session's first call, and a completion with
-/// `Used` and what the session does next. The parent reserves this much room
-/// in `out` before calling it.
-pub const MAX_OUT: u32 = 2;
+/// The most requests an entry point emits per call: a completion is answered
+/// with `Used` and what the session does next, which is at most a batch of
+/// tool runs; closing a session cancels at most a batch; an admitted `Open` is
+/// answered with `Opened` and the session's first call. The parent reserves
+/// this much room in `out` before calling it.
+pub const MAX_OUT: u32 = MAX_PARALLEL + 1;
 
 /// The session sub-model's state.
 #[derive(Debug)]
 pub struct Model {
     pub(crate) sessions: Slab<Session>,
+    /// The sessions' tool calls in flight, each named by its own token.
+    pub(crate) runs: Slab<Run>,
     pub(crate) alarms: Deadlines<Alarm>,
     pub(crate) rng: Rng,
     pub(crate) facts: Facts,
@@ -27,8 +30,10 @@ impl Model {
     #[must_use]
     pub fn new(limits: &Limits, seed: u64) -> Model {
         let alarms = limits::alarms(limits).expect("worst_case accepted the limits");
+        let runs = limits::runs(limits).expect("worst_case accepted the limits");
         Model {
             sessions: Slab::with_capacity(limits.sessions),
+            runs: Slab::with_capacity(runs),
             alarms: Deadlines::with_capacity(alarms),
             rng: Rng::new(seed),
             facts: Facts::with_capacity(limits.facts),
@@ -73,6 +78,7 @@ impl Model {
     /// The reclaim point: frees what closed in this iteration.
     pub fn reclaim(&mut self) {
         self.sessions.reclaim();
+        self.runs.reclaim();
     }
 }
 

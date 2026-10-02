@@ -5,7 +5,7 @@
 use std::mem::size_of;
 
 use temper_agent_model_session::llm::{Block, Completion, Decoded, Endpoint, Failure, Problem, Stop, Usage};
-use temper_agent_model_session::{Budget, Event, Limits, MAX_OUT, Model, Request, Spec, worst_case};
+use temper_agent_model_session::{Budget, Event, Limits, MAX_OUT, MAX_PARALLEL, Model, Request, Spec, worst_case};
 use temper_agent_model_tools::{Call, Grants, Name, Outcome, Part, Path};
 use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
 
@@ -86,6 +86,7 @@ const LIMITS: Limits = Limits {
     backoff_max: Duration::from_secs(60),
     call_timeout: Duration::from_secs(30),
     facts: 64,
+    parallel_tools: 1,
 };
 
 /// What a step asked for last, without the payload.
@@ -163,6 +164,7 @@ fn fill(limits: Limits, route: Route) {
         };
         match route {
             Route::Tool => {
+                // A call's slot for its result takes a block's room.
                 let tooling_cost = (block + 3 + (part + 1)) + block;
                 let output = limits.session_bytes - spec_cost - tooling_cost - 1;
                 let name = Name::new(bytes(1)).expect("a name");
@@ -217,6 +219,7 @@ fn a_model_with_every_session_full_stays_within_its_worst_case() {
         fill(LIMITS, route);
         fill(Limits { sessions: 64, session_bytes: 65_536, ..LIMITS }, route);
         fill(Limits { sessions: 1000, messages: 8, session_bytes: 600, ..LIMITS }, route);
+        fill(Limits { sessions: 64, parallel_tools: MAX_PARALLEL, ..LIMITS }, route);
     }
 }
 

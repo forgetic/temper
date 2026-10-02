@@ -2,9 +2,11 @@
 //! yields, a limit or the budget ends it, or its opener closes it.
 //!
 //! An `Open` opens a session and the session calls the LLM. While the LLM asks
-//! for tools, the session runs them one at a time and sends their results back
-//! in another call. A call the protocol layer could not decode is answered
-//! with its problem, and nothing runs for it. When the LLM stops calling
+//! for tools, the session runs them and sends their results back, in call
+//! order, in another call. They run in batches: adjacent calls that read run
+//! together, up to `Limits::parallel_tools`, and a call that writes runs
+//! alone; each run has a token of its own. A call the protocol layer could
+//! not decode is answered with its problem, and nothing runs for it. When the LLM stops calling
 //! tools, the session yields to its opener, which continues it with a new user
 //! message or closes it; the message goes back after a result for each call
 //! the yielded answer made but did not wait for. A session ends once, and only
@@ -20,19 +22,21 @@
 //! state          event or alarm               next
 //! (none)         open, admitted               Calling      opened; call the LLM
 //!                open, busy or invalid        (none)       ended: busy, invalid
-//! Calling        completed, tool use          Tooling      run the first owned call
+//! Calling        completed, tool use          Tooling      run the first batch
 //!                completed, otherwise         Yielded      yielded
 //!                failed, transient            Backoff
 //!                failed, otherwise            Closed       ended: failed
-//!                close, expiry                Closing      cancel the call
+//!                close, expiry                Closing      cancel the call, wait for it
 //! Backoff        retry                        Calling      call again
 //!                close, expiry                Closed       ended: closed, out of time
-//! Tooling        tool done, more owned calls  Tooling      run the next one
+//! Tooling        tool done, batch running     Tooling      keep the result
+//!                tool done, more calls        Tooling      run the next batch
 //!                tool done, no more           Calling      send the results
-//!                close, expiry                Closing      cancel the tool
+//!                close, expiry                Closing      cancel the batch, wait for each run
 //! Yielded        continue                     Calling      call with the message
 //!                close, expiry                Closed       ended: closed, out of time
-//! Closing        what was cancelled ends      Closed       ended
+//! Closing        what it waits for ends       Closed       ended
+//!                a run ends, others pending   Closing      wait for the rest
 //!                close                        Closing      (already closing)
 //! Closed         continue, close              Closed       (dropped: the handle is stale)
 //! ```
@@ -63,7 +67,7 @@
 use alloc::boxed::Box;
 use core::mem::{self, size_of};
 
-use temper_agent_model_tools::{Call, Entry, Grants, Outcome, Part, Path};
+use temper_agent_model_tools::{self as tools, Call, Effect, Entry, Grants, Outcome, Part, Path};
 use temper_lib::{Deadlines, Duration, Env, Id, List, Queue, Rng, Slab, Time, Token, Writer};
 
 use crate::boundary::{Budget, Dimension, End, Request, Spec, Yield};
@@ -115,18 +119,47 @@ enum State {
     /// close the session.
     Yielded,
     /// Ending with `end`, once what was cancelled has settled.
-    Closing { end: End },
+    Closing { end: End, waiting: Waiting },
     /// Terminal: holds nothing.
     Closed,
 }
 
-/// The tool calls of the last assistant message, run one at a time.
+/// What a closing session waits for: the terminal event of its call, or of
+/// each of its tool runs still `pending`.
+#[derive(Debug)]
+enum Waiting {
+    Call,
+    Tools { pending: u32 },
+}
+
+/// The tool calls of the last assistant message, run in batches: adjacent
+/// owned calls that read, up to `Limits::parallel_tools` of them, run
+/// together, and one that writes runs alone.
 #[derive(Debug)]
 struct Tools {
-    /// The block of the owned call in flight.
+    /// A slot for each call reached, in call order, with room for them all.
+    slots: List<Slot>,
+    /// The runs of the batch still in flight.
+    running: u32,
+    /// The block where the calls not reached yet begin.
+    next: u32,
+}
+
+#[derive(Debug)]
+enum Slot {
+    /// The call is running as `run`.
+    Running { run: Id<Run> },
+    /// The call has its result.
+    Done { result: Block },
+}
+
+/// An owned tool call running for a session, named by its own token: the
+/// call at `block` of the session's last message, which fills `slot`.
+#[derive(Debug)]
+pub(crate) struct Run {
+    session: Id<Session>,
+    slot: u32,
     block: u32,
-    /// The results so far, in call order, with room for one per call.
-    results: List<Block>,
 }
 
 /// A session's timers, named by what they are for.
@@ -194,9 +227,9 @@ pub(crate) fn close(model: &mut Model, session: Token, out: &mut Queue<Request>)
     session.state = match state {
         State::Calling { attempt: _ } => cancel_call(id, End::Closed, out),
         State::Backoff { attempt: _, until: _ } | State::Yielded => finish(&session.conversation, End::Closed, out),
-        State::Tooling { tools: _ } => cancel_tool(id, End::Closed, out),
+        State::Tooling { tools } => cancel_tools(tools, End::Closed, out),
         // It is already ending, with the end it had first.
-        State::Closing { end } => State::Closing { end },
+        State::Closing { end, waiting } => State::Closing { end, waiting },
         State::Closed => unreachable!("an addressed session has not ended"),
     };
     conclude(model, id, out, mark);
@@ -218,11 +251,13 @@ pub(crate) fn completed(
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
-        State::Calling { attempt: _ } => answered(conversation, id, completion, env, out),
-        State::Closing { end } => answered_late(conversation, end, completion.usage, out),
-        State::Backoff { .. } | State::Tooling { .. } | State::Yielded | State::Closed => {
-            unreachable!("a completion ends a call in flight")
-        }
+        State::Calling { attempt: _ } => answered(conversation, id, &mut model.runs, completion, env, out),
+        State::Closing { end, waiting: Waiting::Call } => answered_late(conversation, end, completion.usage, out),
+        State::Backoff { .. }
+        | State::Tooling { .. }
+        | State::Yielded
+        | State::Closing { waiting: Waiting::Tools { .. }, .. }
+        | State::Closed => unreachable!("a completion ends a call in flight"),
     };
     conclude(model, id, out, mark);
 }
@@ -237,10 +272,12 @@ pub(crate) fn failed(model: &mut Model, env: &Env<Limits>, owner: Token, failure
     let conversation = &mut session.conversation;
     session.state = match state {
         State::Calling { attempt } => call_failed(conversation, attempt, failure, &mut model.rng, env, out),
-        State::Closing { end } => finish(conversation, end, out),
-        State::Backoff { .. } | State::Tooling { .. } | State::Yielded | State::Closed => {
-            unreachable!("a failure ends a call in flight")
-        }
+        State::Closing { end, waiting: Waiting::Call } => finish(conversation, end, out),
+        State::Backoff { .. }
+        | State::Tooling { .. }
+        | State::Yielded
+        | State::Closing { waiting: Waiting::Tools { .. }, .. }
+        | State::Closed => unreachable!("a failure ends a call in flight"),
     };
     // A retry is told with its wait: no request goes out until then.
     match &session.state {
@@ -260,10 +297,13 @@ pub(crate) fn cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request
     model.facts.push(Fact::CompletionCancelled { opener: session.conversation.opener });
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
-        State::Closing { end } => finish(&session.conversation, end, out),
-        State::Calling { .. } | State::Backoff { .. } | State::Tooling { .. } | State::Yielded | State::Closed => {
-            unreachable!("a cancellation answers a cancel, sent only on the way to Closing")
-        }
+        State::Closing { end, waiting: Waiting::Call } => finish(&session.conversation, end, out),
+        State::Calling { .. }
+        | State::Backoff { .. }
+        | State::Tooling { .. }
+        | State::Yielded
+        | State::Closing { waiting: Waiting::Tools { .. }, .. }
+        | State::Closed => unreachable!("a cancellation answers the cancel of a call, sent on the way to Closing"),
     };
     conclude(model, id, out, mark);
 }
@@ -276,7 +316,7 @@ pub(crate) fn tool_done(
     out: &mut Queue<Request>,
 ) {
     let mark = out.len();
-    let id = Id::from_token(owner);
+    let Run { session: id, slot, block } = ended_run(&mut model.runs, owner);
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
     let output = outcome_cost(&outcome).unwrap_or(u64::MAX);
     let fact = Fact::ToolFinished { opener: session.conversation.opener, output, failed: !succeeded(&outcome) };
@@ -285,29 +325,35 @@ pub(crate) fn tool_done(
     let conversation = &mut session.conversation;
     session.state = match state {
         State::Tooling { tools } => {
-            let result =
-                Block::ToolResult { id: call_id(conversation, tools.block), result: Returned::Owned { outcome } };
-            tool_ran(conversation, id, tools, result, env, out)
+            let result = Block::ToolResult { id: call_id(conversation, block), result: Returned::Owned { outcome } };
+            tool_ran(conversation, id, &mut model.runs, tools, slot, result, env, out)
         }
-        State::Closing { end } => finish(conversation, end, out),
-        State::Calling { .. } | State::Backoff { .. } | State::Yielded | State::Closed => {
-            unreachable!("a tool result ends a tool run in flight")
-        }
+        State::Closing { end, waiting: Waiting::Tools { pending } } => settled(conversation, end, pending, out),
+        State::Calling { .. }
+        | State::Backoff { .. }
+        | State::Yielded
+        | State::Closing { waiting: Waiting::Call, .. }
+        | State::Closed => unreachable!("a tool result ends a tool run in flight"),
     };
     conclude(model, id, out, mark);
 }
 
 pub(crate) fn tool_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
     let mark = out.len();
-    let id = Id::from_token(owner);
+    let Run { session: id, slot: _, block: _ } = ended_run(&mut model.runs, owner);
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
     model.facts.push(Fact::ToolCancelled { opener: session.conversation.opener });
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
-        State::Closing { end } => finish(&session.conversation, end, out),
-        State::Calling { .. } | State::Backoff { .. } | State::Tooling { .. } | State::Yielded | State::Closed => {
-            unreachable!("a cancellation answers a cancel, sent only on the way to Closing")
+        State::Closing { end, waiting: Waiting::Tools { pending } } => {
+            settled(&session.conversation, end, pending, out)
         }
+        State::Calling { .. }
+        | State::Backoff { .. }
+        | State::Tooling { .. }
+        | State::Yielded
+        | State::Closing { waiting: Waiting::Call, .. }
+        | State::Closed => unreachable!("a cancellation answers the cancel of a run, sent on the way to Closing"),
     };
     conclude(model, id, out, mark);
 }
@@ -319,7 +365,7 @@ pub(crate) fn expire(model: &mut Model, id: Id<Session>, out: &mut Queue<Request
     session.state = match state {
         State::Calling { attempt: _ } => cancel_call(id, OUT_OF_TIME, out),
         State::Backoff { attempt: _, until: _ } | State::Yielded => finish(&session.conversation, OUT_OF_TIME, out),
-        State::Tooling { tools: _ } => cancel_tool(id, OUT_OF_TIME, out),
+        State::Tooling { tools } => cancel_tools(tools, OUT_OF_TIME, out),
         State::Closing { .. } | State::Closed => {
             unreachable!("the expiry alarm runs only in Calling, Backoff, Tooling and Yielded")
         }
@@ -338,6 +384,16 @@ pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: 
         }
     };
     conclude(model, id, out, mark);
+}
+
+/// The run `owner` names, whose terminal event has come: retired, and copied
+/// out.
+fn ended_run(runs: &mut Slab<Run>, owner: Token) -> Run {
+    let id = Id::from_token(owner);
+    let run = runs.get(id).expect("a run lives until its terminal event");
+    let ended = Run { session: run.session, slot: run.slot, block: run.block };
+    runs.retire(id);
+    ended
 }
 
 /// The session an opener's handle names, or `None` if it has ended: the handle
@@ -359,13 +415,13 @@ fn addressed(sessions: &Slab<Session>, session: Token) -> Option<Id<Session>> {
 /// implies. `mark` is where the requests the transition made begin in `out`.
 fn conclude(model: &mut Model, id: Id<Session>, out: &Queue<Request>, mark: u32) {
     let session = model.sessions.get(id).expect("a session lives until it is retired");
-    tell(&mut model.facts, session, out, mark);
+    tell(&mut model.facts, &model.runs, session, out, mark);
     follow(&mut model.sessions, &mut model.alarms, id);
 }
 
 /// What a transition tells, derived from the requests it made: a fact for
 /// each but the cancels, whose outcome is told when it comes.
-fn tell(facts: &mut Facts, session: &Session, out: &Queue<Request>, mark: u32) {
+fn tell(facts: &mut Facts, runs: &Slab<Run>, session: &Session, out: &Queue<Request>, mark: u32) {
     let opener = session.conversation.opener;
     let made = usize::try_from(mark).expect("a u32 fits in a usize");
     for request in out.iter().skip(made) {
@@ -380,7 +436,10 @@ fn tell(facts: &mut Facts, session: &Session, out: &Queue<Request>, mark: u32) {
                 let (messages, max_tokens) = (count(prompt.messages.len()), prompt.max_tokens);
                 Fact::CompletionStarted { opener, attempt: attempt(&session.state), messages, max_tokens }
             }
-            Request::Tool { owner: _, call: _ } => Fact::ToolStarted { opener, block: block(&session.state) },
+            Request::Tool { owner, call: _ } => {
+                let run = runs.get(Id::from_token(*owner)).expect("a run lives while its call is asked for");
+                Fact::ToolStarted { opener, block: run.block }
+            }
             Request::Cancel { .. } | Request::CancelTool { .. } => continue,
         };
         facts.push(fact);
@@ -393,16 +452,6 @@ fn attempt(state: &State) -> u32 {
         State::Calling { attempt } => *attempt,
         State::Backoff { .. } | State::Tooling { .. } | State::Yielded | State::Closing { .. } | State::Closed => {
             unreachable!("a session that asks for a completion is calling")
-        }
-    }
-}
-
-/// The block of the tool call a session has just asked to run.
-fn block(state: &State) -> u32 {
-    match state {
-        State::Tooling { tools } => tools.block,
-        State::Calling { .. } | State::Backoff { .. } | State::Yielded | State::Closing { .. } | State::Closed => {
-            unreachable!("a session that runs a tool is tooling")
         }
     }
 }
@@ -440,13 +489,14 @@ fn set(alarms: &mut Deadlines<Alarm>, alarm: Alarm, at: Option<Time>) {
 fn answered(
     conversation: &mut Conversation,
     id: Id<Session>,
+    runs: &mut Slab<Run>,
     completion: Completion,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
     used(conversation, completion.usage, out);
     match completion.stop {
-        Stop::ToolUse => use_tools(conversation, id, completion.content, env, out),
+        Stop::ToolUse => use_tools(conversation, id, runs, completion.content, env, out),
         Stop::EndTurn => pause(conversation, Yield::Done, completion.content, &env.limits, out),
         Stop::MaxTokens => pause(conversation, Yield::Truncated, completion.content, &env.limits, out),
         Stop::Refusal => pause(conversation, Yield::Refused, completion.content, &env.limits, out),
@@ -466,6 +516,7 @@ fn answered_late(conversation: &mut Conversation, end: End, usage: Usage, out: &
 fn use_tools(
     conversation: &mut Conversation,
     id: Id<Session>,
+    runs: &mut Slab<Run>,
     content: Box<[Block]>,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
@@ -479,45 +530,79 @@ fn use_tools(
         return finish(conversation, End::TranscriptFull, out);
     }
     conversation.transcript.push(Message { role: Role::Assistant, content }).expect("checked for room above");
-    advance(conversation, id, List::with_capacity(calls), 0, env, out)
+    let tools = Tools { slots: List::with_capacity(calls), running: 0, next: 0 };
+    advance(conversation, id, runs, tools, env, out)
 }
 
-/// Goes through the tool calls of the last message from block `from`, with
-/// the `results` of those before it: answers each invalid one with its
-/// problem, and runs the first owned one; past the last, sends the results
-/// back.
+/// With no run in flight, goes on through the tool calls of the last message:
+/// answers each invalid one with its problem, and starts the next batch, the
+/// adjacent owned calls that read, up to `Limits::parallel_tools`, or one
+/// that writes. Past the last call, sends the results back.
 fn advance(
     conversation: &mut Conversation,
     id: Id<Session>,
-    mut results: List<Block>,
-    from: u32,
+    runs: &mut Slab<Run>,
+    mut tools: Tools,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
     let message = conversation.transcript.last().expect("the assistant message is last while tooling");
     let end = u32::try_from(message.content.len()).expect("a message whose calls were counted has its blocks counted");
-    for index in from..end {
+    let mut batch: Option<Effect> = None;
+    let mut next = end;
+    for index in tools.next..end {
         let message = conversation.transcript.last().expect("the assistant message is last while tooling");
         let block = message.content.get(usize::try_from(index).expect("a u32 fits in a usize"));
-        let answer = match block.expect("within the message") {
+        match block.expect("within the message") {
             Block::ToolCall { id: _, name: _, input: _, call: Decoded::Owned { call } } => {
-                out.push(Request::Tool { owner: id.token(), call: call.clone() });
-                return State::Tooling { tools: Tools { block: index, results } };
+                let effect = tools::effect(call);
+                if !joins(batch, effect, tools.running, env.limits.parallel_tools) {
+                    next = index;
+                    break;
+                }
+                let run = Run { session: id, slot: tools.slots.len(), block: index };
+                let run = runs.insert(run).expect("the run slab has room for every session's batches");
+                out.push(Request::Tool { owner: run.token(), call: call.clone() });
+                tools.slots.push(Slot::Running { run }).expect("a slot for every call");
+                tools.running = tools.running.saturating_add(1);
+                batch = Some(effect);
             }
             Block::ToolCall { id: call, name: _, input: _, call: Decoded::Invalid { problem } } => {
-                Block::ToolResult { id: call.clone(), result: Returned::Invalid { problem: problem.clone() } }
+                // Its answer was counted when the message was recorded.
+                let answer = Returned::Invalid { problem: problem.clone() };
+                let result = Block::ToolResult { id: call.clone(), result: answer };
+                tools.slots.push(Slot::Done { result }).expect("a slot for every call");
             }
-            Block::Text { .. } | Block::ToolResult { .. } => continue,
-        };
-        // The answer's block was counted when the message was recorded.
-        if !charge(conversation, payload_cost(&answer), &env.limits) {
-            return finish(conversation, End::TranscriptFull, out);
+            Block::Text { .. } | Block::ToolResult { .. } => {}
         }
-        results.push(answer).expect("room for one result per tool call");
+    }
+    tools.next = next;
+    if tools.running > 0 {
+        return State::Tooling { tools };
+    }
+    let mut results = List::with_capacity(tools.slots.len());
+    for slot in tools.slots.into_boxed() {
+        match slot {
+            Slot::Done { result } => results.push(result).expect("a result for every slot"),
+            Slot::Running { .. } => unreachable!("no run is in flight"),
+        }
     }
     let results = Message { role: Role::User, content: results.into_boxed() };
     conversation.transcript.push(results).expect("room was checked when the message was recorded");
     call(conversation, id, 0, env, out)
+}
+
+/// Whether an owned call with `effect` joins a batch of `batch` with `running`
+/// runs: a read joins reads while there is room, and a write runs alone.
+const fn joins(batch: Option<Effect>, effect: Effect, running: u32, parallel: u32) -> bool {
+    match batch {
+        None => true,
+        Some(Effect::Write) => false,
+        Some(Effect::Read) => match effect {
+            Effect::Read => running < parallel,
+            Effect::Write => false,
+        },
+    }
 }
 
 /// Calling, completed without tools to run: record the message, and yield to
@@ -575,21 +660,38 @@ fn unrun(conversation: &Conversation, text: Box<[u8]>) -> Box<[Block]> {
     content.into_boxed()
 }
 
-/// Tooling, tool done: keep the result, and go on through the calls after it.
+/// Tooling, tool done: keep the result in its slot, and once the batch is
+/// done, go on through the calls after it.
+#[expect(clippy::too_many_arguments, reason = "a cell handler takes what its cell needs, and the runs to start more")]
 fn tool_ran(
     conversation: &mut Conversation,
     id: Id<Session>,
+    runs: &mut Slab<Run>,
     mut tools: Tools,
+    slot: u32,
     result: Block,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
+    tools.running = tools.running.checked_sub(1).expect("the run that ended was counted");
     // The result's block was counted when the message was recorded.
-    if !charge(conversation, payload_cost(&result), &env.limits) {
-        return finish(conversation, End::TranscriptFull, out);
+    let fits = charge(conversation, payload_cost(&result), &env.limits);
+    *tools.slots.get_mut(slot).expect("a run fills its own slot") = Slot::Done { result };
+    if !fits {
+        return abandon(conversation, tools, End::TranscriptFull, out);
     }
-    tools.results.push(result).expect("room for one result per tool call");
-    advance(conversation, id, tools.results, tools.block.saturating_add(1), env, out)
+    if tools.running > 0 {
+        return State::Tooling { tools };
+    }
+    advance(conversation, id, runs, tools, env, out)
+}
+
+/// Closing, a tool run ended: one fewer to wait for.
+fn settled(conversation: &Conversation, end: End, pending: u32, out: &mut Queue<Request>) -> State {
+    match pending.checked_sub(1).expect("the run that ended was waited for") {
+        0 => finish(conversation, end, out),
+        pending => State::Closing { end, waiting: Waiting::Tools { pending } },
+    }
 }
 
 /// Calling, failed: wait and call again if the failure is transient and
@@ -626,12 +728,26 @@ fn call(
 
 fn cancel_call(id: Id<Session>, end: End, out: &mut Queue<Request>) -> State {
     out.push(Request::Cancel { owner: id.token() });
-    State::Closing { end }
+    State::Closing { end, waiting: Waiting::Call }
 }
 
-fn cancel_tool(id: Id<Session>, end: End, out: &mut Queue<Request>) -> State {
-    out.push(Request::CancelTool { owner: id.token() });
-    State::Closing { end }
+/// Cancels the runs in flight, to end with `end` once each has settled.
+fn cancel_tools(tools: Tools, end: End, out: &mut Queue<Request>) -> State {
+    for slot in &tools.slots {
+        match slot {
+            Slot::Running { run } => out.push(Request::CancelTool { owner: run.token() }),
+            Slot::Done { .. } => {}
+        }
+    }
+    State::Closing { end, waiting: Waiting::Tools { pending: tools.running } }
+}
+
+/// Ends with `end` at once, or once the runs in flight have settled.
+fn abandon(conversation: &Conversation, tools: Tools, end: End, out: &mut Queue<Request>) -> State {
+    if tools.running == 0 {
+        return finish(conversation, end, out);
+    }
+    cancel_tools(tools, end, out)
 }
 
 /// Counts a completion that came back, and tells the opener.
@@ -857,10 +973,20 @@ fn spec_cost(model: &[u8], system: &[u8], content: &[Block]) -> Option<u64> {
 }
 
 /// What an assistant message with `calls` tool calls costs while its tools run:
-/// the message, and the room for their results.
+/// the message, a slot for each call's result, and the answers to the invalid
+/// calls, which are known already.
 fn held(content: &[Block], calls: u32) -> Option<u64> {
-    let results = u64::try_from(size_of::<Block>()).ok()?.checked_mul(u64::from(calls))?;
-    content_cost(content)?.checked_add(results)
+    let slots = u64::try_from(size_of::<Slot>()).ok()?.checked_mul(u64::from(calls))?;
+    let mut cost = content_cost(content)?.checked_add(slots)?;
+    for block in content {
+        match block {
+            Block::ToolCall { id, name: _, input: _, call: Decoded::Invalid { problem } } => {
+                cost = cost.checked_add(len(id)?)?.checked_add(problem_cost(problem)?)?;
+            }
+            Block::ToolCall { call: Decoded::Owned { .. }, .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
+        }
+    }
+    Some(cost)
 }
 
 fn content_cost(content: &[Block]) -> Option<u64> {
@@ -917,7 +1043,7 @@ fn call_cost(call: &Call) -> Option<u64> {
 
 /// A path's parts and the names in them.
 fn path_cost(path: &Path) -> Option<u64> {
-    let parts = u64::try_from(size_of::<Part>()).ok()?.checked_mul(len_of(&path.parts)?)?;
+    let parts = u64::try_from(size_of::<Part>()).ok()?.checked_mul(u64::try_from(path.parts.len()).ok()?)?;
     let mut cost = parts;
     for part in &path.parts {
         match part {
@@ -932,7 +1058,7 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
     match outcome {
         Outcome::Read { content, .. } => len(content),
         Outcome::Listed { entries, more: _ } => {
-            let mut cost = u64::try_from(size_of::<Entry>()).ok()?.checked_mul(len_of(entries)?)?;
+            let mut cost = u64::try_from(size_of::<Entry>()).ok()?.checked_mul(u64::try_from(entries.len()).ok()?)?;
             for entry in entries {
                 cost = cost.checked_add(len(entry.name.as_bytes())?)?;
             }
@@ -962,10 +1088,6 @@ fn problem_cost(problem: &Problem) -> Option<u64> {
         Problem::UnknownTool | Problem::NotAnObject => Some(0),
         Problem::Missing { field } | Problem::WrongType { field } | Problem::BadValue { field } => len(field),
     }
-}
-
-fn len_of<T>(items: &[T]) -> Option<u64> {
-    u64::try_from(items.len()).ok()
 }
 
 fn len(bytes: &[u8]) -> Option<u64> {

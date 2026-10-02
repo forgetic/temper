@@ -3,7 +3,11 @@ use temper_lib::{Deadlines, Duration, List, Queue, Slab};
 use crate::boundary::Budget;
 use crate::facts::Fact;
 use crate::llm::Message;
-use crate::session::{Alarm, Session};
+use crate::session::{Alarm, Run, Session};
+
+/// The most tool calls a session runs at once: what `Limits::parallel_tools`
+/// may be, and what bounds the requests a step emits.
+pub const MAX_PARALLEL: u32 = 8;
 
 /// The session sub-model's limits (section 7), handed by its parent to every
 /// step read-only.
@@ -19,6 +23,10 @@ pub struct Limits {
     /// The largest budget a spec may ask for, dimension by dimension. Its time
     /// is the longest a session may live.
     pub budget: Budget,
+    /// Owned tool calls a session runs at once: adjacent calls that read run
+    /// together, up to this many, and a call that writes runs alone. Between
+    /// one and [`MAX_PARALLEL`].
+    pub parallel_tools: u32,
     /// The largest `max_tokens` a spec may ask for.
     pub max_tokens: u32,
     /// Retries of a call that failed transiently, after which the session
@@ -45,12 +53,23 @@ pub struct Limits {
 /// count them. Facts own nothing beyond their queue.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
+    if !(1..=MAX_PARALLEL).contains(&limits.parallel_tools) {
+        return None;
+    }
     let sessions = Slab::<Session>::worst_case(limits.sessions)?;
+    let runs = Slab::<Run>::worst_case(runs(limits)?)?;
     let alarms = Deadlines::<Alarm>::worst_case(alarms(limits)?)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
     // Each session owns its transcript's list and up to its byte limit.
     let session = List::<Message>::worst_case(limits.messages)?.checked_add(limits.session_bytes)?;
-    sessions.checked_add(alarms)?.checked_add(facts)?.checked_add(u64::from(limits.sessions).checked_mul(session)?)
+    let held = u64::from(limits.sessions).checked_mul(session)?;
+    sessions.checked_add(runs)?.checked_add(alarms)?.checked_add(facts)?.checked_add(held)
+}
+
+/// The run slab's capacity: every session may run a batch, and start the next
+/// in the iteration that retired the last, before its slots are reclaimed.
+pub(crate) fn runs(limits: &Limits) -> Option<u32> {
+    limits.sessions.checked_mul(limits.parallel_tools)?.checked_mul(2)
 }
 
 /// The alarm table's capacity: every session may have two alarms armed.

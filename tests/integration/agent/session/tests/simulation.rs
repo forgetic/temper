@@ -81,18 +81,26 @@ fn malformed_calls_are_answered_with_their_problem_and_the_conversation_goes_on(
     assert!(told.invalid_calls >= 2 && told.invalid_calls == told.calls, "{told:?}");
 }
 
+/// The world checks every batch as it starts: no more reads at once than
+/// the limits allow, a write alone, and the results back in call order.
 #[test]
-fn several_calls_in_one_answer_run_in_turn_and_their_results_go_back_together() {
+fn reads_in_one_answer_run_side_by_side_and_writes_alone() {
     let calm = Settings::calm(19);
-    let settings = Settings { provider: Config { calls_per_answer: 3, ..calm.provider }, ..calm };
+    let settings = Settings {
+        agent: Limits { parallel_tools: 3, ..calm.agent },
+        provider: Config { calls_per_answer: 6, tool_rounds: 4, ..calm.provider },
+        ..calm
+    };
     let mut world = World::new(settings);
-    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    let openers: Vec<u64> = (0..4).map(|_| world.submit(Time::ZERO, spec(b"fix the build"))).collect();
     world.run(ITERATIONS);
 
-    assert_eq!((end(&world, opener), turns(&world, opener)), (End::Closed, 3));
+    for opener in openers {
+        assert_eq!((end(&world, opener), turns(&world, opener)), (End::Closed, 5));
+    }
     let (told, _) = world.told();
     assert_eq!(world.stats().tool_runs, told.calls);
-    assert!(told.calls > 2, "some answers made several calls");
+    assert_eq!(world.stats().most_parallel, 3, "reads ran as many at once as the limits allow");
 }
 
 #[test]
@@ -343,13 +351,14 @@ fn facts_change_nothing_the_sessions_do() {
 fn random_worlds_settle_with_every_session_ended() {
     let mut ends = BTreeSet::new();
     let mut stops = BTreeSet::new();
-    let (mut stale, mut invalid, mut not_run) = (0, 0, 0);
+    let (mut stale, mut invalid, mut not_run, mut parallel) = (0, 0, 0, 0);
     for seed in 0..300 {
         let settings = noisy(seed);
         let mut world = World::new(settings);
         submit_noisily(&mut world, &settings, seed);
         world.run(ITERATIONS);
         stale += world.stats().stale;
+        parallel = parallel.max(world.stats().most_parallel);
         invalid += world.told().0.invalid_calls;
         not_run += world.stats().not_run;
         for (_, session) in world.sessions() {
@@ -385,6 +394,7 @@ fn random_worlds_settle_with_every_session_ended() {
     assert_eq!(ends, expected.into_iter().map(String::from).collect());
     assert_eq!(stops, ["Done", "Malformed", "Refused", "Truncated"].into_iter().map(String::from).collect());
     assert!(stale > 0, "some continues and closes reached sessions that had ended");
+    assert!(parallel > 1, "some reads ran side by side");
     assert!(
         invalid > 0 && not_run > 0,
         "some calls were malformed, and some were cut short and not run: {invalid} {not_run}"
@@ -414,6 +424,7 @@ fn noisy(seed: u64) -> Settings {
             backoff_max: Duration::from_secs(2),
             call_timeout,
             facts: pick(0, 24),
+            parallel_tools: pick(1, 4),
             ..calm.agent
         },
         provider: Config {

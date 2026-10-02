@@ -2,15 +2,16 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_session as agent;
 use temper_agent_model_session::llm::{Block, Endpoint, Failure, Prompt, Returned, Usage};
-use temper_agent_model_tools::{self as tools, Entry, Fault, Grants, Kind, Name, Outcome};
+use temper_agent_model_tools::{self as tools, Effect, Entry, Fault, Grants, Kind, Name, Outcome};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_llm_model as provider;
 
 use crate::translate;
 
-/// Room in each model's output queue. Small, so the loop's flow control (take
-/// an event only while there is room for what it may produce) is exercised.
-const OUT: u32 = 4;
+/// Room in each model's output queue beyond what one step may emit. Small, so
+/// the loop's flow control (take an event only while there is room for what
+/// it may produce) is exercised.
+const SLACK: u32 = 3;
 
 /// What the fake opener says when it nudges a session on.
 const NUDGE: &[u8] = b"You have not finished: carry on.";
@@ -89,6 +90,7 @@ impl Settings {
                 backoff_max: Duration::from_secs(5),
                 call_timeout: Duration::from_secs(60),
                 facts: 256,
+                parallel_tools: 4,
             },
             provider: provider::Config {
                 calls: 16,
@@ -157,6 +159,8 @@ pub struct Stats {
     pub closes: u32,
     /// Continues and closes that reached a session after it had ended.
     pub stale: u32,
+    /// The most tool runs one session had in flight at once.
+    pub most_parallel: u32,
 }
 
 /// The facts the sessions told, by kind, as the loop drained them.
@@ -233,6 +237,15 @@ enum Delivery {
     ToolDone { owner: Token, outcome: Outcome },
 }
 
+/// A tool run of the agent in flight, as the tools would keep it.
+struct Running {
+    /// The result's delivery, withdrawn if the run is cancelled.
+    delivery: (Time, u64),
+    /// The session that started it.
+    session: Token,
+    effect: Effect,
+}
+
 /// A call of the agent in flight, as its protocol layer would keep it.
 struct Call {
     owner: Token,
@@ -262,8 +275,11 @@ pub struct World {
     /// The agent's calls in flight, and the call each session has in flight.
     calls: BTreeMap<u64, Call>,
     calling: BTreeMap<Token, u64>,
-    /// The tool run each session has in flight, by its result's delivery.
-    tools: BTreeMap<Token, (Time, u64)>,
+    /// The tool runs in flight, by their tokens; and the session of each run
+    /// the agent has started or has yet to hear the end of, worked out from
+    /// the step that started it.
+    tools: BTreeMap<Token, Running>,
+    runs: BTreeMap<Token, Token>,
     /// Calls the provider has not answered yet.
     serving: BTreeSet<u64>,
     /// The sessions opened, by the opener's name for each, and the opener's
@@ -290,16 +306,17 @@ impl World {
             agent,
             agent_env: Env { now: Time::ZERO, limits: settings.agent },
             agent_in: VecDeque::new(),
-            agent_out: Queue::with_capacity(OUT),
+            agent_out: Queue::with_capacity(agent::MAX_OUT + SLACK),
             provider,
             provider_env: Env { now: Time::ZERO, limits: settings.provider },
             provider_in: VecDeque::new(),
-            provider_out: Queue::with_capacity(OUT),
+            provider_out: Queue::with_capacity(provider::MAX_OUT + SLACK),
             wire: BTreeMap::new(),
             serial: 0,
             calls: BTreeMap::new(),
             calling: BTreeMap::new(),
             tools: BTreeMap::new(),
+            runs: BTreeMap::new(),
             serving: BTreeSet::new(),
             sessions: BTreeMap::new(),
             openers: BTreeMap::new(),
@@ -380,11 +397,19 @@ impl World {
         while self.agent_out.room() >= agent::MAX_OUT {
             let Some(event) = self.agent_in.pop_front() else { break };
             self.log(&format!("agent <- {}", describe_agent_event(&event)));
+            let (session, ended) = self.session_of(&event);
+            let made = self.agent_out.len();
             agent::step(&mut self.agent, &self.agent_env, event, &mut self.agent_out);
+            self.attribute(made, session);
+            if let Some(run) = ended {
+                self.runs.remove(&run);
+            }
         }
         while self.agent_out.room() >= agent::MAX_OUT && self.agent.is_due(self.now) {
             self.log("agent alarm");
+            let made = self.agent_out.len();
             agent::fire(&mut self.agent, &self.agent_env, &mut self.agent_out);
+            self.attribute(made, None);
         }
         // The facts, drained as the shell would write them out.
         while let Some(fact) = self.agent.pop_fact() {
@@ -426,6 +451,7 @@ impl World {
             }
             agent::Request::Complete { owner, prompt, timeout } => {
                 self.affordable(owner, &prompt);
+                in_call_order(&prompt);
                 self.stats.not_run += not_run(&prompt);
                 let call = self.next_serial();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
@@ -445,14 +471,18 @@ impl World {
                 }
             }
             agent::Request::Tool { owner, call } => {
+                let session = *self.runs.get(&owner).expect("a run is worked out from the step that started it");
+                let effect = tools::effect(&call);
+                self.batched(session, effect);
                 let outcome = self.run_tool(&call);
                 let at = self.now.saturating_add(self.draw(self.settings.tool));
                 let delivery = self.schedule(at, Delivery::ToolDone { owner, outcome });
-                assert!(self.tools.insert(owner, delivery).is_none(), "a session has one tool run in flight");
+                let running = Running { delivery, session, effect };
+                assert!(self.tools.insert(owner, running).is_none(), "each run has a token of its own");
                 self.stats.tool_runs += 1;
             }
             agent::Request::CancelTool { owner } => {
-                if let Some(delivery) = self.tools.remove(&owner) {
+                if let Some(Running { delivery, .. }) = self.tools.remove(&owner) {
                     self.wire.remove(&delivery).expect("a tool run in flight has its result on the way");
                     self.agent_in.push_back(agent::Event::ToolCancelled { owner });
                     self.stats.tool_cancels += 1;
@@ -587,7 +617,48 @@ impl World {
 
     /// Whether the session `name` has nothing in flight.
     fn idle(&self, name: Token) -> bool {
-        !self.calling.contains_key(&name) && !self.tools.contains_key(&name)
+        !self.calling.contains_key(&name) && self.tools.values().all(|run| run.session != name)
+    }
+
+    /// The session an event is for, as far as tool runs go, and the run whose
+    /// end it is.
+    fn session_of(&self, event: &agent::Event) -> (Option<Token>, Option<Token>) {
+        match event {
+            agent::Event::Completed { owner, .. }
+            | agent::Event::Failed { owner, .. }
+            | agent::Event::Cancelled { owner } => (Some(*owner), None),
+            agent::Event::ToolDone { owner, .. } | agent::Event::ToolCancelled { owner } => {
+                (Some(*self.runs.get(owner).expect("a run's end is for a run the agent started")), Some(*owner))
+            }
+            agent::Event::Continue { session, .. } | agent::Event::Close { session } => (Some(*session), None),
+            agent::Event::Open { .. } => (None, None),
+        }
+    }
+
+    /// Notes the session of each tool run the step just made started, from
+    /// `made` in the output: a step works on one session.
+    fn attribute(&mut self, made: u32, session: Option<Token>) {
+        let skip = usize::try_from(made).expect("a small queue");
+        for request in self.agent_out.iter().skip(skip) {
+            if let agent::Request::Tool { owner, .. } = request {
+                let session = session.expect("tool runs start in a step for their session");
+                assert!(self.runs.insert(*owner, session).is_none(), "each run has a token of its own");
+            }
+        }
+    }
+
+    /// A run with `effect` starts for `session`: a write runs alone, and reads
+    /// run together, as many as the limits allow.
+    fn batched(&mut self, session: Token, effect: Effect) {
+        let others: Vec<&Running> = self.tools.values().filter(|run| run.session == session).collect();
+        let writing = others.iter().any(|run| run.effect == Effect::Write);
+        assert!(!writing, "nothing runs beside a write");
+        if effect == Effect::Write {
+            assert!(others.is_empty(), "a write runs alone");
+        }
+        let running = u32::try_from(others.len()).expect("a small batch") + 1;
+        assert!(running <= self.settings.agent.parallel_tools, "no more runs at once than the limits allow");
+        self.stats.most_parallel = self.stats.most_parallel.max(running);
     }
 
     /// The provider's requests, carried back the way its protocol layer would.
@@ -757,7 +828,7 @@ impl World {
         assert_eq!(self.agent.next_deadline(), None, "no alarm outlives its session");
         assert_eq!(self.provider.calls(), 0, "the provider holds no call");
         assert!(self.calls.is_empty() && self.calling.is_empty(), "no call is in flight");
-        assert!(self.tools.is_empty(), "no tool is running");
+        assert!(self.tools.is_empty() && self.runs.is_empty(), "no tool is running, and every run's end was heard");
         assert!(self.serving.is_empty(), "the provider answered every call");
         assert!(
             self.wire.is_empty() && self.agent_in.is_empty() && self.provider_in.is_empty(),
@@ -842,4 +913,21 @@ fn not_run(prompt: &Prompt) -> u32 {
     let Some(last) = prompt.messages.last() else { return 0 };
     let unrun = last.content.iter().filter(|block| matches!(block, Block::ToolResult { result: Returned::NotRun, .. }));
     u32::try_from(unrun.count()).expect("a small message")
+}
+
+/// Checks that the results at the end of `prompt` answer the calls of the
+/// message before them, in their order.
+fn in_call_order(prompt: &Prompt) {
+    let [.., asked, answered] = &*prompt.messages else { return };
+    let calls: Vec<&[u8]> = asked
+        .content
+        .iter()
+        .filter_map(|block| if let Block::ToolCall { id, .. } = block { Some(&**id) } else { None })
+        .collect();
+    let results: Vec<&[u8]> = answered
+        .content
+        .iter()
+        .filter_map(|block| if let Block::ToolResult { id, .. } = block { Some(&**id) } else { None })
+        .collect();
+    assert_eq!(calls, results, "the results go back in call order");
 }
