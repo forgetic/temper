@@ -6,8 +6,11 @@
 //! ```text
 //! state    event or alarm              next     emits
 //! Waiting  its alarm                   Due      (on the due queue)
-//!                                      Placed   assign (overbooked: no worker has a free slot)
-//! Due      resume, a free slot         Placed   assign (a stale event for the attempt it replaces, later)
+//!                                      Placed   assign (overbooked: no worker has a free slot, and
+//!                                                 none holds an attempt of its workstream)
+//! Due      resume, a free slot, no     Placed   assign (a stale event for the attempt it replaces, later)
+//!            attempt of its workstream
+//!            held
 //! Placed   answered: busy              Waiting  (a retry) or Closed (no attempts left)
 //!          answered: invalid snapshot  Waiting  (a retry, fresh) or Closed (no attempts left)
 //!          answered: invalid           Closed
@@ -83,6 +86,11 @@ pub(crate) struct Item {
     wakes: u32,
     /// Its last attempt, and the worker that got it.
     last: Option<Last>,
+    /// Its workstream, by its place among the configured ones. A workstream
+    /// is one item's work at a time (engine-model.md, 4.1): no attempt of the
+    /// item is assigned while a worker holds one of another of its
+    /// workstream's.
+    stream: u32,
     state: State,
 }
 
@@ -96,7 +104,8 @@ struct Last {
 enum State {
     /// Its alarm is armed: its first start, a retry or a wake.
     Waiting,
-    /// On the due queue, waiting for a free slot.
+    /// On the due queue, waiting for a free slot, and for no worker to hold
+    /// an attempt of its workstream.
     Due,
     /// Its attempt `attempt` is out, and has not answered.
     Placed { attempt: Token },
@@ -108,6 +117,8 @@ enum State {
 #[derive(Debug)]
 pub(crate) struct Attempt {
     pub(crate) item: Id<Item>,
+    /// Its item's workstream.
+    pub(crate) stream: u32,
     pub(crate) worker: Token,
     /// Inbound events sent to it.
     pub(crate) sent: u32,
@@ -136,8 +147,18 @@ enum Ending {
 }
 
 impl Item {
-    pub(crate) fn new(workspace: Workspace, save: Option<Box<[u8]>>, charter: Box<[u8]>) -> Item {
-        Item { workspace, save, charter, snapshot: None, attempts: 0, wakes: 0, last: None, state: State::Waiting }
+    pub(crate) fn new(workspace: Workspace, save: Option<Box<[u8]>>, charter: Box<[u8]>, stream: u32) -> Item {
+        Item {
+            workspace,
+            save,
+            charter,
+            snapshot: None,
+            attempts: 0,
+            wakes: 0,
+            last: None,
+            stream,
+            state: State::Waiting,
+        }
     }
 }
 
@@ -168,13 +189,58 @@ pub(crate) fn state(model: &Model, worker: Token, run: Token, attempt: Token) ->
     Some(record.state)
 }
 
+/// Whether a worker holds an attempt of the workstream `stream`, as far as
+/// the engine knows: out on it and not answered, its contact lost or not, or
+/// presumed lost and listed by it since.
+pub(crate) fn held(model: &Model, stream: u32) -> bool {
+    for (_, worker) in &model.workers {
+        for attempt in &worker.placed {
+            let record = model.attempts.get(attempt).expect("an attempt held has not answered");
+            if record.stream == stream {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Whether a due item's workstream is held by no worker.
+pub(crate) fn placeable(model: &Model) -> bool {
+    for id in &model.due {
+        let item = model.items.get(*id).expect("an item due lives");
+        if !held(model, item.stream) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Takes the oldest due item whose workstream no worker holds an attempt of,
+/// if there is one, from the due queue, leaving the others in their order.
+pub(crate) fn next_due(model: &mut Model) -> Option<Id<Item>> {
+    let mut next = None;
+    for _ in 0..model.due.len() {
+        let id = model.due.pop().expect("as many as the queue holds");
+        let stream = model.items.get(id).expect("an item due lives").stream;
+        if next.is_none() && !held(model, stream) {
+            next = Some(id);
+        } else {
+            model.due.push(id);
+        }
+    }
+    next
+}
+
 /// Waiting, its alarm: the item is due. It waits for a free slot, unless no
-/// worker has one and it is overbooked on a worker in contact.
+/// worker has one and it is overbooked on a worker in contact; either way, it
+/// waits while a worker holds an attempt of its workstream.
 pub(crate) fn due(model: &mut Model, env: &Env<Config>, id: Id<Item>, out: &mut Queue<Request>) {
     let config = &env.limits;
+    let stream = model.items.get(id).expect("an item lives until it closes").stream;
+    let free = !held(model, stream);
     let item = model.items.get_mut(id).expect("an item lives until it closes");
     let full = fleet::free(&model.workers).is_none();
-    let overbooked = if full && model.rng.chance(config.overbook) { fleet::up(&model.workers) } else { None };
+    let overbooked = if free && full && model.rng.chance(config.overbook) { fleet::up(&model.workers) } else { None };
     match overbooked {
         Some(worker) => {
             model.tally.overbooked = model.tally.overbooked.saturating_add(1);
@@ -195,6 +261,8 @@ pub(crate) fn due(model: &mut Model, env: &Env<Config>, id: Id<Item>, out: &mut 
 /// Waiting or Due: assigns the item's next attempt to `worker`.
 pub(crate) fn place(model: &mut Model, env: &Env<Config>, id: Id<Item>, worker: Token, out: &mut Queue<Request>) {
     let config = &env.limits;
+    let stream = model.items.get(id).expect("an item lives until it closes").stream;
+    assert!(!held(model, stream), "a workstream is one item's work at a time");
     let Model { items, attempts, workers, timers, rng, tally, made, .. } = model;
     *made = made.checked_add(1).expect("attempts fit a u64");
     let attempt = Token::new(*made);
@@ -222,7 +290,7 @@ pub(crate) fn place(model: &mut Model, env: &Env<Config>, id: Id<Item>, worker: 
         charter: item.charter.clone(),
         snapshot: item.snapshot.clone(),
     };
-    let fresh = attempts.insert(attempt, Attempt { item: id, worker, sent: 0, state: Attempted::Live });
+    let fresh = attempts.insert(attempt, Attempt { item: id, stream, worker, sent: 0, state: Attempted::Live });
     assert!(fresh.expect("room for every attempt").is_none(), "attempts are named apart");
     let placed = workers.get_mut(&worker).expect("placed on a worker that said hello").placed.insert(attempt);
     assert!(placed.expect("room for an attempt per item"), "attempts are named apart");

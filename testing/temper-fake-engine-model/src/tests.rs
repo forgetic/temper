@@ -212,15 +212,43 @@ fn an_assignment_carries_the_items_workspace_and_charter() {
     assert!(charter.outcome.change, "a writable workspace may take a change");
 }
 
+/// Workstreams enough that the first two items draw two of them.
+fn several_workstreams() -> Config {
+    Config {
+        workstreams: Box::new([copy_of(b"parser"), copy_of(b"lexer"), copy_of(b"docs")]),
+        spread_min: 1,
+        spread_max: 1,
+        ..config()
+    }
+}
+
 #[test]
 fn an_item_due_with_no_free_slot_is_sometimes_assigned_all_the_same() {
-    let mut h = Harness::new(Config { items: 2, overbook: 1000, ..config() });
+    let mut h = Harness::new(Config { items: 2, overbook: 1000, ..several_workstreams() });
     h.hello(WORKER, 1, &[]);
     assert_eq!(h.next(), None);
-    assigned(h.resume());
+    let first = assigned(h.resume());
     let overbooked = assigned(h.next());
     assert_eq!(overbooked.attempt, Token::new(2));
+    assert_ne!(overbooked.workspace.key, first.workspace.key, "of another workstream");
     assert_eq!(h.model.tally().overbooked, 1);
+}
+
+#[test]
+fn an_item_waits_while_a_worker_holds_an_attempt_of_its_workstream() {
+    let mut h = Harness::new(Config { items: 2, overbook: 1000, ..config() });
+    h.hello(WORKER, 2, &[]);
+    assert_eq!(h.next(), None);
+    let first = assigned(h.resume());
+    assert_eq!(h.next(), None, "due, and not overbooked either");
+    assert!(!h.model.is_ready(), "a slot is free, but the workstream is held");
+    // Held across a lost channel, within the grace, too.
+    h.step(Event::Lost { worker: WORKER });
+    h.hello(WORKER, 2, &[hosted(&first)]);
+    assert!(!h.model.is_ready(), "still held");
+    h.answer(&first, Answer::Ended { outcome: copy_of(b"done"), work: nothing() });
+    let second = assigned(h.resume());
+    assert_eq!(second.workspace.key, first.workspace.key, "the workstream's next item, once the first answered");
 }
 
 #[test]
@@ -676,7 +704,7 @@ fn workspaces_beyond_the_rules_are_drawn_by_chance_and_only_so() {
         let mut rng = Rng::new(5);
         let streams = workspace::streams(&mut rng, &config);
         for place in 0..64 {
-            let (drawn, _) = workspace::draw(&mut rng, &config, &streams, place);
+            let (drawn, _, _) = workspace::draw(&mut rng, &config, &streams, place);
             assert_eq!(keeps_the_rules(&drawn), keeps, "{drawn:?}");
         }
     }

@@ -4,7 +4,9 @@
 //! (engine-model.md, section 8; worker-model.md, sections 2 and 9). It has
 //! work items to run, drawn from its configuration (see the `workspace` and
 //! `charter` modules), and assigns each to a worker that has said hello,
-//! within the slots the worker reported, and sometimes past them. It decides
+//! within the slots the worker reported, and sometimes past them; but never
+//! while a worker holds an attempt of the item's workstream, which is one
+//! item's work at a time (engine-model.md, 4.1). It decides
 //! what follows a run (engine-model.md, 4.2 to 4.4, simplified): an ended run
 //! is recorded; a failed one is retried with a new attempt, by chance and
 //! within a bound; a parked one is woken later, resumed from its snapshot or

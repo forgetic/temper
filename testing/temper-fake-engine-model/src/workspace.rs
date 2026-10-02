@@ -77,13 +77,17 @@ pub(crate) fn streams(rng: &mut Rng, config: &Config) -> Box<[Stream]> {
     streams.into_boxed()
 }
 
-/// The workspace of the item at `place` among the items, and its saved-work
-/// branch if it saves.
-pub(crate) fn draw(rng: &mut Rng, config: &Config, streams: &[Stream], place: u32) -> (Workspace, Option<Box<[u8]>>) {
+/// The workspace of the item at `place` among the items, its saved-work
+/// branch if it saves, and its workstream's place among the configured ones.
+pub(crate) fn draw(
+    rng: &mut Rng,
+    config: &Config,
+    streams: &[Stream],
+    place: u32,
+) -> (Workspace, Option<Box<[u8]>>, u32) {
     let count = u64::try_from(streams.len()).expect("a configured list fits a u64");
-    let stream = streams
-        .get(usize::try_from(rng.below(count)).expect("drawn below a usize"))
-        .expect("a workstream is configured");
+    let drawn = rng.below(count);
+    let stream = streams.get(usize::try_from(drawn).expect("drawn below a usize")).expect("a workstream is configured");
     let branch = joined(&[b"temper/", &stream.key]);
     let room = u32::try_from(stream.members.len()).expect("a configured list fits a u32").saturating_add(1);
     let mut repositories = List::with_capacity(room);
@@ -109,7 +113,8 @@ pub(crate) fn draw(rng: &mut Rng, config: &Config, streams: &[Stream], place: u3
     if rng.chance(config.invalid) {
         breach(rng, &mut key, &mut repositories);
     }
-    (Workspace { key, repositories: repositories.into_boxed() }, save)
+    let drawn = u32::try_from(drawn).expect("a configured list fits a u32");
+    (Workspace { key, repositories: repositories.into_boxed() }, save, drawn)
 }
 
 /// Breaks one of the rules a workspace must keep, drawn at random.

@@ -355,9 +355,9 @@ impl Model {
         };
         let streams = workspace::streams(&mut model.rng, config);
         for place in 0..items {
-            let (workspace, save) = workspace::draw(&mut model.rng, config, &streams, place);
+            let (workspace, save, stream) = workspace::draw(&mut model.rng, config, &streams, place);
             let charter = charter::encode(&charter::draw(&mut model.rng, config, work::writable(&workspace)));
-            let id = model.items.insert(Item::new(workspace, save, charter)).expect("a slot per item");
+            let id = model.items.insert(Item::new(workspace, save, charter, stream)).expect("a slot per item");
             let at = Time::ZERO.saturating_add(Duration::from_nanos(model.rng.below(config.window.as_nanos())));
             model.timers.arm(Alarm::Item(id), at).expect("a timer per item");
         }
@@ -407,11 +407,12 @@ impl Model {
         }
     }
 
-    /// Whether a cancel is to be sent, or a due item has a worker with a free
-    /// slot. While either holds, the loop calls [`resume`].
+    /// Whether a cancel is to be sent, or a due item whose workstream no
+    /// worker holds an attempt of has a worker with a free slot. While either
+    /// holds, the loop calls [`resume`].
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        !self.cancels.is_empty() || (!self.due.is_empty() && fleet::free(&self.workers).is_some())
+        !self.cancels.is_empty() || (fleet::free(&self.workers).is_some() && work::placeable(self))
     }
 
     pub fn reclaim(&mut self) {
@@ -458,7 +459,8 @@ pub fn fire(model: &mut Model, env: &Env<Config>, out: &mut Queue<Request>) {
 
 /// Takes the first entry of the ready list, if there is one, emitting at most
 /// [`MAX_OUT`] requests: a cancel a hello decided, or else the oldest due
-/// item, placed on the first worker with a free slot.
+/// item whose workstream no worker holds an attempt of, placed on the first
+/// worker with a free slot.
 pub fn resume(model: &mut Model, env: &Env<Config>, out: &mut Queue<Request>) {
     if let Some(&attempt) = model.cancels.first() {
         model.cancels.remove(&attempt);
@@ -468,7 +470,7 @@ pub fn resume(model: &mut Model, env: &Env<Config>, out: &mut Queue<Request>) {
     let Some(worker) = fleet::free(&model.workers) else {
         return;
     };
-    let Some(id) = model.due.pop() else {
+    let Some(id) = work::next_due(model) else {
         return;
     };
     work::place(model, env, id, worker, out);

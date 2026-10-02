@@ -589,8 +589,12 @@ pub struct World {
     /// Attempts a hello listed as answered, whose answers follow it.
     following: BTreeSet<Token>,
     /// Attempts the engine's cancel reached the worker for, by the place among
-    /// the worker's requests of the first one made after it.
+    /// the worker's requests of the first one made after it; and those whose
+    /// agents have heard a cancel since. The stop sends the cancel down behind
+    /// what waits for the agent, a relayed answer the run had before among it:
+    /// none may follow.
     cancelled: BTreeMap<Token, u64>,
+    stopped: BTreeSet<Token>,
     /// The worker's requests routed so far.
     routed: u64,
     agents: BTreeMap<Token, Agent>,
@@ -657,6 +661,7 @@ impl World {
             reached: BTreeSet::new(),
             following: BTreeSet::new(),
             cancelled: BTreeMap::new(),
+            stopped: BTreeSet::new(),
             routed: 0,
             agents: BTreeMap::new(),
             spaces: BTreeMap::new(),
@@ -1053,8 +1058,8 @@ impl World {
                 let attempt = agent.attempt.expect("an agent calls once started");
                 match reply {
                     Reply::Relayed { .. } => {
-                        let cancelled = self.cancelled.get(&attempt).is_some_and(|first| self.routed >= *first);
-                        assert!(!cancelled, "a cancelled run's relayed calls are answered unavailable");
+                        let stopped = self.stopped.contains(&attempt);
+                        assert!(!stopped, "a cancelled run's relayed calls are answered unavailable");
                         self.stats.relayed += 1;
                     }
                     Reply::Pushed(push) => *self.stats.pushed.entry(push_kind(*push)).or_default() += 1,
@@ -1064,7 +1069,15 @@ impl World {
                     Reply::TooLarge => {}
                 }
             }
-            Down::Cancel => self.stats.cancels += 1,
+            Down::Cancel => {
+                let agent = self.agents.get(&owner).expect("a cancel goes to an agent spawned");
+                if let Some(attempt) = agent.attempt
+                    && self.cancelled.get(&attempt).is_some_and(|first| self.routed >= *first)
+                {
+                    self.stopped.insert(attempt);
+                }
+                self.stats.cancels += 1;
+            }
         }
     }
 

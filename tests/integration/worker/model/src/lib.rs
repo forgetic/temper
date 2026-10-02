@@ -44,7 +44,8 @@
 //! with the attempt's snapshot, in the tree each repository was checked out
 //! at, which for saved work is the last save that landed; an inbound event
 //! only for its agent's attempt; nothing an agent hears holding the forge
-//! identity; no relayed answer to a run once its attempt is cancelled; no git
+//! identity; no relayed answer to a run after the cancel its attempt's
+//! cancel sent down to it (behind what waited for it); no git
 //! operation in a workspace while its run's agent may be running, but the
 //! push it asked for, and none at all by a hold whose run has answered; a run
 //! answered only once its agent has gone and nothing of git runs for it;

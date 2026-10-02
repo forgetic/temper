@@ -400,7 +400,8 @@ fn config(items: u32) -> Config {
 }
 
 /// Every assignment the fake engine makes of `config`'s items to one worker
-/// with a slot for each.
+/// with a slot for each, each answered as it comes, so that the next item of
+/// its workstream may follow.
 fn assignments(config: Config, seed: u64) -> Vec<Assignment> {
     let items = config.items;
     let mut model = temper_fake_engine_model::Model::new(&config, seed);
@@ -420,6 +421,15 @@ fn assignments(config: Config, seed: u64) -> Vec<Assignment> {
         while let Some(request) = out.pop() {
             let temper_fake_engine_model::Request::Assign { worker: _, assignment } = request else {
                 panic!("expected an assignment, got {request:?}");
+            };
+            let (run, attempt) = (assignment.run, assignment.attempt);
+            let work = temper_fake_engine_model::api::Work { landed: Box::new([]), saved: None };
+            let answer = temper_fake_engine_model::api::Answer::Ended { outcome: bytes(b"done"), work };
+            let answered = temper_fake_engine_model::Event::Answered { worker: WORKER, run, attempt, answer };
+            temper_fake_engine_model::step(&mut model, &env, answered, &mut out);
+            let acknowledged = out.pop();
+            let Some(temper_fake_engine_model::Request::Acknowledge { .. }) = acknowledged else {
+                panic!("expected the answer acknowledged, got {acknowledged:?}");
             };
             assigned.push(assignment);
         }
