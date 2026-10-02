@@ -434,7 +434,7 @@ fn check_op(writing: &Writing) -> Op {
             let target = writing.target.expect("a record is checked when it has one");
             Op::Comment { number: item.number, id: target.comment }
         }
-        Write::Merge { item, .. } => Op::Pull { number: item.number, reviews: 0 },
+        Write::Merge { item, .. } => Op::Pull { number: item.number },
         Write::PutPage { name, .. } => Op::Page { name: copy_of(name) },
         Write::CreateIssue { .. }
         | Write::Comment { .. }
@@ -727,7 +727,7 @@ fn searched(
     let most = page_size(&env.limits);
     match &writing.write {
         Write::CreateIssue { key, .. } => {
-            let (items, more) = api::items(answer);
+            let (items, more, _) = api::items(answer);
             let items = items.get(..most).unwrap_or(&items);
             for summary in items {
                 let keyed = match &summary.key {
@@ -865,7 +865,8 @@ fn done(writing: &Writing, answer: Answer) -> State {
         | Answer::Item { .. }
         | Answer::Comment(_)
         | Answer::Pull(_)
-        | Answer::Statuses(_)
+        | Answer::Reviews { .. }
+        | Answer::Statuses { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -945,6 +946,14 @@ fn answer(
 ) {
     let writing = model.writes.get(id).expect("a write lives until it closes");
     let (owner, found, next, nonce, sent) = (writing.owner, writing.found, writing.next, writing.nonce, writing.sent);
+    // Given up after a write call that may have been made.
+    let gave_up = match result {
+        Err(Failure::Forge(_)) => writing.ambiguous,
+        Ok(_)
+        | Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Edited { .. } | Failure::Revised { .. }) => {
+            false
+        }
+    };
     let recording = match writing.write {
         Write::Record { item, .. } => Some(item),
         Write::CreateIssue { .. }
@@ -957,7 +966,7 @@ fn answer(
         | Write::PutPage { .. }
         | Write::DeletePage { .. } => None,
     };
-    // Given up after a call that may still land.
+    // Given up as its last call timed out: it may still land.
     let pending = result == Err(Failure::Forge(Error::Timeout));
     if found {
         model.facts.push(Fact::Found { owner });
@@ -972,7 +981,7 @@ fn answer(
             }
             None => {
                 // The record may now say what this one carried.
-                if pending {
+                if gave_up {
                     items::uncertain(model, item, nonce);
                     follow_record(&mut model.writes, next, None, Some(nonce), env.limits.writes);
                 }

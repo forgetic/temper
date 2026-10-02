@@ -4,7 +4,7 @@ use core::mem::size_of;
 use temper_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
 
 use crate::api::{Answer, Comment, PageName, Pull, Review, Status, Summary};
-use crate::boundary::Item;
+use crate::boundary::{Item, Reviewed};
 use crate::calls::Call;
 use crate::facts::Fact;
 use crate::items::{Entry, Held};
@@ -24,9 +24,13 @@ pub struct Limits {
     pub items: u32,
     /// Labels an item carries or a write sets.
     pub labels: u32,
-    /// News an item's inbox holds until the parent takes it. Beyond them, the
-    /// rest waits on the forge until there is room.
+    /// News an item's inbox holds until the parent takes it, the last place
+    /// kept for its pull request's state and verdicts. Beyond them, the rest
+    /// waits on the forge until there is room. At least two.
     pub inbox: u32,
+    /// The reviewers whose verdicts on a pull request's head the working set
+    /// holds; those beyond them are not counted.
+    pub reviewers: u32,
     /// Fresh reads in hand at once. A read beyond them is refused as busy.
     pub reads: u32,
     /// Writes in hand at once, those waiting their turn included. A write
@@ -47,8 +51,11 @@ pub struct Limits {
     pub body_bytes: u32,
     /// The request budget: the calls made in a window of `window`, which
     /// starts with the first call after the last window ended. At least one.
+    /// Of them, `reserve` are kept for keeping up and the slow pass while
+    /// they wait: fewer than `rate`.
     pub rate: u32,
     pub window: Duration,
+    pub reserve: u32,
     /// Keeping up: a repository's changes are listed every `poll`, and
     /// `hinted` after a webhook, but never sooner than `hinted` after the last
     /// listing began, which must be more than the forge's resolution.
@@ -58,8 +65,11 @@ pub struct Limits {
     /// listed at a time this close to a pass's start may have changed during
     /// it.
     pub resolution: Duration,
-    /// The slow pass lists a page of a repository's open items every `slow`.
+    /// The slow pass lists a page of a repository's open items every `slow`,
+    /// and reads at most `probes` of its items for a record. A pull request
+    /// held is read again at least every `slow`, more often when it moves.
     pub slow: Duration,
+    pub probes: u32,
     /// A call that failed for a while is tried again after a backoff drawn
     /// between `backoff` and twice it, doubling with each attempt up to
     /// `backoff_max`; a read or write gives up after `attempts` of them.
@@ -112,8 +122,8 @@ fn write_bytes(limits: &Limits) -> Option<u64> {
 }
 
 /// The most bytes an answer brings in: a page of items, an item and a page
-/// of its comments, a pull request with a page of its reviews and its
-/// statuses, a page of wiki page names, or a wiki page.
+/// of its comments, a pull request, a page of its reviews or of statuses, a
+/// page of wiki page names, or a wiki page.
 fn answer_bytes(limits: &Limits) -> Option<u64> {
     let page = u64::from(limits.page);
     let name = u64::from(limits.name_bytes);
@@ -124,14 +134,13 @@ fn answer_bytes(limits: &Limits) -> Option<u64> {
     let comment = size(size_of::<Comment>())?.checked_add(u64::from(limits.body_bytes))?.checked_add(name)?;
     let item = summary.checked_add(page.checked_mul(comment)?)?;
     let review = size(size_of::<Review>())?.checked_add(u64::from(limits.body_bytes))?;
+    let reviews = page.checked_mul(review)?;
     let status = size(size_of::<Status>())?.checked_add(name)?;
-    let pull = size(size_of::<Pull>())?
-        .checked_add(name.checked_mul(2)?)?
-        .checked_add(page.checked_mul(review)?)?
-        .checked_add(page.checked_mul(status)?)?;
+    let statuses = page.checked_mul(status)?;
+    let pull = size(size_of::<Pull>())?.checked_add(name.checked_mul(2)?)?;
     let pages = page.checked_mul(size(size_of::<PageName>())?.checked_add(name)?)?.checked_add(name)?;
     let wiki = name.checked_add(u64::from(limits.body_bytes))?;
-    items.max(item).max(pull).max(pages).max(wiki).checked_add(size(size_of::<Answer>())?)
+    items.max(item).max(pull).max(reviews).max(statuses).max(pages).max(wiki).checked_add(size(size_of::<Answer>())?)
 }
 
 fn size(bytes: usize) -> Option<u64> {
@@ -152,9 +161,20 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     if limits.rate == 0 || limits.calls == 0 || limits.page == 0 || limits.repositories == 0 {
         return None;
     }
+    // A listing as soon as a resolution after the last would settle nothing;
+    // an inbox that keeps its last place holds a comment only with two; a
+    // reserve of the whole budget leaves the parent none.
+    if limits.hinted <= limits.resolution || limits.inbox < 2 || limits.reserve >= limits.rate {
+        return None;
+    }
     let calls = calls(limits)?;
     let held = Slab::<Call>::worst_case(calls)?.checked_add(Queue::<Id<Call>>::worst_case(calls)?.checked_mul(4)?)?;
-    let item = labels_bytes(limits)?.checked_add(Queue::<Held>::worst_case(limits.inbox)?)?;
+    // Its labels, inbox, the verdicts on its pull request's head and those
+    // being read, and its base's name.
+    let item = labels_bytes(limits)?
+        .checked_add(Queue::<Held>::worst_case(limits.inbox)?)?
+        .checked_add(List::<Reviewed>::worst_case(limits.reviewers)?.checked_mul(2)?)?
+        .checked_add(u64::from(limits.name_bytes))?;
     let items = Slab::<Entry>::worst_case(limits.items)?
         .checked_add(u64::from(limits.items).checked_mul(item)?)?
         .checked_add(Map::<Item, Id<Entry>>::worst_case(limits.items)?.checked_mul(2)?)?;

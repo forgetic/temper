@@ -24,6 +24,7 @@ const LIMITS: Limits = Limits {
     items: 4,
     labels: 3,
     inbox: 3,
+    reviewers: 3,
     reads: 2,
     writes: 3,
     calls: 4,
@@ -33,10 +34,12 @@ const LIMITS: Limits = Limits {
     body_bytes: 64,
     rate: 1_000,
     window: Duration::from_secs(60),
+    reserve: 100,
     poll: Duration::from_secs(30),
     hinted: Duration::from_secs(2),
     resolution: Duration::from_secs(1),
     slow: Duration::from_secs(90),
+    probes: 2,
     backoff: Duration::from_secs(1),
     backoff_max: Duration::from_secs(4),
     attempts: 3,
@@ -57,7 +60,8 @@ enum Asked {
     Items { page: u32 },
     Item { number: u64, after: u64 },
     Comment { id: u64 },
-    Pull { number: u64, reviews: u32 },
+    Pull { number: u64 },
+    Reviews { number: u64, page: u32 },
     Statuses,
     Permission,
     Branch,
@@ -76,8 +80,9 @@ fn asked(op: &Op) -> Asked {
         Op::Items { page, .. } => Asked::Items { page: *page },
         Op::Item { number, after } => Asked::Item { number: *number, after: *after },
         Op::Comment { id, .. } => Asked::Comment { id: *id },
-        Op::Pull { number, reviews } => Asked::Pull { number: *number, reviews: *reviews },
-        Op::PullFor { .. } => Asked::Pull { number: 4, reviews: 0 },
+        Op::Pull { number } => Asked::Pull { number: *number },
+        Op::Reviews { number, page } => Asked::Reviews { number: *number, page: *page },
+        Op::PullFor { .. } => Asked::Pull { number: 4 },
         Op::Statuses { .. } => Asked::Statuses,
         Op::Permission { .. } => Asked::Permission,
         Op::Branch { .. } => Asked::Branch,
@@ -208,6 +213,7 @@ fn comments(limits: &Limits, after: u64, record: bool) -> Box<[Comment]> {
                     Mark::Record {
                         position: Position {
                             comment: after,
+                            pull_comment: after,
                             reviews: 0,
                             head: Some([1; 32]),
                             ci: temper_engine_model_forge::Ci::Pending,
@@ -223,25 +229,34 @@ fn comments(limits: &Limits, after: u64, record: bool) -> Box<[Comment]> {
         .collect()
 }
 
-fn pull(limits: &Limits, number: u64, after: u32) -> Pull {
+fn pull(limits: &Limits, number: u64, now: u64) -> Pull {
     Pull {
         number,
         state: State::Open,
         head: name(limits, b'h'),
         base: name(limits, b'b'),
-        commit: [u8::try_from(after % 200).expect("small"); 32],
+        commit: [u8::try_from(now % 200).expect("small"); 32],
+        base_commit: Some([4; 32]),
         merged: None,
         mergeable: true,
+        ci: temper_engine_model_forge::Ci::Pending,
+    }
+}
+
+/// A page of reviews, as many as a page holds, by as many reviewers, on the
+/// head a pull request read at `now` has.
+fn reviews(limits: &Limits, page: u32, now: u64) -> Answer {
+    Answer::Reviews {
         reviews: (0..limits.page)
-            .map(|_| Review {
-                author: 9,
+            .map(|nth| Review {
+                id: u64::from(page * 10 + nth),
+                author: 9 + u64::from(page * 10 + nth),
                 verdict: Verdict::Approve,
-                commit: [3; 32],
+                commit: [u8::try_from(now % 200).expect("small"); 32],
                 body: bytes(limits.body_bytes, b'r'),
             })
             .collect(),
-        more: after < 2 * limits.page,
-        statuses: (0..limits.page).map(|_| Status { context: name(limits, b's'), check: Check::Pending }).collect(),
+        more: page < 3,
     }
 }
 
@@ -252,7 +267,7 @@ fn answer(limits: &Limits, rng: &mut Rng, now: u64, op: Asked) -> Result<Answer,
         0 => return Err(Error::Timeout),
         1 => return Err(Error::Unavailable),
         2 if rng.chance(300) => {
-            return Err(Error::RateLimited { reset: Time::ZERO.saturating_add(Duration::from_secs(now + 3)) });
+            return Err(Error::RateLimited { after: Duration::from_secs(3) });
         }
         3 if rng.chance(200) => return Err(Error::Missing),
         _ => {}
@@ -261,7 +276,7 @@ fn answer(limits: &Limits, rng: &mut Rng, now: u64, op: Asked) -> Result<Answer,
         Asked::Items { page } => {
             let items =
                 (1..=u64::from(limits.page)).map(|nth| summary(limits, nth + u64::from(page) * 2, now)).collect();
-            Answer::Items { items, more: page < 3 }
+            Answer::Items { items, more: page < 3, now: Time::ZERO.saturating_add(Duration::from_secs(now)) }
         }
         Asked::Item { number, after } => Answer::Item {
             item: summary(limits, number, now),
@@ -269,10 +284,13 @@ fn answer(limits: &Limits, rng: &mut Rng, now: u64, op: Asked) -> Result<Answer,
             more: after < 6,
         },
         Asked::Comment { id } => Answer::Comment(comments(limits, id - 1, true).into_vec().remove(0)),
-        Asked::Pull { number, reviews } => Answer::Pull(pull(limits, number, reviews)),
-        Asked::Statuses => Answer::Statuses(
-            (0..limits.page).map(|_| Status { context: name(limits, b's'), check: Check::Passed }).collect(),
-        ),
+        Asked::Pull { number } => Answer::Pull(pull(limits, number, now)),
+        Asked::Reviews { number: _, page } => reviews(limits, page, now),
+        Asked::Statuses => Answer::Statuses {
+            ci: temper_engine_model_forge::Ci::Passed,
+            statuses: (0..limits.page).map(|_| Status { context: name(limits, b's'), check: Check::Passed }).collect(),
+            more: true,
+        },
         Asked::Permission => Answer::Permission(Permission::Write),
         Asked::Branch => Answer::Commit([5; 32]),
         Asked::Pages => Answer::Pages {
@@ -329,7 +347,8 @@ fn reads(limits: &Limits, item: Item) -> Vec<Read> {
         Read::Item { item, after: 0 },
         Read::Pull { item },
         Read::PullFor { repository: 0, head: name(limits, b'h'), base: name(limits, b'b') },
-        Read::Statuses { repository: 0, commit: [1; 32] },
+        Read::Statuses { repository: 0, commit: [1; 32], page: 2 },
+        Read::Reviews { item, page: 2 },
         Read::Permission { repository: 1, user: 9 },
         Read::Branch { repository: 0, branch: name(limits, b'h') },
         Read::Pages { repository: 0, after: Some(name(limits, b'p')) },
@@ -367,10 +386,13 @@ fn run(limits: Limits, seed: u64, rounds: u64) -> (Measured, u64) {
             1 => Event::Untrack { item },
             2 => Event::Link { item, pull: Some(2 + 2 * rng.below(3)) },
             3 => Event::Took { item, through: rng.below(6) },
-            4 => Event::Hint { repository: item.repository, item: Some(item.number), commit: Some([1; 32]) },
+            4 => {
+                let branch = if rng.chance(500) { Some(name(&limits, b'b')) } else { None };
+                Event::Hint { repository: item.repository, item: Some(item.number), commit: Some([1; 32]), branch }
+            }
             5 => {
                 let all = reads(&limits, item);
-                let read = all.into_iter().nth(usize::try_from(rng.below(8)).expect("few")).expect("eight");
+                let read = all.into_iter().nth(usize::try_from(rng.below(9)).expect("few")).expect("nine");
                 Event::Read { owner: model.owner(), read }
             }
             _ => {

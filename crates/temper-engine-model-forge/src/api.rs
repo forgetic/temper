@@ -13,16 +13,25 @@
 //!
 //! - **Listings** ([`Op::Items`]) are the forge's: the items updated at or
 //!   after `since`, at the forge's resolution (a second on Forgejo), least
-//!   recently updated first, a page at a time by number. An item that changes
-//!   while a listing is paged moves to its end; the model pages by time
-//!   rather than by number where it can, and re-lists from the last time it
-//!   saw, so a move costs it a duplicate and never a miss.
+//!   recently updated first (Forgejo's `sort=leastupdate`: its default is
+//!   newest first), a page at a time by number, each saying the forge's time
+//!   as it was made (the response's `Date`). An item that changes while a
+//!   listing is paged moves to its end; the model pages by time rather than
+//!   by number where it can, and re-lists from the last time it saw, so a
+//!   move costs it a duplicate and never a miss.
+//! - **Times** the forge shows are its own clock's, which the model compares
+//!   only with one another, never with its own; a rate limit's reset comes
+//!   as how long to wait ([`Error::RateLimited`]).
 //! - **An item's updated time** moves with new comments, reviews, label
 //!   changes, pushes to a pull request's head, closing and reopening, and
 //!   edits of its title or body; not with commit statuses, nor with edits of
-//!   comments. So CI is learnt from status webhooks and by reading the
-//!   statuses on the heads the working set holds, and an edited record by
-//!   reading it afresh before it is written.
+//!   comments, nor with a move of a pull request's base. So CI and the base
+//!   are learnt from webhooks and by reading the pull requests the working
+//!   set holds again, and an edited record by reading it afresh before it is
+//!   written.
+//! - **Pages** of comments are by id; of reviews and statuses, by number,
+//!   which the protocol layer maps to Forgejo's. A review a person starts
+//!   pending is shown only once submitted, with its earlier id.
 //! - **Markers.** A creation's key goes inside what it creates, as a marker
 //!   the protocol layer writes and finds again ([`Summary::key`],
 //!   [`Mark::Key`]); so does the engine's record, whose inbox position and
@@ -42,9 +51,9 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Time, Token};
+use temper_lib::{Duration, Time, Token};
 
-use crate::boundary::Position;
+use crate::boundary::{Ci, Position};
 
 /// What a call asks of a repository.
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -67,16 +76,18 @@ pub enum Op {
     /// The comment `id` on the item `number`. Answered by
     /// [`Answer::Comment`].
     Comment { number: u64, id: u64 },
-    /// The pull request `number`: its head, the statuses on its head, and a
-    /// page of its reviews after the first `reviews`, oldest first. Answered
-    /// by [`Answer::Pull`].
-    Pull { number: u64, reviews: u32 },
-    /// The newest pull request, open or not, that merges `head` into `base`,
-    /// with the first page of its reviews. Answered by [`Answer::Pull`].
+    /// The pull request `number`: its head, where its base is, and CI on its
+    /// head. Answered by [`Answer::Pull`].
+    Pull { number: u64 },
+    /// The newest pull request, open or not, that merges `head` into `base`.
+    /// Answered by [`Answer::Pull`].
     PullFor { head: Box<[u8]>, base: Box<[u8]> },
-    /// The latest status of each context on `commit`. Answered by
-    /// [`Answer::Statuses`].
-    Statuses { commit: [u8; 32] },
+    /// The `page`th page (from 1) of the reviews of the pull request
+    /// `number`, oldest first. Answered by [`Answer::Reviews`].
+    Reviews { number: u64, page: u32 },
+    /// CI on `commit`, and the `page`th page (from 1) of the latest status of
+    /// each context on it. Answered by [`Answer::Statuses`].
+    Statuses { commit: [u8; 32], page: u32 },
     /// The permission of `user`. Answered by [`Answer::Permission`].
     Permission { user: u64 },
     /// Where `branch` is. Answered by [`Answer::Commit`].
@@ -138,10 +149,12 @@ pub enum Body {
 /// The answer to a call that succeeded.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Answer {
-    /// A page of items, and whether another may follow it.
+    /// A page of items, whether another may follow it, and the forge's time
+    /// as it made the page.
     Items {
         items: Box<[Summary]>,
         more: bool,
+        now: Time,
     },
     /// An item and a page of its comments, and whether more follow.
     Item {
@@ -151,8 +164,18 @@ pub enum Answer {
     },
     Comment(Comment),
     Pull(Pull),
-    /// In their contexts' order.
-    Statuses(Box<[Status]>),
+    /// A page of reviews, and whether more follow.
+    Reviews {
+        reviews: Box<[Review]>,
+        more: bool,
+    },
+    /// CI on a commit, over all its contexts; a page of their statuses, in
+    /// their contexts' order, and whether more follow.
+    Statuses {
+        ci: Ci,
+        statuses: Box<[Status]>,
+        more: bool,
+    },
     Permission(Permission),
     /// Where a branch is.
     Commit([u8; 32]),
@@ -190,8 +213,9 @@ pub enum Error {
     /// dropped connection, no answer in time): what was asked may have been
     /// done, or may still be.
     Timeout,
-    /// Too many calls: none is taken until `reset`, the forge's time.
-    RateLimited { reset: Time },
+    /// Too many calls: none is taken for `after`, until the reset the forge
+    /// named.
+    RateLimited { after: Duration },
     /// The engine's permission does not allow it.
     Forbidden,
     /// What the call names is not there: the item, comment, pull request,
@@ -279,9 +303,9 @@ pub enum Mark {
     Mangled,
 }
 
-/// A pull request: its branches, its head commit, whether and how it
-/// merged, a page of its reviews oldest first and whether more follow, and the
-/// latest status of each context on its head.
+/// A pull request: its branches, its head commit, where its base branch is,
+/// whether and how it merged, whether it merges cleanly, and CI on its head,
+/// over all its contexts.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Pull {
     pub number: u64,
@@ -289,15 +313,16 @@ pub struct Pull {
     pub head: Box<[u8]>,
     pub base: Box<[u8]>,
     pub commit: [u8; 32],
+    pub base_commit: Option<[u8; 32]>,
     pub merged: Option<[u8; 32]>,
     pub mergeable: bool,
-    pub reviews: Box<[Review]>,
-    pub more: bool,
-    pub statuses: Box<[Status]>,
+    pub ci: Ci,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Review {
+    /// An id that only grows, across the forge.
+    pub id: u64,
     pub author: u64,
     pub verdict: Verdict,
     /// The head it reviewed.
@@ -345,13 +370,14 @@ pub struct PageName {
 // is the protocol layer's bug.
 
 /// The answer to [`Op::Items`].
-pub(crate) fn items(answer: Answer) -> (Box<[Summary]>, bool) {
+pub(crate) fn items(answer: Answer) -> (Box<[Summary]>, bool, Time) {
     match answer {
-        Answer::Items { items, more } => (items, more),
+        Answer::Items { items, more, now } => (items, more, now),
         Answer::Item { .. }
         | Answer::Comment(_)
         | Answer::Pull(_)
-        | Answer::Statuses(_)
+        | Answer::Reviews { .. }
+        | Answer::Statuses { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -372,7 +398,8 @@ pub(crate) fn item(answer: Answer) -> (Summary, Box<[Comment]>, bool) {
         Answer::Items { .. }
         | Answer::Comment(_)
         | Answer::Pull(_)
-        | Answer::Statuses(_)
+        | Answer::Reviews { .. }
+        | Answer::Statuses { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -393,7 +420,8 @@ pub(crate) fn comment(answer: Answer) -> Comment {
         Answer::Items { .. }
         | Answer::Item { .. }
         | Answer::Pull(_)
-        | Answer::Statuses(_)
+        | Answer::Reviews { .. }
+        | Answer::Statuses { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -414,7 +442,8 @@ pub(crate) fn pull(answer: Answer) -> Pull {
         Answer::Items { .. }
         | Answer::Item { .. }
         | Answer::Comment(_)
-        | Answer::Statuses(_)
+        | Answer::Reviews { .. }
+        | Answer::Statuses { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -436,7 +465,8 @@ pub(crate) fn page(answer: Answer) -> Page {
         | Answer::Item { .. }
         | Answer::Comment(_)
         | Answer::Pull(_)
-        | Answer::Statuses(_)
+        | Answer::Reviews { .. }
+        | Answer::Statuses { .. }
         | Answer::Permission(_)
         | Answer::Commit(_)
         | Answer::Pages { .. }
@@ -446,5 +476,27 @@ pub(crate) fn page(answer: Answer) -> Page {
         | Answer::Merged(_)
         | Answer::Revision(_)
         | Answer::Done => unreachable!("a wiki page's read is answered with the page"),
+    }
+}
+
+/// The answer to [`Op::Reviews`].
+pub(crate) fn reviews(answer: Answer) -> (Box<[Review]>, bool) {
+    match answer {
+        Answer::Reviews { reviews, more } => (reviews, more),
+        Answer::Items { .. }
+        | Answer::Item { .. }
+        | Answer::Comment(_)
+        | Answer::Pull(_)
+        | Answer::Statuses { .. }
+        | Answer::Permission(_)
+        | Answer::Commit(_)
+        | Answer::Pages { .. }
+        | Answer::Page(_)
+        | Answer::Created(_)
+        | Answer::Commented { .. }
+        | Answer::Edited { .. }
+        | Answer::Merged(_)
+        | Answer::Revision(_)
+        | Answer::Done => unreachable!("a pull request's reviews are answered with reviews"),
     }
 }

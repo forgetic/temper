@@ -22,9 +22,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use temper_engine_model_forge::api::{Answer, Check, Error, State};
+use temper_engine_model_forge::api::{Answer, Error, State};
 use temper_engine_model_forge::{
-    Cause, Content, Event, Failure, Item, News, Read, Record, Request, View, Write, Written,
+    Cause, Ci, Content, Event, Failure, Item, News, Read, Record, Request, View, Write, Written,
 };
 use temper_lib::{Duration, Rng, Time, Token};
 use temper_world::Span;
@@ -128,10 +128,15 @@ pub struct Parent {
     rng: Rng,
     items: BTreeMap<Item, Held>,
     taking: BTreeSet<Item>,
+    /// The items it was refused for want of room, asked for again once there
+    /// is room.
+    refused: BTreeSet<Item>,
     fill: Fill,
     /// Names reads, writes and payloads.
     tokens: u64,
-    writes: BTreeMap<u64, Intent>,
+    /// The writes in flight, by owner: what each is, and whether it was asked
+    /// for again, after its cause.
+    writes: BTreeMap<u64, (Intent, Option<Cause>)>,
     /// The fresh reads in flight, by owner, and what each is for.
     reads: BTreeMap<u64, Reading>,
     resume: Vec<Intent>,
@@ -149,6 +154,7 @@ impl Parent {
             rng: Rng::new(seed),
             items: BTreeMap::new(),
             taking: BTreeSet::new(),
+            refused: BTreeSet::new(),
             fill: Fill::new(),
             tokens: 0,
             writes: BTreeMap::new(),
@@ -182,8 +188,9 @@ impl Parent {
     pub fn restart(&mut self) {
         self.items.clear();
         self.taking.clear();
+        self.refused.clear();
         self.reads.clear();
-        for intent in std::mem::take(&mut self.writes).into_values() {
+        for (intent, _) in std::mem::take(&mut self.writes).into_values() {
             match intent {
                 Intent::Comment { .. } | Intent::Task { .. } | Intent::Open { .. } => self.resume.push(intent),
                 Intent::Record { .. }
@@ -210,7 +217,17 @@ impl Parent {
             }
             Request::Full { item } => {
                 self.taking.remove(item);
+                self.refused.insert(*item);
             }
+            Request::Room => {
+                // What was refused is asked for again.
+                for item in std::mem::take(&mut self.refused) {
+                    if !self.items.contains_key(&item) && self.taking.insert(item) {
+                        actions.push((self.soon(), Action::Model(Event::Track { item })));
+                    }
+                }
+            }
+            Request::Forbidden { .. } => {}
             Request::Announced { item, view } => self.announced(*item, view, &mut actions),
             Request::Inbox { item, seq, news } => self.news(*item, *seq, *news, &mut actions),
             Request::Changed { item, labels } => {
@@ -218,7 +235,7 @@ impl Parent {
                     held.labels = labels.iter().map(|label| label.to_vec()).collect();
                 }
             }
-            Request::Left { item } => {
+            Request::Left { item, .. } => {
                 self.items.remove(item);
                 self.taking.remove(item);
                 self.changes.remove(item);
@@ -235,8 +252,7 @@ impl Parent {
             Request::Read { owner, result } => match self.reads.remove(&owner.raw()) {
                 Some(Reading::Pull(item)) => {
                     if let Ok(Answer::Pull(pull)) = result {
-                        let green = !pull.statuses.is_empty()
-                            && pull.statuses.iter().all(|status| status.check == Check::Passed);
+                        let green = pull.ci == Ci::Passed;
                         let open = pull.state == State::Open && pull.mergeable && pull.merged.is_none();
                         if green && open && self.items.contains_key(&item) {
                             let intent = Intent::Merge { item, pull: pull.number, head: pull.commit };
@@ -290,9 +306,7 @@ impl Parent {
             held.running = true;
             actions.push((run, Action::Run(item)));
         }
-        if let News::Pull {
-            ci: temper_engine_model_forge::Ci::Passed, open: true, merged: None, mergeable: true, ..
-        } = news
+        if let News::Pull { ci: Ci::Passed, open: true, merged: None, mergeable: true, .. } = news
             && let Some(Change { pull: Some(pull), .. }) = self.changes.get(&item)
         {
             let pull = Item { repository: item.repository, number: *pull };
@@ -306,15 +320,32 @@ impl Parent {
     }
 
     fn wrote(&mut self, owner: u64, result: &Result<Written, Failure>, actions: &mut Vec<(Duration, Action)>) {
-        let Some(intent) = self.writes.remove(&owner) else {
+        let Some((intent, resumed)) = self.writes.remove(&owner) else {
             return;
         };
         match result {
             Err(Failure::Busy) => {
-                // No room: asked again in a while.
+                // No room: asked again in a while, as it was.
                 let later = Duration::from_secs(5);
-                let write = self.write(intent, None);
+                let write = self.write(intent, resumed);
                 actions.push((later, write));
+                return;
+            }
+            Err(Failure::Forge(Error::Timeout)) => {
+                // It may have been made: asked again, to be looked for.
+                match intent {
+                    Intent::Comment { .. } | Intent::Task { .. } | Intent::Open { .. } => {
+                        self.tally.resumed += 1;
+                        let write = self.write(intent, Some(Cause { comment: 0, at: Time::ZERO }));
+                        actions.push((Duration::from_secs(5), write));
+                    }
+                    Intent::Record { .. }
+                    | Intent::Labels { .. }
+                    | Intent::Merge { .. }
+                    | Intent::Close { .. }
+                    | Intent::DeleteBranch { .. }
+                    | Intent::PutPage { .. } => {}
+                }
                 return;
             }
             Err(Failure::Edited { .. }) => {
@@ -541,7 +572,7 @@ impl Parent {
                 Planned::PutPage { repository: *repository, name: name.clone() }
             }
         };
-        self.writes.insert(owner, intent);
+        self.writes.insert(owner, (intent, resumed));
         Action::Write { owner, write, resumed, plan }
     }
 

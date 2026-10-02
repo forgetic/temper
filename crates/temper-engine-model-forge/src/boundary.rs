@@ -11,12 +11,21 @@
 //! - The parent's own. A [`Event::Read`] is answered by exactly one
 //!   [`Request::Read`], and a [`Event::Write`] by exactly one
 //!   [`Request::Wrote`], each echoing its `owner`; a [`Event::Track`] by a
-//!   [`Request::Announced`] once the item is read, or at once by a
-//!   [`Request::Full`]. Everything else it tells unasked, as the forge
-//!   changes: an item handed in ([`Request::Offered`]), news for an item's
-//!   inbox ([`Request::Inbox`]), its labels changing ([`Request::Changed`]),
-//!   its leaving ([`Request::Left`]), and the end of the cold start
+//!   [`Request::Announced`] once the item is read, by a [`Request::Left`] if
+//!   it is closed or not there, or at once by a [`Request::Full`]. A write
+//!   that fails as [`Failure::Forge`] with [`Error::Timeout`] may have been
+//!   made: the parent asks for it again, `resumed`, if it still wants it.
+//!   Everything else it tells unasked, as the forge changes: an item handed
+//!   in ([`Request::Offered`]), news for an item's inbox
+//!   ([`Request::Inbox`]), its labels changing ([`Request::Changed`]), its
+//!   leaving ([`Request::Left`]), an item the forge keeps refusing to show
+//!   ([`Request::Forbidden`]), room in the working set after a refusal
+//!   ([`Request::Room`]), and the end of the cold start
 //!   ([`Request::Loaded`]).
+//!
+//! What an item's dependencies are, and whether they finished, the parent
+//! reads afresh: the working set holds the items the engine tracks, and a
+//! dependency that is not one leaves no news.
 //!
 //! Items, repositories and people are named as the deployment names them
 //! (an [`Item`], a repository's index in the deployment's list, a person's
@@ -54,9 +63,10 @@ pub enum Event {
     /// The parent took `item`'s news up to and including `through`: the
     /// inbox position moves past them, and the next record written carries it.
     Took { item: Item, through: u64 },
-    /// A webhook: something changed in `repository`, about the item `item`
-    /// or the commit `commit` if it names one.
-    Hint { repository: u32, item: Option<u64>, commit: Option<[u8; 32]> },
+    /// A webhook: something changed in `repository`, about the item `item`,
+    /// the commit `commit` (a status, a push) or the branch `branch` (a
+    /// push) if it names one.
+    Hint { repository: u32, item: Option<u64>, commit: Option<[u8; 32]>, branch: Option<Box<[u8]>> },
     /// A fresh read, answered by one [`Request::Read`].
     Read { owner: Token, read: Read },
     /// A write, answered by one [`Request::Wrote`]. `resumed` names its
@@ -80,9 +90,12 @@ pub enum Request {
     Read { owner: Token, result: Result<Answer, Failure> },
     /// The answer to a [`Event::Write`]: exactly one per write.
     Wrote { owner: Token, result: Result<Written, Failure> },
-    /// `item` was not taken in: the working set is full. It waits on the
-    /// forge, where its labels find it again once there is room.
+    /// `item` was not taken in: the working set is full. One carrying the
+    /// tracking label is found again by a listing once there is room; for
+    /// the rest, the parent hears [`Request::Room`], and asks again.
     Full { item: Item },
+    /// The working set has room again, after a [`Request::Full`].
+    Room,
     /// `item` is in the working set, read: what it is and its record.
     Announced { item: Item, view: View },
     /// `item`, an open issue, carries the hand-in label and is not tracked.
@@ -91,8 +104,13 @@ pub enum Request {
     Inbox { item: Item, seq: u64, news: News },
     /// `item`'s labels are now `labels`.
     Changed { item: Item, labels: Box<[Box<[u8]>]> },
-    /// `item` closed, and left the working set.
-    Left { item: Item },
+    /// `item` left the working set, as it is closed, or not on the forge
+    /// (deleted, or moved to another repository).
+    Left { item: Item, why: Why },
+    /// The forge refused the engine `item` as many times in a row as the
+    /// limits' `attempts`: it stays in the working set, read again after
+    /// each backoff, and its news follows once the forge shows it again.
+    Forbidden { item: Item },
     /// The cold start is done: every item that carried the tracking label as
     /// it began has been read and announced, or did not fit.
     Loaded,
@@ -117,18 +135,26 @@ pub enum Read {
         item: Item,
         after: u64,
     },
-    /// The pull request `item`, its reviews and the statuses on its head.
+    /// The pull request `item`: its head, where its base is, and CI on its
+    /// head.
     Pull {
         item: Item,
+    },
+    /// The `page`th page (from 1) of the reviews of the pull request `item`.
+    Reviews {
+        item: Item,
+        page: u32,
     },
     PullFor {
         repository: u32,
         head: Box<[u8]>,
         base: Box<[u8]>,
     },
+    /// CI on `commit`, and the `page`th page (from 1) of its statuses.
     Statuses {
         repository: u32,
         commit: [u8; 32],
+        page: u32,
     },
     Permission {
         repository: u32,
@@ -261,18 +287,29 @@ pub enum Record {
 }
 
 /// What an item has taken of its inbox (engine-model.md, 4.3): the last
-/// comment, the reviews of its pull request, and the head and CI seen.
+/// comment on it and on its pull request, the verdicts on its pull request's
+/// head (a digest of them), and the head and CI seen.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Position {
     pub comment: u64,
-    pub reviews: u32,
+    pub pull_comment: u64,
+    pub reviews: u64,
     pub head: Option<[u8; 32]>,
     pub ci: Ci,
 }
 
 impl Position {
     /// Nothing taken.
-    pub const START: Position = Position { comment: 0, reviews: 0, head: None, ci: Ci::None };
+    pub const START: Position = Position { comment: 0, pull_comment: 0, reviews: 0, head: None, ci: Ci::None };
+}
+
+/// Why an item left the working set.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Why {
+    /// The forge shows it closed: done.
+    Closed,
+    /// The forge does not have it: deleted, or moved to another repository.
+    Missing,
 }
 
 /// CI on a head, over its contexts: failed if any failed, pending if any is
@@ -289,23 +326,34 @@ pub enum Ci {
 /// (who, which comment, which state); content is fetched on demand.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum News {
-    /// A person commented: the comment `id`, by `author`.
-    Comment { id: u64, author: u64 },
-    /// A review of the item's pull request, at `commit`.
-    Review { author: u64, verdict: Verdict, commit: [u8; 32] },
+    /// A person commented: the comment `id`, by `author`, on the item `on`:
+    /// this one, or its pull request.
+    Comment { on: u64, id: u64, author: u64 },
+    /// The verdicts on the item's pull request's head `commit` changed: the
+    /// working set holds them ([`crate::Model::reviews`]).
+    Reviews { commit: [u8; 32] },
     /// The item's pull request moved: its head, CI on that head, whether it is
     /// open, merged, and merges cleanly.
     Pull { commit: [u8; 32], ci: Ci, open: bool, merged: Option<[u8; 32]>, mergeable: bool },
 }
 
 /// An item's pull request as last read: what a step's decisions read of a
-/// change (seams: "Plans"), on its exact head.
+/// change (seams: "Plans"), on its exact head, and where its base is.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Level {
     pub number: u64,
     pub commit: [u8; 32],
+    pub base: Option<[u8; 32]>,
     pub ci: Ci,
     pub open: bool,
     pub merged: Option<[u8; 32]>,
     pub mergeable: bool,
+}
+
+/// A reviewer's latest verdict on a pull request's head: approve, or request
+/// changes (a review that only comments is no verdict).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Reviewed {
+    pub author: u64,
+    pub verdict: Verdict,
 }

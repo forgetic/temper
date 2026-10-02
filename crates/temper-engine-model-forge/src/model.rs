@@ -6,8 +6,7 @@ use alloc::boxed::Box;
 use temper_lib::bytes::copy_of;
 use temper_lib::{Deadlines, Env, Id, List, Map, Queue, Rng, Slab, Time};
 
-use crate::boundary::Level;
-use crate::boundary::{Event, Item, Request};
+use crate::boundary::{Event, Item, Level, Request, Reviewed};
 use crate::calls::{self, Calls};
 use crate::facts::{Fact, Facts};
 use crate::items::{self, Entry};
@@ -18,15 +17,15 @@ use crate::writes::{self, Lane, Writing};
 
 /// The most requests an entry point emits per call under `limits`: a page of
 /// a listing, each of its items offered, changed or left; or an item read,
-/// announced, its labels changed, and a page of news, or as much news as its
-/// inbox holds from its pull request; and the end of the cold start besides.
-/// The parent reserves this much room in `out` before calling it.
+/// announced, its labels changed, and a page of news, as much as its inbox
+/// holds; and the end of the cold start, and room told, besides. The parent
+/// reserves this much room in `out` before calling it.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
     let listing = limits.page;
     let reading = limits.inbox.saturating_add(2);
     let most = if listing > reading { listing } else { reading };
-    most.saturating_add(1)
+    most.saturating_add(2)
 }
 
 /// What the deployment says of the forge, which the sub-model keeps.
@@ -70,6 +69,8 @@ pub struct Model {
     pub(crate) rng: Rng,
     pub(crate) facts: Facts,
     pub(crate) loading: Loading,
+    /// A track was refused for want of room since room was last told.
+    pub(crate) refused: bool,
 }
 
 /// How far the cold start is: repositories whose labels are still being
@@ -140,6 +141,7 @@ impl Model {
             rng: Rng::new(seed),
             facts: Facts::with_capacity(limits.facts),
             loading: Loading { listing: limits.repositories, finding: 0, told: false },
+            refused: false,
         };
         model.alarms.arm(Alarm::Wake, Time::ZERO).expect("the model's first alarm fits");
         scans::start(&mut model, limits);
@@ -165,6 +167,16 @@ impl Model {
     pub fn pull(&self, item: Item) -> Option<Level> {
         let id = self.index.get(&item)?;
         items::level(self.entries.get(*id)?)
+    }
+
+    /// The verdicts on the head of `item`'s pull request, as last read: the
+    /// latest of each reviewer but the engine, approving or requesting
+    /// changes, as many reviewers as the limits hold. `None` until they are
+    /// read for that head.
+    #[must_use]
+    pub fn reviews(&self, item: Item) -> Option<&[Reviewed]> {
+        let id = self.index.get(&item)?;
+        items::verdicts(self.entries.get(*id)?)
     }
 
     /// Calls in hand, queued or out, answered ones included until they are
@@ -242,13 +254,16 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Track { item } => items::track(model, env, item, out),
         Event::Untrack { item } => items::untrack(model, env, item),
         Event::Link { item, pull } => items::link(model, env, item, pull),
-        Event::Took { item, through } => items::took(model, env, item, through),
-        Event::Hint { repository, item: _, commit } => scans::hint(model, env, repository, commit),
+        Event::Took { item, through } => items::took(model, env, item, through, out),
+        Event::Hint { repository, item: _, commit, branch } => {
+            scans::hint(model, env, repository, commit, branch.as_deref());
+        }
         Event::Read { owner, read } => reads::read(model, env, owner, read, out),
         Event::Write { owner, write, resumed } => writes::write(model, env, owner, write, resumed, out),
         Event::Answered { call, result } => calls::answered(model, env, call, result, out),
     }
     loaded(model, out);
+    roomy(model, out);
 }
 
 /// Fires the earliest alarm due at `env.now`, if there is one. A stage fires
@@ -270,12 +285,21 @@ pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
         Alarm::Write(id) => writes::retry(model, env, id),
     }
     loaded(model, out);
+    roomy(model, out);
 }
 
 /// Sends the next call ready, if the request budget allows one, emitting at
 /// most one request: the call.
 pub fn resume(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     calls::send(model, env, out);
+}
+
+/// Tells the parent the working set has room again, once after a refusal.
+fn roomy(model: &mut Model, out: &mut Queue<Request>) {
+    if model.refused && !model.entries.is_full() {
+        model.refused = false;
+        out.push(Request::Room);
+    }
 }
 
 /// Tells the end of the cold start, once: every repository's labels listed,

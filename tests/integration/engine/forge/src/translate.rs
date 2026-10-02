@@ -15,15 +15,20 @@
 //! - **A comment's revision** is a digest of its body, so it changes whenever
 //!   the body does, at any resolution of the forge's clock.
 //! - **Pages** are the sub-model's: a listing asks the fake for a page of the
-//!   sub-model's size, and a page of comments or reviews is cut to it; and so
-//!   are texts, to its limits, once what is marked at their heads is read.
+//!   sub-model's size, and a page of comments is cut to it, and reviews and
+//!   statuses are paged by number out of all the fake shows; and so are
+//!   texts, to their limits, once what is marked at their heads is read.
+//! - **CI** on a commit is combined over its contexts as Forgejo combines it:
+//!   failed if any failed, pending if any is pending, passed if all passed.
+//! - **Times** the fake shows are its own clock's; a rate limit's reset is
+//!   told as the wait from the fake's time as it answers.
 
 use std::collections::BTreeMap;
 
 use temper_engine_model_forge::api as engine;
 use temper_engine_model_forge::{Ci, Limits, Position};
 use temper_forge_model::api as forge;
-use temper_lib::Token;
+use temper_lib::{Duration, Time, Token};
 
 const KEY: &[u8] = b"<!-- temper:key ";
 const RECORD: &[u8] = b"<!-- temper:record ";
@@ -42,11 +47,15 @@ pub enum Asked {
     Comment {
         number: u64,
     },
-    /// A pull request, and a page of its reviews after the first `reviews`.
-    Pull {
-        reviews: u32,
+    /// A pull request; the `page`th page of its reviews; of the statuses on
+    /// a commit.
+    Pull,
+    Reviews {
+        page: u32,
     },
-    Statuses,
+    Statuses {
+        page: u32,
+    },
     Permission,
     Branch,
     Pages,
@@ -117,7 +126,8 @@ pub fn recorded(position: Position, nonce: u64, payload: &[u8]) -> Vec<u8> {
         Ci::Failed => 3,
     };
     let mut body = RECORD.to_vec();
-    body.extend_from_slice(format!("{} {} {head} {ci} {nonce}", position.comment, position.reviews).as_bytes());
+    let fields = format!("{} {} {} {head} {ci} {nonce}", position.comment, position.pull_comment, position.reviews);
+    body.extend_from_slice(fields.as_bytes());
     body.extend_from_slice(END);
     body.extend_from_slice(payload);
     body
@@ -176,6 +186,7 @@ fn position(rest: &[u8]) -> Option<(Position, u64)> {
     let text = std::str::from_utf8(&rest[..end]).ok()?;
     let mut fields = text.split(' ');
     let comment = fields.next()?.parse().ok()?;
+    let pull_comment = fields.next()?.parse().ok()?;
     let reviews = fields.next()?.parse().ok()?;
     let head = match fields.next()? {
         "-" => None,
@@ -192,7 +203,7 @@ fn position(rest: &[u8]) -> Option<(Position, u64)> {
     if fields.next().is_some() {
         return None;
     }
-    Some((Position { comment, reviews, head, ci }, nonce))
+    Some((Position { comment, pull_comment, reviews, head, ci }, nonce))
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -247,9 +258,12 @@ pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
         }
         engine::Op::Item { number, after } => (Asked::Item, Op::Read(Read::Item { number, after })),
         engine::Op::Comment { number, id } => (Asked::Comment { number }, Op::Read(Read::Comment { id })),
-        engine::Op::Pull { number, reviews } => (Asked::Pull { reviews }, Op::Read(Read::Pull { number })),
-        engine::Op::PullFor { head, base } => (Asked::Pull { reviews: 0 }, Op::Read(Read::PullFor { head, base })),
-        engine::Op::Statuses { commit } => (Asked::Statuses, Op::Read(Read::Statuses { commit: count(commit) })),
+        engine::Op::Pull { number } => (Asked::Pull, Op::Read(Read::Pull { number })),
+        engine::Op::PullFor { head, base } => (Asked::Pull, Op::Read(Read::PullFor { head, base })),
+        engine::Op::Reviews { number, page } => (Asked::Reviews { page }, Op::Read(Read::Pull { number })),
+        engine::Op::Statuses { commit, page } => {
+            (Asked::Statuses { page }, Op::Read(Read::Statuses { commit: count(commit) }))
+        }
         engine::Op::Permission { user } => (Asked::Permission, Op::Read(Read::Permission { user })),
         engine::Op::Branch { branch } => (Asked::Branch, Op::Read(Read::Branch { branch })),
         engine::Op::Pages { after } => (Asked::Pages, Op::Read(Read::Pages { after })),
@@ -289,8 +303,9 @@ pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
     }
 }
 
-/// The sub-model's answer for what the fake answered a call that asked
-/// `asked`, cutting a page of comments or reviews, and texts, to `limits`.
+/// The sub-model's answer for what the fake answered, at its time `now`, a
+/// call that asked `asked`, cutting a page of comments, reviews or statuses,
+/// and texts, to `limits`.
 ///
 /// # Errors
 ///
@@ -299,12 +314,13 @@ pub fn answer(
     asked: Asked,
     result: Result<forge::Answer, forge::Error>,
     limits: &Limits,
+    now: Time,
 ) -> Result<engine::Answer, engine::Error> {
-    let answer = result.map_err(error)?;
+    let answer = result.map_err(|failed| error(failed, now))?;
     let page = usize::try_from(limits.page).expect("a page fits a usize");
     let answer = match (asked, answer) {
-        (Asked::Items, forge::Answer::Items { items, more, now: _ }) => {
-            engine::Answer::Items { items: items.iter().map(|item| summary(item, limits)).collect(), more }
+        (Asked::Items, forge::Answer::Items { items, more, now }) => {
+            engine::Answer::Items { items: items.iter().map(|item| summary(item, limits)).collect(), more, now }
         }
         (Asked::Item, forge::Answer::Item { item, comments, more }) => {
             let cut = comments.len() > page;
@@ -317,11 +333,14 @@ pub fn answer(
             }
             engine::Answer::Comment(comment(&found, limits))
         }
-        (Asked::Pull { reviews }, forge::Answer::Pull(found)) => {
-            engine::Answer::Pull(pull(&found, usize::try_from(reviews).expect("fits"), limits))
+        (Asked::Pull, forge::Answer::Pull(found)) => engine::Answer::Pull(pull(&found)),
+        (Asked::Reviews { page: number }, forge::Answer::Pull(found)) => {
+            let (reviews, more) = page_of(&found.reviews, number, page);
+            engine::Answer::Reviews { reviews: reviews.iter().map(|found| review(found, limits)).collect(), more }
         }
-        (Asked::Statuses, forge::Answer::Statuses(statuses)) => {
-            engine::Answer::Statuses(statuses.iter().map(status).collect())
+        (Asked::Statuses { page: number }, forge::Answer::Statuses(statuses)) => {
+            let (shown, more) = page_of(&statuses, number, page);
+            engine::Answer::Statuses { ci: combined(&statuses), statuses: shown.iter().map(status).collect(), more }
         }
         (Asked::Permission, forge::Answer::Permission(permission)) => engine::Answer::Permission(match permission {
             forge::Permission::None => engine::Permission::None,
@@ -353,13 +372,15 @@ pub fn answer(
     Ok(answer)
 }
 
-/// The sub-model's error for the fake's.
+/// The sub-model's error for the fake's, answered at its time `now`.
 #[must_use]
-pub fn error(error: forge::Error) -> engine::Error {
+pub fn error(error: forge::Error, now: Time) -> engine::Error {
     match error {
         forge::Error::Unavailable => engine::Error::Unavailable,
         forge::Error::Timeout => engine::Error::Timeout,
-        forge::Error::RateLimited { reset } => engine::Error::RateLimited { reset },
+        forge::Error::RateLimited { reset } => {
+            engine::Error::RateLimited { after: Duration::from_nanos(reset.as_nanos().saturating_sub(now.as_nanos())) }
+        }
         forge::Error::Forbidden => engine::Error::Forbidden,
         forge::Error::Missing(_) => engine::Error::Missing,
         forge::Error::TooLarge => engine::Error::TooLarge,
@@ -427,9 +448,8 @@ fn comment(comment: &forge::Comment, limits: &Limits) -> engine::Comment {
     }
 }
 
-/// A pull request, with the page of its reviews after the first `skip`.
-fn pull(pull: &forge::Pull, skip: usize, limits: &Limits) -> engine::Pull {
-    let page = usize::try_from(limits.page).expect("a page fits a usize");
+/// A pull request, CI on its head combined.
+fn pull(pull: &forge::Pull) -> engine::Pull {
     engine::Pull {
         number: pull.number,
         state: match pull.state {
@@ -439,26 +459,46 @@ fn pull(pull: &forge::Pull, skip: usize, limits: &Limits) -> engine::Pull {
         head: pull.head.clone(),
         base: pull.base.clone(),
         commit: commit(pull.commit),
+        base_commit: pull.base_commit.map(commit),
         merged: pull.merged.map(commit),
         mergeable: pull.mergeable,
-        more: pull.reviews.len() > skip + page,
-        reviews: pull
-            .reviews
-            .iter()
-            .skip(skip)
-            .take(page)
-            .map(|review| engine::Review {
-                author: review.author,
-                verdict: match review.verdict {
-                    forge::Verdict::Approve => engine::Verdict::Approve,
-                    forge::Verdict::RequestChanges => engine::Verdict::RequestChanges,
-                    forge::Verdict::Comment => engine::Verdict::Comment,
-                },
-                commit: commit(review.commit),
-                body: cut(&review.body, limits.body_bytes),
-            })
-            .collect(),
-        statuses: pull.statuses.iter().take(page).map(status).collect(),
+        ci: combined(&pull.statuses),
+    }
+}
+
+/// The `number`th page (from 1) of `size` of `all`, and whether more follow.
+fn page_of<T>(all: &[T], number: u32, size: usize) -> (&[T], bool) {
+    let skip = usize::try_from(number.saturating_sub(1)).expect("fits").saturating_mul(size);
+    let rest = all.get(skip..).unwrap_or(&[]);
+    (&rest[..rest.len().min(size)], rest.len() > size)
+}
+
+/// CI over every context's latest status, as Forgejo combines it.
+#[must_use]
+pub fn combined(statuses: &[forge::Status]) -> Ci {
+    if statuses.is_empty() {
+        return Ci::None;
+    }
+    if statuses.iter().any(|status| status.state == forge::Check::Failed) {
+        return Ci::Failed;
+    }
+    if statuses.iter().any(|status| status.state == forge::Check::Pending) {
+        return Ci::Pending;
+    }
+    Ci::Passed
+}
+
+fn review(review: &forge::Review, limits: &Limits) -> engine::Review {
+    engine::Review {
+        id: review.id,
+        author: review.author,
+        verdict: match review.verdict {
+            forge::Verdict::Approve => engine::Verdict::Approve,
+            forge::Verdict::RequestChanges => engine::Verdict::RequestChanges,
+            forge::Verdict::Comment => engine::Verdict::Comment,
+        },
+        commit: commit(review.commit),
+        body: cut(&review.body, limits.body_bytes),
     }
 }
 

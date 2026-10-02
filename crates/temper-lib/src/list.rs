@@ -77,6 +77,12 @@ impl<T> List<T> {
         self.items.last()
     }
 
+    /// Empties the list, keeping its capacity: a list refilled in place
+    /// allocates nothing.
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+
     #[must_use]
     pub fn as_slice(&self) -> &[T] {
         &self.items
@@ -139,5 +145,17 @@ mod tests {
         }
         assert_eq!(results.get_mut(3), None);
         assert_eq!(&*results.into_boxed(), &[Some('a'), Some('b'), Some('c')]);
+    }
+
+    #[test]
+    fn a_list_cleared_is_refilled_to_its_capacity() {
+        let mut list = List::with_capacity(2);
+        assert_eq!(list.push(1_u8), Ok(()));
+        assert_eq!(list.push(2), Ok(()));
+        list.clear();
+        assert!(list.is_empty());
+        assert_eq!(list.room(), 2, "its capacity kept");
+        assert_eq!(list.push(3), Ok(()));
+        assert_eq!(&*list.into_boxed(), &[3]);
     }
 }

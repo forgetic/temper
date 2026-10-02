@@ -144,11 +144,12 @@ pub(crate) fn op(model: &Model, id: Id<Fetch>) -> (u32, Op) {
     let fetch = model.reads.get(id).expect("a read lives until its call is answered");
     match &fetch.read {
         Read::Item { item, after } => (item.repository, Op::Item { number: item.number, after: *after }),
-        Read::Pull { item } => (item.repository, Op::Pull { number: item.number, reviews: 0 }),
+        Read::Pull { item } => (item.repository, Op::Pull { number: item.number }),
+        Read::Reviews { item, page } => (item.repository, Op::Reviews { number: item.number, page: *page }),
         Read::PullFor { repository, head, base } => {
             (*repository, Op::PullFor { head: copy_of(head), base: copy_of(base) })
         }
-        Read::Statuses { repository, commit } => (*repository, Op::Statuses { commit: *commit }),
+        Read::Statuses { repository, commit, page } => (*repository, Op::Statuses { commit: *commit, page: *page }),
         Read::Permission { repository, user } => (*repository, Op::Permission { user: *user }),
         Read::Branch { repository, branch } => (*repository, Op::Branch { branch: copy_of(branch) }),
         Read::Pages { repository, after } => (*repository, Op::Pages { after: after.clone() }),
@@ -160,7 +161,7 @@ pub(crate) fn op(model: &Model, id: Id<Fetch>) -> (u32, Op) {
 fn valid(read: &Read, limits: &Limits) -> bool {
     let none: &[u8] = &[];
     let (repository, names): (u32, [&[u8]; 2]) = match read {
-        Read::Item { item, .. } | Read::Pull { item } => (item.repository, [none, none]),
+        Read::Item { item, .. } | Read::Pull { item } | Read::Reviews { item, .. } => (item.repository, [none, none]),
         Read::PullFor { repository, head, base } => (*repository, [head, base]),
         Read::Statuses { repository, .. } | Read::Permission { repository, .. } => (*repository, [none, none]),
         Read::Branch { repository, branch } => (*repository, [branch, none]),

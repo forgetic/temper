@@ -2,7 +2,9 @@
 //!
 //! Whatever needs the forge queues a call, in its priority's class: the
 //! parent's fresh reads first, then writes and the reads that find what an
-//! attempt made, then keeping up, then the slow pass. A call holds only what
+//! attempt made, then keeping up, then the slow pass. So that the first two
+//! never starve the others, `Limits::reserve` calls of each window are kept
+//! for keeping up and the slow pass while they wait. A call holds only what
 //! it is for; its operation is built as it goes out, from its owner's state,
 //! so a retry carries what is true then.
 //!
@@ -79,12 +81,14 @@ pub(crate) struct Calls {
     woken: bool,
 }
 
-/// The request budget: calls left in the window and when it ends, whether
-/// it is spent, and the reset a rate-limit refusal named, until it passes.
+/// The request budget: calls left in the window and when it ends, the
+/// parent's reads and the writes it took, whether it is spent, and the reset
+/// a rate-limit refusal named, until it passes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct Budget {
     left: u32,
     ends: Time,
+    first: u32,
     spent: bool,
     reset: Option<Time>,
 }
@@ -100,7 +104,7 @@ impl Calls {
             slow: Queue::with_capacity(capacity),
             out: 0,
             limit,
-            budget: Budget { left: 0, ends: Time::ZERO, spent: false, reset: None },
+            budget: Budget { left: 0, ends: Time::ZERO, first: 0, spent: false, reset: None },
             woken: false,
         }
     }
@@ -144,7 +148,7 @@ pub(crate) fn send(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request
     if !model.calls.is_ready() {
         return;
     }
-    let Some(id) = next(&mut model.calls) else {
+    let Some(id) = next(&mut model.calls, env) else {
         return;
     };
     let call = model.calls.slab.get_mut(id).expect("a call queued lives until it is answered");
@@ -155,7 +159,7 @@ pub(crate) fn send(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request
     call.state = State::Out;
     let (purpose, priority) = (call.purpose, call.priority);
     model.calls.out = model.calls.out.saturating_add(1);
-    spend(model, env);
+    spend(model, env, priority);
     let (repository, op) = build(model, env, purpose);
     match purpose {
         Purpose::Write(owner) => writes::sent(model, owner, env.now),
@@ -165,13 +169,19 @@ pub(crate) fn send(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request
     out.push(Request::Call { call: id.token(), repository, op });
 }
 
-/// The next call in the queues, the highest class first.
-fn next(calls: &mut Calls) -> Option<Id<Call>> {
-    if let Some(id) = calls.fresh.pop() {
-        return Some(id);
-    }
-    if let Some(id) = calls.write.pop() {
-        return Some(id);
+/// The next call in the queues, the highest class first; but the first two
+/// classes only within their share of the window while the others wait.
+fn next(calls: &mut Calls, env: &Env<Limits>) -> Option<Id<Call>> {
+    let waiting = !(calls.keep.is_empty() && calls.slow.is_empty());
+    let first = if env.now >= calls.budget.ends { 0 } else { calls.budget.first };
+    let share = env.limits.rate.saturating_sub(env.limits.reserve);
+    if !waiting || first < share {
+        if let Some(id) = calls.fresh.pop() {
+            return Some(id);
+        }
+        if let Some(id) = calls.write.pop() {
+            return Some(id);
+        }
     }
     if let Some(id) = calls.keep.pop() {
         return Some(id);
@@ -179,12 +189,18 @@ fn next(calls: &mut Calls) -> Option<Id<Call>> {
     calls.slow.pop()
 }
 
-/// Spends one call of the window, starting a new window if the last ended.
-fn spend(model: &mut Model, env: &Env<Limits>) {
+/// Spends one call of the window, of the class `priority`, starting a new
+/// window if the last ended.
+fn spend(model: &mut Model, env: &Env<Limits>, priority: Priority) {
     let budget = &mut model.calls.budget;
     if env.now >= budget.ends {
         budget.left = env.limits.rate;
         budget.ends = env.now.saturating_add(env.limits.window);
+        budget.first = 0;
+    }
+    match priority {
+        Priority::Fresh | Priority::Write => budget.first = budget.first.saturating_add(1),
+        Priority::Keep | Priority::Slow => {}
     }
     budget.left = budget.left.saturating_sub(1);
     if budget.left == 0 {
@@ -256,7 +272,7 @@ pub(crate) fn answered(
     if let Err(error) = &result {
         model.facts.push(Fact::Failed { priority, error: *error });
         match error {
-            Error::RateLimited { reset } => limited(model, env, *reset),
+            Error::RateLimited { after } => limited(model, env, env.now.saturating_add(*after)),
             Error::Unavailable
             | Error::Timeout
             | Error::Forbidden

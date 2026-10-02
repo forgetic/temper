@@ -4,12 +4,10 @@ use alloc::boxed::Box;
 
 use temper_lib::{Duration, Env, List, Queue, Time, Token};
 
-use crate::api::{
-    Answer, Body, Check, Comment, Error, Kind, Mark, Op, Page, Pull, Review, State, Status, Summary, Verdict,
-};
+use crate::api::{Answer, Body, Comment, Error, Kind, Mark, Op, Page, Pull, Review, State, Summary, Verdict};
 use crate::{
     Cause, Ci, Config, Content, Event, Fact, Failure, Item, Level, Limits, Model, News, Position, Priority, Read,
-    Record, Request, View, Write, Written, fire, max_out, resume, step, worst_case,
+    Record, Request, Reviewed, View, Why, Write, Written, fire, max_out, resume, step, worst_case,
 };
 
 /// The engine's forge user, and a person's.
@@ -21,6 +19,7 @@ const LIMITS: Limits = Limits {
     items: 3,
     labels: 3,
     inbox: 3,
+    reviewers: 4,
     reads: 2,
     writes: 3,
     calls: 8,
@@ -30,10 +29,12 @@ const LIMITS: Limits = Limits {
     body_bytes: 32,
     rate: 100,
     window: Duration::from_secs(60),
+    reserve: 0,
     poll: Duration::from_secs(30),
     hinted: Duration::from_secs(2),
     resolution: Duration::from_secs(1),
     slow: Duration::from_secs(600),
+    probes: 2,
     backoff: Duration::from_secs(1),
     backoff_max: Duration::from_secs(8),
     attempts: 3,
@@ -162,7 +163,15 @@ impl Harness {
         panic!("a call asks {op:?}");
     }
 
+    /// Answers `sent` with `result`: a page of items made now, unless it says
+    /// when it was made.
     fn answer(&mut self, sent: &Sent, result: Result<Answer, Error>) -> Box<[Request]> {
+        let result = match result {
+            Ok(Answer::Items { items, more, now }) if now == Time::ZERO => {
+                Ok(Answer::Items { items, more, now: self.env.now })
+            }
+            other => other,
+        };
         self.step(Event::Answered { call: sent.call, result })
     }
 
@@ -260,6 +269,7 @@ fn lists_changes(op: &Op) -> bool {
         | Op::Item { .. }
         | Op::Comment { .. }
         | Op::Pull { .. }
+        | Op::Reviews { .. }
         | Op::PullFor { .. }
         | Op::Statuses { .. }
         | Op::Permission { .. }
@@ -359,7 +369,7 @@ fn comments(list: &[Comment]) -> Box<[Comment]> {
 
 #[expect(clippy::unnecessary_wraps, reason = "what a call is answered with")]
 fn page(items: Box<[Summary]>, more: bool) -> Result<Answer, Error> {
-    Ok(Answer::Items { items, more })
+    Ok(Answer::Items { items, more, now: Time::ZERO })
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "what a call is answered with")]
@@ -386,27 +396,32 @@ fn item(number: u64) -> Item {
     Item { repository: 0, number }
 }
 
-fn pull(number: u64, commit: [u8; 32], checks: &[Check], reviews: &[(u64, Verdict)]) -> Pull {
-    let mut statuses = List::with_capacity(8);
-    for check in checks {
-        statuses.push(Status { context: bytes(b"ci"), check: *check }).expect("room");
-    }
-    let mut list = List::with_capacity(8);
-    for (author, verdict) in reviews {
-        list.push(Review { author: *author, verdict: *verdict, commit, body: bytes(b"review") }).expect("room");
-    }
+/// Where the base branch of the pull requests is.
+const BASE: [u8; 32] = [9; 32];
+
+fn pull(number: u64, commit: [u8; 32], ci: Ci) -> Pull {
     Pull {
         number,
         state: State::Open,
         head: bytes(b"change"),
         base: bytes(b"main"),
         commit,
+        base_commit: Some(BASE),
         merged: None,
         mergeable: true,
-        reviews: list.into_boxed(),
-        more: false,
-        statuses: statuses.into_boxed(),
+        ci,
     }
+}
+
+/// A page of reviews, each `(id, author, verdict)` on `commit`.
+#[expect(clippy::unnecessary_wraps, reason = "what a call is answered with")]
+fn reviews(list: &[(u64, u64, Verdict)], commit: [u8; 32], more: bool) -> Result<Answer, Error> {
+    let mut reviews = List::with_capacity(8);
+    for (id, author, verdict) in list {
+        let review = Review { id: *id, author: *author, verdict: *verdict, commit, body: bytes(b"review") };
+        reviews.push(review).expect("room");
+    }
+    Ok(Answer::Reviews { reviews: reviews.into_boxed(), more })
 }
 
 /// The record found by the cold start of an item numbered `number`.
@@ -458,7 +473,7 @@ fn a_record_is_found_past_the_first_page_and_its_position_ends_the_comments_read
     let record = Record::Found { comment: 3, revision: 8, position };
     assert_eq!(
         *told,
-        [announced(5, record), news(5, 1, News::Comment { id: 4, author: PERSON })],
+        [announced(5, record), news(5, 1, News::Comment { on: 5, id: 4, author: PERSON })],
         "announced, then the news after its position"
     );
 }
@@ -479,7 +494,7 @@ fn a_record_whose_position_is_before_the_page_it_is_on_has_the_comments_between_
     let again = h.send_one();
     assert_eq!(again.op, Op::Item { number: 5, after: 1 }, "the comments after its position are read");
     let told = h.answer(&again, item_page(issue(5, &[TRACKING], 1), comments(&[comment(2, PERSON)]), false));
-    assert_eq!(*told, [news(5, 1, News::Comment { id: 2, author: PERSON })], "the comment between is news");
+    assert_eq!(*told, [news(5, 1, News::Comment { on: 5, id: 2, author: PERSON })], "the comment between is news");
 }
 
 #[test]
@@ -493,7 +508,7 @@ fn an_item_without_a_record_is_announced_so_and_all_its_comments_are_news() {
     let view = View { kind: Kind::Issue, labels: labels(&[HAND_IN]), record: Record::Missing };
     assert_eq!(
         *told,
-        [Request::Announced { item: item(9), view }, news(9, 1, News::Comment { id: 1, author: PERSON })],
+        [Request::Announced { item: item(9), view }, news(9, 1, News::Comment { on: 9, id: 1, author: PERSON })],
         "announced with no record, and every comment is news"
     );
     assert!(h.send().is_empty(), "read once");
@@ -511,7 +526,7 @@ fn a_mangled_record_is_announced_as_such_and_news_starts_after_it() {
         View { kind: Kind::Issue, labels: labels(&[TRACKING]), record: Record::Mangled { comment: 2, revision: 20 } };
     assert_eq!(
         *told,
-        [Request::Announced { item: item(9), view }, news(9, 1, News::Comment { id: 3, author: PERSON })],
+        [Request::Announced { item: item(9), view }, news(9, 1, News::Comment { on: 9, id: 3, author: PERSON })],
         "held for a person by its parent; what came after it is news"
     );
 }
@@ -532,7 +547,7 @@ fn a_record_of_someone_else_is_not_the_engines() {
     let view = View { kind: Kind::Issue, labels: labels(&[TRACKING]), record: Record::Missing };
     assert_eq!(
         *told,
-        [Request::Announced { item: item(9), view }, news(9, 1, News::Comment { id: 2, author: PERSON })],
+        [Request::Announced { item: item(9), view }, news(9, 1, News::Comment { on: 9, id: 2, author: PERSON })],
         "a person's record block is a comment"
     );
 }
@@ -544,7 +559,7 @@ fn a_tracked_item_closed_by_the_time_it_is_read_leaves() {
     let read = h.send_one();
     let closed = summary(9, Kind::Issue, State::Closed, &[TRACKING], 4);
     let told = h.answer(&read, item_page(closed, Box::new([]), false));
-    assert_eq!(*told, [Request::Left { item: item(9) }], "it left");
+    assert_eq!(*told, [Request::Left { item: item(9), why: Why::Closed }], "it left");
     assert!(!h.model.is_tracked(item(9)), "and is not held");
 }
 
@@ -559,7 +574,7 @@ fn a_pass_lists_the_changes_since_the_newest_time_seen_and_reads_what_changed() 
     assert_eq!(sent.len(), 1, "the changed item is read: {sent:?}");
     assert_eq!(sent[0].op, Op::Item { number: 5, after: 100 }, "after the last comment passed");
     let told = h.answer(&sent[0], item_page(issue(5, &[TRACKING], 20), comments(&[comment(101, PERSON)]), false));
-    assert_eq!(*told, [news(5, 1, News::Comment { id: 101, author: PERSON })], "news");
+    assert_eq!(*told, [news(5, 1, News::Comment { on: 5, id: 101, author: PERSON })], "news");
     // The next pass starts at the newest time seen, inclusive.
     h.at(60);
     h.fire();
@@ -568,17 +583,43 @@ fn a_pass_lists_the_changes_since_the_newest_time_seen_and_reads_what_changed() 
 }
 
 #[test]
-fn an_item_listed_again_at_the_time_it_changed_is_read_once_more_in_a_later_pass() {
+fn an_item_listed_within_the_second_it_changed_is_read_once_more_once_that_second_passed() {
     let mut h = Harness::new(LIMITS);
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
-    let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 20)]);
+    // Listed in the very second it changed: a change may follow in it.
+    let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 30)]);
     assert_eq!(sent.len(), 1, "read for the change");
-    h.answer(&sent[0], item_page(issue(5, &[TRACKING], 20), Box::new([]), false));
-    let (_, sent) = h.pass(60, &[issue(5, &[TRACKING], 20)]);
-    assert_eq!(sent.len(), 1, "read once more: a change may have come in the same second");
-    h.answer(&sent[0], item_page(issue(5, &[TRACKING], 20), Box::new([]), false));
-    let (_, sent) = h.pass(90, &[issue(5, &[TRACKING], 20)]);
+    h.answer(&sent[0], item_page(issue(5, &[TRACKING], 30), Box::new([]), false));
+    let (_, sent) = h.pass(60, &[issue(5, &[TRACKING], 30)]);
+    assert_eq!(sent.len(), 1, "read once more, by a listing made after that second");
+    h.answer(&sent[0], item_page(issue(5, &[TRACKING], 30), Box::new([]), false));
+    let (_, sent) = h.pass(90, &[issue(5, &[TRACKING], 30)]);
     assert!(sent.is_empty(), "and then no more: {sent:?}");
+    // Listed when the second it changed had passed: read once.
+    let (_, sent) = h.pass(120, &[issue(5, &[TRACKING], 100)]);
+    h.answer(&sent[0], item_page(issue(5, &[TRACKING], 100), Box::new([]), false));
+    let (_, sent) = h.pass(150, &[issue(5, &[TRACKING], 100)]);
+    assert!(sent.is_empty(), "the read after it found all of it: {sent:?}");
+}
+
+#[test]
+fn a_listing_made_in_the_same_second_does_not_settle_what_it_shows() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 30)]);
+    h.answer(&sent[0], item_page(issue(5, &[TRACKING], 30), Box::new([]), false));
+    // Another pass, a hint after, in the same second as the change, by the
+    // forge's clock: it settles nothing.
+    h.at(32);
+    h.step(Event::Hint { repository: 0, item: Some(5), commit: None, branch: None });
+    h.fire();
+    let listing = h.send_for(&changes(30, 1));
+    let made = Time::ZERO.saturating_add(Duration::from_millis(30_500));
+    let listed = Ok(Answer::Items { items: copies(&[issue(5, &[TRACKING], 30)]), more: false, now: made });
+    h.answer(&listing, listed);
+    assert!(h.send().is_empty(), "not read: the second has not passed for the forge");
+    let (_, sent) = h.pass(62, &[issue(5, &[TRACKING], 30)]);
+    assert_eq!(sent.len(), 1, "read once more by a listing made after it: {sent:?}");
 }
 
 #[test]
@@ -614,8 +655,9 @@ fn a_pass_that_paged_by_number_and_moved_meanwhile_lists_that_time_again() {
     h.answer(&next, page(copies(&[issue(1, &[], 4), issue(2, &[], 4), issue(3, &[], 4)]), true));
     let next = h.send_one();
     assert_eq!(next.op, changes(4, 2), "by number within one time");
-    // An item changed as the pass ran: one of the time it paged at may have
-    // shifted onto the page it had read.
+    // An item changed as the pass ran, as the forge made its first page or
+    // after: one of the time it paged at may have shifted onto the page it
+    // had read.
     h.answer(&next, page(copies(&[issue(4, &[], 4), issue(1, &[], 30)]), false));
     h.at(60);
     h.fire();
@@ -630,7 +672,7 @@ fn labels_changed_are_told_and_a_closed_item_leaves() {
     assert_eq!(*told, [Request::Changed { item: item(5), labels: labels(&[TRACKING, b"bug"]) }], "labels told");
     h.answer(&sent[0], item_page(issue(5, &[TRACKING, b"bug"], 20), Box::new([]), false));
     let (told, sent) = h.pass(60, &[summary(5, Kind::Issue, State::Closed, &[TRACKING], 50)]);
-    assert_eq!(*told, [Request::Left { item: item(5) }], "it left");
+    assert_eq!(*told, [Request::Left { item: item(5), why: Why::Closed }], "it left");
     assert!(sent.is_empty(), "and is not read");
     assert!(!h.model.is_tracked(item(5)), "nor held");
 }
@@ -650,71 +692,221 @@ fn a_hint_brings_the_next_pass_forward_and_a_pass_running_is_followed_soon() {
     h.start(&[], &[]);
     assert_eq!(h.model.next_deadline(), Some(at(30)), "a poll after the start began");
     h.at(10);
-    h.step(Event::Hint { repository: 0, item: Some(3), commit: None });
+    h.step(Event::Hint { repository: 0, item: Some(3), commit: None, branch: None });
     assert_eq!(h.model.next_deadline(), Some(at(10)), "at once: the last pass began long enough ago");
     h.fire();
     let listing = h.send_one();
     h.at(11);
-    h.step(Event::Hint { repository: 0, item: None, commit: None });
+    h.step(Event::Hint { repository: 0, item: None, commit: None, branch: None });
     h.answer(&listing, page(Box::new([]), false));
     assert_eq!(h.model.next_deadline(), Some(at(12)), "the next follows soon after the one that ran");
 }
 
-#[test]
-fn pull_requests_whose_ci_has_not_settled_are_read_every_pass_and_on_a_status_hint() {
-    let mut h = Harness::new(LIMITS);
-    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+/// Links item 5 to the pull request 9 at `HEAD` with `ci`, its verdicts
+/// none and its comments none, and returns what was told.
+fn linked(h: &mut Harness, ci: Ci) -> Box<[Request]> {
     h.step(Event::Link { item: item(5), pull: Some(9) });
     let read = h.send_one();
-    assert_eq!(read.op, Op::Pull { number: 9, reviews: 0 }, "the linked pull request is read");
-    let told = h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, &[Check::Pending], &[]))));
-    let level = News::Pull { commit: HEAD, ci: Ci::Pending, open: true, merged: None, mergeable: true };
-    assert_eq!(*told, [news(5, 1, level)], "its head and CI are news");
-    let (_, sent) = h.pass(30, &[]);
-    assert_eq!(sent.len(), 1, "pending CI is read again with the pass");
-    let told = h.answer(&sent[0], Ok(Answer::Pull(pull(9, HEAD, &[Check::Passed], &[]))));
-    let level = News::Pull { commit: HEAD, ci: Ci::Passed, open: true, merged: None, mergeable: true };
-    assert_eq!(*told, [news(5, 2, level)], "CI passed");
-    let (_, sent) = h.pass(60, &[]);
-    assert!(sent.is_empty(), "settled CI is not read again: {sent:?}");
-    h.step(Event::Hint { repository: 0, item: None, commit: Some(HEAD) });
-    let read = h.send_one();
-    assert_eq!(read.op, Op::Pull { number: 9, reviews: 0 }, "a status on its head reads it again");
-    h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, &[Check::Failed], &[]))));
-    assert_eq!(
-        h.model.pull(item(5)),
-        Some(Level { number: 9, commit: HEAD, ci: Ci::Failed, open: true, merged: None, mergeable: true }),
-        "the level as last read"
-    );
+    assert_eq!(read.op, Op::Pull { number: 9 }, "the linked pull request is read");
+    let told = h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, ci))));
+    let verdicts = h.send_one();
+    assert_eq!(verdicts.op, Op::Reviews { number: 9, page: 1 }, "then its verdicts");
+    assert!(h.answer(&verdicts, reviews(&[], HEAD, false)).is_empty(), "none");
+    let remarks = h.send_one();
+    assert_eq!(remarks.op, Op::Item { number: 9, after: 0 }, "then its comments");
+    assert!(h.answer(&remarks, item_page(summary(9, Kind::Pull, State::Open, &[], 1), Box::new([]), false)).is_empty());
+    told
 }
 
 #[test]
-fn reviews_after_those_taken_are_news_and_a_linked_pull_request_listed_is_read() {
+fn a_pull_request_is_read_on_a_backoff_of_its_own_and_on_a_hint_whatever_its_state() {
     let mut h = Harness::new(LIMITS);
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
-    h.step(Event::Link { item: item(5), pull: Some(9) });
+    let told = linked(&mut h, Ci::Pending);
+    let level = News::Pull { commit: HEAD, ci: Ci::Pending, open: true, merged: None, mergeable: true };
+    assert_eq!(*told, [news(5, 1, level)], "its head and CI are news");
+    let (_, sent) = h.pass(30, &[]);
+    assert_eq!(sent.len(), 1, "read again with the pass: {sent:?}");
+    let told = h.answer(&sent[0], Ok(Answer::Pull(pull(9, HEAD, Ci::Passed))));
+    let level = News::Pull { commit: HEAD, ci: Ci::Passed, open: true, merged: None, mergeable: true };
+    assert_eq!(*told, [news(5, 2, level)], "CI passed");
+    let (_, sent) = h.pass(60, &[]);
+    assert_eq!(sent.len(), 1, "settled CI is read again: it may run again");
+    assert!(h.answer(&sent[0], Ok(Answer::Pull(pull(9, HEAD, Ci::Passed)))).is_empty(), "unchanged");
+    let (_, sent) = h.pass(90, &[]);
+    assert_eq!(sent.len(), 1, "a poll after");
+    h.answer(&sent[0], Ok(Answer::Pull(pull(9, HEAD, Ci::Passed))));
+    let (_, sent) = h.pass(120, &[]);
+    assert!(sent.is_empty(), "unchanged twice: twice as long before the next: {sent:?}");
+    let (_, sent) = h.pass(150, &[]);
+    assert_eq!(sent.len(), 1, "then read: {sent:?}");
+    let mut moved = pull(9, HEAD, Ci::Passed);
+    moved.mergeable = false;
+    moved.base_commit = Some(OTHER);
+    let told = h.answer(&sent[0], Ok(Answer::Pull(moved)));
+    let level = News::Pull { commit: HEAD, ci: Ci::Passed, open: true, merged: None, mergeable: false };
+    assert_eq!(*told, [news(5, 3, level)], "its base moved: it no longer merges cleanly");
+    h.step(Event::Hint { repository: 0, item: None, commit: Some(HEAD), branch: None });
     let read = h.send_one();
-    h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, &[Check::Passed], &[]))));
+    assert_eq!(read.op, Op::Pull { number: 9 }, "a status on its head reads it again");
+    h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, Ci::Failed))));
+    let level =
+        Level { number: 9, commit: HEAD, base: Some(BASE), ci: Ci::Failed, open: true, merged: None, mergeable: true };
+    assert_eq!(h.model.pull(item(5)), Some(level), "the level as last read");
+    h.step(Event::Hint { repository: 0, item: None, commit: None, branch: Some(bytes(b"main")) });
+    assert_eq!(h.send_one().op, Op::Pull { number: 9 }, "a push to its base reads it again");
+}
+
+/// Sends what is ready, among `sent` and after, answering every read of the
+/// pull request 9 with it at `commit` with `ci`, until no more is; returns
+/// what was told, and the other calls sent.
+fn pull_reads(h: &mut Harness, sent: Box<[Sent]>, commit: [u8; 32], ci: Ci) -> (Box<[Request]>, List<Sent>) {
+    let mut told = List::with_capacity(16);
+    let mut others = List::with_capacity(16);
+    let mut sent = sent;
+    for _ in 0..8_u32 {
+        if sent.is_empty() {
+            break;
+        }
+        for call in sent {
+            if call.op == (Op::Pull { number: 9 }) {
+                for request in h.answer(&call, Ok(Answer::Pull(pull(9, commit, ci)))) {
+                    told.push(request).expect("room");
+                }
+            } else {
+                others.push(call).expect("room");
+            }
+        }
+        sent = h.send();
+    }
+    (told.into_boxed(), others)
+}
+
+#[test]
+fn a_pull_request_is_read_whatever_room_the_inbox_has_and_told_when_there_is() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    linked(&mut h, Ci::Pending);
+    let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 20)]);
+    let (_, others) = pull_reads(&mut h, sent, HEAD, Ci::Pending);
+    let read = others.get(0).expect("the item read");
+    assert_eq!(read.op, Op::Item { number: 5, after: 100 });
+    let page = comments(&[comment(101, PERSON)]);
+    h.answer(read, item_page(issue(5, &[TRACKING], 20), page, false));
+    // The inbox's last place is the level's.
+    h.step(Event::Hint { repository: 0, item: None, commit: Some(HEAD), branch: None });
+    let read = h.send_one();
+    let told = h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, Ci::Failed))));
+    let failed = News::Pull { commit: HEAD, ci: Ci::Failed, open: true, merged: None, mergeable: true };
+    assert_eq!(*told, [news(5, 3, failed)], "told in the place kept for it");
+    // The inbox is full: the pull request is read all the same.
+    h.step(Event::Hint { repository: 0, item: None, commit: Some(HEAD), branch: None });
+    let read = h.send_one();
+    assert!(h.answer(&read, Ok(Answer::Pull(pull(9, HEAD, Ci::Passed)))).is_empty(), "no room to tell it");
+    let level = h.model.pull(item(5)).expect("read");
+    assert_eq!(level.ci, Ci::Passed, "the level is fresh");
+    let told = h.step(Event::Took { item: item(5), through: 3 });
+    let passed = News::Pull { commit: HEAD, ci: Ci::Passed, open: true, merged: None, mergeable: true };
+    assert_eq!(*told, [news(5, 4, passed)], "told once there is room");
+}
+
+#[test]
+fn the_verdicts_on_the_head_are_level_state_told_when_they_move() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    linked(&mut h, Ci::Passed);
+    h.step(Event::Took { item: item(5), through: 1 });
     let (_, sent) = h.pass(30, &[summary(9, Kind::Pull, State::Open, &[], 25)]);
-    assert_eq!(sent[0].op, Op::Pull { number: 9, reviews: 0 }, "the linked pull request changed: read");
-    let reviews = [(PERSON, Verdict::Approve), (8, Verdict::RequestChanges)];
-    let mut page = pull(9, HEAD, &[Check::Passed], &reviews);
-    page.more = true;
-    let told = h.answer(&sent[0], Ok(Answer::Pull(page)));
-    assert_eq!(
-        *told,
-        [
-            news(5, 2, News::Review { author: PERSON, verdict: Verdict::Approve, commit: HEAD }),
-            news(5, 3, News::Review { author: 8, verdict: Verdict::RequestChanges, commit: HEAD }),
-        ],
-        "each review is news"
-    );
-    assert!(h.send().is_empty(), "the inbox is full: the rest waits");
-    h.step(Event::Took { item: item(5), through: 3 });
-    let next = h.send_one();
-    assert_eq!(next.op, Op::Pull { number: 9, reviews: 2 }, "the reviews after those told");
-    let told = h.answer(&next, Ok(Answer::Pull(pull(9, HEAD, &[Check::Passed], &[(PERSON, Verdict::Comment)]))));
-    assert_eq!(*told, [news(5, 4, News::Review { author: PERSON, verdict: Verdict::Comment, commit: HEAD })], "and on");
+    let (told, others) = pull_reads(&mut h, sent, HEAD, Ci::Passed);
+    assert!(told.is_empty(), "its state is the same");
+    let first = others.get(0).expect("its verdicts read");
+    assert_eq!(first.op, Op::Reviews { number: 9, page: 1 }, "its verdicts, a page at a time");
+    let page = [(3, PERSON, Verdict::Approve), (4, 8, Verdict::RequestChanges), (5, ENGINE, Verdict::Approve)];
+    assert!(h.answer(first, reviews(&page, HEAD, true)).is_empty(), "nothing told before the last page");
+    let second = h.send_one();
+    assert_eq!(second.op, Op::Reviews { number: 9, page: 2 });
+    let page = [(6, PERSON, Verdict::Comment), (7, 8, Verdict::Approve)];
+    let told = h.answer(&second, reviews(&page, HEAD, false));
+    assert_eq!(*told, [news(5, 2, News::Reviews { commit: HEAD })], "they moved: told once");
+    let verdicts =
+        [Reviewed { author: PERSON, verdict: Verdict::Approve }, Reviewed { author: 8, verdict: Verdict::Approve }];
+    assert_eq!(h.model.reviews(item(5)), Some(verdicts.as_slice()), "the latest of each, the engine's aside");
+    let remarks = h.send_one();
+    h.answer(&remarks, item_page(summary(9, Kind::Pull, State::Open, &[], 25), Box::new([]), false));
+    h.step(Event::Took { item: item(5), through: 2 });
+    // A pending review submitted lands earlier: the same verdicts, read in
+    // another order, are no news.
+    let (_, sent) = h.pass(60, &[summary(9, Kind::Pull, State::Open, &[], 55)]);
+    let (_, others) = pull_reads(&mut h, sent, HEAD, Ci::Passed);
+    let read = others.get(0).expect("its verdicts read");
+    let page = [(2, 8, Verdict::Approve), (3, PERSON, Verdict::Approve), (5, ENGINE, Verdict::RequestChanges)];
+    assert!(h.answer(read, reviews(&page, HEAD, false)).is_empty(), "no news");
+    let remarks = h.send_one();
+    h.answer(&remarks, item_page(summary(9, Kind::Pull, State::Open, &[], 55), Box::new([]), false));
+    // A new head: the verdicts on the old one say nothing of it.
+    let (_, sent) = h.pass(90, &[summary(9, Kind::Pull, State::Open, &[], 85)]);
+    let (told, others) = pull_reads(&mut h, sent, OTHER, Ci::Pending);
+    let level = News::Pull { commit: OTHER, ci: Ci::Pending, open: true, merged: None, mergeable: true };
+    assert_eq!(*told, [news(5, 3, level)], "the head moved");
+    let read = others.get(0).expect("its verdicts read");
+    let told = h.answer(read, reviews(&page, HEAD, false));
+    assert_eq!(*told, [news(5, 4, News::Reviews { commit: OTHER })], "no verdicts on the new head");
+    assert_eq!(h.model.reviews(item(5)), Some([].as_slice()));
+}
+
+#[test]
+fn a_persons_comment_on_the_linked_pull_request_is_news_with_a_position_of_its_own() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    linked(&mut h, Ci::Passed);
+    h.step(Event::Took { item: item(5), through: 1 });
+    let (_, sent) = h.pass(30, &[summary(9, Kind::Pull, State::Open, &[], 25)]);
+    let (_, others) = pull_reads(&mut h, sent, HEAD, Ci::Passed);
+    let read = others.get(0).expect("its verdicts read");
+    h.answer(read, reviews(&[], HEAD, false));
+    let remarks = h.send_one();
+    assert_eq!(remarks.op, Op::Item { number: 9, after: 0 }, "the pull request's comments");
+    let page = comments(&[comment(201, ENGINE), comment(202, PERSON)]);
+    let told = h.answer(&remarks, item_page(summary(9, Kind::Pull, State::Open, &[], 25), page, false));
+    assert_eq!(*told, [news(5, 2, News::Comment { on: 9, id: 202, author: PERSON })], "news for the item");
+    h.step(Event::Took { item: item(5), through: 2 });
+    let owner = Token::new(1);
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload: Token::new(2) }, resumed: None });
+    let check = h.send_one();
+    h.answer(&check, Ok(Answer::Comment(record(100, 5, Position::START))));
+    let edit = h.send_one();
+    let Op::EditComment { body: Body::Record { position, .. }, .. } = edit.op else {
+        panic!("the record edited: {edit:?}");
+    };
+    assert_eq!(position.pull_comment, 202, "the record carries where the pull request's comments were taken");
+    assert_eq!(position.head, Some(HEAD));
+}
+
+#[test]
+fn relinking_drops_what_was_held_of_the_other_pull_request() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    linked(&mut h, Ci::Passed);
+    h.step(Event::Link { item: item(5), pull: Some(11) });
+    let read = h.send_one();
+    assert_eq!(read.op, Op::Pull { number: 11 }, "the new one is read");
+    assert_eq!(h.model.pull(item(5)), None, "nothing known of it yet");
+    // The parent takes the news of the old one: the position carries nothing
+    // of it.
+    h.step(Event::Took { item: item(5), through: 1 });
+    let owner = Token::new(1);
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload: Token::new(2) }, resumed: None });
+    let check = h.send_for(&Op::Comment { number: 5, id: 100 });
+    h.answer(&check, Ok(Answer::Comment(record(100, 5, Position::START))));
+    let edit = h.send_one();
+    let Op::EditComment { body: Body::Record { position, .. }, .. } = edit.op else {
+        panic!("the record edited: {edit:?}");
+    };
+    assert_eq!(position, Position { comment: 100, ..Position::START }, "nothing of the old pull request is taken");
+    h.answer(&edit, Ok(Answer::Edited { revision: 7 }));
+    let told = h.answer(&read, Ok(Answer::Pull(pull(11, OTHER, Ci::Pending))));
+    let level = News::Pull { commit: OTHER, ci: Ci::Pending, open: true, merged: None, mergeable: true };
+    assert_eq!(*told, [news(5, 2, level)], "the new one's state is news");
 }
 
 #[test]
@@ -723,18 +915,134 @@ fn a_full_inbox_waits_until_the_parent_takes_news() {
     h.start(&[issue(5, &[TRACKING], 1)], &[]);
     let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 20)]);
     let page = comments(&[comment(101, PERSON), comment(102, ENGINE), comment(103, PERSON)]);
-    h.answer(&sent[0], item_page(issue(5, &[TRACKING], 20), page, true));
+    let told = h.answer(&sent[0], item_page(issue(5, &[TRACKING], 20), page, true));
+    let expected = [
+        news(5, 1, News::Comment { on: 5, id: 101, author: PERSON }),
+        news(5, 2, News::Comment { on: 5, id: 103, author: PERSON }),
+    ];
+    assert_eq!(*told, expected, "as much news as the inbox holds, its last place kept");
+    assert!(h.send().is_empty(), "nothing more is read while it is full");
+    h.step(Event::Took { item: item(5), through: 1 });
     let read = h.send_one();
-    assert_eq!(read.op, Op::Item { number: 5, after: 103 }, "the next page");
+    assert_eq!(read.op, Op::Item { number: 5, after: 103 }, "read on from the last comment told");
     let page = comments(&[comment(104, PERSON), comment(106, PERSON)]);
     let told = h.answer(&read, item_page(issue(5, &[TRACKING], 20), page, false));
-    assert_eq!(*told, [news(5, 3, News::Comment { id: 104, author: PERSON })], "as much news as the inbox holds");
-    assert!(h.send().is_empty(), "nothing more is read while it is full");
-    h.step(Event::Took { item: item(5), through: 2 });
+    assert_eq!(*told, [news(5, 3, News::Comment { on: 5, id: 104, author: PERSON })], "news resumes");
+    h.step(Event::Took { item: item(5), through: 3 });
     let read = h.send_one();
-    assert_eq!(read.op, Op::Item { number: 5, after: 104 }, "read on from the last comment told");
+    assert_eq!(read.op, Op::Item { number: 5, after: 104 });
     let told = h.answer(&read, item_page(issue(5, &[TRACKING], 20), comments(&[comment(106, PERSON)]), false));
-    assert_eq!(*told, [news(5, 4, News::Comment { id: 106, author: PERSON })], "news resumes");
+    assert_eq!(*told, [news(5, 4, News::Comment { on: 5, id: 106, author: PERSON })], "and on");
+}
+
+#[test]
+fn an_item_the_forge_no_longer_has_leaves_as_missing() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    h.step(Event::Track { item: item(9) });
+    let read = h.send_one();
+    let told = h.answer(&read, Err(Error::Missing));
+    assert_eq!(*told, [Request::Left { item: item(9), why: Why::Missing }], "never there");
+    let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 20)]);
+    let told = h.answer(&sent[0], Err(Error::Missing));
+    assert_eq!(*told, [Request::Left { item: item(5), why: Why::Missing }], "deleted, or moved: not finished");
+}
+
+#[test]
+fn an_item_the_forge_forbids_is_read_again_and_told_once_the_attempts_run_out() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    let (_, sent) = h.pass(30, &[issue(5, &[TRACKING], 20)]);
+    let mut read = sent.into_iter().next().expect("the item read");
+    for attempt in 1..=4_u64 {
+        let told = h.answer(&read, Err(Error::Forbidden));
+        if attempt == 3 {
+            assert_eq!(*told, [Request::Forbidden { item: item(5) }], "told once the attempts ran out");
+        } else {
+            assert!(told.is_empty(), "a backoff, and nothing told: {told:?}");
+        }
+        assert!(h.model.is_tracked(item(5)), "held all the same");
+        h.at(30 + attempt * 10);
+        h.fire();
+        read = h.send_for(&Op::Item { number: 5, after: 100 });
+    }
+    let told = h.answer(&read, item_page(issue(5, &[TRACKING], 20), comments(&[comment(101, PERSON)]), false));
+    assert_eq!(*told, [news(5, 1, News::Comment { on: 5, id: 101, author: PERSON })], "news, once it is shown");
+}
+
+#[test]
+fn labels_beyond_the_limits_are_cut_keeping_the_engines() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    let long: &[u8] = &[b'x'; 17];
+    let many = issue(5, &[b"a", b"b", long, b"c", HAND_IN, TRACKING], 20);
+    let (told, _) = h.pass(30, &[many]);
+    let kept = labels(&[HAND_IN, TRACKING, b"a"]);
+    assert_eq!(*told, [Request::Changed { item: item(5), labels: kept }], "the engine's first, as many as fit");
+}
+
+#[test]
+fn the_slow_pass_reads_a_few_candidates_a_page_and_items_held_it_never_shows() {
+    let limits = Limits { probes: 1, ..LIMITS };
+    let mut h = Harness::new(limits);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    let mut probed = List::with_capacity(4);
+    for cycle in 0..2_u64 {
+        h.at(600 * (cycle + 1));
+        h.fire();
+        let listing =
+            Op::Items { state: Some(State::Open), kind: None, label: None, author: None, since: Time::ZERO, page: 1 };
+        let mut slow = None;
+        for call in h.send() {
+            if call.op == listing && call.repository == 0 {
+                slow = Some(call);
+            } else {
+                h.answer(&call, page(Box::new([]), false));
+            }
+        }
+        let slow = slow.expect("the slow pass lists the open items");
+        // Item 5, held, is not shown: it may be gone.
+        h.answer(&slow, page(copies(&[issue(3, &[], 1), issue(4, &[], 1)]), false));
+        let sent = h.send();
+        for call in sent {
+            match call.op {
+                Op::Item { number: 5, after: 100 } => {
+                    // Admitted during the first cycle, it is owed the second.
+                    assert_eq!(cycle, 1, "read once, as the cycle ends");
+                    h.answer(&call, Err(Error::Missing));
+                }
+                Op::Item { number, after: 0 } => {
+                    probed.push(number).expect("room");
+                    h.answer(&call, item_page(issue(number, &[], 1), Box::new([]), false));
+                }
+                Op::Items { .. }
+                | Op::Item { .. }
+                | Op::Comment { .. }
+                | Op::Pull { .. }
+                | Op::Reviews { .. }
+                | Op::PullFor { .. }
+                | Op::Statuses { .. }
+                | Op::Permission { .. }
+                | Op::Branch { .. }
+                | Op::Pages { .. }
+                | Op::Page { .. }
+                | Op::CreateIssue { .. }
+                | Op::Post { .. }
+                | Op::EditComment { .. }
+                | Op::AddLabels { .. }
+                | Op::RemoveLabels { .. }
+                | Op::OpenPull { .. }
+                | Op::Merge { .. }
+                | Op::Close { .. }
+                | Op::DeleteBranch { .. }
+                | Op::PutPage { .. }
+                | Op::DeletePage { .. } => panic!("the slow pass: {call:?}"),
+            }
+        }
+        assert!(h.send().is_empty(), "one probe a page");
+    }
+    assert_eq!(probed.as_slice(), [4, 3], "a different one each cycle");
+    assert!(!h.model.is_tracked(item(5)), "gone");
 }
 
 #[test]
@@ -757,6 +1065,7 @@ fn the_slow_pass_finds_an_item_whose_tracking_label_was_removed() {
             | Op::Item { .. }
             | Op::Comment { .. }
             | Op::Pull { .. }
+            | Op::Reviews { .. }
             | Op::PullFor { .. }
             | Op::Statuses { .. }
             | Op::Permission { .. }
@@ -803,12 +1112,13 @@ fn a_full_working_set_refuses_and_lists_the_labels_again_once_there_is_room() {
     let (_, sent) = h.pass(30, &[issue(7, &[TRACKING], 20)]);
     assert!(sent.is_empty(), "no room for one found either: {sent:?}");
     let (told, _) = h.pass(60, &[summary(5, Kind::Issue, State::Closed, &[TRACKING], 50)]);
-    assert_eq!(*told, [Request::Left { item: item(5) }], "room frees");
+    assert_eq!(*told, [Request::Left { item: item(5), why: Why::Closed }], "room frees");
     assert_eq!(h.model.next_deadline(), Some(at(62)), "the labels are listed again soon");
     h.at(62);
-    h.fire();
+    assert_eq!(*h.fire(), [Request::Room], "the parent hears there is room again, once");
     let sent = h.send();
     assert_eq!(sent[0].op, tracked_listing(1), "the tracking label first");
+    assert!(h.step(Event::Took { item: item(5), through: 0 }).is_empty(), "told once");
 }
 
 #[test]
@@ -849,14 +1159,14 @@ fn fresh_reads_go_out_first_are_tried_again_and_answered_once() {
     h.step(Event::Write { owner: Token::new(5), write: Write::Close { item: item(1) }, resumed: None });
     h.step(Event::Read { owner, read: Read::Pull { item: item(9) } });
     let sent = h.send();
-    assert_eq!(sent[0].op, Op::Pull { number: 9, reviews: 0 }, "the read before the write: {sent:?}");
+    assert_eq!(sent[0].op, Op::Pull { number: 9 }, "the read before the write: {sent:?}");
     assert_eq!(sent[1].op, Op::Close { number: 1 }, "then the write");
     assert!(h.answer(&sent[0], Err(Error::Unavailable)).is_empty(), "tried again");
     h.at(2);
     h.fire();
     let again = h.send_one();
-    let told = h.answer(&again, Ok(Answer::Pull(pull(9, HEAD, &[], &[]))));
-    assert_eq!(*told, [Request::Read { owner, result: Ok(Answer::Pull(pull(9, HEAD, &[], &[]))) }], "answered");
+    let told = h.answer(&again, Ok(Answer::Pull(pull(9, HEAD, Ci::None))));
+    assert_eq!(*told, [Request::Read { owner, result: Ok(Answer::Pull(pull(9, HEAD, Ci::None))) }], "answered");
 }
 
 #[test]
@@ -952,9 +1262,13 @@ fn labels_people_set_are_never_written() {
 #[test]
 fn an_issue_whose_creation_timed_out_is_found_by_its_key_before_it_is_tried_again() {
     let mut h = Harness::started(LIMITS);
-    // The forge's clock is behind the engine's: what the listings show is
-    // what the find goes by.
-    h.pass(30, &[issue(3, &[], 7)]);
+    // The forge's clock is behind the engine's: what the forge says is what
+    // the find goes by.
+    h.at(30);
+    h.fire();
+    let listing = h.send_for(&changes(0, 1));
+    let made = at(20);
+    h.answer(&listing, Ok(Answer::Items { items: copies(&[issue(3, &[], 7)]), more: false, now: made }));
     h.at(31);
     let owner = Token::new(1);
     let create = Write::CreateIssue {
@@ -981,8 +1295,8 @@ fn an_issue_whose_creation_timed_out_is_found_by_its_key_before_it_is_tried_agai
     h.fire();
     let find = h.send_one();
     let issues =
-        Op::Items { state: None, kind: Some(Kind::Issue), label: None, author: Some(ENGINE), since: at(7), page: 1 };
-    assert_eq!(find.op, issues, "the engine's, since the newest time the forge showed");
+        Op::Items { state: None, kind: Some(Kind::Issue), label: None, author: Some(ENGINE), since: at(20), page: 1 };
+    assert_eq!(find.op, issues, "the engine's, since the forge last said its time");
     let mut other = issue(11, &[], 8);
     other.author = ENGINE;
     other.key = Some(bytes(b"k0"));
@@ -1070,7 +1384,7 @@ fn a_resumed_creation_is_looked_for_first_and_a_pull_request_by_its_branches() {
     h.step(Event::Write { owner, write: open, resumed: Some(CAUSE) });
     let find = h.send_one();
     assert_eq!(find.op, Op::PullFor { head: bytes(b"change"), base: bytes(b"main") }, "looked for first");
-    let told = h.answer(&find, Ok(Answer::Pull(pull(4, HEAD, &[], &[]))));
+    let told = h.answer(&find, Ok(Answer::Pull(pull(4, HEAD, Ci::None))));
     assert_eq!(*told, [Request::Wrote { owner, result: Ok(Written::Created(4)) }], "found open");
     let open = Write::OpenPull {
         repository: 1,
@@ -1098,8 +1412,8 @@ fn a_merge_that_timed_out_is_done_if_the_pull_request_merged_at_its_head() {
     h.at(3);
     h.fire();
     let check = h.send_one();
-    assert_eq!(check.op, Op::Pull { number: 4, reviews: 0 }, "checked");
-    let mut merged = pull(4, HEAD, &[Check::Passed], &[]);
+    assert_eq!(check.op, Op::Pull { number: 4 }, "checked");
+    let mut merged = pull(4, HEAD, Ci::Passed);
     merged.state = State::Closed;
     merged.merged = Some(OTHER);
     let told = h.answer(&check, Ok(Answer::Pull(merged)));
@@ -1130,7 +1444,7 @@ fn a_write_failing_for_a_while_gives_up_after_its_attempts_and_the_rate_counts_n
     let owner = Token::new(1);
     h.step(Event::Write { owner, write: Write::Close { item: item(1) }, resumed: None });
     let sent = h.send_one();
-    h.answer(&sent, Err(Error::RateLimited { reset: at(5) }));
+    h.answer(&sent, Err(Error::RateLimited { after: Duration::from_secs(5) }));
     assert!(h.send().is_empty(), "nothing goes out until the reset");
     h.at(5);
     h.fire();
@@ -1240,6 +1554,39 @@ fn a_record_edit_that_timed_out_is_read_before_it_is_tried_again() {
     let told = h.answer(&check, Ok(Answer::Comment(written(100, 8, Position::START, mine))));
     let record = Record::Found { comment: 100, revision: 8, position: Position::START };
     assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Edited { record }) }], "someone else's change");
+}
+
+#[test]
+fn a_record_write_that_gave_up_after_its_edit_timed_out_leaves_it_its_own_whatever_failed_last() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    let payload = Token::new(3);
+    let owner = Token::new(1);
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: None });
+    let check = h.send_one();
+    h.answer(&check, Ok(Answer::Comment(record(100, 5, Position::START))));
+    let edit = h.send_one();
+    let mine = nonce(&edit.op);
+    h.answer(&edit, Err(Error::Timeout));
+    for secs in [3, 10] {
+        h.at(secs);
+        h.fire();
+        let check = h.send_one();
+        let told = h.answer(&check, Err(Error::Unavailable));
+        if secs == 10 {
+            let gave_up = [Request::Wrote { owner, result: Err(Failure::Forge(Error::Unavailable)) }];
+            assert_eq!(*told, gave_up, "gave up, reading");
+        }
+    }
+    // Its edit landed: the next write takes the record saying it as the
+    // engine's own.
+    let owner = Token::new(2);
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: None });
+    let check = h.sends_for(&Op::Comment { number: 5, id: 100 });
+    h.answer(&check, Ok(Answer::Comment(written(100, 999, Position::START, mine))));
+    let edit = h.send_one();
+    let body = Body::Record { payload, position: Position::START, nonce: nonce(&edit.op) };
+    assert_eq!(edit.op, Op::EditComment { number: 5, id: 100, body }, "edited, not held");
 }
 
 #[test]
@@ -1357,7 +1704,7 @@ fn the_budget_spends_its_window_then_waits_for_it_to_end() {
     h.step(Event::Read { owner: Token::new(1), read: Read::Pull { item: item(1) } });
     let sent = h.send();
     assert_eq!(sent.len(), 2, "a window's worth: {sent:?}");
-    assert_eq!(sent[0].op, Op::Pull { number: 1, reviews: 0 }, "the read first");
+    assert_eq!(sent[0].op, Op::Pull { number: 1 }, "the read first");
     assert!(h.send().is_empty(), "spent");
     assert_eq!(h.model.next_deadline(), Some(at(160)), "until the window ends");
     h.at(160);
@@ -1378,13 +1725,44 @@ fn calls_go_out_by_priority_and_no_more_than_the_limit_at_once() {
     h.step(Event::Read { owner: Token::new(2), read: Read::Pull { item: item(2) } });
     let sent = h.send();
     assert_eq!(sent.len(), 2, "two at once: {sent:?}");
-    assert_eq!(sent[0].op, Op::Pull { number: 2, reviews: 0 }, "the fresh read first");
+    assert_eq!(sent[0].op, Op::Pull { number: 2 }, "the fresh read first");
     assert_eq!(sent[1].op, Op::Close { number: 1 }, "then the write");
-    h.answer(&sent[0], Ok(Answer::Pull(pull(2, HEAD, &[], &[]))));
+    h.answer(&sent[0], Ok(Answer::Pull(pull(2, HEAD, Ci::None))));
     let next = h.send_one();
     assert_eq!(next.op, changes(0, 1), "keeping up after them");
     let facts = h.facts();
     assert!(facts.contains(&Fact::Sent { priority: Priority::Fresh }), "{facts:?}");
+}
+
+#[test]
+fn keeping_up_has_its_share_of_each_window_whatever_the_parent_asks() {
+    let mut h = Harness::new(Limits { calls: 8, ..LIMITS });
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    h.env.limits = Limits { rate: 4, reserve: 2, calls: 8, ..LIMITS };
+    h.at(100);
+    for owner in 1..=2_u64 {
+        h.step(Event::Read { owner: Token::new(owner), read: Read::Pull { item: item(owner) } });
+    }
+    for number in 1..=3_u64 {
+        h.step(Event::Write {
+            owner: Token::new(10 + number),
+            write: Write::Close { item: item(number) },
+            resumed: None,
+        });
+    }
+    h.fire();
+    let sent = h.send();
+    let ops: List<&Op> = {
+        let mut ops = List::with_capacity(8);
+        for call in &sent {
+            ops.push(&call.op).expect("room");
+        }
+        ops
+    };
+    assert_eq!(sent.len(), 4, "a window's worth: {sent:?}");
+    assert_eq!(*ops.as_slice()[0], Op::Pull { number: 1 }, "the parent's first");
+    assert_eq!(*ops.as_slice()[1], Op::Pull { number: 2 });
+    assert!(lists_changes(ops.as_slice()[2]) && lists_changes(ops.as_slice()[3]), "then keeping up's share: {sent:?}");
 }
 
 #[test]
@@ -1394,7 +1772,7 @@ fn a_rate_limit_refusal_holds_every_call_until_its_reset() {
     h.step(Event::Read { owner, read: Read::Pull { item: item(1) } });
     let sent = h.send_one();
     h.step(Event::Write { owner, write: Write::Close { item: item(2) }, resumed: None });
-    let told = h.answer(&sent, Err(Error::RateLimited { reset: at(40) }));
+    let told = h.answer(&sent, Err(Error::RateLimited { after: Duration::from_secs(40) }));
     assert!(told.is_empty(), "the read waits");
     assert!(h.send().is_empty(), "nothing goes out before the reset");
     h.at(30);
@@ -1403,7 +1781,7 @@ fn a_rate_limit_refusal_holds_every_call_until_its_reset() {
     h.at(40);
     h.fire();
     let sent = h.send();
-    assert_eq!(sent[0].op, Op::Pull { number: 1, reviews: 0 }, "the read again, first: {sent:?}");
+    assert_eq!(sent[0].op, Op::Pull { number: 1 }, "the read again, first: {sent:?}");
     assert!(h.facts().contains(&Fact::Limited { reset: at(40) }), "told as a fact");
 }
 

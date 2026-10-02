@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use temper_engine_model_forge::{
-    self as sub, Config as Deployment, Event, Fact, Failure, Item, Limits, Model, News, Record, Request, Written,
+    self as sub, Config as Deployment, Event, Fact, Failure, Item, Limits, Model, News, Record, Request, Why, Written,
 };
 use temper_forge_model::api::{self as forge_api, Checks, File, Git, Permission, Protection, Setup};
 use temper_forge_model::{self as forge, Config, Skew};
@@ -73,6 +73,7 @@ const CALM: Limits = Limits {
     items: 16,
     labels: 6,
     inbox: 8,
+    reviewers: 8,
     reads: 4,
     writes: 8,
     calls: 6,
@@ -82,10 +83,12 @@ const CALM: Limits = Limits {
     body_bytes: 96,
     rate: 120,
     window: Duration::from_secs(60),
+    reserve: 20,
     poll: Duration::from_secs(30),
     hinted: Duration::from_secs(2),
     resolution: Duration::from_secs(1),
     slow: Duration::from_secs(120),
+    probes: 4,
     backoff: Duration::from_millis(500),
     backoff_max: Duration::from_secs(10),
     attempts: 5,
@@ -665,11 +668,11 @@ impl World {
         while let Some(request) = self.forge_out.pop() {
             match request {
                 forge::Request::Reply { to, result } => self.reply(to.into_token().raw(), result),
-                forge::Request::Hook { repository, change: _, number, branch: _, commit } => {
+                forge::Request::Hook { repository, change: _, number, branch, commit } => {
                     let repository = REPOSITORIES.iter().position(|name| **name == *repository).expect("ours");
                     let repository = u32::try_from(repository).expect("few repositories");
                     let commit = commit.map(translate::commit);
-                    self.stage.push(Event::Hint { repository, item: number, commit });
+                    self.stage.push(Event::Hint { repository, item: number, commit, branch });
                 }
             }
         }
@@ -684,10 +687,11 @@ impl World {
                 return;
             }
             self.withdraw(out.deadline);
-            let result = translate::answer(out.asked, result, &self.settings.limits);
-            if let Err(sub::api::Error::RateLimited { reset }) = result {
+            let now = forge::time(&self.settings.forge, self.now);
+            let result = translate::answer(out.asked, result, &self.settings.limits, now);
+            if let Err(sub::api::Error::RateLimited { after }) = result {
                 self.end("limited");
-                self.observe(Seen::Limited { reset });
+                self.observe(Seen::Limited { reset: self.now.saturating_add(after) });
             }
             self.answer(out.call, result);
             return;
@@ -735,6 +739,8 @@ impl World {
             | Request::Inbox { .. }
             | Request::Changed { .. }
             | Request::Left { .. }
+            | Request::Forbidden { .. }
+            | Request::Room
             | Request::Loaded) => {
                 self.tell(&told);
                 let actions = self.parent.told(&told);
@@ -789,7 +795,7 @@ impl World {
             Request::Inbox { item, seq: _, news } => {
                 let (ending, comment) = match news {
                     News::Comment { id, .. } => ("news: comment", Some(*id)),
-                    News::Review { .. } => ("news: review", None),
+                    News::Reviews { .. } => ("news: review", None),
                     News::Pull { .. } => ("news: pull", None),
                 };
                 self.end(ending);
@@ -800,10 +806,15 @@ impl World {
                 let labels = labels.iter().map(|label| label.to_vec()).collect();
                 self.observe(Seen::Changed { item: *item, labels });
             }
-            Request::Left { item } => {
-                self.end("left");
+            Request::Left { item, why } => {
+                self.end(match why {
+                    Why::Closed => "left",
+                    Why::Missing => "left: missing",
+                });
                 self.observe(Seen::Left { item: *item });
             }
+            Request::Forbidden { .. } => self.end("forbidden"),
+            Request::Room => self.end("room"),
             Request::Loaded => {
                 self.end("loaded");
                 self.observe(Seen::Loaded);
@@ -954,9 +965,9 @@ fn describe(event: &Event) -> String {
 
 fn describe_answer(answer: &sub::api::Answer) -> String {
     match answer {
-        sub::api::Answer::Items { items, more } => {
+        sub::api::Answer::Items { items, more, now } => {
             let numbers: Vec<u64> = items.iter().map(|item| item.number).collect();
-            format!("items {numbers:?} more {more}")
+            format!("items {numbers:?} more {more} at {now:?}")
         }
         sub::api::Answer::Item { item, comments, more } => {
             let ids: Vec<u64> = comments.iter().map(|comment| comment.id).collect();
@@ -964,7 +975,8 @@ fn describe_answer(answer: &sub::api::Answer) -> String {
         }
         sub::api::Answer::Comment(_)
         | sub::api::Answer::Pull(_)
-        | sub::api::Answer::Statuses(_)
+        | sub::api::Answer::Reviews { .. }
+        | sub::api::Answer::Statuses { .. }
         | sub::api::Answer::Permission(_)
         | sub::api::Answer::Commit(_)
         | sub::api::Answer::Pages { .. }
