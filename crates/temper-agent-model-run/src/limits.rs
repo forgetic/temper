@@ -1,6 +1,7 @@
 use temper_lib::{Deadlines, Duration, List, Slab};
 
 use crate::budget::Budget;
+use crate::land::Call;
 use crate::prepare::Guide;
 use crate::run::{Alarm, Conversation, Run};
 
@@ -34,14 +35,21 @@ pub struct Limits {
     pub guide_bytes: u32,
     /// How long io has for each look in the checkout.
     pub io_timeout: Duration,
+    /// The most bytes an outcome declared to `finish` may hold, as a run
+    /// counts them. A larger one is rejected.
+    pub outcome_bytes: u64,
+    /// How long a repository's checks may run.
+    pub check_timeout: Duration,
+    /// The most bytes of a failed check's output the LLM is shown: its tail.
+    pub check_tail: u32,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
 /// if it does not fit a `u64`.
 ///
 /// It counts the containers, their bookkeeping included, and the payloads, not
-/// allocator overhead. What a run sends a conversation is a copy, which the
-/// conversation counts.
+/// allocator overhead. What a run sends is a copy, which its receiver counts;
+/// what it receives and only passes on (a check's output) is the sender's.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let runs = Slab::<Run>::worst_case(limits.runs)?;
@@ -52,7 +60,11 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let guides = List::<Guide>::worst_case(limits.repositories)?
         .checked_add(u64::from(limits.repositories).checked_mul(u64::from(limits.guide_bytes))?)?;
     let checks = List::<u32>::worst_case(limits.repositories)?;
-    let run = limits.run_bytes.checked_add(guides)?.checked_add(checks)?;
+    // A winding run holds the outcome it accepted.
+    let run = limits.run_bytes.checked_add(guides)?.checked_add(checks)?.checked_add(limits.outcome_bytes)?;
     let held = u64::from(limits.runs).checked_mul(run)?;
-    runs.checked_add(conversations)?.checked_add(alarms)?.checked_add(held)
+    // A landing holds its change.
+    let calls = Slab::<Call>::worst_case(limits.conversations)?
+        .checked_add(u64::from(limits.conversations).checked_mul(limits.outcome_bytes)?)?;
+    runs.checked_add(conversations)?.checked_add(alarms)?.checked_add(held)?.checked_add(calls)
 }

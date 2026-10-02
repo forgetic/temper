@@ -71,11 +71,29 @@ pub struct Budget {
     pub wall_time: Duration,
 }
 
+/// A change a run asks the worker to push.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Change {
+    pub title: Box<[u8]>,
+    pub body: Box<[u8]>,
+}
+
+/// How a push went.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Pushed {
+    Done,
+    /// The branch moved since the run started: nothing was pushed.
+    Moved,
+    Failed,
+}
+
 /// The agent's answer for a run.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Answer {
     /// The agent had no room for it.
     Busy,
+    /// It finished, after spending `usage`; a change was pushed.
+    Done { usage: Usage },
     /// The agent would not take its charter.
     Invalid,
     /// It ended without an outcome, after spending `usage`.

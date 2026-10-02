@@ -6,18 +6,28 @@
 //! - The worker's, which the parent routes to and from the protocol layer. A
 //!   [`Event::Start`] is a call, answered by exactly one [`Request::Answer`].
 //!   An admitted run is named by [`Request::Admitted`] first, so that a
-//!   [`Event::Cancel`] can name it.
-//! - io's, for what the run itself reads in its checkout, which the parent
+//!   [`Event::Cancel`] can name it. A run's host call, [`Request::Push`], is
+//!   ended by exactly one [`Event::Pushed`], or after a
+//!   [`Request::CancelHost`] by [`Event::HostCancelled`] if the cancel won.
+//! - io's, for what the run itself does in its checkout, which the parent
 //!   routes to and from the protocol layer. A [`Request::Read`] is ended by
-//!   exactly one [`Event::Read`], and a [`Request::Probe`] by one
-//!   [`Event::Probed`]; each carries its deadline, and io runs the race
-//!   (5.3). The `owner` is the run's token, echoed on the terminal.
+//!   exactly one [`Event::Read`], a [`Request::Probe`] by one
+//!   [`Event::Probed`], and a [`Request::Check`] by one [`Event::Checked`],
+//!   or after a [`Request::Abort`] by [`Event::Aborted`] if the abort won.
+//!   Each carries its deadline, and io runs the race (5.3).
 //! - The conversations', which the parent translates to and from the session
 //!   sub-model's vocabulary. A [`Request::Open`] is ended by exactly one
 //!   [`Event::Ended`], after a [`Event::Started`] unless the conversation was
 //!   refused at its entrance. Every event about a conversation carries the
 //!   run's token for it, `conversation`; the run addresses a conversation by
-//!   `peer`, the token it gave back when it started (4.2).
+//!   `peer`, the token it gave back when it started (4.2). A conversation's
+//!   [`Event::Delegated`] call is ended by exactly one [`Request::Return`],
+//!   after an [`Event::Withdraw`] too; the call is named by the
+//!   conversation's own token for it, `call`.
+//!
+//! A request's `owner` is the run's token for what asked: the run itself for
+//! a read or a probe, a finishing call for a check, a push or their cancels.
+//! It is echoed on the terminal.
 
 use alloc::boxed::Box;
 
@@ -25,6 +35,7 @@ use temper_lib::{ReplyTo, Time, Token};
 
 use crate::budget::{Budget, Exhausted, Spend};
 use crate::charter::{Charter, Checkout, Llm, Tools};
+use crate::outcome::{Change, Declared, Problems};
 
 /// parent -> run
 #[derive(PartialEq, Eq, Debug)]
@@ -51,6 +62,20 @@ pub enum Event {
     /// Terminal for `Probe`: whether an executable file is at the place. A
     /// failure or a deadline passed reads as not.
     Probed { owner: Token, executable: bool },
+    /// A call the conversation's LLM made of the run, which the run answers
+    /// with one `Return`.
+    Delegated { conversation: Token, call: Token, ask: Ask },
+    /// The conversation abandons its call `call`: it is closing, or the call's
+    /// time ran out. Its `Return` still comes.
+    Withdraw { conversation: Token, call: Token },
+    /// Terminal for `Check`: what the checks' process did.
+    Checked { owner: Token, ran: Ran },
+    /// Terminal for `Check`, after `Abort`: the checks were stopped.
+    Aborted { owner: Token },
+    /// Terminal for `Push`.
+    Pushed { owner: Token, push: Push },
+    /// Terminal for a host call, after `CancelHost`: it was abandoned.
+    HostCancelled { owner: Token },
 }
 
 /// run -> parent
@@ -74,6 +99,84 @@ pub enum Request {
     /// Find out whether an executable file is at `at`, giving up at
     /// `deadline`.
     Probe { owner: Token, at: Place, deadline: Time },
+    /// Run the executable at `program`, in its repository's root, as a
+    /// contained process, stopping it at `deadline`; keep the last `tail`
+    /// bytes of what it writes.
+    Check { owner: Token, program: Place, deadline: Time, tail: u32 },
+    /// Stop the `Check` in flight for `owner`. Its terminal still comes:
+    /// `Aborted`, or `Checked` if the checks ended first.
+    Abort { owner: Token },
+    /// To the worker: checks of the run it names `worker` are running until
+    /// `deadline` at the latest, so its watchdog waits that long. A notice,
+    /// with no terminal.
+    Checking { worker: Token, deadline: Time },
+    /// To the worker, a host call: commit what the checkout of the run it
+    /// names `worker` holds, exactly as it is, and push it, with `change`'s
+    /// title and body.
+    Push { worker: Token, owner: Token, change: Change },
+    /// Abandon the host call in flight for `owner`. Its terminal still comes:
+    /// `HostCancelled`, or whichever outcome won the race.
+    CancelHost { owner: Token },
+    /// The one terminal for the conversation's call `call`.
+    Return { call: Token, result: Returned },
+}
+
+/// What a conversation's LLM asks of the run.
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub enum Ask {
+    /// Finish the run with `outcome`.
+    Finish { outcome: Declared },
+}
+
+/// The run's answer to a delegated call.
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub enum Returned {
+    /// The outcome is accepted: the run finishes with it.
+    Accepted,
+    /// The outcome does not fit what the run may finish with.
+    Rejected { problems: Problems },
+    /// The checks of the repository `repository` failed, as `ran` says.
+    ChecksFailed { repository: Box<[u8]>, ran: Ran },
+    /// The change was not pushed: its branch moved since the run started.
+    Moved,
+    /// The change was not pushed: the push failed.
+    Unpushed,
+    /// Nothing was decided: the call was withdrawn, or the run is ending
+    /// otherwise.
+    Cancelled,
+}
+
+/// What a check's process did: how it ended, and the tail of what it wrote,
+/// with the `cut` bytes before the tail dropped.
+#[derive(PartialEq, Eq, Hash, Debug)]
+pub struct Ran {
+    pub exit: Exit,
+    pub output: Box<[u8]>,
+    pub cut: u64,
+}
+
+/// How a check's process ended.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Exit {
+    /// It exited with `code`; zero passes.
+    Code { code: u8 },
+    /// A signal killed it.
+    Signalled,
+    /// Its deadline passed, and io stopped it.
+    TimedOut,
+    /// It could not be started.
+    Unstarted,
+}
+
+/// How a push ended.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Push {
+    /// The change is pushed.
+    Done,
+    /// The branch moved since the run started: nothing was pushed.
+    Moved,
+    /// The push failed.
+    Failed,
 }
 
 /// Where a file is, for the run's own io: a repository's root, as io names
@@ -112,6 +215,9 @@ pub struct Opening {
     /// Its share of the run's budget: what the run has left when it opens, and
     /// the time to the run's deadline. The conversation keeps to it.
     pub budget: Budget,
+    /// Whether its LLM may call `finish`, which the conversation runs as a
+    /// write: alone, never beside another call.
+    pub finish: bool,
 }
 
 /// Why a conversation's LLM stopped calling tools.
@@ -165,6 +271,9 @@ pub enum Fault {
 pub enum Answer {
     /// Refused at the entrance: nothing was done.
     Refused(Refusal),
+    /// The run finished with `outcome`, having spent `spent`. A change has
+    /// been pushed.
+    Accepted { outcome: Declared, spent: Spend },
     /// The run ended without an outcome, having spent `spent`.
     Failed { failure: Failure, spent: Spend },
 }
@@ -217,6 +326,7 @@ pub enum Failure {
 /// The run's rules, as the LLM broke them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Policy {
-    /// It kept stopping without finishing, through `nudges` nudges.
-    Unfinished { nudges: u32 },
+    /// It kept stopping without finishing, through `nudges` nudges, having
+    /// called `finish` with `rejected` outcomes that were refused.
+    Unfinished { nudges: u32, rejected: u32 },
 }

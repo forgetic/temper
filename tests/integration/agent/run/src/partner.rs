@@ -8,16 +8,22 @@
 //!   started at once.
 //! - A started conversation takes turns, each a `Used` once its latency has
 //!   passed. After each, the script draws what the LLM does next: fail
-//!   (`Ended` with a fault), yield (`Yielded`, then wait for `Say` or
-//!   `Close`), or carry on.
-//! - It keeps to its share of the budget as a session keeps to its ceilings:
-//!   before each turn it ends, out of budget, when no turn, input or output
-//!   is left, or once a cache part is past its share; and it expires, out of
-//!   time, when its time runs out, yielded or not.
+//!   (`Ended` with a fault), call `finish` (`Delegated`, then wait for its
+//!   `Return`), yield (`Yielded`, then wait for `Say` or `Close`), or carry
+//!   on. A finish declares an outcome that fits the fake worker's charters
+//!   or one that breaks them, a change or a verdict.
+//! - It keeps to its share of the budget as a session keeps to its ceilings
+//!   (seams.md B): it starts a turn only while turns, input and output each
+//!   have some left; after a turn that went past any part of its share, it
+//!   settles that turn's call, if it made one, and ends out of budget. It
+//!   expires, out of time, when its time runs out.
+//! - A finish in flight past its deadline is withdrawn, and the LLM carries
+//!   on once it returns.
 //! - `Say` comes only while it is yielded; `Close` at any time. Closed, it
-//!   settles for a while, and a turn in flight may win the race with the
-//!   close and be spent; then it sends its one `Ended`. A `Say` or `Close`
-//!   for a conversation that has ended is dropped, as a stale handle is.
+//!   withdraws its finish in flight and waits for it to return, settles for
+//!   a while (a turn in flight may win the race with the close and be spent),
+//!   then sends its one `Ended`. A `Say` or `Close` for a conversation that
+//!   has ended is dropped, as a stale handle is.
 //!
 //! What it does at a later time it asks the world to wake it for. Each wake
 //! names the conversation and which of its wakes it is, so a wake that a
@@ -25,7 +31,8 @@
 
 use std::collections::BTreeMap;
 
-use temper_agent_model_run::{Budget, End, Event, Exhausted, Fault, Opening, Spend, Stop};
+use temper_agent_model_run::outcome::{Change, Child, Declared, Field, Verdict};
+use temper_agent_model_run::{Ask, Budget, End, Event, Exhausted, Fault, Opening, Returned, Spend, Stop};
 use temper_lib::{Duration, Rng, Time, Token};
 
 use crate::world::Span;
@@ -39,15 +46,24 @@ pub struct Script {
     pub invalid: u32,
     /// How long a turn takes.
     pub turn: Span,
-    /// The tokens a turn spends: input and output drawn from `0..=` the
+    /// The tokens a turn spends: input and output drawn from `1..=` the
     /// largest of each, cache reads and writes each from `0..=` the largest.
     pub input: u64,
     pub output: u64,
     pub cache: u64,
     /// After each turn, the chance, per mille, that the conversation fails,
-    /// and that the LLM yields.
+    /// that the LLM calls `finish`, and that it yields; otherwise it carries
+    /// on.
     pub faults: u32,
+    pub finishes: u32,
     pub yields: u32,
+    /// Of finishes, the chance, per mille, that the outcome is a change
+    /// rather than a verdict, and that a verdict fits the fake worker's
+    /// charters.
+    pub changes: u32,
+    pub good: u32,
+    /// How long a finish may take before the conversation withdraws it.
+    pub finish_deadline: Span,
     /// The chance, per mille, that a yield stops for something other than the
     /// end of a turn.
     pub odd_stops: u32,
@@ -75,6 +91,16 @@ pub struct Tally {
     pub yields: u32,
     pub nudged: u32,
     pub faults: u32,
+    /// Finishes called, and how they returned.
+    pub finishes: u32,
+    pub accepted: u32,
+    pub rejected: u32,
+    pub checks_failed: u32,
+    pub moved: u32,
+    pub unpushed: u32,
+    pub cancelled: u32,
+    /// Finishes withdrawn: past their deadline, or as the conversation closed.
+    pub withdrawn: u32,
     /// Conversations that ended at a ceiling of their share, or out of time.
     pub ceilings: u32,
     pub expired: u32,
@@ -89,7 +115,9 @@ pub struct Partner {
     script: Script,
     rng: Rng,
     talks: BTreeMap<Token, Talk>,
-    /// Names for conversations.
+    /// The conversation each finish in flight is of.
+    calls: BTreeMap<Token, Token>,
+    /// Names for conversations and calls.
     serial: u64,
     /// What every conversation has spent, by its `Used`.
     spent: Spend,
@@ -114,8 +142,25 @@ enum Phase {
     Turning,
     /// Waiting for `Say` or `Close`: its wake is the expiry.
     Yielded,
+    /// Its finish `call` is in flight: its wake is the call's deadline or the
+    /// expiry. `over` is the part of the share the turn that called it went
+    /// past, if any.
+    Finishing { call: Token, over: Option<Exhausted> },
+    /// It withdrew its finish `call`, and waits for its return; then `then`.
+    Withdrawn { call: Token, then: Then },
     /// Closed, settling: its wake ends it. `in_flight` says a turn was.
     Closing { in_flight: bool },
+}
+
+/// What a conversation does once its withdrawn finish returns.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Then {
+    /// The LLM carries on, or the conversation ends past its share.
+    CarryOn { over: Option<Exhausted> },
+    /// It ends, out of time.
+    Expire,
+    /// It settles, closed.
+    Close,
 }
 
 impl Partner {
@@ -125,16 +170,17 @@ impl Partner {
             script,
             rng: Rng::new(seed),
             talks: BTreeMap::new(),
+            calls: BTreeMap::new(),
             serial: 0,
             spent: Spend::ZERO,
             tally: Tally::default(),
         }
     }
 
-    /// Conversations started and not ended.
+    /// Conversations started and not ended, and finishes in flight.
     #[must_use]
     pub fn live(&self) -> usize {
-        self.talks.len()
+        self.talks.len() + self.calls.len()
     }
 
     /// What every conversation has spent.
@@ -163,8 +209,8 @@ impl Partner {
             self.tally.refused += 1;
             return;
         }
-        self.serial += 1;
-        let peer = Token::new(self.serial);
+        assert!(opening.finish, "a main conversation may finish");
+        let peer = self.mint();
         let expires = now.saturating_add(opening.budget.time);
         let talk =
             Talk { conversation, budget: opening.budget, expires, spent: Spend::ZERO, phase: Phase::Turning, wake: 0 };
@@ -190,27 +236,91 @@ impl Partner {
             self.tally.stale += 1;
             return;
         };
-        talk.phase = match talk.phase {
-            Phase::Turning => Phase::Closing { in_flight: true },
-            Phase::Yielded => Phase::Closing { in_flight: false },
+        let conversation = talk.conversation;
+        let in_flight = match talk.phase {
+            Phase::Turning => true,
+            Phase::Yielded => false,
+            // It withdraws its finish in flight and waits for it to return,
+            // with no wake.
+            Phase::Finishing { call, over: _ } => {
+                talk.phase = Phase::Withdrawn { call, then: Then::Close };
+                talk.wake += 1;
+                out.push(Out::Event(Event::Withdraw { conversation, call }));
+                self.tally.withdrawn += 1;
+                return;
+            }
+            Phase::Withdrawn { call, then: _ } => {
+                talk.phase = Phase::Withdrawn { call, then: Then::Close };
+                return;
+            }
             Phase::Closing { .. } => panic!("the run closes a conversation once"),
         };
+        talk.phase = Phase::Closing { in_flight };
         self.wake(now.saturating_add(settle), peer, out);
+    }
+
+    /// The run's answer to the finish `call`.
+    pub fn returned(&mut self, now: Time, call: Token, result: &Returned, out: &mut Vec<Out>) {
+        let peer = self.calls.remove(&call).expect("a return names a finish in flight");
+        match result {
+            Returned::Accepted => self.tally.accepted += 1,
+            Returned::Rejected { .. } => self.tally.rejected += 1,
+            Returned::ChecksFailed { .. } => self.tally.checks_failed += 1,
+            Returned::Moved => self.tally.moved += 1,
+            Returned::Unpushed => self.tally.unpushed += 1,
+            Returned::Cancelled => self.tally.cancelled += 1,
+        }
+        let talk = self.talks.get_mut(&peer).expect("a conversation outlives its calls");
+        let then = match talk.phase {
+            Phase::Finishing { call: finishing, over } => {
+                assert_eq!(finishing, call, "a conversation has one finish in flight");
+                Then::CarryOn { over }
+            }
+            Phase::Withdrawn { call: withdrawn, then } => {
+                assert_eq!(withdrawn, call, "a conversation has one finish in flight");
+                then
+            }
+            Phase::Turning | Phase::Yielded | Phase::Closing { .. } => {
+                panic!("a return comes while its call is in flight")
+            }
+        };
+        let expires = talk.expires;
+        match then {
+            Then::CarryOn { over: Some(exhausted) } => self.end(peer, End::Budget(exhausted), out),
+            Then::CarryOn { over: None } if now >= expires => self.end(peer, End::Budget(Exhausted::Time), out),
+            Then::CarryOn { over: None } => self.carry_on(now, peer, out),
+            Then::Expire => self.end(peer, End::Budget(Exhausted::Time), out),
+            Then::Close => {
+                let settle = self.draw(self.script.settle);
+                let talk = self.talks.get_mut(&peer).expect("a live conversation");
+                talk.phase = Phase::Closing { in_flight: false };
+                self.wake(now.saturating_add(settle), peer, out);
+            }
+        }
     }
 
     /// The wake numbered `wake` for `peer` has come.
     pub fn woken(&mut self, now: Time, peer: Token, wake: u64, out: &mut Vec<Out>) {
-        let Some(talk) = self.talks.get(&peer) else { return };
+        let Some(talk) = self.talks.get_mut(&peer) else { return };
         if talk.wake != wake {
             return;
         }
-        match talk.phase {
-            Phase::Turning if now >= talk.expires => self.end(peer, End::Budget(Exhausted::Time), out),
+        let (phase, expires, conversation) = (talk.phase, talk.expires, talk.conversation);
+        match phase {
+            Phase::Turning if now >= expires => self.end(peer, End::Budget(Exhausted::Time), out),
             Phase::Turning => self.turn(now, peer, out),
             Phase::Yielded => {
-                assert!(now >= talk.expires, "a yielded conversation wakes only when it expires");
+                assert!(now >= expires, "a yielded conversation wakes only when it expires");
                 self.end(peer, End::Budget(Exhausted::Time), out);
             }
+            Phase::Finishing { call, over } => {
+                // Past the call's deadline, or the conversation's.
+                let then = if now >= expires { Then::Expire } else { Then::CarryOn { over } };
+                talk.phase = Phase::Withdrawn { call, then };
+                out.push(Out::Event(Event::Withdraw { conversation, call }));
+                self.tally.withdrawn += 1;
+            }
+            Phase::Withdrawn { .. } => unreachable!("a withdrawn finish waits without a wake"),
             Phase::Closing { in_flight } => {
                 if in_flight && self.rng.chance(self.script.races) {
                     self.spend(peer, out);
@@ -225,12 +335,21 @@ impl Partner {
     /// A turn in flight completes; the script draws what comes next.
     fn turn(&mut self, now: Time, peer: Token, out: &mut Vec<Out>) {
         self.spend(peer, out);
+        let talk = self.talks.get(&peer).expect("a turn is of a live conversation");
+        let over = overspent(&talk.budget, talk.spent);
         let roll = u32::try_from(self.rng.below(1000)).expect("below 1000");
-        if roll < self.script.faults {
+        let Script { faults, finishes, yields, .. } = self.script;
+        if roll < faults {
             let fault = if self.rng.chance(500) { Fault::Provider } else { Fault::ContextFull };
             self.tally.faults += 1;
             self.end(peer, End::Fault(fault), out);
-        } else if roll < self.script.faults.saturating_add(self.script.yields) {
+        } else if roll < faults.saturating_add(finishes) {
+            self.finish(now, peer, over, out);
+        } else if let Some(exhausted) = over {
+            // Past its share with no call to settle: it ends.
+            self.tally.ceilings += 1;
+            self.end(peer, End::Budget(exhausted), out);
+        } else if roll < faults.saturating_add(finishes).saturating_add(yields) {
             let stop = if self.rng.chance(self.script.odd_stops) {
                 match self.rng.below(3) {
                     0 => Stop::MaxTokens,
@@ -249,6 +368,48 @@ impl Partner {
         } else {
             self.carry_on(now, peer, out);
         }
+    }
+
+    /// The LLM calls `finish`, with an outcome drawn from the script.
+    fn finish(&mut self, now: Time, peer: Token, over: Option<Exhausted>, out: &mut Vec<Out>) {
+        let outcome = self.outcome();
+        let call = self.mint();
+        let deadline = self.draw(self.script.finish_deadline);
+        let talk = self.talks.get_mut(&peer).expect("a live conversation finishes");
+        talk.phase = Phase::Finishing { call, over };
+        let (conversation, expires) = (talk.conversation, talk.expires);
+        self.calls.insert(call, peer);
+        out.push(Out::Event(Event::Delegated { conversation, call, ask: Ask::Finish { outcome } }));
+        self.tally.finishes += 1;
+        self.wake(now.saturating_add(deadline).min(expires), peer, out);
+    }
+
+    /// An outcome to declare: a change or a verdict, one that fits the fake
+    /// worker's charters or, for a verdict, one that does not.
+    fn outcome(&mut self) -> Declared {
+        let change = self.rng.chance(self.script.changes);
+        let good = self.rng.chance(self.script.good);
+        if change {
+            return Declared::Change(Change {
+                title: b"Fix the parser"[..].into(),
+                body: b"It accepts tabs now."[..].into(),
+            });
+        }
+        let comment = |kind: &[u8], fields: &[&[u8]]| Child {
+            kind: kind.into(),
+            fields: fields.iter().map(|name| Field { name: (*name).into(), value: b"...".as_slice().into() }).collect(),
+        };
+        let (name, children): (&[u8], Box<[Child]>) = match (good, self.rng.below(3)) {
+            (true, 0) => (b"approve", Box::new([])),
+            (true, _) => {
+                let count = self.rng.between(1, 3);
+                (b"request-changes", (0..count).map(|_| comment(b"nit", &[b"path", b"body"])).collect())
+            }
+            (false, 0) => (b"reject", Box::new([])),
+            (false, 1) => (b"request-changes", Box::new([])),
+            (false, _) => (b"request-changes", Box::new([comment(b"praise", &[b"path"])])),
+        };
+        Declared::Verdict(Verdict { name: name.into(), body: b"See the comments."[..].into(), children })
     }
 
     /// The LLM goes on: another turn, unless the share leaves no room for one.
@@ -298,20 +459,37 @@ impl Partner {
         out.push(Out::Wake { at, peer, wake: talk.wake });
     }
 
+    fn mint(&mut self) -> Token {
+        self.serial += 1;
+        Token::new(self.serial)
+    }
+
     fn draw(&mut self, span: Span) -> Duration {
         Duration::from_nanos(self.rng.between(span.min.as_nanos(), span.max.as_nanos()))
     }
 }
 
-/// The part of `budget` that leaves no room for another turn after `spent`:
-/// no turn, input or output left, or a cache part gone past (a turn need not
-/// cache).
+/// The part of `budget` that leaves no room to start another turn after
+/// `spent`: no turn, input or output left.
 fn ceiling(budget: &Budget, spent: Spend) -> Option<Exhausted> {
     if spent.turns >= budget.turns {
         Some(Exhausted::Turns)
     } else if spent.input >= budget.input {
         Some(Exhausted::Input)
     } else if spent.output >= budget.output {
+        Some(Exhausted::Output)
+    } else {
+        None
+    }
+}
+
+/// The first part of `budget` that `spent` has gone past, if any.
+fn overspent(budget: &Budget, spent: Spend) -> Option<Exhausted> {
+    if spent.turns > budget.turns {
+        Some(Exhausted::Turns)
+    } else if spent.input > budget.input {
+        Some(Exhausted::Input)
+    } else if spent.output > budget.output {
         Some(Exhausted::Output)
     } else if spent.cache_read > budget.cache_read {
         Some(Exhausted::CacheRead)

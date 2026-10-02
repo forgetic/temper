@@ -2,13 +2,14 @@
 //! configuration.
 //!
 //! - The brief is a text of a length drawn from the configured range.
-//! - The checkout is one or two repositories, the first writable at random.
+//! - The checkout is one or two repositories, the first writable with the
+//!   configured chance.
 //! - Reading is always granted; writing, the shell, forge reads and a
 //!   "comment" outlet each at random; sub-agents never.
 //! - The outcome is a change, the verdicts "approve" (no children) and
 //!   "request-changes" (one to eight children, each "blocking" or a "nit",
-//!   with a "path" and a "body"), or either; a change must pass its checks
-//!   most of the time.
+//!   with a "path" and a "body"), or either, with the configured chances;
+//!   so is whether a change must pass its checks.
 //! - The budget's turns, tokens and time are drawn from their ranges.
 
 use alloc::boxed::Box;
@@ -25,7 +26,7 @@ const TEXT: &[u8] = b"Fix the failing test in the parser, and keep the change sm
 pub(crate) fn draw(rng: &mut Rng, config: &Config) -> Charter {
     let brief = brief(rng.between(u64::from(config.brief_min), u64::from(config.brief_max)));
     let mut repositories = List::with_capacity(2);
-    let writable = rng.chance(500);
+    let writable = rng.chance(config.writable);
     let temper = Repository { name: copy_of(b"temper"), path: copy_of(b"/work/temper"), writable };
     repositories.push(temper).expect("room for two");
     if rng.chance(500) {
@@ -35,12 +36,9 @@ pub(crate) fn draw(rng: &mut Rng, config: &Config) -> Charter {
     let tools = Tools { read: true, write: rng.chance(500), shell: rng.chance(500) };
     let forge = rng.chance(500);
     let outlets: Box<[Box<[u8]>]> = if rng.chance(500) { Box::new([copy_of(b"comment")]) } else { Box::new([]) };
-    let checks = rng.chance(800);
-    let outcome = match rng.below(3) {
-        0 => Outcome { change: true, checks, verdicts: Box::new([]) },
-        1 => Outcome { change: false, checks: false, verdicts: verdicts() },
-        _ => Outcome { change: true, checks, verdicts: verdicts() },
-    };
+    let verdicts = if rng.chance(config.verdicts) { verdicts() } else { Box::new([]) };
+    let change = rng.chance(config.changes) || verdicts.is_empty();
+    let outcome = Outcome { change, checks: change && rng.chance(config.checks), verdicts };
     let budget = Budget {
         turns: u32::try_from(rng.between(u64::from(config.turns_min), u64::from(config.turns_max)))
             .expect("drawn between two u32s"),

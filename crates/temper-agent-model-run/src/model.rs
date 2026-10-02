@@ -3,12 +3,14 @@
 use temper_lib::{Deadlines, Env, Queue, Slab, Time};
 
 use crate::boundary::{Event, Request};
+use crate::land::Call;
 use crate::limits::Limits;
 use crate::run::{self, Alarm, Conversation, Run};
 
 /// The most requests an entry point emits per call: an admitted start names
-/// the run and opens its main conversation, or asks io for its first look.
-/// The parent reserves this much room in `out` before calling it.
+/// the run and opens its main conversation or asks io for its first look; a
+/// check goes with its notice to the worker; a call returns as main is
+/// closed. The parent reserves this much room in `out` before calling it.
 pub const MAX_OUT: u32 = 2;
 
 /// The run sub-model's state.
@@ -16,6 +18,8 @@ pub const MAX_OUT: u32 = 2;
 pub struct Model {
     pub(crate) runs: Slab<Run>,
     pub(crate) conversations: Slab<Conversation>,
+    /// Finish calls landing a change: one at most per conversation.
+    pub(crate) calls: Slab<Call>,
     pub(crate) alarms: Deadlines<Alarm>,
 }
 
@@ -26,6 +30,7 @@ impl Model {
         Model {
             runs: Slab::with_capacity(limits.runs),
             conversations: Slab::with_capacity(limits.conversations),
+            calls: Slab::with_capacity(limits.conversations),
             alarms: Deadlines::with_capacity(limits.runs),
         }
     }
@@ -58,10 +63,18 @@ impl Model {
         }
     }
 
+    /// Finish calls landing a change, returned ones included until they are
+    /// reclaimed.
+    #[must_use]
+    pub fn calls(&self) -> u32 {
+        self.calls.len()
+    }
+
     /// The reclaim point: frees what closed in this iteration.
     pub fn reclaim(&mut self) {
         self.runs.reclaim();
         self.conversations.reclaim();
+        self.calls.reclaim();
     }
 }
 
@@ -76,6 +89,12 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Ended { conversation, end, spend } => run::ended(model, conversation, end, spend, out),
         Event::Read { owner, read } => run::read(model, env, owner, read, out),
         Event::Probed { owner, executable } => run::probed(model, env, owner, executable, out),
+        Event::Delegated { conversation, call, ask } => run::delegated(model, env, conversation, call, ask, out),
+        Event::Withdraw { conversation, call } => run::withdraw(model, conversation, call, out),
+        Event::Checked { owner, ran } => run::checked(model, env, owner, ran, out),
+        Event::Aborted { owner } => run::aborted(model, owner, out),
+        Event::Pushed { owner, push } => run::pushed(model, owner, push, out),
+        Event::HostCancelled { owner } => run::host_cancelled(model, owner, out),
     }
 }
 

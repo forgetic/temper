@@ -3,7 +3,8 @@
 //! A worker seen from the inside: it has jobs to run, and starts an agent run
 //! for each at a time drawn from its configuration, on a charter drawn the
 //! same way (see the `charter` module). It cancels some of the runs once the
-//! agent has admitted them, and takes each run's one answer. Its requests go
+//! agent has admitted them, serves the pushes they ask for, and takes each
+//! run's one answer. Its requests go
 //! down to its protocol layer as [`Request`]s, and what the agent says comes
 //! back up as [`Event`]s.
 //!

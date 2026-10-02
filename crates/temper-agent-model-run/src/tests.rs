@@ -5,11 +5,13 @@ use alloc::boxed::Box;
 use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
-use crate::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
+use crate::outcome::{
+    Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Problem, Problems, Verdict, VerdictRule,
+};
 use crate::prepare::{Found, Guide};
 use crate::{
-    Answer, Budget, Charter, End, Event, Exhausted, Failure, Fault, Invalid, Limits, MAX_OUT, Model, Opening, Place,
-    Policy, Read, Refusal, Request, Spend, Stop, fire, step, worst_case,
+    Answer, Ask, Budget, Charter, End, Event, Exhausted, Exit, Failure, Fault, Invalid, Limits, MAX_OUT, Model,
+    Opening, Place, Policy, Push, Ran, Read, Refusal, Request, Returned, Spend, Stop, fire, step, worst_case,
 };
 
 const BUDGET: Budget = Budget {
@@ -40,6 +42,9 @@ const LIMITS: Limits = Limits {
     nudges: 2,
     guide_bytes: 64,
     io_timeout: Duration::from_secs(10),
+    outcome_bytes: 1024,
+    check_timeout: Duration::from_secs(300),
+    check_tail: 4096,
 };
 
 /// The model, its environment, and room for one step's output.
@@ -193,6 +198,7 @@ fn an_admitted_run_reads_its_checkout_then_opens_main_with_the_whole_budget() {
         tools: charter().grants.tools,
         checkout: charter().checkout,
         budget: BUDGET,
+        finish: true,
     };
     assert_eq!(opening, &expected);
     assert_eq!(h.model.next_deadline(), Some(Time::ZERO.saturating_add(BUDGET.time)));
@@ -378,7 +384,7 @@ fn an_llm_that_stops_without_finishing_is_nudged_until_its_nudges_run_out() {
     assert!(h.step(Event::Used { conversation, spend: spend(5) }).is_empty(), "winding down");
     let total = Spend { turns: 4, input: 20, output: 40, cache_read: 0, cache_write: 0 };
     let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: total });
-    let unfinished = Failure::Policy(Policy::Unfinished { nudges: LIMITS.nudges });
+    let unfinished = Failure::Policy(Policy::Unfinished { nudges: LIMITS.nudges, rejected: 0 });
     assert_eq!(answered(emitted), (1, failed(unfinished, total)));
 }
 
@@ -412,15 +418,20 @@ fn an_llm_with_no_turn_left_is_not_nudged() {
 }
 
 #[test]
-fn spending_past_the_budget_closes_main_and_fails_the_run_for_budget() {
+fn spending_past_the_budget_lets_main_finish_its_turn_then_closes_it() {
     let mut h = Harness::new(LIMITS);
     let (_, conversation) = h.running(1, 100);
     assert!(h.step(Event::Used { conversation, spend: spend(BUDGET.input) }).is_empty(), "at the budget");
+    assert!(h.step(Event::Used { conversation, spend: spend(1) }).is_empty(), "past it: main keeps its turn");
     assert_eq!(&*h.step(Event::Used { conversation, spend: spend(1) }), &[Request::Close { peer: Token::new(100) }]);
-    // The conversation ran out too, and ended before it saw the close.
-    let total = spend(BUDGET.input).saturating_add(spend(1));
-    let emitted = h.step(Event::Ended { conversation, end: End::Budget(Exhausted::Input), spend: total });
+    let total = Spend { turns: 3, input: BUDGET.input + 2, output: 30, cache_read: 0, cache_write: 0 };
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: total });
     assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Input), total)));
+
+    // Or it yields, and is closed then.
+    let (_, conversation) = h.running(2, 101);
+    drop(h.step(Event::Used { conversation, spend: spend(BUDGET.input + 1) }));
+    assert_eq!(&*h.step(end_turn(conversation)), &[Request::Close { peer: Token::new(101) }], "no nudge past it");
 }
 
 #[test]
@@ -479,4 +490,238 @@ fn the_worst_case_is_bounded_or_refused() {
     let bytes = worst_case(&LIMITS).expect("the test limits fit");
     assert!(bytes > 2 * LIMITS.run_bytes, "every run may hold its bytes");
     assert_eq!(worst_case(&Limits { runs: u32::MAX, run_bytes: u64::MAX, ..LIMITS }), None);
+}
+
+// Finishing.
+
+/// What a run's main conversation asks when it finishes with `outcome`, as
+/// its call `call`.
+fn finish(conversation: Token, call: u64, outcome: Declared) -> Event {
+    Event::Delegated { conversation, call: Token::new(call), ask: Ask::Finish { outcome } }
+}
+
+fn returned(call: u64, result: Returned) -> Request {
+    Request::Return { call: Token::new(call), result }
+}
+
+fn verdict(name: &[u8], children: Box<[Child]>) -> Declared {
+    Declared::Verdict(Verdict { name: bytes(name), body: bytes(b"Looks good."), children })
+}
+
+fn comment() -> Child {
+    let fields = Box::new([
+        Field { name: bytes(b"path"), value: bytes(b"a.rs") },
+        Field { name: bytes(b"body"), value: bytes(b"Nit.") },
+    ]);
+    Child { kind: bytes(b"nit"), fields }
+}
+
+fn change() -> Change {
+    Change { title: bytes(b"Fix the parser"), body: bytes(b"It accepts tabs now.") }
+}
+
+/// The test charter, finishing with a change whose checks must pass, in two
+/// writable repositories.
+fn coding() -> Charter {
+    let checkout = Checkout {
+        repositories: Box::new([
+            Repository { name: bytes(b"temper"), root: Token::new(900), writable: true },
+            Repository { name: bytes(b"docs"), root: Token::new(901), writable: true },
+        ]),
+    };
+    Charter {
+        checkout,
+        outcome: OutcomeSpec { change: Some(ChangeSpec { checks: true }), verdicts: Box::new([]) },
+        ..charter()
+    }
+}
+
+impl Harness {
+    /// Starts a run of `coding()` for call `call` whose repositories both have
+    /// checks, and its main conversation as `peer`: the run's token and main's.
+    fn coding(&mut self, call: u64, peer: u64) -> (Token, Token) {
+        let emitted = self.start(call, coding());
+        let [Request::Admitted { run, .. }, Request::Read { .. }] = &*emitted else {
+            panic!("expected a read, got {emitted:?}");
+        };
+        let run = *run;
+        drop(self.step(Event::Read { owner: run, read: Read::Missing }));
+        drop(self.step(Event::Probed { owner: run, executable: true }));
+        drop(self.step(Event::Read { owner: run, read: Read::Missing }));
+        let emitted = self.step(Event::Probed { owner: run, executable: true });
+        let [Request::Open { conversation, .. }] = &*emitted else {
+            panic!("expected main to open, got {emitted:?}");
+        };
+        let conversation = *conversation;
+        drop(self.step(Event::Started { conversation, peer: Token::new(peer) }));
+        (run, conversation)
+    }
+
+    /// Has main finish with `change()` as call `call`: the owner of the
+    /// landing, whose first check is in flight.
+    fn land(&mut self, conversation: Token, call: u64) -> Token {
+        let emitted = self.step(finish(conversation, call, Declared::Change(change())));
+        let [Request::Check { owner, program, deadline, tail }, Request::Checking { worker: _, deadline: until }] =
+            &*emitted
+        else {
+            panic!("expected the first check, got {emitted:?}");
+        };
+        assert_eq!(program, &Place { root: Token::new(900), path: bytes(b".temper/pre-pr") });
+        assert_eq!((*tail, deadline), (LIMITS.check_tail, until));
+        assert_eq!(*deadline, self.env.now.saturating_add(LIMITS.check_timeout));
+        *owner
+    }
+}
+
+fn ran(code: u8, output: &[u8]) -> Ran {
+    Ran { exit: Exit::Code { code }, output: bytes(output), cut: 0 }
+}
+
+#[test]
+fn an_outcome_that_does_not_fit_the_spec_is_rejected_and_the_run_goes_on() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.running(1, 100);
+    let emitted = h.step(finish(conversation, 7, Declared::Change(change())));
+    let problems = Problems { listed: Box::new([Problem::ChangeNotAllowed]), more: 0 };
+    assert_eq!(&*emitted, &[returned(7, Returned::Rejected { problems })]);
+    let huge = verdict(b"approve", Box::new([]));
+    let Declared::Verdict(mut huge) = huge else { unreachable!("a verdict") };
+    huge.body = Box::from([b'x'; 2000].as_slice());
+    let emitted = h.step(finish(conversation, 8, Declared::Verdict(huge)));
+    let problems = Problems { listed: Box::new([Problem::TooLarge { max: LIMITS.outcome_bytes }]), more: 0 };
+    assert_eq!(&*emitted, &[returned(8, Returned::Rejected { problems })]);
+    // Nudged out, the run fails as unfinished, counting what it rejected.
+    for _ in 0..LIMITS.nudges {
+        drop(h.step(end_turn(conversation)));
+    }
+    assert_eq!(&*h.step(end_turn(conversation)), &[Request::Close { peer: Token::new(100) }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    let unfinished = Failure::Policy(Policy::Unfinished { nudges: LIMITS.nudges, rejected: 2 });
+    assert_eq!(answered(emitted), (1, failed(unfinished, Spend::ZERO)));
+}
+
+#[test]
+fn a_verdict_that_fits_is_accepted_and_the_run_finishes_with_it() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.running(1, 100);
+    let outcome = verdict(b"request", Box::new([comment()]));
+    let emitted = h.step(finish(conversation, 7, outcome));
+    assert_eq!(&*emitted, &[returned(7, Returned::Accepted), Request::Close { peer: Token::new(100) }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: spend(5) });
+    let accepted = Answer::Accepted { outcome: verdict(b"request", Box::new([comment()])), spent: spend(5) };
+    assert_eq!(answered(emitted), (1, accepted));
+}
+
+#[test]
+fn a_change_runs_each_repositorys_checks_then_is_pushed_and_accepted() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    let emitted = h.step(Event::Checked { owner, ran: ran(0, b"ok") });
+    let [Request::Check { owner: second, program, .. }, Request::Checking { .. }] = &*emitted else {
+        panic!("expected the second check, got {emitted:?}");
+    };
+    assert_eq!((second, program.root), (&owner, Token::new(901)));
+    let emitted = h.step(Event::Checked { owner, ran: ran(0, b"ok") });
+    assert_eq!(&*emitted, &[Request::Push { worker: Token::new(1), owner, change: change() }]);
+    assert_eq!(h.model.calls(), 1);
+    let emitted = h.step(Event::Pushed { owner, push: Push::Done });
+    assert_eq!(&*emitted, &[returned(7, Returned::Accepted), Request::Close { peer: Token::new(100) }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    let accepted = Answer::Accepted { outcome: Declared::Change(change()), spent: Spend::ZERO };
+    assert_eq!(answered(emitted), (1, accepted));
+    h.model.reclaim();
+    assert_eq!((h.model.runs(), h.model.conversations(), h.model.calls()), (0, 0, 0));
+}
+
+#[test]
+fn a_change_that_fails_its_checks_or_its_push_goes_back_to_the_llm() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    let failing = Ran { exit: Exit::Code { code: 1 }, output: bytes(b"test parse ... FAILED"), cut: 12 };
+    let emitted = h.step(Event::Checked { owner, ran: failing });
+    let failing = Ran { exit: Exit::Code { code: 1 }, output: bytes(b"test parse ... FAILED"), cut: 12 };
+    assert_eq!(&*emitted, &[returned(7, Returned::ChecksFailed { repository: bytes(b"temper"), ran: failing })]);
+    // A returned call is reclaimed before its conversation can call again,
+    // which takes a completion.
+    h.model.reclaim();
+    let owner = h.land(conversation, 8);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Moved }), &[returned(8, Returned::Moved)]);
+    h.model.reclaim();
+    let owner = h.land(conversation, 9);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Failed }), &[returned(9, Returned::Unpushed)]);
+    assert!(h.step(end_turn(conversation)).len() == 1, "the run goes on: a nudge");
+}
+
+#[test]
+fn a_withdrawn_landing_stops_what_is_in_flight_and_returns_once_it_has() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    assert!(h.step(Event::Withdraw { conversation, call: Token::new(6) }).is_empty(), "not the landing call");
+    assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(7) }), &[Request::Abort { owner }]);
+    assert_eq!(&*h.step(Event::Aborted { owner }), &[returned(7, Returned::Cancelled)]);
+    assert!(h.step(Event::Withdraw { conversation, call: Token::new(7) }).is_empty(), "returned already");
+    h.model.reclaim();
+
+    // Withdrawn while pushing, and the push wins the race: it landed.
+    let owner = h.land(conversation, 8);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(8) }), &[Request::CancelHost { owner }]);
+    let emitted = h.step(Event::Pushed { owner, push: Push::Done });
+    assert_eq!(&*emitted, &[returned(8, Returned::Accepted), Request::Close { peer: Token::new(100) }]);
+}
+
+#[test]
+fn a_run_cancelled_while_it_lands_answers_cancelled_once_the_landing_has_settled() {
+    let mut h = Harness::new(LIMITS);
+    let (run, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
+    // A check that passes now does not lead to a push.
+    assert_eq!(&*h.step(Event::Checked { owner, ran: ran(0, b"") }), &[returned(7, Returned::Cancelled)]);
+    // A finish that crossed the close is cancelled too.
+    assert_eq!(
+        &*h.step(finish(conversation, 8, verdict(b"approve", Box::new([])))),
+        &[returned(8, Returned::Cancelled)]
+    );
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, failed(Failure::Cancelled, Spend::ZERO)));
+
+    // Or the push is in flight, wins the race with the withdraw, and loses to
+    // the cancel all the same.
+    let (run, conversation) = h.coding(2, 101);
+    let owner = h.land(conversation, 9);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Cancel { run }));
+    assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(9) }), &[Request::CancelHost { owner }]);
+    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(9, Returned::Cancelled)]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (2, failed(Failure::Cancelled, Spend::ZERO)));
+}
+
+#[test]
+fn past_the_budget_a_finish_in_the_turn_in_flight_still_counts() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.running(1, 100);
+    drop(h.step(Event::Used { conversation, spend: spend(BUDGET.input + 1) }));
+    let emitted = h.step(finish(conversation, 7, verdict(b"approve", Box::new([]))));
+    assert_eq!(&*emitted, &[returned(7, Returned::Accepted), Request::Close { peer: Token::new(100) }]);
+    let total = spend(BUDGET.input + 1);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: total });
+    assert_eq!(answered(emitted), (1, Answer::Accepted { outcome: verdict(b"approve", Box::new([])), spent: total }));
+
+    // A refused one closes main, and the run fails for budget.
+    let (_, conversation) = h.running(2, 101);
+    drop(h.step(Event::Used { conversation, spend: spend(BUDGET.input + 1) }));
+    let emitted = h.step(finish(conversation, 8, verdict(b"reject", Box::new([]))));
+    let problems = Problems { listed: Box::new([Problem::UnknownVerdict]), more: 0 };
+    assert_eq!(&*emitted, &[returned(8, Returned::Rejected { problems }), Request::Close { peer: Token::new(101) }]);
 }

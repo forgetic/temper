@@ -55,13 +55,16 @@ pub struct Children {
 /// from the input it wrote.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Declared {
-    /// A change: the diff of the checkout, with the title and body of its pull
-    /// request.
-    Change {
-        title: Box<[u8]>,
-        body: Box<[u8]>,
-    },
+    Change(Change),
     Verdict(Verdict),
+}
+
+/// A change: the diff of the checkout, with the title and body of its pull
+/// request.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Change {
+    pub title: Box<[u8]>,
+    pub body: Box<[u8]>,
 }
 
 #[derive(PartialEq, Eq, Hash, Debug)]
@@ -90,6 +93,8 @@ pub struct Field {
 /// counted from zero, in the order the LLM gave them.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Problem {
+    /// The outcome holds more than `max` bytes, as a run counts them.
+    TooLarge { max: u64 },
     /// The run may not finish with a change.
     ChangeNotAllowed,
     /// The run may not finish with a verdict.
@@ -126,7 +131,7 @@ impl Problems {
 pub fn judge(spec: &OutcomeSpec, declared: &Declared) -> Result<(), Problems> {
     let mut found = Found { listed: List::with_capacity(Problems::LISTED), more: 0 };
     match declared {
-        Declared::Change { title: _, body: _ } => {
+        Declared::Change(Change { title: _, body: _ }) => {
             if spec.change.is_none() {
                 found.add(Problem::ChangeNotAllowed);
             }
@@ -255,6 +260,31 @@ pub(crate) fn cost(spec: &OutcomeSpec) -> Option<u64> {
     Some(cost)
 }
 
+/// The bytes `declared` holds beyond its fixed size: each part held in a box
+/// at its fixed size, plus its payload. `None` past a `u64`.
+pub(crate) fn declared_cost(declared: &Declared) -> Option<u64> {
+    match declared {
+        Declared::Change(Change { title, body }) => len(title)?.checked_add(len(body)?),
+        Declared::Verdict(Verdict { name, body, children }) => {
+            let child = u64::try_from(size_of::<Child>()).ok()?;
+            let field = u64::try_from(size_of::<Field>()).ok()?;
+            let mut cost = len(name)?.checked_add(len(body)?)?;
+            for Child { kind, fields } in children {
+                cost = cost.checked_add(child)?.checked_add(len(kind)?)?;
+                for Field { name, value } in fields {
+                    cost = cost.checked_add(field)?.checked_add(len(name)?)?.checked_add(len(value)?)?;
+                }
+            }
+            Some(cost)
+        }
+    }
+}
+
+/// The problems of an outcome that holds more than `max` bytes.
+pub(crate) fn too_large(max: u64) -> Problems {
+    Problems { listed: Box::new([Problem::TooLarge { max }]), more: 0 }
+}
+
 fn labels(labels: &[Box<[u8]>]) -> Option<u64> {
     let label = u64::try_from(size_of::<Box<[u8]>>()).ok()?;
     let mut cost: u64 = 0;
@@ -271,7 +301,8 @@ mod tests {
     use temper_lib::bytes::copy_of;
 
     use super::{
-        ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Problem, Problems, Verdict, VerdictRule, judge,
+        Change, ChangeSpec, Child, Children, Declared, Field, OutcomeSpec, Problem, Problems, Verdict, VerdictRule,
+        judge,
     };
 
     fn labels(names: &[&[u8]]) -> Box<[Box<[u8]>]> {
@@ -301,7 +332,7 @@ mod tests {
     }
 
     fn change() -> Declared {
-        Declared::Change { title: copy_of(b"Fix the parser"), body: copy_of(b"It now accepts tabs.") }
+        Declared::Change(Change { title: copy_of(b"Fix the parser"), body: copy_of(b"It now accepts tabs.") })
     }
 
     fn verdict(name: &[u8], children: Box<[Child]>) -> Declared {

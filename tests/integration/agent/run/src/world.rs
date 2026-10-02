@@ -38,8 +38,11 @@ pub struct Settings {
     /// agent, the top level hands records over in the step that makes them;
     /// a latency here lets them cross in every order.
     pub hop: Span,
-    /// What the checkouts hold, and how io reads them.
+    /// What the checkouts hold, and how io works on them.
     pub checkout: Checkouts,
+    /// The chance, per mille, that a check or a push in flight wins the race
+    /// with its cancel.
+    pub races: u32,
 }
 
 /// The checkouts the world makes for runs, and io's way with them.
@@ -49,18 +52,22 @@ pub struct Checkouts {
     /// length drawn from `1..=guide_max`.
     pub guides: u32,
     pub guide_max: u32,
-    /// The chance, per mille, that a repository has checks.
+    /// The chance, per mille, that a repository has checks, and how many
+    /// times they fail before they pass: drawn from `0..=check_failures`.
     pub checks: u32,
-    /// How long io takes for each operation, and the chance, per mille, that
-    /// it fails.
+    pub check_failures: u32,
+    /// How long io takes for each read or probe, and the chance, per mille,
+    /// that it fails.
     pub io: Span,
     pub io_failures: u32,
+    /// How long checks run.
+    pub check: Span,
 }
 
 impl Settings {
     /// A world where nothing goes wrong at the agent's side: room for every
     /// run, charters well within the limits, an LLM that works and yields now
-    /// and then, and no cancels.
+    /// and then but never finishes, and no cancels.
     #[must_use]
     pub const fn calm(seed: u64) -> Settings {
         Settings {
@@ -84,6 +91,9 @@ impl Settings {
                 nudges: 2,
                 guide_bytes: 1024,
                 io_timeout: Duration::from_secs(5),
+                outcome_bytes: 4096,
+                check_timeout: Duration::from_secs(600),
+                check_tail: 256,
             },
             worker: worker::Config {
                 jobs: 4,
@@ -100,6 +110,14 @@ impl Settings {
                 time_min: Duration::from_secs(3600),
                 time_max: Duration::from_secs(7200),
                 max_tokens: 4096,
+                writable: 500,
+                changes: 700,
+                checks: 800,
+                verdicts: 700,
+                push_min: Duration::from_millis(10),
+                push_max: Duration::from_millis(500),
+                moves: 0,
+                push_failures: 0,
             },
             partner: Script {
                 conversations: 16,
@@ -109,14 +127,27 @@ impl Settings {
                 output: 1_000,
                 cache: 2_000,
                 faults: 0,
+                finishes: 0,
                 yields: 200,
+                changes: 500,
+                good: 1000,
+                finish_deadline: Span::millis(600_000, 600_000),
                 odd_stops: 0,
                 settle: Span::millis(1, 500),
                 races: 500,
             },
             network: Span::millis(1, 20),
             hop: Span::millis(0, 2),
-            checkout: Checkouts { guides: 500, guide_max: 2000, checks: 500, io: Span::millis(0, 50), io_failures: 0 },
+            checkout: Checkouts {
+                guides: 500,
+                guide_max: 2000,
+                checks: 500,
+                check_failures: 0,
+                io: Span::millis(0, 50),
+                io_failures: 0,
+                check: Span::millis(100, 5_000),
+            },
+            races: 500,
         }
     }
 }
@@ -127,9 +158,14 @@ pub struct Stats {
     /// Runs the worker started, and cancels it sent.
     pub starts: u32,
     pub cancels: u32,
-    /// Reads and probes the run asked io for.
+    /// Reads, probes and checks the run asked io for, and checks it aborted.
     pub reads: u32,
     pub probes: u32,
+    pub checks: u32,
+    pub aborts: u32,
+    /// Pushes the run asked the worker for, and host calls it cancelled.
+    pub pushes: u32,
+    pub host_cancels: u32,
     /// Conversations the run opened, nudges it said, and closes it sent.
     pub opens: u32,
     pub says: u32,
@@ -149,6 +185,8 @@ enum Delivery {
     Cancel {
         run: Token,
     },
+    /// The end of a host call reaches the run.
+    Host(run::Event),
     /// The agent's word on a run reaches the worker.
     Admitted {
         owner: Token,
@@ -157,6 +195,15 @@ enum Delivery {
     Answered {
         owner: Token,
         answer: worker::api::Answer,
+    },
+    Checking {
+        job: Token,
+        deadline: Time,
+    },
+    Push {
+        owner: Token,
+        job: Token,
+        change: worker::api::Change,
     },
     /// The run's requests reach its conversations.
     Open {
@@ -168,6 +215,10 @@ enum Delivery {
     },
     Close {
         peer: Token,
+    },
+    Return {
+        call: Token,
+        result: run::Returned,
     },
     /// A conversation's event reaches the run.
     Event(run::Event),
@@ -204,6 +255,19 @@ struct Open {
     ended: bool,
 }
 
+/// A conversation's call, as the world tracks it.
+struct Call {
+    conversation: Token,
+    returned: bool,
+}
+
+/// A push, as the world tracks it: for which job, and whether the world, as
+/// the protocol layer, has answered its cancel already.
+struct Pushing {
+    job: Token,
+    cancelled: bool,
+}
+
 pub struct World {
     now: Time,
     rng: Rng,
@@ -226,15 +290,24 @@ pub struct World {
     serial: u64,
     /// When each lane delivers its latest, which the next may not overtake.
     lanes: [Time; 4],
-    /// Every start, by the worker's name for it, and every open, by the run's
-    /// name for the conversation.
+    /// Every start, by the worker's name for it; every open, by the run's
+    /// name for the conversation; every conversation's call, by its own name.
     starts: BTreeMap<Token, Start>,
     opens: BTreeMap<Token, Open>,
-    /// The checkouts' files, by their roots and paths, and which of them are
-    /// executable; and io's operations in flight, by their owners.
+    calls: BTreeMap<Token, Call>,
+    /// The checkouts' files, by their roots and paths, which of them are
+    /// executable, and how many more times each repository's checks fail.
     files: BTreeMap<(Token, Vec<u8>), Vec<u8>>,
     executables: BTreeSet<(Token, Vec<u8>)>,
+    failures: BTreeMap<Token, u64>,
+    /// io's operations in flight, by their owners, and where the result of
+    /// each check in flight is on the wire.
     io: BTreeSet<Token>,
+    checks: BTreeMap<Token, (Time, u64)>,
+    /// Pushes in flight, by the run's owner; and the jobs whose runs pushed a
+    /// change.
+    pushes: BTreeMap<Token, Pushing>,
+    pushed: BTreeSet<Token>,
 
     stats: Stats,
     trace: Vec<String>,
@@ -265,9 +338,14 @@ impl World {
             lanes: [Time::ZERO; 4],
             starts: BTreeMap::new(),
             opens: BTreeMap::new(),
+            calls: BTreeMap::new(),
             files: BTreeMap::new(),
             executables: BTreeSet::new(),
+            failures: BTreeMap::new(),
             io: BTreeSet::new(),
+            checks: BTreeMap::new(),
+            pushes: BTreeMap::new(),
+            pushed: BTreeSet::new(),
             stats: Stats::default(),
             trace: Vec::new(),
         }
@@ -350,30 +428,21 @@ impl World {
         self.worker.reclaim();
         assert!(self.run.runs() <= self.settings.run.runs, "runs stay within their slots");
         assert!(self.run.conversations() <= self.settings.run.conversations, "conversations stay within their slots");
+        assert!(self.run.calls() <= self.settings.run.conversations, "calls stay within their slots");
     }
 
     /// The run's requests, carried out the way the top level, the protocol
-    /// layer and the conversations would.
+    /// layer, io and the conversations would.
     fn run_request(&mut self, request: run::Request) {
         self.log(&format!("run -> {request:?}"));
         match request {
             run::Request::Admitted { worker, run } => {
                 self.send(Lane::Worker, Delivery::Admitted { owner: worker, run });
             }
-            run::Request::Answer { to, answer } => {
-                let owner = to.into_token();
-                let start = self.starts.get_mut(&owner).expect("an answer is to a start that was made");
-                assert!(start.answer.is_none(), "a start is answered once");
-                assert_within(&start.budget, &answer, self.partner.turn_max());
-                let translated = translate::answer(&answer);
-                start.answer = Some(answer);
-                self.send(Lane::Worker, Delivery::Answered { owner, answer: translated });
-            }
+            run::Request::Answer { to, answer } => self.answer(to, answer),
             run::Request::Open { conversation, opening } => {
-                assert!(
-                    self.opens.insert(conversation, Open::default()).is_none(),
-                    "conversations have distinct names"
-                );
+                let fresh = self.opens.insert(conversation, Open::default()).is_none();
+                assert!(fresh, "conversations have distinct names");
                 self.stats.opens += 1;
                 self.send(Lane::Conversations, Delivery::Open { conversation, opening });
             }
@@ -385,8 +454,14 @@ impl World {
                 self.stats.closes += 1;
                 self.send(Lane::Conversations, Delivery::Close { peer });
             }
+            run::Request::Return { call, result } => {
+                let ledger = self.calls.get_mut(&call).expect("a return is of a call that was made");
+                assert!(!ledger.returned, "a call returns once");
+                ledger.returned = true;
+                self.send(Lane::Conversations, Delivery::Return { call, result });
+            }
             run::Request::Read { owner, at, max, deadline } => {
-                let read = match self.io_result(owner, deadline) {
+                let (at_time, read) = match self.io_result(owner, deadline) {
                     Some(at_time) => {
                         let read = match self.files.get(&(at.root, at.path.to_vec())) {
                             Some(content) => {
@@ -401,7 +476,7 @@ impl World {
                     None => (deadline, run::Read::Failed),
                 };
                 self.stats.reads += 1;
-                self.schedule(read.0, Delivery::Io(run::Event::Read { owner, read: read.1 }));
+                self.schedule(at_time, Delivery::Io(run::Event::Read { owner, read }));
             }
             run::Request::Probe { owner, at, deadline } => {
                 let (at_time, executable) = match self.io_result(owner, deadline) {
@@ -411,11 +486,84 @@ impl World {
                 self.stats.probes += 1;
                 self.schedule(at_time, Delivery::Io(run::Event::Probed { owner, executable }));
             }
+            run::Request::Check { owner, program, deadline, tail } => self.check(owner, &program, deadline, tail),
+            run::Request::Abort { owner } => {
+                self.stats.aborts += 1;
+                // A check whose result is on its way already won the race.
+                if let Some(key) = self.checks.get(&owner).copied()
+                    && !self.rng.chance(self.settings.races)
+                {
+                    self.wire.remove(&key).expect("a check in flight has its result on the wire");
+                    self.checks.remove(&owner);
+                    let at = self.now.saturating_add(self.draw(self.settings.checkout.io));
+                    self.schedule(at, Delivery::Io(run::Event::Aborted { owner }));
+                }
+            }
+            run::Request::Checking { worker, deadline } => {
+                self.send(Lane::Worker, Delivery::Checking { job: worker, deadline });
+            }
+            run::Request::Push { worker, owner, change } => {
+                let fresh = self.pushes.insert(owner, Pushing { job: worker, cancelled: false }).is_none();
+                assert!(fresh, "a host call is in flight once");
+                self.stats.pushes += 1;
+                self.send(Lane::Worker, Delivery::Push { owner, job: worker, change: translate::change(change) });
+            }
+            run::Request::CancelHost { owner } => {
+                self.stats.host_cancels += 1;
+                // A push the worker has answered already won the race; the
+                // protocol layer may also wait for one that is about to.
+                if let Some(pushing) = self.pushes.get_mut(&owner)
+                    && !pushing.cancelled
+                    && !self.rng.chance(self.settings.races)
+                {
+                    pushing.cancelled = true;
+                    self.send(Lane::Agent, Delivery::Host(run::Event::HostCancelled { owner }));
+                }
+            }
         }
     }
 
-    /// When io answers an operation of `owner`'s due by `deadline`, or `None`
-    /// if it fails or runs out of time.
+    /// The run's answer, checked against its budget and what it did.
+    fn answer(&mut self, to: ReplyTo, answer: run::Answer) {
+        let owner = to.into_token();
+        let start = self.starts.get_mut(&owner).expect("an answer is to a start that was made");
+        assert!(start.answer.is_none(), "a start is answered once");
+        assert_within(&start.budget, &answer, self.partner.turn_max());
+        if let run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. } = &answer {
+            assert!(self.pushed.contains(&owner), "a change is accepted only once it is pushed");
+        }
+        let translated = translate::answer(&answer);
+        start.answer = Some(answer);
+        self.send(Lane::Worker, Delivery::Answered { owner, answer: translated });
+    }
+
+    /// Runs the checks at `program` as io would: they fail as many times as
+    /// their repository was given, then pass, unless they outlast `deadline`.
+    fn check(&mut self, owner: Token, program: &run::Place, deadline: Time, tail: u32) {
+        assert!(self.io.insert(owner), "a call has one check in flight at a time");
+        assert!(self.executables.contains(&(program.root, program.path.to_vec())), "checks are run where found");
+        self.stats.checks += 1;
+        let at = self.now.saturating_add(self.draw(self.settings.checkout.check));
+        let failures = self.failures.entry(program.root).or_insert(0);
+        let (at, exit, written) = if at > deadline {
+            (deadline, run::Exit::TimedOut, 100)
+        } else if *failures > 0 {
+            *failures -= 1;
+            (at, run::Exit::Code { code: 1 }, self.rng.between(0, u64::from(tail) * 3))
+        } else {
+            (at, run::Exit::Code { code: 0 }, 20)
+        };
+        // io keeps the tail of what the checks wrote.
+        let kept = written.min(u64::from(tail));
+        let output =
+            b"test parse_tabs ... FAILED\n".iter().copied().cycle().take(usize::try_from(kept).expect("small"));
+        let ran = run::Ran { exit, output: output.collect(), cut: written - kept };
+        let key = self.schedule(at, Delivery::Io(run::Event::Checked { owner, ran }));
+        self.checks.insert(owner, key);
+    }
+
+    /// When io answers a read or a probe of `owner`'s due by `deadline`, or
+    /// `None` if it fails or runs out of time.
     fn io_result(&mut self, owner: Token, deadline: Time) -> Option<Time> {
         assert!(self.io.insert(owner), "a run has one look in flight at a time");
         let at = self.now.saturating_add(self.draw(self.settings.checkout.io));
@@ -438,6 +586,7 @@ impl World {
             }
             if self.rng.chance(settings.checks) {
                 self.executables.insert((root, b".temper/pre-pr".to_vec()));
+                self.failures.insert(root, self.rng.between(0, u64::from(settings.check_failures)));
             }
             roots.push(root);
         }
@@ -458,6 +607,19 @@ impl World {
                 self.stats.cancels += 1;
                 self.send(Lane::Agent, Delivery::Cancel { run });
             }
+            worker::Request::Pushed { to, pushed } => {
+                let owner = to.into_token();
+                let Pushing { job, cancelled } = self.pushes.remove(&owner).expect("the worker answers a push made");
+                // The cancel was answered already: the answer is late.
+                if cancelled {
+                    return;
+                }
+                let push = translate::push(pushed);
+                if push == run::Push::Done {
+                    self.pushed.insert(job);
+                }
+                self.send(Lane::Agent, Delivery::Host(run::Event::Pushed { owner, push }));
+            }
         }
     }
 
@@ -474,9 +636,16 @@ impl World {
                     self.run_in.push_back(run::Event::Start { reply_to: ReplyTo::new(owner), worker: owner, charter });
                 }
                 Delivery::Cancel { run } => self.run_in.push_back(run::Event::Cancel { run }),
+                Delivery::Host(event) => self.run_in.push_back(event),
                 Delivery::Admitted { owner, run } => self.worker_in.push_back(worker::Event::Admitted { owner, run }),
                 Delivery::Answered { owner, answer } => {
                     self.worker_in.push_back(worker::Event::Answered { owner, answer });
+                }
+                Delivery::Checking { job, deadline } => {
+                    self.worker_in.push_back(worker::Event::Checking { job, deadline });
+                }
+                Delivery::Push { owner, job, change } => {
+                    self.worker_in.push_back(worker::Event::Push { reply_to: ReplyTo::new(owner), job, change });
                 }
                 Delivery::Open { conversation, opening } => {
                     let mut out = Vec::new();
@@ -493,6 +662,11 @@ impl World {
                     self.partner.close(self.now, peer, &mut out);
                     self.partner_out(out);
                 }
+                Delivery::Return { call, result } => {
+                    let mut out = Vec::new();
+                    self.partner.returned(self.now, call, &result, &mut out);
+                    self.partner_out(out);
+                }
                 Delivery::Wake { peer, wake } => {
                     let mut out = Vec::new();
                     self.partner.woken(self.now, peer, wake, &mut out);
@@ -503,10 +677,15 @@ impl World {
                     self.run_in.push_back(event);
                 }
                 Delivery::Io(event) => {
-                    let (run::Event::Read { owner, .. } | run::Event::Probed { owner, .. }) = &event else {
-                        unreachable!("io answers reads and probes");
+                    let (run::Event::Read { owner, .. }
+                    | run::Event::Probed { owner, .. }
+                    | run::Event::Checked { owner, .. }
+                    | run::Event::Aborted { owner }) = &event
+                    else {
+                        unreachable!("io answers reads, probes and checks");
                     };
                     assert!(self.io.remove(owner), "io answers each operation once");
+                    self.checks.remove(owner);
                     self.run_in.push_back(event);
                 }
             }
@@ -526,7 +705,8 @@ impl World {
     }
 
     /// The conversations' contract, as the run receives it: `Started` at most
-    /// once and first, one `Ended` per open, nothing after it.
+    /// once and first, one `Ended` per open once every call it made has
+    /// returned, nothing after it; a withdraw only of a call it made.
     fn check_conversation(&mut self, event: &run::Event) {
         let (conversation, started, ended) = match event {
             run::Event::Started { conversation, .. } => (conversation, true, false),
@@ -534,10 +714,24 @@ impl World {
             run::Event::Yielded { conversation, .. } | run::Event::Used { conversation, .. } => {
                 (conversation, false, false)
             }
+            run::Event::Delegated { conversation, call, .. } => {
+                let fresh = self.calls.insert(*call, Call { conversation: *conversation, returned: false }).is_none();
+                assert!(fresh, "calls have distinct names");
+                (conversation, false, false)
+            }
+            run::Event::Withdraw { conversation, call } => {
+                let ledger = self.calls.get(call).expect("a withdraw is of a call that was made");
+                assert_eq!(ledger.conversation, *conversation, "a conversation withdraws its own calls");
+                (conversation, false, false)
+            }
             run::Event::Start { .. }
             | run::Event::Cancel { .. }
             | run::Event::Read { .. }
-            | run::Event::Probed { .. } => unreachable!("not a conversation's event"),
+            | run::Event::Probed { .. }
+            | run::Event::Checked { .. }
+            | run::Event::Aborted { .. }
+            | run::Event::Pushed { .. }
+            | run::Event::HostCancelled { .. } => unreachable!("not a conversation's event"),
         };
         let open = self.opens.get_mut(conversation).expect("events are about conversations the run opened");
         assert!(!open.ended, "nothing comes after a conversation's end");
@@ -549,6 +743,14 @@ impl World {
             assert!(open.started, "a conversation starts before anything else");
         }
         open.ended = ended;
+        if ended {
+            for ledger in self.calls.values() {
+                assert!(
+                    ledger.conversation != *conversation || ledger.returned,
+                    "a conversation ends once its calls have returned"
+                );
+            }
+        }
     }
 
     fn has_work_now(&self) -> bool {
@@ -568,21 +770,30 @@ impl World {
     fn assert_settled(&self) {
         assert_eq!(self.run.runs(), 0, "every run has answered and been reclaimed");
         assert_eq!(self.run.conversations(), 0, "every conversation has ended and been reclaimed");
+        assert_eq!(self.run.calls(), 0, "every call has returned and been reclaimed");
         assert_eq!(self.run.next_deadline(), None, "no alarm outlives its run");
         assert_eq!(self.worker.jobs(), 0, "the worker took every answer");
+        assert_eq!(self.worker.pushes(), 0, "the worker answered every push");
         assert_eq!(self.worker.answered(), self.settings.worker.jobs, "every job was started and answered");
         assert_eq!(self.partner.live(), 0, "every conversation has ended");
-        assert!(self.io.is_empty(), "io answered every operation");
+        assert!(self.io.is_empty() && self.checks.is_empty(), "io answered every operation");
+        assert!(self.pushes.is_empty(), "every push was answered");
         assert!(self.wire.is_empty() && self.run_in.is_empty() && self.worker_in.is_empty(), "nothing is on its way");
         let mut answered = run::Spend::ZERO;
         for (owner, start) in &self.starts {
             let answer = start.answer.as_ref().unwrap_or_else(|| panic!("start {owner:?} was answered"));
-            if let run::Answer::Failed { spent, .. } = answer {
-                answered = answered.saturating_add(*spent);
+            match answer {
+                run::Answer::Failed { spent, .. } | run::Answer::Accepted { spent, .. } => {
+                    answered = answered.saturating_add(*spent);
+                }
+                run::Answer::Refused(_) => {}
             }
         }
         for (conversation, open) in &self.opens {
             assert!(open.ended, "conversation {conversation:?} ended");
+        }
+        for (call, ledger) in &self.calls {
+            assert!(ledger.returned, "call {call:?} returned");
         }
         assert_eq!(answered, self.partner.spent(), "every turn spent is in exactly one answer");
     }
@@ -601,9 +812,11 @@ impl World {
         self.schedule(at, delivery);
     }
 
-    fn schedule(&mut self, at: Time, delivery: Delivery) {
+    fn schedule(&mut self, at: Time, delivery: Delivery) -> (Time, u64) {
         self.serial += 1;
-        self.wire.insert((at, self.serial), delivery);
+        let key = (at, self.serial);
+        self.wire.insert(key, delivery);
+        key
     }
 
     fn draw(&mut self, span: Span) -> Duration {
@@ -619,7 +832,7 @@ impl World {
 /// conversation keeps to its share of turns, and may go past its share of
 /// tokens by the turn that crossed it.
 fn assert_within(budget: &run::Budget, answer: &run::Answer, turn: run::Spend) {
-    let run::Answer::Failed { spent, .. } = answer else { return };
+    let (run::Answer::Failed { spent, .. } | run::Answer::Accepted { spent, .. }) = answer else { return };
     assert!(spent.turns <= budget.turns, "{spent:?} keeps to the turns of {budget:?}");
     let over = |spent: u64, budget: u64, turn: u64| spent <= budget.saturating_add(turn);
     assert!(

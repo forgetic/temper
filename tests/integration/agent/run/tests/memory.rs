@@ -5,9 +5,10 @@
 use std::mem::size_of;
 
 use temper_agent_model_run::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
-use temper_agent_model_run::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
+use temper_agent_model_run::outcome::{Change, ChangeSpec, Children, Declared, OutcomeSpec, VerdictRule};
 use temper_agent_model_run::{
-    Answer, Budget, Charter, Event, Invalid, Limits, MAX_OUT, Model, Read, Refusal, Request, Spend, Stop, worst_case,
+    Answer, Ask, Budget, Charter, Event, Invalid, Limits, MAX_OUT, Model, Read, Refusal, Request, Spend, Stop,
+    worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 
@@ -91,6 +92,9 @@ const LIMITS: Limits = Limits {
     nudges: 1,
     guide_bytes: 512,
     io_timeout: Duration::from_secs(5),
+    outcome_bytes: 256,
+    check_timeout: Duration::from_secs(60),
+    check_tail: 1024,
 };
 
 /// A charter that holds exactly `held` bytes, as the run counts them: one of
@@ -130,6 +134,7 @@ fn charter(held: u64) -> Charter {
 enum Asked {
     Read { owner: Token },
     Probe { owner: Token },
+    Check,
     Open { conversation: Token },
     Answer { answer: Answer },
     Other,
@@ -137,8 +142,9 @@ enum Asked {
 
 /// Fills every run of a model under `limits` with a charter of exactly its
 /// byte limit and a guide of exactly its limit too, and has each one's main
-/// conversation start, spend, yield and be nudged, checking the heap against
-/// the worst case after every step.
+/// conversation start, spend, yield, be nudged, and finish with a change of
+/// exactly the outcome limit, which is being checked, checking the heap
+/// against the worst case after every step.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
@@ -156,8 +162,16 @@ fn fill(limits: Limits) {
                 Request::Open { conversation, .. } => Asked::Open { conversation },
                 Request::Read { owner, .. } => Asked::Read { owner },
                 Request::Probe { owner, .. } => Asked::Probe { owner },
+                Request::Check { .. } => Asked::Check,
                 Request::Answer { answer, to: _ } => Asked::Answer { answer },
-                Request::Admitted { .. } | Request::Say { .. } | Request::Close { .. } => Asked::Other,
+                Request::Admitted { .. }
+                | Request::Say { .. }
+                | Request::Close { .. }
+                | Request::Abort { .. }
+                | Request::Checking { .. }
+                | Request::Push { .. }
+                | Request::CancelHost { .. }
+                | Request::Return { .. } => Asked::Other,
             });
         }
         let held = held(base);
@@ -182,9 +196,13 @@ fn fill(limits: Limits) {
         assert!(step(Event::Used { conversation, spend }).is_empty(), "within the budget");
         let yielded = Event::Yielded { conversation, stop: Stop::EndTurn, text: bytes(100) };
         assert_eq!(step(yielded), [Asked::Other], "nudged");
+        let change = Change { title: bytes(1), body: bytes(limits.outcome_bytes - 1) };
+        let ask = Ask::Finish { outcome: Declared::Change(change) };
+        let finish = Event::Delegated { conversation, call: worker, ask };
+        assert_eq!(step(finish)[..], [Asked::Check, Asked::Other], "the change is being checked");
     }
     let held = held(base);
-    let full = u64::from(limits.runs) * (limits.run_bytes + u64::from(limits.guide_bytes));
+    let full = u64::from(limits.runs) * (limits.run_bytes + u64::from(limits.guide_bytes) + limits.outcome_bytes);
     assert!(held >= full, "{limits:?}: every run holds its byte limit");
 
     // A byte more is refused.

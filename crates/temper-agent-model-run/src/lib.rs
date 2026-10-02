@@ -27,6 +27,7 @@ extern crate alloc;
 mod boundary;
 mod budget;
 pub mod charter;
+mod land;
 mod limits;
 mod model;
 pub mod outcome;
@@ -36,7 +37,10 @@ mod run;
 #[cfg(test)]
 mod tests;
 
-pub use boundary::{Answer, End, Event, Failure, Fault, Invalid, Opening, Place, Policy, Read, Refusal, Request, Stop};
+pub use boundary::{
+    Answer, Ask, End, Event, Exit, Failure, Fault, Invalid, Opening, Place, Policy, Push, Ran, Read, Refusal, Request,
+    Returned, Stop,
+};
 pub use budget::{Budget, Exhausted, Spend};
 pub use charter::Charter;
 pub use limits::{Limits, worst_case};

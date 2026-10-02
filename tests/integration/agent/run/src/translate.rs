@@ -3,7 +3,7 @@
 
 use temper_agent_model_run as run;
 use temper_agent_model_run::charter;
-use temper_agent_model_run::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
+use temper_agent_model_run::outcome::{Change, ChangeSpec, Children, OutcomeSpec, VerdictRule};
 use temper_fake_worker_model::api as worker;
 use temper_lib::Token;
 
@@ -57,12 +57,30 @@ pub fn budget(budget: worker::Budget) -> run::Budget {
     }
 }
 
+/// The worker's change for the run's.
+#[must_use]
+pub fn change(change: Change) -> worker::Change {
+    let Change { title, body } = change;
+    worker::Change { title, body }
+}
+
+/// The run's push for the worker's.
+#[must_use]
+pub fn push(pushed: worker::Pushed) -> run::Push {
+    match pushed {
+        worker::Pushed::Done => run::Push::Done,
+        worker::Pushed::Moved => run::Push::Moved,
+        worker::Pushed::Failed => run::Push::Failed,
+    }
+}
+
 /// The worker's answer for the run's.
 #[must_use]
 pub fn answer(answer: &run::Answer) -> worker::Answer {
     match answer {
         run::Answer::Refused(run::Refusal::Busy) => worker::Answer::Busy,
         run::Answer::Refused(run::Refusal::Invalid(_)) => worker::Answer::Invalid,
+        run::Answer::Accepted { outcome: _, spent } => worker::Answer::Done { usage: usage(*spent) },
         run::Answer::Failed { failure, spent } => {
             let reason = match failure {
                 run::Failure::Model(_) => worker::Reason::Model,

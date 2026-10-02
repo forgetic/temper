@@ -1,8 +1,6 @@
 //! End to end at the run sub-model: runs started by a fake worker's model, with
 //! a scripted partner playing their conversations, in a simulated world.
 //!
-//! Finishing is not wired yet, so every run here ends by failing or being
-//! cancelled, or is refused.
 
 use std::collections::BTreeSet;
 
@@ -28,6 +26,7 @@ fn failure(answer: &Answer) -> Failure {
     match answer {
         Answer::Failed { failure, .. } => *failure,
         Answer::Refused(refusal) => panic!("the run was refused: {refusal:?}"),
+        Answer::Accepted { outcome, .. } => panic!("the run finished with {outcome:?}"),
     }
 }
 
@@ -36,7 +35,7 @@ fn an_llm_that_keeps_stopping_is_nudged_until_the_run_fails_as_unfinished() {
     let calm = Settings::calm(1);
     let world = settled(&Settings { partner: Script { yields: 1000, ..calm.partner }, ..calm });
     for answer in answers(&world) {
-        assert_eq!(failure(answer), Failure::Policy(Policy::Unfinished { nudges: calm.run.nudges }));
+        assert_eq!(failure(answer), Failure::Policy(Policy::Unfinished { nudges: calm.run.nudges, rejected: 0 }));
     }
     let stats = world.stats();
     assert_eq!((stats.opens, stats.says, stats.closes), (4, 4 * calm.run.nudges, 4));
@@ -191,6 +190,62 @@ fn a_main_conversation_refused_at_its_entrance_refuses_its_run() {
     }
 }
 
+/// A world where the LLM finishes, with outcomes that fit, and changes land
+/// after their checks fail a time or two and their branch moves once.
+fn finishing(seed: u64) -> Settings {
+    let calm = Settings::calm(seed);
+    Settings {
+        worker: Config { moves: 1, writable: 1000, changes: 1000, checks: 1000, verdicts: 1000, ..calm.worker },
+        partner: Script { finishes: 300, yields: 0, ..calm.partner },
+        checkout: Checkouts { checks: 1000, check_failures: 2, ..calm.checkout },
+        ..calm
+    }
+}
+
+#[test]
+fn an_llm_that_finishes_with_what_fits_has_its_run_accepted() {
+    let world = settled(&finishing(15));
+    for answer in answers(&world) {
+        assert!(matches!(answer, Answer::Accepted { .. }), "{answer:?}");
+    }
+    assert_eq!(world.stats().partner.accepted, 4);
+}
+
+#[test]
+fn changes_land_after_their_checks_pass_and_their_push_goes_through() {
+    let settings = finishing(16);
+    let world = settled(&Settings { partner: Script { changes: 1000, ..settings.partner }, ..settings });
+    let stats = world.stats();
+    assert_eq!(stats.partner.accepted, 4, "{stats:?}");
+    assert!(stats.partner.checks_failed > 0 && stats.partner.moved > 0, "{stats:?}");
+    assert!(world.trace().iter().any(|line| line.contains("Checking {")), "the worker hears of each check");
+}
+
+#[test]
+fn an_outcome_that_does_not_fit_is_rejected_and_the_llm_tries_again() {
+    let settings = finishing(17);
+    let world = settled(&Settings { partner: Script { good: 300, changes: 0, ..settings.partner }, ..settings });
+    let stats = world.stats();
+    assert!(stats.partner.rejected > 0, "{stats:?}");
+    for answer in answers(&world) {
+        assert!(matches!(answer, Answer::Accepted { .. } | Answer::Failed { .. }), "{answer:?}");
+    }
+}
+
+#[test]
+fn a_finish_past_its_deadline_is_withdrawn_and_its_checks_aborted() {
+    let settings = finishing(18);
+    let world = settled(&Settings {
+        partner: Script { changes: 1000, finish_deadline: Span::millis(1_000, 3_000), ..settings.partner },
+        checkout: Checkouts { check: Span::millis(500, 6_000), ..settings.checkout },
+        races: 0,
+        ..settings
+    });
+    let stats = world.stats();
+    assert!(stats.partner.withdrawn > 0 && stats.aborts > 0, "{stats:?}");
+    assert!(stats.partner.cancelled > 0, "{stats:?}");
+}
+
 #[test]
 fn a_seed_replays_to_the_same_run() {
     let replay = |seed| {
@@ -219,6 +274,7 @@ fn random_worlds_settle_with_every_start_answered_once() {
         expired += stats.partner.expired;
         for answer in answers(&world) {
             let kind = match answer {
+                Answer::Accepted { .. } => "accepted",
                 Answer::Refused(Refusal::Busy) => "busy",
                 Answer::Refused(Refusal::Invalid(Invalid::Conversation)) => "conversation invalid",
                 Answer::Refused(Refusal::Invalid(_)) => "invalid",
@@ -236,6 +292,7 @@ fn random_worlds_settle_with_every_start_answered_once() {
         }
     }
     let mut expected = vec![
+        "accepted",
         "busy",
         "cancelled",
         "conversation invalid",
@@ -285,6 +342,13 @@ fn noisy(seed: u64) -> Settings {
         time_max: Duration::from_secs(pick(60, 4_000)),
         ..calm.worker
     };
+    let worker = Config {
+        push_min: Duration::ZERO,
+        push_max: Duration::from_millis(pick(0, 3_000)),
+        moves: small(pick(0, 2)),
+        push_failures: small(pick(0, 200)),
+        ..worker
+    };
     let partner = Script {
         conversations: small(pick(0, 4)),
         invalid: small(pick(0, 30)),
@@ -293,6 +357,10 @@ fn noisy(seed: u64) -> Settings {
         output: pick(1, 1_000),
         cache: pick(0, 2_000),
         faults: small(pick(0, 100)),
+        finishes: small(pick(0, 300)),
+        changes: small(pick(0, 1000)),
+        good: small(pick(0, 1000)),
+        finish_deadline: Span::millis(100, pick(100, 30_000)),
         yields: small(pick(0, 500)),
         odd_stops: small(pick(0, 300)),
         settle: Span::millis(0, pick(0, 2_000)),
@@ -302,9 +370,17 @@ fn noisy(seed: u64) -> Settings {
         guides: small(pick(0, 1000)),
         guide_max: small(pick(1, 3000)),
         checks: small(pick(0, 1000)),
+        check_failures: small(pick(0, 3)),
         io: Span::millis(0, pick(0, 6_000)),
         io_failures: small(pick(0, 200)),
+        check: Span::millis(0, pick(0, 20_000)),
     };
     let run = Limits { guide_bytes: small(pick(1, 2000)), io_timeout: Duration::from_secs(pick(1, 5)), ..run };
-    Settings { run, worker, partner, hop: Span::millis(0, pick(0, 50)), checkout, ..calm }
+    let run = Limits {
+        outcome_bytes: pick(10, 400),
+        check_timeout: Duration::from_millis(pick(1_000, 30_000)),
+        check_tail: small(pick(0, 300)),
+        ..run
+    };
+    Settings { run, worker, partner, hop: Span::millis(0, pick(0, 50)), checkout, races: small(pick(0, 1000)), ..calm }
 }
