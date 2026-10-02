@@ -905,6 +905,8 @@ impl World {
                 tree::Out::Due { after, due } => {
                     self.wire.send(self.now.saturating_add(after), Delivery::Tree(due));
                 }
+                // What an agent writes reaches the model through the channel.
+                tree::Out::Wrote { .. } => {}
             }
         }
     }

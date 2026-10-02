@@ -170,6 +170,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-worker-model-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-checkout-fake",
+ "temper-fake-engine-model",
+ "temper-lib",
+ "temper-worker-model",
+ "temper-worker-model-agent-tests",
+ "temper-worker-model-checkout-tests",
+ "temper-world",
+]
+
+[[package]]
 name = "temper-world"
 version = "0.0.0"
 dependencies = [

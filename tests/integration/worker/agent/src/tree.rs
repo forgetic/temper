@@ -64,6 +64,10 @@ pub enum Out {
     Model { after: Duration, event: Event },
     /// Something of the tree's own falls due `after` from now.
     Due { after: Duration, due: Due },
+    /// The agent the model names `owner` wrote `said` up its channel, now:
+    /// for a world whose agents do more than talk, such as edit files before
+    /// they ask to push.
+    Wrote { owner: Token, said: Said },
 }
 
 /// What falls due in the tree.
@@ -481,6 +485,7 @@ impl Tree {
                 Act::Write(said) => {
                     let pipe = self.script.pipe.draw(&mut self.rng);
                     let proc = self.procs.get_mut(&process).expect("an agent of a spawned tree");
+                    outs.push(Out::Wrote { owner: proc.owner, said: said.clone() });
                     // Bytes come through a pipe in the order written.
                     let last = proc.up.back().map_or(now, |(ready, _)| *ready);
                     let ready = now.saturating_add(pipe).max(last);
