@@ -149,8 +149,10 @@ pub enum Read {
     /// The hub's part of it.
     Record(Lifecycle),
     /// It does not decode: a person mangled it. The item is held for a
-    /// person.
-    Mangled,
+    /// person. Its attempts are counted from the highest an outcome posted on
+    /// it names (they are keyed by their attempt), so a later claim never
+    /// names an attempt whose outcome is there already.
+    Mangled { attempts: u64 },
 }
 
 /// The hub's part of an item's record (engine-model.md, 4.1): where it is in

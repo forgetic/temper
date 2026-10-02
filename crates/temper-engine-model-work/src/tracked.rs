@@ -97,9 +97,10 @@
 //! terminal is unreachable by the contract; so is an alarm in a state that
 //! arms none ([`follow`]).
 //!
-//! An item whose record did not decode counts its attempts from zero, and
-//! from the highest attempt the fleet says of it while it is held, so its next
-//! claim is past every attempt a worker may still hold.
+//! An item whose record did not decode counts its attempts from the highest
+//! its outcomes on the forge name, and from the highest the fleet says of it
+//! while it is held, so its next claim is past every attempt whose outcome is
+//! posted or that a worker may still hold.
 
 use core::mem;
 
@@ -188,7 +189,8 @@ pub(crate) fn take(
         return;
     }
     let (attempts, failures) = match read {
-        Read::New | Read::Mangled => (0, Failures::NONE),
+        Read::New => (0, Failures::NONE),
+        Read::Mangled { attempts } => (attempts, Failures::NONE),
         Read::Record(Lifecycle { phase: Phase::Done, .. }) => {
             out.push(Request::Refused { to: reply_to, refusal: Refusal::Done });
             return;
@@ -207,7 +209,7 @@ pub(crate) fn take(
     let entry = tracked.get_mut(id).expect("just taken in");
     entry.state = match read {
         Read::New => writing(entry, id, Phase::Waiting, Next::Ask, None, out),
-        Read::Mangled => held(facts, item, Hold::Record),
+        Read::Mangled { .. } => held(facts, item, Hold::Record),
         Read::Record(Lifecycle { phase, .. }) => match phase {
             Phase::Waiting | Phase::Parked => ask(entry, id, out),
             Phase::Retrying(class) => State::Backoff { until: backoff(entry.failures, class, env, rng) },

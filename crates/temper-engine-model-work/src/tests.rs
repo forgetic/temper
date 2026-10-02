@@ -350,7 +350,9 @@ fn an_item_read_held_waits_for_a_person() {
 #[test]
 fn a_mangled_record_holds_the_item_and_its_attempts_follow_the_fleet() {
     let mut h = Harness::new(LIMITS);
-    assert!(h.take(ITEM, Read::Mangled).is_empty());
+    assert!(h.take(ITEM, Read::Mangled { attempts: 4 }).is_empty());
+    // An attempt below the outcomes' is not counted.
+    assert_eq!(&*h.step(Event::Running { item: ITEM, attempt: 2 }), [Request::Cancel { item: ITEM, attempt: 2 }]);
     // A worker still hosts an attempt of it: cancelled, since none is in
     // flight, and counted.
     assert_eq!(&*h.step(Event::Running { item: ITEM, attempt: 6 }), [Request::Cancel { item: ITEM, attempt: 6 }]);
