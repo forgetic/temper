@@ -10,9 +10,10 @@
 
 use std::time::Duration;
 
-use temper_checkout_fake::git::{Forge, Tree};
+use temper_checkout_fake::git::Tree;
 use temper_checkout_fake::{self as fake, Checkout, Program};
 use temper_fake_engine_model::{BASE, Origin};
+use temper_worker_model_checkout_tests::forge::Forge;
 
 use crate::script::{self, Job};
 

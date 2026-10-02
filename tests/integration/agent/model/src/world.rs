@@ -4,13 +4,14 @@ use temper_agent_model::run::outcome::Declared;
 use temper_agent_model::run::{self, Spend};
 use temper_agent_model::{self as agent, Event, Fact, Limits, Request, session, tools};
 use temper_checkout_fake::Checkout;
-use temper_checkout_fake::git::{Forge, Tree as Files};
+use temper_checkout_fake::git::{Remote, Tree as Files};
 use temper_fake_engine_model::{self as engine, Config, Origin, api};
 use temper_lib::{Duration, Env, Queue, Rng, Time, Token};
 use temper_llm_model as provider;
 use temper_worker_model::agent::channel::{Down, Up};
 use temper_worker_model::checkout::git::{Commit, Op};
 use temper_worker_model::{self as worker, host};
+use temper_worker_model_checkout_tests::forge::Forge;
 use temper_worker_model_checkout_tests::translate as io;
 use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
 
@@ -879,8 +880,6 @@ pub struct World {
     /// roots the agents' tools work in.
     forge: Forge,
     disk: Checkout,
-    /// The forge's moves the referee has seen.
-    moves: usize,
     /// The workspaces io holds, the git operations in flight, and the process
     /// of each root io named for an agent.
     spaces: BTreeMap<Token, Space>,
@@ -923,7 +922,7 @@ impl World {
         assert!(worker::worst_case(&settings.worker).is_some(), "the shell refuses limits it cannot provision");
         let [engine_seed, worker_seed, provider_seed, agent_seed] = seeds(settings.seed);
         let mut rng = Rng::new(settings.seed.rotate_left(32));
-        let mut forge = Forge::new();
+        let mut forge = Forge::new(settings.seed);
         let first = fixture::seed(&mut forge, &settings.engine.repositories);
         let mut seen = BTreeSet::new();
         for origin in &settings.engine.repositories {
@@ -955,7 +954,6 @@ impl World {
             save_branches: BTreeSet::new(),
             forge,
             disk,
-            moves: 0,
             spaces: BTreeMap::new(),
             git: Ledger::new("git operation"),
             roots: BTreeMap::new(),
@@ -1028,7 +1026,7 @@ impl World {
     #[must_use]
     pub fn landed(&self, run: &Run, path: &[u8]) -> Option<Vec<u8>> {
         let commit = run.landed.first()?;
-        self.forge.object(*commit).tree.get(path).cloned()
+        self.forge.tree(*commit).get(path).cloned()
     }
 
     /// Runs until nothing is left to happen, then checks the invariants of a

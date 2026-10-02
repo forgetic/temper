@@ -2,7 +2,8 @@
 //! and never drops, with the whole worker's world's translation of the fake
 //! engine's api ([`temper_worker_model_tests::translate`]); io's agent
 //! processes, each the home of an agent model, and their pipes; and io's git,
-//! on the forge and the disk, through the checkout world's translation. And
+//! on the disk and the fake forge, through the checkout world's translation
+//! and its route to the forge. And
 //! where the worker and the agent meet: what the engine records of each run.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -10,12 +11,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use temper_agent_model::run::charter::{Checkout, Repository as Placed};
 use temper_agent_model::run::{self, Spend};
 use temper_agent_model::{self as agent};
-use temper_checkout_fake::git::{Move, Remote};
+use temper_checkout_fake::git::Remote;
 use temper_fake_engine_model::{self as engine, BASE, IDENTITY, api};
 use temper_lib::{Time, Token};
 use temper_worker_model::agent::channel::{Down, Reply, Up};
 use temper_worker_model::checkout::git::{Commit, Done, Op, Place, Want};
 use temper_worker_model::{self as worker, host};
+use temper_worker_model_checkout_tests::forge::Move;
 use temper_worker_model_checkout_tests::translate as io;
 use temper_worker_model_tests::translate;
 use temper_world::Stage;
@@ -478,13 +480,14 @@ impl World {
             | Op::CheckOut { .. }
             | Op::Commit { .. } => None,
         };
+        self.forge.at(self.now);
         let done = io::perform(&mut self.forge, &mut self.disk, op);
         self.observe_moves();
         if let Some(repository) = committed
             && let Done::Committed { commit } = &done
         {
             let id = self.spaces.get(&workspace).and_then(|space| space.process).expect("a change is an agent's");
-            let tree = self.forge.object(io::fake(*commit)).tree.clone();
+            let tree = self.forge.tree(io::fake(*commit));
             self.observe(Seen::Committed { process: id, repository, tree });
         }
         if let Some(branch) = pushed
@@ -502,9 +505,10 @@ impl World {
     /// Another party moves `branch` of `remote`, making it first if it is
     /// nowhere yet, from the base branch, unless the forge refuses.
     pub(super) fn advance(&mut self, remote: &[u8], branch: &[u8]) {
+        self.forge.at(self.now);
         if self.forge.branch(remote, branch).is_none() {
             let base = self.forge.branch(remote, BASE).expect("every repository has the base branch");
-            if self.forge.create(remote, branch, base).is_err() {
+            if self.forge.create_branch(remote, branch, base).is_err() {
                 return;
             }
         }
@@ -516,12 +520,10 @@ impl World {
     }
 
     /// The referee sees every move of the forge's branches since it last
-    /// looked, the worker's and another party's, each a fast-forward, with
-    /// the commits it brings onto its branch.
+    /// looked, as the forge observed them, the worker's and another party's,
+    /// each a fast-forward, with the commits it brings onto its branch.
     pub(super) fn observe_moves(&mut self) {
-        let moved = self.forge.moves()[self.moves..].to_vec();
-        self.moves = self.forge.moves().len();
-        for Move { remote, branch, from, to } in moved {
+        for Move { remote, branch, from, to } in self.forge.moves() {
             if let Some(from) = from {
                 assert!(
                     self.forge.is_ancestor(from, to),
@@ -536,9 +538,9 @@ impl World {
                 && Some(commit) != from
             {
                 brought.push(commit);
-                next = self.forge.object(commit).parent;
+                next = self.forge.parent(commit);
             }
-            let tree = self.forge.object(to).tree.clone();
+            let tree = self.forge.tree(to);
             self.observe(Seen::Moved { remote, branch, tip: to, brought, tree });
         }
     }

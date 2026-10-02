@@ -21,13 +21,16 @@
 //!   terminate or a kill ends the process at once, with what it had in flight,
 //!   and its exit, its reap and the end of its pipe follow; one that has
 //!   answered exits of itself;
-//! - **git and files:** a fake forge, each job's repository on it seeded to
-//!   cue its script ([`fixture`]), and one disk ([`temper_checkout_fake`]),
-//!   through the checkout world's translation of the checkout's operations
-//!   (`temper_worker_model_checkout_tests::translate`): the working trees the
-//!   worker prepares are the roots the agents' tools read and write, so what
-//!   the worker commits is what the agent left; with another party moving a
-//!   push branch, and repositories that refuse pushes;
+//! - **git and files:** the fake forge (`temper_forge_model`), each job's
+//!   repository on it seeded to cue its script ([`fixture`]), and one disk
+//!   ([`temper_checkout_fake`]), through the checkout world's translation of
+//!   the checkout's operations and its route to the forge
+//!   (`temper_worker_model_checkout_tests::translate` and `forge`): the
+//!   working trees the worker prepares are the roots the agents' tools read
+//!   and write, so what the worker commits is what the agent left; with
+//!   another party moving a push branch, and repositories that refuse
+//!   pushes; and the forge's observations of every branch moved, which the
+//!   referee sees;
 //! - **the agents' other neighbours:** a fake LLM provider's model, which plays
 //!   scripted jobs, or wanders at random ([`temper_llm_model`], [`script`]),
 //!   with the protocol layers on both sides, which only the world sees both
