@@ -3,23 +3,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use temper_agent_model_tools as tools;
 use temper_agent_model_tools::{Authority, Call, Done, Expect, Fault, Grants, Op, Outcome, Refusal, Repo, Var};
 use temper_checkout_fake::Checkout;
-use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
+use temper_lib::{Duration, ReplyTo, Rng, Time, Token};
+use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
 
 use crate::translate;
-
-/// Durations drawn uniformly from `min..=max`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Span {
-    pub min: Duration,
-    pub max: Duration,
-}
-
-impl Span {
-    #[must_use]
-    pub const fn millis(min: u64, max: u64) -> Span {
-        Span { min: Duration::from_millis(min), max: Duration::from_millis(max) }
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
@@ -136,8 +123,8 @@ struct Pending {
     /// When it started; when it ends, and when its deadline passes, as
     /// deliveries.
     since: Time,
-    ran: (Time, u64),
-    deadline: (Time, u64),
+    ran: Key,
+    deadline: Key,
 }
 
 /// What io does for an operation in flight.
@@ -187,19 +174,15 @@ pub struct World {
     checkout: Checkout,
 
     tools: tools::Model,
-    env: Env<tools::Limits>,
-    tools_in: VecDeque<tools::Event>,
-    tools_out: Queue<tools::Request>,
+    stage: Stage<tools::Limits, tools::Event, tools::Request>,
 
-    /// Deliveries in flight, by time and then by the order they were sent.
-    wire: BTreeMap<(Time, u64), Delivery>,
-    /// Names for sessions, calls and deliveries.
-    serial: u64,
+    /// Deliveries in flight, whose count names sessions and calls too.
+    wire: Schedule<Delivery>,
     sessions: BTreeMap<u64, Session>,
     /// Every call made, by name: whose it is, and its answer once it came.
     calls: BTreeMap<u64, (u64, Option<Outcome>)>,
     /// io's operations in flight.
-    ops: BTreeMap<Token, Pending>,
+    ops: Ledger<Token, Pending>,
     /// The session whose kit each operation, and each kit, is for.
     owners: BTreeMap<Token, u64>,
     kits: BTreeMap<Token, u64>,
@@ -214,7 +197,7 @@ pub struct World {
     untouched: Option<BTreeMap<Vec<u8>, Vec<u8>>>,
 
     stats: Stats,
-    trace: Vec<String>,
+    trace: Trace,
 }
 
 impl World {
@@ -230,14 +213,11 @@ impl World {
             settings,
             checkout,
             tools: tools::Model::new(&settings.tools),
-            env: Env { now: Time::ZERO, limits: settings.tools },
-            tools_in: VecDeque::new(),
-            tools_out: Queue::with_capacity(room),
-            wire: BTreeMap::new(),
-            serial: 0,
+            stage: Stage::new(settings.tools, tools::max_out(&settings.tools), room),
+            wire: Schedule::new(),
             sessions: BTreeMap::new(),
             calls: BTreeMap::new(),
-            ops: BTreeMap::new(),
+            ops: Ledger::new("operation"),
             owners: BTreeMap::new(),
             kits: BTreeMap::new(),
             versions: BTreeSet::new(),
@@ -245,7 +225,7 @@ impl World {
             writable: BTreeMap::new(),
             untouched: None,
             stats: Stats::default(),
-            trace: Vec::new(),
+            trace: Trace::default(),
         }
     }
 
@@ -267,7 +247,7 @@ impl World {
     /// What crossed between the tools and the world, in order, with times.
     #[must_use]
     pub fn trace(&self) -> &[String] {
-        &self.trace
+        self.trace.lines()
     }
 
     /// A session that opens a kit with `authority` at `at`, runs `script`
@@ -277,12 +257,12 @@ impl World {
         for repo in &authority.repos {
             *self.writable.entry(repo.root.raw()).or_insert(false) |= repo.writable && authority.grants.modify;
         }
-        let session = self.next_serial();
+        let session = self.wire.name();
         let state = State::Opening;
         let script = script.into();
         let entry = Session { authority: Some(authority), script, state, calls: Vec::new(), awaited: BTreeSet::new() };
         self.sessions.insert(session, entry);
-        self.schedule(at, Delivery::Open { session });
+        self.wire.send(at, Delivery::Open { session });
         session
     }
 
@@ -330,14 +310,12 @@ impl World {
         if self.untouched.is_none() {
             self.untouched = Some(self.read_only());
         }
-        self.env.now = self.now;
+        self.stage.tick(self.now);
         self.deliver();
 
         // The tools take their events while they have room for what one more
         // may produce.
-        let max_out = tools::max_out(&self.settings.tools);
-        while self.tools_out.room() >= max_out {
-            let Some(event) = self.tools_in.pop_front() else { break };
+        while let Some(event) = self.stage.next_event() {
             self.log(&format!("tools <- {event:?}"));
             // The operations a step asks for are for the kit of the call, or
             // of the operation, the event is about.
@@ -346,10 +324,10 @@ impl World {
                 tools::Event::Done { owner, .. } => Some(*self.owners.get(owner).expect("an operation io ran")),
                 tools::Event::Open { .. } | tools::Event::Close { .. } => None,
             };
-            let before = self.tools_out.len();
-            tools::step(&mut self.tools, &self.env, event, &mut self.tools_out);
+            let before = self.stage.out.len();
+            tools::step(&mut self.tools, &self.stage.env, event, &mut self.stage.out);
             if let Some(session) = whose {
-                for request in self.tools_out.iter().skip(usize::try_from(before).expect("a small queue")) {
+                for request in self.stage.out.iter().skip(usize::try_from(before).expect("a small queue")) {
                     match request {
                         tools::Request::Io { owner, .. } => drop(self.owners.insert(*owner, session)),
                         tools::Request::Opened { .. }
@@ -363,7 +341,7 @@ impl World {
         }
 
         // What they asked for, carried out at the end of the iteration.
-        while let Some(request) = self.tools_out.pop() {
+        while let Some(request) = self.stage.out.pop() {
             self.log(&format!("tools -> {request:?}"));
             self.request(request);
         }
@@ -428,16 +406,16 @@ impl World {
             }
             tools::Request::Io { owner, op, deadline } => {
                 let (work, ran) = self.start(owner, op);
-                let ran = self.schedule(ran, Delivery::Ran { owner });
-                let deadline = self.schedule(deadline, Delivery::Deadline { owner });
+                let ran = self.wire.send(ran, Delivery::Ran { owner });
+                let deadline = self.wire.send(deadline, Delivery::Deadline { owner });
                 let pending = Pending { work, since: self.now, ran, deadline };
-                assert!(self.ops.insert(owner, pending).is_none(), "an operation's owner has one in flight");
+                self.ops.open(owner, pending);
                 self.stats.ops += 1;
             }
             tools::Request::CancelIo { owner } => {
                 // An operation that has ended has its terminal on the way: the
                 // cancel lost the race and changes nothing.
-                if !self.ops.contains_key(&owner) {
+                if !self.ops.contains(owner) {
                     self.stats.stale_cancels += 1;
                     return;
                 }
@@ -446,30 +424,28 @@ impl World {
                     self.stats.late_cancels += 1;
                     return;
                 }
-                let pending = self.ops.remove(&owner).expect("checked above");
-                self.wire.remove(&pending.ran);
-                self.wire.remove(&pending.deadline);
+                let pending = self.ops.end(owner);
+                self.wire.withdraw(pending.ran);
+                self.wire.withdraw(pending.deadline);
                 self.abandon(pending.work);
-                self.tools_in.push_back(tools::Event::Done { owner, done: Done::Cancelled });
+                self.stage.push(tools::Event::Done { owner, done: Done::Cancelled });
             }
         }
     }
 
     /// Hands every delivery that is due to its destination.
     fn deliver(&mut self) {
-        while let Some(entry) = self.wire.first_entry() {
-            if entry.key().0 > self.now {
-                break;
-            }
-            match entry.remove() {
+        while let Some(delivery) = self.wire.next(self.now) {
+            match delivery {
                 Delivery::Open { session } => {
                     let authority = self.session_mut(session).authority.take().expect("a session opens once");
-                    self.tools_in.push_back(tools::Event::Open { session: Token::new(session), authority });
+                    self.stage.push(tools::Event::Open { session: Token::new(session), authority });
                 }
                 Delivery::Next { session } => self.step(session),
                 Delivery::Ran { owner } => {
-                    let pending = self.ops.remove(&owner).expect("a run is withdrawn when its operation ends first");
-                    self.wire.remove(&pending.deadline);
+                    // A run is withdrawn when its operation ends first.
+                    let pending = self.ops.end(owner);
+                    self.wire.withdraw(pending.deadline);
                     let done = match pending.work {
                         // A fault may come after the operation took effect,
                         // as a store renamed into place before io failed.
@@ -491,12 +467,12 @@ impl World {
                         }
                         Work::Ending(done) => done,
                     };
-                    self.tools_in.push_back(tools::Event::Done { owner, done });
+                    self.stage.push(tools::Event::Done { owner, done });
                 }
                 Delivery::Deadline { owner } => {
-                    let pending =
-                        self.ops.remove(&owner).expect("a deadline is withdrawn when its operation ends first");
-                    self.wire.remove(&pending.ran);
+                    // A deadline is withdrawn when its operation ends first.
+                    let pending = self.ops.end(owner);
+                    self.wire.withdraw(pending.ran);
                     let done = match &pending.work {
                         // io kills a command at its deadline, and tells what
                         // it wrote by then.
@@ -515,13 +491,13 @@ impl World {
                         Work::File(op @ Op::Search { .. }) => {
                             let found = translate::perform(&mut self.checkout, op.clone());
                             let ran = u128::from(self.now.saturating_since(pending.since).as_nanos());
-                            let whole = u128::from(pending.ran.0.saturating_since(pending.since).as_nanos());
+                            let whole = u128::from(pending.ran.at.saturating_since(pending.since).as_nanos());
                             translate::cut(found, ran, whole)
                         }
                         Work::File(_) | Work::Ending(_) => Done::TimedOut,
                     };
                     self.abandon(pending.work);
-                    self.tools_in.push_back(tools::Event::Done { owner, done });
+                    self.stage.push(tools::Event::Done { owner, done });
                     self.stats.timeouts += 1;
                 }
             }
@@ -530,7 +506,7 @@ impl World {
 
     /// Starts `op` for `owner`, and says when it ends.
     fn start(&mut self, owner: Token, op: Op) -> (Work, Time) {
-        let latency = self.now.saturating_add(self.draw(self.settings.io));
+        let latency = self.now.saturating_add(self.settings.io.draw(&mut self.rng));
         match op {
             Op::Spawn { cwd, command, env, roots, head, tail } => {
                 self.stats.commands += 1;
@@ -623,7 +599,7 @@ impl World {
         };
         let Some(step) = entry.script.pop_front() else {
             entry.state = State::Closing;
-            self.tools_in.push_back(tools::Event::Close { kit });
+            self.stage.push(tools::Event::Close { kit });
             return;
         };
         match step {
@@ -649,7 +625,7 @@ impl World {
             }
             Step::Sleep(span) => {
                 let at = self.now.saturating_add(span);
-                self.schedule(at, Delivery::Next { session });
+                self.wire.send(at, Delivery::Next { session });
             }
             Step::Latency(span) => {
                 self.settings.io = span;
@@ -662,12 +638,12 @@ impl World {
     fn send(&mut self, session: u64, kit: Token, calls: Vec<Call>) -> Vec<u64> {
         let mut names = Vec::new();
         for call in calls {
-            let name = self.next_serial();
+            let name = self.wire.name();
             self.calls.insert(name, (session, None));
             self.session_mut(session).calls.push(name);
             let deadline = self.now.saturating_add(self.settings.call_timeout);
             let reply_to = ReplyTo::new(Token::new(name));
-            self.tools_in.push_back(tools::Event::Call { kit, reply_to, call, deadline });
+            self.stage.push(tools::Event::Call { kit, reply_to, call, deadline });
             self.stats.calls += 1;
             names.push(name);
         }
@@ -676,24 +652,24 @@ impl World {
 
     /// Schedules the session's next step, after it has thought about it.
     fn next(&mut self, session: u64) {
-        let at = self.now.saturating_add(self.draw(self.settings.think));
-        self.schedule(at, Delivery::Next { session });
+        let at = self.now.saturating_add(self.settings.think.draw(&mut self.rng));
+        self.wire.send(at, Delivery::Next { session });
     }
 
     fn has_work_now(&self) -> bool {
-        !self.tools_in.is_empty() || self.wire.first_key_value().is_some_and(|((at, _), _)| *at <= self.now)
+        self.stage.has_events() || self.wire.is_due(self.now)
     }
 
     fn next_time(&self) -> Option<Time> {
-        self.wire.first_key_value().map(|((at, _), _)| *at)
+        self.wire.next_time()
     }
 
     /// The invariants of a world where nothing is left to happen.
     fn assert_settled(&self) {
         assert_eq!(self.tools.kits(), 0, "every kit has closed and been reclaimed");
         assert_eq!(self.tools.jobs(), 0, "every job has ended and been reclaimed");
-        assert!(self.ops.is_empty(), "no operation is in flight");
-        assert!(self.wire.is_empty() && self.tools_in.is_empty(), "nothing is on its way");
+        self.ops.assert_settled();
+        assert!(self.wire.is_empty() && !self.stage.has_events(), "nothing is on its way");
         for (name, session) in &self.sessions {
             match session.state {
                 State::Closed | State::Refused(_) => {}
@@ -787,23 +763,8 @@ impl World {
         }
     }
 
-    fn schedule(&mut self, at: Time, delivery: Delivery) -> (Time, u64) {
-        let key = (at, self.next_serial());
-        self.wire.insert(key, delivery);
-        key
-    }
-
-    fn draw(&mut self, span: Span) -> Duration {
-        Duration::from_nanos(self.rng.between(span.min.as_nanos(), span.max.as_nanos()))
-    }
-
-    fn next_serial(&mut self) -> u64 {
-        self.serial += 1;
-        self.serial
-    }
-
     fn log(&mut self, line: &str) {
-        self.trace.push(format!("{:>16} {line}", self.now.as_nanos()));
+        self.trace.log(self.now, line);
     }
 }
 

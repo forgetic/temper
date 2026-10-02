@@ -328,15 +328,12 @@ fn calls_and_kits_beyond_their_room_are_refused() {
 
 #[test]
 fn a_seed_replays_to_the_same_run() {
-    let replay = |seed| {
+    let trace = temper_world::assert_replays(11, 12, |seed| {
         let mut world = noisy_world(seed);
         world.run(ITERATIONS);
-        (world.trace().to_vec(), world.stats(), world.now())
-    };
-    let (trace, stats, end) = replay(11);
+        (world.trace().to_vec(), (world.stats(), world.now()))
+    });
     assert!(trace.len() > 20, "the run did something");
-    assert_eq!(replay(11), (trace.clone(), stats, end));
-    assert_ne!(replay(12).0, trace);
 }
 
 /// Hundreds of worlds with random limits, faults, latencies and scripts: each

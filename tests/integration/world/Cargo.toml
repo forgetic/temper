@@ -1,6 +1,6 @@
 [package]
-name = "temper-agent-model-tools-tests"
-description = "The tools sub-model's world: a simulation against a fake checkout"
+name = "temper-world"
+description = "What the model worlds share: a delivery schedule, stages driven under flow control, ledgers, traces and a counting allocator"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,22 +8,18 @@ publish.workspace = true
 
 [dependencies]
 temper-lib.workspace = true
-temper-agent-model-tools.workspace = true
-temper-checkout-fake.workspace = true
-temper-world.workspace = true
 
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/integration/clippy.toml bans what would make a run unrepeatable.
 [lints.rust]
-unsafe_code = "deny"                  # not forbid: tests/memory.rs's counting allocator expects it
+unsafe_code = "deny"                  # not forbid: heap's counting allocator expects it
 elided_lifetimes_in_paths = "deny"
 unused_must_use = "deny"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-missing_panics_doc = "allow"          # the world asserts its invariants by panicking
-missing_errors_doc = "allow"          # errors are terminals, documented where they are defined
-wildcard_enum_match_arm = "deny"      # a new variant must break the translation
+missing_panics_doc = "allow"          # the harness asserts the contracts it keeps by panicking
+wildcard_enum_match_arm = "deny"
 match_wildcard_for_single_variants = "deny"
 unwrap_used = "deny"
 allow_attributes = "deny"

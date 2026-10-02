@@ -14,6 +14,7 @@ members = [
     "tests/integration/agent/session",
     "tests/integration/agent/tools",
     "tests/integration/checkout",
+    "tests/integration/world",
 ]
 
 [workspace.package]
@@ -32,6 +33,7 @@ temper-fake-worker-model = { path = "testing/temper-fake-worker-model" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 temper-checkout-fake = { path = "tests/integration/checkout" }
 temper-agent-model-tools-tests = { path = "tests/integration/agent/tools" }
+temper-world = { path = "tests/integration/world" }
 
 # Panics are fail-stop and overflow traps, in every profile. (The test harness
 # needs unwinding, so cargo ignores `panic` for test targets.)

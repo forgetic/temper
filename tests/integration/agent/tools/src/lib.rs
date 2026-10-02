@@ -17,4 +17,5 @@ pub mod calls;
 pub mod translate;
 mod world;
 
-pub use world::{Settings, Span, Stats, Step, World, authority, repo};
+pub use temper_world::Span;
+pub use world::{Settings, Stats, Step, World, authority, repo};

@@ -61,6 +61,7 @@ dependencies = [
  "temper-agent-model-tools",
  "temper-checkout-fake",
  "temper-lib",
+ "temper-world",
 ]
 
 [[package]]
@@ -80,6 +81,13 @@ version = "0.0.0"
 
 [[package]]
 name = "temper-llm-model"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+]
+
+[[package]]
+name = "temper-world"
 version = "0.0.0"
 dependencies = [
  "temper-lib",
