@@ -81,8 +81,10 @@ agent    LLM work: one run per agent process, reporting to the worker
   cancels each run. Past the grace, the worker cancels them itself, saving
   their work first, and keeps their answers for the next channel.
 - **Shutting down** cancels every run and admits no more. The worker is
-  done once the engine has every answer or, with the engine out of reach
-  past the grace, once it has given them up, counted.
+  done once the engine has every answer. It gives the answers it keeps
+  up, counted, only once no run is left and the engine is still out of
+  reach past the grace; a channel that opens before then gets them after
+  the hello.
 
 ## 3. Structure
 
@@ -181,15 +183,18 @@ cancel, from any state ──────────────► stop ─►
    The engine decides what happens next, and its acknowledgement frees the
    slot.
 
-A cancel from the engine, the watchdog, a lost channel or shutdown takes
-the same tail: stop, save, release, answer. A run stopped that way may
-still say how it finishes as it winds down, and what it says first,
-before its agent has gone, is its answer: a push that lands meanwhile is
-its outcome (agent-model.md, 4.4), and a cancel it reports is the
-worker's. Only a run that says nothing is answered as the worker stopped
-it. The host arms no timers: each wait is bounded below it, by the
-deadlines of git operations, the agent's watchdog and wall time, and the
-grace of cancel, then kill.
+A cancel from the engine, a lost channel or shutdown, or a fault of the
+agent (the watchdog's among them), takes the same tail: stop, save,
+release, answer. A cancelled run may still say how it finishes as it
+winds down, and what it says first, before its agent has gone, is its
+answer: a push that lands meanwhile is its outcome (agent-model.md, 4.4),
+and a cancel it reports is the worker's. A run past its wall time winds
+down the same way, but a cancel it reports is its wall time's failure; a
+run stopped for any other fault is answered with the fault. Only a run
+that says nothing is answered as the worker stopped it. The host arms no
+timers: each wait is bounded below it, by the deadlines of git
+operations, the agent's watchdog and wall time, and the grace of cancel,
+then kill.
 
 ### 4.3 Failures
 
@@ -221,13 +226,15 @@ runs as contained processes and whose output it parses.
 
 - **A cache, keyed by workstream.** The work on one item (implementing an
   issue, repairing its CI, resolving a conflict) shares a key, so its runs
-  find the repositories already cloned. A cached checkout is reused only
-  if it holds exactly the repositories named, by directory and remote, and
-  is reset to the assignment's starting point: nothing local is
-  authoritative. One that a killed or broken git may have damaged is not
-  trusted, and is rebuilt from an empty directory, as a new one is. The
-  cache holds a fixed number of checkouts; once they are all made, a new
-  workstream takes the least recently used one that no run holds.
+  find the repositories already cloned. The engine runs them one at a
+  time; a worker given a second while the first holds the checkout fails
+  its prepare as transient. A cached checkout is reused only if it holds
+  exactly the repositories named, by directory and remote, and is reset
+  to the assignment's starting point: nothing local is authoritative.
+  One that a killed or broken git may have damaged is not trusted, and is
+  rebuilt from an empty directory, as a new one is. The cache holds a
+  fixed number of checkouts; once they are all made, a new workstream
+  takes the least recently used one that no run holds.
 - **Repositories side by side.** A workspace holds one directory per
   repository, so code that refers to a sibling by path works, and the
   agent's write authority is the list of writable ones.
@@ -356,14 +363,22 @@ types (programming-model.md, section 11):
   moving a branch, and pushes that land and say they timed out.
 
 Each sub-model has a world of its own, its parent and neighbours scripted
-in it. The whole worker meets the fake engine, scripted agents and the git
-fake in one world. In a larger one, the real agent model, with a fake LLM
-provider, takes the scripted agent's place, and what its tools write in
-the git fake's working trees is what the worker commits. The fake engine
-is a step crate, as much of an engine as a worker meets, and temporary:
-the engine's model takes its place once it exists.
+in it. The whole worker's world has all four, the agents' process trees
+standing in for io, and shuts the worker down at random. It checks that
+the engine takes each attempt's answer once, that what lands is exactly
+the tree the agent left and saved work exactly the tree at the stop, that
+no git operation runs while a run's agent may, but the push it asked for,
+and that nothing is live once it settles.
 
-<!-- To record: what the whole-worker and worker+agent worlds cover. -->
+The worker meets the real agent in the agent's top-level world: each
+process it spawns is an agent model with a fake LLM provider, its tools
+working in the trees the worker prepared, and the engine records the
+outcome the run accepted. Its network and git are kept simple there, as
+the whole worker's world covers their faults. The agent's worlds no
+longer use a fake worker: the run's world scripts its host itself.
+
+The fake engine is a step crate, as much of an engine as a worker meets,
+and temporary: the engine's model takes its place once it exists.
 
 ## 10. Open questions
 
