@@ -21,6 +21,7 @@ members = [
     "tests/integration/checkout",
     "tests/integration/worker/checkout",
     "tests/integration/worker/host",
+    "tests/integration/worker/agent",
     "tests/integration/world",
 ]
 
