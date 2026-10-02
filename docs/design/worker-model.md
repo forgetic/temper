@@ -4,14 +4,14 @@ Provisional, 2026-10-02. What the temper worker does, as a model layer:
 its parts, what each is responsible for, and how they fit together. The
 mechanics are those of `programming-model.md`, and the agent it hosts is
 described in `agent-model.md`. Each part's details are settled as it is
-built; what is still open is listed in section 11.
+built; what is still open is listed in section 10.
 
 ## 1. In one page
 
 - **A worker is an execution host.** The engine decides what work exists
   and holds the forge; the agent does the LLM work. The worker sits between
   them: it prepares checkouts, starts agent runs and keeps them in bounds,
-  runs the gate, pushes branches, and relays everything else between a run
+  pushes the changes they make, and relays everything else between a run
   and the engine.
 - **The worker keeps nothing.** What must survive lives in the forge
   (pushed branches, saved work) or with the engine (claims, snapshots). A
@@ -23,9 +23,9 @@ built; what is still open is listed in section 11.
   inbound events in; host calls out; park or end.
 - **Policy is data.** The worker interprets no workflow vocabulary: no
   role, queue, action or verdict names. An assignment says which
-  repositories to check out and how, which checks the gate runs, what to
-  save, and the charter to hand the agent.
-- **Its one forge write is a git push:** a branch that passed the gate, or
+  repositories to check out and how, what to save, and the charter to hand
+  the agent.
+- **Its one forge write is a git push:** a change its run accepted, or
   saved work. Push credentials stay in the worker's protocol layer; an
   agent never sees them. Everything else that touches the forge goes
   through the engine.
@@ -34,13 +34,13 @@ built; what is still open is listed in section 11.
   once the run's process tree is gone.
 - **The model is complete** (programming-model.md, section 4). A world of
   models and fakes runs everything the worker does, with no protocol and
-  no io (section 10).
+  no io (section 9).
 
 ## 2. The worker in the system
 
 ```
 engine   the forge's only API client: what work exists, for whom; claims; applies outcomes
-worker   execution host: checkouts, agent runs, the gate, branch pushes; relays the rest
+worker   execution host: checkouts, agent runs, pushing their changes; relays the rest
 agent    LLM work: one run per agent process, reporting to the worker
 ```
 
@@ -48,6 +48,9 @@ agent    LLM work: one run per agent process, reporting to the worker
   inbound events, cancels and the answers to relayed calls come down; host
   calls, facts, parks and ends go up. The engine never connects to a
   worker, so a worker can run wherever it can reach the engine.
+- **The engine never reads a repository.** It works from forge state, and
+  what a checkout holds (a repository's checks, its `AGENTS.md`) is for the
+  run to find (agent-model.md, section 2).
 - **The engine holds the claim.** It claims work on the forge before
   assigning it, and decides what follows a run: apply its outcome, run it
   again on any worker, or park the work for a human. The worker never
@@ -67,7 +70,6 @@ agent    LLM work: one run per agent process, reporting to the worker
 temper-worker-model                 the worker loop's entry point: the engine link, routing
 ├── temper-worker-model-host        hosted runs: admit, prepare, start, relay, park or end
 ├── temper-worker-model-checkout    workspaces: prepare, commit, push, save; the cache
-├── temper-worker-model-gate        checks, run in contained processes
 └── temper-worker-model-agent       agent processes: spawn, channel, watchdog, cancel then kill
 ```
 
@@ -75,7 +77,7 @@ The tree follows programming-model.md, 4.5: each sub-model is a step
 machine with its own vocabulary, limits and world; a parent owns its
 children's state and routes between them; siblings share no domain types.
 `host` is the hub, as the run is in the agent: it knows a hosted run's
-lifecycle and nothing of git, processes or channels. The other three are
+lifecycle and nothing of git, processes or channels. The other two are
 capabilities. `temper-worker-model` faces the protocol layer, and its
 vocabulary is what crosses the model boundary: the engine's messages, the
 agent channel, git operations, and the process and file operations of
@@ -94,8 +96,6 @@ What the engine gives the worker for one run:
   to start (a base branch, a branch, a commit, or saved work), whether it
   may be written, the branch a change is pushed to, and the push identity
   (a name the protocol layer maps to credentials).
-- **Gate.** The checks a change must pass before it is pushed, read by the
-  engine from the repository's base branch.
 - **Saving.** Whether to save unfinished work, and to which branch.
 - **Charter.** What the agent's run is given (agent-model.md, 4.1). The
   worker adds where the repositories sit and passes the rest through.
@@ -107,7 +107,7 @@ Its size is bounded by the worker's limits and checked at the entrance.
 
 ```
 admit ─► prepare ─► start ─► active ⇄ waiting
-                               │  host calls: gate and push, served here;
+                               │  host calls: push, served here;
                                │  forge reads and outlets, relayed to the engine
                                ▼
                          park or end ─► stop ─► save ─► release ─► answer
@@ -118,16 +118,16 @@ cancel, from any state ──────────────► stop ─►
    slot is taken) or invalid (beyond the limits).
 2. **Prepare** the checkout (section 5).
 3. **Start** an agent process with the charter, and the snapshot if there
-   is one (section 7).
+   is one (section 6).
 4. **Relay** while the run is live. Inbound events go down to the run as
-   they arrive; host calls come up. Gate and push are served by the worker
-   (section 6); forge reads and outlets go to the engine and their answers
+   they arrive; host calls come up. Pushes are served by the worker
+   (section 5); forge reads and outlets go to the engine and their answers
    come back. A run that yields waits for its next inbound event, and
    holds its slot while it waits.
 5. **Park or end,** as the run decides. A run that parks hands over a
    snapshot if it has one, and exits.
 6. **Stop:** wait until the agent process and everything it started are
-   gone, killing them if they outstay the grace (section 7). Nothing
+   gone, killing them if they outstay the grace (section 6). Nothing
    touches the checkout while anything of the run is still running.
 7. **Save** unfinished work, if the assignment asks: commit what the
    writable repositories hold and push it to the saved-work branch, so a
@@ -177,11 +177,13 @@ whose output it parses.
 - **Prepare** fetches what the assignment names and checks out its
   starting point. A base branch that does not exist yet is created on the
   forge from the default branch, and only created, never moved.
-- **Commit, then push exactly that commit.** A change is committed first,
-  the gate runs on that commit, and that commit is pushed, so what was
-  checked is what lands. A push is a fast-forward and never forced: if the
-  branch moved since the run started, the push fails and the run is told,
-  which makes it the freshness check too.
+- **Push commits what the run checked.** When a run asks to push, at
+  `finish` with a change or proposing one mid-run, it has run the
+  repository's checks with nothing else writing to the checkout
+  (agent-model.md, 4.4); the worker commits exactly that tree and pushes
+  the commit. A push is a fast-forward and never forced: if the branch
+  moved since the run started, the push fails and the run is told, which
+  makes it the freshness check too.
 - **Saved work** is ordinary commits on the saved-work branch, pushed the
   same way. A run that resumes from saved work starts where the last one
   stopped. Work done since the last save is lost if the worker dies.
@@ -189,23 +191,7 @@ whose output it parses.
   invocation that needs them, never into a checkout's configuration, where
   an agent could read them.
 
-## 6. The gate
-
-The gate runs a change's checks before it is pushed: the checks listed in
-the assignment, in order, in the checkout, each in a contained process
-with a deadline.
-
-- **First failure stops it,** and the result keeps a bounded tail of each
-  check's output.
-- **It runs inside the live run.** `finish` with a change (agent-model.md,
-  4.4), or a push mid-run, is a host call: the worker commits, runs the
-  gate, pushes on success, and answers with the result either way. A
-  failing gate is feedback the LLM reads and acts on, within the same run.
-- **Feedback, not a security boundary.** An agent can edit what a check
-  runs. What guards landing is CI on the forge and the engine's rules; the
-  gate catches failures early and cheaply.
-
-## 7. Agent processes
+## 6. Agent processes
 
 The agent sub-model runs each hosted run in an agent process of its own.
 
@@ -220,15 +206,16 @@ The agent sub-model runs each hosted run in an agent process of its own.
 - **A watchdog on progress.** The run's facts (an LLM call or a tool
   started or finished) count as progress; silence past the no-progress
   deadline stops the run. The clock pauses while the run waits for an
-  inbound event and while a host call it made is being served, so neither
-  a human who has gone to lunch nor a long gate looks like a hang. A
-  separate bound covers the run's wall time.
+  inbound event or for a host call to be served, and stretches to the
+  deadline of a long operation the run reports, such as the repository's
+  checks, so neither a human who has gone to lunch nor a two-hour test
+  suite looks like a hang. A separate bound covers the run's wall time.
 - **Cancel, then kill.** A cancel goes down the channel first, and the
   run winds down on its own (agent-model.md, 4.2); past a grace period
   the process tree is terminated, then killed. Only an exited process
   and an empty tree release the slot.
 
-## 8. Facts
+## 7. Facts
 
 What the run reports as it goes (agent-model.md, section 7) feeds the
 watchdog and goes up to the engine for liveness, operators and live
@@ -237,7 +224,7 @@ bounded queue, with what does not fit dropped and counted. Nothing the
 worker or the engine decides depends on a fact arriving, and no fact
 holds a slot.
 
-## 9. Below the model
+## 8. Below the model
 
 What the protocol and io layers owe the model, to be designed after it:
 
@@ -250,12 +237,10 @@ What the protocol and io layers owe the model, to be designed after it:
 - **Git:** each typed operation is one git invocation in a contained
   process, its output parsed into a typed outcome; credentials passed per
   invocation, never in a URL or a file.
-- **The gate:** contained processes with deadlines and captured output
-  tails.
 - **Files:** workspace directories, and removing them when the cache
   evicts.
 
-## 10. The world
+## 9. The world
 
 The worker's world runs the model against fakes that share none of its
 types (programming-model.md, section 11):
@@ -265,14 +250,12 @@ types (programming-model.md, section 11):
 - **an agent** that follows a script: progress, host calls, yields, parks
   and ends, but also hangs, crashes and ignored cancels;
 - **git:** a remote of refs and commits, and local working trees, with
-  fast-forward rules and failing fetches;
-- **processes** for the gate's checks: exit status, output, duration,
-  hangs.
+  fast-forward rules and failing fetches.
 
 The worker and the agent meet in a larger world, where the real agent
 model, with a fake LLM provider, takes the scripted agent's place.
 
-## 11. Open questions
+## 10. Open questions
 
 - **Saved-work branches:** their names, whether pushing to them triggers
   CI, and when the engine deletes them.
@@ -281,9 +264,9 @@ model, with a fake LLM provider, takes the scripted agent's place.
 - **Snapshots:** what the agent puts in one, its size limit, and where
   the engine keeps it. Until runs offer them, parking ends the run and
   resuming starts a fresh one from forge state (agent-model.md, 4.5).
-- **Checks without an agent:** an assignment that prepares a checkout,
-  runs checks and reports what they found, for validating an exact head.
-  It fits the lifecycle without a start; add it when it is wanted.
+- **Checks without an LLM:** validating an exact head needs a checkout
+  and the repository's checks but no conversation. It could be a run whose
+  outcome is its checks' result; add it when it is wanted.
 - **Code graph:** indexing a checkout for codebase-memory-mcp as part of
   preparing it, and keeping that index with the cache.
 - **Placement:** whether the engine prefers a worker that holds a
