@@ -98,7 +98,10 @@
 //! batch starts once it has passed. A completion, a result or a new message
 //! that does not fit the byte limit ends the session as transcript full in
 //! place of the transition it would have made, cancelling the rest of the
-//! batch.
+//! batch. A message is charged room for its calls' results with their ids
+//! ([`held`]), and what a result holds besides as it arrives; so a refusal
+//! at the tools' entrance, which holds nothing more, always fits, and a step
+//! either starts a batch or cancels one, never both.
 //!
 //! The expiry alarm, set for when the time budget runs out, runs in every
 //! state but Closing and Closed, and the retry alarm in Backoff; a session is
@@ -520,8 +523,8 @@ fn owned_answered(
     let conversation = &mut session.conversation;
     session.state = match state {
         State::Tooling { tools } => {
-            let result = Block::ToolResult { id: call_id(conversation, block), result: Returned::Owned { outcome } };
-            tool_ran(conversation, id, &mut model.calls, tools, slot, result, env, out)
+            let result = Returned::Owned { outcome };
+            tool_ran(conversation, id, &mut model.calls, tools, slot, block, result, env, out)
         }
         State::Closing { end, waiting } => settled(end, waiting),
         State::Calling { .. } | State::Backoff { .. } | State::Resting { .. } | State::Yielded | State::Closed => {
@@ -555,8 +558,8 @@ pub(crate) fn delegate_answered(
     let conversation = &mut session.conversation;
     session.state = match state {
         State::Tooling { tools } => {
-            let result = Block::ToolResult { id: call_id(conversation, block), result: Returned::Delegated { answer } };
-            tool_ran(conversation, id, &mut model.calls, tools, slot, result, env, out)
+            let result = Returned::Delegated { answer };
+            tool_ran(conversation, id, &mut model.calls, tools, slot, block, result, env, out)
         }
         State::Closing { end, waiting } => settled(end, waiting),
         State::Calling { .. } | State::Backoff { .. } | State::Resting { .. } | State::Yielded | State::Closed => {
@@ -942,14 +945,14 @@ fn advance(
                 };
                 assert!(answered == run, "the tools answer at once only the call they were given");
                 calls.runs.retire(run);
-                let result =
-                    Block::ToolResult { id: call_id(conversation, index), result: Returned::Owned { outcome } };
-                // The result's block was counted when the message was recorded.
-                let fits = charge(conversation, payload_cost(&result), &env.limits);
+                // Refused at the entrance: its block and its id were counted
+                // when the message was recorded, and a refusal holds nothing
+                // more, so it fits, and the batch it is in goes on.
+                let result = Returned::Owned { outcome };
+                let fits = charge(conversation, returned_cost(&result), &env.limits);
+                assert!(fits, "the tools refuse a call at their entrance with an outcome that holds nothing");
+                let result = Block::ToolResult { id: call_id(conversation, index), result };
                 tools.slots.push(Slot::Done { result }).expect("a slot for every call");
-                if !fits {
-                    return abandon(&calls.runs, tools, End::TranscriptFull, out);
-                }
             }
             Block::ToolCall { id: _, name: _, input: _, call: Decoded::Delegated { ticket, effect } } => {
                 if !joins(batch, *effect, started, env.limits.parallel_tools) {
@@ -1076,8 +1079,8 @@ fn unrun(conversation: &Conversation, text: Box<[u8]>) -> Box<[Block]> {
     content.into_boxed()
 }
 
-/// Tooling, a run done: keep the result in its slot, and once the batch is
-/// done, go on through the calls after it.
+/// Tooling, a run done: keep the result of the call at `block` in its slot,
+/// and once the batch is done, go on through the calls after it.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes what its cell needs, and the calls to start more")]
 fn tool_ran(
     conversation: &mut Conversation,
@@ -1085,13 +1088,16 @@ fn tool_ran(
     calls: &mut Calls,
     mut tools: Tools,
     slot: u32,
-    result: Block,
+    block: u32,
+    result: Returned,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
     tools.running = tools.running.checked_sub(1).expect("the run that ended was counted");
-    // The result's block was counted when the message was recorded.
-    let fits = charge(conversation, payload_cost(&result), &env.limits);
+    // The result's block and its id were counted when the message was
+    // recorded.
+    let fits = charge(conversation, returned_cost(&result), &env.limits);
+    let result = Block::ToolResult { id: call_id(conversation, block), result };
     *tools.slots.get_mut(slot).expect("a run fills its own slot") = Slot::Done { result };
     if !fits {
         return abandon(&calls.runs, tools, End::TranscriptFull, out);
@@ -1377,8 +1383,10 @@ fn spec_cost(model: &[u8], system: &[u8], delegated: &[Descriptor], content: &[B
 
 /// What an assistant message with `calls` tool calls costs while its tools run:
 /// the message, a block for each call's result, which is no less than the slot
-/// the result waits in, and the answers to the invalid calls, which are known
-/// already.
+/// the result waits in, with the id it echoes, and the answers to the invalid
+/// calls, which are known already. What the other results hold is charged as
+/// each arrives; so a refusal at the tools' entrance, which holds nothing,
+/// always fits, and a step that starts a batch never cancels it.
 fn held(content: &[Block], calls: u32) -> Option<u64> {
     let slots = u64::try_from(size_of::<Block>()).ok()?.checked_mul(u64::from(calls))?;
     let mut cost = content_cost(content)?.checked_add(slots)?;
@@ -1387,9 +1395,10 @@ fn held(content: &[Block], calls: u32) -> Option<u64> {
             Block::ToolCall { id, name: _, input: _, call: Decoded::Invalid { problem } } => {
                 cost = cost.checked_add(len(id)?)?.checked_add(problem_cost(problem)?)?;
             }
-            Block::ToolCall { call: Decoded::Owned { .. } | Decoded::Delegated { .. }, .. }
-            | Block::Text { .. }
-            | Block::ToolResult { .. } => {}
+            Block::ToolCall { id, name: _, input: _, call: Decoded::Owned { .. } | Decoded::Delegated { .. } } => {
+                cost = cost.checked_add(len(id)?)?;
+            }
+            Block::Text { .. } | Block::ToolResult { .. } => {}
         }
     }
     Some(cost)
@@ -1422,16 +1431,18 @@ fn payload_cost(block: &Block) -> Option<u64> {
             };
             len(id)?.checked_add(len(name)?)?.checked_add(len(input)?)?.checked_add(decoded)
         }
-        Block::ToolResult { id, result } => {
-            let returned = match result {
-                Returned::Owned { outcome } => outcome_cost(outcome)?,
-                // The opener holds its answer, and the session counts it.
-                Returned::Delegated { answer } => answer.bytes,
-                Returned::Invalid { problem } => problem_cost(problem)?,
-                Returned::NotRun => 0,
-            };
-            len(id)?.checked_add(returned)
-        }
+        Block::ToolResult { id, result } => len(id)?.checked_add(returned_cost(result)?),
+    }
+}
+
+/// The bytes a tool call's result holds beyond its block and its id.
+fn returned_cost(result: &Returned) -> Option<u64> {
+    match result {
+        Returned::Owned { outcome } => outcome_cost(outcome),
+        // The opener holds its answer, and the session counts it.
+        Returned::Delegated { answer } => Some(answer.bytes),
+        Returned::Invalid { problem } => problem_cost(problem),
+        Returned::NotRun => Some(0),
     }
 }
 

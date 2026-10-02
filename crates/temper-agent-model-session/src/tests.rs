@@ -663,6 +663,29 @@ fn a_result_that_does_not_fit_cancels_the_rest_of_its_batch() {
 }
 
 #[test]
+fn a_result_is_charged_its_id_with_its_call_so_a_refusal_at_the_entrance_always_fits() {
+    let limits = Limits { session_bytes: 4096, ..LIMITS };
+    let away = Call::Read { path: outside(), skip: 0, lines: None };
+    // An id the transcript has room for once but not twice: the message that
+    // carries it does not fit, and no batch starts to be cancelled.
+    let mut h = Harness::new(limits);
+    let (owner, _) = h.open(1);
+    let content = Box::new([tool_call(b"a", cat(b"main.rs")), tool_call(&[b'i'; 2100], away.clone())]);
+    let end = h.step(Event::Completed { owner, completion: completion(content, Stop::ToolUse) });
+    assert_eq!(end, Some(ended(End::TranscriptFull, 1)));
+    // Room for it twice: the refusal at the entrance fits, and its batch goes
+    // on.
+    let mut h = Harness::new(limits);
+    let (owner, _) = h.open(1);
+    let id = [b'i'; 1500];
+    let content = Box::new([tool_call(b"a", cat(b"main.rs")), tool_call(&id, away)]);
+    let runs = h.batch(Event::Completed { owner, completion: completion(content, Stop::ToolUse) });
+    let &[a] = runs.as_slice() else { panic!("the read alone runs, not {runs:?}") };
+    let (_, prompt) = calling(h.step(ran(a, b"main.rs")));
+    assert_eq!(&*prompt.messages[2].content, &[result(b"a", read(b"main.rs")), result(&id, Outcome::Outside)]);
+}
+
+#[test]
 fn the_tools_tell_of_each_call_and_the_session_passes_it_on() {
     let mut h = Harness::new(LIMITS);
     let opener = Token::new(1);

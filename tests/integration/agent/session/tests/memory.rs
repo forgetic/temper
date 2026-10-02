@@ -130,8 +130,9 @@ fn fill(limits: Limits, route: Route) {
     let (block, part) = (size(size_of::<Block>()), size(size_of::<Part>()));
     for opener in 0..limits.sessions {
         // What the model charges, as it charges it: the spec's names, the
-        // tools its opener serves and its prompt; then, by tool, the assistant's message with its call and
-        // room for its result, then the result's id and output; by an invalid
+        // tools its opener serves and its prompt; then, by tool, the
+        // assistant's message with its call and room for its result with the
+        // result's id, then the result's output; by an invalid
         // call, the message with its problem and room for its answer, then
         // the answer's id and the problem again; or, by talk, the assistant's
         // answer, then the opener's message.
@@ -156,9 +157,10 @@ fn fill(limits: Limits, route: Route) {
         };
         match route {
             Route::Tool => {
-                // A call's slot for its result takes a block's room.
-                let tooling_cost = (block + 3 + (part + 1)) + block;
-                let output = limits.session_bytes - spec_cost - tooling_cost - 1;
+                // A call's slot for its result takes a block's room, and its
+                // result's id is charged with it.
+                let tooling_cost = (block + 3 + (part + 1)) + (block + 1);
+                let output = limits.session_bytes - spec_cost - tooling_cost;
                 let path = Path { absolute: false, parts: Box::new([Part::Name { name: name() }]) };
                 let call = Decoded::Owned { call: Call::Read { path, skip: 0, lines: None } };
                 let content = Box::new([Block::ToolCall { id: bytes(1), name: bytes(1), input: bytes(1), call }]);
