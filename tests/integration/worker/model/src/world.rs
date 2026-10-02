@@ -54,8 +54,10 @@ pub struct Git {
     /// `stall` instead, which may run past its deadline.
     pub stalls: u32,
     pub stall: Span,
-    /// The chance, per mille, that io fails an operation on the worker's side.
+    /// The chance, per mille, that io fails an operation on the worker's side,
+    /// and that it carries one out and then reports that it ran out of time.
     pub broken: u32,
+    pub ambiguous: u32,
     /// The chance, per mille, that an operation that reaches the forge finds
     /// its repository unreachable, and that a push or a branch's creation is
     /// refused.
@@ -173,6 +175,7 @@ impl Settings {
             git: Git {
                 stalls: 20,
                 broken: 20,
+                ambiguous: 20,
                 unreachable: 30,
                 refusing: 30,
                 cancels_lost: 200,
@@ -343,6 +346,7 @@ const GIT: Git = Git {
     stalls: 0,
     stall: Span::millis(5_000, 120_000),
     broken: 0,
+    ambiguous: 0,
     unreachable: 0,
     refusing: 0,
     cancels_lost: 0,
@@ -458,6 +462,7 @@ pub struct Stats {
     pub ops: u32,
     pub op_timeouts: u32,
     pub op_broken: u32,
+    pub ambiguous: u32,
     pub op_cancels: u32,
     pub cancels_lost: u32,
     pub unreachable: u32,
@@ -604,6 +609,9 @@ struct Pending {
 enum Work {
     /// It runs when it ends.
     Perform(Op),
+    /// It runs when it ends, and io reports that it ran out of time, which
+    /// leaves what it did in doubt.
+    Ambiguous(Op),
     /// It ends so, having done nothing.
     Ending(Done),
 }
@@ -1487,6 +1495,9 @@ impl World {
         let mut work = if self.rng.chance(git.broken) {
             self.stats.op_broken += 1;
             Work::Ending(Done::Failed { fault: Fault::Broken })
+        } else if self.rng.chance(git.ambiguous) {
+            self.stats.ambiguous += 1;
+            Work::Ambiguous(op)
         } else {
             Work::Perform(op)
         };
@@ -1510,7 +1521,7 @@ impl World {
             return;
         };
         let prepares = match &pending.work {
-            Work::Perform(op) => match op {
+            Work::Perform(op) | Work::Ambiguous(op) => match op {
                 Op::Make { .. } | Op::Clone { .. } | Op::Fetch { .. } | Op::Create { .. } | Op::CheckOut { .. } => true,
                 Op::Commit { .. } | Op::Push { .. } => false,
             },
@@ -1536,6 +1547,10 @@ impl World {
         let pending = self.ops.end(owner);
         let done = match pending.work {
             Work::Perform(op) => self.perform(owner, op),
+            Work::Ambiguous(op) => {
+                self.perform(owner, op);
+                Done::Failed { fault: Fault::TimedOut }
+            }
             Work::Ending(done) => done,
         };
         if !self.done {
