@@ -1,5 +1,5 @@
 [package]
-name = "temper-worker-model"
+name = "temper-fake-worker-model"
 description = "The model layer of a fake worker, starting agent runs, for simulations"
 version.workspace = true
 edition.workspace = true

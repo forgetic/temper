@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 use temper_agent_model_run::{Answer, Budget, Exhausted, Failure, Fault, Invalid, Limits, Policy, Refusal};
 use temper_agent_model_run_tests::partner::Script;
 use temper_agent_model_run_tests::{Settings, Span, World};
+use temper_fake_worker_model::Config;
 use temper_lib::{Duration, Rng};
-use temper_worker_model::Config;
 
 const ITERATIONS: u32 = 1_000_000;
 

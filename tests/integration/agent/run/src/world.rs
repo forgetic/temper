@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use temper_agent_model_run as run;
+use temper_fake_worker_model as worker;
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
-use temper_worker_model as worker;
 
 use crate::partner::{Out, Partner, Script, Tally};
 use crate::translate;

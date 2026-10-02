@@ -4,7 +4,7 @@
 use temper_agent_model_run as run;
 use temper_agent_model_run::charter;
 use temper_agent_model_run::outcome::{Children, OutcomeSpec, VerdictRule};
-use temper_worker_model::api as worker;
+use temper_fake_worker_model::api as worker;
 
 /// The run's charter for the worker's.
 #[must_use]
