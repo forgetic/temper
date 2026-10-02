@@ -96,7 +96,9 @@ pub enum Release {
 /// A repository of a client's spec, as the client knows it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Repo {
+    /// Its directory, and the forge's address for it.
     pub name: Vec<u8>,
+    pub remote: Vec<u8>,
     pub writable: bool,
     /// The commit its spec names, if it starts from one.
     pub commit: Option<u64>,

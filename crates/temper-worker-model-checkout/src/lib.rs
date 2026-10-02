@@ -43,6 +43,6 @@ mod model;
 mod tests;
 
 pub use boundary::{Event, Failure, Landing, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start};
-pub use facts::{Cached, Fact, Tally};
+pub use facts::{Cached, Fact, Tally, Target};
 pub use limits::{Limits, worst_case};
 pub use model::{MAX_OUT, Model, step};

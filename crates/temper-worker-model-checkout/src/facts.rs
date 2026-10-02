@@ -29,7 +29,7 @@ pub enum Fact {
     /// The prepare ended.
     Prepared { client: Token, prepared: Prepared },
     /// The push, or the save, ended with the repositories counted so.
-    Pushed { client: Token, saved: bool, tally: Tally },
+    Pushed { client: Token, to: Target, tally: Tally },
     /// The workspace is back in the cache.
     Released { client: Token },
 }
@@ -40,15 +40,24 @@ pub enum Cached {
     /// The workstream's, with the spec's repositories cloned: it is fetched
     /// and checked out afresh.
     Reused,
-    /// The workstream's, but holding other repositories, or what it held is
-    /// not known after an operation that failed or was aborted: it is
-    /// removed and made again.
+    /// The workstream's, but holding other repositories, or what it holds is
+    /// not known after an operation that broke, ran out of time or was
+    /// cancelled: it is made again, empty.
     Rebuilt,
     /// A new one: the cache had room.
     New,
     /// The least recently used workspace no client held, another
-    /// workstream's: it is removed and made again for this one.
+    /// workstream's: it is made again, empty, for this one.
     Evicted,
+}
+
+/// Where a push went.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Target {
+    /// Each writable repository's push branch.
+    Push,
+    /// The saved-work branch.
+    Saved,
 }
 
 /// The repositories of a push or a save, by what came of them.

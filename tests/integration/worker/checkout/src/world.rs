@@ -192,6 +192,15 @@ enum Delivery {
     Advance { repository: Vec<u8>, branch: Vec<u8> },
 }
 
+/// A repository on the forge: its directory in a workspace, its address on
+/// the forge, and its first commit.
+#[derive(Clone, Debug)]
+struct Hosted {
+    name: Vec<u8>,
+    remote: Vec<u8>,
+    first: u64,
+}
+
 /// An operation in flight in io: its end on the way, and what it does then.
 #[derive(Debug)]
 struct Pending {
@@ -217,8 +226,8 @@ pub struct World {
     wire: Schedule<Delivery>,
     disk: Checkout,
     forge: Forge,
-    /// The forge's repositories, by name, with their first commit.
-    repositories: Vec<(Vec<u8>, u64)>,
+    /// The forge's repositories.
+    repositories: Vec<Hosted>,
     /// Each workstream's repositories, by place among the forge's.
     workstreams: Vec<Vec<usize>>,
     clients: BTreeMap<u64, Client>,
@@ -246,10 +255,11 @@ impl World {
         let mut repositories = Vec::new();
         for place in 0..settings.repositories {
             let name = format!("r{place}").into_bytes();
+            let remote = format!("forge/r{place}").into_bytes();
             let tree =
                 Tree::from([(b"README".to_vec(), name.clone()), (b"src/lib.rs".to_vec(), b"fn f() {}".to_vec())]);
-            let first = forge.repository(&name, b"main", tree);
-            repositories.push((name, first));
+            let first = forge.repository(&remote, b"main", tree);
+            repositories.push(Hosted { name, remote, first });
         }
         let mut workstreams = Vec::new();
         for _ in 0..settings.workstreams {
@@ -306,10 +316,10 @@ impl World {
         &self.forge
     }
 
-    /// The forge's name for the repository at `place`.
+    /// The forge's address for the repository at `place`.
     #[must_use]
     pub fn repository(&self, place: usize) -> &[u8] {
-        &self.repositories[place].0
+        &self.repositories[place].remote
     }
 
     /// The repositories of the workstream at `place`, by place among the
@@ -427,11 +437,24 @@ impl World {
         let mut repositories = Vec::new();
         let mut repos = Vec::new();
         for (index, place) in places.into_iter().enumerate() {
+            let writable = index == 0 || self.rng.chance(500);
             let pick = match plan.start {
                 Some(pick) => pick,
                 None => self.draw_pick(),
             };
-            let (mut name, first) = self.repositories[place].clone();
+            // A read-only repository starts from what exists: no base branch
+            // is created for it.
+            let pick = match pick {
+                Pick::Base | Pick::Saved if !writable => Pick::Branch,
+                Pick::Base
+                | Pick::Branch
+                | Pick::Commit
+                | Pick::Saved
+                | Pick::MissingRepository
+                | Pick::MissingBranch
+                | Pick::MissingCommit => pick,
+            };
+            let Hosted { mut name, mut remote, first } = self.repositories[place].clone();
             let mut commit = None;
             let start = match pick {
                 Pick::Branch => Start::Branch { branch: b"main".as_slice().into() },
@@ -439,12 +462,13 @@ impl World {
                     commit = Some(first);
                     Start::Commit { commit: translate::commit(first) }
                 }
-                Pick::Saved if self.forge.branch(&name, &saved).is_some() => {
+                Pick::Saved if self.forge.branch(&remote, &saved).is_some() => {
                     Start::Saved { branch: saved.clone().into() }
                 }
                 Pick::Base | Pick::Saved => Start::Base { branch: base.clone().into() },
                 Pick::MissingRepository => {
                     name = format!("nowhere-{index}").into_bytes();
+                    remote = format!("forge/nowhere-{index}").into_bytes();
                     Start::Branch { branch: b"main".as_slice().into() }
                 }
                 Pick::MissingBranch => Start::Branch { branch: b"gone".as_slice().into() },
@@ -453,20 +477,21 @@ impl World {
                     Start::Commit { commit: translate::commit(1_000_000) }
                 }
             };
-            let writable = index == 0 || self.rng.chance(500);
             let push = if writable { Some(base.clone().into()) } else { None };
             let identity = IDENTITY.into();
             let base = match &start {
                 Start::Base { .. } => true,
                 Start::Branch { .. } | Start::Commit { .. } | Start::Saved { .. } => false,
             };
-            repositories.push(Repository { name: name.clone().into(), start, identity, push });
-            repos.push(Repo { name, writable, commit, base });
+            let spec = Repository { name: name.clone().into(), remote: remote.clone().into(), start, identity, push };
+            repositories.push(spec);
+            repos.push(Repo { name, remote, writable, commit, base });
         }
         // Another party may create or advance a base branch meanwhile.
         let first = repos.first().expect("a workstream has a repository");
-        if self.repositories.iter().any(|(known, _)| *known == first.name) && self.rng.chance(self.settings.advance) {
-            let delivery = Delivery::Advance { repository: first.name.clone(), branch: base.clone() };
+        let hosted = self.repositories.iter().any(|hosted| hosted.remote == first.remote);
+        if hosted && self.rng.chance(self.settings.advance) {
+            let delivery = Delivery::Advance { repository: first.remote.clone(), branch: base.clone() };
             let at = self.now.saturating_add(self.settings.remote.draw(&mut self.rng));
             self.schedule(at, delivery);
         }
@@ -713,8 +738,10 @@ impl World {
         if self.rng.chance(self.settings.advance) {
             let workstream = client.plan.workstream;
             let repo = client.repos.iter().find(|repo| repo.writable).expect("a spec's first repository is writable");
-            let delivery =
-                Delivery::Advance { repository: repo.name.clone(), branch: format!("base/{workstream}").into_bytes() };
+            let delivery = Delivery::Advance {
+                repository: repo.remote.clone(),
+                branch: format!("base/{workstream}").into_bytes(),
+            };
             let at = self.now.saturating_add(self.settings.think.draw(&mut self.rng));
             self.schedule(at, delivery);
         }
@@ -759,7 +786,7 @@ impl World {
                     assert!(repo.writable, "only a writable repository is pushed");
                     if !saved && repo.base {
                         let base = format!("base/{}", client.plan.workstream).into_bytes();
-                        let tip = self.forge.branch(&repo.name, &base);
+                        let tip = self.forge.branch(&repo.remote, &base);
                         assert!(tip != client.known[index], "a push is moved only if its branch moved: {tip:?}");
                     }
                     stats.moved += 1;
@@ -878,7 +905,7 @@ impl World {
     /// what moved on the forge.
     fn perform(&mut self, owner: Token, op: Op) -> Done {
         let remote = translate::remote(&op).map(<[u8]>::to_vec);
-        let on_forge = remote.filter(|name| self.repositories.iter().any(|(known, _)| known == name));
+        let on_forge = remote.filter(|remote| self.repositories.iter().any(|hosted| hosted.remote == *remote));
         let writes = op.kind() == Kind::Create || op.kind() == Kind::Push;
         if let Some(name) = &on_forge {
             let reachable = !self.rng.chance(self.settings.unreachable);
@@ -891,7 +918,6 @@ impl World {
                 self.checked_out.insert((owner, at.repository.to_vec()), translate::fake(*commit));
             }
             Op::Make { .. }
-            | Op::Remove { .. }
             | Op::Clone { .. }
             | Op::Fetch { .. }
             | Op::Create { .. }
@@ -983,8 +1009,8 @@ impl World {
             assert_eq!(client.release, Release::Done, "client {name} released what it held, or was refused");
             assert!(client.operation.is_none() && client.refusals == 0, "client {name} heard every end");
         }
-        for (repository, _) in &self.repositories {
-            for branch in self.forge.branches(repository).keys() {
+        for hosted in &self.repositories {
+            for branch in self.forge.branches(&hosted.remote).keys() {
                 assert!(
                     branch.starts_with(b"base/") || branch.starts_with(b"saved/") || branch == b"main",
                     "only the workstreams' branches are made: {}",

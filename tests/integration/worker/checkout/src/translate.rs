@@ -42,7 +42,7 @@ pub fn path(place: &Place) -> Vec<u8> {
 #[must_use]
 pub fn workspace(op: &Op) -> Token {
     match op {
-        Op::Make { workspace } | Op::Remove { workspace } => *workspace,
+        Op::Make { workspace } => *workspace,
         Op::Clone { at, .. }
         | Op::Fetch { at, .. }
         | Op::Create { at, .. }
@@ -61,18 +61,18 @@ pub fn identity(op: &Op) -> Option<&[u8]> {
         | Op::Create { identity, .. }
         | Op::Commit { identity, .. }
         | Op::Push { identity, .. } => Some(identity),
-        Op::Make { .. } | Op::Remove { .. } | Op::CheckOut { .. } => None,
+        Op::Make { .. } | Op::CheckOut { .. } => None,
     }
 }
 
-/// The repository a remote operation reaches.
+/// The repository a remote operation reaches, by the forge's address for it.
 #[must_use]
 pub fn remote(op: &Op) -> Option<&[u8]> {
     match op {
-        Op::Clone { at, .. } | Op::Fetch { at, .. } | Op::Create { at, .. } | Op::Push { at, .. } => {
-            Some(&at.repository)
+        Op::Clone { remote, .. } | Op::Fetch { remote, .. } | Op::Create { remote, .. } | Op::Push { remote, .. } => {
+            Some(remote)
         }
-        Op::Make { .. } | Op::Remove { .. } | Op::CheckOut { .. } | Op::Commit { .. } => None,
+        Op::Make { .. } | Op::CheckOut { .. } | Op::Commit { .. } => None,
     }
 }
 
@@ -81,37 +81,34 @@ pub fn remote(op: &Op) -> Option<&[u8]> {
 pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
     match op {
         Op::Make { workspace } => {
+            // Empty: whatever is there goes first.
             let dir = dir(workspace);
-            assert!(!disk.exists(&dir), "a workspace is made where nothing is");
+            disk.remove(&dir);
             disk.mkdir(&dir);
             Done::Succeeded
         }
-        Op::Remove { workspace } => {
-            disk.remove(&dir(workspace));
-            Done::Succeeded
-        }
-        Op::Clone { at, identity: _ } => {
+        Op::Clone { at, remote, identity: _ } => {
             assert!(disk.exists(&dir(at.workspace)), "a repository is cloned into a workspace made");
-            match forge.clone_repository(disk, &at.repository, &path(&at)) {
+            match forge.clone_repository(disk, &remote, &path(&at)) {
                 Ok(()) => Done::Succeeded,
                 Err(fault) => failed(fault),
             }
         }
-        Op::Fetch { at, want, identity: _ } => {
+        Op::Fetch { at, remote, want, identity: _ } => {
             assert_cloned(disk, &at);
             let want = match &want {
                 Want::Branch { branch } => git::Want::Branch(branch),
                 Want::Commit { commit } => git::Want::Commit(fake(*commit)),
                 Want::Default => git::Want::Default,
             };
-            match forge.fetch(&at.repository, want) {
+            match forge.fetch(&remote, want) {
                 Ok(fetched) => Done::Fetched { commit: commit(fetched) },
                 Err(fault) => failed(fault),
             }
         }
-        Op::Create { at, branch, commit, identity: _ } => {
+        Op::Create { at, remote, branch, commit, identity: _ } => {
             assert_cloned(disk, &at);
-            match forge.create(&at.repository, &branch, fake(commit)) {
+            match forge.create(&remote, &branch, fake(commit)) {
                 Ok(Created::Created) => Done::Succeeded,
                 Ok(Created::Exists) => Done::Exists,
                 Err(fault) => failed(fault),
@@ -130,9 +127,9 @@ pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
                 None => Done::Unchanged,
             }
         }
-        Op::Push { at, commit, branch, identity: _ } => {
+        Op::Push { at, remote, commit, branch, identity: _ } => {
             assert_cloned(disk, &at);
-            match forge.push(&at.repository, fake(commit), &branch) {
+            match forge.push(&remote, fake(commit), &branch) {
                 Ok(Pushed::Pushed) => Done::Succeeded,
                 Ok(Pushed::Rejected) => Done::Rejected,
                 Err(fault) => failed(fault),

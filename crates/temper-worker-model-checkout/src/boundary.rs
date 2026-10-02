@@ -42,12 +42,14 @@ pub enum Event {
     Save { hold: Token, branch: Box<[u8]>, message: Message },
     /// End the prepare, push or save under way for `hold` once the operation
     /// in flight has settled, without starting another: its answer says it
-    /// was aborted, and nothing touches the workspace afterwards. With
-    /// nothing under way, nothing happens.
+    /// was aborted, and nothing touches the workspace afterwards. A prepare's
+    /// operation is cancelled; a push's or a save's is not, but runs to its
+    /// end, which its deadline bounds, so that a push that lands is reported
+    /// landed. With nothing under way, nothing happens.
     Abort { hold: Token },
     /// Give the workspace of `hold` back to the cache, aborting what is under
-    /// way first. Answered by exactly one `Released`, once nothing touches
-    /// the workspace.
+    /// way first, as `Abort` does. Answered by exactly one `Released`, once
+    /// nothing touches the workspace.
     Release { hold: Token },
     /// Terminal for `Io`.
     Done { owner: Token, done: Done },
@@ -89,9 +91,13 @@ pub struct Spec {
 /// A repository of a spec.
 #[derive(PartialEq, Eq, Debug)]
 pub struct Repository {
-    /// The forge's name for it, which also names its directory in the
-    /// workspace.
+    /// Its directory in the workspace, beside the others': one path
+    /// component, so neither empty, `.` nor `..`, without `/` or NUL, and not
+    /// `.git` in any case.
     pub name: Box<[u8]>,
+    /// The forge's address for it, which the protocol layer maps to a URL:
+    /// never interpreted.
+    pub remote: Box<[u8]>,
     pub start: Start,
     /// Who the worker is to the forge for this repository, and who commits to
     /// it: a name the protocol layer maps to credentials and an author.
@@ -104,8 +110,9 @@ pub struct Repository {
 /// authoritative: it is fetched and checked out afresh.
 #[derive(PartialEq, Eq, Debug)]
 pub enum Start {
-    /// The tip of a base branch, which is created on the forge from the
-    /// default branch if it does not exist: only created, never moved.
+    /// The tip of a base branch. If the forge does not have it, it is created
+    /// there from the default branch, only created, never moved, for a
+    /// repository that may be written; for one that may not, it is missing.
     Base { branch: Box<[u8]> },
     /// The tip of a branch, which must exist.
     Branch { branch: Box<[u8]> },
@@ -174,22 +181,32 @@ pub enum Outcome {
     Refused { refusal: Refusal },
 }
 
-/// What came of one repository in a push or a save.
+/// What came of one repository in a push or a save. A push that failed in a
+/// way that may have landed (it ran out of time, broke, or lost the forge on
+/// the way) is checked by fetching its branch: it landed if the branch is at
+/// its commit.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Landing {
     /// `commit` is on the branch now.
     Landed { commit: Commit },
-    /// The branch is no longer where the workspace started from (or, for a
-    /// push, where the last push left it), so the push was rejected.
+    /// The branch is somewhere the commit does not descend from, so the push
+    /// was rejected. For a push: the branch moved since the workspace started
+    /// from it, or since the last push landed there. For a save: the
+    /// saved-work branch moved since the workspace started from it; a save
+    /// from any other start to a saved-work branch that exists is always
+    /// moved.
     Moved,
     /// The forge could not be reached, something failed on the worker's
-    /// side, or it ran out of time: trying again may succeed.
+    /// side, or it ran out of time, and it did not land: trying again may
+    /// succeed.
     Failed,
     /// The forge refused the push.
     Refused,
     /// Nothing to push: the tree is as the repository started (or, for a
     /// push, as the last push left it). Every read-only repository's.
     Unchanged,
-    /// Not pushed: it was aborted first.
+    /// Not pushed: an abort or a release came first. A push or a save in
+    /// flight is never cancelled: the repository it is pushing when they come
+    /// has its own landing, and those after it are aborted.
     Aborted,
 }

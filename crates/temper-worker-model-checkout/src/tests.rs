@@ -4,12 +4,12 @@ use alloc::boxed::Box;
 use core::mem::size_of;
 
 use temper_lib::bytes::copy_of;
-use temper_lib::{Duration, Env, List, Queue, Time, Token};
+use temper_lib::{Duration, Env, List, Queue, Time, Token, Writer};
 
 use crate::git::{Commit, Done, Fault, Kind, Missing, Op, Place, Want};
 use crate::{
     Cached, Event, Fact, Failure, Landing, Limits, MAX_OUT, Message, Model, Outcome, Prepared, Refusal, Repository,
-    Request, Spec, Start, Tally, step, worst_case,
+    Request, Spec, Start, Tally, Target, step, worst_case,
 };
 
 const LIMITS: Limits = Limits {
@@ -92,12 +92,9 @@ impl Harness {
         for _ in 0..16_u32 {
             let done = match &op {
                 Op::Fetch { at, .. } => Done::Fetched { commit: start_of(at) },
-                Op::Make { .. }
-                | Op::Remove { .. }
-                | Op::Clone { .. }
-                | Op::Create { .. }
-                | Op::CheckOut { .. }
-                | Op::Push { .. } => Done::Succeeded,
+                Op::Make { .. } | Op::Clone { .. } | Op::Create { .. } | Op::CheckOut { .. } | Op::Push { .. } => {
+                    Done::Succeeded
+                }
                 Op::Commit { .. } => panic!("a prepare commits nothing"),
             };
             match self.one(Event::Done { owner: hold, done }) {
@@ -161,7 +158,21 @@ fn bytes(text: &[u8]) -> Box<[u8]> {
 /// `writable`.
 fn repository(name: &[u8], writable: bool) -> Repository {
     let push = if writable { Some(bytes(b"main")) } else { None };
-    Repository { name: bytes(name), start: Start::Branch { branch: bytes(b"main") }, identity: bytes(b"bot"), push }
+    Repository {
+        name: bytes(name),
+        remote: remote(name),
+        start: Start::Branch { branch: bytes(b"main") },
+        identity: bytes(b"bot"),
+        push,
+    }
+}
+
+/// Where the forge has the repository `name`.
+fn remote(name: &[u8]) -> Box<[u8]> {
+    let mut remote = Writer::new(name.len().checked_add(6).expect("a short name"));
+    remote.put(b"forge:").expect("room for the prefix");
+    remote.put(name).expect("room for the name");
+    remote.finish()
 }
 
 fn spec(key: &[u8], repositories: Box<[Repository]>) -> Spec {
@@ -233,7 +244,7 @@ fn refused(request: Request) -> Refusal {
 /// The workspace a held workspace's operations name.
 fn workspace_of(op: &Op) -> Token {
     match op {
-        Op::Make { workspace } | Op::Remove { workspace } => *workspace,
+        Op::Make { workspace } => *workspace,
         Op::Clone { at, .. }
         | Op::Fetch { at, .. }
         | Op::Create { at, .. }
@@ -249,15 +260,16 @@ fn a_new_workspace_is_made_then_each_repository_cloned_fetched_and_checked_out()
     let (hold, op) = h.prepare(7, two(b"issue-1"));
     let Op::Make { workspace } = op else { panic!("a new workspace is made: {op:?}") };
     let identity = bytes(b"bot");
-    let clone_a = Op::Clone { at: place(workspace, b"a"), identity: identity.clone() };
+    let clone_a = Op::Clone { at: place(workspace, b"a"), remote: remote(b"a"), identity: identity.clone() };
     assert_eq!(h.next(hold, Done::Succeeded), clone_a);
-    let clone_b = Op::Clone { at: place(workspace, b"b"), identity: identity.clone() };
+    let clone_b = Op::Clone { at: place(workspace, b"b"), remote: remote(b"b"), identity: identity.clone() };
     assert_eq!(h.next(hold, Done::Succeeded), clone_b);
-    let fetch_a = Op::Fetch { at: place(workspace, b"a"), want: want_main(), identity: identity.clone() };
+    let fetch_a =
+        Op::Fetch { at: place(workspace, b"a"), remote: remote(b"a"), want: want_main(), identity: identity.clone() };
     assert_eq!(h.next(hold, Done::Succeeded), fetch_a);
     let check_out_a = Op::CheckOut { at: place(workspace, b"a"), commit: commit(1) };
     assert_eq!(h.next(hold, Done::Fetched { commit: commit(1) }), check_out_a);
-    let fetch_b = Op::Fetch { at: place(workspace, b"b"), want: want_main(), identity };
+    let fetch_b = Op::Fetch { at: place(workspace, b"b"), remote: remote(b"b"), want: want_main(), identity };
     assert_eq!(h.next(hold, Done::Succeeded), fetch_b);
     let check_out_b = Op::CheckOut { at: place(workspace, b"b"), commit: commit(2) };
     assert_eq!(h.next(hold, Done::Fetched { commit: commit(2) }), check_out_b);
@@ -306,7 +318,7 @@ fn a_workspace_holding_other_repositories_is_rebuilt() {
     h.one(Event::Release { hold: first });
     h.facts();
     let (_, op) = h.prepare(2, one(b"issue-1"));
-    assert_eq!(op.kind(), Kind::Remove, "removed, then made again");
+    assert_eq!(op.kind(), Kind::Make, "made again, empty");
     assert_eq!(h.facts().get(0), Some(&Fact::Held { client: Token::new(2), cached: Cached::Rebuilt }));
 }
 
@@ -324,9 +336,10 @@ fn the_least_recently_used_idle_workspace_is_evicted_when_the_cache_is_full() {
     h.one(Event::Release { hold: a });
     h.facts();
     let (_, op) = h.prepare(3, one(b"c-work"));
-    let Op::Remove { workspace } = op else { panic!("the evicted workspace is removed: {op:?}") };
+    let Op::Make { workspace } = op else { panic!("the evicted workspace is made again: {op:?}") };
     assert_eq!(h.facts().get(0), Some(&Fact::Held { client: Token::new(3), cached: Cached::Evicted }));
-    assert_eq!((h.model.workstream(0), h.model.workstream(1)), (Some(&b"a-work"[..]), Some(&b"c-work"[..])));
+    // c's is being built: it is not listed until it is cloned.
+    assert_eq!((h.model.workstream(0), h.model.workstream(1)), (Some(&b"a-work"[..]), None));
     // a is still cached, and reused.
     let (_, op) = h.prepare(4, one(b"a-work"));
     assert_eq!(op.kind(), Kind::Fetch, "a's workspace is still cached");
@@ -360,6 +373,16 @@ fn a_spec_beyond_the_limits_is_refused_at_the_entrance() {
         spec(b"w", Box::new([Repository { identity: bytes(&long), ..repository(b"a", true) }])),
         spec(b"w", Box::new([Repository { push: Some(bytes(b"")), ..repository(b"a", true) }])),
         spec(b"w", Box::new([Repository { start: Start::Base { branch: bytes(&long) }, ..repository(b"a", true) }])),
+        spec(b"w", Box::new([Repository { remote: bytes(b""), ..repository(b"a", true) }])),
+        spec(b"w", Box::new([Repository { remote: bytes(&long), ..repository(b"a", true) }])),
+        // Each repository's directory is one safe path component.
+        spec(b"w", Box::new([repository(b".", true)])),
+        spec(b"w", Box::new([repository(b"..", true)])),
+        spec(b"w", Box::new([repository(b"a/b", true)])),
+        spec(b"w", Box::new([repository(b"/", true)])),
+        spec(b"w", Box::new([repository(b"a\0", true)])),
+        spec(b"w", Box::new([repository(b".git", true)])),
+        spec(b"w", Box::new([repository(b".GiT", true)])),
     ];
     let mut h = Harness::new(LIMITS);
     for spec in invalid {
@@ -367,9 +390,11 @@ fn a_spec_beyond_the_limits_is_refused_at_the_entrance() {
         assert_eq!(refused(request), Refusal::Invalid);
     }
     assert_eq!((h.model.workspaces(), h.model.holds()), (0, 0), "nothing is held");
-    // At the limits, it is admitted.
-    let at = Repository { identity: bytes(&long[..16]), ..repository(&long[..16], true) };
-    h.prepare(1, spec(&long[..16], Box::new([at, repository(b"b", false)])));
+    // At the limits, it is admitted; and a name may look like a git
+    // directory's or have dots, so long as it is not one.
+    let at = Repository { identity: bytes(&long[..16]), remote: bytes(&long[..16]), ..repository(&long[..16], true) };
+    h.prepare(1, spec(&long[..16], Box::new([at, repository(b".gitx", false)])));
+    h.prepare(2, spec(b"v", Box::new([repository(b"...", true), repository(b".git.", false)])));
 }
 
 #[test]
@@ -384,8 +409,13 @@ fn a_missing_base_branch_is_created_from_the_default_branch() {
     let default = h.next(hold, failed(Fault::Missing { missing: Missing::Branch }));
     let Op::Fetch { want: Want::Default, .. } = default else { panic!("then the default branch: {default:?}") };
     let create = h.next(hold, Done::Fetched { commit: commit(9) });
-    let expected =
-        Op::Create { at: at.clone(), branch: bytes(b"temper/1"), commit: commit(9), identity: bytes(b"bot") };
+    let expected = Op::Create {
+        at: at.clone(),
+        remote: remote(b"a"),
+        branch: bytes(b"temper/1"),
+        commit: commit(9),
+        identity: bytes(b"bot"),
+    };
     assert_eq!(create, expected, "created at the default branch's tip");
     let check_out = h.next(hold, Done::Succeeded);
     assert_eq!(check_out, Op::CheckOut { at, commit: commit(9) });
@@ -476,8 +506,7 @@ fn a_build_that_failed_is_rebuilt_and_a_fetch_that_failed_is_not() {
     h.one(Event::Done { owner: hold, done: failed(Fault::Unreachable) });
     h.one(Event::Release { hold });
     let (hold, op) = h.prepare(2, one(b"w"));
-    assert_eq!(op.kind(), Kind::Remove, "what a failed clone left is not known");
-    h.next(hold, Done::Succeeded);
+    assert_eq!(op.kind(), Kind::Make, "what a failed clone left is not known");
     h.next(hold, Done::Succeeded);
     h.next(hold, Done::Succeeded);
     h.one(Event::Done { owner: hold, done: failed(Fault::Unreachable) });
@@ -495,7 +524,9 @@ fn a_push_commits_the_tree_on_its_start_and_pushes_it_to_the_push_branch() {
     assert_eq!((&*at.repository, parent), (&b"a"[..], commit(1)), "the writable one, on its start");
     assert_eq!((&*title, &*body, &*identity), (&b"Fix it"[..], &b"Because."[..], &b"bot"[..]));
     let push = h.next(hold, Done::Committed { commit: commit(11) });
-    assert_eq!(push, Op::Push { at, commit: commit(11), branch: bytes(b"main"), identity: bytes(b"bot") });
+    let expected =
+        Op::Push { at, remote: remote(b"a"), commit: commit(11), branch: bytes(b"main"), identity: bytes(b"bot") };
+    assert_eq!(push, expected);
     let end = h.one(Event::Done { owner: hold, done: Done::Succeeded });
     assert_eq!(
         end,
@@ -507,7 +538,7 @@ fn a_push_commits_the_tree_on_its_start_and_pushes_it_to_the_push_branch() {
         }
     );
     let told = Tally { landed: 1, moved: 0, failed: 0, refused: 0, unchanged: 1, aborted: 0 };
-    assert_eq!(h.facts().last(), Some(&Fact::Pushed { client: Token::new(1), saved: false, tally: told }));
+    assert_eq!(h.facts().last(), Some(&Fact::Pushed { client: Token::new(1), to: Target::Push, tally: told }));
 }
 
 #[test]
@@ -540,8 +571,7 @@ fn a_push_that_is_not_a_fast_forward_is_moved_and_others_fail_by_kind() {
     let cases = [
         (Done::Rejected, Landing::Moved),
         (failed(Fault::Refused), Landing::Refused),
-        (failed(Fault::Unreachable), Landing::Failed),
-        (failed(Fault::TimedOut), Landing::Failed),
+        (failed(Fault::Missing { missing: Missing::Repository }), Landing::Failed),
     ];
     for (done, landing) in cases {
         let mut h = Harness::new(LIMITS);
@@ -645,27 +675,145 @@ fn an_abort_ends_a_prepare_once_its_operation_has_settled() {
         assert_eq!(h.one(Event::Release { hold }), Request::Released { client: Token::new(1) });
         // What the build left is not known.
         let (_, op) = h.prepare(2, two(b"w"));
-        assert_eq!(op.kind(), Kind::Remove);
+        assert_eq!(op.kind(), Kind::Make);
     }
 }
 
 #[test]
-fn an_abort_mid_push_keeps_what_landed_and_reports_the_rest_aborted() {
+fn an_abort_mid_push_waits_for_the_push_keeps_what_landed_and_reports_the_rest_aborted() {
     let mut h = Harness::new(LIMITS);
     let both = spec(b"w", Box::new([repository(b"a", true), repository(b"b", true)]));
     let hold = h.ready(1, both);
     h.one(Event::Push { hold, message: message() });
     h.next(hold, Done::Committed { commit: commit(11) });
-    assert_eq!(h.one(Event::Abort { hold }), Request::Cancel { owner: hold });
+    // The push in flight is not cancelled.
+    h.none(Event::Abort { hold });
+    h.none(Event::Abort { hold });
     let end = h.one(Event::Done { owner: hold, done: Done::Succeeded });
     assert_eq!(&*landings(end), &[Landing::Landed { commit: commit(11) }, Landing::Aborted]);
     // Ready again: a save goes ahead.
     let save = h.one(Event::Save { hold, branch: bytes(b"saved/1"), message: message() });
     assert_eq!(io(save, hold).kind(), Kind::Commit);
-    // An abort while committing pushes nothing.
-    assert_eq!(h.one(Event::Abort { hold }), Request::Cancel { owner: hold });
+    // An abort while committing pushes nothing, whether the commit was made
+    // or cancelled.
+    h.none(Event::Abort { hold });
     let end = h.one(Event::Done { owner: hold, done: Done::Committed { commit: commit(13) } });
     assert_eq!(&*landings(end), &[Landing::Aborted, Landing::Aborted]);
+    h.one(Event::Push { hold, message: message() });
+    h.none(Event::Abort { hold });
+    let end = h.one(Event::Done { owner: hold, done: failed(Fault::Cancelled) });
+    assert_eq!(&*landings(end), &[Landing::Aborted, Landing::Aborted]);
+}
+
+#[test]
+fn a_push_that_may_have_landed_is_verified() {
+    let cases = [
+        (failed(Fault::TimedOut), Done::Fetched { commit: commit(11) }, Landing::Landed { commit: commit(11) }),
+        (failed(Fault::Broken), Done::Fetched { commit: commit(1) }, Landing::Failed),
+        (failed(Fault::Unreachable), failed(Fault::Unreachable), Landing::Failed),
+        (failed(Fault::TimedOut), failed(Fault::Missing { missing: Missing::Branch }), Landing::Failed),
+    ];
+    for (ended, found, landing) in cases {
+        let mut h = Harness::new(LIMITS);
+        let hold = h.ready(1, one(b"w"));
+        h.one(Event::Push { hold, message: message() });
+        h.next(hold, Done::Committed { commit: commit(11) });
+        // Verified even when the client asked to abort meanwhile.
+        h.none(Event::Abort { hold });
+        let verify = h.next(hold, ended);
+        let Op::Fetch { at, remote: from, want: Want::Branch { branch }, .. } = verify else {
+            panic!("the push branch is fetched: {verify:?}");
+        };
+        assert_eq!((&*at.repository, &*from, &*branch), (&b"a"[..], &*remote(b"a"), &b"main"[..]));
+        let end = h.one(Event::Done { owner: hold, done: found });
+        assert_eq!(&*landings(end), &[landing]);
+    }
+    // One that landed is the base of the next push.
+    let mut h = Harness::new(LIMITS);
+    let hold = h.ready(1, one(b"w"));
+    h.one(Event::Push { hold, message: message() });
+    h.next(hold, Done::Committed { commit: commit(11) });
+    h.next(hold, failed(Fault::TimedOut));
+    h.one(Event::Done { owner: hold, done: Done::Fetched { commit: commit(11) } });
+    h.one(Event::Push { hold, message: message() });
+    let end = h.one(Event::Done { owner: hold, done: Done::Unchanged });
+    assert_eq!(&*landings(end), &[Landing::Unchanged]);
+    // A push refused, or not a fast-forward, is not verified.
+    for (ended, landing) in [(failed(Fault::Refused), Landing::Refused), (Done::Rejected, Landing::Moved)] {
+        let mut h = Harness::new(LIMITS);
+        let hold = h.ready(1, one(b"w"));
+        h.one(Event::Push { hold, message: message() });
+        h.next(hold, Done::Committed { commit: commit(11) });
+        let end = h.one(Event::Done { owner: hold, done: ended });
+        assert_eq!(&*landings(end), &[landing]);
+    }
+}
+
+#[test]
+fn an_operation_that_broke_ran_out_of_time_or_was_cancelled_leaves_the_workspace_untrusted() {
+    for fault in [Fault::Broken, Fault::TimedOut, Fault::Cancelled, Fault::Unreachable, Fault::Refused] {
+        // A fetch, in a workspace already cloned.
+        let mut h = Harness::new(LIMITS);
+        let hold = h.ready(1, one(b"w"));
+        h.one(Event::Release { hold });
+        let (hold, _) = h.prepare(2, one(b"w"));
+        h.one(Event::Done { owner: hold, done: failed(fault) });
+        h.one(Event::Release { hold });
+        let (_, op) = h.prepare(3, one(b"w"));
+        let damaged = match fault {
+            Fault::Broken | Fault::TimedOut | Fault::Cancelled => true,
+            Fault::Missing { .. } | Fault::Refused | Fault::Unreachable => false,
+        };
+        let expected = if damaged { Kind::Make } else { Kind::Fetch };
+        assert_eq!(op.kind(), expected, "after a fetch that ended {fault:?}");
+        // A commit.
+        let mut h = Harness::new(LIMITS);
+        let hold = h.ready(1, one(b"w"));
+        h.one(Event::Push { hold, message: message() });
+        h.one(Event::Done { owner: hold, done: failed(fault) });
+        h.one(Event::Release { hold });
+        let (_, op) = h.prepare(2, one(b"w"));
+        assert_eq!(op.kind(), expected, "after a commit that ended {fault:?}");
+    }
+}
+
+#[test]
+fn a_missing_base_branch_of_a_read_only_repository_is_missing() {
+    let mut h = Harness::new(LIMITS);
+    let base = Repository { start: Start::Base { branch: bytes(b"temper/1") }, ..repository(b"a", false) };
+    let (hold, _) = h.prepare(1, spec(b"w", Box::new([base])));
+    h.next(hold, Done::Succeeded);
+    h.next(hold, Done::Succeeded);
+    let end = h.one(Event::Done { owner: hold, done: failed(Fault::Missing { missing: Missing::Branch }) });
+    assert_eq!(
+        prepared(end),
+        Prepared::Failed { failure: Failure::Missing { repository: 0, missing: Missing::Branch } }
+    );
+}
+
+#[test]
+fn a_workspace_cloned_from_another_remote_is_rebuilt() {
+    let mut h = Harness::new(LIMITS);
+    let hold = h.ready(1, one(b"w"));
+    h.one(Event::Release { hold });
+    let moved = Repository { remote: remote(b"elsewhere"), ..repository(b"a", true) };
+    let (_, op) = h.prepare(2, spec(b"w", Box::new([moved])));
+    assert_eq!(op.kind(), Kind::Make, "the same directory, but another repository");
+}
+
+#[test]
+fn only_workspaces_whose_disk_is_known_are_listed() {
+    let mut h = Harness::new(LIMITS);
+    let (hold, _) = h.prepare(1, one(b"w"));
+    assert_eq!(h.model.workstream(0), None, "being built");
+    h.next(hold, Done::Succeeded);
+    h.next(hold, Done::Succeeded);
+    assert_eq!(h.model.workstream(0), Some(&b"w"[..]), "cloned");
+    h.one(Event::Done { owner: hold, done: failed(Fault::TimedOut) });
+    assert_eq!(h.model.workstream(0), None, "damaged");
+    h.one(Event::Release { hold });
+    h.ready(2, one(b"v"));
+    assert_eq!((h.model.workstream(0), h.model.workstream(1)), (Some(&b"v"[..]), None));
 }
 
 #[test]
@@ -683,13 +831,15 @@ fn a_release_under_way_aborts_first_and_releases_once_settled() {
     ];
     assert_eq!(requests.as_slice(), &expected);
     assert_eq!((h.model.holds(), h.model.idle()), (0, 1), "reclaimed, and the workspace idle");
-    // A release while pushing.
+    // A release while pushing waits for the push.
     let hold = h.ready(2, one(b"w"));
     h.one(Event::Push { hold, message: message() });
-    assert_eq!(h.one(Event::Release { hold }), Request::Cancel { owner: hold });
-    let requests = h.step(Event::Done { owner: hold, done: failed(Fault::Cancelled) });
+    h.next(hold, Done::Committed { commit: commit(11) });
+    h.none(Event::Release { hold });
+    let requests = h.step(Event::Done { owner: hold, done: Done::Succeeded });
+    let landed = Box::new([Landing::Landed { commit: commit(11) }]);
     let expected = [
-        Request::Pushed { client: Token::new(2), outcome: Outcome::Pushed { landings: Box::new([Landing::Failed]) } },
+        Request::Pushed { client: Token::new(2), outcome: Outcome::Pushed { landings: landed } },
         Request::Released { client: Token::new(2) },
     ];
     assert_eq!(requests.as_slice(), &expected);

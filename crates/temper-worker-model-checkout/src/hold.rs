@@ -3,12 +3,12 @@
 //! steps 2, 7 and 8, and 5).
 //!
 //! A prepare that passes the entrance holds a workspace ([`crate::cache`]) and
-//! readies it, one operation at a time. A workspace made again is removed
-//! (unless it is new) and made, and each repository cloned. Then each
-//! repository is fetched at its starting point and checked out. A base branch
-//! the forge does not have is created there from the default branch, and only
-//! created: if another party created it meanwhile, it is fetched again and
-//! the workspace starts from wherever that party put it.
+//! readies it, one operation at a time. A workspace made again is made empty,
+//! and each repository cloned into it. Then each repository is fetched at its
+//! starting point and checked out. A base branch the forge does not have is
+//! created there from the default branch, for a repository that may be
+//! written, and only created: if another party created it meanwhile, it is
+//! fetched again and the workspace starts from wherever that party put it.
 //!
 //! A push commits each writable repository's tree exactly as it is, on the
 //! commit it was checked out at or last committed, and pushes the commit to
@@ -18,7 +18,9 @@
 //! since the start: otherwise it is `Unchanged`. A save does the same to the
 //! saved-work branch, for every repository changed since the start. Pushing
 //! is not atomic: each repository is pushed on its own, whatever came of the
-//! one before.
+//! one before. A push that failed in a way that may have landed all the same
+//! (it ran out of time, broke, or lost the forge on the way) is verified: the
+//! branch is fetched, and the push landed if the branch is at its commit.
 //!
 //! The transition table. Every other cell is unreachable by the boundary's
 //! contract: one terminal event per operation, and an operation's terminal
@@ -27,19 +29,22 @@
 //! ```text
 //! state       event                     next        requests
 //! (none)      prepare, refused          (none)      prepared: refused
-//!             prepare, admitted         Preparing   held, io: remove, make or fetch
+//!             prepare, admitted         Preparing   held, io: make or fetch
 //! Preparing   done, more to do          Preparing   io: the next operation
 //!             done, all checked out     Ready       prepared: ready
 //!             done, failed              Unprepared  prepared: failed
 //!             done, aborting            Unprepared  prepared: aborted
 //!             done, releasing           Closed      prepared: aborted, released
+//!             abort, release            Preparing   cancel, the first time asked
 //! Pushing     done, more to do          Pushing     io: the next operation
+//!             done, a push that may     Pushing     io: fetch its branch
+//!               have landed
 //!             done, all pushed          Ready       pushed or saved
 //!             done, aborting            Ready       pushed or saved (the rest aborted)
 //!             done, releasing           Closed      pushed or saved, released
-//! Preparing,  abort                     (same)      cancel, the first time asked
-//! Pushing     release                   (same)      cancel, the first time asked
-//!             push, save                (same)      pushed or saved: refused, busy
+//!             abort, release            Pushing     (it waits for the operation)
+//! Preparing,  push, save                (same)      pushed or saved: refused, busy
+//! Pushing
 //! Ready       push, save                Pushing     io: commit
 //!             ... nothing writable      Ready       pushed or saved: all unchanged
 //!             ... beyond the limits     Ready       pushed or saved: refused, invalid
@@ -53,11 +58,18 @@
 //! ```
 //!
 //! "More to do" follows the steps above. A prepare asked to abort, or to
-//! release, ends aborted once the operation in flight has ended, whatever
-//! that operation's end, and starts nothing more; a push or a save keeps
-//! what came of the repository in flight and reports the rest as aborted.
-//! Nothing touches the workspace afterwards: the hold runs one operation at
-//! a time, and it ends only once that operation has.
+//! release, cancels its operation in flight, ends aborted once that has
+//! ended, whatever its end, and starts nothing more. A push or a save is
+//! never cancelled: so that a push that lands is reported landed, the
+//! operation in flight runs to its end, which its deadline bounds, and a push
+//! that may have landed is verified all the same; then the push or the save
+//! ends, reporting the repositories not reached as aborted. Nothing touches
+//! the workspace afterwards: the hold runs one operation at a time, and it
+//! ends only once that operation has.
+//!
+//! An operation that broke, ran out of time or was cancelled may have left
+//! its repository damaged (git was killed, or failed half way), so the
+//! workspace is not trusted again: the next prepare makes it again.
 //!
 //! What a transition tells as facts is derived from the requests it made, in
 //! one place ([`tell`]), and what the new state implies (a closed hold is
@@ -66,12 +78,12 @@
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::bytes::copy_of;
+use temper_lib::bytes::{copy_of, find};
 use temper_lib::{Env, Id, List, Queue, Slab, Token};
 
 use crate::boundary::{Failure, Landing, Message, Outcome, Prepared, Refusal, Repository, Request, Spec, Start};
 use crate::cache::{Cache, Workspace, count};
-use crate::facts::{Cached, Fact, Facts, Tally};
+use crate::facts::{Cached, Fact, Facts, Tally, Target};
 use crate::git::{Commit, Done, Fault, Missing, Op, Place, Want};
 use crate::limits::Limits;
 use crate::model::Model;
@@ -123,7 +135,6 @@ enum State {
 /// place in the spec.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum PrepareStep {
-    Remove,
     Make,
     Clone {
         repository: u32,
@@ -171,8 +182,16 @@ enum To {
 /// The operation a pushing hold waits for.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum PushStep {
-    Commit { repository: u32 },
-    Push { repository: u32 },
+    Commit {
+        repository: u32,
+    },
+    Push {
+        repository: u32,
+    },
+    /// The branch a push that may have landed went to.
+    Verify {
+        repository: u32,
+    },
 }
 
 /// What the client asked of the operation under way: nothing, to abort it, or
@@ -217,8 +236,7 @@ pub(crate) fn prepare(model: &mut Model, env: &Env<Limits>, client: Token, spec:
     out.push(Request::Held { client, hold: id.token() });
     let first = match cached {
         Cached::Reused => PrepareStep::Fetch { repository: 0 },
-        Cached::Rebuilt | Cached::Evicted => PrepareStep::Remove,
-        Cached::New => PrepareStep::Make,
+        Cached::Rebuilt | Cached::Evicted | Cached::New => PrepareStep::Make,
     };
     let hold = model.holds.get_mut(id).expect("inserted above");
     hold.state = prepare_step(&hold.holding, id, first, env, out);
@@ -266,9 +284,9 @@ pub(crate) fn release(model: &mut Model, hold: Token, out: &mut Queue<Request>) 
     ask(model, hold, Asked::Release, out);
 }
 
-/// The client asks to abort, or to release: what is under way is cancelled
-/// the first time it asks, and a hold with nothing under way is released at
-/// once.
+/// The client asks to abort, or to release: a prepare's operation is
+/// cancelled the first time it asks, a push's runs to its end, and a hold
+/// with nothing under way is released at once.
 fn ask(model: &mut Model, hold: Token, now: Asked, out: &mut Queue<Request>) {
     let mark = out.len();
     let Some(id) = addressed(&model.holds, hold) else {
@@ -277,8 +295,8 @@ fn ask(model: &mut Model, hold: Token, now: Asked, out: &mut Queue<Request>) {
     let hold = model.holds.get_mut(id).expect("addressed above");
     let state = mem::replace(&mut hold.state, State::Closed);
     hold.state = match state {
-        State::Preparing { step, asked } => State::Preparing { step, asked: asking(id, asked, now, out) },
-        State::Pushing { push, step, asked } => State::Pushing { push, step, asked: asking(id, asked, now, out) },
+        State::Preparing { step, asked } => State::Preparing { step, asked: cancelling(id, asked, now, out) },
+        State::Pushing { push, step, asked } => State::Pushing { push, step, asked: outranking(asked, now) },
         idle @ (State::Ready | State::Unprepared) => match now {
             Asked::Release => released(hold.holding.client, out),
             Asked::Abort => idle,
@@ -295,6 +313,9 @@ pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Don
     let id = Id::from_token(owner);
     let hold = model.holds.get_mut(id).expect("a hold lives until its operation has ended");
     model.facts.push(Fact::Ended { client: hold.holding.client, done });
+    if damages(done) {
+        model.cache.spoil(hold.holding.workspace);
+    }
     let state = mem::replace(&mut hold.state, State::Closed);
     let holding = &mut hold.holding;
     hold.state = match state {
@@ -338,8 +359,8 @@ fn tell(facts: &mut Facts, client: Token, out: &Queue<Request>, mark: u32) {
         let fact = match request {
             Request::Held { .. } => continue,
             Request::Prepared { client, prepared } => Fact::Prepared { client: *client, prepared: *prepared },
-            Request::Pushed { client, outcome } => pushed_fact(*client, false, outcome),
-            Request::Saved { client, outcome } => pushed_fact(*client, true, outcome),
+            Request::Pushed { client, outcome } => pushed_fact(*client, Target::Push, outcome),
+            Request::Saved { client, outcome } => pushed_fact(*client, Target::Saved, outcome),
             Request::Released { client } => Fact::Released { client: *client },
             Request::Io { owner: _, op, deadline: _ } => Fact::Started { client, op: op.kind() },
             Request::Cancel { owner: _ } => Fact::Aborting { client },
@@ -348,9 +369,9 @@ fn tell(facts: &mut Facts, client: Token, out: &Queue<Request>, mark: u32) {
     }
 }
 
-fn pushed_fact(client: Token, saved: bool, outcome: &Outcome) -> Fact {
+fn pushed_fact(client: Token, to: Target, outcome: &Outcome) -> Fact {
     match outcome {
-        Outcome::Pushed { landings } => Fact::Pushed { client, saved, tally: tally(landings) },
+        Outcome::Pushed { landings } => Fact::Pushed { client, to, tally: tally(landings) },
         Outcome::Refused { refusal } => Fact::Refused { client, refusal: *refusal },
     }
 }
@@ -376,13 +397,6 @@ fn follow(holds: &mut Slab<Hold>, cache: &mut Cache, id: Id<Hold>) {
 fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: Done) -> Next {
     let last = count(holding.repositories.len()).checked_sub(1).expect("a spec names a repository");
     match step {
-        PrepareStep::Remove => match done {
-            Done::Succeeded => Next::Step(PrepareStep::Make),
-            Done::Failed { fault: _ } => Next::Failed(Failure::Transient),
-            Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
-                unreachable!("io ends a removal with its own terminals")
-            }
-        },
         PrepareStep::Make => match done {
             Done::Succeeded => Next::Step(PrepareStep::Clone { repository: 0 }),
             Done::Failed { fault: _ } => Next::Failed(Failure::Transient),
@@ -403,7 +417,9 @@ fn prepared(holding: &mut Holding, cache: &mut Cache, step: PrepareStep, done: D
         },
         PrepareStep::Fetch { repository } => match done {
             Done::Fetched { commit } => Next::Step(PrepareStep::CheckOut { repository, commit }),
-            Done::Failed { fault: Fault::Missing { missing: Missing::Branch } } if is_base(holding, repository) => {
+            Done::Failed { fault: Fault::Missing { missing: Missing::Branch } }
+                if creates_base(holding, repository) =>
+            {
                 Next::Step(PrepareStep::Default { repository })
             }
             Done::Failed { fault } => Next::Failed(failure(repository, fault)),
@@ -498,11 +514,12 @@ fn prepare_step(
 ) -> State {
     let workspace = holding.workspace.token();
     let op = match step {
-        PrepareStep::Remove => Op::Remove { workspace },
         PrepareStep::Make => Op::Make { workspace },
         PrepareStep::Clone { repository } => {
             let repository = nth(holding, repository);
-            Op::Clone { at: place(workspace, repository), identity: copy_of(&repository.identity) }
+            let remote = copy_of(&repository.remote);
+            let identity = copy_of(&repository.identity);
+            Op::Clone { at: place(workspace, repository), remote, identity }
         }
         PrepareStep::Fetch { repository } | PrepareStep::Refetch { repository } => {
             let repository = nth(holding, repository);
@@ -512,11 +529,15 @@ fn prepare_step(
                 }
                 Start::Commit { commit } => Want::Commit { commit: *commit },
             };
-            Op::Fetch { at: place(workspace, repository), want, identity: copy_of(&repository.identity) }
+            let remote = copy_of(&repository.remote);
+            let identity = copy_of(&repository.identity);
+            Op::Fetch { at: place(workspace, repository), remote, want, identity }
         }
         PrepareStep::Default { repository } => {
             let repository = nth(holding, repository);
-            Op::Fetch { at: place(workspace, repository), want: Want::Default, identity: copy_of(&repository.identity) }
+            let remote = copy_of(&repository.remote);
+            let identity = copy_of(&repository.identity);
+            Op::Fetch { at: place(workspace, repository), remote, want: Want::Default, identity }
         }
         PrepareStep::Create { repository, commit } => {
             let repository = nth(holding, repository);
@@ -526,8 +547,9 @@ fn prepare_step(
                     unreachable!("only a base branch is created")
                 }
             };
+            let remote = copy_of(&repository.remote);
             let identity = copy_of(&repository.identity);
-            Op::Create { at: place(workspace, repository), branch, commit, identity }
+            Op::Create { at: place(workspace, repository), remote, branch, commit, identity }
         }
         PrepareStep::CheckOut { repository, commit } => {
             Op::CheckOut { at: place(workspace, nth(holding, repository)), commit }
@@ -573,7 +595,8 @@ fn push_from(
         }
         let at = place(holding.workspace.token(), spec);
         let parent = tips(holding, repository).head;
-        let (title, body) = (copy_of(&push.message.title), copy_of(&push.message.body));
+        let title = copy_of(&push.message.title);
+        let body = copy_of(&push.message.body);
         io(id, Op::Commit { at, parent, title, body, identity: copy_of(&spec.identity) }, env, out);
         return State::Pushing { push, step: PushStep::Commit { repository }, asked: Asked::Nothing };
     }
@@ -595,17 +618,25 @@ fn pushed(
     out: &mut Queue<Request>,
 ) -> State {
     let (repository, landing) = match step {
-        PushStep::Commit { repository } => match committed(holding, repository, done) {
-            Some(failed) => (repository, failed),
-            None => match asked {
-                Asked::Nothing => match unpushed(holding, &push.to, repository) {
+        PushStep::Commit { repository } => match asked {
+            Asked::Nothing => match committed(holding, repository, done) {
+                Ok(()) => match unpushed(holding, &push.to, repository) {
                     Some(commit) => return push_commit(holding, id, push, repository, commit, env, out),
                     None => (repository, Landing::Unchanged),
                 },
-                Asked::Abort | Asked::Release => (repository, Landing::Aborted),
+                Err(fault) => (repository, landing(fault)),
+            },
+            // Committed or not, nothing is pushed.
+            Asked::Abort | Asked::Release => match committed(holding, repository, done) {
+                Ok(()) | Err(Fault::Cancelled) => (repository, Landing::Aborted),
+                Err(fault) => (repository, landing(fault)),
             },
         },
-        PushStep::Push { repository } => (repository, landed(holding, &push.to, repository, done)),
+        PushStep::Push { repository } => match pushed_to(holding, &push.to, repository, done) {
+            Some(landing) => (repository, landing),
+            None => return verify(holding, id, push, repository, asked, env, out),
+        },
+        PushStep::Verify { repository } => (repository, verified(holding, &push.to, repository, done)),
     };
     push.landings.push(landing).expect("room for each repository's landing");
     match asked {
@@ -614,16 +645,16 @@ fn pushed(
     }
 }
 
-/// Pushing, a commit done: its new head, or the landing of a commit that
-/// failed.
-fn committed(holding: &mut Holding, repository: u32, done: Done) -> Option<Landing> {
+/// Pushing, a commit done: the repository's new head, if it committed, or
+/// why it failed.
+fn committed(holding: &mut Holding, repository: u32, done: Done) -> Result<(), Fault> {
     match done {
         Done::Committed { commit } => {
             tips_mut(holding, repository).head = commit;
-            None
+            Ok(())
         }
-        Done::Unchanged => None,
-        Done::Failed { fault } => Some(landing(fault)),
+        Done::Unchanged => Ok(()),
+        Done::Failed { fault } => Err(fault),
         Done::Succeeded | Done::Fetched { .. } | Done::Exists | Done::Rejected => {
             unreachable!("io ends a commit with its own terminals")
         }
@@ -654,33 +685,70 @@ fn push_commit(
     out: &mut Queue<Request>,
 ) -> State {
     let spec = nth(holding, repository);
-    let branch = match &push.to {
-        To::Branches => copy_of(spec.push.as_deref().expect("only a writable repository is pushed")),
-        To::Saved { branch } => copy_of(branch),
-    };
+    let branch = branch_of(spec, &push.to);
     let at = place(holding.workspace.token(), spec);
-    io(id, Op::Push { at, commit, branch, identity: copy_of(&spec.identity) }, env, out);
+    let remote = copy_of(&spec.remote);
+    let identity = copy_of(&spec.identity);
+    io(id, Op::Push { at, remote, commit, branch, identity }, env, out);
     State::Pushing { push, step: PushStep::Push { repository }, asked: Asked::Nothing }
 }
 
-/// Pushing, a push done: what came of it. A commit that landed on its push
-/// branch is the base of the next push.
-fn landed(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Landing {
+/// Pushing, a push done: what came of it, or `None` if it may have landed
+/// all the same, to be verified. A commit that landed on its push branch is
+/// the base of the next push.
+fn pushed_to(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Option<Landing> {
     match done {
-        Done::Succeeded => {
-            let tips = tips_mut(holding, repository);
-            match to {
-                To::Branches => tips.pushed = tips.head,
-                To::Saved { .. } => {}
-            }
-            Landing::Landed { commit: tips.head }
-        }
-        Done::Rejected => Landing::Moved,
-        Done::Failed { fault } => landing(fault),
+        Done::Succeeded => Some(land(holding, to, repository)),
+        Done::Rejected => Some(Landing::Moved),
+        Done::Failed { fault: Fault::TimedOut | Fault::Broken | Fault::Unreachable | Fault::Cancelled } => None,
+        Done::Failed { fault: fault @ (Fault::Missing { .. } | Fault::Refused) } => Some(landing(fault)),
         Done::Fetched { .. } | Done::Committed { .. } | Done::Unchanged | Done::Exists => {
             unreachable!("io ends a push with its own terminals")
         }
     }
+}
+
+/// Asks io for the branch a push that may have landed went to, whether the
+/// client asked to abort or not: one more operation, bounded as any.
+fn verify(
+    holding: &Holding,
+    id: Id<Hold>,
+    push: Push,
+    repository: u32,
+    asked: Asked,
+    env: &Env<Limits>,
+    out: &mut Queue<Request>,
+) -> State {
+    let spec = nth(holding, repository);
+    let want = Want::Branch { branch: branch_of(spec, &push.to) };
+    let at = place(holding.workspace.token(), spec);
+    let remote = copy_of(&spec.remote);
+    let identity = copy_of(&spec.identity);
+    io(id, Op::Fetch { at, remote, want, identity }, env, out);
+    State::Pushing { push, step: PushStep::Verify { repository }, asked }
+}
+
+/// Pushing, a verification done: the push landed if its branch is at the
+/// commit it pushed.
+fn verified(holding: &mut Holding, to: &To, repository: u32, done: Done) -> Landing {
+    match done {
+        Done::Fetched { commit } if commit == tips(holding, repository).head => land(holding, to, repository),
+        Done::Fetched { .. } | Done::Failed { .. } => Landing::Failed,
+        Done::Succeeded | Done::Committed { .. } | Done::Unchanged | Done::Exists | Done::Rejected => {
+            unreachable!("io ends a fetch with its own terminals")
+        }
+    }
+}
+
+/// The head of the repository at `repository` landed on the branch `to`
+/// names.
+fn land(holding: &mut Holding, to: &To, repository: u32) -> Landing {
+    let tips = tips_mut(holding, repository);
+    match to {
+        To::Branches => tips.pushed = tips.head,
+        To::Saved { .. } => {}
+    }
+    Landing::Landed { commit: tips.head }
 }
 
 /// Pushing, aborted or released once the operation in flight has ended: the
@@ -697,16 +765,21 @@ fn end_push(holding: &Holding, mut push: Push, asked: Asked, out: &mut Queue<Req
     }
 }
 
-/// What the client has asked once it asks `now`, having asked `before`: the
-/// operation in flight is cancelled the first time, and a release outranks an
-/// abort.
-fn asking(id: Id<Hold>, before: Asked, now: Asked, out: &mut Queue<Request>) -> Asked {
+/// What the client has asked of a prepare once it asks `now`, having asked
+/// `before`: the operation in flight is cancelled the first time.
+fn cancelling(id: Id<Hold>, before: Asked, now: Asked, out: &mut Queue<Request>) -> Asked {
     match before {
-        Asked::Nothing => {
-            out.push(Request::Cancel { owner: id.token() });
-            now
-        }
-        Asked::Abort => now,
+        Asked::Nothing => out.push(Request::Cancel { owner: id.token() }),
+        Asked::Abort | Asked::Release => {}
+    }
+    outranking(before, now)
+}
+
+/// What the client has asked once it asks `now`, having asked `before`: a
+/// release outranks an abort.
+const fn outranking(before: Asked, now: Asked) -> Asked {
+    match before {
+        Asked::Nothing | Asked::Abort => now,
         Asked::Release => Asked::Release,
     }
 }
@@ -733,6 +806,21 @@ fn io(id: Id<Hold>, op: Op, env: &Env<Limits>, out: &mut Queue<Request>) {
     out.push(Request::Io { owner: id.token(), op, deadline: env.now.saturating_add(timeout) });
 }
 
+/// Whether an operation that ended so may have left its repository damaged:
+/// git was killed, or failed on the worker's side.
+const fn damages(done: Done) -> bool {
+    match done {
+        Done::Failed { fault: Fault::Broken | Fault::TimedOut | Fault::Cancelled } => true,
+        Done::Failed { fault: Fault::Missing { .. } | Fault::Refused | Fault::Unreachable }
+        | Done::Succeeded
+        | Done::Fetched { .. }
+        | Done::Committed { .. }
+        | Done::Unchanged
+        | Done::Exists
+        | Done::Rejected => false,
+    }
+}
+
 /// Why a prepare failed, from an operation's fault for the repository at
 /// `repository`.
 const fn failure(repository: u32, fault: Fault) -> Failure {
@@ -743,7 +831,7 @@ const fn failure(repository: u32, fault: Fault) -> Failure {
     }
 }
 
-/// What came of a repository whose commit or push failed so.
+/// What came of a repository whose commit or push failed so, for good.
 const fn landing(fault: Fault) -> Landing {
     match fault {
         Fault::Refused => Landing::Refused,
@@ -770,8 +858,9 @@ fn tally(landings: &[Landing]) -> Tally {
 }
 
 /// Whether `spec` fits the limits: a workstream, and between one and
-/// `Limits::repositories` repositories, each named once, every name, branch
-/// and identity at most `Limits::name_bytes` and none empty.
+/// `Limits::repositories` repositories, each in a directory of its own named
+/// by one safe path component, and every name, remote, branch and identity at
+/// most `Limits::name_bytes` and none empty.
 fn fits(spec: &Spec, limits: &Limits) -> bool {
     let Ok(repositories) = u32::try_from(spec.repositories.len()) else {
         return false;
@@ -788,7 +877,9 @@ fn fits(spec: &Spec, limits: &Limits) -> bool {
             Some(branch) => named(branch, limits),
             None => true,
         };
-        if !named(&repository.name, limits) || !named(&repository.identity, limits) || !start || !push {
+        let directory = named(&repository.name, limits) && component(&repository.name);
+        let reached = named(&repository.remote, limits) && named(&repository.identity, limits);
+        if !directory || !reached || !start || !push {
             return false;
         }
         for earlier in spec.repositories.iter().take(place) {
@@ -798,6 +889,14 @@ fn fits(spec: &Spec, limits: &Limits) -> bool {
         }
     }
     true
+}
+
+/// Whether `name` is one safe path component: not `.` or `..`, without `/`
+/// or NUL, and not a git directory (`.git` in any ASCII case).
+fn component(name: &[u8]) -> bool {
+    let dots = name == b"." || name == b"..";
+    let separated = find(name, b"/").is_some() || find(name, b"\0").is_some();
+    !dots && !separated && !name.eq_ignore_ascii_case(b".git")
 }
 
 /// Whether a push's or a save's message, and a save's branch, fit the limits:
@@ -825,11 +924,15 @@ fn named(bytes: &[u8], limits: &Limits) -> bool {
     within && !bytes.is_empty()
 }
 
-fn is_base(holding: &Holding, repository: u32) -> bool {
-    match nth(holding, repository).start {
+/// Whether the repository at `repository` starts from a base branch that is
+/// created if the forge does not have it: only for one that may be written.
+fn creates_base(holding: &Holding, repository: u32) -> bool {
+    let spec = nth(holding, repository);
+    let base = match spec.start {
         Start::Base { .. } => true,
         Start::Branch { .. } | Start::Commit { .. } | Start::Saved { .. } => false,
-    }
+    };
+    base && spec.push.is_some()
 }
 
 fn nth(holding: &Holding, repository: u32) -> &Repository {
@@ -847,6 +950,14 @@ fn tips_mut(holding: &mut Holding, repository: u32) -> &mut Tips {
 
 fn place(workspace: Token, repository: &Repository) -> Place {
     Place { workspace, repository: copy_of(&repository.name) }
+}
+
+/// The branch a push to `to` of `repository` goes to.
+fn branch_of(repository: &Repository, to: &To) -> Box<[u8]> {
+    match to {
+        To::Branches => copy_of(repository.push.as_deref().expect("only a writable repository is pushed")),
+        To::Saved { branch } => copy_of(branch),
+    }
 }
 
 fn after(repository: u32) -> u32 {

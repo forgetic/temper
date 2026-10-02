@@ -6,8 +6,13 @@
 //! A workspace is a directory io names by the workspace's token. Its
 //! repositories sit side by side in it, each in a directory named by the
 //! repository's name ([`Place`]), so that code that refers to a sibling by
-//! path works. The protocol layer maps a name to a directory and to the
-//! forge's address for the repository.
+//! path works. An operation that reaches the forge names the repository there
+//! by its `remote`, the forge's address for it, which the protocol layer maps
+//! to a URL and never interprets otherwise.
+//!
+//! io settles every operation before it ends it (5.3): one that runs out of
+//! time or is cancelled ends only once its process tree has exited, so that
+//! nothing of it touches the workspace afterwards.
 //!
 //! No credentials reach the disk: an operation that reaches the forge, or
 //! commits, names the `identity` it acts as, which the protocol layer maps to
@@ -39,8 +44,7 @@ impl Commit {
 }
 
 /// A repository in a workspace: the workspace's directory, as io names it, and
-/// the repository's name, which names its directory there and the repository
-/// on the forge.
+/// the repository's name, the one path component its directory has there.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Place {
     pub workspace: Token,
@@ -51,23 +55,21 @@ pub struct Place {
 /// names, in [`Done::Succeeded`] if it names none, or in [`Done::Failed`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Op {
-    /// Make the workspace's directory, empty. It does not exist, or was
-    /// removed.
+    /// Make the workspace's directory, empty: io removes whatever is there
+    /// first, what the cache evicts or what an earlier worker left.
     Make { workspace: Token },
-    /// Remove the workspace's directory, and everything beneath it.
-    Remove { workspace: Token },
-    /// Clone the repository from the forge into its directory, which does not
-    /// exist yet, without checking a tree out. Fails `Missing` if the forge
-    /// has no such repository.
-    Clone { at: Place, identity: Box<[u8]> },
-    /// Fetch `want` from the forge into the repository. Ends in `Fetched`, or
-    /// fails `Missing` if the forge has no such branch or commit, or no
-    /// default branch.
-    Fetch { at: Place, want: Want, identity: Box<[u8]> },
+    /// Clone the repository at `remote` on the forge into its directory, which
+    /// does not exist yet, without checking a tree out. Fails `Missing` if the
+    /// forge has no such repository.
+    Clone { at: Place, remote: Box<[u8]>, identity: Box<[u8]> },
+    /// Fetch `want` from the repository at `remote` into the repository. Ends
+    /// in `Fetched`, or fails `Missing` if the forge has no such branch or
+    /// commit, or no default branch.
+    Fetch { at: Place, remote: Box<[u8]>, want: Want, identity: Box<[u8]> },
     /// Create `branch` on the forge at `commit`, only if it does not exist:
     /// a branch that does is left where it is, and the operation ends in
     /// `Exists`.
-    Create { at: Place, branch: Box<[u8]>, commit: Commit, identity: Box<[u8]> },
+    Create { at: Place, remote: Box<[u8]>, branch: Box<[u8]>, commit: Commit, identity: Box<[u8]> },
     /// Make the repository's working tree exactly `commit`'s tree: what is not
     /// in it is removed, and the git directory is left as it is.
     CheckOut { at: Place, commit: Commit },
@@ -79,7 +81,7 @@ pub enum Op {
     /// a branch that does not exist is created, and one that is not an
     /// ancestor of `commit` is left where it is, and the operation ends in
     /// `Rejected`.
-    Push { at: Place, commit: Commit, branch: Box<[u8]>, identity: Box<[u8]> },
+    Push { at: Place, remote: Box<[u8]>, commit: Commit, branch: Box<[u8]>, identity: Box<[u8]> },
 }
 
 /// What a fetch asks for.
@@ -96,7 +98,7 @@ pub enum Want {
 /// io's terminal for an operation.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Done {
-    /// `Make`, `Remove`, `Clone`, `Create`, `CheckOut`, `Push`: done as asked.
+    /// `Make`, `Clone`, `Create`, `CheckOut`, `Push`: done as asked.
     Succeeded,
     /// `Fetch`: what was asked for is at `commit`, now in the repository.
     Fetched { commit: Commit },
@@ -125,9 +127,9 @@ pub enum Fault {
     Unreachable,
     /// Something failed on the worker's side: the disk, or git itself.
     Broken,
-    /// The deadline passed first.
+    /// The deadline passed first, and io stopped it.
     TimedOut,
-    /// The cancel won the race.
+    /// The cancel won the race, and io stopped it.
     Cancelled,
 }
 
@@ -143,7 +145,6 @@ pub enum Missing {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Kind {
     Make,
-    Remove,
     Clone,
     Fetch,
     Create,
@@ -157,7 +158,6 @@ impl Op {
     pub const fn kind(&self) -> Kind {
         match self {
             Op::Make { .. } => Kind::Make,
-            Op::Remove { .. } => Kind::Remove,
             Op::Clone { .. } => Kind::Clone,
             Op::Fetch { .. } => Kind::Fetch,
             Op::Create { .. } => Kind::Create,
@@ -172,7 +172,7 @@ impl Op {
     pub const fn is_remote(&self) -> bool {
         match self {
             Op::Clone { .. } | Op::Fetch { .. } | Op::Create { .. } | Op::Push { .. } => true,
-            Op::Make { .. } | Op::Remove { .. } | Op::CheckOut { .. } | Op::Commit { .. } => false,
+            Op::Make { .. } | Op::CheckOut { .. } | Op::Commit { .. } => false,
         }
     }
 }

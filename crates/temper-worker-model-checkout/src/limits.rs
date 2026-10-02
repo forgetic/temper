@@ -3,7 +3,7 @@ use alloc::boxed::Box;
 use temper_lib::{Duration, Id, List, Map, Queue, Slab};
 
 use crate::boundary::{Landing, Repository};
-use crate::cache::Workspace;
+use crate::cache::{Cloned, Workspace};
 use crate::facts::Fact;
 use crate::hold::{Hold, Tips};
 
@@ -16,7 +16,8 @@ pub struct Limits {
     pub workspaces: u32,
     /// Repositories a spec names: at least one.
     pub repositories: u32,
-    /// The longest workstream key, repository name, branch or identity.
+    /// The longest workstream key, repository name or remote, branch or
+    /// identity.
     pub name_bytes: u32,
     /// The longest commit message, its title and body together.
     pub message_bytes: u32,
@@ -36,8 +37,8 @@ pub struct Limits {
 /// or no repository a spec may name.
 ///
 /// It is the cache's and the holds'. Each workspace owns its key twice (in
-/// the workspace and in the index of keys) and the names of the repositories
-/// it holds. Each hold owns its spec's repositories, where each stands, and,
+/// the workspace and in the index of keys) and the names and remotes of the
+/// repositories it holds. Each hold owns its spec's repositories, where each stands, and,
 /// while it pushes or saves, the outcomes so far, the message and the
 /// saved-work branch; a hold released in an iteration holds them until the
 /// reclaim point. It counts the containers, their bookkeeping included, and
@@ -52,14 +53,14 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let workspaces = Slab::<Workspace>::worst_case(limits.workspaces)?;
     let keys = Map::<Box<[u8]>, Id<Workspace>>::worst_case(limits.workspaces)?;
     let idle = Map::<u64, Id<Workspace>>::worst_case(limits.workspaces)?;
-    let names = List::<Box<[u8]>>::worst_case(limits.repositories)?
-        .checked_add(u64::from(limits.repositories).checked_mul(name)?)?;
+    let names = List::<Cloned>::worst_case(limits.repositories)?
+        .checked_add(u64::from(limits.repositories).checked_mul(name.checked_mul(2)?)?)?;
     let workspace = name.checked_mul(2)?.checked_add(names)?;
     let cache = u64::from(limits.workspaces).checked_mul(workspace)?;
     let hold_slots = holds(limits)?;
     let holds = Slab::<Hold>::worst_case(hold_slots)?;
-    // A repository's name, identity, starting branch and push branch.
-    let repository = name.checked_mul(4)?;
+    // A repository's name, remote, identity, starting branch and push branch.
+    let repository = name.checked_mul(5)?;
     let spec = List::<Repository>::worst_case(limits.repositories)?
         .checked_add(u64::from(limits.repositories).checked_mul(repository)?)?;
     let push = List::<Landing>::worst_case(limits.repositories)?

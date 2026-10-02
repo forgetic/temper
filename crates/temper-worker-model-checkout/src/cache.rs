@@ -5,16 +5,19 @@
 //! held by one hold at a time, or idle. A prepare finds its workstream's
 //! workspace, if the cache has one that no hold holds; otherwise it takes a
 //! new one while there is room, and then evicts the least recently used idle
-//! workspace, which is made again for the new workstream. A workspace is never
+//! workspace, which is made again, empty, for the new workstream. A workspace is never
 //! removed from the cache once made: eviction gives it to another workstream,
 //! so the cache holds at most `Limits::workspaces`, and a prepare that finds
 //! them all held is refused.
 //!
 //! Nothing local is authoritative: a workspace is reused only for its own
-//! workstream, and only when it holds exactly the repositories the spec names,
-//! all cloned; a prepare then fetches and checks each out afresh. Otherwise
-//! what it holds is not known (it is about to be removed, or a build failed or
-//! was aborted), and the next prepare removes it and makes it again.
+//! workstream, and only when it holds exactly the repositories the spec names
+//! (each by its directory and its remote), all cloned; a prepare then fetches
+//! and checks each out afresh. Otherwise what it holds is not known (it is
+//! being built, or an operation on it broke, ran out of time or was cancelled,
+//! so git may have left it damaged), and the next prepare makes it again,
+//! empty. A failure that leaves the disk as it was (the forge unreachable, or
+//! without what was asked, or refusing) keeps what it holds.
 
 use alloc::boxed::Box;
 
@@ -35,10 +38,18 @@ pub(crate) struct Workspace {
 /// What a workspace's directory holds.
 #[derive(Debug)]
 enum Disk {
-    /// The repositories named, each cloned, side by side.
-    Holds { names: Box<[Box<[u8]>]> },
-    /// Not known: it is removed before it is used.
+    /// These repositories, each cloned, side by side.
+    Holds { repositories: Box<[Cloned]> },
+    /// Not known: it is made again, empty, before it is used.
     Unknown,
+}
+
+/// A repository cloned in a workspace: its directory, and where it was cloned
+/// from.
+#[derive(Debug)]
+pub(crate) struct Cloned {
+    name: Box<[u8]>,
+    remote: Box<[u8]>,
 }
 
 /// Whether a workspace is held, or idle since the release that `since`
@@ -80,10 +91,22 @@ impl Cache {
         self.idle.len()
     }
 
-    /// The workstream of the `nth` workspace, in the order of the keys.
+    /// The workstream of the `nth` workspace whose disk is known, in the order
+    /// of the keys.
     pub(crate) fn key(&self, nth: u32) -> Option<&[u8]> {
-        let (key, _) = self.keys.iter().nth(usize::try_from(nth).ok()?)?;
-        Some(key)
+        let mut known = 0_u32;
+        for (key, id) in &self.keys {
+            let workspace = self.workspaces.get(*id).expect("a key names a workspace of the cache");
+            match workspace.disk {
+                Disk::Holds { .. } => {}
+                Disk::Unknown => continue,
+            }
+            if known == nth {
+                return Some(key);
+            }
+            known = known.checked_add(1).expect("fewer workspaces than a u32 counts");
+        }
+        None
     }
 
     /// Holds a workspace for the workstream `key`, whose spec names
@@ -120,7 +143,8 @@ impl Cache {
         let Some((since, evicted)) = self.idle.first() else {
             return Err(Refusal::Full);
         };
-        let (since, id) = (*since, *evicted);
+        let since = *since;
+        let id = *evicted;
         self.idle.remove(&since);
         let workspace = self.workspaces.get_mut(id).expect("an idle workspace is of the cache");
         let gone = self.keys.remove(&*workspace.key);
@@ -134,11 +158,19 @@ impl Cache {
     /// The workspace `id` holds `repositories`, each cloned.
     pub(crate) fn cloned(&mut self, id: Id<Workspace>, repositories: &[Repository]) {
         let workspace = self.workspaces.get_mut(id).expect("a hold's workspace is of the cache");
-        let mut names = List::with_capacity(count(repositories.len()));
+        let mut cloned = List::with_capacity(count(repositories.len()));
         for repository in repositories {
-            names.push(copy_of(&repository.name)).expect("room for every name");
+            let clone = Cloned { name: copy_of(&repository.name), remote: copy_of(&repository.remote) };
+            cloned.push(clone).expect("room for every repository");
         }
-        workspace.disk = Disk::Holds { names: names.into_boxed() };
+        workspace.disk = Disk::Holds { repositories: cloned.into_boxed() };
+    }
+
+    /// What the workspace `id` holds is no longer known: an operation on it
+    /// broke, ran out of time or was cancelled.
+    pub(crate) fn spoil(&mut self, id: Id<Workspace>) {
+        let workspace = self.workspaces.get_mut(id).expect("a hold's workspace is of the cache");
+        workspace.disk = Disk::Unknown;
     }
 
     /// The workspace `id` is idle again, the most recently used.
@@ -151,22 +183,31 @@ impl Cache {
     }
 }
 
-/// Whether `disk` holds exactly the repositories named, which are named once
-/// each.
+/// Whether `disk` holds exactly the repositories named, each in its directory
+/// and cloned from its remote. A spec names a directory once.
 fn holds_exactly(disk: &Disk, repositories: &[Repository]) -> bool {
-    let names = match disk {
-        Disk::Holds { names } => names,
+    let cloned = match disk {
+        Disk::Holds { repositories } => repositories,
         Disk::Unknown => return false,
     };
-    if names.len() != repositories.len() {
+    if cloned.len() != repositories.len() {
         return false;
     }
     for repository in repositories {
-        if !names.contains(&repository.name) {
+        if !holds(cloned, repository) {
             return false;
         }
     }
     true
+}
+
+fn holds(cloned: &[Cloned], repository: &Repository) -> bool {
+    for clone in cloned {
+        if clone.name == repository.name {
+            return clone.remote == repository.remote;
+        }
+    }
+    false
 }
 
 pub(crate) fn count(items: usize) -> u32 {

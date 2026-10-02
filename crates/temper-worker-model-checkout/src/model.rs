@@ -9,8 +9,8 @@ use crate::hold::{self, Hold};
 use crate::limits::{self, Limits};
 
 /// The most requests a step emits: an admitted prepare's `Held` and its first
-/// operation, or an operation's end and the `Released` of a hold released
-/// while it was in flight. The parent reserves this much room in `out` before
+/// operation, or a prepare's, a push's or a save's end and the `Released` of a
+/// hold released while it was under way. The parent reserves this much room in `out` before
 /// calling it.
 pub const MAX_OUT: u32 = 2;
 
@@ -52,8 +52,10 @@ impl Model {
         self.holds.len()
     }
 
-    /// The workstream of the cache's `nth` workspace, in byte order, if it has
-    /// that many: what the worker tells the engine it holds checkouts for.
+    /// The workstream of the cache's `nth` workspace that holds its
+    /// repositories cloned, in byte order, if it has that many: what the
+    /// worker tells the engine it holds checkouts for. A workspace whose disk
+    /// is not known (being built, or damaged) is not counted.
     #[must_use]
     pub fn workstream(&self, nth: u32) -> Option<&[u8]> {
         self.cache.key(nth)

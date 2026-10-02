@@ -27,10 +27,11 @@ fn bytes(len: u32) -> Box<[u8]> {
     vec![b'x'; usize::try_from(len).expect("a test length fits")].into_boxed_slice()
 }
 
-/// A name of `len` bytes, its first four `n`, so that names differ.
+/// A name of `len` bytes, its first eight `n` in hexadecimal, so that names
+/// differ and each is a safe path component.
 fn name(len: u32, n: u32) -> Box<[u8]> {
     let mut name = bytes(len);
-    name[..4].copy_from_slice(&n.to_be_bytes());
+    name[..8].copy_from_slice(format!("{n:08x}").as_bytes());
     name
 }
 
@@ -60,6 +61,7 @@ fn full_spec(limits: &Limits, n: u32) -> Spec {
     for place in 0..limits.repositories {
         repositories.push(Repository {
             name: name(limits.name_bytes, place),
+            remote: name(limits.name_bytes, place),
             start: Start::Base { branch: name(limits.name_bytes, place) },
             identity: bytes(limits.name_bytes),
             push: Some(bytes(limits.name_bytes)),
@@ -138,9 +140,10 @@ fn fill(limits: Limits) {
     let held = meter.held();
     let name = u64::from(limits.name_bytes);
     let repositories = u64::from(limits.repositories);
-    // Each workspace's key, twice, and its repositories' names; each hold's
-    // spec, four names a repository, and its save's message and branch.
-    let each = 2 * name + repositories * name + repositories * 4 * name + u64::from(limits.message_bytes) + name;
+    // Each workspace's key, twice, and its repositories' names and remotes;
+    // each hold's spec, five names a repository, and its save's message and
+    // branch.
+    let each = 2 * name + repositories * 2 * name + repositories * 5 * name + u64::from(limits.message_bytes) + name;
     let full = u64::from(limits.workspaces) * each;
     assert!(held >= full, "{limits:?}: every workspace and hold holds its limits: {held} < {full}");
     // Every workspace is held: another prepare is refused.
@@ -149,10 +152,10 @@ fn fill(limits: Limits) {
         panic!("every workspace is held");
     };
     for hold in holds {
-        assert_eq!(step(Event::Abort { hold })[..], [Asked::Cancel]);
-        assert!(step(Event::Release { hold }).is_empty(), "released once the cancel settles");
-        let cancelled = Event::Done { owner: hold, done: Done::Failed { fault: Fault::Cancelled } };
-        assert_eq!(step(cancelled)[..], [Asked::Saved, Asked::Released]);
+        assert!(step(Event::Abort { hold }).is_empty(), "a save in flight is not cancelled");
+        assert!(step(Event::Release { hold }).is_empty(), "released once the save has ended");
+        let pushed = Event::Done { owner: hold, done: Done::Succeeded };
+        assert_eq!(step(pushed)[..], [Asked::Saved, Asked::Released]);
     }
 
     // A byte more is refused.
