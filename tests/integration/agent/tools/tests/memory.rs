@@ -1,7 +1,7 @@
 //! Memory stays within the worst case (programming-model.md, 6.4), measured by
 //! a counting allocator: the tools sub-model with every kit holding the
 //! longest authority, knowing as many files as it may at the longest paths,
-//! and running as many calls as it may.
+//! and running as many reads and writes as it may.
 
 use temper_agent_model_tools::{
     Authority, Call, Done, Event, Grants, Limits, Model, Name, Part, Path, Repo, Request, Version, max_out, worst_case,
@@ -92,18 +92,29 @@ fn authority(limits: &Limits) -> Authority {
     Authority { cwd, repos: repos.into(), grants: GRANTS }
 }
 
-/// A read of a file whose absolute path is exactly `path_bytes` long, distinct
-/// for each `file`.
-fn read(limits: &Limits, file: u64) -> Call {
+/// The path of a file whose absolute path is exactly `path_bytes` long,
+/// distinct for each `file`.
+fn path(limits: &Limits, file: u64) -> Path {
     let len = usize::try_from(limits.path_bytes - 1).expect("a small limit");
     let name = format!("f{file:0>len$}");
     let parts = Box::new([Part::Name { name: Name::new(name.into_bytes().into()).expect("a name") }]);
-    Call::Read { path: Path { absolute: true, parts }, skip: 0, lines: None }
+    Path { absolute: true, parts }
+}
+
+fn read(limits: &Limits, file: u64) -> Call {
+    Call::Read { path: path(limits, file), skip: 0, lines: None }
+}
+
+/// A write of a file the kit read, so that it has a version to expect.
+fn write(limits: &Limits, file: u64) -> Call {
+    let content = vec![b'x'; usize::try_from(limits.file_bytes).expect("a small limit")].into();
+    Call::Write { path: path(limits, file), content }
 }
 
 /// Fills every kit of a model under `limits` to its limits, checking the heap
 /// against the worst case after every step: it knows twice as many files as
-/// it may, the oldest forgotten, then runs as many reads as it may at once.
+/// it may, the oldest forgotten, then runs as many calls as it may at once,
+/// writes of the files it knows and reads.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
@@ -145,10 +156,15 @@ fn fill(limits: Limits) {
             let done = Done::Loaded { content: b"x\n"[..].into(), version: Version::new([file, 0, 0, 0]) };
             assert!(step(Event::Done { owner, done }).is_empty(), "a read answers");
         }
-        for _ in 0..limits.calls {
-            file += 1;
-            let reply_to = ReplyTo::new(Token::new(file));
-            assert_eq!(step(Event::Call { kit, reply_to, call: read(&limits, file), deadline }).len(), 1);
+        for call in 0..u64::from(limits.calls) {
+            let call = if call < u64::from(limits.known_files) {
+                write(&limits, file - call)
+            } else {
+                file += 1;
+                read(&limits, file)
+            };
+            let reply_to = ReplyTo::new(Token::new(file + 1000));
+            assert_eq!(step(Event::Call { kit, reply_to, call, deadline }).len(), 1, "{limits:?}: the call runs");
         }
     }
     let held = held(base);

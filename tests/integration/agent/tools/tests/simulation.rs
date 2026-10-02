@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use temper_agent_model_tools::{Authority, Entry, Fault, Grants, Kind, Limits, Name, Outcome, Refusal, Repo};
-use temper_agent_model_tools_tests::calls::{list, read, read_lines};
+use temper_agent_model_tools_tests::calls::{list, read, read_lines, write};
 use temper_agent_model_tools_tests::{Settings, Span, Step, World, authority, repo};
 use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, Rng, Time};
@@ -12,6 +12,8 @@ use temper_lib::{Duration, Rng, Time};
 const ITERATIONS: u32 = 100_000;
 
 const INSPECT: Grants = Grants { inspect: true, modify: false, shell: false };
+
+const MODIFY: Grants = Grants { inspect: true, modify: true, shell: false };
 
 const LIB: &[u8] = b"pub fn one() {}\npub fn two() {}\npub fn three() {}\n";
 
@@ -322,11 +324,15 @@ fn random_worlds_settle_with_every_call_answered() {
         "not a file",
         "not found",
         "not granted",
+        "not read",
         "outside",
         "read",
+        "read only",
         "refused",
+        "stale",
         "timed out",
         "too large",
+        "written",
     ];
     assert_eq!(seen, expected.into_iter().collect());
 }
@@ -375,6 +381,8 @@ const PATHS: [&[u8]; 18] = [
     b"Cargo.toml/x",
 ];
 
+const HOT: [&[u8]; 3] = [b"src/lib.rs", b"Cargo.toml", b"src/new.rs"];
+
 /// A world drawn from `seed`: small limits, faults, latencies that race the
 /// deadlines, and up to five sessions with random scripts, some changing the
 /// checkout as they go.
@@ -402,6 +410,7 @@ fn noisy_world(seed: u64) -> World {
         io,
         faults: pick(0, 200),
         late_cancels: pick(0, 500),
+        late_effects: pick(0, 500),
         think,
         call_timeout,
         ..calm
@@ -431,6 +440,7 @@ fn noisy_script(rng: &mut Rng) -> Vec<Step> {
             7 => Step::Sleep(Duration::from_millis(rng.between(1, 5_000))),
             8 => Step::Change(Box::new(|checkout: &mut Checkout| {
                 checkout.write(b"work/temper/src/lib.rs", b"pub fn changed() {}\n");
+                checkout.write(b"work/temper/Cargo.toml", b"[package]\n");
             })),
             _ => Step::Change(Box::new(|checkout: &mut Checkout| checkout.remove(b"work/temper/src/main.rs"))),
         };
@@ -442,13 +452,214 @@ fn noisy_script(rng: &mut Rng) -> Vec<Step> {
 fn noisy_calls(rng: &mut Rng) -> Vec<temper_agent_model_tools::Call> {
     let mut calls = Vec::new();
     for _ in 0..rng.between(1, 4) {
-        let path = PATHS[usize::try_from(rng.below(PATHS.len() as u64)).expect("an index")];
-        let call = match rng.below(4) {
+        // Half the calls are about a few files, so that kits and changes meet.
+        let pool: &[&[u8]] = if rng.chance(500) { &HOT } else { &PATHS };
+        let path = pool[usize::try_from(rng.below(pool.len() as u64)).expect("an index")];
+        let call = match rng.below(6) {
             0 => list(path),
             1 => read_lines(path, u32::try_from(rng.below(5)).expect("small"), 2),
+            2 | 3 => write(path, format!("written {}\n", rng.below(1000)).as_bytes()),
             _ => read(path),
         };
         calls.push(call);
     }
     calls
+}
+
+fn written(created: bool) -> Outcome {
+    Outcome::Written { created }
+}
+
+#[test]
+fn a_kit_creates_files_and_replaces_those_its_llm_read() {
+    let script = vec![
+        Step::Calls(vec![write(b"src/new.rs", b"pub fn new() {}\n"), write(b"tests/deep/it.rs", b"#[test]\n")]),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![write(b"src/lib.rs", b"pub fn one() {}\n")]),
+        // What its LLM wrote, it knows: no read is needed to write it again.
+        Step::Calls(vec![write(b"src/lib.rs", b"pub fn uno() {}\n")]),
+        // A link on the way is followed, and the place is the one read.
+        Step::Calls(vec![read(b"srclink/main.rs")]),
+        Step::Calls(vec![write(b"srclink/main.rs", b"fn main() { run() }\n")]),
+    ];
+    let (answers, world) = run(Settings::calm(20), MODIFY, script);
+    let expected = vec![
+        written(true),
+        written(true),
+        read_of(LIB, 0, 3, 3),
+        written(false),
+        written(false),
+        read_of(b"fn main() {}\n", 0, 1, 1),
+        written(false),
+    ];
+    assert_eq!(answers, expected);
+    let checkout = world.checkout();
+    assert_eq!(checkout.content(b"work/temper/src/new.rs"), Some(&b"pub fn new() {}\n"[..]));
+    assert_eq!(checkout.content(b"work/temper/tests/deep/it.rs"), Some(&b"#[test]\n"[..]));
+    assert_eq!(checkout.content(b"work/temper/src/lib.rs"), Some(&b"pub fn uno() {}\n"[..]));
+    assert_eq!(checkout.content(b"work/temper/src/main.rs"), Some(&b"fn main() { run() }\n"[..]));
+}
+
+#[test]
+fn a_kit_may_not_change_a_file_its_llm_has_not_read() {
+    let script = vec![
+        Step::Calls(vec![write(b"src/lib.rs", b"overwritten")]),
+        // A listing is not a read.
+        Step::Calls(vec![list(b"src")]),
+        Step::Calls(vec![write(b"src/main.rs", b"overwritten")]),
+        // Nor is reading the file by another path, through a link to it.
+        Step::Calls(vec![read(b"link")]),
+        Step::Calls(vec![write(b"src/lib.rs", b"overwritten")]),
+    ];
+    let (answers, world) = run(Settings::calm(21), MODIFY, script);
+    let src = [entry(b"lib.rs", Kind::File), entry(b"main.rs", Kind::File)];
+    let listed = Outcome::Listed { entries: src.into(), more: 0 };
+    let expected = vec![Outcome::NotRead, listed, Outcome::NotRead, read_of(LIB, 0, 3, 3), Outcome::NotRead];
+    assert_eq!(answers, expected);
+    assert_eq!(world.checkout().files(), Fixture::new().checkout.files(), "nothing changed");
+}
+
+#[test]
+fn a_change_made_since_the_llm_read_a_file_is_caught() {
+    let script = vec![
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Change(Box::new(|checkout: &mut Checkout| {
+            checkout.write(b"work/temper/src/lib.rs", b"theirs\n");
+        })),
+        Step::Calls(vec![write(b"src/lib.rs", b"ours\n")]),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![write(b"src/lib.rs", b"ours\n")]),
+        // Removed since it was read: stale, and then created afresh.
+        Step::Calls(vec![read(b"src/main.rs")]),
+        Step::Change(Box::new(|checkout: &mut Checkout| checkout.remove(b"work/temper/src/main.rs"))),
+        Step::Calls(vec![write(b"src/main.rs", b"fn main() {}\n")]),
+        Step::Calls(vec![write(b"src/main.rs", b"fn main() {}\n")]),
+    ];
+    let (answers, world) = run(Settings::calm(22), MODIFY, script);
+    let expected = vec![
+        read_of(LIB, 0, 3, 3),
+        Outcome::Stale,
+        read_of(b"theirs\n", 0, 1, 1),
+        written(false),
+        read_of(b"fn main() {}\n", 0, 1, 1),
+        Outcome::Stale,
+        written(true),
+    ];
+    assert_eq!(answers, expected);
+    assert_eq!(world.checkout().content(b"work/temper/src/lib.rs"), Some(&b"ours\n"[..]));
+}
+
+#[test]
+fn kits_on_one_checkout_catch_each_others_changes() {
+    let fixture = Fixture::new();
+    let authorities = [fixture.authority(MODIFY), fixture.authority(MODIFY), fixture.authority(MODIFY)];
+    let mut world = World::new(Settings::calm(23), fixture.checkout);
+    let [first, second, third] = authorities;
+    let seconds = Duration::from_secs;
+    // The first reads the file, and writes it long after the second has.
+    let slow = vec![
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Sleep(seconds(10)),
+        Step::Calls(vec![write(b"src/lib.rs", b"first\n")]),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![write(b"src/lib.rs", b"first\n")]),
+    ];
+    let quick = vec![
+        Step::Sleep(seconds(2)),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![write(b"src/lib.rs", b"second\n")]),
+        Step::Calls(vec![write(b"src/new.rs", b"second\n")]),
+    ];
+    // The third creates the file the second did, never having read it.
+    let late = vec![Step::Sleep(seconds(5)), Step::Calls(vec![write(b"src/new.rs", b"third\n")])];
+    let slow = world.session(Time::ZERO, first, slow);
+    let quick = world.session(Time::ZERO, second, quick);
+    let late = world.session(Time::ZERO, third, late);
+    world.run(ITERATIONS);
+    let expected = [read_of(LIB, 0, 3, 3), Outcome::Stale, read_of(b"second\n", 0, 1, 1), written(false)];
+    assert_eq!(world.answers(slow), expected.iter().collect::<Vec<_>>());
+    let expected = [read_of(LIB, 0, 3, 3), written(false), written(true)];
+    assert_eq!(world.answers(quick), expected.iter().collect::<Vec<_>>());
+    assert_eq!(world.answers(late), vec![&Outcome::NotRead]);
+    let checkout = world.checkout();
+    assert_eq!(checkout.content(b"work/temper/src/lib.rs"), Some(&b"first\n"[..]));
+    assert_eq!(checkout.content(b"work/temper/src/new.rs"), Some(&b"second\n"[..]));
+}
+
+#[test]
+fn writes_stay_in_writable_repositories_of_granted_kits() {
+    let script = vec![
+        Step::Calls(vec![
+            write(b"../docs/guide.md", b"x"),
+            write(b"vendor/lib/lib.rs", b"x"),
+            write(b"/etc/passwd", b"x"),
+            write(b"../../etc/passwd", b"x"),
+            // A link on the way out of the repository.
+            write(b"escape/x", b"x"),
+            write(b"big.txt", &[b'x'; 5000]),
+            write(b"src", b"x"),
+            write(b"dev", b"x"),
+            write(b"Cargo.toml/x", b"x"),
+        ]),
+        // A link is not written through, even once read.
+        Step::Calls(vec![read(b"link")]),
+        Step::Calls(vec![write(b"link", b"x")]),
+    ];
+    let (answers, world) = run(Settings::calm(24), MODIFY, script);
+    let expected = vec![
+        Outcome::ReadOnly,
+        Outcome::ReadOnly,
+        Outcome::Outside,
+        Outcome::Outside,
+        Outcome::Outside,
+        Outcome::TooLarge { size: 5000 },
+        Outcome::NotFile,
+        Outcome::NotFile,
+        Outcome::NotDirectory,
+        read_of(LIB, 0, 3, 3),
+        Outcome::NotFile,
+    ];
+    assert_eq!(answers, expected);
+    assert_eq!(world.checkout().files(), Fixture::new().checkout.files(), "nothing changed");
+
+    let script = vec![Step::Calls(vec![write(b"src/new.rs", b"x")])];
+    let (answers, world) = run(Settings::calm(25), INSPECT, script);
+    assert_eq!((answers, world.stats().ops), (vec![Outcome::NotGranted], 0));
+}
+
+#[test]
+fn a_kit_that_knows_too_many_files_forgets_the_one_read_longest_ago() {
+    let calm = Settings::calm(26);
+    let settings = Settings { tools: Limits { known_files: 1, ..calm.tools }, ..calm };
+    let script = vec![
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![read(b"src/main.rs")]),
+        Step::Calls(vec![write(b"src/lib.rs", b"x")]),
+        Step::Calls(vec![write(b"src/main.rs", b"x")]),
+    ];
+    let (answers, _) = run(settings, MODIFY, script);
+    let expected = vec![read_of(LIB, 0, 3, 3), read_of(b"fn main() {}\n", 0, 1, 1), Outcome::NotRead, written(false)];
+    assert_eq!(answers, expected);
+}
+
+#[test]
+fn a_write_that_timed_out_may_have_happened_and_the_next_one_finds_out() {
+    let calm = Settings::calm(27);
+    let settings = Settings { late_effects: 1000, ..calm };
+    let script = vec![
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Latency(Span::millis(20_000, 20_000)),
+        Step::Calls(vec![write(b"src/lib.rs", b"ours\n")]),
+        Step::Latency(calm.io),
+        // The LLM cannot know whether its write happened; the check can.
+        Step::Calls(vec![write(b"src/lib.rs", b"ours again\n")]),
+        Step::Calls(vec![read(b"src/lib.rs")]),
+        Step::Calls(vec![write(b"src/lib.rs", b"ours again\n")]),
+    ];
+    let (answers, world) = run(settings, MODIFY, script);
+    let expected =
+        vec![read_of(LIB, 0, 3, 3), Outcome::TimedOut, Outcome::Stale, read_of(b"ours\n", 0, 1, 1), written(false)];
+    assert_eq!(answers, expected);
+    assert_eq!(world.stats().late_effects, 1);
+    assert_eq!(world.checkout().content(b"work/temper/src/lib.rs"), Some(&b"ours again\n"[..]));
 }

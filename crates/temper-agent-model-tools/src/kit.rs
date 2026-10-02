@@ -25,7 +25,7 @@
 use temper_lib::{Env, Id, Queue, ReplyTo, Set, Slab, Time, Token};
 
 use crate::authority::{self, Authority, Checkout, Located};
-use crate::boundary::{Refusal, Request};
+use crate::boundary::{Expect, Refusal, Request};
 use crate::call::{Call, Outcome};
 use crate::job::{self, Job, Work};
 use crate::knowledge::Knowledge;
@@ -162,9 +162,15 @@ fn admit(kit: &Kit, call: Call, deadline: Time, env: &Env<Limits>) -> Result<Wor
             return Err(Outcome::Unsupported);
         }
         Call::Write { path, content } => {
-            drop(writable(&kit.checkout, &path, limits)?);
+            let located = writable(&kit.checkout, &path, limits)?;
             fits(&content, limits)?;
-            return Err(Outcome::Unsupported);
+            // As the kit knows the file: at the version its LLM read, or
+            // absent.
+            let expect = match kit.knowledge.version(&located.place) {
+                Some(version) => Expect::Is { version },
+                None => Expect::Absent,
+            };
+            Work::Write { place: located.place, content, expect }
         }
         Call::Edit { path, .. } => {
             drop(writable(&kit.checkout, &path, limits)?);

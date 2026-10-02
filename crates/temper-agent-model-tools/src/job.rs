@@ -6,6 +6,14 @@
 //! whether the operation completed, failed, timed out, or lost or won a race
 //! with a cancel.
 //!
+//! A write stores the file if it is as the kit knows it: at the version its
+//! LLM read or wrote last, or absent if it knows none. io checks that against
+//! the real file as it stores, so a change made since, by another kit or by
+//! anything else, is caught: as `Stale` if the LLM had read the file, and as
+//! `NotRead` if it had not and the write would have created it. A write that
+//! may or may not have happened (timed out, failed) leaves the knowledge as
+//! it was, and the next write's check settles it.
+//!
 //! The transition table. Every other cell is unreachable by the boundary's
 //! contract: an operation ends only in its own terminals.
 //!
@@ -16,16 +24,21 @@
 //!            any other                   Done   what it says
 //! Listing    scanned                     Done   the entries
 //!            any other                   Done   what it says
+//! Writing    stored                      Done   written; the new version is known
+//!            conflict, creating          Done   not read
+//!            conflict, replacing         Done   stale; a file now absent is forgotten
+//!            any other                   Done   what it says
 //! ```
 //!
 //! A job is retired once it is Done ([`follow`]), which also ends a closing
 //! kit with its last job.
 
+use alloc::boxed::Box;
 use core::mem;
 
 use temper_lib::{Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
-use crate::boundary::{Done, Op, Request};
+use crate::boundary::{Done, Expect, Op, Request};
 use crate::call::Outcome;
 use crate::kit::{self, Kit};
 use crate::knowledge::Knowledge;
@@ -47,6 +60,9 @@ enum State {
     Reading { reply_to: ReplyTo, place: Place, span: Span },
     /// Scanning a directory.
     Listing { reply_to: ReplyTo },
+    /// Storing the file at `place`, which it creates if `creating`, and
+    /// replaces at the version the kit knows otherwise.
+    Writing { reply_to: ReplyTo, place: Place, creating: bool },
     /// Terminal: answered, holds nothing.
     Done,
 }
@@ -56,6 +72,7 @@ enum State {
 pub(crate) enum Work {
     Read { place: Place, span: Span },
     List { place: Place },
+    Write { place: Place, content: Box<[u8]>, expect: Expect },
 }
 
 /// Starts a job for `work` in the kit `kit`, which has room for one, asking
@@ -79,6 +96,14 @@ pub(crate) fn start(
             (State::Reading { reply_to, place, span }, op)
         }
         Work::List { place } => (State::Listing { reply_to }, Op::Scan { at: place, max: limits.list_entries }),
+        Work::Write { place, content, expect } => {
+            let creating = match expect {
+                Expect::Absent => true,
+                Expect::Is { .. } => false,
+            };
+            let op = Op::Store { at: place.clone(), content, expect };
+            (State::Writing { reply_to, place, creating }, op)
+        }
     };
     // Room: a kit has at most `calls` jobs, and the slab twice that many slots
     // per kit, for the jobs retired in this iteration, which are at most those
@@ -109,6 +134,9 @@ pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Don
             loaded(&mut kit.knowledge, reply_to, place, span, done, &env.limits, out)
         }
         State::Listing { reply_to } => scanned(reply_to, done, out),
+        State::Writing { reply_to, place, creating } => {
+            stored(&mut kit.knowledge, reply_to, place, creating, done, out)
+        }
         State::Done => unreachable!("a job that has answered has nothing in flight"),
     };
     follow(kits, jobs, id, out);
@@ -119,7 +147,7 @@ pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Don
 fn follow(kits: &mut Slab<Kit>, jobs: &mut Slab<Job>, id: Id<Job>, out: &mut Queue<Request>) {
     let job = jobs.get(id).expect("a job lives until it is retired");
     match job.state {
-        State::Reading { .. } | State::Listing { .. } => {}
+        State::Reading { .. } | State::Listing { .. } | State::Writing { .. } => {}
         State::Done => {
             kit::finished(kits, job.kit, id, out);
             jobs.retire(id);
@@ -175,6 +203,41 @@ fn scanned(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
         Done::Cancelled => Outcome::Cancelled,
         Done::Loaded { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::NotFile | Done::TooLarge { .. } => {
             unreachable!("io ends a scan with a scan's terminal")
+        }
+    };
+    answer(reply_to, outcome, out)
+}
+
+/// Writing, ended: answer, and know the version written.
+fn stored(
+    knowledge: &mut Knowledge,
+    reply_to: ReplyTo,
+    place: Place,
+    creating: bool,
+    done: Done,
+    out: &mut Queue<Request>,
+) -> State {
+    let outcome = match done {
+        Done::Stored { version } => {
+            knowledge.record(place, version);
+            Outcome::Written { created: creating }
+        }
+        // Something is there that the LLM has not read.
+        Done::Conflict { now: Some(_) } if creating => Outcome::NotRead,
+        Done::Conflict { now: None } if creating => unreachable!("io refuses to create a file only over one"),
+        Done::Conflict { now: Some(_) } => Outcome::Stale,
+        Done::Conflict { now: None } => {
+            knowledge.forget(&place);
+            Outcome::Stale
+        }
+        Done::NotFile => Outcome::NotFile,
+        Done::NotDirectory => Outcome::NotDirectory,
+        Done::Escapes => Outcome::Outside,
+        Done::Failed { fault } => Outcome::Failed { fault },
+        Done::TimedOut => Outcome::TimedOut,
+        Done::Cancelled => Outcome::Cancelled,
+        Done::Loaded { .. } | Done::Scanned { .. } | Done::Missing | Done::TooLarge { .. } => {
+            unreachable!("io ends a store with a store's terminal")
         }
     };
     answer(reply_to, outcome, out)

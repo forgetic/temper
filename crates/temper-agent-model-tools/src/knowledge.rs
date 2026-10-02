@@ -32,7 +32,6 @@ impl Knowledge {
     }
 
     /// The version of the file at `place` the LLM knows, if it knows one.
-    #[cfg_attr(not(test), expect(dead_code, reason = "writes ask for it, next"))]
     pub(crate) fn version(&self, place: &Place) -> Option<Version> {
         let seen = self.seen.get(place)?;
         Some(seen.version)

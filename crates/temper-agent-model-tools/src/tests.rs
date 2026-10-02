@@ -11,8 +11,8 @@ use crate::knowledge::Knowledge;
 use crate::path;
 use crate::window::{self, Span};
 use crate::{
-    Authority, Call, Done, Effect, Entry, Event, Fault, Grants, Kind, Limits, Model, Name, Op, Outcome, Part, Path,
-    Place, Refusal, Repo, Request, Version, effect, max_out, step, worst_case,
+    Authority, Call, Done, Effect, Entry, Event, Expect, Fault, Grants, Kind, Limits, Model, Name, Op, Outcome, Part,
+    Path, Place, Refusal, Repo, Request, Version, effect, max_out, step, worst_case,
 };
 
 const LIMITS: Limits = Limits {
@@ -380,7 +380,8 @@ fn calls_are_refused_at_the_entrance() {
         (modify, write(b"src/big.rs", 1025), Outcome::TooLarge { size: 1025 }),
         (inspect, read(b"a/very/long/path/that/does/not/fit/in/the/sixty/four/bytes/allowed"), Outcome::TooLong),
         // What passes the entrance does not run yet.
-        (modify, write(b"src/big.rs", 1024), Outcome::Unsupported),
+        (ALL, edit(b"src/lib.rs"), Outcome::Unsupported),
+        (ALL, Call::Search { path: path(b"src"), pattern: bytes(b"fn"), glob: None }, Outcome::Unsupported),
         (ALL, shell, Outcome::Unsupported),
     ];
     let mut h = Harness::new(Limits { kits: 16, ..LIMITS });
@@ -612,4 +613,94 @@ fn a_kit_whose_calls_end_and_start_in_one_iteration_has_room() {
         assert_eq!(h.model.jobs(), 2, "the answered job waits for the reclaim point");
         owner = next;
     }
+}
+
+fn store(at: Place, content: &[u8], expect: Expect) -> Op {
+    Op::Store { at, content: Box::from(content), expect }
+}
+
+#[test]
+fn a_write_creates_a_file_the_kit_knows_nothing_of() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    let (owner, op) = h.start(kit, 1, write(b"src/new.rs", 3));
+    assert_eq!(op, store(place(1, b"src/new.rs"), b"xxx", Expect::Absent));
+    assert_eq!(h.end(owner, Done::Stored { version: version(4) }), (1, Outcome::Written { created: true }));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/new.rs")), Some(version(4)));
+    // Its LLM wrote it, so it may write it again.
+    let (owner, op) = h.start(kit, 2, write(b"src/new.rs", 1));
+    assert_eq!(op, store(place(1, b"src/new.rs"), b"x", Expect::Is { version: version(4) }));
+    assert_eq!(h.end(owner, Done::Stored { version: version(5) }), (2, Outcome::Written { created: false }));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/new.rs")), Some(version(5)));
+}
+
+#[test]
+fn a_write_replaces_a_file_at_the_version_its_llm_read() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    let (owner, _) = h.start(kit, 1, read(b"src/lib.rs"));
+    drop(h.end(owner, Done::Loaded { content: bytes(b"old\n"), version: version(7) }));
+    let (owner, op) = h.start(kit, 2, write(b"./src/../src/lib.rs", 2));
+    assert_eq!(op, store(place(1, b"src/lib.rs"), b"xx", Expect::Is { version: version(7) }), "places are normalised");
+    assert_eq!(h.end(owner, Done::Stored { version: version(8) }), (2, Outcome::Written { created: false }));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), Some(version(8)));
+}
+
+#[test]
+fn a_write_that_conflicts_with_the_real_file_is_refused() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    // Creating over a file the LLM never read.
+    let (owner, _) = h.start(kit, 1, write(b"src/lib.rs", 1));
+    assert_eq!(h.end(owner, Done::Conflict { now: Some(version(3)) }), (1, Outcome::NotRead));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), None, "the LLM still has not read it");
+
+    // Replacing a file changed since the LLM read it.
+    let (owner, _) = h.start(kit, 2, read(b"src/lib.rs"));
+    drop(h.end(owner, Done::Loaded { content: bytes(b""), version: version(3) }));
+    let (owner, _) = h.start(kit, 3, write(b"src/lib.rs", 1));
+    assert_eq!(h.end(owner, Done::Conflict { now: Some(version(4)) }), (3, Outcome::Stale));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), Some(version(3)), "what the LLM read");
+
+    // Replacing a file removed since: the kit knows it is gone, and the next
+    // write creates it.
+    let (owner, _) = h.start(kit, 4, write(b"src/lib.rs", 1));
+    assert_eq!(h.end(owner, Done::Conflict { now: None }), (4, Outcome::Stale));
+    let (_, op) = h.start(kit, 5, write(b"src/lib.rs", 1));
+    assert_eq!(op, store(place(1, b"src/lib.rs"), b"x", Expect::Absent));
+}
+
+#[test]
+fn every_other_end_of_a_store_answers_for_itself() {
+    let table = [
+        (Done::NotFile, Outcome::NotFile),
+        (Done::NotDirectory, Outcome::NotDirectory),
+        (Done::Escapes, Outcome::Outside),
+        (Done::Failed { fault: Fault::NoSpace }, Outcome::Failed { fault: Fault::NoSpace }),
+        (Done::TimedOut, Outcome::TimedOut),
+        (Done::Cancelled, Outcome::Cancelled),
+    ];
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    let (owner, _) = h.start(kit, 1, read(b"link"));
+    drop(h.end(owner, Done::Loaded { content: bytes(b""), version: version(2) }));
+    for (done, expected) in table {
+        let (owner, op) = h.start(kit, 1, write(b"link", 1));
+        assert_eq!(op, store(place(1, b"link"), b"x", Expect::Is { version: version(2) }));
+        assert_eq!(h.end(owner, done), (1, expected));
+        // Whether or not the store happened, the next one's check settles it.
+        assert_eq!(h.knowledge(kit).version(&place(1, b"link")), Some(version(2)));
+    }
+}
+
+#[test]
+fn a_kit_that_forgot_a_file_must_read_it_again_to_change_it() {
+    let mut h = Harness::new(Limits { known_files: 1, ..LIMITS });
+    let kit = h.open(1, authority(ALL));
+    for (name, file) in [(1, &b"a"[..]), (2, b"b")] {
+        let (owner, _) = h.start(kit, name, read(file));
+        drop(h.end(owner, Done::Loaded { content: bytes(b""), version: version(name) }));
+    }
+    let (_, op) = h.start(kit, 3, write(b"a", 1));
+    assert_eq!(op, store(place(1, b"a"), b"x", Expect::Absent), "a was forgotten for b");
 }

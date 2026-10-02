@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_tools as tools;
-use temper_agent_model_tools::{Authority, Call, Done, Fault, Grants, Op, Outcome, Refusal, Repo};
+use temper_agent_model_tools::{Authority, Call, Done, Expect, Fault, Grants, Op, Outcome, Refusal, Repo};
 use temper_checkout_fake::Checkout;
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 
@@ -33,6 +33,9 @@ pub struct Settings {
     /// The chance, per mille, that a cancel loses its race and the operation
     /// ends as it would have.
     pub late_cancels: u32,
+    /// The chance, per mille, that an operation abandoned at its deadline had
+    /// taken effect all the same.
+    pub late_effects: u32,
     /// How long the session takes between one step of its script and the
     /// next.
     pub think: Span,
@@ -61,6 +64,7 @@ impl Settings {
             io: Span::millis(1, 20),
             faults: 0,
             late_cancels: 0,
+            late_effects: 0,
             think: Span::millis(1, 100),
             call_timeout: Duration::from_secs(60),
         }
@@ -77,6 +81,8 @@ pub enum Step {
     Change(Box<dyn FnOnce(&mut Checkout)>),
     /// Waits.
     Sleep(Duration),
+    /// From now on io takes this long to run an operation, for every kit.
+    Latency(Span),
 }
 
 /// What the world counted.
@@ -88,8 +94,10 @@ pub struct Stats {
     pub ops: u32,
     /// Operations that failed with a fault.
     pub faults: u32,
-    /// Operations that ran out of time.
+    /// Operations that ran out of time, and those that took effect all the
+    /// same.
     pub timeouts: u32,
+    pub late_effects: u32,
     /// Operations the tools cancelled, and those whose cancel lost the race.
     pub cancels: u32,
     pub late_cancels: u32,
@@ -164,6 +172,9 @@ pub struct World {
     calls: BTreeMap<u64, (u64, Option<Outcome>)>,
     /// io's operations in flight.
     ops: BTreeMap<Token, Pending>,
+    /// The versions io has told the tools of, for each place: the only ones a
+    /// store may expect there.
+    versions: BTreeSet<(u64, Vec<u8>, u64)>,
 
     stats: Stats,
     trace: Vec<String>,
@@ -190,6 +201,7 @@ impl World {
             sessions: BTreeMap::new(),
             calls: BTreeMap::new(),
             ops: BTreeMap::new(),
+            versions: BTreeSet::new(),
             stats: Stats::default(),
             trace: Vec::new(),
         }
@@ -332,6 +344,10 @@ impl World {
                 self.session_mut(session.raw()).state = State::Closed;
             }
             tools::Request::Io { owner, op, deadline } => {
+                if let Op::Store { at, expect: Expect::Is { version }, .. } = &op {
+                    let known = (at.root.raw(), at.path.to_vec(), version.raw()[0]);
+                    assert!(self.versions.contains(&known), "a store expects a version io gave for its place");
+                }
                 let ran = self.now.saturating_add(self.draw(self.settings.io));
                 let ran = self.schedule(ran, Delivery::Ran { owner });
                 let deadline = self.schedule(deadline, Delivery::Deadline { owner });
@@ -377,7 +393,7 @@ impl World {
                         self.stats.faults += 1;
                         Done::Failed { fault: self.fault() }
                     } else {
-                        translate::perform(&mut self.checkout, pending.op)
+                        self.perform(pending.op)
                     };
                     self.tools_in.push_back(tools::Event::Done { owner, done });
                 }
@@ -385,11 +401,39 @@ impl World {
                     let pending =
                         self.ops.remove(&owner).expect("a deadline is withdrawn when its operation ends first");
                     self.wire.remove(&pending.ran);
+                    if self.rng.chance(self.settings.late_effects) {
+                        drop(translate::perform(&mut self.checkout, pending.op));
+                        self.stats.late_effects += 1;
+                    }
                     self.tools_in.push_back(tools::Event::Done { owner, done: Done::TimedOut });
                     self.stats.timeouts += 1;
                 }
             }
         }
+    }
+
+    /// Runs `op` on the checkout, and notes the version it tells of.
+    fn perform(&mut self, op: Op) -> Done {
+        let at = match &op {
+            Op::Load { at, .. } | Op::Scan { at, .. } | Op::Store { at, .. } => at.clone(),
+        };
+        let done = translate::perform(&mut self.checkout, op);
+        match &done {
+            Done::Loaded { version, .. } | Done::Stored { version } => {
+                self.versions.insert((at.root.raw(), at.path.to_vec(), version.raw()[0]));
+            }
+            Done::Scanned { .. }
+            | Done::Conflict { .. }
+            | Done::Missing
+            | Done::NotFile
+            | Done::NotDirectory
+            | Done::TooLarge { .. }
+            | Done::Escapes
+            | Done::Failed { .. }
+            | Done::TimedOut
+            | Done::Cancelled => {}
+        }
+        done
     }
 
     /// The session takes the next step of its script, or closes its kit once
@@ -427,6 +471,10 @@ impl World {
             Step::Sleep(span) => {
                 let at = self.now.saturating_add(span);
                 self.schedule(at, Delivery::Next { session });
+            }
+            Step::Latency(span) => {
+                self.settings.io = span;
+                self.next(session);
             }
         }
     }
