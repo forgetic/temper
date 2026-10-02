@@ -714,7 +714,8 @@ fn call_failed(
 }
 
 /// Calls the LLM with the conversation so far, if the budget pays for another
-/// completion; ends the session otherwise.
+/// completion and the transcript has room for its answer; ends the session
+/// otherwise, rather than pay for an answer it could not keep.
 fn call(
     conversation: &Conversation,
     id: Id<Session>,
@@ -724,6 +725,9 @@ fn call(
 ) -> State {
     if let Some(spent) = spent(conversation, env.now) {
         return finish(conversation, End::Budget { spent }, out);
+    }
+    if conversation.transcript.room() == 0 {
+        return finish(conversation, End::TranscriptFull, out);
     }
     out.push(complete(id, conversation, &env.limits));
     State::Calling { attempt }

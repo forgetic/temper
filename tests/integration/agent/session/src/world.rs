@@ -561,6 +561,8 @@ impl World {
         assert!(usage.cache_read_tokens <= budget.cache_read, "session {opener} is within its cache reads");
         assert!(usage.cache_write_tokens <= budget.cache_write, "session {opener} is within its cache writes");
         assert!(Some(self.now) < session.expires, "session {opener} has time left");
+        let messages = u32::try_from(prompt.messages.len()).expect("a small transcript");
+        assert!(messages < self.settings.agent.messages, "session {opener}'s transcript has room for the answer");
         let left = budget.output - usage.output_tokens;
         let most = u32::try_from(left).unwrap_or(u32::MAX).min(session.max_tokens);
         assert_eq!(prompt.max_tokens, most, "session {opener}'s answer takes no more than the output budget left");

@@ -15,7 +15,8 @@ pub const MAX_PARALLEL: u32 = 8;
 pub struct Limits {
     /// Sessions at once. An `Open` beyond them is refused as busy.
     pub sessions: u32,
-    /// Messages a session's transcript holds, the spec's prompt included.
+    /// Messages a session's transcript holds, the spec's prompt included: at
+    /// least two, the prompt and an answer.
     pub messages: u32,
     /// Bytes a session holds: its spec, its transcript and the tool results
     /// it is collecting, each block counted at its fixed size plus its payload.
@@ -57,7 +58,7 @@ pub struct Limits {
 /// count them. Facts own nothing beyond their queue.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
-    if !(1..=MAX_PARALLEL).contains(&limits.parallel_tools) {
+    if !(1..=MAX_PARALLEL).contains(&limits.parallel_tools) || limits.messages < 2 {
         return None;
     }
     let sessions = Slab::<Session>::worst_case(limits.sessions)?;

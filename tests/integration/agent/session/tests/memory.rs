@@ -70,7 +70,7 @@ fn size(of: usize) -> u64 {
 
 const LIMITS: Limits = Limits {
     sessions: 1,
-    messages: 3,
+    messages: 4,
     session_bytes: 1024,
     budget: Budget {
         turns: 16,

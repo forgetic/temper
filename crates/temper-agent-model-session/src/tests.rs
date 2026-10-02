@@ -886,6 +886,17 @@ fn a_conversation_that_outgrows_its_bytes_ends_the_session() {
 }
 
 #[test]
+fn a_session_starts_no_completion_whose_answer_it_could_not_keep() {
+    // The prompt, the tools' call and their results: no room for an answer.
+    let mut h = Harness::new(Limits { messages: 3, ..LIMITS });
+    let (owner, _) = h.open(1);
+    let (run, _) = running(h.step(Event::Completed { owner, completion: ls() }));
+    assert_eq!(h.step(ran(run, b"main.rs")), Some(ended(End::TranscriptFull, 1)));
+    // Nor is a transcript too short to hold a prompt and its answer.
+    assert_eq!(worst_case(&Limits { messages: 1, ..LIMITS }), None);
+}
+
+#[test]
 fn a_transcript_with_no_room_for_another_message_ends_the_session() {
     let mut h = Harness::new(Limits { messages: 2, ..LIMITS });
     let session = h.yielded();
