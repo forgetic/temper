@@ -9,12 +9,13 @@ what is still open is listed in section 9.
 ## 1. In one page
 
 - **An agent is a flexible LLM driver integrated with the forge.** The
-  engine decides what work exists, the worker prepares a checkout and holds
-  authority over the forge, and the agent does the LLM work: a coding job,
-  a review, a design session with a human, a coordinator reporting on a
-  feature. A code change is one kind of outcome among several.
+  engine decides what work exists and holds authority over the forge, the
+  worker prepares a checkout and hosts the run, and the agent does the LLM
+  work: a coding job, a review, a design session with a human, a
+  coordinator reporting on a feature. A code change is one kind of outcome
+  among several.
 - **Runs are short-lived by default, and continuity lives in the forge.**
-  Each activation is a fresh run whose brief the worker builds from forge
+  Each activation is a fresh run whose brief the engine builds from forge
   state, including what the agent itself wrote last time. Nothing in the
   model stops a run from living longer (4.5).
 - **Three sub-models under one top-level model.** `run` (one agent
@@ -29,7 +30,7 @@ what is still open is listed in section 9.
   role, queue or action names. What differs between agents arrives in the
   charter: the brief, the tools granted, the repositories it may write, the
   outcomes it may produce, its budget.
-- **Any model, any provider.** The worker names the model a run starts
+- **Any model, any provider.** The charter names the model a run starts
   with; the sessions a run opens may use any endpoint the agent is
   configured with, so a sub-agent can run on another model or another
   provider. The conversation vocabulary is provider-neutral; each
@@ -41,18 +42,23 @@ what is still open is listed in section 9.
 ## 2. The agent in the system
 
 ```
-engine   workflow state, read from the forge: what work exists, and for whom
-worker   checkout, authority over the forge, gates: starts runs, applies their outcomes
+engine   workflow and forge authority: what work exists, for whom; applies outcomes
+worker   checkouts and gates: starts runs, relays their host calls, pushes their branches
 agent    LLM work: runs sessions with tools, reports facts and outcomes to the worker
 ```
 
+- **The engine is the forge's only API client.** It reads workflow state,
+  makes every change (pull requests, bodies, comments, child issues,
+  labels), and answers the forge reads and outlets a run asks for. The
+  worker's one write is pushing a run's branch, over git.
 - **The worker starts a run** with a charter (4.1). Credentials never reach
   the model: it names an LLM endpoint, and the protocol layer holds the
   rest.
 - **The agent acts on the world only through the worker:** the pre-push
-  gate, forge reads, and the outlets its charter grants (4.3). It never
-  pushes, merges or writes to the forge on its own authority.
-- **Retrying a failed run is the worker's business,** across attempts. A
+  gate, which the worker runs, and the forge reads and outlets its charter
+  grants (4.3), which the worker relays to the engine. It never pushes,
+  merges or writes to the forge on its own authority.
+- **Retrying a failed run is decided above the run,** across attempts. A
   run answers once and is done.
 
 ## 3. Structure
@@ -80,15 +86,16 @@ checkout, judges what comes out, and answers once.
 
 ### 4.1 Charter
 
-What the worker gives a run when it starts it:
+What the worker gives a run when it starts it, most of it from the engine's
+assignment:
 
 - **Brief.** Text for the LLM: the work item and its lineage, the role's
   charter, the action's guidance, the repository's `AGENTS.md`, rendered by
-  the worker, which holds the forge and the workflow. The agent adds only
+  the engine, which holds the forge and the workflow. The agent adds only
   the sections about its own mechanics (its tools, its checkout, how to
   finish), because those are what it enforces.
 - **Checkout.** The repositories, where they sit, and which may be
-  written: the effective write authority, computed by the worker and
+  written: the effective write authority, decided by the engine and
   enforced by the tools, not stated in prose.
 - **Grants.** What the LLM may do: tool families (inspect, modify, shell,
   forge reads, sub-agents) and outlets (4.3). Data, never derived from a
@@ -137,9 +144,10 @@ runs use one of each.
 - **Inbound:** the request that starts it; later, a human's message (web
   UI, engine, worker), a forge event it waits for, a timer. The first
   request is just the first event.
-- **Outlets:** delegated tools that act through the worker: finish, and
-  later reply to a human, comment, open an issue, propose a change, wait
-  for an event. Which outlets a run has is part of its grants.
+- **Outlets:** delegated tools that act through the worker, and through
+  the engine where they touch the forge: finish, and later reply to a
+  human, comment, open an issue, propose a change, wait for an event.
+  Which outlets a run has is part of its grants.
 
 | Agent | Inbound | Outlets | Ends when |
 |---|---|---|---|
