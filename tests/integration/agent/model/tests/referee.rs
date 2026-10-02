@@ -7,10 +7,14 @@ use std::collections::BTreeMap;
 
 use temper_agent_model::run::outcome::{Change, Declared};
 use temper_agent_model::run::{Answer, Spend};
-use temper_agent_model_tests::referee::{Meeting, POSTED, Report, Repository, Seen};
-use temper_agent_model_tests::{channel, protocol};
+use temper_agent_model_tests::desk::{self, CODING, Hand, Work};
+use temper_agent_model_tests::referee::{Meeting, POSTED, Report, Repository, STORY, Seen};
+use temper_agent_model_tests::{CALM, Job, channel, protocol};
 use temper_checkout_fake::git::Tree;
+use temper_engine_model::forge::Position;
+use temper_engine_model::work::{Class, Hold, Phase};
 use temper_engine_model::{Item, Outcome, Posted};
+use temper_engine_model_forge_tests::translate::recorded;
 use temper_engine_model_tests::codec;
 use temper_engine_model_tests::deployment::{ENGINE, REPOSITORIES};
 use temper_forge_model::Observation;
@@ -38,7 +42,7 @@ fn change() -> Declared {
 /// A referee that has seen the run of `ATTEMPT` start in `PROCESS`, on a
 /// repository it may write, ask to push `pushed`, and accept a change.
 fn started(pushed: &[u8]) -> Referee<Meeting> {
-    let mut referee = Referee::new(Meeting::new(Duration::from_secs(60)));
+    let mut referee = Referee::new(Meeting::new(Duration::from_secs(60), false, false));
     let repository = Repository { name: b"app".to_vec(), remote: b"forge/app".to_vec(), push: Some(b"fix".to_vec()) };
     referee.observe(at(0), Seen::Assigned { attempt: ATTEMPT, repositories: vec![repository] }, &mut Vec::new());
     referee.observe(at(1), Seen::Started { process: PROCESS, attempt: ATTEMPT }, &mut Vec::new());
@@ -221,4 +225,60 @@ fn a_merge_that_loses_what_the_run_changed_fails_the_run() {
     referee.observe(at(6), ended(9), &mut Vec::new());
     referee.observe(at(7), merged(9, b"42"), &mut Vec::new());
     assert_eq!(why(&referee), r#"a merge keeps src/lib.rs as the head 9 has it: { "src/lib.rs": "42" } merged"#);
+}
+
+/// The engine records `ITEM` held for `why`, as it edits its record.
+fn held(why: Hold) -> Seen {
+    let hand = Hand {
+        at: Duration::ZERO,
+        repository: ITEM.repository,
+        job: Job::Coding,
+        work: Work::Agent,
+        grants: CODING,
+        budget: CALM,
+    };
+    let mut record = desk::record(&hand, Time::ZERO);
+    record.lifecycle.phase = Phase::Held { why, outcome: None };
+    let body = recorded(Position::START, 0, &codec::record_block(&record));
+    let repository = REPOSITORIES[0].into();
+    Seen::Forge(Observation::Edited { repository, number: ITEM.number, id: 3, body: body.into(), by: ENGINE })
+}
+
+/// A referee that has seen `ITEM` handed in, the forge or the store failing
+/// if `faults`.
+fn handed(faults: bool) -> Referee<Meeting> {
+    let mut referee = Referee::new(Meeting::new(Duration::from_secs(60), faults, false));
+    referee.observe(at(0), Seen::Handed { item: ITEM }, &mut Vec::new());
+    referee
+}
+
+#[test]
+fn an_issue_held_for_its_runs_failures_or_closed_ends_its_story() {
+    let mut referee = handed(false);
+    referee.observe(at(5), held(Hold::Failures(Class::Run)), &mut Vec::new());
+    assert_eq!(referee.verdict(), Verdict::Passed);
+    let mut referee = handed(false);
+    let closed = Observation::Closed { repository: REPOSITORIES[0].into(), number: ITEM.number, by: ENGINE };
+    referee.observe(at(5), Seen::Forge(closed), &mut Vec::new());
+    assert_eq!(referee.verdict(), Verdict::Passed);
+}
+
+#[test]
+fn an_issue_held_for_its_writes_where_nothing_fails_fails_the_run() {
+    let mut referee = handed(true);
+    referee.observe(at(5), held(Hold::Writes), &mut Vec::new());
+    assert_eq!(referee.verdict(), Verdict::Passed, "the forge failed the engine's writes");
+    let mut referee = handed(false);
+    referee.observe(at(5), held(Hold::Writes), &mut Vec::new());
+    assert!(why(&referee).starts_with(
+        "the engine holds Item { repository: 0, number: 7 } only for what the scenario makes happen, not Writes"
+    ));
+}
+
+#[test]
+fn an_issue_neither_closed_nor_held_past_its_bound_fails_listing_it() {
+    let mut referee = handed(false);
+    assert_eq!(referee.next_deadline(), Some(at(0).saturating_add(STORY)));
+    referee.fire(at(0).saturating_add(STORY), &mut Vec::new());
+    assert_eq!(why(&referee), "Story(Item { repository: 0, number: 7 }) was not met by 43200.000000000s");
 }

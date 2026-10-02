@@ -45,6 +45,7 @@ impl World {
         let item = Item { repository: hand.repository, number };
         self.items.insert(item, at);
         self.stats.handed += 1;
+        self.observe(Seen::Handed { item });
         self.log(&format!("person {person} hands in {item:?} as {:?} {:?}", hand.job, hand.work));
         self.observe_forge();
         if !self.looking {
@@ -259,8 +260,11 @@ impl World {
                 | Observation::Removed { .. }
                 | Observation::Reviewed { .. }
                 | Observation::Reported { .. }
-                | Observation::Refused { .. }
                 | Observation::Rejected { .. } => {}
+                Observation::Refused { what, number, error, by, .. } => {
+                    self.log(&format!("the forge refuses {what:?} on {number:?} by {by}: {error:?}"));
+                    self.stats.conflicts += u32::from(*error == forge::api::Error::Conflict);
+                }
             }
             self.observe(Seen::Forge(observation.clone()));
             self.observe_engine(engine_referee::Seen::Forge(observation));

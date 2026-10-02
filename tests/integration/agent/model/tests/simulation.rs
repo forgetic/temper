@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use temper_agent_model::run::outcome::Declared;
 use temper_agent_model::run::{Answer, Exhausted, Failure, Push};
 use temper_agent_model_tests::desk::{CODING, Hand, Reviewer, Work};
-use temper_agent_model_tests::{CALM, Job, Run, Settings, Span, World};
+use temper_agent_model_tests::{CALM, Job, Run, Settings, Span, Stats, World};
 use temper_engine_model::Outcome;
 use temper_engine_model::plan::{Budget, Verdict};
 use temper_engine_model::work::{Hold, Phase};
@@ -364,22 +364,51 @@ const REPORTED: [&str; 8] = [
 
 #[test]
 fn random_worlds_settle_with_every_invariant_held() {
+    sweep(true);
+}
+
+/// The sweep, in worlds where nothing is held for its writes where the
+/// forge never fails, a merge refused for a conflict included: the change
+/// is its run's to repair (engine-model.md, 5.1).
+#[test]
+#[ignore = "until merges refused for a conflict go to repair"]
+fn random_worlds_hold_items_for_their_writes_only_where_the_forge_fails() {
+    sweep(false);
+}
+
+/// Settles many random worlds, an item held for its writes once a merge was
+/// refused for a conflict if `conflicts_held`, and checks how their runs and
+/// their issues ended.
+fn sweep(conflicts_held: bool) {
     let mut ends = Ends::default();
     let mut reported = BTreeMap::new();
     let (mut lost, mut unprepared, mut invalid, mut landed, mut saves) = (0, 0, 0, 0, 0);
     let (mut merged, mut stopped, mut checks) = (0, 0, 0);
+    let mut items = Items::default();
     for seed in 0..120 {
-        let mut world = World::new(Settings::random(seed));
+        let settings = Settings { conflicts_held, ..Settings::random(seed) };
+        let faults = settings.faults();
+        let mut world = World::new(settings);
         world.run(ITERATIONS);
         // The referees passed the world, having seen every assignment
-        // answered in time, and the outcome of every run that ended posted.
+        // answered in time, the outcome of every run that ended posted, and
+        // every issue handed in end.
         let (checked, met) = world.judged();
         let stats = world.stats();
         assert_eq!(
             met,
-            u64::from(stats.assigned + stats.ended),
-            "seed {seed}: the referee saw every assignment answered and every outcome posted"
+            u64::from(stats.assigned + stats.ended + stats.handed),
+            "seed {seed}: the referee saw every assignment answered, every outcome posted and every issue end"
         );
+        items.count(&stats, faults);
+        if !faults {
+            let writes = if conflicts_held && stats.conflicts > 0 { 0 } else { stats.held_writes };
+            assert_eq!(
+                (writes, stats.held_record),
+                (0, 0),
+                "seed {seed}: nothing is held for its writes or its record where the forge and the store never fail"
+            );
+        }
         checks += checked;
         for run in world.runs() {
             ends.count(run);
@@ -405,6 +434,40 @@ fn random_worlds_settle_with_every_invariant_held() {
     assert!(landed > 0 && saves > 0, "changes landed, and unfinished work was saved: {landed}, {saves}");
     assert!(merged > 0 && stopped > 0, "changes were merged, and runs stopped: {merged}, {stopped}");
     assert!(checks > 0, "the referees checked what the engine, the worker and the agents did");
+    let Items { closed, failures, stopped, sound, .. } = items;
+    assert!(
+        closed > 0 && failures > 0 && stopped > 0 && sound > 0,
+        "issues were closed, and held for their runs' failures and for people's stops, in worlds whose forge and \
+         store never fail too: {items:?}"
+    );
+}
+
+/// How the issues handed in to many random worlds ended: closed, or held
+/// for a person, by why; and how many worlds had a forge and a store that
+/// never fail.
+#[derive(Default, Debug)]
+struct Items {
+    closed: u32,
+    plan: u32,
+    failures: u32,
+    stopped: u32,
+    acceptance: u32,
+    writes: u32,
+    record: u32,
+    sound: u32,
+}
+
+impl Items {
+    fn count(&mut self, stats: &Stats, faults: bool) {
+        self.closed += stats.closed;
+        self.plan += stats.held_plan;
+        self.failures += stats.held_failures;
+        self.stopped += stats.held_stopped;
+        self.acceptance += stats.held_acceptance;
+        self.writes += stats.held_writes;
+        self.record += stats.held_record;
+        self.sound += u32::from(!faults);
+    }
 }
 
 #[test]

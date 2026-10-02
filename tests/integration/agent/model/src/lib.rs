@@ -85,14 +85,20 @@
 //! commits exactly the tree the agent left; the engine hears the outcome the
 //! run accepted, or how it failed, a cancel being the worker's to report, and
 //! posts on its item, within a bound, exactly the outcome a run ended with,
-//! and no other; what landed is on the forge; what the engine merges is what a run landed,
-//! keeping every file the run changed; and every assignment is answered
-//! within the wall time the worker's watchdog gives a run, and a margin. The
-//! engine's (`temper_engine_model_tests::referee`): nothing lands on a
-//! protected branch without green CI on its exact head and a person's
-//! approval of it, writes only to the deployment's repositories, keyed
-//! creations and outcomes made once, attempts that only grow and one live run
-//! per item.
+//! and no other; what landed is on the forge; what the engine merges is what
+//! a run landed, keeping every file the run changed; an issue is held for a
+//! person only for its runs' failures, a person's stop or its plan's reasons,
+//! and for its writes or its record only where the forge or the store were
+//! scripted to fail; every assignment is answered within the wall time the
+//! worker's watchdog gives a run, and a margin; and every issue handed in
+//! ends, closed or held, within a bound. The engine's
+//! (`temper_engine_model_tests::referee`): nothing lands on a protected
+//! branch without green CI on its exact head and a person's approval of it,
+//! writes only to the deployment's repositories, keyed creations and outcomes
+//! made once, attempts that only grow and one live run per item. Its stories
+//! are kept by the first referee instead, as an issue held for a person ends
+//! here as surely as one closed, and the engine's referee meets a story only
+//! on a close.
 //!
 //! Not exercised, as the agent's side does not do it yet: sessions, inbound
 //! events and a run's waiting for them, parking and snapshots, and relayed

@@ -307,6 +307,10 @@ pub struct Settings {
     /// The grid every delivery is rounded up to, so that some come at the
     /// same instant; zero for none.
     pub granule: Duration,
+    /// Whether the engine may hold an item for its writes once the forge
+    /// refused one of its merges for a conflict, as it does today, where the
+    /// change is its run's to repair (engine-model.md, 5.1).
+    pub conflicts_held: bool,
 }
 
 impl Settings {
@@ -390,6 +394,7 @@ impl Settings {
             move_after: Span::millis(0, 1000),
             refusing: 0,
             granule: Duration::ZERO,
+            conflicts_held: false,
         }
     }
 
@@ -482,7 +487,7 @@ impl Settings {
             1 => Duration::from_millis(50),
             _ => Duration::from_secs(1),
         };
-        Settings {
+        let mut settings = Settings {
             seed,
             limits: TIGHT,
             worker,
@@ -504,8 +509,26 @@ impl Settings {
             move_after: Span::millis(0, 5_000),
             refusing: chance(&mut rng, 150),
             granule,
+            conflicts_held: true,
             ..calm
+        };
+        // In some worlds the forge and the store never fail, so that nothing
+        // the engine writes fails for good.
+        if rng.chance(300) {
+            let forge =
+                forge::Config { late: 0, unavailable: 0, timeouts: 0, landing: 0, rate_limit: 0, ..settings.forge };
+            settings.forge = forge;
+            settings.store.failures = 0;
         }
+        settings
+    }
+
+    /// Whether the forge or the store may fail the engine's calls, so that a
+    /// write, or a record, may fail for good.
+    #[must_use]
+    pub fn faults(&self) -> bool {
+        let forge = &self.forge;
+        forge.late + forge.unavailable + forge.timeouts + forge.landing + forge.rate_limit + self.store.failures > 0
     }
 }
 
@@ -569,6 +592,17 @@ pub struct Stats {
     /// Runs people asked the engine to stop, and those it did.
     pub stops: u32,
     pub stopped: u32,
+    /// How the issues handed in ended, once the world settled: closed, or
+    /// held for a person, by why.
+    pub closed: u32,
+    pub held_plan: u32,
+    pub held_failures: u32,
+    pub held_stopped: u32,
+    pub held_acceptance: u32,
+    pub held_writes: u32,
+    pub held_record: u32,
+    /// The engine's merges the forge refused for a conflict.
+    pub conflicts: u32,
     /// The engine's calls of the forge, those past the protocol layer's
     /// deadline, and those the forge limited; webhooks; the store's
     /// operations that failed; the engine's facts.
@@ -1069,7 +1103,11 @@ impl World {
             abort_lost: BTreeSet::new(),
             passed: BTreeSet::new(),
             pushes: Ledger::new("push"),
-            referee: Referee::new(Meeting::new(answered_within(&settings.worker))),
+            referee: Referee::new(Meeting::new(
+                answered_within(&settings.worker),
+                settings.faults(),
+                settings.conflicts_held,
+            )),
             engine_referee: Referee::new(engine_referee::Engine::new(bounds, 0)),
             stats: Stats::default(),
             told: Told::default(),
@@ -1483,9 +1521,43 @@ impl World {
         if self.stats.kills == 0 && self.facts_lost() == 0 {
             self.assert_told();
         }
+        self.count_endings();
         self.observe_engine(engine_referee::Seen::Settled);
         self.referee.assert_passed(seed);
         self.engine_referee.assert_passed(seed);
+    }
+
+    /// Counts how each issue handed in ended: closed, or held, by why.
+    fn count_endings(&mut self) {
+        let seed = self.settings.seed;
+        for item in self.items.keys() {
+            let repository = deployment::name(item.repository);
+            if self.mirror.issue(repository, item.number).is_some_and(|issue| !issue.open) {
+                self.stats.closed += 1;
+                continue;
+            }
+            let phase = self.mirror.record(repository, item.number).map(|record| record.lifecycle.phase);
+            let count = match phase {
+                Some(engine::work::Phase::Held { why, .. }) => match why {
+                    engine::work::Hold::Plan { .. } => &mut self.stats.held_plan,
+                    engine::work::Hold::Failures(_) => &mut self.stats.held_failures,
+                    engine::work::Hold::Stopped => &mut self.stats.held_stopped,
+                    engine::work::Hold::Acceptance => &mut self.stats.held_acceptance,
+                    engine::work::Hold::Writes => &mut self.stats.held_writes,
+                    engine::work::Hold::Record => &mut self.stats.held_record,
+                },
+                Some(
+                    engine::work::Phase::Waiting
+                    | engine::work::Phase::Parked
+                    | engine::work::Phase::Retrying(_)
+                    | engine::work::Phase::Claimed
+                    | engine::work::Phase::Applying { .. }
+                    | engine::work::Phase::Done,
+                )
+                | None => panic!("seed {seed}: {item:?} settled open and not held, {phase:?}"),
+            };
+            *count += 1;
+        }
     }
 
     fn has_work_now(&self) -> bool {

@@ -13,6 +13,13 @@
 //! - the engine posts an outcome only for an attempt the worker answered as
 //!   ended, and the outcome it posts is the one the answer carried, as the
 //!   engine's codec reads it;
+//! - the engine holds an item for a person only for what the scenario
+//!   makes happen: its runs' failures, a person's stop, its plan's reasons;
+//!   for its writes, or its record, only where the forge or the store were
+//!   scripted to fail (or, where the world allows it, for its writes once a
+//!   merge was refused for a conflict, which the engine holds for today
+//!   where its run should repair it); and never for a person's acceptance,
+//!   which nothing handed in here needs;
 //! - what landed is on the forge: an ancestor of its branch's tip, whoever
 //!   moved the branch since, exactly the tree its agent left when it asked
 //!   to push;
@@ -21,18 +28,22 @@
 //!   as the head has it.
 //!
 //! And liveness: every assignment is answered within a bound the world
-//! sets, and every outcome a run ended with is posted on its item within
-//! [`POSTED`].
+//! sets, every outcome a run ended with is posted on its item within
+//! [`POSTED`], and every issue handed in ends, closed or held for a person
+//! as the scenario allows, within [`STORY`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display};
 
 use temper_agent_model::run::{self, outcome::Declared};
 use temper_checkout_fake::git::Tree as Files;
+use temper_engine_model::work::{Hold, Phase};
 use temper_engine_model::{Decoded, Item, Outcome};
 use temper_engine_model_tests::codec;
 use temper_engine_model_tests::deployment::{self, ENGINE};
 use temper_forge_model::Observation;
+use temper_forge_model::Operation;
+use temper_forge_model::api::Error;
 use temper_lib::{Duration, Token};
 use temper_worker_model::host;
 use temper_world::{Expectations, Judge};
@@ -43,6 +54,10 @@ use crate::{channel, protocol};
 /// worker answered with it: the engine's calls are retried past the forge's
 /// outages and rate limits.
 pub const POSTED: Duration = Duration::from_secs(3_600);
+
+/// Within which an issue handed in ends, closed or held: the retries of its
+/// step's runs, each within the worker's wall time, and their backoffs.
+pub const STORY: Duration = Duration::from_secs(12 * 3_600);
 
 /// What the referee observes.
 #[derive(Debug)]
@@ -79,6 +94,8 @@ pub enum Seen {
     Reported { attempt: Token, kind: &'static str, report: Report, landed: Vec<(usize, u64)> },
     /// The forge did this, as it observed it.
     Forge(Observation),
+    /// A person handed `item` in.
+    Handed { item: Item },
 }
 
 /// A repository of an assignment's workspace.
@@ -123,6 +140,8 @@ pub enum Expected {
     /// The engine posts the outcome the worker's answer for the attempt so
     /// named ended with.
     Posted(u64),
+    /// The item handed in ends: closed, or held for a person.
+    Story(Item),
 }
 
 /// This world injects nothing of its own: the channel to the engine never
@@ -135,6 +154,13 @@ pub enum Stimulus {}
 pub struct Meeting {
     /// How long the worker may take to answer an assignment.
     within: Duration,
+    /// Whether the forge or the store were scripted to fail, so that a
+    /// write, or a record, may fail for good; whether an item may be held
+    /// for its writes once a merge was refused for a conflict, and whether
+    /// one was.
+    faults: bool,
+    conflicts_held: bool,
+    conflicted: bool,
     attempts: BTreeMap<Token, Attempt>,
     processes: BTreeMap<u64, Process>,
     /// Each branch of the forge seen to move, by remote and branch: its tip
@@ -181,11 +207,16 @@ struct Process {
 
 impl Meeting {
     /// Expectations under which the worker answers each assignment `within`
-    /// its assignment.
+    /// its assignment, the forge or the store fail if `faults`, and an item
+    /// may be held for its writes once a merge was refused for a conflict if
+    /// `conflicts_held`.
     #[must_use]
-    pub fn new(within: Duration) -> Meeting {
+    pub fn new(within: Duration, faults: bool, conflicts_held: bool) -> Meeting {
         Meeting {
             within,
+            faults,
+            conflicts_held,
+            conflicted: false,
             attempts: BTreeMap::new(),
             processes: BTreeMap::new(),
             branches: BTreeMap::new(),
@@ -342,12 +373,28 @@ impl Meeting {
                 let item = Item { repository: index, number: *number };
                 match codec::comment(*id, body) {
                     Some(Decoded::Outcome { posted, .. }) => self.posted(item, posted.attempt, &posted.outcome, judge),
-                    Some(Decoded::Record { .. } | Decoded::Page { .. }) | None => {}
+                    Some(Decoded::Record { record, .. }) => self.recorded(item, record.lifecycle.phase, judge),
+                    Some(Decoded::Page { .. }) | None => {}
                 }
+            }
+            Observation::Edited { repository, number, id, body, by } if *by == ENGINE => {
+                let Some(index) = deployment::index(repository) else { return };
+                let item = Item { repository: index, number: *number };
+                match codec::comment(*id, body) {
+                    Some(Decoded::Record { record, .. }) => self.recorded(item, record.lifecycle.phase, judge),
+                    Some(Decoded::Outcome { .. } | Decoded::Page { .. }) | None => {}
+                }
+            }
+            Observation::Closed { repository, number, .. } => {
+                if let Some(index) = deployment::index(repository) {
+                    judge.meet(&Expected::Story(Item { repository: index, number: *number }));
+                }
+            }
+            Observation::Refused { what: Operation::Merge, error: Error::Conflict, by, .. } if *by == ENGINE => {
+                self.conflicted = true;
             }
             Observation::Commented { .. }
             | Observation::Edited { .. }
-            | Observation::Closed { .. }
             | Observation::Refused { .. }
             | Observation::Moved { .. }
             | Observation::Merged { .. }
@@ -365,6 +412,35 @@ impl Meeting {
             | Observation::Reported { .. }
             | Observation::Rejected { .. } => {}
         }
+    }
+
+    /// The engine records `item` in `phase`: held only for what the scenario
+    /// allows, which ends its story.
+    fn recorded(&mut self, item: Item, phase: Phase, judge: &mut Judge<Expected, Stimulus>) {
+        let why = match phase {
+            Phase::Held { why, .. } => why,
+            Phase::Waiting
+            | Phase::Parked
+            | Phase::Retrying(_)
+            | Phase::Claimed
+            | Phase::Applying { .. }
+            | Phase::Done => return,
+        };
+        let allowed = match why {
+            Hold::Failures(_) | Hold::Stopped | Hold::Plan { .. } => true,
+            Hold::Writes => self.faults || (self.conflicts_held && self.conflicted),
+            Hold::Record => self.faults,
+            Hold::Acceptance => false,
+        };
+        judge.check(
+            allowed,
+            format_args!(
+                "the engine holds {item:?} only for what the scenario makes happen, not {why:?} (the forge and \
+                 the store {})",
+                if self.faults { "fail" } else { "never fail" }
+            ),
+        );
+        judge.meet(&Expected::Story(item));
     }
 
     /// The engine posts `outcome` on `item` for its attempt `count`: only
@@ -442,6 +518,7 @@ impl Expectations for Meeting {
             }
             Seen::Reported { attempt, kind, report, landed } => self.reported(attempt, kind, &report, &landed, judge),
             Seen::Forge(observation) => self.forge(&observation, judge),
+            Seen::Handed { item } => judge.expect(Expected::Story(item), STORY),
         }
     }
 }
