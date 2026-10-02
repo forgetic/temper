@@ -1,0 +1,108 @@
+//! The brief sub-model's state and its entry points (programming-style.md,
+//! section 3).
+
+use temper_lib::{Deadlines, Env, Id, Queue, Slab, Time};
+
+use crate::boundary::{Event, Request};
+use crate::brief::{self, Brief, Reading};
+use crate::facts::{Fact, Facts};
+use crate::limits::{self, Limits};
+
+/// The brief sub-model's state.
+#[derive(Debug)]
+pub struct Model {
+    pub(crate) briefs: Slab<Brief>,
+    /// The reads in flight, each for a section of a brief.
+    pub(crate) reads: Slab<Reading>,
+    /// Each gathering brief's deadline.
+    pub(crate) alarms: Deadlines<Id<Brief>>,
+    pub(crate) facts: Facts,
+}
+
+impl Model {
+    /// A model with room for `limits`.
+    #[must_use]
+    pub fn new(limits: &Limits) -> Model {
+        let reads = limits::reads(limits).expect("worst_case accepted the limits");
+        Model {
+            briefs: Slab::with_capacity(limits.briefs),
+            reads: Slab::with_capacity(reads),
+            alarms: Deadlines::with_capacity(limits.briefs),
+            facts: Facts::with_capacity(limits.facts),
+        }
+    }
+
+    /// Briefs present, gathering or settling, closed ones included until
+    /// they are reclaimed.
+    #[must_use]
+    pub fn briefs(&self) -> u32 {
+        self.briefs.len()
+    }
+
+    /// Reads in flight, ended ones included until they are reclaimed.
+    #[must_use]
+    pub fn reads(&self) -> u32 {
+        self.reads.len()
+    }
+
+    /// When the earliest deadline falls due.
+    #[must_use]
+    pub fn next_deadline(&self) -> Option<Time> {
+        self.alarms.next()
+    }
+
+    /// Whether a deadline is due at `now`. While one is, the loop fires the
+    /// top-level model, which calls [`fire`].
+    #[must_use]
+    pub fn is_due(&self, now: Time) -> bool {
+        match self.alarms.next() {
+            Some(at) => at <= now,
+            None => false,
+        }
+    }
+
+    /// The oldest fact not yet drained. The parent drains them at its own
+    /// pace; what does not fit meanwhile is dropped and counted.
+    pub fn pop_fact(&mut self) -> Option<Fact> {
+        self.facts.pop()
+    }
+
+    /// How many facts were dropped for want of room since the model was made.
+    #[must_use]
+    pub fn facts_lost(&self) -> u64 {
+        self.facts.lost()
+    }
+
+    /// The reclaim point: frees what ended in this iteration.
+    pub fn reclaim(&mut self) {
+        self.briefs.reclaim();
+        self.reads.reclaim();
+    }
+}
+
+/// The most requests one step or alarm emits under `limits`: a render's
+/// reads, one per section; or one answer. The parent reserves this much room
+/// in `out`.
+#[must_use]
+pub const fn max_out(limits: &Limits) -> u32 {
+    if limits.sections > 1 { limits.sections } else { 1 }
+}
+
+/// Handles one event, emitting at most [`max_out`] requests.
+pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
+    match event {
+        Event::Render { reply_to, sections } => brief::render(model, env, reply_to, sections, out),
+        Event::Read { owner, read } => brief::read(model, env, owner, read, out),
+    }
+}
+
+/// Fires the earliest deadline due at `env.now`, if there is one, emitting
+/// at most [`max_out`] requests. A stage fires its alarms after its input
+/// events, so a read that arrived in the same iteration wins over a deadline
+/// that passed while the loop waited.
+pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
+    let Some(id) = model.alarms.expire(env.now) else {
+        return;
+    };
+    brief::expire(model, env, id, out);
+}
