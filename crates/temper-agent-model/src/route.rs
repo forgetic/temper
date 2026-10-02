@@ -142,8 +142,10 @@ fn from_session(model: &mut Model, env: &Env<Limits>, request: session::Request,
             run::Event::Ended { conversation: opener, end: translate::end(end), spend: translate::spend(turns, usage) }
         }
         session::Request::Delegate { owner, opener, call, deadline: _ } => {
-            // The deadline is the session's expiry, and the run's own deadline
-            // is no later: the run races the call against it.
+            // The deadline is the session's expiry, which is the run's own
+            // deadline, as a session's time is what the run has left: the run
+            // bounds the call by it. Once the run's Delegated carries a
+            // deadline of its own, it is passed on here.
             let id = peer(model, opener);
             let ask = model.peers.get_mut(id).expect("found above").take(call);
             model.tickets = model.tickets.saturating_sub(1);

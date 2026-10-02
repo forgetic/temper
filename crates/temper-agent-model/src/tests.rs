@@ -6,7 +6,7 @@
 use alloc::boxed::Box;
 
 use temper_agent_model_run::charter::{Checkout, Endpoint, Families, Grants, Llm, Repository, Tools};
-use temper_agent_model_run::outcome::{Children, Declared, OutcomeSpec, Verdict, VerdictRule};
+use temper_agent_model_run::outcome::{Change, ChangeSpec, Children, Declared, OutcomeSpec, Verdict, VerdictRule};
 use temper_agent_model_run::{self as run, Ask, Charter};
 use temper_agent_model_session as session;
 use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
@@ -374,6 +374,28 @@ fn an_accepted_finish_closes_main_and_the_run_answers_the_worker() {
     assert_eq!((spent.turns, spent.input), (1, USAGE.input_tokens));
     h.model.reclaim();
     assert_eq!((h.model.peers(), h.model.tickets(), h.model.flights()), (0, 0, 0), "main's tickets went with it");
+}
+
+#[test]
+fn a_change_lands_through_the_worker_and_the_run_answers_with_it() {
+    let mut h = Harness::new();
+    let outcome = OutcomeSpec { change: Some(ChangeSpec { checks: false }), verdicts: Box::new([]) };
+    let (_, main, _) = h.admit(7, Charter { outcome, ..charter() });
+    let change = Change { title: bytes(b"Fix the bug"), body: bytes(b"It was in main.rs.") };
+    let finish = Ask::Finish { outcome: Declared::Change(change.clone()) };
+    let emitted = h.answer(main, Box::new([served(b"f1", finish)]));
+    let [Request::Push { worker, owner, change: pushed }] = &*emitted else {
+        panic!("expected the change pushed, got {emitted:?}");
+    };
+    assert_eq!((worker, pushed), (&Token::new(7), &change));
+    assert!(h.step(Event::Pushed { owner: *owner, push: run::Push::Done }).is_empty(), "the answer and the close wait");
+    let emitted = h.next();
+    let [Request::Answer { to: _, answer: run::Answer::Accepted { outcome, spent: _ } }] = &*emitted else {
+        panic!("expected the run accepted, got {emitted:?}");
+    };
+    assert_eq!(outcome, &Declared::Change(change));
+    h.model.reclaim();
+    assert_eq!((h.model.peers(), h.model.flights(), h.model.tickets()), (0, 0, 0));
 }
 
 #[test]
