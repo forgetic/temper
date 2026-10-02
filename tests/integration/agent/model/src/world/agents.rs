@@ -245,7 +245,7 @@ impl World {
             Request::Complete { owner, prompt, timeout } => {
                 let call = self.wire.name();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
-                self.calls.open(call, Call { owner: (id, owner), deadline });
+                self.calls_out.open(call, Call { owner: (id, owner), deadline });
                 assert!(self.calling.insert((id, owner), call).is_none(), "a session has one call in flight");
                 offers(&prompt);
                 self.count_results(id, owner, &prompt);
@@ -583,7 +583,7 @@ impl World {
     /// Ends the agent's call `call` if it is still in flight, withdrawing its
     /// deadline, and returns it.
     pub(super) fn end_call(&mut self, call: u64) -> Option<Call> {
-        let ended = self.calls.take(call)?;
+        let ended = self.calls_out.take(call)?;
         self.calling.remove(&ended.owner);
         self.wire.withdraw(ended.deadline);
         Some(ended)
@@ -863,12 +863,13 @@ fn copy(answer: &run::Answer) -> run::Answer {
 
 /// Checks what `prompt` offers against whose conversation it is, which its
 /// system text tells: a sub-agent's starts with the brief its asker wrote,
-/// which the scripts start with their cue, and main's with the charter's.
-/// Only main may finish; an explorer only inspects; a fixer has every family
-/// of tools, which the run gave it only if main had them.
+/// which the scripts start with a sub-agent's cue, and main's with the
+/// charter's, which starts with its step's guidance. Only main may finish;
+/// an explorer only inspects; a fixer has every family of tools, which the
+/// run gave it only if main had them.
 fn offers(prompt: &agent::llm::Prompt) {
     let finish = prompt.served.contains(&agent::llm::Served::Finish);
-    let sub_agent = prompt.system.starts_with(b"@");
+    let sub_agent = [b"@explore".as_slice(), b"@fix", b"@burn"].iter().any(|cue| prompt.system.starts_with(cue));
     assert!(finish != sub_agent, "only main may finish");
     let inspect = tools::Grants { inspect: true, modify: false, shell: false };
     if prompt.system.starts_with(b"@explore") || prompt.system.starts_with(b"@burn") {

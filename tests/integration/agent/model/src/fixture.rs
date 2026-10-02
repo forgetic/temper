@@ -1,21 +1,18 @@
-//! The forge the engine's workspaces are drawn from, and the commands and
-//! checks that run in the working trees the worker checks out of it.
+//! What the deployment's repositories hold, and the commands and checks
+//! that run in the working trees the worker checks out of them.
 //!
-//! Each job has a repository of its own on the forge, named for it: the code
-//! (an answer of 42, which its checks want to be 43), a guide for LLMs that
-//! cues the job's script, and the checks: an executable at `.temper/pre-pr`,
-//! which is a list of files and what each must hold. Executables start with
-//! `#!`. Beside them, `docs` holds documentation only. Every repository's
-//! default branch is the engine's base branch.
+//! Every repository holds the code (an answer of 42, which its checks want
+//! to be 43), a guide for LLMs, the checks (an executable at
+//! `.temper/pre-pr`, which is a list of files and what each must hold;
+//! executables start with `#!`), and the file the forge's CI reads, which
+//! says green: a change that leaves it so passes CI. A run's script is cued
+//! by the guidance of its step, not by its repository ([`crate::desk`]).
 
 use std::time::Duration;
 
 use temper_checkout_fake::git::Tree;
 use temper_checkout_fake::{self as fake, Checkout, Program};
-use temper_fake_engine_model::{BASE, Origin};
-use temper_worker_model_checkout_tests::forge::Forge;
-
-use crate::script::{self, Job};
+use temper_engine_model_tests::deployment::{CUE, GREEN};
 
 /// Where the checks are, beneath a repository's root.
 pub const CHECKS: &[u8] = b".temper/pre-pr";
@@ -23,9 +20,6 @@ pub const CHECKS: &[u8] = b".temper/pre-pr";
 /// The code, as each run finds it, and what its checks want of it.
 pub const CODE: (&[u8], &[u8]) = (b"src/lib.rs", b"pub fn answer() -> u32 { 42 }\n");
 pub const WANTED: &[u8] = b"43";
-
-/// The repository of documentation only.
-pub const DOCS: &[u8] = b"docs";
 
 /// The commands the scripts run, how long each takes, what it writes and how
 /// it ends.
@@ -48,65 +42,18 @@ pub fn script(disk: &mut Checkout) {
     }
 }
 
-/// The name of `job`'s repository, which is the directory a workspace gives
-/// it.
+/// What every repository of the deployment holds on its default branch: the
+/// code, a guide, the checks, and the file CI reads, green.
 #[must_use]
-pub const fn name(job: Job) -> &'static [u8] {
-    match job {
-        Job::Coding => b"coding",
-        Job::Review => b"review",
-        Job::Delegating => b"delegating",
-        Job::Spending => b"spending",
-        Job::Wandering => b"wandering",
-    }
-}
-
-/// The job whose repository is named `name`, if it is one's.
-#[must_use]
-pub fn job(name: &[u8]) -> Option<Job> {
-    script::JOBS.into_iter().find(|job| self::name(*job) == name)
-}
-
-/// The engine's origin for the repository named `name`.
-#[must_use]
-pub fn origin(name: &[u8]) -> Origin {
-    Origin { name: name.into(), remote: [b"ai/", name].concat().into() }
-}
-
-/// Seeds `forge` with every repository of `origins` once, each at a first
-/// commit on the base branch; and returns the first one's.
-pub fn seed(forge: &mut Forge, origins: &[Origin]) -> u64 {
-    let mut first = None;
-    for (place, origin) in origins.iter().enumerate() {
-        if origins[..place].iter().any(|before| before.remote == origin.remote) {
-            continue;
-        }
-        let tree = match job(&origin.name) {
-            Some(job) => code(script::cue(job)),
-            None => docs(),
-        };
-        let commit = forge.repository(&origin.remote, BASE, tree);
-        first.get_or_insert(commit);
-    }
-    first.expect("the engine draws from a repository")
-}
-
-/// A repository of code, its guide cued with `cue`.
-fn code(cue: Option<&[u8]>) -> Tree {
-    let guide = [cue.unwrap_or_default(), b" The answer is in src/lib.rs; the checks want it to be 43.\n"].concat();
+pub fn tree() -> Tree {
+    let guide = b"The answer is in src/lib.rs; the checks want it to be 43.\n".to_vec();
     let checks = [b"#!checks\n", CODE.0, b" ", WANTED, b"\n"].concat();
     Tree::from([
         (b"AGENTS.md".to_vec(), guide),
         (b"README.md".to_vec(), b"temper: the answer\n".to_vec()),
         (CODE.0.to_vec(), CODE.1.to_vec()),
         (CHECKS.to_vec(), checks),
-    ])
-}
-
-fn docs() -> Tree {
-    Tree::from([
-        (b"AGENTS.md".to_vec(), b"Documentation only.\n".to_vec()),
-        (b"guide.md".to_vec(), b"docs: the guide\n".to_vec()),
+        (CUE.to_vec(), GREEN.to_vec()),
     ])
 }
 

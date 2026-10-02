@@ -4,32 +4,42 @@ use temper_agent_model::run::outcome::Declared;
 use temper_agent_model::run::{self, Spend};
 use temper_agent_model::{self as agent, Event, Fact, Limits, Request, session, tools};
 use temper_checkout_fake::Checkout;
-use temper_checkout_fake::git::{Remote, Tree as Files};
-use temper_fake_engine_model::{self as engine, Config, Origin, api};
+use temper_checkout_fake::git::Tree as Files;
+use temper_engine_model::plan::Budget;
+use temper_engine_model::{self as engine, Item};
+use temper_engine_model_tests::deployment::{self, MAIN, REPOSITORIES};
+use temper_engine_model_tests::mirror::Mirror;
+use temper_engine_model_tests::referee as engine_referee;
+use temper_engine_model_tests::store::{self, Store};
+use temper_engine_model_tests::translate::Asked;
+use temper_forge_model::{self as forge, Skew};
 use temper_lib::{Duration, Env, Queue, Rng, Time, Token};
 use temper_llm_model as provider;
-use temper_worker_model::agent::channel::{Down, Up};
-use temper_worker_model::checkout::git::{Commit, Op};
+use temper_worker_model::checkout::git::Op;
 use temper_worker_model::{self as worker, host};
-use temper_worker_model_checkout_tests::forge::Forge;
 use temper_worker_model_checkout_tests::translate as io;
-use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace};
+use temper_world::{Key, Ledger, Referee, Schedule, Span, Stage, Trace, Verdict};
 
-use crate::channel::{self, Link};
+use crate::desk::{self, CODING, Hand, Reviewer};
 use crate::fixture;
-use crate::referee::{Meeting, Repository, Seen, Stimulus};
+use crate::forge as shared;
+use crate::people;
+use crate::referee::{Meeting, Repository, Seen};
 use crate::script::{self, Job};
 
 mod agents;
+mod engine_side;
 mod hosting;
+
+/// The world's own bounds: lines of its trace and deliveries scheduled at
+/// once. A world past one fails with its seed, rather than grow.
+const TRACE: usize = 400_000;
+const DELIVERIES: usize = 20_000;
 
 /// Room in each model's output queue beyond what one step may emit. Small, so
 /// the loop's flow control (take an event only while there is room for what
 /// it may produce) is exercised.
 const SLACK: u32 = 3;
-
-/// The world's name for the worker, in the engine's vocabulary.
-const NAME: Token = Token::new(1);
 
 /// The most a charter may ask for in the calm world, which every session may
 /// take.
@@ -192,18 +202,77 @@ pub const WORKER: worker::Limits = worker::Limits {
     stalled: 8,
 };
 
+/// The most a step's run may ask for, in the engine's terms: past the
+/// agent's budget in turns, so that some charters are refused.
+pub const MOST: Budget = Budget { tokens: 1 << 20, turns: 72, time: Duration::from_secs(3600) };
+
+/// What a calm run is given.
+pub const CALM: Budget = Budget { tokens: 1 << 20, turns: 64, time: Duration::from_secs(3600) };
+
+/// The engine's limits: the engine world's, with room for what an agent's run
+/// may ask, and few rebases of a change.
+pub const ENGINE: engine::Limits = engine::Limits {
+    plan: engine::plan::Limits { budget: MOST, rebases: 2, ..deployment::LIMITS.plan },
+    ..deployment::LIMITS
+};
+
+/// The deployment's configuration: the engine world's, with the models the
+/// fake provider plays, and room in the rules for what a run may spend.
+#[must_use]
+pub fn config() -> engine::Config {
+    let mut config = deployment::config();
+    config.models = b"fake-1 fake-2 fake-3".as_slice().into();
+    config.rules.run_spend = MOST.tokens;
+    config
+}
+
+/// The fake forge's limits: room for every commit and file the runs make,
+/// whatever their LLMs write. Nothing fills: a forge that refused for want of
+/// room would fail the world.
+pub const FORGE: forge::Limits = forge::Limits {
+    repositories: 2,
+    users: 16,
+    labels: 8,
+    items: 64,
+    comments: 1_024,
+    reviews: 64,
+    dependencies: 8,
+    branches: 64,
+    commits: 4_096,
+    files: 256,
+    statuses: 256,
+    contexts: 2,
+    pages: 16,
+    name_bytes: 256,
+    title_bytes: 64,
+    body_bytes: 16_384,
+    content_bytes: 65_536,
+    page_size: 64,
+    calls: 64,
+    hooks: 64,
+    observations: 4_096,
+};
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Settings {
     /// Seeds the world, which seeds the models.
     pub seed: u64,
-    /// Each agent process's limits, and the worker's.
+    /// Each agent process's limits, the worker's and the engine's.
     pub limits: Limits,
     pub worker: worker::Limits,
-    pub engine: Config,
+    pub engine: engine::Limits,
+    pub forge: forge::Config,
     pub provider: provider::Config,
+    /// What people hand in, and when.
+    pub hands: Vec<Hand>,
     /// One-way latency between an agent and the provider, and between the
     /// worker and the engine.
     pub network: Span,
+    /// Between the reviewer's looks at the forge.
+    pub people: Span,
+    pub store: store::Script,
+    /// The engine's forge protocol layer's deadline for a call.
+    pub timeout: Duration,
     /// How long io takes to spawn an agent process; how long a message takes
     /// through its pipes, and io to tell of a signal, an exit or a reap; and
     /// how long a git operation takes.
@@ -215,17 +284,23 @@ pub struct Settings {
     pub tool: Span,
     pub look: Span,
     /// The chance, per mille, that io fails an operation of the tools, or a
-    /// look of a run's.
+    /// look of a run's; and that a git operation of the worker's cannot reach
+    /// the forge.
     pub io_errors: u32,
+    pub git_errors: u32,
     /// How long a run's checks take.
     pub check: Span,
     /// The chance, per mille, that a cancel loses its race: the call, the
     /// operation or the checks it was for end of themselves, and that is their
     /// terminal event. A cancel that wins is told after a network draw.
     pub cancels_lost: u32,
+    /// The chance, per mille, that a person stops an item's first run, a
+    /// drawn `stop_after` after the engine assigned it.
+    pub stops: u32,
+    pub stop_after: Span,
     /// The chance, per mille, that another party moves the push branch of a
-    /// run's first writable repository, a drawn `move_after` after the run
-    /// started; and that a repository on the forge refuses every push.
+    /// run, a drawn `move_after` after the run started; and that a repository
+    /// on the forge refuses every push.
     pub moved: u32,
     pub move_after: Span,
     pub refusing: u32,
@@ -235,70 +310,48 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// A world where nothing goes wrong: one coding run, on a charter that
-    /// grants sub-agents and wants a change that passes its checks, answered
-    /// well within every deadline.
+    /// A world where nothing goes wrong: one issue handed in, a change in the
+    /// first repository that must pass its checks and that a person reviews,
+    /// on a charter that grants sub-agents, answered well within every
+    /// deadline.
     #[must_use]
     pub fn calm(seed: u64) -> Settings {
+        let hand = Hand {
+            at: Duration::ZERO,
+            repository: 0,
+            job: Job::Coding,
+            work: desk::Work::Change { checks: true, reviewer: Reviewer::Person },
+            grants: CODING,
+            budget: CALM,
+        };
         Settings {
             seed,
             limits: LIMITS,
             worker: WORKER,
-            engine: Config {
-                items: 1,
-                window: Duration::from_millis(1),
-                workers: 1,
-                workstreams: Box::new([b"parser".as_slice().into()]),
-                repositories: Box::new([fixture::origin(fixture::name(Job::Coding))]),
-                spread_min: 1,
-                spread_max: 1,
-                commits: 0,
-                branches: 0,
-                writable: 1000,
-                saves: 0,
-                invalid: 0,
-                brief_min: 64,
-                brief_max: 64,
-                turns_min: 64,
-                turns_max: 64,
-                tokens_min: 1 << 20,
-                tokens_max: 1 << 20,
-                time_min: Duration::from_secs(3600),
-                time_max: Duration::from_secs(3600),
-                max_tokens: 1024,
-                changes: 1000,
-                checks: 1000,
-                verdicts: 0,
-                agents: 1000,
-                attempts: 1,
-                transient: 0,
-                permanent: 0,
-                backoff_min: Duration::from_secs(1),
-                backoff_max: Duration::from_secs(5),
-                wakes: 0,
-                wake_min: Duration::from_secs(1),
-                wake_max: Duration::from_secs(1),
-                resumes: 0,
-                overbook: 0,
-                inbound: 0,
-                inbound_min: Duration::from_secs(1),
-                inbound_max: Duration::from_secs(1),
-                event_min: 1,
-                event_max: 1,
-                resends: 0,
-                cancels: 0,
-                late_cancels: 0,
-                stale: 0,
-                cancel_min: Duration::from_secs(1),
-                cancel_max: Duration::from_secs(60),
-                calls: 16,
-                relay_min: Duration::from_secs(1),
-                relay_max: Duration::from_secs(1),
-                relay_errors: 0,
-                answer_min: 1,
-                answer_max: 1,
-                grace: Duration::from_secs(120),
-                keeps: 1000,
+            engine: ENGINE,
+            forge: forge::Config {
+                limits: FORGE,
+                latency_min: Duration::from_millis(20),
+                latency_max: Duration::from_millis(400),
+                late: 0,
+                late_min: Duration::from_secs(5),
+                late_max: Duration::from_secs(20),
+                unavailable: 0,
+                timeouts: 0,
+                landing: 0,
+                land_min: Duration::from_millis(100),
+                land_max: Duration::from_secs(8),
+                rate_limit: 0,
+                rate_window: Duration::from_secs(60),
+                ci: deployment::CI,
+                hook_min: Duration::from_millis(50),
+                hook_max: Duration::from_millis(500),
+                hooks_late: 0,
+                hooks_lost: 0,
+                resolution: Duration::from_secs(1),
+                skew: Skew::None,
+                status_updates: false,
+                edit_updates: false,
             },
             provider: provider::Config {
                 calls: 64,
@@ -317,15 +370,22 @@ impl Settings {
                 malformed: 0,
                 tool_rounds: 2,
             },
+            hands: vec![hand],
             network: Span::millis(1, 20),
+            people: Span::millis(1_000, 10_000),
+            store: store::Script { latency: Span::millis(1, 50), failures: 0, done_anyway: 0 },
+            timeout: Duration::from_secs(10),
             spawn: Span::millis(10, 100),
             pipe: Span::millis(1, 5),
             git: Span::millis(5, 200),
             tool: Span::millis(10, 200),
             look: Span::millis(1, 50),
             io_errors: 0,
+            git_errors: 0,
             check: Span::millis(500, 2000),
             cancels_lost: 0,
+            stops: 0,
+            stop_after: Span::millis(0, 12_000),
             moved: 0,
             move_after: Span::millis(0, 1000),
             refusing: 0,
@@ -333,97 +393,91 @@ impl Settings {
         }
     }
 
-    /// These settings, with every workspace the engine draws holding `job`'s
-    /// repository alone.
+    /// These settings, with the one issue handed in playing `job` for a step
+    /// of `work`.
     #[must_use]
-    pub fn doing(self, job: Job) -> Settings {
-        let repositories = Box::new([fixture::origin(fixture::name(job))]);
-        Settings { engine: Config { repositories, ..self.engine }, ..self }
+    pub fn doing(self, job: Job, work: desk::Work) -> Settings {
+        let hands = self.hands.iter().map(|hand| Hand { job, work, ..hand.clone() }).collect();
+        Settings { hands, ..self }
     }
 
-    /// A world of its own for `seed`: runs side by side on every job, in
-    /// workspaces of one or two repositories, on charters of every kind, some
-    /// beyond an agent's limits, in tight limits; with an engine that retries,
-    /// overbooks and cancels, a forge that refuses pushes and whose branches
-    /// move, an LLM provider that fails, and io that fails and races, at
-    /// chances drawn from the seed.
+    /// These settings, each issue handed in on a budget of `budget`.
+    #[must_use]
+    pub fn spending(self, budget: Budget) -> Settings {
+        let hands = self.hands.iter().map(|hand| Hand { budget, ..hand.clone() }).collect();
+        Settings { hands, ..self }
+    }
+
+    /// A world of its own for `seed`: issues handed in over a window, in both
+    /// repositories, of every job, as agent steps and as changes reviewed by
+    /// people and by agents, on charters of every kind and budgets some of
+    /// which are beyond an agent's, in tight limits; with people who stop
+    /// runs, a forge that is slow, fails the engine's calls, loses webhooks,
+    /// refuses pushes and whose branches move, an LLM provider that fails,
+    /// and io that fails and races, at chances drawn from the seed.
     #[must_use]
     pub fn random(seed: u64) -> Settings {
         let mut rng = Rng::new(seed ^ 0x5EED_0F0A_0B0D_D1CE);
-        let mut chance = |most: u64| u32::try_from(rng.below(most + 1)).expect("a chance per mille");
         let calm = Settings::calm(seed);
         let provider = provider::Config {
             calls: 16,
             latency_min: Duration::from_millis(50),
-            latency_max: Duration::from_millis(500 + u64::from(chance(4500))),
-            overloaded: chance(50),
-            rate_limited: chance(30),
-            unavailable: chance(20),
-            too_long: chance(5),
-            unauthorized: chance(3),
-            refused: chance(20),
-            no_calls: chance(20),
-            malformed: chance(50),
-            calls_per_answer: 1 + chance(2),
-            tool_rounds: 1 + chance(2),
+            latency_max: Duration::from_millis(500 + u64::from(chance(&mut rng, 4500))),
+            overloaded: chance(&mut rng, 50),
+            rate_limited: chance(&mut rng, 30),
+            unavailable: chance(&mut rng, 20),
+            too_long: chance(&mut rng, 5),
+            unauthorized: chance(&mut rng, 3),
+            refused: chance(&mut rng, 20),
+            no_calls: chance(&mut rng, 20),
+            malformed: chance(&mut rng, 50),
+            calls_per_answer: 1 + chance(&mut rng, 2),
+            tool_rounds: 1 + chance(&mut rng, 2),
             ..calm.provider
         };
-        // Each job's repository, followed by documentation, so that a
-        // workspace of two holds one beside the other, either way round.
-        let repositories: Vec<Origin> = script::JOBS
-            .into_iter()
-            .flat_map(|job| [fixture::origin(fixture::name(job)), fixture::origin(fixture::DOCS)])
-            .collect();
-        let engine = Config {
-            items: 4 + chance(8),
-            window: Duration::from_millis(1 + u64::from(chance(30_000))),
-            workstreams: Box::new([b"parser".as_slice().into(), b"lexer".as_slice().into(), b"site".as_slice().into()]),
-            repositories: repositories.into(),
-            spread_max: 2,
-            branches: chance(300),
-            writable: 900,
-            saves: chance(800),
-            invalid: chance(50),
-            brief_min: 16,
-            brief_max: 256,
-            turns_min: 6,
-            // Past the agent's budget now and then: a run it refuses.
-            turns_max: 72,
-            tokens_min: 2000,
-            tokens_max: 1 << 20,
-            time_min: Duration::from_secs(10),
-            time_max: Duration::from_secs(600),
-            max_tokens: 256 + chance(768),
-            changes: 800,
-            checks: 700,
-            verdicts: 500,
-            agents: 700,
-            attempts: 3,
-            transient: 500,
-            permanent: 200,
-            overbook: chance(300),
-            cancels: chance(300),
-            late_cancels: chance(500),
-            cancel_min: Duration::ZERO,
-            cancel_max: Duration::from_secs(30),
-            ..calm.engine
+        let skew = match rng.below(3) {
+            0 => Skew::None,
+            1 => Skew::Ahead(Duration::from_millis(rng.below(60_000))),
+            _ => Skew::Behind(Duration::from_millis(rng.below(60_000))),
         };
+        let forge = forge::Config {
+            late: chance(&mut rng, 40),
+            unavailable: chance(&mut rng, 30),
+            timeouts: chance(&mut rng, 30),
+            landing: chance(&mut rng, 20),
+            rate_limit: if rng.chance(300) { 40 } else { 0 },
+            hooks_late: chance(&mut rng, 400),
+            hooks_lost: chance(&mut rng, 1_000),
+            skew,
+            ..calm.forge
+        };
+        let window = 1 + rng.below(60_000);
+        let count = 4 + rng.below(9);
+        let hands = (0..count).map(|_| hand(&mut rng, window)).collect();
         // A grace some runs outstay as they wind down, and in some worlds a
-        // watchdog and a wall time that some runs trip.
-        let watched = chance(1) == 1;
+        // watchdog and a wall time that some runs trip; and charters that do
+        // not fit.
+        let watched = chance(&mut rng, 1) == 1;
         let agent = worker::agent::Limits {
-            grace: Duration::from_millis(1000 + u64::from(chance(4000))),
-            kill_after: Duration::from_millis(500 + u64::from(chance(1500))),
+            grace: Duration::from_millis(1000 + u64::from(chance(&mut rng, 4000))),
+            kill_after: Duration::from_millis(500 + u64::from(chance(&mut rng, 1500))),
             no_progress: if watched {
-                Duration::from_millis(2000 + u64::from(chance(8000)))
+                Duration::from_millis(2000 + u64::from(chance(&mut rng, 8000)))
             } else {
                 WORKER.agent.no_progress
             },
-            wall_time: if watched { Duration::from_secs(20 + u64::from(chance(180))) } else { WORKER.agent.wall_time },
+            wall_time: if watched {
+                Duration::from_secs(20 + u64::from(chance(&mut rng, 180)))
+            } else {
+                WORKER.agent.wall_time
+            },
             ..WORKER.agent
         };
-        let worker = worker::Limits { agent, ..WORKER };
-        let granule = match chance(2) {
+        let charters = if rng.chance(250) { 150 + u64::from(chance(&mut rng, 250)) } else { WORKER.host.charter_bytes };
+        let host = host::Limits { charter_bytes: charters, ..WORKER.host };
+        let worker =
+            worker::Limits { host, agent: worker::agent::Limits { charter_bytes: charters, ..agent }, ..WORKER };
+        let granule = match chance(&mut rng, 2) {
             0 => Duration::ZERO,
             1 => Duration::from_millis(50),
             _ => Duration::from_secs(1),
@@ -432,81 +486,100 @@ impl Settings {
             seed,
             limits: TIGHT,
             worker,
-            engine,
+            forge,
             provider,
-            network: Span::millis(1, 10 + u64::from(chance(190))),
-            git: Span::millis(5, 200 + u64::from(chance(1800))),
-            tool: Span::millis(1, 100 + u64::from(chance(1900))),
-            look: Span::millis(1, 10 + u64::from(chance(90))),
-            io_errors: chance(30),
-            check: Span::millis(100, 1000 + u64::from(chance(89_000))),
-            cancels_lost: chance(300),
-            moved: chance(500),
+            hands,
+            store: store::Script { latency: Span::millis(1, 2_000), failures: chance(&mut rng, 60), done_anyway: 300 },
+            network: Span::millis(1, 10 + u64::from(chance(&mut rng, 190))),
+            git: Span::millis(5, 200 + u64::from(chance(&mut rng, 1800))),
+            tool: Span::millis(1, 100 + u64::from(chance(&mut rng, 1900))),
+            look: Span::millis(1, 10 + u64::from(chance(&mut rng, 90))),
+            io_errors: chance(&mut rng, 30),
+            git_errors: chance(&mut rng, 100),
+            check: Span::millis(100, 1000 + u64::from(chance(&mut rng, 89_000))),
+            cancels_lost: chance(&mut rng, 300),
+            stops: chance(&mut rng, 300),
+            stop_after: Span::millis(0, 30_000),
+            moved: chance(&mut rng, 300),
             move_after: Span::millis(0, 5_000),
-            refusing: chance(200),
+            refusing: chance(&mut rng, 150),
             granule,
             ..calm
         }
     }
-
-    /// These settings, with the first seed from theirs whose first run the
-    /// engine assigns on a charter that is `wanted`: the fake draws its
-    /// charters, and a scenario picks one it can tell a story about.
-    #[must_use]
-    pub fn drawing(self, wanted: impl Fn(&run::Charter) -> bool) -> Settings {
-        let mut seed = self.seed;
-        loop {
-            let settings = Settings { seed, ..self.clone() };
-            if wanted(&first_charter(&settings)) {
-                return settings;
-            }
-            seed += 1;
-            assert!(seed < self.seed + 10_000, "a seed draws such a charter");
-        }
-    }
 }
 
-/// The seeds the world draws for the engine, the worker, the provider and the
-/// agents from its own.
-fn seeds(seed: u64) -> [u64; 4] {
-    let mut rng = Rng::new(seed);
-    [rng.next_u64(), rng.next_u64(), rng.next_u64(), rng.next_u64()]
+/// A chance per mille, drawn up to `most`.
+fn chance(rng: &mut Rng, most: u64) -> u32 {
+    u32::try_from(rng.below(most + 1)).expect("a chance per mille")
 }
 
-/// The charter of the first run the engine of `settings` assigns, as an agent
-/// decodes it, less its repositories.
-fn first_charter(settings: &Settings) -> run::Charter {
-    let [seed, ..] = seeds(settings.seed);
-    let mut model = engine::Model::new(&settings.engine, seed);
-    let mut env = Env { now: Time::ZERO, limits: settings.engine.clone() };
-    let mut out = Queue::with_capacity(engine::MAX_OUT);
-    let hello = api::Hello { slots: settings.worker.host.slots, workstreams: Box::new([]), hosting: Box::new([]) };
-    engine::step(&mut model, &env, engine::Event::Hello { worker: NAME, hello }, &mut out);
-    loop {
-        if model.is_ready() {
-            engine::resume(&mut model, &env, &mut out);
-        } else {
-            env.now = model.next_deadline().expect("an item falls due");
-            engine::fire(&mut model, &env, &mut out);
-        }
-        if let Some(engine::Request::Assign { assignment, .. }) = out.pop() {
-            let checkout = run::charter::Checkout { repositories: Box::new([]) };
-            return channel::charter(&assignment.charter, checkout);
-        }
+/// An issue a random world's person hands in, within `window` milliseconds
+/// of the world's start.
+fn hand(rng: &mut Rng, window: u64) -> Hand {
+    let jobs = [Job::Coding, Job::Reporting, Job::Delegating, Job::Spending, Job::Wandering];
+    let job = jobs[usize::try_from(rng.below(5)).expect("small")];
+    let change = match job {
+        Job::Coding | Job::Delegating => true,
+        Job::Reporting | Job::Review => false,
+        Job::Spending | Job::Wandering => rng.chance(300),
+    };
+    let reviewer = if rng.chance(300) { Reviewer::Agent } else { Reviewer::Person };
+    let work = if change { desk::Work::Change { checks: rng.chance(700), reviewer } } else { desk::Work::Agent };
+    let grants = engine::plan::Grants {
+        modify: change || rng.chance(500),
+        shell: rng.chance(700),
+        forge: rng.chance(500),
+        subagents: rng.chance(700),
+        note: rng.chance(300),
+    };
+    let budget = Budget {
+        tokens: rng.between(2_000, MOST.tokens),
+        turns: u32::try_from(rng.between(6, u64::from(MOST.turns))).expect("a few turns"),
+        time: Duration::from_millis(rng.between(10_000, 600_000)),
+    };
+    Hand {
+        at: Duration::from_millis(rng.below(window)),
+        repository: u32::try_from(rng.below(2)).expect("two repositories"),
+        job,
+        work,
+        grants,
+        budget,
     }
 }
 
 /// What the world counted, as it crossed the boundaries.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Stats {
+    /// Issues people handed in.
+    pub handed: u32,
     /// Assignments the engine made; the worker's answers, those that said a
     /// run ended, and the repositories they say landed a change.
     pub assigned: u32,
     pub reported: u32,
     pub ended: u32,
     pub landed: u32,
-    /// Answers for runs whose workspaces could not be prepared.
+    /// Answers for runs whose workspaces could not be prepared, and refusals
+    /// of assignments that do not fit the worker.
     pub unprepared: u32,
+    pub invalid: u32,
+    /// Pull requests the engine merged, and those a person approved.
+    pub merged: u32,
+    pub reviews: u32,
+    /// Runs people asked the engine to stop, and those it did.
+    pub stops: u32,
+    pub stopped: u32,
+    /// The engine's calls of the forge, those past the protocol layer's
+    /// deadline, and those the forge limited; webhooks; the store's
+    /// operations that failed; the engine's facts.
+    pub forge_calls: u32,
+    pub timed_out: u32,
+    pub limited: u32,
+    pub hints: u32,
+    pub store_failed: u32,
+    pub engine_facts: u32,
+    /// git operations that could not reach the forge.
+    pub unreachable: u32,
     /// Agent processes spawned, those that exited of themselves once their
     /// runs had answered, and those a signal ended.
     pub spawns: u32,
@@ -618,8 +691,10 @@ pub struct Told {
 /// worker spawned their processes.
 #[derive(Debug)]
 pub struct Run {
+    /// The item it is for, and the script its main conversation plays.
+    pub item: Item,
     pub job: Job,
-    /// The engine's name for the attempt it is.
+    /// The channel's name for the attempt it is.
     pub attempt: Token,
     /// What its charter allowed, and what it may spend.
     pub allowed: Allowed,
@@ -668,86 +743,65 @@ type Owner = (u64, Token);
 
 /// Something on its way, delivered at its time.
 enum Delivery {
-    /// An event for the engine, or for the worker.
-    Engine(engine::Event),
+    /// An event for the engine, up the worker's channel `channel` if it names
+    /// one: dropped if the channel has closed since.
+    Engine { channel: Option<Token>, event: engine::Event },
+    /// An event for the worker.
     Worker(worker::Event),
+    /// The engine's protocol layer's deadline for its forge call `name`.
+    Timeout(u64),
+    /// A person hands in the issue `hands[at]`.
+    Hand(usize),
+    /// The reviewer looks at the forge.
+    Look,
+    /// A person asks the engine to stop the item's run.
+    Stop(Item),
     /// io has spawned the agent process the worker's `owner` asked for, in
     /// `workspace`.
-    Spawned {
-        owner: Token,
-        workspace: Token,
-    },
+    Spawned { owner: Token, workspace: Token },
     /// `message` comes through the pipe down to the agent of `process`.
-    Down {
-        process: u64,
-        message: Down,
-    },
+    Down { process: u64, message: temper_worker_model::agent::channel::Down },
     /// The worker reads `message` from the pipe of `process`.
-    Read {
-        process: u64,
-        message: Up,
-    },
+    Read { process: u64, message: temper_worker_model::agent::channel::Up },
     /// A signal reaches the tree of `process`.
-    Signal {
-        process: u64,
-    },
+    Signal { process: u64 },
     /// The agent of `process`, its run answered, exits.
-    Exit {
-        process: u64,
-    },
+    Exit { process: u64 },
     /// A git operation of the worker's ends.
-    Git {
-        owner: Token,
-    },
-    /// Another party moves `branch` of `remote`.
-    Advance {
-        remote: Vec<u8>,
-        branch: Vec<u8>,
-    },
+    Git { owner: Token },
+    /// Another party moves `branch` of `remote`, unless the attempt it was
+    /// drawn for has been answered.
+    Advance { attempt: Token, remote: Vec<u8>, branch: Vec<u8> },
     /// An event for the agent of `process`.
-    Agent {
-        process: u64,
-        event: Event,
-    },
+    Agent { process: u64, event: Event },
     /// A call arrives at the provider.
-    Query {
-        call: u64,
-        query: provider::api::Query,
-    },
+    Query { call: u64, query: provider::api::Query },
     /// The provider's answer arrives back at the agent's side.
-    Answer {
-        call: u64,
-        result: Result<provider::api::Answer, provider::api::Error>,
-    },
+    Answer { call: u64, result: Result<provider::api::Answer, provider::api::Error> },
     /// The agent's side gives up on a call.
-    Deadline {
-        call: u64,
-    },
+    Deadline { call: u64 },
     /// An operation of the tools ends.
-    Ran {
-        owner: Owner,
-    },
+    Ran { owner: Owner },
     /// A look of a run's in its checkout ends so.
-    Looked {
-        owner: Owner,
-        event: Event,
-    },
+    Looked { owner: Owner, event: Event },
     /// A run's checks end.
-    Checked {
-        owner: Owner,
-    },
+    Checked { owner: Owner },
 }
 
 /// An assignment the engine made, as the world keeps it.
 #[derive(Debug)]
 struct Attempt {
-    /// The job its first repository of a job is for.
+    item: Item,
+    /// The script its runs play.
     job: Job,
     repositories: Vec<Repository>,
+    /// The deployment's index for each repository of its workspace.
+    places: Vec<u32>,
     /// The agent process that carries its run, once started.
     process: Option<u64>,
-    /// The worker has answered for it.
+    /// The worker has answered for it, and refused it.
     answered: bool,
+    refused: bool,
 }
 
 /// An agent process, as io and the agent's protocol layer keep it, and what
@@ -760,10 +814,10 @@ struct Process {
     agent: Option<agent::Model>,
     stage: Stage<Limits, Event, Request>,
     /// What came down the channel, in order, that the agent has yet to take.
-    heard: VecDeque<Down>,
+    heard: VecDeque<temper_worker_model::agent::channel::Down>,
     /// The channel, as the agent's protocol layer has it, once the start came
     /// down.
-    link: Option<Link>,
+    link: Option<crate::channel::Link>,
     run: Option<Run>,
     /// The facts the agent told in this iteration's steps, each with the
     /// number of requests submitted before its step's.
@@ -771,7 +825,7 @@ struct Process {
     submitted: u64,
     /// What the agent wrote up the channel and the worker has yet to read,
     /// each with when it is through the pipe; and what the worker waits for.
-    written: VecDeque<(Time, Up)>,
+    written: VecDeque<(Time, temper_worker_model::agent::channel::Up)>,
     demands: Demands,
     /// Whether the worker has read how the run finishes.
     finish_read: bool,
@@ -843,6 +897,15 @@ enum Checks {
     Ending(Event),
 }
 
+/// An engine call the protocol layer has out on the forge.
+#[derive(Debug)]
+struct Out {
+    call: Token,
+    asked: Asked,
+    deadline: Key,
+    expired: bool,
+}
+
 pub struct World {
     now: Time,
     rng: Rng,
@@ -851,7 +914,7 @@ pub struct World {
     settings: Settings,
 
     engine: engine::Model,
-    engine_stage: Stage<Config, engine::Event, engine::Request>,
+    engine_stage: Stage<engine::Limits, engine::Event, engine::Request>,
     worker: worker::Model,
     worker_stage: Stage<worker::Limits, worker::Event, worker::Request>,
     provider: provider::Model,
@@ -862,26 +925,45 @@ pub struct World {
 
     /// Deliveries in flight, whose count names calls and processes too.
     wire: Schedule<Delivery>,
-    /// The channel between the worker and the engine: whether the worker has
-    /// dialled, and when the last message each way arrives, so that the
-    /// channel keeps their order.
-    dialled: bool,
+    /// The channel between the worker and the engine: the engine's name for
+    /// it while it is open, and when the last message each way arrives, so
+    /// that the channel keeps their order.
+    channel: Option<Token>,
     up_lane: Time,
     down_lane: Time,
-    /// What the protocol layers keep for the engine's traffic: the places of
-    /// inbound events, and the commit the engine's one hash stands for.
-    places: BTreeMap<Token, u64>,
-    commit: Commit,
-    /// The engine's assignments, by its names for their attempts.
+    /// The engine's assignments, by the channel's names for their attempts.
     attempts: BTreeMap<Token, Attempt>,
     save_branches: BTreeSet<Vec<u8>>,
 
-    /// The forge and the disk: the working trees the worker prepares are the
-    /// roots the agents' tools work in.
-    forge: Forge,
+    /// The forge, everyone's; its configuration and what it emitted; the
+    /// direct calls made of it, and what it emitted for others meanwhile.
+    forge: forge::Model,
+    forge_env: Env<forge::Config>,
+    forge_out: Queue<forge::Request>,
+    direct: u64,
+    stray: Vec<forge::Request>,
+    /// The engine's calls on the forge, by the protocol layer's names for
+    /// them, and by the engine's; the reviewer's calls; people's asks of the
+    /// engine; the store's operations.
+    calls: Ledger<u64, Out>,
+    owned: Ledger<Token, ()>,
+    theirs: Ledger<u64, (usize, u64, u64)>,
+    asks: Ledger<u64, Item>,
+    stores: Ledger<Token, ()>,
+    store: Store,
+    /// The forge as observed, which people read; the reviewer; the items
+    /// handed in, by the hand each is.
+    mirror: Mirror,
+    reviewer: people::Reviewer,
+    looking: bool,
+    items: BTreeMap<Item, usize>,
+    /// The items whose first run a person may have stopped.
+    stopping: BTreeSet<Item>,
+
+    /// The disk: the working trees the worker prepares are the roots the
+    /// agents' tools work in. The workspaces io holds, the git operations in
+    /// flight, and the process of each root io named for an agent.
     disk: Checkout,
-    /// The workspaces io holds, the git operations in flight, and the process
-    /// of each root io named for an agent.
     spaces: BTreeMap<Token, Space>,
     git: Ledger<Token, Op>,
     roots: BTreeMap<u64, u64>,
@@ -889,7 +971,7 @@ pub struct World {
     /// The agents' calls of the provider in flight, the call each session has
     /// in flight, the sessions whose cancel lost its race, and the calls the
     /// provider has not answered yet.
-    calls: Ledger<u64, Call>,
+    calls_out: Ledger<u64, Call>,
     calling: BTreeMap<Owner, u64>,
     cancel_lost: BTreeSet<Owner>,
     serving: Ledger<u64, ()>,
@@ -907,8 +989,10 @@ pub struct World {
     /// The runs' pushes in flight.
     pushes: Ledger<Owner, ()>,
 
-    /// What the scenario expects of the worker and the agent together.
+    /// What the scenario expects of the worker and the agent together, and
+    /// of the engine.
     referee: Referee<Meeting>,
+    engine_referee: Referee<engine_referee::Engine>,
 
     stats: Stats,
     told: Told,
@@ -920,44 +1004,60 @@ impl World {
     pub fn new(settings: Settings) -> World {
         assert!(agent::worst_case(&settings.limits).is_some(), "the shell refuses limits it cannot provision");
         assert!(worker::worst_case(&settings.worker).is_some(), "the shell refuses limits it cannot provision");
+        assert!(engine::worst_case(&settings.engine).is_some(), "the shell refuses limits it cannot provision");
         let [engine_seed, worker_seed, provider_seed, agent_seed] = seeds(settings.seed);
         let mut rng = Rng::new(settings.seed.rotate_left(32));
-        let mut forge = Forge::new(settings.seed);
-        let first = fixture::seed(&mut forge, &settings.engine.repositories);
-        let mut seen = BTreeSet::new();
-        for origin in &settings.engine.repositories {
-            if seen.insert(origin.remote.clone()) && rng.chance(settings.refusing) {
-                forge.set_refusing(&origin.remote, true);
+        let mut forge = forge::Model::new(&settings.forge, rng.next_u64());
+        shared::setup(&mut forge, &settings.forge);
+        for name in REPOSITORIES {
+            if rng.chance(settings.refusing) {
+                forge::set_refusing(&mut forge, name, true);
             }
         }
         let mut disk = Checkout::new();
         fixture::script(&mut disk);
         let worker_max = worker::max_out(&settings.worker);
+        let engine_max = engine::max_out(&settings.engine);
+        let bounds =
+            engine_referee::Bounds { story: Duration::from_secs(4 * 3_600), message: Duration::from_secs(3_600) };
         let mut world = World {
             now: Time::ZERO,
             rng,
             agent_rng: Rng::new(agent_seed),
-            engine: engine::Model::new(&settings.engine, engine_seed),
-            engine_stage: Stage::new(settings.engine.clone(), engine::MAX_OUT, engine::MAX_OUT + SLACK),
+            engine: engine::Model::new(config(), &settings.engine, engine_seed, Time::ZERO),
+            engine_stage: Stage::new(settings.engine, engine_max, engine_max + SLACK),
             worker: worker::Model::new(&settings.worker, worker_seed),
             worker_stage: Stage::new(settings.worker, worker_max, worker_max + SLACK),
             provider: provider::Model::scripted(&settings.provider, provider_seed, script::all()),
             provider_stage: Stage::new(settings.provider, provider::MAX_OUT, provider::MAX_OUT + SLACK),
             processes: BTreeMap::new(),
             wire: Schedule::new(),
-            dialled: false,
+            channel: None,
             up_lane: Time::ZERO,
             down_lane: Time::ZERO,
-            places: BTreeMap::new(),
-            commit: io::commit(first),
             attempts: BTreeMap::new(),
             save_branches: BTreeSet::new(),
             forge,
+            forge_env: Env { now: Time::ZERO, limits: settings.forge },
+            forge_out: Queue::with_capacity(forge::MAX_OUT),
+            direct: 0,
+            stray: Vec::new(),
+            calls: Ledger::new("engine's forge call"),
+            owned: Ledger::new("engine's call, by its name"),
+            theirs: Ledger::new("review"),
+            asks: Ledger::new("person's ask"),
+            stores: Ledger::new("store operation"),
+            store: Store::new(settings.store, settings.seed ^ 0x5704_E5ED, 10_000),
+            mirror: Mirror::default(),
+            reviewer: people::Reviewer::default(),
+            looking: false,
+            items: BTreeMap::new(),
+            stopping: BTreeSet::new(),
             disk,
             spaces: BTreeMap::new(),
             git: Ledger::new("git operation"),
             roots: BTreeMap::new(),
-            calls: Ledger::new("call to the provider"),
+            calls_out: Ledger::new("call to the provider"),
             calling: BTreeMap::new(),
             cancel_lost: BTreeSet::new(),
             serving: Ledger::new("call the provider serves"),
@@ -970,13 +1070,23 @@ impl World {
             passed: BTreeSet::new(),
             pushes: Ledger::new("push"),
             referee: Referee::new(Meeting::new(answered_within(&settings.worker))),
+            engine_referee: Referee::new(engine_referee::Engine::new(bounds, 0)),
             stats: Stats::default(),
             told: Told::default(),
             trace: Trace::default(),
             settings,
         };
-        // The branches the fixture made.
-        world.observe_moves();
+        world.observe_engine(engine_referee::Seen::Start);
+        // What the setup made, and the issues handed in at the start.
+        world.observe_forge();
+        for (at, hand) in world.settings.hands.clone().iter().enumerate() {
+            let when = Time::ZERO.saturating_add(hand.at);
+            if when == Time::ZERO {
+                world.hand_in(at);
+            } else {
+                world.send_at(when, Delivery::Hand(at));
+            }
+        }
         world
     }
 
@@ -987,7 +1097,7 @@ impl World {
 
     #[must_use]
     pub fn stats(&self) -> Stats {
-        self.stats
+        Stats { reviews: self.reviewer.reviews, ..self.stats }
     }
 
     /// The facts the agents told, and how many they dropped for want of room.
@@ -996,17 +1106,13 @@ impl World {
         (self.told, self.facts_lost())
     }
 
-    /// What the engine has done and heard.
-    #[must_use]
-    pub fn tally(&self) -> engine::Tally {
-        self.engine.tally()
-    }
-
-    /// How many safety checks the referee made, and how many liveness
-    /// expectations it saw met.
+    /// How many safety checks the referees made, and how many liveness
+    /// expectations they saw met.
     #[must_use]
     pub fn judged(&self) -> (u64, u64) {
-        self.referee.judged()
+        let (checked, met) = self.referee.judged();
+        let (engine_checked, engine_met) = self.engine_referee.judged();
+        (checked + engine_checked, met + engine_met)
     }
 
     /// What crossed between the models and the world, in order, with times.
@@ -1021,30 +1127,61 @@ impl World {
         self.processes.values().filter_map(|process| process.run.as_ref())
     }
 
-    /// The content of `path` in the first repository `run` landed a change
-    /// in, as it is on the forge.
+    /// The forge as observed.
+    #[must_use]
+    pub fn mirror(&self) -> &Mirror {
+        &self.mirror
+    }
+
+    /// The items handed in, in the order of the hands.
+    #[must_use]
+    pub fn items(&self) -> Vec<Item> {
+        let mut items: Vec<(usize, Item)> = self.items.iter().map(|(item, at)| (*at, *item)).collect();
+        items.sort_unstable();
+        items.into_iter().map(|(_, item)| item).collect()
+    }
+
+    /// The content of `path` in the commit `run` landed first, as it is on
+    /// the forge.
     #[must_use]
     pub fn landed(&self, run: &Run, path: &[u8]) -> Option<Vec<u8>> {
         let commit = run.landed.first()?;
-        self.forge.tree(*commit).get(path).cloned()
+        shared::tree(&self.forge, *commit).get(path).cloned()
     }
 
-    /// Runs until nothing is left to happen, then checks the invariants of a
-    /// settled world. Panics if it takes more than `iterations`.
+    /// The content of `path` on the default branch of `item`'s repository,
+    /// where its change lands.
+    #[must_use]
+    pub fn merged(&self, item: Item, path: &[u8]) -> Option<Vec<u8>> {
+        let repository = deployment::name(item.repository);
+        let main = shared::branch(&self.forge, &self.settings.forge, repository, MAIN)?;
+        shared::tree(&self.forge, main).get(path).cloned()
+    }
+
+    /// Runs until the issues handed in have all ended or are held and nothing
+    /// is in flight, then checks the invariants of a settled world. Panics if
+    /// it takes more than `iterations`.
     pub fn run(&mut self, iterations: u32) {
         for _ in 0..iterations {
             self.iterate();
             if self.has_work_now() {
                 continue;
             }
-            let Some(next) = self.next_time() else {
+            if self.is_quiet() {
                 self.assert_settled();
                 return;
-            };
+            }
+            let next = self.next_time().expect("the engine polls, so there is always a next time");
             assert!(next > self.now, "time moves forward");
             self.now = next;
         }
-        panic!("the world did not settle in {iterations} iterations");
+        panic!(
+            "seed {}: the world did not settle in {iterations} iterations, at {:?}: {:?}, unsettled {:?}",
+            self.settings.seed,
+            self.now,
+            self.referee.verdict(),
+            self.unsettled()
+        );
     }
 
     /// One iteration of the loop, as the shells would run it.
@@ -1053,18 +1190,27 @@ impl World {
         self.engine_stage.tick(now);
         self.worker_stage.tick(now);
         self.provider_stage.tick(now);
+        self.forge_env.now = now;
         for process in self.processes.values_mut() {
             process.stage.tick(now);
         }
         self.deliver();
-        // The referee fires what is due: a deadline that passes fails the
-        // test, and the stimuli due are injected.
-        if self.referee.is_due(now) {
-            let mut stimuli = Vec::new();
-            self.referee.fire(now, &mut stimuli);
-            self.referee.assert_holding(self.settings.seed);
-            for stimulus in &stimuli {
-                inject(stimulus);
+        while self.forge.is_due(now) {
+            forge::fire(&mut self.forge, &self.forge_env, &mut self.forge_out);
+            self.drain_forge();
+        }
+        self.observe_forge();
+        // The referees fire what is due: a deadline that passes fails the
+        // test.
+        for due in [self.referee.is_due(now), self.engine_referee.is_due(now)] {
+            if due {
+                let mut stimuli = Vec::new();
+                self.referee.fire(now, &mut stimuli);
+                self.referee.assert_holding(self.settings.seed);
+                let mut injected = Vec::new();
+                self.engine_referee.fire(now, &mut injected);
+                self.engine_referee.assert_holding(self.settings.seed);
+                assert!(stimuli.is_empty() && injected.is_empty(), "the referees inject nothing in this world");
             }
         }
 
@@ -1074,6 +1220,7 @@ impl World {
             engine::resume(&mut self.engine, &self.engine_stage.env, &mut self.engine_stage.out);
         }
         while let Some(event) = self.engine_stage.next_event() {
+            self.log(&format!("engine <- {}", engine_side::describe_event(&event)));
             engine::step(&mut self.engine, &self.engine_stage.env, event, &mut self.engine_stage.out);
         }
         while self.engine_stage.has_room() && self.engine.is_due(now) {
@@ -1096,7 +1243,8 @@ impl World {
             self.stats.worker_facts += 1;
         }
         while let Some(told) = self.worker.pop_told() {
-            self.send_up(engine::Event::Fact { worker: NAME, run: told.run, attempt: told.attempt });
+            let event = crate::protocol::told(told);
+            self.send_up(event);
         }
         let live: Vec<u64> =
             self.processes.iter().filter(|(_, process)| process.agent.is_some()).map(|(id, _)| *id).collect();
@@ -1112,7 +1260,7 @@ impl World {
 
         // What the steps asked for, submitted at the end of the iteration.
         while let Some(request) = self.engine_stage.out.pop() {
-            self.send_down(request);
+            self.engine_request(request);
         }
         while let Some(request) = self.worker_stage.out.pop() {
             self.worker_request(request);
@@ -1123,11 +1271,16 @@ impl World {
         while let Some(request) = self.provider_stage.out.pop() {
             self.provider_request(request);
         }
+        self.observe_forge();
+        while self.engine.pop_fact().is_some() {
+            self.stats.engine_facts += 1;
+        }
 
         // The reclaim point.
         self.engine.reclaim();
         self.worker.reclaim();
         self.provider.reclaim();
+        self.forge.reclaim();
         for process in self.processes.values_mut() {
             if let Some(agent) = &mut process.agent {
                 agent.reclaim();
@@ -1140,8 +1293,16 @@ impl World {
     fn deliver(&mut self) {
         while let Some(delivery) = self.wire.next(self.now) {
             match delivery {
-                Delivery::Engine(event) => self.engine_stage.push(event),
+                Delivery::Engine { channel, event } => {
+                    if channel.is_none() || channel == self.channel {
+                        self.engine_stage.push(event);
+                    }
+                }
                 Delivery::Worker(event) => self.worker_stage.push(event),
+                Delivery::Timeout(name) => self.timed_out(name),
+                Delivery::Hand(at) => self.hand_in(at),
+                Delivery::Look => self.review(),
+                Delivery::Stop(item) => self.stop(item),
                 Delivery::Spawned { owner, workspace } => self.spawned(owner, workspace),
                 Delivery::Down { process, message } => self.heard(process, message),
                 Delivery::Read { process, message } => self.read_up(process, message),
@@ -1152,7 +1313,11 @@ impl World {
                     }
                 }
                 Delivery::Git { owner } => self.ran_git(owner),
-                Delivery::Advance { remote, branch } => self.advance(&remote, &branch),
+                Delivery::Advance { attempt, remote, branch } => {
+                    if self.attempts.get(&attempt).is_some_and(|attempt| !attempt.answered) {
+                        self.advance(&remote, &branch);
+                    }
+                }
                 Delivery::Agent { process, event } => self.agent_event(process, event),
                 Delivery::Query { call, query } => {
                     self.serving.open(call, ());
@@ -1203,6 +1368,9 @@ impl World {
         let host = self.worker.host();
         assert!(host.hosted() <= self.settings.worker.host.slots, "the worker hosts runs within its slots");
         assert!(self.worker.agent().agents() <= self.settings.worker.agent.agents, "agents stay within their slots");
+        let seed = self.settings.seed;
+        assert!(self.wire.len() <= DELIVERIES, "seed {seed}: more deliveries scheduled than the world holds");
+        assert!(self.trace.lines().len() <= TRACE, "seed {seed}: the trace grew past its bound");
     }
 
     /// How many facts the agents dropped for want of room.
@@ -1213,29 +1381,78 @@ impl World {
             .sum()
     }
 
+    /// Whether the world has settled: every issue handed in, and each ended
+    /// or held; the worker idle, every agent gone and the provider idle;
+    /// nothing in flight anywhere but the reviewer's next look; and the
+    /// referees expecting nothing more.
+    fn is_quiet(&self) -> bool {
+        let looks = usize::from(self.looking);
+        self.items.len() == self.settings.hands.len()
+            && self.wire.len() == looks
+            && !self.engine_stage.has_events()
+            && !self.worker_stage.has_events()
+            && !self.provider_stage.has_events()
+            && self.worker.host().hosted() == 0
+            && self.worker.held() == 0
+            && self.worker.agent().agents() == 0
+            && self.processes.values().all(|process| process.agent.is_none() && process.reaped)
+            && self.git.is_empty()
+            && self.provider.calls() == 0
+            && self.calls_out.is_empty()
+            && self.serving.is_empty()
+            && self.ops.is_empty()
+            && self.looks.is_empty()
+            && self.checks.is_empty()
+            && self.pushes.is_empty()
+            && self.calls.is_empty()
+            && self.theirs.is_empty()
+            && self.asks.is_empty()
+            && self.forge.calls() == 0
+            && self.forge.deliveries() == 0
+            && self.reviewer.is_idle()
+            && self.unsettled().is_empty()
+            && [self.referee.verdict(), self.engine_referee.verdict()].iter().all(|verdict| match verdict {
+                Verdict::Open { .. } => false,
+                Verdict::Passed | Verdict::Stopped { .. } | Verdict::Failed(_) => true,
+            })
+    }
+
+    /// The open items the engine tracks, with a record, that are not held.
+    fn unsettled(&self) -> Vec<u64> {
+        let mut unsettled = Vec::new();
+        for ((repository, number), issue) in &self.mirror.issues {
+            let tracked = issue.labels.iter().any(|label| **label == *deployment::TRACKING);
+            if !tracked || !issue.open || deployment::index(repository).is_none() {
+                continue;
+            }
+            let Some(record) = self.mirror.record(repository, *number) else { continue };
+            match record.lifecycle.phase {
+                engine::work::Phase::Held { .. } => {}
+                engine::work::Phase::Waiting
+                | engine::work::Phase::Parked
+                | engine::work::Phase::Retrying(_)
+                | engine::work::Phase::Claimed
+                | engine::work::Phase::Applying { .. }
+                | engine::work::Phase::Done => unsettled.push(*number),
+            }
+        }
+        unsettled
+    }
+
     /// The invariants of a world where nothing is left to happen.
-    fn assert_settled(&self) {
-        assert!(
-            self.wire.is_empty()
-                && !self.engine_stage.has_events()
-                && !self.worker_stage.has_events()
-                && !self.provider_stage.has_events(),
-            "nothing is on its way"
-        );
-        // The engine took each attempt's answer once: none was lost, and none
-        // came twice.
-        let tally = self.engine.tally();
-        assert_eq!(self.engine.outstanding(), 0, "the engine has no attempt out");
-        assert_eq!(self.engine.next_deadline(), None, "the engine has nothing left due");
-        assert_eq!(self.engine.items(), 0, "every item closed");
-        assert_eq!((tally.lost, tally.late, tally.duplicates), (0, 0, 0), "every answer came once, in time");
-        let taken = tally.busy + tally.invalid + tally.ended + tally.parked + tally.failed;
-        assert_eq!(taken, tally.assigned, "the engine took one answer for each attempt");
-        assert_eq!(tally.assigned, self.stats.assigned, "the engine assigned what reached the worker");
-        assert_eq!(self.stats.reported, self.stats.assigned, "the worker answered every attempt");
-        assert_eq!(tally.ended, self.stats.ended, "the engine recorded every run that ended");
-        assert_eq!(tally.landed, self.stats.landed, "the engine heard of every change that landed");
-        assert!(self.attempts.values().all(|attempt| attempt.answered), "every attempt was answered");
+    fn assert_settled(&mut self) {
+        let seed = self.settings.seed;
+        // The engine's neighbours: every call ended, and each assignment was
+        // answered once.
+        self.calls.assert_settled();
+        self.owned.assert_settled();
+        self.theirs.assert_settled();
+        self.asks.assert_settled();
+        self.stores.assert_settled();
+        let tally = self.forge.tally();
+        assert_eq!(tally.forgotten, 0, "seed {seed}: the forge kept every call it took: {tally:?}");
+        assert!(self.attempts.values().all(|attempt| attempt.answered), "seed {seed}: every attempt was answered");
+        assert_eq!(self.stats.reported, self.stats.assigned, "seed {seed}: the worker answered every assignment");
         // The worker.
         let host = self.worker.host();
         assert_eq!(host.hosted(), 0, "every slot is free");
@@ -1244,7 +1461,6 @@ impl World {
         assert_eq!(self.worker.workspaces(), 0, "every workspace asked for was released");
         assert_eq!(self.worker.agent().agents(), 0, "no agent is left");
         assert_eq!(self.worker.held(), 0, "no answer is held");
-        assert_eq!(self.worker.next_deadline(), None, "no alarm is armed");
         self.git.assert_settled();
         // The agents and their neighbours.
         for (id, process) in &self.processes {
@@ -1255,7 +1471,7 @@ impl World {
             }
         }
         assert_eq!(self.provider.calls(), 0, "the provider holds no call");
-        self.calls.assert_settled();
+        self.calls_out.assert_settled();
         self.serving.assert_settled();
         self.ops.assert_settled();
         self.looks.assert_settled();
@@ -1266,7 +1482,9 @@ impl World {
         if self.stats.kills == 0 && self.facts_lost() == 0 {
             self.assert_told();
         }
-        self.referee.assert_passed(self.settings.seed);
+        self.observe_engine(engine_referee::Seen::Settled);
+        self.referee.assert_passed(seed);
+        self.engine_referee.assert_passed(seed);
     }
 
     fn has_work_now(&self) -> bool {
@@ -1278,8 +1496,10 @@ impl World {
             || self.worker.is_ready()
             || self.worker.is_due(self.now)
             || self.provider.is_due(self.now)
+            || self.forge.is_due(self.now)
             || self.wire.is_due(self.now)
             || self.referee.is_due(self.now)
+            || self.engine_referee.is_due(self.now)
             || self.processes.values().any(|process| match &process.agent {
                 Some(agent) => {
                     process.stage.has_events()
@@ -1298,7 +1518,9 @@ impl World {
             self.engine.next_deadline(),
             self.worker.next_deadline(),
             self.provider.next_deadline(),
+            self.forge.next_deadline(),
             self.referee.next_deadline(),
+            self.engine_referee.next_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -1306,9 +1528,15 @@ impl World {
         .min()
     }
 
+    /// Sends `delivery` after a draw of the network's latency.
     fn send(&mut self, delivery: Delivery) {
         let at = self.now.saturating_add(self.draw(self.settings.network));
         self.schedule(at, delivery);
+    }
+
+    /// Sends `delivery` at `at`, as it is.
+    fn send_at(&mut self, at: Time, delivery: Delivery) -> Key {
+        self.wire.send(at, delivery)
     }
 
     fn schedule(&mut self, at: Time, delivery: Delivery) -> Key {
@@ -1329,9 +1557,15 @@ impl World {
         let mut stimuli = Vec::new();
         self.referee.observe(self.now, seen, &mut stimuli);
         self.referee.assert_holding(self.settings.seed);
-        for stimulus in &stimuli {
-            inject(stimulus);
-        }
+        assert!(stimuli.is_empty(), "the referee injects nothing in this world");
+    }
+
+    /// The engine's referee observes `seen`.
+    fn observe_engine(&mut self, seen: engine_referee::Seen) {
+        let mut stimuli = Vec::new();
+        self.engine_referee.observe(self.now, seen, &mut stimuli);
+        self.engine_referee.assert_holding(self.settings.seed);
+        assert!(stimuli.is_empty(), "the engine's referee injects nothing in this world");
     }
 
     fn log(&mut self, line: &str) {
@@ -1339,9 +1573,11 @@ impl World {
     }
 }
 
-/// What the referee injects: nothing, in this world.
-fn inject(stimulus: &Stimulus) {
-    match *stimulus {}
+/// The seeds the world draws for the engine, the worker, the provider and the
+/// agents from its own.
+fn seeds(seed: u64) -> [u64; 4] {
+    let mut rng = Rng::new(seed);
+    [rng.next_u64(), rng.next_u64(), rng.next_u64(), rng.next_u64()]
 }
 
 /// How long the worker may take to answer an assignment: the wall time its

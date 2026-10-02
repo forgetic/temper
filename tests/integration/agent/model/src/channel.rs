@@ -52,12 +52,22 @@
 //!   as a fact, so its `LongDone` is as lossy as facts are: one dropped
 //!   leaves the watchdog paused until the checks' deadline, which bounds it
 //!   anyway.
-//! - The engine's charter names one endpoint and one `max_tokens` for every
-//!   model, which each sub-agent's LLM takes from the main one; it grants
-//!   reading and writing, which are the run's inspect and modify families;
-//!   and whether a change must pass its checks means nothing without a
-//!   change. Which repositories are writable is the workspace's, not the
-//!   charter's.
+//! - The engine's charter is typed (engine-model.md, 4.1), and comes as
+//!   its codec writes it ([`codec::charter`]). Its brief is sections, which
+//!   the LLM reads as text: the plan's guidance first, then why the run is
+//!   due, then each section under a heading. Reading is always granted, and
+//!   writing and the shell are the run's modify and shell families; the
+//!   `note` grant is an outlet of that name. Its budget's tokens bound each
+//!   kind of token alike. Its models are the deployment's names, the first
+//!   the main conversation's and the others a sub-agent's to pick, each on
+//!   one endpoint and offered [`MAX_TOKENS`]. What it may finish with is a
+//!   change, a review's verdicts ("approve", or "request-changes" with one
+//!   to eight children), or a report, which the run declares as a verdict
+//!   of that name; a session's turn never reaches an agent. Which
+//!   repositories are writable is the workspace's, not the charter's.
+//! - The outcome goes back as the engine's codec encodes the engine's
+//!   outcome ([`codec::outcome`]): a change by its message, a verdict's
+//!   children written out after its text.
 //!
 //! The protocol layer sends a step's facts up before its requests: a check
 //! that ends as the next starts says so before the next one's `Long`, and the
@@ -76,7 +86,11 @@ use temper_agent_model::run::{self, Budget};
 use temper_agent_model::session;
 use temper_agent_model::tools;
 use temper_agent_model::{Event, Fact, Request};
-use temper_lib::{Duration, ReplyTo, Time, Token};
+use temper_engine_model::brief::{Body, Section};
+use temper_engine_model::plan::{self, Why};
+use temper_engine_model::{self as engine, Outcome};
+use temper_engine_model_tests::codec;
+use temper_lib::{ReplyTo, Time, Token};
 use temper_worker_model_agent::channel::{Ask, Down, Finish, Push, Reply, RunFailure, Up};
 
 /// What the agent's protocol layer holds for an agent process's channel.
@@ -258,173 +272,123 @@ fn tools_fact(fact: tools::Fact) -> &'static [u8] {
     }
 }
 
-/// The run's charter for the engine's, encoded as the fake engine encodes it
-/// (`temper_fake_engine_model::charter`: fields in declared order; a `bool`
-/// one byte, 0 or 1; a `u32` or `u64` little-endian, a time a `u64` of
-/// nanoseconds; bytes a `u32` length, then the bytes; a list a `u32` count,
-/// then its items), with `checkout`'s repositories. Every byte is read.
+/// The model every LLM of a run is offered at most this many tokens of, as
+/// the deployment configures the agent's protocol layer.
+pub const MAX_TOKENS: u32 = 1024;
+
+/// The run's charter for the engine's, as the engine's codec encodes it
+/// ([`codec::charter`]), with `checkout`'s repositories. Panics on bytes that
+/// do not decode: the engine's side encoded them.
 #[must_use]
 pub fn charter(bytes: &[u8], checkout: Checkout) -> run::Charter {
-    let mut reader = Reader { bytes };
-    let brief = reader.bytes();
-    let tools = charter::Tools { inspect: reader.flag(), modify: reader.flag(), shell: reader.flag() };
-    let forge = reader.flag();
-    let agents = reader.flag();
-    let outlets = reader.names().into_iter().map(|name| charter::Outlet { name }).collect();
-    let change = reader.flag();
-    let checks = reader.flag();
-    let verdicts = (0..reader.word()).map(|_| reader.verdict()).collect();
-    let budget = Budget {
-        turns: reader.word(),
-        input: reader.long(),
-        output: reader.long(),
-        cache_read: reader.long(),
-        cache_write: reader.long(),
-        time: Duration::from_nanos(reader.long()),
+    let charter = codec::charter_of(bytes).expect("a charter decodes as the engine's side encoded it");
+    let engine::Charter { why, brief, instructions, grants, finish, budget, models, policy: _ } = charter;
+    let tools = charter::Tools { inspect: true, modify: grants.modify, shell: grants.shell };
+    let outlets: Box<[charter::Outlet]> =
+        if grants.note { Box::new([charter::Outlet { name: NOTE.into() }]) } else { Box::new([]) };
+    let outcome = match finish {
+        plan::Finish::Report { grows: _ } => OutcomeSpec { change: None, verdicts: Box::new([rule(REPORT, 0, 0)]) },
+        plan::Finish::Change { checks } => OutcomeSpec { change: Some(ChangeSpec { checks }), verdicts: Box::new([]) },
+        plan::Finish::Verdict => OutcomeSpec { change: None, verdicts: verdicts() },
+        plan::Finish::Turn { .. } => panic!("no session reaches an agent: people hand in agent steps and changes"),
     };
-    let endpoint = charter::Endpoint(reader.word());
-    let model = reader.bytes();
-    let max_tokens = reader.word();
-    let models = reader.names().into_iter().map(|model| charter::Llm { endpoint, model, max_tokens }).collect();
-    reader.end();
+    let tokens = budget.tokens;
+    let budget = Budget {
+        turns: budget.turns,
+        input: tokens,
+        output: tokens,
+        cache_read: tokens,
+        cache_write: tokens,
+        time: budget.time,
+    };
+    let mut names = models.split(|byte| *byte == b' ').filter(|name| !name.is_empty());
+    let llm =
+        |model: &[u8]| charter::Llm { endpoint: charter::Endpoint(0), model: model.into(), max_tokens: MAX_TOKENS };
+    let main = llm(names.next().expect("the deployment names a model"));
     run::Charter {
-        brief,
+        brief: self::brief(why, &instructions, &brief),
         checkout,
-        grants: charter::Grants { tools, forge, agents, outlets },
-        outcome: OutcomeSpec { change: change.then_some(ChangeSpec { checks }), verdicts },
+        grants: charter::Grants { tools, forge: grants.forge, agents: grants.subagents, outlets },
+        outcome,
         budget,
-        llm: charter::Llm { endpoint, model, max_tokens },
-        models,
+        llm: main,
+        models: names.map(llm).collect(),
     }
 }
 
-/// `declared`, encoded for the engine as a charter is: a byte for which
-/// outcome it is, 0 for a change and 1 for a verdict, then its fields in
-/// declared order, and likewise for a verdict's children and their fields.
+/// The outlet of the engine's `note` grant.
+pub const NOTE: &[u8] = b"note";
+
+/// The verdicts a run may finish with: a report on an agent step's work,
+/// and on a change it reviews, approving it or asking for changes.
+pub const REPORT: &[u8] = b"report";
+pub const APPROVE: &[u8] = b"approve";
+pub const REQUEST: &[u8] = b"request-changes";
+
+fn rule(name: &[u8], min: u32, max: u32) -> VerdictRule {
+    VerdictRule { name: name.into(), children: Children { min, max }, kinds: Box::new([]), fields: Box::new([]) }
+}
+
+/// A review's verdicts: approving, with nothing more, or asking for changes,
+/// one to eight of them, each blocking or a nit, with where and what.
+fn verdicts() -> Box<[VerdictRule]> {
+    let request = VerdictRule {
+        kinds: Box::new([b"blocking".as_slice().into(), b"nit".as_slice().into()]),
+        fields: Box::new([b"path".as_slice().into(), b"body".as_slice().into()]),
+        ..rule(REQUEST, 1, 8)
+    };
+    Box::new([rule(APPROVE, 0, 0), request])
+}
+
+/// The brief the LLM reads: the plan's guidance first, then why the run is
+/// due, then each section under a heading of its kind, or why it could not
+/// be read.
+fn brief(why: Why, instructions: &[u8], sections: &[Section]) -> Box<[u8]> {
+    let mut text = instructions.to_vec();
+    text.extend_from_slice(format!("\n\nWhy: {why:?}\n").as_bytes());
+    for section in sections {
+        text.extend_from_slice(format!("\n## {:?}\n", section.kind).as_bytes());
+        match &section.body {
+            Body::Text(body) => text.extend_from_slice(body),
+            Body::Missing(unread) => text.extend_from_slice(format!("[unread: {unread:?}]").as_bytes()),
+        }
+        text.push(b'\n');
+    }
+    text.into()
+}
+
+/// `declared`, as the engine's codec encodes the outcome it is
+/// ([`codec::outcome`]).
 #[must_use]
 pub fn outcome(declared: &Declared) -> Box<[u8]> {
-    let mut writer = Writer::default();
+    codec::outcome(&engine_outcome(declared)).into()
+}
+
+/// The engine's outcome for what a run declared: a change, by its message;
+/// a verdict on a change, its children written out after its text; a report.
+#[must_use]
+pub fn engine_outcome(declared: &Declared) -> Outcome {
     match declared {
-        Declared::Change(Change { title, body }) => {
-            writer.byte(0);
-            writer.bytes(title);
-            writer.bytes(body);
-        }
+        Declared::Change(change) => Outcome::Change { message: message(change) },
         Declared::Verdict(Verdict { name, body, children }) => {
-            writer.byte(1);
-            writer.bytes(name);
-            writer.bytes(body);
-            writer.count(children.len());
+            let mut text = body.to_vec();
             for Child { kind, fields } in children {
-                writer.bytes(kind);
-                writer.count(fields.len());
+                text.extend_from_slice(b"\n- ");
+                text.extend_from_slice(kind);
                 for Field { name, value } in fields {
-                    writer.bytes(name);
-                    writer.bytes(value);
+                    text.extend_from_slice(b" ");
+                    text.extend_from_slice(name);
+                    text.extend_from_slice(b": ");
+                    text.extend_from_slice(value);
                 }
             }
+            let text = text.into_boxed_slice();
+            match &**name {
+                REPORT => Outcome::Report { text },
+                APPROVE => Outcome::Verdict { verdict: plan::Verdict::Approve, text },
+                REQUEST => Outcome::Verdict { verdict: plan::Verdict::Changes, text },
+                other => panic!("a run declares only the verdicts its charter allows, not {other:?}"),
+            }
         }
-    }
-    writer.bytes.into()
-}
-
-/// The outcome `outcome` encodes, as the engine side reads it back. Every
-/// byte is read.
-#[must_use]
-pub fn declared(outcome: &[u8]) -> Declared {
-    let mut reader = Reader { bytes: outcome };
-    let declared = match reader.byte() {
-        0 => Declared::Change(Change { title: reader.bytes(), body: reader.bytes() }),
-        1 => {
-            let name = reader.bytes();
-            let body = reader.bytes();
-            let children = (0..reader.word()).map(|_| reader.child()).collect();
-            Declared::Verdict(Verdict { name, body, children })
-        }
-        other => panic!("an outcome is a change (0) or a verdict (1), not {other}"),
-    };
-    reader.end();
-    declared
-}
-
-/// Reads an encoding front to back.
-#[derive(Debug)]
-struct Reader<'a> {
-    bytes: &'a [u8],
-}
-
-impl<'a> Reader<'a> {
-    fn verdict(&mut self) -> VerdictRule {
-        let name = self.bytes();
-        let children = Children { min: self.word(), max: self.word() };
-        VerdictRule { name, children, kinds: self.names(), fields: self.names() }
-    }
-
-    fn child(&mut self) -> Child {
-        let kind = self.bytes();
-        let fields = (0..self.word()).map(|_| Field { name: self.bytes(), value: self.bytes() }).collect();
-        Child { kind, fields }
-    }
-
-    fn names(&mut self) -> Box<[Box<[u8]>]> {
-        (0..self.word()).map(|_| self.bytes()).collect()
-    }
-
-    fn bytes(&mut self) -> Box<[u8]> {
-        let len = usize::try_from(self.word()).expect("a u32 fits in a usize");
-        self.raw(len).into()
-    }
-
-    fn flag(&mut self) -> bool {
-        match self.byte() {
-            0 => false,
-            1 => true,
-            other => panic!("a flag is 0 or 1, not {other}"),
-        }
-    }
-
-    fn byte(&mut self) -> u8 {
-        let [byte] = self.raw(1) else { unreachable!("one byte was taken") };
-        *byte
-    }
-
-    fn word(&mut self) -> u32 {
-        u32::from_le_bytes(self.raw(4).try_into().expect("four bytes were taken"))
-    }
-
-    fn long(&mut self) -> u64 {
-        u64::from_le_bytes(self.raw(8).try_into().expect("eight bytes were taken"))
-    }
-
-    fn raw(&mut self, len: usize) -> &'a [u8] {
-        let (taken, rest) = self.bytes.split_at_checked(len).expect("an encoding holds what it counts");
-        self.bytes = rest;
-        taken
-    }
-
-    fn end(&self) {
-        assert!(self.bytes.is_empty(), "an encoding is all its bytes, but {} are left", self.bytes.len());
-    }
-}
-
-/// Writes an encoding front to back.
-#[derive(Default, Debug)]
-struct Writer {
-    bytes: Vec<u8>,
-}
-
-impl Writer {
-    fn bytes(&mut self, bytes: &[u8]) {
-        self.count(bytes.len());
-        self.bytes.extend_from_slice(bytes);
-    }
-
-    fn count(&mut self, count: usize) {
-        let count = u32::try_from(count).expect("an outcome's counts fit a u32");
-        self.bytes.extend_from_slice(&count.to_le_bytes());
-    }
-
-    fn byte(&mut self, byte: u8) {
-        self.bytes.push(byte);
     }
 }

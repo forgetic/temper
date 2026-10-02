@@ -75,6 +75,7 @@ temper-forge-model = { path = "testing/temper-forge-model" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 temper-checkout-fake = { path = "tests/integration/checkout" }
 temper-engine-model-forge-tests = { path = "tests/integration/engine/forge" }
+temper-engine-model-tests = { path = "tests/integration/engine/model" }
 temper-agent-model-tools-tests = { path = "tests/integration/agent/tools" }
 temper-worker-model-agent-tests = { path = "tests/integration/worker/agent" }
 temper-worker-model-checkout-tests = { path = "tests/integration/worker/checkout" }

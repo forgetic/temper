@@ -56,13 +56,15 @@ dependencies = [
  "temper-agent-model",
  "temper-agent-model-tools-tests",
  "temper-checkout-fake",
- "temper-fake-engine-model",
+ "temper-engine-model",
+ "temper-engine-model-forge-tests",
+ "temper-engine-model-tests",
+ "temper-forge-model",
  "temper-lib",
  "temper-llm-model",
  "temper-worker-model",
  "temper-worker-model-agent",
  "temper-worker-model-checkout-tests",
- "temper-worker-model-tests",
  "temper-world",
 ]
 

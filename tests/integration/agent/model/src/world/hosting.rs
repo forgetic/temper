@@ -1,81 +1,87 @@
-//! The worker's neighbours: the engine, over a channel that keeps its order
-//! and never drops, with the whole worker's world's translation of the fake
-//! engine's api ([`temper_worker_model_tests::translate`]); io's agent
-//! processes, each the home of an agent model, and their pipes; and io's git,
-//! on the disk and the fake forge, through the checkout world's translation
-//! and its route to the forge. And
-//! where the worker and the agent meet: what the engine records of each run.
+//! The worker's neighbours: the engine, over a channel that keeps its order,
+//! through the protocol layers on both sides ([`crate::protocol`]); io's
+//! agent processes, each the home of an agent model, and their pipes; and
+//! io's git, on the disk and the one fake forge, through the checkout world's
+//! translation. And where the worker and the agent meet: what the engine
+//! hears of each run.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model::run::charter::{Checkout, Repository as Placed};
 use temper_agent_model::run::{self, Spend};
 use temper_agent_model::{self as agent};
-use temper_checkout_fake::git::Remote;
-use temper_fake_engine_model::{self as engine, BASE, IDENTITY, api};
+use temper_engine_model as engine;
+use temper_engine_model_tests::referee as engine_referee;
 use temper_lib::{Time, Token};
 use temper_worker_model::agent::channel::{Down, Reply, Up};
 use temper_worker_model::checkout::git::{Commit, Done, Op, Place, Want};
 use temper_worker_model::{self as worker, host};
-use temper_worker_model_checkout_tests::forge::Move;
 use temper_worker_model_checkout_tests::translate as io;
-use temper_worker_model_tests::translate;
 use temper_world::Stage;
 
-use super::{Allowed, Attempt, Delivery, Demands, NAME, Process, Repository, Run, SLACK, World, files};
+use super::{Allowed, Attempt, Delivery, Demands, Process, Repository, Run, SLACK, World, files};
 use crate::channel::{self, Link};
-use crate::fixture;
+use crate::protocol::{self, IDENTITY};
 use crate::referee::{Report, Seen};
 use crate::script::Job;
 
 impl World {
-    /// Sends `event` up the channel to the engine, after what went before it.
-    pub(super) fn send_up(&mut self, event: engine::Event) {
-        let at = self.now.saturating_add(self.draw(self.settings.network)).max(self.up_lane);
-        self.up_lane = at;
-        self.schedule(at, Delivery::Engine(event));
-    }
-
-    /// Sends the engine's `request` down the channel to the worker, after
-    /// what went before it, as the protocol layers translate it.
-    pub(super) fn send_down(&mut self, request: engine::Request) {
-        match &request {
-            engine::Request::Assign { worker, assignment } => {
-                assert_eq!(*worker, NAME, "the engine assigns to the one worker there is");
-                self.assigned(assignment);
-            }
-            engine::Request::Cancel { attempt, .. } => self.log(&format!("engine cancels {}", attempt.raw())),
-            engine::Request::Inbound { .. } | engine::Request::Relayed { .. } | engine::Request::Acknowledge { .. } => {
-            }
-        }
-        let event = translate::down(request, self.commit, &mut self.places);
+    /// Sends `event` down the channel to the worker, after what went before
+    /// it.
+    pub(super) fn send_down(&mut self, event: worker::Event) {
         let at = self.now.saturating_add(self.draw(self.settings.network)).max(self.down_lane);
         self.down_lane = at;
         self.schedule(at, Delivery::Worker(event));
     }
 
-    /// Keeps what the world follows of the engine's `assignment`.
-    fn assigned(&mut self, assignment: &api::Assignment) {
+    /// The engine assigns a run: the worker hears it as its protocol layer
+    /// translates it, and the world keeps what it follows of it.
+    pub(super) fn assign(&mut self, assignment: engine::Assignment) {
+        let (item, count) = (assignment.item, assignment.attempt);
+        // A review's run plays the review's script; any other, its step's.
+        let job = match assignment.charter.finish {
+            engine::plan::Finish::Verdict => Job::Review,
+            engine::plan::Finish::Report { .. }
+            | engine::plan::Finish::Change { .. }
+            | engine::plan::Finish::Turn { .. } => {
+                let at = self.items.get(&item).expect("the engine runs only what people handed in");
+                self.settings.hands[*at].job
+            }
+        };
+        let (assignment, places) = protocol::assignment(assignment);
         let repositories = assignment.workspace.repositories.iter().map(|repository| Repository {
             name: repository.name.to_vec(),
             remote: repository.remote.to_vec(),
             push: match &repository.access {
-                api::Access::Writable { push, .. } => Some(push.to_vec()),
-                api::Access::ReadOnly => None,
+                host::Access::Writable { push } => Some(push.to_vec()),
+                host::Access::ReadOnly => None,
             },
         });
-        // The first repository of a job cues the script its guide is read in.
-        let job = assignment.workspace.repositories.iter().find_map(|repository| fixture::job(&repository.name));
-        let job = job.unwrap_or(Job::Wandering);
         if let Some(save) = &assignment.save {
             self.save_branches.insert(save.to_vec());
         }
         let repositories: Vec<Repository> = repositories.collect();
-        self.observe(Seen::Assigned { attempt: assignment.attempt, repositories: repositories.clone() });
-        let attempt = Attempt { job, repositories, process: None, answered: false };
-        assert!(self.attempts.insert(assignment.attempt, attempt).is_none(), "the engine names its attempts apart");
+        let name = assignment.attempt;
+        let live =
+            self.attempts.iter().any(|(other, attempt)| *other != name && attempt.item == item && !attempt.answered);
+        self.observe(Seen::Assigned { attempt: name, repositories: repositories.clone() });
+        // An attempt the worker refused, which never ran, is placed again
+        // under its count: the engine's referee sees it assigned once.
+        if !self.attempts.contains_key(&name) {
+            self.observe_engine(engine_referee::Seen::Assigned { item, attempt: count, live });
+        }
+        let attempt = Attempt { item, job, repositories, places, process: None, answered: false, refused: false };
+        if let Some(before) = self.attempts.insert(name, attempt) {
+            assert!(before.refused, "the engine assigns an attempt again only once the worker refused it");
+        }
         self.stats.assigned += 1;
-        self.log(&format!("engine assigns {} as {job:?}", assignment.attempt.raw()));
+        self.log(&format!("engine assigns {item:?}#{count} as {job:?}"));
+        // A person may stop the item's first run.
+        if self.stopping.insert(item) && self.rng.chance(self.settings.stops) {
+            let at = self.now.saturating_add(self.draw(self.settings.stop_after));
+            self.send_at(at, Delivery::Stop(item));
+        }
+        self.send_down(worker::Event::Assign { assignment });
     }
 
     /// The worker's requests, carried the way its protocol layer and io would.
@@ -83,23 +89,28 @@ impl World {
         self.log(&format!("worker -> {}", describe_request(&request)));
         match request {
             worker::Request::Dial => {
-                assert!(!self.dialled, "the worker dials once: the channel never drops");
-                self.dialled = true;
-                let at = self.now.saturating_add(self.draw(self.settings.network));
-                self.schedule(at, Delivery::Worker(worker::Event::Connected));
+                assert!(self.channel.is_none(), "the worker dials only while it has no channel");
+                // The channel opens: the engine's protocol layer names it.
+                self.channel = Some(Token::new(self.wire.name()));
+                self.send(Delivery::Worker(worker::Event::Connected));
             }
             worker::Request::Hello { hello } => {
-                self.send_up(engine::Event::Hello { worker: NAME, hello: translate::hello(hello) });
+                let channel = self.channel.expect("a hello goes on an open channel");
+                self.send_up(engine::Event::Hello { channel, hello: protocol::hello(hello) });
             }
-            worker::Request::Answer { run, attempt, answer } => {
-                self.reported(attempt, &answer);
-                let answer = translate::answer(answer);
-                self.send_up(engine::Event::Answered { worker: NAME, run, attempt, answer });
+            worker::Request::Answer { run: _, attempt, answer } => {
+                let places = self.reported(attempt, &answer);
+                let (item, count) = protocol::attempt_of(attempt);
+                self.observe_engine(engine_referee::Seen::Answered { item, attempt: count });
+                let channel = self.channel.expect("an answer goes on an open channel");
+                let answer = protocol::answer(answer, &places);
+                self.send_up(engine::Event::Answer { channel, item, attempt: count, answer });
             }
             worker::Request::Relay { .. } => unreachable!("the agent's run relays no calls"),
-            worker::Request::Bounced { run, attempt, bounce } => {
-                let bounce = translate::bounce(bounce);
-                self.send_up(engine::Event::Bounced { worker: NAME, run, attempt, bounce });
+            worker::Request::Bounced { run: _, attempt, bounce } => {
+                let (item, attempt) = protocol::attempt_of(attempt);
+                let bounce = protocol::bounce(bounce);
+                self.send_up(engine::Event::Bounced { item, attempt, bounce });
             }
             worker::Request::Spawn { owner, workspace, deadline } => self.spawn(owner, workspace, deadline),
             worker::Request::Send { owner, process, message } => {
@@ -207,9 +218,8 @@ impl World {
                 assert!(process.link.is_none(), "the start comes down first, once");
                 assert!(snapshot.is_none(), "the engine never parks a run of the agent's, so it never resumes one");
                 // The frame is the world's, which the protocol layer takes off.
-                let attempt = translate::charter_attempt(&charter);
-                let frame = usize::try_from(translate::CHARTER_FRAME).expect("a small frame");
-                let charter: Box<[u8]> = charter[frame..].into();
+                let (attempt, charter) = protocol::unframed(&charter);
+                let charter: Box<[u8]> = charter.into();
                 self.start(id, attempt, &charter);
                 Down::Start { charter, snapshot }
             }
@@ -229,7 +239,7 @@ impl World {
         let record = self.attempts.get_mut(&attempt).expect("an agent starts for an attempt the engine made");
         assert!(!record.answered && record.process.is_none(), "an attempt not answered starts one agent");
         record.process = Some(id);
-        let job = record.job;
+        let (job, item) = (record.job, record.item);
         let named: Vec<(Vec<u8>, bool)> =
             record.repositories.iter().map(|repository| (repository.name.clone(), repository.push.is_some())).collect();
         let first_writable = record
@@ -255,6 +265,7 @@ impl World {
             verdicts: !decoded.outcome.verdicts.is_empty(),
         };
         let run = Run {
+            item,
             job,
             attempt,
             allowed,
@@ -278,13 +289,13 @@ impl World {
         process.link = Some(Link { worker: Token::new(id), checkout, run: None });
         process.run = Some(run);
         self.stats.starts += 1;
-        self.log(&format!("agent {id} starts attempt {} as {job:?}", attempt.raw()));
+        self.log(&format!("agent {id} starts {item:?} at {} as {job:?}", attempt.raw()));
         // Another party may move the branch the run pushes to while it works.
         if let Some((remote, branch)) = first_writable
             && self.rng.chance(self.settings.moved)
         {
             let at = self.now.saturating_add(self.draw(self.settings.move_after));
-            self.schedule(at, Delivery::Advance { remote, branch });
+            self.schedule(at, Delivery::Advance { attempt, remote, branch });
         }
     }
 
@@ -432,7 +443,7 @@ impl World {
         let timeout = if op.is_remote() { limits.remote_timeout } else { limits.local_timeout };
         assert_eq!(deadline, self.now.saturating_add(timeout), "an operation's deadline is by where it runs");
         if let Some(identity) = io::identity(&op) {
-            assert_eq!(identity, IDENTITY, "an operation acts as its repository's identity");
+            assert_eq!(identity, IDENTITY, "an operation acts as the deployment's workers' identity");
         }
         let workspace = io::workspace(&op);
         if let Some(id) = self.spaces.get(&workspace).and_then(|space| space.process)
@@ -480,14 +491,20 @@ impl World {
             | Op::CheckOut { .. }
             | Op::Commit { .. } => None,
         };
-        self.forge.at(self.now);
-        let done = io::perform(&mut self.forge, &mut self.disk, op);
-        self.observe_moves();
+        // A remote operation may not reach the forge.
+        let reachable = !(op.is_remote() && self.rng.chance(self.settings.git_errors));
+        self.stats.unreachable += u32::from(!reachable);
+        let mut disk = std::mem::take(&mut self.disk);
+        let done =
+            io::perform(&mut self.direct(temper_engine_model_tests::deployment::WORKER, reachable), &mut disk, op);
+        self.disk = disk;
+        self.route_stray();
+        self.observe_forge();
         if let Some(repository) = committed
             && let Done::Committed { commit } = &done
         {
             let id = self.spaces.get(&workspace).and_then(|space| space.process).expect("a change is an agent's");
-            let tree = self.forge.tree(io::fake(*commit));
+            let tree = crate::forge::tree(&self.forge, io::fake(*commit));
             self.observe(Seen::Committed { process: id, repository, tree });
         }
         if let Some(branch) = pushed
@@ -502,58 +519,23 @@ impl World {
         self.worker_stage.push(worker::Event::Done { owner, done });
     }
 
-    /// Another party moves `branch` of `remote`, making it first if it is
-    /// nowhere yet, from the base branch, unless the forge refuses.
-    pub(super) fn advance(&mut self, remote: &[u8], branch: &[u8]) {
-        self.forge.at(self.now);
-        if self.forge.branch(remote, branch).is_none() {
-            let base = self.forge.branch(remote, BASE).expect("every repository has the base branch");
-            if self.forge.create_branch(remote, branch, base).is_err() {
-                return;
-            }
-        }
-        self.stats.advanced += 1;
-        let content = format!("another party, {}\n", self.stats.advanced);
-        self.forge.advance(remote, branch, b"OTHER.md", content.as_bytes());
-        self.observe_moves();
-        self.log(&format!("another party moves {}", String::from_utf8_lossy(branch)));
-    }
-
-    /// The referee sees every move of the forge's branches since it last
-    /// looked, as the forge observed them, the worker's and another party's,
-    /// each a fast-forward, with the commits it brings onto its branch.
-    pub(super) fn observe_moves(&mut self) {
-        for Move { remote, branch, from, to } in self.forge.moves() {
-            if let Some(from) = from {
-                assert!(
-                    self.forge.is_ancestor(from, to),
-                    "{}: {} moved only by a fast-forward",
-                    String::from_utf8_lossy(&remote),
-                    String::from_utf8_lossy(&branch)
-                );
-            }
-            let mut brought = Vec::new();
-            let mut next = Some(to);
-            while let Some(commit) = next
-                && Some(commit) != from
-            {
-                brought.push(commit);
-                next = self.forge.parent(commit);
-            }
-            let tree = self.forge.tree(to);
-            self.observe(Seen::Moved { remote, branch, tip: to, brought, tree });
-        }
-    }
-
     /// The worker answers the engine for `attempt`: the engine hears it, and
     /// the referee judges it where the worker and the agent meet.
-    fn reported(&mut self, attempt: Token, answer: &host::Answer) {
-        let kind = translate::answer_kind(answer);
+    fn reported(&mut self, attempt: Token, answer: &host::Answer) -> Vec<u32> {
+        let kind = protocol::answer_kind(answer);
         self.log(&format!("worker answers {}: {kind}", attempt.raw()));
         let record = self.attempts.get_mut(&attempt).expect("the worker answers attempts the engine made");
         assert!(!record.answered, "the worker answers each attempt once");
         record.answered = true;
+        let (refused, invalid) = match answer {
+            host::Answer::Refused(host::Refusal::Busy) => (true, false),
+            host::Answer::Refused(host::Refusal::Invalid(_)) => (true, true),
+            host::Answer::Ended { .. } | host::Answer::Parked { .. } | host::Answer::Failed { .. } => (false, false),
+        };
+        record.refused = refused;
         let process = record.process;
+        let places = record.places.clone();
+        self.stats.invalid += u32::from(invalid);
         self.stats.reported += 1;
         let (landed, ends): (&[host::Landed], bool) = match answer {
             host::Answer::Refused(_) => (&[], false),
@@ -585,6 +567,7 @@ impl World {
             run.reported = Some(kind);
             run.landed = commits;
         }
+        places
     }
 }
 
@@ -631,7 +614,7 @@ fn describe_request(request: &worker::Request) -> String {
         worker::Request::Dial => "dial".to_owned(),
         worker::Request::Hello { hello } => format!("hello hosting {}", hello.hosting.len()),
         worker::Request::Answer { attempt, answer, .. } => {
-            format!("answer {} {}", attempt.raw(), translate::answer_kind(answer))
+            format!("answer {} {}", attempt.raw(), protocol::answer_kind(answer))
         }
         worker::Request::Relay { attempt, call, .. } => format!("relay {} for {}", call.raw(), attempt.raw()),
         worker::Request::Bounced { attempt, bounce, .. } => format!("bounced {bounce:?} for {}", attempt.raw()),

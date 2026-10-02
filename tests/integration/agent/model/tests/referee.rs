@@ -69,7 +69,7 @@ fn why(referee: &Referee<Meeting>) -> String {
 /// The forge moves `branch` to `tip`, bringing `brought`.
 fn moved(branch: &[u8], tip: u64, brought: &[u64], content: &[u8]) -> Seen {
     let (remote, branch) = (b"forge/app".to_vec(), branch.to_vec());
-    Seen::Moved { remote, branch, tip, brought: brought.to_vec(), tree: tree(content) }
+    Seen::Moved { remote, branch, tip, brought: brought.to_vec(), tree: tree(content), other: false }
 }
 
 #[test]

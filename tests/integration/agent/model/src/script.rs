@@ -1,10 +1,9 @@
 //! What the LLMs do: scripts the fake provider plays, each cued by a word in
 //! a conversation's system text. A run's main conversation is cued by its
-//! job's word, which starts the `AGENTS.md` of the job's repository on the
-//! forge (the run puts the guides it finds in every system text, after the
-//! brief, in the checkout's order); a sub-agent by the word its asker writes
-//! at the start of its brief (which comes first). A job with no word is
-//! played at random.
+//! job's word, which starts the guidance of the step it runs for, and so its
+//! brief (which comes first in the system text); a sub-agent by the word its
+//! asker writes at the start of its brief. A job with no word is played at
+//! random.
 //!
 //! The scripts follow the fixture ([`crate::fixture`]): the answer in
 //! `src/lib.rs` is 42 and the checks want 43.
@@ -18,8 +17,10 @@ pub enum Job {
     /// fail, fixes it, and finishes again; and once more if the push fails.
     Coding,
     /// Reads and searches, finishes with a verdict the run rejects, then
-    /// with one it takes.
+    /// with one it takes: changes asked for.
     Review,
+    /// Reads, and finishes with a report.
+    Reporting,
     /// Asks two read-only sub-agents side by side, then a writable one that
     /// fixes the code and asks one of its own (and tries to finish, which it
     /// may not), then finishes with a change.
@@ -32,7 +33,7 @@ pub enum Job {
 }
 
 /// Every job, for worlds that draw them.
-pub const JOBS: [Job; 5] = [Job::Coding, Job::Review, Job::Delegating, Job::Spending, Job::Wandering];
+pub const JOBS: [Job; 6] = [Job::Coding, Job::Review, Job::Reporting, Job::Delegating, Job::Spending, Job::Wandering];
 
 /// The word that cues the script of `job`'s main conversation, if it has one.
 #[must_use]
@@ -40,6 +41,7 @@ pub const fn cue(job: Job) -> Option<&'static [u8]> {
     match job {
         Job::Coding => Some(b"@coding"),
         Job::Review => Some(b"@review"),
+        Job::Reporting => Some(b"@report"),
         Job::Delegating => Some(b"@delegate"),
         Job::Spending => Some(b"@spend"),
         Job::Wandering => None,
@@ -52,6 +54,7 @@ pub fn all() -> Box<[Script]> {
     Box::new([
         script(b"@coding", coding()),
         script(b"@review", review()),
+        script(b"@report", reporting()),
         script(b"@delegate", delegating()),
         script(b"@spend", spending()),
         script(b"@explore", exploring()),
@@ -128,6 +131,13 @@ fn review() -> Vec<Turn> {
             "finish",
             r#"{"verdict":"request-changes","body":"Fix it.","1.kind":"blocking","1.path":"src/lib.rs","1.body":"43"}"#,
         )]),
+    ]
+}
+
+fn reporting() -> Vec<Turn> {
+    vec![
+        calls(vec![read("README.md"), call("list_dir", r#"{"path":"."}"#)]),
+        calls(vec![call("finish", r#"{"verdict":"report","body":"The answer is 42, and the checks want 43."}"#)]),
     ]
 }
 

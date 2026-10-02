@@ -12,7 +12,10 @@
 //!   agent started;
 //! - what landed is on the forge: an ancestor of its branch's tip, whoever
 //!   moved the branch since, exactly the tree its agent left when it asked
-//!   to push.
+//!   to push;
+//! - what the engine merges is what a run landed, or what another party
+//!   moved its branch to, and the merge keeps every file the head changed
+//!   as the head has it.
 //!
 //! And liveness: every assignment is answered within a bound the world
 //! sets.
@@ -49,11 +52,15 @@ pub enum Seen {
     /// io commits `tree` in `repository` of the workspace `process` was
     /// spawned in last.
     Committed { process: u64, repository: Vec<u8>, tree: Files },
-    /// The forge moves `branch` of `remote` to `commit`, which holds `tree`.
     /// The forge moves `branch` of `remote` to `tip`, which holds `tree`, a
-    /// push of the worker's or another party's: `brought` are the commits
-    /// the move brings onto the branch, from its new tip back to its old.
-    Moved { remote: Vec<u8>, branch: Vec<u8>, tip: u64, brought: Vec<u64>, tree: Files },
+    /// push of the worker's, a merge of the engine's, or `other` party's:
+    /// `brought` are the commits the move brings onto the branch, from its
+    /// new tip back to its old.
+    Moved { remote: Vec<u8>, branch: Vec<u8>, tip: u64, brought: Vec<u64>, tree: Files, other: bool },
+    /// The forge merges `head` into `base` of `remote`, with the tree
+    /// `merged`: `changed` are the files the head changed since it forked
+    /// from the base, as the head has them.
+    Merged { remote: Vec<u8>, base: Vec<u8>, head: u64, changed: Files, merged: Files },
     /// The engine hears the worker's answer for `attempt`, of `kind`, and the
     /// commits it says landed, by the repository's place in the assignment.
     Reported { attempt: Token, kind: &'static str, report: Report, landed: Vec<(usize, u64)> },
@@ -117,6 +124,9 @@ pub struct Meeting {
     /// to.
     branches: BTreeMap<(Vec<u8>, Vec<u8>), Branch>,
     trees: BTreeMap<u64, Files>,
+    /// The commits runs landed, and those another party made.
+    landed: BTreeSet<u64>,
+    others: BTreeSet<u64>,
 }
 
 /// A branch of the forge, as the referee saw it move.
@@ -159,6 +169,8 @@ impl Meeting {
             processes: BTreeMap::new(),
             branches: BTreeMap::new(),
             trees: BTreeMap::new(),
+            landed: BTreeSet::new(),
+            others: BTreeSet::new(),
         }
     }
 
@@ -262,6 +274,7 @@ impl Meeting {
             );
         }
         for (index, commit) in landed {
+            self.landed.insert(*commit);
             let repository = &record.repositories[*index];
             let Some(branch) = &repository.push else {
                 judge.fail("a change lands in a repository that may be written");
@@ -309,12 +322,35 @@ impl Expectations for Meeting {
             Seen::Stopped { process } => self.process(process).stopped = true,
             Seen::Gone { process, left } => self.process(process).left = Some(left),
             Seen::Committed { process, repository, tree } => self.committed(process, &repository, &tree, judge),
-            Seen::Moved { remote, branch, tip, brought, tree } => {
+            Seen::Moved { remote, branch, tip, brought, tree, other } => {
+                if other {
+                    self.others.extend(brought.iter().copied());
+                }
                 let branch =
                     self.branches.entry((remote, branch)).or_insert_with(|| Branch { tip, history: BTreeSet::new() });
                 branch.tip = tip;
                 branch.history.extend(brought);
                 self.trees.insert(tip, tree);
+            }
+            Seen::Merged { remote, base, head, changed, merged } => {
+                judge.check(
+                    self.landed.contains(&head) || self.others.contains(&head),
+                    format_args!(
+                        "the engine merges into {}'s {} only what a run landed or another party made, not {head}",
+                        String::from_utf8_lossy(&remote),
+                        String::from_utf8_lossy(&base)
+                    ),
+                );
+                for (path, content) in &changed {
+                    judge.check(
+                        merged.get(path) == Some(content),
+                        format_args!(
+                            "a merge keeps {} as the head {head} has it: {} merged",
+                            String::from_utf8_lossy(path),
+                            Show(Some(&merged))
+                        ),
+                    );
+                }
             }
             Seen::Reported { attempt, kind, report, landed } => self.reported(attempt, kind, &report, &landed, judge),
         }

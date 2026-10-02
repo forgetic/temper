@@ -1,6 +1,6 @@
 [package]
 name = "temper-agent-model-tests"
-description = "The agent model's world: the real worker hosting real agents, with a fake engine, a fake LLM provider and a fake forge"
+description = "The agent's top-level world: the real engine and worker hosting real agents, with a fake LLM provider, a fake forge and scripted people"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,13 +11,15 @@ temper-lib.workspace = true
 temper-agent-model.workspace = true
 temper-agent-model-tools-tests.workspace = true
 temper-checkout-fake.workspace = true
-temper-fake-engine-model.workspace = true
+temper-engine-model.workspace = true
+temper-engine-model-forge-tests.workspace = true
+temper-engine-model-tests.workspace = true
+temper-forge-model.workspace = true
 temper-llm-model.workspace = true
 temper-world.workspace = true
 temper-worker-model.workspace = true
 temper-worker-model-agent.workspace = true
 temper-worker-model-checkout-tests.workspace = true
-temper-worker-model-tests.workspace = true
 
 # Ordinary Rust (programming-style.md, 10.2), so not the step crates' lints.
 # tests/integration/clippy.toml bans what would make a run unrepeatable.
