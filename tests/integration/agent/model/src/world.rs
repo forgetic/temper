@@ -103,6 +103,32 @@ pub const LIMITS: Limits = Limits {
     },
 };
 
+/// The agent's limits in random worlds: room for fewer runs, conversations,
+/// sessions and calls than the worker may ask for, so that some are refused.
+pub const TIGHT: Limits = Limits {
+    run: run::Limits {
+        runs: 3,
+        conversations: 8,
+        calls: 6,
+        run_conversations: 4,
+        answer_bytes: 256,
+        guide_bytes: 256,
+        check_tail: 128,
+        ..LIMITS.run
+    },
+    session: session::Limits {
+        sessions: 8,
+        messages: 32,
+        session_bytes: 1 << 16,
+        retries: 2,
+        call_timeout: Duration::from_secs(20),
+        tool_timeout: Duration::from_secs(30),
+        parallel_tools: 3,
+        tools: tools::Limits { kits: 8, calls: 3, ..LIMITS.session.tools },
+        ..LIMITS.session
+    },
+};
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Settings {
     /// Seeds the world, which seeds the models.
@@ -199,6 +225,78 @@ impl Settings {
 }
 
 impl Settings {
+    /// A world of its own for `seed`: runs side by side on every job, on
+    /// charters of every kind, in tight limits, with every neighbour failing,
+    /// cancelling and racing at chances drawn from the seed.
+    #[must_use]
+    pub fn random(seed: u64) -> Settings {
+        let mut rng = Rng::new(seed ^ 0x5EED_0F0A_0B0D_D1CE);
+        let mut chance = |most: u64| u32::try_from(rng.below(most + 1)).expect("a chance per mille");
+        let calm = Settings::calm(seed);
+        let provider = provider::Config {
+            calls: 16,
+            latency_min: Duration::from_millis(50),
+            latency_max: Duration::from_millis(500 + u64::from(chance(4500))),
+            overloaded: chance(50),
+            rate_limited: chance(30),
+            unavailable: chance(20),
+            too_long: chance(5),
+            unauthorized: chance(3),
+            refused: chance(20),
+            no_calls: chance(20),
+            malformed: chance(50),
+            calls_per_answer: 1 + chance(2),
+            tool_rounds: 1 + chance(2),
+            ..calm.provider
+        };
+        let worker = worker::Config {
+            jobs: 1 + chance(5),
+            window: Duration::from_millis(u64::from(chance(30_000))),
+            cancels: chance(500),
+            cancel_min: Duration::ZERO,
+            cancel_max: Duration::from_secs(30),
+            recancels: chance(500),
+            late_cancels: chance(500),
+            brief_min: 16,
+            brief_max: 256,
+            turns_min: 6,
+            turns_max: 40,
+            tokens_min: 2000,
+            tokens_max: 1 << 20,
+            time_min: Duration::from_secs(10),
+            time_max: Duration::from_secs(600),
+            max_tokens: 256 + chance(768),
+            writable: 800,
+            changes: 700,
+            checks: 700,
+            verdicts: 500,
+            agents: 700,
+            push_min: Duration::from_millis(50),
+            push_max: Duration::from_secs(2),
+            moved: chance(300),
+            push_failures: chance(300),
+        };
+        let granule = match chance(2) {
+            0 => Duration::ZERO,
+            1 => Duration::from_millis(50),
+            _ => Duration::from_secs(1),
+        };
+        Settings {
+            seed,
+            limits: TIGHT,
+            provider,
+            worker,
+            jobs: &script::JOBS,
+            network: Span::millis(1, 10 + u64::from(chance(190))),
+            tool: Span::millis(1, 100 + u64::from(chance(1900))),
+            look: Span::millis(1, 10 + u64::from(chance(90))),
+            io_errors: chance(30),
+            check: Span::millis(100, 1000 + u64::from(chance(89_000))),
+            cancels_lost: chance(300),
+            granule,
+        }
+    }
+
     /// These settings, with the first seed from theirs whose first run the
     /// worker starts on a charter that is `wanted`: the fake draws its
     /// charters, and a scenario picks one it can tell a story about.
@@ -278,6 +376,10 @@ pub struct Stats {
     pub pushes_cancelled: u32,
     /// Cancels the worker sent.
     pub worker_cancels: u32,
+    /// Results of the run's tools that went back to the LLMs: sub-agents'
+    /// answers, and the rest.
+    pub sub_answers: u32,
+    pub served: u32,
 }
 
 /// The facts the agent told, by kind, as the loop drained them.
@@ -332,16 +434,23 @@ pub struct Run {
     pub run: Option<Token>,
     /// The worker cancelled it.
     pub cancelled: bool,
-    /// What came of its checks, and its pushes, in order.
+    /// Whether it found checks in its checkout (a probe that failed finds
+    /// none), what came of them, and of its pushes, in order.
+    pub found: bool,
     pub checked: Vec<bool>,
     pub pushes: Vec<run::Push>,
-    /// Its answer.
+    /// Its answer, and when the start reached the agent and the answer left
+    /// it.
     pub answer: Option<run::Answer>,
+    pub started: Option<Time>,
+    pub answered: Option<Time>,
     /// What its conversations used, by the facts, and where it stood when it
     /// first spent past its budget: how many of its conversations were live
     /// then, and how many completions they used after.
     pub used: Spend,
     pub crossed: Option<(u32, u32)>,
+    /// The most of its conversations that lived at once.
+    pub widest: u32,
     /// io's name for its first repository, if it has one.
     root: Option<u64>,
 }
@@ -462,6 +571,9 @@ pub struct World {
     /// The run of each conversation, and those that live, by the facts.
     conversations: BTreeMap<Token, Token>,
     live: BTreeSet<Token>,
+    /// How many messages of each session's prompts have had their results
+    /// counted.
+    counted: BTreeMap<Token, usize>,
 
     stats: Stats,
     told: Told,
@@ -509,6 +621,7 @@ impl World {
             pushes: Ledger::new("push"),
             conversations: BTreeMap::new(),
             live: BTreeSet::new(),
+            counted: BTreeMap::new(),
             stats: Stats::default(),
             told: Told::default(),
             trace: Trace::default(),
@@ -582,6 +695,7 @@ impl World {
         }
         while let Some(event) = self.agent_stage.next_event() {
             self.log(&format!("agent <- {}", describe_event(&event)));
+            self.started(&event);
             agent::step(&mut self.agent, &self.agent_stage.env, event, &mut self.agent_stage.out);
         }
         while self.agent_stage.has_room() && self.agent.is_due(self.now) {
@@ -623,6 +737,26 @@ impl World {
         self.assert_bounded();
     }
 
+    /// Notes when the start `event` is, if it is one, reached the agent.
+    fn started(&mut self, event: &Event) {
+        match event {
+            Event::Start { worker, .. } => {
+                self.runs.get_mut(worker).expect("a run of the worker's").started = Some(self.now);
+            }
+            Event::Cancel { .. }
+            | Event::Pushed { .. }
+            | Event::HostCancelled { .. }
+            | Event::Completed { .. }
+            | Event::Failed { .. }
+            | Event::Cancelled { .. }
+            | Event::Done { .. }
+            | Event::Read { .. }
+            | Event::Probed { .. }
+            | Event::Checked { .. }
+            | Event::Aborted { .. } => {}
+        }
+    }
+
     /// What holds after every reclaim point: every slab within its limits.
     fn assert_bounded(&self) {
         let limits = &self.settings.limits;
@@ -658,7 +792,8 @@ impl World {
                 self.starts.end(worker);
                 self.answered(worker, &answer);
                 let answered = translate::answer(&answer);
-                self.runs.get_mut(&worker).expect("checked above").answer = Some(answer);
+                let state = self.runs.get_mut(&worker).expect("checked above");
+                (state.answer, state.answered) = (Some(answer), Some(self.now));
                 self.stats.answers += 1;
                 self.send(Delivery::Worker(worker::Event::Answered { owner: worker, answer: answered }));
             }
@@ -672,7 +807,8 @@ impl World {
                 assert!(state.answer.is_none(), "a run pushes before it answers");
                 assert!(state.allowed.change, "a run pushes only a change its charter allows");
                 assert_eq!(&*change.title, script::TITLE, "the change pushed is the one the LLM declared");
-                if state.allowed.checks {
+                if state.found {
+                    assert!(state.allowed.checks, "a run looks for checks only if its change must pass them");
                     assert!(self.passed.contains(&owner), "a change is pushed only once its checks passed");
                 }
                 self.pushes.open(owner, worker);
@@ -690,6 +826,7 @@ impl World {
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
                 self.calls.open(call, Call { owner, deadline });
                 assert!(self.calling.insert(owner, call).is_none(), "a session has one call in flight");
+                self.count_results(owner, &prompt);
                 let query = translate::query(prompt);
                 self.send(Delivery::Query { call, query });
                 self.stats.calls += 1;
@@ -783,6 +920,8 @@ impl World {
             Some(Err(_)) | None => false,
         };
         self.stats.probes += 1;
+        let worker = self.roots.get(&at.root.raw()).expect("a run looks in its own checkout");
+        self.runs.get_mut(worker).expect("a run of the worker's").found |= executable;
         self.looked(owner, ends, Event::Probed { owner, executable });
     }
 
@@ -815,7 +954,11 @@ impl World {
             self.stats.cancels_crossed += 1;
             return;
         };
-        if matches!(checking.work, Checks::Ending(_)) || self.rng.chance(self.settings.cancels_lost) {
+        let ending = match checking.work {
+            Checks::Running { .. } => false,
+            Checks::Ending(_) => true,
+        };
+        if ending || self.rng.chance(self.settings.cancels_lost) {
             self.abort_lost.insert(owner);
             self.stats.cancels_lost += 1;
             return;
@@ -1035,11 +1178,15 @@ impl World {
             budget: translate::budget(charter.budget),
             run: None,
             cancelled: false,
+            found: false,
             checked: Vec::new(),
             pushes: Vec::new(),
             answer: None,
+            started: None,
+            answered: None,
             used: Spend::ZERO,
             crossed: None,
+            widest: 0,
             root: roots.first().map(|root| root.raw()),
         };
         assert!(self.runs.insert(owner, state).is_none(), "the worker names its jobs apart");
@@ -1122,9 +1269,11 @@ impl World {
                     told.deepest = told.deepest.max(depth);
                     self.conversations.insert(conversation, run);
                     self.live.insert(conversation);
+                    let live = self.live_of(run);
                     let worker = self.workers.get(&run).expect("a run opens conversations once admitted");
-                    let state = self.runs.get(worker).expect("a run of the worker's");
+                    let state = self.runs.get_mut(worker).expect("a run of the worker's");
                     assert!(state.crossed.is_none(), "a run past its budget opens no conversation");
+                    state.widest = state.widest.max(live);
                 }
                 run_facts::Fact::Ended { conversation, .. } => {
                     told.ended += 1;
@@ -1183,9 +1332,8 @@ impl World {
     /// adds it up, and notes when it first spends past its budget.
     fn used(&mut self, conversation: Token, usage: session::llm::Usage) {
         let run = self.conversations.get(&conversation).expect("a session's opener is a conversation of a run");
+        let live = self.live_of(*run);
         let worker = self.workers.get(run).expect("a run of the agent's");
-        let live = u32::try_from(self.live.iter().filter(|live| self.conversations.get(live) == Some(run)).count())
-            .expect("a few conversations");
         let state = self.runs.get_mut(worker).expect("a run of the worker's");
         let session::llm::Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens } = usage;
         let spend = Spend {
@@ -1203,12 +1351,54 @@ impl World {
         }
     }
 
+    /// How many conversations of `run` live, by the facts.
+    fn live_of(&self, run: Token) -> u32 {
+        let live = self.live.iter().filter(|live| self.conversations.get(live) == Some(&run)).count();
+        u32::try_from(live).expect("a few conversations")
+    }
+
+    /// Counts the results of the run's tools in the last message of
+    /// `prompt`, the first time the session of `owner` sends it.
+    fn count_results(&mut self, owner: Token, prompt: &agent::llm::Prompt) {
+        let counted = self.counted.entry(owner).or_default();
+        if prompt.messages.len() <= *counted {
+            return;
+        }
+        *counted = prompt.messages.len();
+        let last = prompt.messages.last().expect("a prompt has a message");
+        for block in &last.content {
+            match block {
+                agent::llm::Block::ToolResult { result: agent::llm::Returned::Served { returned, .. }, .. } => {
+                    match returned {
+                        run::Returned::Answered { .. } => self.stats.sub_answers += 1,
+                        run::Returned::Accepted
+                        | run::Returned::Rejected { .. }
+                        | run::Returned::ChecksFailed { .. }
+                        | run::Returned::Moved
+                        | run::Returned::Unpushed
+                        | run::Returned::Cancelled
+                        | run::Returned::TimedOut
+                        | run::Returned::Busy
+                        | run::Returned::Unanswered { .. }
+                        | run::Returned::Refused { .. } => self.stats.served += 1,
+                    }
+                }
+                agent::llm::Block::Text { .. }
+                | agent::llm::Block::ToolCall { .. }
+                | agent::llm::Block::ToolResult { .. } => {}
+            }
+        }
+    }
+
     /// What the facts must add up to when none were dropped: what the world
     /// saw cross the boundary.
     fn assert_told(&self) {
         let (told, stats) = (&self.told, &self.stats);
         assert_eq!(told.admitted, stats.admitted, "a fact for every run admitted");
-        assert_eq!(told.runs_answered, stats.answers, "a fact for every answer");
+        // A run refused at its own entrance was never admitted, and its answer
+        // is about no run.
+        let admitted = self.runs.values().filter(|state| state.run.is_some() && state.answer.is_some()).count();
+        assert_eq!(told.runs_answered, u32::try_from(admitted).expect("a few runs"), "a fact for every answer");
         assert_eq!(told.opened, told.ended, "a conversation opened ends");
         assert_eq!(told.sessions_ended, told.opened, "each conversation's session ends, or is refused");
         assert!(told.sessions <= told.opened, "a session opens for a conversation");

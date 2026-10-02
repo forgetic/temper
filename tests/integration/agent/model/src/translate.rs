@@ -212,23 +212,39 @@ fn part(block: agent::Block) -> provider::Part {
 #[must_use]
 pub fn render(result: &agent::Returned) -> (Box<[u8]>, bool) {
     match result {
-        agent::Returned::Owned { outcome } => {
-            let failed = !matches!(
-                outcome,
-                Outcome::Read { .. }
-                    | Outcome::Listed { .. }
-                    | Outcome::Found { .. }
-                    | Outcome::Written { .. }
-                    | Outcome::Edited { .. }
-                    | Outcome::Exited { exit: Exit::Code { code: 0 }, .. }
-            );
-            let text = if let Outcome::Read { content, .. } = outcome {
-                content.clone()
-            } else {
-                format!("{outcome:?}").into_bytes().into()
-            };
-            (text, failed)
-        }
+        agent::Returned::Owned { outcome } => match outcome {
+            Outcome::Read { content, .. } => (content.clone(), false),
+            Outcome::Exited { exit, .. } => {
+                let failed = match exit {
+                    Exit::Code { code } => *code != 0,
+                    Exit::Signal { .. } | Exit::TimedOut => true,
+                };
+                (format!("{outcome:?}").into_bytes().into(), failed)
+            }
+            Outcome::Listed { .. } | Outcome::Found { .. } | Outcome::Written { .. } | Outcome::Edited { .. } => {
+                (format!("{outcome:?}").into_bytes().into(), false)
+            }
+            Outcome::NotGranted
+            | Outcome::Outside
+            | Outcome::ReadOnly
+            | Outcome::TooLong
+            | Outcome::NotFound
+            | Outcome::NotFile
+            | Outcome::Linked
+            | Outcome::Protected
+            | Outcome::NotDirectory
+            | Outcome::TooLarge { .. }
+            | Outcome::NotRead
+            | Outcome::Stale
+            | Outcome::NoMatch
+            | Outcome::Ambiguous { .. }
+            | Outcome::Unchanged
+            | Outcome::Failed { .. }
+            | Outcome::TimedOut
+            | Outcome::Cancelled
+            | Outcome::Busy
+            | Outcome::NulByte => (format!("{outcome:?}").into_bytes().into(), true),
+        },
         agent::Returned::Served { returned, error } => {
             let text = match returned {
                 run::Returned::Answered { text, .. } => text.clone(),

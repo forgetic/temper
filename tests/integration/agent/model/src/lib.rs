@@ -35,4 +35,4 @@ mod world;
 
 pub use script::{JOBS, Job};
 pub use temper_world::Span;
-pub use world::{BUDGET, LIMITS, Run, Settings, Stats, Told, World};
+pub use world::{Allowed, BUDGET, LIMITS, Run, Settings, Stats, TIGHT, Told, World};
