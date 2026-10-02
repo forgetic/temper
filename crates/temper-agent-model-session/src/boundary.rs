@@ -80,8 +80,9 @@ pub enum Request {
     /// `Done` with `Cancelled`, or whichever outcome won the race.
     CancelIo { owner: Token },
     /// Ask the opener to serve the delegated call `call`, a ticket, and to
-    /// answer it by `deadline`: the opener runs the race, and answers a call
-    /// that loses as a failure.
+    /// answer it by `deadline`, when the session's time runs out: the opener
+    /// runs the race, within limits of its own if it has shorter ones, and
+    /// answers a call that loses as a failure.
     Delegate { owner: Token, opener: Token, call: Token, deadline: Time },
     /// Abandon the `Delegate` in flight for `owner`, as the session closes.
     /// Its terminal event still comes: `AnswerCancelled`, or `Answered` if

@@ -4,7 +4,7 @@ use temper_lib::{Deadlines, Duration, List, Queue, Slab};
 use crate::boundary::Budget;
 use crate::facts::Fact;
 use crate::llm::Message;
-use crate::session::{Alarm, Run, Session};
+use crate::session::{Alarm, Ready, Run, Session};
 
 /// The most tool calls a session runs at once: what `Limits::parallel_tools`
 /// may be, and what bounds the requests a step emits.
@@ -43,10 +43,9 @@ pub struct Limits {
     pub call_timeout: Duration,
     /// How long a tool call may run, and no later than the session's time
     /// runs out. Its deadline goes with it, and a call that runs out of time
-    /// is answered as such, to the LLM.
+    /// is answered as such, to the LLM. A delegated call has no timeout here:
+    /// the opener races it against the session's time.
     pub tool_timeout: Duration,
-    /// The same for a delegated call, which the opener serves.
-    pub delegate_timeout: Duration,
     /// Facts kept until the parent drains them, the tools' passed on among
     /// them. Beyond them, facts are dropped and counted.
     pub facts: u32,
@@ -78,6 +77,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let sessions = Slab::<Session>::worst_case(limits.sessions)?;
     let runs = Slab::<Run>::worst_case(runs(limits)?)?;
     let alarms = Deadlines::<Alarm>::worst_case(alarms(limits)?)?;
+    let ready = Ready::worst_case(limits.sessions)?;
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
     let tools = tools::worst_case(&limits.tools)?;
     let tools_out = Queue::<tools::Request>::worst_case(tools::max_out(&limits.tools))?;
@@ -87,6 +87,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     sessions
         .checked_add(runs)?
         .checked_add(alarms)?
+        .checked_add(ready)?
         .checked_add(facts)?
         .checked_add(tools)?
         .checked_add(tools_out)?
@@ -95,14 +96,14 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
 
 /// The run slab's capacity: two batches a session. A session starts at most
 /// one batch in a step, and a batch the tools answered in the step that
-/// started it goes on at the next instant, after the reclaim point (see the
+/// started it goes on from the ready list, after the reclaim point (see the
 /// session module). So in one iteration a session holds the runs of at most
 /// two batches: one ending, and the next it starts.
 pub(crate) fn runs(limits: &Limits) -> Option<u32> {
     limits.sessions.checked_mul(limits.parallel_tools)?.checked_mul(2)
 }
 
-/// The alarm table's capacity: every session may have three alarms armed.
+/// The alarm table's capacity: every session may have two alarms armed.
 pub(crate) fn alarms(limits: &Limits) -> Option<u32> {
-    limits.sessions.checked_mul(3)
+    limits.sessions.checked_mul(2)
 }

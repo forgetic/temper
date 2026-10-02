@@ -30,7 +30,7 @@ mod tests;
 
 pub use boundary::{Event, Request};
 pub use limits::{Limits, worst_case};
-pub use model::{Model, fire, max_out, step};
+pub use model::{Model, fire, max_out, resume, step};
 // The payloads are the session's: a parent may use its children's types.
 pub use temper_agent_model_session::{Budget, Dimension, End, Fact, Spec, Yield, llm};
 pub use temper_agent_model_tools as tools;

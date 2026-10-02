@@ -56,6 +56,13 @@ impl Model {
         self.session.is_due(now)
     }
 
+    /// Whether a session is ready to go on. While one is, the loop calls
+    /// [`resume`] at the start of the model's stage, before its input events.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.session.is_ready()
+    }
+
     /// The oldest fact the sessions told and the loop has not drained yet.
     /// They are the session's own for now, passed through as they are.
     pub fn pop_fact(&mut self) -> Option<session::Fact> {
@@ -86,6 +93,13 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
 /// while the loop waited.
 pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     session::fire(&mut model.session, &session_env(env), &mut model.session_out);
+    route_out(model, env, out);
+}
+
+/// Starts a session that is ready to go on, if one is, emitting at most
+/// [`max_out`] requests.
+pub fn resume(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
+    session::resume(&mut model.session, &session_env(env), &mut model.session_out);
     route_out(model, env, out);
 }
 

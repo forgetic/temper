@@ -13,8 +13,8 @@ use crate::llm::{
     Usage,
 };
 use crate::{
-    Budget, Dimension, End, Event, Fact, Limits, MAX_PARALLEL, Model, Request, Spec, Yield, fire, max_out, step,
-    worst_case,
+    Budget, Dimension, End, Event, Fact, Limits, MAX_PARALLEL, Model, Request, Spec, Yield, fire, max_out, resume,
+    step, worst_case,
 };
 
 /// The budget every spec asks for, unless a test says otherwise: the most the
@@ -62,7 +62,6 @@ const LIMITS: Limits = Limits {
     backoff_max: Duration::from_secs(1),
     call_timeout: Duration::from_secs(30),
     tool_timeout: Duration::from_secs(20),
-    delegate_timeout: Duration::from_secs(40),
     facts: 64,
     parallel_tools: 2,
     tools: TOOLS,
@@ -103,6 +102,14 @@ impl Harness {
     fn fire(&mut self) -> Option<Request> {
         assert!(self.model.is_due(self.env.now), "an alarm is due");
         fire(&mut self.model, &self.env, &mut self.out);
+        self.one()
+    }
+
+    /// Starts the session that is ready, which emits at most one request
+    /// besides `Used`.
+    fn resume(&mut self) -> Option<Request> {
+        assert!(self.model.is_ready(), "a session is ready");
+        resume(&mut self.model, &self.env, &mut self.out);
         self.one()
     }
 
@@ -559,7 +566,7 @@ fn adjacent_reads_run_together_and_a_write_runs_alone_and_results_go_back_in_ord
 }
 
 #[test]
-fn a_batch_the_tools_answer_at_once_goes_on_at_the_next_instant() {
+fn a_batch_the_tools_answer_at_once_goes_on_from_the_ready_list_after_the_reclaim_point() {
     let mut h = Harness::new(LIMITS);
     let (owner, _) = h.open(1);
     // Outside the checkout: the tools answer these at their entrance.
@@ -567,21 +574,34 @@ fn a_batch_the_tools_answer_at_once_goes_on_at_the_next_instant() {
     let over = Call::Write { path: outside(), content: bytes(b"x") };
     let content = Box::new([tool_call(b"c1", away), tool_call(b"c2", over), tool_call(b"c3", cat(b"main.rs"))]);
     // The first batch is answered within the step that started it: the
-    // session rests, and starts the next an instant later.
+    // session rests, and is ready once the iteration's reclaim point passed.
     assert_eq!(h.step(Event::Completed { owner, completion: completion(content, Stop::ToolUse) }), None);
-    let next = Time::ZERO.saturating_add(Duration::from_nanos(1));
-    assert_eq!(h.model.next_deadline(), Some(next));
+    assert!(!h.model.is_ready(), "not before the reclaim point");
+    assert_eq!(h.model.next_deadline(), Some(Time::ZERO.saturating_add(BUDGET.time)), "no alarm but expiry");
     h.model.reclaim();
     assert_eq!(h.model.runs(), 0, "the runs answered at once are reclaimed before the next batch");
-    h.after(Duration::from_nanos(1));
-    assert_eq!(h.fire(), None, "the write is answered at once too");
+    assert_eq!(h.resume(), None, "the write is answered at once too");
+    assert!(!h.model.is_ready(), "it rests again until the next reclaim point");
     h.model.reclaim();
-    h.after(Duration::from_nanos(1));
-    let (load, op) = running(h.fire());
+    let (load, op) = running(h.resume());
+    assert!(!h.model.is_ready());
     assert_eq!(loading(&op), place(b"main.rs"));
     let (_, prompt) = calling(h.step(ran(load, b"main.rs")));
     let results = [result(b"c1", Outcome::Outside), result(b"c2", Outcome::Outside), result(b"c3", read(b"main.rs"))];
     assert_eq!(&*prompt.messages[2].content, &results);
+}
+
+#[test]
+fn a_session_closed_while_it_rests_leaves_the_ready_list() {
+    let mut h = Harness::new(LIMITS);
+    let (owner, _) = h.open(1);
+    let away = Call::Read { path: outside(), skip: 0, lines: None };
+    let over = Call::Write { path: outside(), content: bytes(b"x") };
+    let content = Box::new([tool_call(b"c1", away), tool_call(b"c2", over)]);
+    assert_eq!(h.step(Event::Completed { owner, completion: completion(content, Stop::ToolUse) }), None);
+    assert_eq!(h.step(Event::Close { session: owner }), Some(ended(End::Closed, 1)));
+    h.model.reclaim();
+    assert!(!h.model.is_ready(), "a closed session is not resumed");
 }
 
 #[test]
@@ -665,7 +685,7 @@ fn a_delegated_call_goes_to_the_opener_and_its_answer_goes_back_to_the_llm() {
         panic!("expected the call delegated");
     };
     assert_eq!((opener, call), (Token::new(1), Token::new(9)));
-    assert_eq!(deadline, h.env.now.saturating_add(LIMITS.delegate_timeout), "the opener runs the race");
+    assert_eq!(deadline, h.env.now.saturating_add(BUDGET.time), "the opener races it against the session's time");
     let (_, prompt) = calling(h.step(Event::Answered { owner: run, answer: answer(11, 20, true) }));
     let result = Block::ToolResult { id: bytes(b"c1"), result: Returned::Delegated { answer: answer(11, 20, true) } };
     assert_eq!(&*prompt.messages[2].content, &[result]);

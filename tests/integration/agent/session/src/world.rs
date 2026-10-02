@@ -122,7 +122,6 @@ impl Settings {
                 backoff_max: Duration::from_secs(5),
                 call_timeout: Duration::from_secs(60),
                 tool_timeout: Duration::from_secs(60),
-                delegate_timeout: Duration::from_secs(120),
                 facts: 256,
                 parallel_tools: 4,
                 tools: TOOLS,
@@ -565,8 +564,12 @@ impl World {
         self.provider_stage.tick(self.now);
         self.deliver();
 
-        // Each stage takes its events, then fires its alarms, while it has room
-        // for what one more may produce.
+        // Each stage resumes what is ready, then takes its events, then fires
+        // its alarms, while it has room for what one more may produce.
+        while self.agent_stage.has_room() && self.agent.is_ready() {
+            self.log("agent ready");
+            agent::resume(&mut self.agent, &self.agent_stage.env, &mut self.agent_stage.out);
+        }
         while let Some(event) = self.agent_stage.next_event() {
             self.log(&format!("agent <- {}", describe_agent_event(&event)));
             let ended = ended_run(&event);
@@ -1114,6 +1117,7 @@ impl World {
     fn has_work_now(&self) -> bool {
         self.agent_stage.has_events()
             || self.provider_stage.has_events()
+            || self.agent.is_ready()
             || self.agent.is_due(self.now)
             || self.provider.is_due(self.now)
             || self.wire.is_due(self.now)

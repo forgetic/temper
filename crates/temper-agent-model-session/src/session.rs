@@ -77,14 +77,15 @@
 //! than [`crate::max_out`], and what it holds for work ended in the iteration
 //! (reclaimed only at the reclaim point) would outgrow its slabs. So a step
 //! starts one batch at most, and a batch the tools answer entirely within the
-//! step that started it rests (Resting) on an alarm due at the next instant,
-//! one nanosecond on: its results are kept, and the next batch starts from
-//! [`crate::fire`] in a later iteration, after the runs it ended have been
-//! reclaimed. The alarm is not due at `now`: the loop fires alarms while one
-//! is due, so one due at `now` would fire within the same iteration, before
-//! the reclaim point, and the chain would go on there. A session therefore
-//! holds the runs of two batches at most in an iteration (one ending and the
-//! next), and each step and alarm emits a bounded number of requests.
+//! step that started it rests (Resting): its results are kept, and the
+//! session goes on the model's ready list (programming-model.md, 2), held as
+//! its state rather than as a queued record. The loop drains the ready list
+//! with [`crate::resume`] at the start of the model's stage in a later
+//! iteration, after the runs the batch ended have been reclaimed; a session
+//! that rests while the list is drained waits for the next iteration, so the
+//! chain never goes on before the reclaim point. A session therefore holds
+//! the runs of two batches at most in an iteration (one ending and the next),
+//! and each step, alarm and resume emits a bounded number of requests.
 //!
 //! Wherever the table calls the LLM (`complete`), the session first checks its
 //! budget and its transcript, and ends instead: as out of budget, naming the
@@ -100,9 +101,9 @@
 //! batch.
 //!
 //! The expiry alarm, set for when the time budget runs out, runs in every
-//! state but Closing and Closed; the retry alarm in Backoff, and the resume
-//! alarm in Resting. They follow from the state, in one place ([`follow`]),
-//! which also retires a session once it is Closed.
+//! state but Closing and Closed, and the retry alarm in Backoff; a session is
+//! on the ready list while it is Resting. They follow from the state, in one
+//! place ([`follow`]), which also retires a session once it is Closed.
 //!
 //! Every transition tells what happened as facts: the entry point tells of
 //! the event it was given (a completion or a delegated call ending, a retry),
@@ -113,7 +114,7 @@ use alloc::boxed::Box;
 use core::mem::{self, size_of};
 
 use temper_agent_model_tools::{self as tools, Call, Effect, Entry, Grants, Outcome, Part, Path};
-use temper_lib::{Deadlines, Duration, Env, Id, List, Queue, ReplyTo, Rng, Slab, Time, Token, Writer};
+use temper_lib::{Deadlines, Duration, Env, Id, List, Queue, ReplyTo, Rng, Set, Slab, Time, Token, Writer};
 
 use crate::boundary::{Budget, Dimension, End, Request, Spec, Yield};
 use crate::facts::{Fact, Facts};
@@ -174,9 +175,9 @@ enum State {
     /// Running the tool calls of the last assistant message.
     Tooling { tools: Tools },
     /// The tools answered every call of the last batch in the step that
-    /// started it: the next batch starts at `until`, the next instant, once
-    /// the runs it ended have been reclaimed.
-    Resting { tools: Tools, until: Time },
+    /// started it: the session is on the ready list, and the next batch
+    /// starts once the runs it ended have been reclaimed.
+    Resting { tools: Tools },
     /// The LLM stopped calling tools: waiting for the opener to continue or
     /// close the session.
     Yielded,
@@ -254,7 +255,61 @@ pub(crate) struct Calls {
 pub(crate) enum Alarm {
     Expiry { session: Id<Session> },
     Retry { session: Id<Session> },
-    Resume { session: Id<Session> },
+}
+
+/// The sessions that rest (programming-model.md, 2), each at most once: those
+/// that rested before the last reclaim point, which [`crate::resume`] starts
+/// again, and those that rested since, which wait for the next.
+#[derive(Debug)]
+pub(crate) struct Ready {
+    now: Set<Id<Session>>,
+    next: Set<Id<Session>>,
+}
+
+impl Ready {
+    pub(crate) const fn with_capacity(sessions: u32) -> Ready {
+        Ready { now: Set::with_capacity(sessions), next: Set::with_capacity(sessions) }
+    }
+
+    /// The most heap the list takes for `sessions` sessions, or `None` past a
+    /// `u64`.
+    pub(crate) fn worst_case(sessions: u32) -> Option<u64> {
+        Set::<Id<Session>>::worst_case(sessions)?.checked_mul(2)
+    }
+
+    pub(crate) fn is_ready(&self) -> bool {
+        !self.now.is_empty()
+    }
+
+    /// Takes a session that may be started again now.
+    pub(crate) fn pop(&mut self) -> Option<Id<Session>> {
+        let id = *self.now.first()?;
+        self.now.remove(&id);
+        Some(id)
+    }
+
+    /// Keeps the session `id` on the list if it is `resting`, and off it if
+    /// not.
+    fn keep(&mut self, id: Id<Session>, resting: bool) {
+        if !resting {
+            self.now.remove(&id);
+            self.next.remove(&id);
+        } else if !self.now.contains(&id) {
+            self.next.insert(id).expect("room on the ready list for every session");
+        }
+    }
+
+    /// The reclaim point: what rested in this iteration may be started again
+    /// in the next.
+    pub(crate) fn promote(&mut self) {
+        for _ in 0..self.next.capacity() {
+            let Some(id) = self.next.first().copied() else {
+                break;
+            };
+            self.next.remove(&id);
+            self.now.insert(id).expect("room on the ready list for every session");
+        }
+    }
 }
 
 // Entry points, one per event or alarm: look the session up, take its state
@@ -296,7 +351,7 @@ pub(crate) fn open(model: &mut Model, env: &Env<Limits>, opener: Token, spec: Sp
     conclude(model, env, id, out, mark);
 }
 
-pub(crate) fn resume(
+pub(crate) fn continued(
     model: &mut Model,
     env: &Env<Limits>,
     session: Token,
@@ -561,21 +616,21 @@ pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: 
     conclude(model, env, id, out, mark);
 }
 
-/// The resume alarm: the session rested for an instant after a batch the tools
-/// answered at once, and starts the next.
+/// Off the ready list: the session rested after a batch the tools answered at
+/// once, and starts the next.
 pub(crate) fn rested(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: &mut Queue<Request>) {
     let mark = out.len();
     let session = model.sessions.get_mut(id).expect("an alarm is cancelled before its session closes");
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
-        State::Resting { tools, until: _ } => advance(conversation, id, &mut model.calls, tools, env, out),
+        State::Resting { tools } => advance(conversation, id, &mut model.calls, tools, env, out),
         State::Calling { .. }
         | State::Backoff { .. }
         | State::Tooling { .. }
         | State::Yielded
         | State::Closing { .. }
-        | State::Closed => unreachable!("the resume alarm runs only in Resting"),
+        | State::Closed => unreachable!("a session is ready only while it rests"),
     };
     conclude(model, env, id, out, mark);
 }
@@ -666,7 +721,7 @@ fn conclude(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: &mut Que
     settle(model, env, id, out);
     let session = model.sessions.get(id).expect("a session lives until it is retired");
     tell(&mut model.facts, &model.calls.runs, session, out, mark);
-    follow(&mut model.sessions, &mut model.alarms, id);
+    follow(&mut model.sessions, &mut model.alarms, &mut model.ready, id);
 }
 
 /// What Closing implies: the session's kit closes, which cancels the calls the
@@ -747,20 +802,20 @@ fn attempt(state: &State) -> u32 {
 }
 
 /// What a session's state implies, applied after every transition: which
-/// alarms run, and whether the session is retired.
-fn follow(sessions: &mut Slab<Session>, alarms: &mut Deadlines<Alarm>, id: Id<Session>) {
+/// alarms run, whether it is on the ready list, and whether it is retired.
+fn follow(sessions: &mut Slab<Session>, alarms: &mut Deadlines<Alarm>, ready: &mut Ready, id: Id<Session>) {
     let session = sessions.get(id).expect("a session lives until it is retired");
     let expires = session.conversation.expires;
-    let (expiry, retry, resume, closed) = match &session.state {
-        State::Calling { .. } | State::Tooling { .. } | State::Yielded => (Some(expires), None, None, false),
-        State::Backoff { until, .. } => (Some(expires), Some(*until), None, false),
-        State::Resting { until, .. } => (Some(expires), None, Some(*until), false),
-        State::Closing { .. } => (None, None, None, false),
-        State::Closed => (None, None, None, true),
+    let (expiry, retry, resting, closed) = match &session.state {
+        State::Calling { .. } | State::Tooling { .. } | State::Yielded => (Some(expires), None, false, false),
+        State::Backoff { until, .. } => (Some(expires), Some(*until), false, false),
+        State::Resting { .. } => (Some(expires), None, true, false),
+        State::Closing { .. } => (None, None, false, false),
+        State::Closed => (None, None, false, true),
     };
     set(alarms, Alarm::Expiry { session: id }, expiry);
     set(alarms, Alarm::Retry { session: id }, retry);
-    set(alarms, Alarm::Resume { session: id }, resume);
+    ready.keep(id, resting);
     if closed {
         sessions.retire(id);
     }
@@ -768,7 +823,7 @@ fn follow(sessions: &mut Slab<Session>, alarms: &mut Deadlines<Alarm>, id: Id<Se
 
 fn set(alarms: &mut Deadlines<Alarm>, alarm: Alarm, at: Option<Time>) {
     if let Some(at) = at {
-        alarms.arm(alarm, at).expect("the alarm table has room for three alarms per session");
+        alarms.arm(alarm, at).expect("the alarm table has room for two alarms per session");
     } else {
         alarms.cancel(alarm);
     }
@@ -840,7 +895,7 @@ fn use_tools(
 /// A step starts one batch at most. The tools may answer a call at their
 /// entrance, in this very step, without asking io anything (a path outside the
 /// checkout, a family not granted); if they answer every call of the batch so,
-/// the session rests until the next instant before it starts another, so that
+/// the session rests on the ready list before it starts another, so that
 /// the runs it ended are reclaimed first, and what one step emits and the runs
 /// a session holds stay bounded ([`crate::limits`]).
 fn advance(
@@ -903,8 +958,9 @@ fn advance(
                 }
                 let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Opener };
                 let run = calls.runs.insert(run).expect("the run slab has room for two batches a session");
-                let deadline = env.now.saturating_add(env.limits.delegate_timeout).min(conversation.expires);
-                let (opener, call) = (conversation.opener, *ticket);
+                // The opener runs the race, and the session waits for it as
+                // long as it lives.
+                let (opener, call, deadline) = (conversation.opener, *ticket, conversation.expires);
                 out.push(Request::Delegate { owner: run.token(), opener, call, deadline });
                 tools.slots.push(Slot::Running { run }).expect("a slot for every call");
                 tools.running = tools.running.saturating_add(1);
@@ -925,7 +981,7 @@ fn advance(
         return State::Tooling { tools };
     }
     if started > 0 && next < end {
-        return State::Resting { tools, until: env.now.saturating_add(Duration::from_nanos(1)) };
+        return State::Resting { tools };
     }
     let mut results = List::with_capacity(tools.slots.len());
     for slot in tools.slots.into_boxed() {

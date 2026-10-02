@@ -348,24 +348,6 @@ fn an_answer_races_its_withdraw() {
     }
 }
 
-#[test]
-fn the_opener_answers_a_call_past_its_deadline_as_timed_out_and_the_conversation_goes_on() {
-    let calm = Settings::calm(25);
-    let settings = Settings {
-        agent: Limits { delegate_timeout: Duration::from_secs(1), ..calm.agent },
-        serve: 1000,
-        serving: Span::millis(5_000, 5_000),
-        ..calm
-    };
-    let mut world = World::new(settings);
-    let opener = world.submit(Time::ZERO, served_only());
-    world.run(ITERATIONS);
-
-    assert_eq!(yields(&world, opener), [(Yield::Done, &b"done"[..])]);
-    let stats = world.stats();
-    assert_eq!((stats.delegates, stats.delegate_timeouts, stats.withdraws), (2, 2, 0));
-}
-
 /// A close and a run's end that come at the same instant, the close first:
 /// the cancel the close sends goes out after the run has ended, and loses.
 #[test]
@@ -589,7 +571,6 @@ fn noisy(seed: u64) -> Settings {
     let mut millis = |low: u64, high: u64| Duration::from_millis(rng.between(low, high));
     let call_timeout = millis(500, 5_000);
     let tool_timeout = millis(500, 5_000);
-    let delegate_timeout = millis(500, 10_000);
     let session_timeout = millis(2_000, 120_000);
     let latency_max = millis(10, 4_000);
     let think = millis(0, 5_000);
@@ -607,7 +588,6 @@ fn noisy(seed: u64) -> Settings {
             backoff_max: Duration::from_secs(2),
             call_timeout,
             tool_timeout,
-            delegate_timeout,
             facts: pick(0, 24),
             parallel_tools,
             tools: tools::Limits {

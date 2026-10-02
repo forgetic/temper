@@ -60,7 +60,6 @@ const LIMITS: Limits = Limits {
     backoff_max: Duration::from_secs(60),
     call_timeout: Duration::from_secs(30),
     tool_timeout: Duration::from_secs(20),
-    delegate_timeout: Duration::from_secs(40),
     facts: 64,
     parallel_tools: 1,
     // Reads answer with the whole file loaded.

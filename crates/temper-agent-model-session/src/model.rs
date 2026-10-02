@@ -6,7 +6,7 @@ use temper_lib::{Deadlines, Env, Queue, Rng, Slab, Time};
 use crate::boundary::{Event, Request};
 use crate::facts::{Fact, Facts};
 use crate::limits::{self, Limits};
-use crate::session::{self, Alarm, Calls, Session};
+use crate::session::{self, Alarm, Calls, Ready, Session};
 
 /// The most requests an entry point emits per call under `limits`, following
 /// the chain to the tools (4.5): the session's own two (a completion's `Used`
@@ -27,6 +27,8 @@ pub struct Model {
     /// What runs the sessions' tool calls: the tools, which the session owns.
     pub(crate) calls: Calls,
     pub(crate) alarms: Deadlines<Alarm>,
+    /// Sessions resting after a batch answered at once.
+    pub(crate) ready: Ready,
     pub(crate) rng: Rng,
     pub(crate) facts: Facts,
 }
@@ -46,6 +48,7 @@ impl Model {
             sessions: Slab::with_capacity(limits.sessions),
             calls,
             alarms: Deadlines::with_capacity(alarms),
+            ready: Ready::with_capacity(limits.sessions),
             rng: Rng::new(seed),
             facts: Facts::with_capacity(limits.facts),
         }
@@ -93,6 +96,14 @@ impl Model {
         }
     }
 
+    /// Whether a session is ready to go on. While one is, the loop resumes the
+    /// top-level model, which calls [`resume`], at the start of the model's
+    /// stage, before its input events.
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.ready.is_ready()
+    }
+
     /// The oldest fact not yet drained, the tools' among them. The parent
     /// drains them at its own pace; what does not fit meanwhile is dropped and
     /// counted.
@@ -112,6 +123,7 @@ impl Model {
         self.sessions.reclaim();
         self.calls.runs.reclaim();
         self.calls.tools.reclaim();
+        self.ready.promote();
     }
 }
 
@@ -119,7 +131,7 @@ impl Model {
 pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Open { opener, spec } => session::open(model, env, opener, spec, out),
-        Event::Continue { session, content } => session::resume(model, env, session, content, out),
+        Event::Continue { session, content } => session::continued(model, env, session, content, out),
         Event::Close { session } => session::close(model, env, session, out),
         Event::Completed { owner, completion } => session::completed(model, env, owner, completion, out),
         Event::Failed { owner, failure } => session::failed(model, env, owner, failure, out),
@@ -142,7 +154,17 @@ pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     match alarm {
         Alarm::Expiry { session } => session::expire(model, env, session, out),
         Alarm::Retry { session } => session::retry(model, env, session, out),
-        Alarm::Resume { session } => session::rested(model, env, session, out),
     }
+    session::pass_on_facts(model, env);
+}
+
+/// Starts a session on the ready list again, if one is, emitting at most
+/// [`max_out`] requests: one that rested in an earlier iteration, after a
+/// batch the tools answered within the step that started it.
+pub fn resume(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
+    let Some(id) = model.ready.pop() else {
+        return;
+    };
+    session::rested(model, env, id, out);
     session::pass_on_facts(model, env);
 }
