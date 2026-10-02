@@ -3,3 +3,15 @@
 //! deterministically from a seed.
 
 pub mod codec;
+pub mod deployment;
+pub mod mirror;
+pub mod people;
+pub mod referee;
+pub mod script;
+pub mod store;
+pub mod translate;
+pub mod workers;
+mod world;
+
+pub use temper_world::Span;
+pub use world::{Settings, Stats, World};

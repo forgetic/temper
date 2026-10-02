@@ -23,7 +23,7 @@
 //! the outcome, is mangled. Every decoder refuses trailing bytes, counts
 //! beyond what is left, and tags it does not know.
 
-use temper_engine_model::brief::{self, Body, Section};
+use temper_engine_model::brief::{self, Body, Section, Unread};
 use temper_engine_model::notes::{Author, Page, Reference};
 use temper_engine_model::plan::{
     self, AgentSpec, Batch, Budget, ChangeSpec, Commit, Decided, Decision, Envelope, Finish, Gate, Goal, Grants,
@@ -1109,7 +1109,14 @@ fn put_section(out: &mut Out, section: &Section) {
             out.u8(0);
             out.bytes(text);
         }
-        Body::Missing => out.u8(1),
+        Body::Missing(unread) => {
+            out.u8(1);
+            out.u8(match unread {
+                Unread::Failed => 0,
+                Unread::Late => 1,
+                Unread::Oversized => 2,
+            });
+        }
     }
 }
 
@@ -1129,7 +1136,12 @@ fn get_section(input: &mut In<'_>) -> Option<Section> {
     };
     let body = match input.u8()? {
         0 => Body::Text(input.bytes()?),
-        1 => Body::Missing,
+        1 => Body::Missing(match input.u8()? {
+            0 => Unread::Failed,
+            1 => Unread::Late,
+            2 => Unread::Oversized,
+            _ => return None,
+        }),
         _ => return None,
     };
     Some(Section { kind, body })

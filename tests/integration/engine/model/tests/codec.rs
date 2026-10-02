@@ -1,6 +1,6 @@
 //! The codecs read back what they write, and refuse what a person mangled.
 
-use temper_engine_model::brief::{self, Body, Section};
+use temper_engine_model::brief::{self, Body, Section, Unread};
 use temper_engine_model::forge::{Ci, Position};
 use temper_engine_model::notes::{Author, Page, Reference};
 use temper_engine_model::plan::{
@@ -217,7 +217,7 @@ fn a_charter_crosses_a_channel() {
         why: Why::Review { head: Commit(translate::commit(3)) },
         brief: Box::new([
             Section { kind: brief::Kind::Item, body: Body::Text(b"the item".as_slice().into()) },
-            Section { kind: brief::Kind::Dependencies, body: Body::Missing },
+            Section { kind: brief::Kind::Dependencies, body: Body::Missing(Unread::Late) },
         ]),
         instructions: b"look".as_slice().into(),
         grants: GRANTS,
