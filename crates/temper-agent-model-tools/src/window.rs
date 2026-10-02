@@ -22,13 +22,13 @@ pub(crate) struct Span {
 pub(crate) fn window(content: Box<[u8]>, span: Span, max: u32) -> Outcome {
     let Span { skip, lines } = span;
     let total = count(&content);
-    let (skipped, start) = line_start(&content, skip);
+    let (skipped, start) = line_start(&content, skip, total);
     let rest = content.get(start..).expect("a line starts within the content");
     let max = usize::try_from(max).unwrap_or(usize::MAX);
-    // Whole lines, while they fit.
+    // Whole lines, while they fit, and no more than there are.
     let mut end: usize = 0;
     let mut taken: u32 = 0;
-    for _ in 0..lines.unwrap_or(u32::MAX) {
+    for _ in 0..lines.unwrap_or(total).min(total) {
         if end >= rest.len() {
             break;
         }
@@ -62,17 +62,15 @@ fn count(content: &[u8]) -> u32 {
     }
 }
 
-/// How many lines come before the `skip`th, at most every line there is, and
-/// where it starts: the end of `content` past its last line.
-fn line_start(content: &[u8], skip: u32) -> (u32, usize) {
+/// How many lines come before the `skip`th, at most the `total` of
+/// `content`, and where it starts: the end of `content` past its last line.
+fn line_start(content: &[u8], skip: u32, total: u32) -> (u32, usize) {
+    let skipped = skip.min(total);
     let mut start: usize = 0;
-    for skipped in 0..skip {
-        if start >= content.len() {
-            return (skipped, start);
-        }
+    for _ in 0..skipped {
         start = next_line(content, start);
     }
-    (skip, start)
+    (skipped, start)
 }
 
 /// Where the line that starts at `start` of `content` ends: past its `\n`, or

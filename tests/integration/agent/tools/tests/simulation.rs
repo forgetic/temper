@@ -1231,3 +1231,33 @@ fn a_search_past_its_deadline_answers_with_what_it_had_found() {
     let hits = [hit(b"lib.rs", 1, b"pub fn one() {}"), hit(b"lib.rs", 2, b"pub fn two() {}")];
     assert_eq!(answers, vec![Outcome::Found { hits: hits.into(), more: 0, timed_out: true }]);
 }
+
+#[test]
+fn a_write_that_failed_may_have_happened_and_the_next_one_finds_out() {
+    let calm = Settings::calm(93);
+    // io fails the store after it renamed the file into place.
+    let script = vec![Step::Calls(vec![write(b"src/new.rs", b"first\n")])];
+    let faulty = Settings { faults: 1000, late_effects: 1000, ..calm };
+    let (answers, world) = run(faulty, MODIFY, script);
+    assert_eq!(answers.len(), 1);
+    assert_eq!(kind(&answers[0]), "failed");
+    assert_eq!(world.checkout().content(b"work/temper/src/new.rs"), Some(&b"first\n"[..]), "it happened");
+    assert_eq!(world.stats().late_effects, 1);
+
+    // The LLM, told it failed, writes again: the file it would create is
+    // there, and it has not read it.
+    let fixture = Fixture::new();
+    let authority = fixture.authority(MODIFY);
+    let mut checkout = fixture.checkout;
+    checkout.write(b"work/temper/src/new.rs", b"first\n");
+    let mut world = World::new(calm, checkout);
+    let script = vec![
+        Step::Calls(vec![write(b"src/new.rs", b"second\n")]),
+        Step::Calls(vec![read(b"src/new.rs")]),
+        Step::Calls(vec![write(b"src/new.rs", b"second\n")]),
+    ];
+    let session = world.session(Time::ZERO, authority, script);
+    world.run(ITERATIONS);
+    let expected = [Outcome::NotRead, read_of(b"first\n", 0, 1, 1), written(false)];
+    assert_eq!(world.answers(session), expected.iter().collect::<Vec<_>>());
+}

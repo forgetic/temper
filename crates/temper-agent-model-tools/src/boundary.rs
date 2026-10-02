@@ -87,14 +87,18 @@ pub enum Op {
     /// it beneath the root following none (`RESOLVE_NO_SYMLINKS`), so a store
     /// lands in the repository its place names and in no other mounted
     /// beneath it. The content is written beside the file and renamed into
-    /// place, so that the file is replaced whole or not at all, after
-    /// creating the missing directories on the way.
+    /// place, so that the file is replaced whole or not at all.
     ///
-    /// io compares the file's version with `expect` just before the rename. A
-    /// change made before that is caught; one made by a writer outside the
-    /// agent between the comparison and the rename is not, for the two are
-    /// not one atomic step. (io runs one store at a time per root, so the
-    /// agent's own kits do not race each other there.)
+    /// To replace (`Is`), io compares the file's version with `expect` just
+    /// before the rename, and makes no directory: a missing one on the way
+    /// means the file is missing, a conflict. A change made before the
+    /// comparison is caught; one made by a writer outside the agent between
+    /// the comparison and the rename is not, for the two are not one atomic
+    /// step. (io runs one store at a time per root, so the agent's own kits
+    /// do not race each other there.) To create (`Absent`), io makes the
+    /// missing directories on the way, then renames the file into place
+    /// without replacing one: a file that appeared meanwhile is a conflict,
+    /// and the directories stay.
     ///
     /// Ends in `Stored`, `Conflict`, `Linked`, `NotFile`, `NotDirectory` or a
     /// common terminal.

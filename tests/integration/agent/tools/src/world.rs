@@ -471,8 +471,15 @@ impl World {
                     let pending = self.ops.remove(&owner).expect("a run is withdrawn when its operation ends first");
                     self.wire.remove(&pending.deadline);
                     let done = match pending.work {
-                        Work::File(_) if self.rng.chance(self.settings.faults) => {
+                        // A fault may come after the operation took effect,
+                        // as a store renamed into place before io failed.
+                        Work::File(op) if self.rng.chance(self.settings.faults) => {
                             self.stats.faults += 1;
+                            if self.rng.chance(self.settings.late_effects) {
+                                drop(translate::perform(&mut self.checkout, op));
+                                self.assert_untouched();
+                                self.stats.late_effects += 1;
+                            }
                             Done::Failed { fault: self.fault() }
                         }
                         Work::File(op) => self.perform(owner, op),
