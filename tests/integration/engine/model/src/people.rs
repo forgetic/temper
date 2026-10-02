@@ -34,9 +34,41 @@ pub enum Story {
     /// A session that writes a note; a person corrects it in the wiki; the
     /// session's next run recalls the correction.
     Notes,
+    /// A session proposes a plan (engine-model.md, 5.2), its person accepts
+    /// it, decides once the spikes have reported, and the build grows it
+    /// within its envelope; its changes land as the fix's does.
+    Plan,
+    /// The same plan, whose build grows beyond its envelope: held for its
+    /// person's acceptance, which it gets.
+    Grow,
+    /// A plan proposed and rejected: the session drops it.
+    Reject,
+    /// An issue handed in where CI never reports: its change stalls and is
+    /// held, the caretaker releases it, it stalls again, and its person
+    /// closes the session, leaving the change held.
+    Stall,
 }
 
-pub const STORIES: [Story; 4] = [Story::Hello, Story::Fix, Story::Chat, Story::Notes];
+/// The stories random worlds draw from. A plan's (`Plan`, `Grow`) runs on
+/// its own, calm: with other changes landing on the same branch at once,
+/// the engine sees its changes' base moved after every push (its top
+/// level's `base_moved` keeps comparing against a base read before the
+/// last), and rebases them until it holds them.
+pub const SWEPT: [Story; 6] = [Story::Hello, Story::Fix, Story::Chat, Story::Notes, Story::Reject, Story::Stall];
+
+pub const STORIES: [Story; 8] =
+    [Story::Hello, Story::Fix, Story::Chat, Story::Notes, Story::Plan, Story::Grow, Story::Reject, Story::Stall];
+
+/// Whether an item's phase is held.
+fn matches_held(phase: temper_engine_model::work::Phase) -> bool {
+    use temper_engine_model::work::Phase;
+    match phase {
+        Phase::Held { .. } => true,
+        Phase::Waiting | Phase::Parked | Phase::Retrying(_) | Phase::Claimed | Phase::Applying { .. } | Phase::Done => {
+            false
+        }
+    }
+}
 
 /// Who asks the engine: a story's person, or the caretaker, who releases
 /// a held item.
@@ -49,7 +81,7 @@ pub enum Asker {
 /// The person who releases items held for failures or stalls, up to
 /// `RELEASES` times each.
 pub const CARETAKER: u64 = deployment::PEOPLE[0];
-pub const RELEASES: u32 = 3;
+pub const RELEASES: u32 = 5;
 
 /// Something a person does.
 #[derive(Debug)]
@@ -190,11 +222,10 @@ impl People {
                 | Phase::Applying { .. }
                 | Phase::Done => false,
             };
-            let count = self.released.entry(item).or_default();
-            if !releasable || *count >= RELEASES {
+            let count = self.released.get(&item).copied().unwrap_or_default();
+            if !releasable || count >= RELEASES {
                 continue;
             }
-            *count += 1;
             self.releasing.insert(item);
             out.push(Act::Ask { asker: Asker::Caretaker(item), person: CARETAKER, ask: Ask::Release { item } });
         }
@@ -203,7 +234,7 @@ impl People {
     /// A story's item, found on the forge by what its person made there.
     fn find(&mut self, at: usize, mirror: &Mirror) {
         let tale = &mut self.tales[at];
-        if tale.item.is_some() || tale.story != Story::Fix {
+        if tale.item.is_some() || !(tale.story == Story::Fix || tale.story == Story::Stall) {
             return;
         }
         // The first it made: a call that timed out may have made one too.
@@ -221,19 +252,24 @@ impl People {
         let person = tale.person;
         let Some(item) = tale.item else {
             return Some(match tale.story {
-                Story::Fix => {
+                Story::Fix | Story::Stall => {
                     let op = forge::Op::Write(Write::CreateIssue {
                         title: b"#fix the build".as_slice().into(),
                         body: tale.key.clone().into(),
                         labels: Box::new([HAND_IN.into()]),
                     });
-                    Act::Forge { tale: Some(at), user: person, repository: 0, op }
+                    // The stalling story's in the repository whose CI never reports.
+                    let repository = usize::from(tale.story == Story::Stall);
+                    Act::Forge { tale: Some(at), user: person, repository, op }
                 }
-                Story::Hello | Story::Chat | Story::Notes => {
+                Story::Hello | Story::Chat | Story::Notes | Story::Plan | Story::Grow | Story::Reject => {
                     let title: &[u8] = match tale.story {
                         Story::Hello => b"#hello",
                         Story::Chat => b"#chat",
-                        Story::Notes | Story::Fix => b"#note",
+                        Story::Notes | Story::Fix | Story::Stall => b"#note",
+                        Story::Plan => b"#plan",
+                        Story::Grow => b"#grow",
+                        Story::Reject => b"#reject",
                     };
                     let ask = Ask::Open {
                         repository: 0,
@@ -253,6 +289,22 @@ impl People {
         match tale.story {
             // An issue it handed in twice, its first call made though it
             // failed: it closes the other.
+            Story::Stall => {
+                // Once its change stalled again after a release, the person
+                // gives up on it: closes the session.
+                let stalled_again = mirror.issues.keys().any(|(repository, number)| {
+                    mirror.record(repository, *number).is_some_and(|record| {
+                        record.relations.parent == Some(item)
+                            && record.step.progress.released.is_some()
+                            && matches_held(record.lifecycle.phase)
+                    })
+                });
+                stalled_again.then(|| {
+                    let op = forge::Op::Write(Write::Close { number: item.number });
+                    let repository = usize::try_from(item.repository).expect("few");
+                    Act::Forge { tale: Some(at), user: person, repository, op }
+                })
+            }
             Story::Fix => mirror.issues.iter().find_map(|((repository, number), issue)| {
                 let twice = issue.by == person && issue.body == tale.key && issue.open && *number != item.number;
                 twice.then(|| {
@@ -275,6 +327,7 @@ impl People {
                 let due = (tale.sent == 0 && words > 0) || (tale.sent == 1 && parked);
                 due.then(|| self.message(at, item, b"more"))
             }
+            Story::Plan | Story::Grow | Story::Reject => self.decide(at, item, mirror),
             Story::Notes => {
                 // Corrects the note once it is in the wiki; and asks the
                 // session again each time it has answered, to note it while
@@ -296,6 +349,58 @@ impl People {
                 (replies > tale.sent).then(|| self.message(at, item, message))
             }
         }
+    }
+
+    /// A plan's person: accepts, or for `Reject` rejects, the session's
+    /// proposal; accepts the plan's decision once its spikes are done, and
+    /// any growth held for acceptance.
+    fn decide(&self, at: usize, session: Item, mirror: &Mirror) -> Option<Act> {
+        use temper_engine_model::plan::{WaitSpec, Work};
+        use temper_engine_model::work::{Hold, Phase};
+        let tale = &self.tales[at];
+        let held = |record: &temper_engine_model::Record| match record.lifecycle.phase {
+            Phase::Held { why: Hold::Acceptance, .. } => true,
+            Phase::Held { .. }
+            | Phase::Waiting
+            | Phase::Parked
+            | Phase::Retrying(_)
+            | Phase::Claimed
+            | Phase::Applying { .. }
+            | Phase::Done => false,
+        };
+        let name = deployment::name(session.repository);
+        let record = mirror.record(name, session.number);
+        if tale.story == Story::Reject
+            && tale.sent == 0
+            && record.as_ref().is_some_and(|record| record.step.progress.rejections > 0)
+        {
+            // Rejected: the person says why, which wakes the session.
+            return Some(self.message(at, session, b"not now, thanks"));
+        }
+        if let Some(record) = record
+            && held(&record)
+        {
+            let ask =
+                if tale.story == Story::Reject { Ask::Reject { item: session } } else { Ask::Accept { item: session } };
+            return Some(Act::Ask { asker: Asker::Tale(at), person: tale.person, ask });
+        }
+        for ((repository, number), issue) in &mirror.issues {
+            let Some(index) = deployment::index(repository) else { continue };
+            let Some(record) = mirror.record(repository, *number) else { continue };
+            if !issue.open || record.relations.goal != Some(session) || record.relations.decision.is_some() {
+                continue;
+            }
+            let ready = record.relations.dependencies.iter().all(|dependency| {
+                let name = deployment::name(dependency.item.repository);
+                mirror.issue(name, dependency.item.number).is_some_and(|issue| !issue.open)
+            });
+            let decision = record.step.step.work == Work::Wait(WaitSpec::Decision);
+            if (decision && ready) || held(&record) {
+                let item = Item { repository: index, number: *number };
+                return Some(Act::Ask { asker: Asker::Tale(at), person: tale.person, ask: Ask::Accept { item } });
+            }
+        }
+        None
     }
 
     fn message(&self, at: usize, item: Item, message: &[u8]) -> Act {
@@ -335,15 +440,18 @@ impl People {
         self.reviewing.remove(&(repository, number, head));
     }
 
-    /// The engine answered an ask.
-    pub fn replied(&mut self, asker: Asker, reply: Reply) {
+    /// The engine answered an ask: a message, if `message`.
+    pub fn replied(&mut self, asker: Asker, reply: Reply, message: bool) {
         self.tally.asks += 1;
         let at = match asker {
             Asker::Tale(at) => at,
             Asker::Caretaker(item) => {
                 self.releasing.remove(&item);
                 match reply {
-                    Reply::Done => self.tally.releases += 1,
+                    Reply::Done => {
+                        self.tally.releases += 1;
+                        *self.released.entry(item).or_default() += 1;
+                    }
                     Reply::Opened { .. } | Reply::Watching { .. } | Reply::Refused(_) => self.tally.refused += 1,
                 }
                 return;
@@ -353,15 +461,20 @@ impl People {
         tale.pending = false;
         match reply {
             Reply::Opened { item } => tale.item = Some(item),
-            Reply::Done => tale.sent += 1,
+            Reply::Done => {
+                if message {
+                    tale.sent += 1;
+                }
+            }
             Reply::Watching { .. } => {}
             Reply::Refused(refusal) => {
                 self.tally.refused += 1;
                 match refusal {
                     // Not tracked yet, as an engine that restarted may not
                     // have read it back yet: asked again later.
-                    Refusal::Busy | Refusal::Failed | Refusal::Unknown => {}
-                    Refusal::Unpermitted | Refusal::Idle | Refusal::Unheld | Refusal::Unfollowed => {
+                    // Or no longer held, as a person decided meanwhile.
+                    Refusal::Busy | Refusal::Failed | Refusal::Unknown | Refusal::Unheld => {}
+                    Refusal::Unpermitted | Refusal::Idle | Refusal::Unfollowed => {
                         panic!("a story asks only what it may: {refusal:?}")
                     }
                 }

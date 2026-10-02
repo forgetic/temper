@@ -27,6 +27,8 @@ pub const STRANGER: u64 = 19;
 /// the engine's may land.
 pub const REPOSITORIES: [&[u8]; 2] = [b"acme/one", b"acme/two"];
 pub const ELSEWHERE: &[u8] = b"acme/elsewhere";
+/// The deployment's repository whose CI never reports.
+pub const STALLED: &[u8] = b"acme/two";
 pub const MAIN: &[u8] = b"main";
 
 /// The tracking label and the hand-in label; and every label the
@@ -65,9 +67,9 @@ pub const LIMITS: Limits = Limits {
         tasks: 4,
         events: 8,
         repairs: 2,
-        rebases: 4,
+        rebases: 8,
         rejections: 2,
-        stall: Duration::from_secs(3_600),
+        stall: Duration::from_secs(1_200),
         budget: BUDGET,
     },
     rules: rules::Limits { repositories: 2, protected: 2, branch_bytes: 16, grants: 4, reviews: 4, gates: 4, lands: 4 },

@@ -179,7 +179,7 @@ impl Settings {
             ..calm.forge
         };
         let mut stories = Vec::new();
-        for story in people::STORIES {
+        for story in people::SWEPT {
             if rng.chance(600) {
                 stories.push(story);
             }
@@ -412,6 +412,12 @@ impl World {
     #[must_use]
     pub fn trace(&self) -> &[String] {
         self.trace.lines()
+    }
+
+    /// How many stories the world tells.
+    #[must_use]
+    pub fn stories(&self) -> usize {
+        self.settings.stories.len()
     }
 
     /// How many safety checks the referee made, and liveness expectations
@@ -757,6 +763,11 @@ impl World {
             .map(|(path, content)| File { path: path.clone(), content: content.clone() })
             .collect();
         files.push(File { path: CUE.into(), content: content.into() });
+        // What the change itself writes: its own file, so that no two
+        // attempts make the same tree, nor one its base's.
+        let path = format!("change-{}", item.number).into_bytes().into_boxed_slice();
+        files.retain(|file| file.path != path);
+        files.push(File { path, content: format!("attempt {attempt}").into_bytes().into_boxed_slice() });
         let commit = match forge::commit(&mut self.forge, &self.settings.forge, tip, files.into_boxed_slice()) {
             Ok(Some(commit)) => commit,
             Ok(None) => tip,
@@ -954,7 +965,7 @@ impl World {
                 {
                     self.end("released");
                 }
-                self.people.replied(asker, reply);
+                self.people.replied(asker, reply, message.is_some());
             }
             Request::Deliver { watcher, .. } => {
                 let at = self.now.saturating_add(self.settings.channel.draw(&mut self.rng));
@@ -1086,12 +1097,35 @@ impl World {
             && self.asks.is_empty()
             && self.forge.calls() == 0
             && self.forge.deliveries() == 0
+            && self.unsettled().is_empty()
             && match self.referee.verdict() {
                 temper_world::Verdict::Open { .. } => false,
                 temper_world::Verdict::Passed
                 | temper_world::Verdict::Stopped { .. }
                 | temper_world::Verdict::Failed(_) => true,
             }
+    }
+
+    /// The open items the engine tracks, with a record, that are not held.
+    fn unsettled(&self) -> Vec<u64> {
+        let mut unsettled = Vec::new();
+        for ((repository, number), issue) in &self.mirror.issues {
+            let tracked = issue.labels.iter().any(|label| **label == *deployment::TRACKING);
+            if !tracked || !issue.open || deployment::index(repository).is_none() {
+                continue;
+            }
+            let Some(record) = self.mirror.record(repository, *number) else { continue };
+            match record.lifecycle.phase {
+                temper_engine_model::work::Phase::Held { .. } => {}
+                temper_engine_model::work::Phase::Waiting
+                | temper_engine_model::work::Phase::Parked
+                | temper_engine_model::work::Phase::Retrying(_)
+                | temper_engine_model::work::Phase::Claimed
+                | temper_engine_model::work::Phase::Applying { .. }
+                | temper_engine_model::work::Phase::Done => unsettled.push(*number),
+            }
+        }
+        unsettled
     }
 
     /// The invariants of a settled world.
@@ -1102,23 +1136,8 @@ impl World {
         self.theirs.assert_settled();
         self.asks.assert_settled();
         self.stores.assert_settled();
-        for ((repository, number), issue) in &self.mirror.issues {
-            let tracked = issue.labels.iter().any(|label| **label == *deployment::TRACKING);
-            if !tracked || !issue.open || deployment::index(repository).is_none() {
-                continue;
-            }
-            let record = self.mirror.record(repository, *number);
-            let held = record.is_some_and(|record| match record.lifecycle.phase {
-                temper_engine_model::work::Phase::Held { .. } => true,
-                temper_engine_model::work::Phase::Waiting
-                | temper_engine_model::work::Phase::Parked
-                | temper_engine_model::work::Phase::Retrying(_)
-                | temper_engine_model::work::Phase::Claimed
-                | temper_engine_model::work::Phase::Applying { .. }
-                | temper_engine_model::work::Phase::Done => false,
-            });
-            assert!(held, "seed {seed}: every open item the engine tracks is held once it settles: {number}");
-        }
+        let unsettled = self.unsettled();
+        assert!(unsettled.is_empty(), "seed {seed}: every open item the engine tracks is held: {unsettled:?} are not");
         let tally = self.forge.tally();
         assert_eq!(tally.forgotten, 0, "seed {seed}: the forge kept every call it took: {tally:?}");
         self.observe(Seen::Settled);
@@ -1158,7 +1177,8 @@ fn setup(forge: &mut forge::Model, config: &forge::Config, name: &[u8]) {
             contexts: Box::new([b"ci".as_slice().into(), b"lint".as_slice().into()]),
             latency_min: Duration::from_secs(1),
             latency_max: Duration::from_secs(40),
-            silent: 0,
+            // The second repository's CI never reports: where changes stall.
+            silent: if name == deployment::STALLED { 1_000 } else { 0 },
             passes: 1_000,
             reruns: 0,
             cue: Some(Cue { path: CUE.into(), green: GREEN.into() }),

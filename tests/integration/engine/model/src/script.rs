@@ -67,7 +67,7 @@ pub fn acts(item: Item, charter: &Charter, snapshot: Option<&[u8]>, mirror: &Mir
 }
 
 /// A session's turn.
-fn session(item: Item, cue: &[u8], _supervising: bool, snapshot: Option<&[u8]>, mirror: &Mirror, acts: &mut Vec<Act>) {
+fn session(item: Item, cue: &[u8], supervising: bool, snapshot: Option<&[u8]>, mirror: &Mirror, acts: &mut Vec<Act>) {
     let name = deployment::name(item.repository);
     let record = mirror.record(name, item.number);
     let children = record.as_ref().map(|record| record.relations.children.to_vec()).unwrap_or_default();
@@ -97,6 +97,22 @@ fn session(item: Item, cue: &[u8], _supervising: bool, snapshot: Option<&[u8]>, 
             }
         }
         b"#note" => note(item, mirror, acts),
+        b"#plan" | b"#grow" | b"#reject" => {
+            let rejected = record.as_ref().is_some_and(|record| record.step.progress.rejections > 0);
+            if supervising {
+                // The goal's supervisor: done once its plan's steps are.
+                if !children.is_empty() && children.iter().all(|child| child.done.is_some()) {
+                    Outcome::Finished { text: text(b"the plan is done") }
+                } else {
+                    Outcome::Reply { text: text(b"the plan goes on") }
+                }
+            } else if rejected {
+                Outcome::Finished { text: text(b"dropped, as you wish") }
+            } else {
+                let plan = proposal(item, cue);
+                Outcome::Plan { plan, text: text(b"here is a plan") }
+            }
+        }
         // A session that says hello, and finishes once it is answered.
         _ => {
             if messages > 0 {
@@ -130,9 +146,81 @@ fn note(item: Item, mirror: &Mirror, acts: &mut Vec<Act>) -> Outcome {
 /// The note a notes session writes.
 pub const NOTE: &[u8] = b"slow-build";
 
-/// An agent step.
-fn agent(_item: Item, _cue: &[u8], _grows: bool, acts: &mut Vec<Act>) {
-    acts.push(Act::End(End::Ended(Outcome::Report { text: text(b"done") })));
+/// An agent step: a report, or the steps a growing one adds.
+fn agent(item: Item, cue: &[u8], grows: bool, acts: &mut Vec<Act>) {
+    let outcome = if grows {
+        // Two changes: within `#plan`'s envelope, beyond `#grow`'s.
+        let _ = cue;
+        let steps = (0..2).map(|at| change_step(item, &[b'c', b'0' + at], b"#part", &[])).collect();
+        Outcome::Steps { steps, text: text(b"the changes it takes") }
+    } else {
+        Outcome::Report { text: text(b"done: it fits") }
+    };
+    acts.push(Act::End(End::Ended(outcome)));
+}
+
+/// The plan a session proposes (engine-model.md, 5.2): two spikes in
+/// parallel, a person's decision, a design change, a build that grows the
+/// plan with two changes, and a check. `#grow`'s envelope allows one change
+/// only, so its build grows beyond it.
+fn proposal(item: Item, cue: &[u8]) -> plan::Plan {
+    let agent = |name: &[u8], instructions: &[u8], grows: bool, after: &[&[u8]]| Step {
+        name: name.into(),
+        repository: Repository(item.repository),
+        work: Work::Agent(plan::AgentSpec { charter: charter(instructions), grows }),
+        after: after.iter().map(|name| (*name).into()).collect(),
+        gates: Box::new([]),
+    };
+    let decide = Step {
+        name: text(b"decide"),
+        repository: Repository(item.repository),
+        work: Work::Wait(plan::WaitSpec::Decision),
+        after: Box::new([text(b"spike-a"), text(b"spike-b")]),
+        gates: Box::new([]),
+    };
+    let steps = vec![
+        agent(b"spike-a", b"#spike with a library", false, &[]),
+        agent(b"spike-b", b"#spike by hand", false, &[]),
+        decide,
+        change_step(item, b"design", b"#design write it down", &[b"decide"]),
+        agent(b"build", b"#build split it", true, &[b"design"]),
+        agent(b"e2e", b"#e2e run the scenario", false, &[b"build"]),
+    ];
+    let changes = if cue == b"#grow" { 1 } else { 4 };
+    let envelope = plan::Envelope {
+        agents: 4,
+        changes,
+        waits: 1,
+        sessions: 0,
+        repositories: Box::new([Repository(item.repository)]),
+        into: Box::new([plan::Target { repository: Repository(item.repository), base: MAIN.into() }]),
+    };
+    plan::Plan { steps: steps.into(), envelope, budget: 50_000 }
+}
+
+fn charter(instructions: &[u8]) -> plan::Charter {
+    plan::Charter {
+        instructions: instructions.into(),
+        template: None,
+        grants: plan::Grants { modify: true, shell: true, forge: true, subagents: false, note: true },
+        budget: BUDGET,
+    }
+}
+
+/// A change step into the default branch, reviewed by a person.
+fn change_step(item: Item, name: &[u8], instructions: &[u8], after: &[&[u8]]) -> Step {
+    Step {
+        name: name.into(),
+        repository: Repository(item.repository),
+        work: Work::Change(ChangeSpec {
+            base: MAIN.into(),
+            produce: charter(instructions),
+            checks: true,
+            review: Review::Person,
+        }),
+        after: after.iter().map(|name| (*name).into()).collect(),
+        gates: Box::new([]),
+    }
 }
 
 /// A change step's run: it produces the change, or repairs it.

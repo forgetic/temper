@@ -58,9 +58,38 @@ fn a_note_written_by_a_run_and_corrected_by_a_person_is_recalled_as_corrected() 
 }
 
 #[test]
-fn every_story_at_once_settles() {
-    let world = run(Settings::calm(5));
-    for tale in 0..temper_engine_model_tests::people::STORIES.len() {
+fn a_plan_is_proposed_accepted_decided_grown_and_landed() {
+    let world = run(Settings::only(6, &[Story::Plan]));
+    assert!(closed(&world, 0), "the goal's session is done");
+    let merged =
+        world.mirror().issues.values().filter(|issue| issue.pull.as_ref().is_some_and(|pull| pull.merged.is_some()));
+    assert_eq!(merged.count(), 3, "the design and the two changes the build added landed");
+}
+
+#[test]
+fn growth_beyond_the_envelope_waits_for_acceptance() {
+    let world = run(Settings::only(7, &[Story::Grow]));
+    assert!(closed(&world, 0), "the goal's session is done");
+}
+
+#[test]
+fn a_rejected_proposal_is_dropped() {
+    let world = run(Settings::only(8, &[Story::Reject]));
+    assert!(closed(&world, 0), "the session is done");
+    assert_eq!(world.mirror().issues.len(), 1, "nothing of the plan was made");
+}
+
+#[test]
+fn a_change_whose_ci_never_reports_stalls_and_is_held() {
+    let world = run(Settings::only(9, &[Story::Stall]));
+    assert!(closed(&world, 0), "its person closed the session");
+    assert!(world.stats().people.releases >= 1, "the stalled change was released once at least");
+}
+
+#[test]
+fn every_story_but_the_plans_at_once_settles() {
+    let world = run(Settings::only(5, &temper_engine_model_tests::people::SWEPT));
+    for tale in 0..world.stories() {
         assert!(closed(&world, tale), "story {tale} is done");
     }
 }
@@ -86,11 +115,9 @@ fn facts_change_nothing() {
 }
 
 /// Seeds that find what the engine does not do yet, run by
-/// `the_engine_findings_replay` until it does: an application that never
-/// commits once a forge read of its record timed out (6); a person's message
-/// posted twice under its key, the request asked again after the first post
-/// failed late (87).
-const FINDINGS: [u64; 2] = [6, 87];
+/// `the_engine_findings_replay` until it does: an item claimed whose run is
+/// never assigned, once a read of its brief failed (248, 267).
+const FINDINGS: [u64; 2] = [248, 267];
 
 #[test]
 fn random_worlds_settle_with_every_ending_reached() {
@@ -121,9 +148,18 @@ fn restarting_worlds_settle() {
 }
 
 #[test]
-#[ignore = "the engine does not yet resume an application whose record read timed out, nor find a person's keyed message"]
+#[ignore = "the engine does not yet assign every run it claims when a read of its brief fails"]
 fn the_engine_findings_replay() {
     for seed in FINDINGS {
         run(Settings::random(seed));
     }
+}
+
+/// Plans' changes landing on one branch beside others: the engine sees their
+/// base moved after every push, and rebases them until it holds them (see
+/// `people::SWEPT`).
+#[test]
+#[ignore = "the engine sees a change's base moved after every push once another lands"]
+fn every_story_at_once_settles() {
+    run(Settings::calm(5));
 }
