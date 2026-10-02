@@ -101,7 +101,8 @@ pub struct Answer {
     pub error: bool,
 }
 
-/// Why the protocol layer could not decode a tool call.
+/// Why a tool call is no call: the protocol layer could not decode it, or the
+/// agent could not hold what it decoded.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Problem {
     /// No tool the prompt offered has the call's name.
@@ -115,6 +116,8 @@ pub enum Problem {
     /// The input's `field` has a value the tool cannot take: a path with an
     /// empty name or a NUL in it, a number out of range.
     BadValue { field: Box<[u8]> },
+    /// The call holds more than the agent takes at once.
+    TooLarge,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

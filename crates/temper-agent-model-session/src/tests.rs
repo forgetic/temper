@@ -496,6 +496,16 @@ fn a_message_of_invalid_calls_goes_straight_back() {
 }
 
 #[test]
+fn a_call_too_large_for_the_agent_is_answered_so_like_any_invalid_call() {
+    let mut h = Harness::new(LIMITS);
+    let (owner, _) = h.open(1);
+    let content = Box::new([invalid(b"c1", Problem::TooLarge)]);
+    let (_, prompt) = calling(h.step(Event::Completed { owner, completion: completion(content, Stop::ToolUse) }));
+    let answer = Block::ToolResult { id: bytes(b"c1"), result: Returned::Invalid { problem: Problem::TooLarge } };
+    assert_eq!(&*prompt.messages[2].content, &[answer]);
+}
+
+#[test]
 fn the_calls_a_yield_leaves_are_answered_when_the_opener_continues() {
     let mut h = Harness::new(LIMITS);
     let cut = completion(Box::new([text(b"let me"), invalid(b"c1", Problem::NotAnObject)]), Stop::MaxTokens);

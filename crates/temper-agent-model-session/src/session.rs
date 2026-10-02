@@ -1511,7 +1511,7 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
 
 fn problem_cost(problem: &Problem) -> Option<u64> {
     match problem {
-        Problem::UnknownTool | Problem::NotAnObject => Some(0),
+        Problem::UnknownTool | Problem::NotAnObject | Problem::TooLarge => Some(0),
         Problem::Missing { field } | Problem::WrongType { field } | Problem::BadValue { field } => len(field),
     }
 }
