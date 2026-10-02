@@ -104,6 +104,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-engine-model-rules"
+version = "0.0.0"
+dependencies = [
+ "temper-lib",
+]
+
+[[package]]
 name = "temper-fake-engine-model"
 version = "0.0.0"
 dependencies = [

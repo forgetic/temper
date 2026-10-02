@@ -9,6 +9,7 @@ members = [
     "crates/temper-agent-model-session",
     "crates/temper-agent-model-tools",
     "crates/temper-engine-model-plan",
+    "crates/temper-engine-model-rules",
     "crates/temper-worker-model",
     "crates/temper-worker-model-agent",
     "crates/temper-worker-model-checkout",
