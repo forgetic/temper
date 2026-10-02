@@ -14,6 +14,7 @@ members = [
     "crates/temper-engine-model-notes",
     "crates/temper-engine-model-plan",
     "crates/temper-engine-model-rules",
+    "crates/temper-engine-model-views",
     "crates/temper-engine-model-work",
     "crates/temper-worker-model",
     "crates/temper-worker-model-agent",
@@ -58,6 +59,7 @@ temper-engine-model-fleet = { path = "crates/temper-engine-model-fleet" }
 temper-engine-model-forge = { path = "crates/temper-engine-model-forge" }
 temper-engine-model-notes = { path = "crates/temper-engine-model-notes" }
 temper-engine-model-plan = { path = "crates/temper-engine-model-plan" }
+temper-engine-model-views = { path = "crates/temper-engine-model-views" }
 temper-engine-model-work = { path = "crates/temper-engine-model-work" }
 temper-worker-model = { path = "crates/temper-worker-model" }
 temper-worker-model-agent = { path = "crates/temper-worker-model-agent" }
