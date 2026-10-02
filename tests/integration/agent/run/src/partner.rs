@@ -29,7 +29,7 @@
 //! names the conversation and which of its wakes it is, so a wake that a
 //! later one replaced is ignored.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use temper_agent_model_run::outcome::{Change, Child, Declared, Field, Verdict};
 use temper_agent_model_run::{Ask, Budget, End, Event, Exhausted, Fault, Opening, Returned, Spend, Stop};
@@ -58,8 +58,7 @@ pub struct Script {
     pub finishes: u32,
     pub yields: u32,
     /// Of finishes, the chance, per mille, that the outcome is a change
-    /// rather than a verdict, and that a verdict fits the fake worker's
-    /// charters.
+    /// rather than a verdict, and that it fits the fake worker's charters.
     pub changes: u32,
     pub good: u32,
     /// How long a finish may take before the conversation withdraws it.
@@ -115,6 +114,8 @@ pub struct Partner {
     script: Script,
     rng: Rng,
     talks: BTreeMap<Token, Talk>,
+    /// Conversations that have ended, which a stale `Say` or `Close` may name.
+    ended: BTreeSet<Token>,
     /// The conversation each finish in flight is of.
     calls: BTreeMap<Token, Token>,
     /// Names for conversations and calls.
@@ -170,6 +171,7 @@ impl Partner {
             script,
             rng: Rng::new(seed),
             talks: BTreeMap::new(),
+            ended: BTreeSet::new(),
             calls: BTreeMap::new(),
             serial: 0,
             spent: Spend::ZERO,
@@ -222,6 +224,7 @@ impl Partner {
 
     pub fn say(&mut self, now: Time, peer: Token, out: &mut Vec<Out>) {
         let Some(talk) = self.talks.get(&peer) else {
+            assert!(self.ended.contains(&peer), "a stale say names a conversation that ended");
             self.tally.stale += 1;
             return;
         };
@@ -233,6 +236,7 @@ impl Partner {
     pub fn close(&mut self, now: Time, peer: Token, out: &mut Vec<Out>) {
         let settle = self.draw(self.script.settle);
         let Some(talk) = self.talks.get_mut(&peer) else {
+            assert!(self.ended.contains(&peer), "a stale close names a conversation that ended");
             self.tally.stale += 1;
             return;
         };
@@ -385,15 +389,13 @@ impl Partner {
     }
 
     /// An outcome to declare: a change or a verdict, one that fits the fake
-    /// worker's charters or, for a verdict, one that does not.
+    /// worker's charters or one that does not.
     fn outcome(&mut self) -> Declared {
         let change = self.rng.chance(self.script.changes);
         let good = self.rng.chance(self.script.good);
         if change {
-            return Declared::Change(Change {
-                title: b"Fix the parser"[..].into(),
-                body: b"It accepts tabs now."[..].into(),
-            });
+            let title = if good { b"Fix the parser"[..].into() } else { Box::default() };
+            return Declared::Change(Change { title, body: b"It accepts tabs now."[..].into() });
         }
         let comment = |kind: &[u8], fields: &[&[u8]]| Child {
             kind: kind.into(),
@@ -446,6 +448,7 @@ impl Partner {
 
     fn end(&mut self, peer: Token, end: End, out: &mut Vec<Out>) {
         let talk = self.talks.remove(&peer).expect("a conversation ends once");
+        self.ended.insert(peer);
         if end == End::Budget(Exhausted::Time) {
             self.tally.expired += 1;
         }

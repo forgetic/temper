@@ -19,8 +19,8 @@
 //!
 //! ```text
 //! state      event or alarm                next       emits
-//! -          start, no room                -          answer: busy
-//!            start, beyond the limits      -          answer: invalid
+//! -          start, beyond the limits      -          answer: invalid
+//!            start, no room                -          answer: busy
 //!            start                         Preparing  admitted, the first look
 //!            start, nothing to look for    Working    admitted, open main
 //! Preparing  read, probed                  Preparing  the next look
@@ -191,12 +191,14 @@ pub(crate) fn start(
     out: &mut Queue<Request>,
 ) {
     let Model { runs, conversations, calls: _, alarms } = model;
-    if runs.is_full() || conversations.is_full() {
-        out.push(Request::Answer { to: reply_to, answer: Answer::Refused(Refusal::Busy) });
-        return;
-    }
+    // A charter that can never fit is invalid, room or not: busy invites a
+    // retry.
     if let Err(invalid) = charter::check(&charter, &env.limits) {
         out.push(Request::Answer { to: reply_to, answer: Answer::Refused(Refusal::Invalid(invalid)) });
+        return;
+    }
+    if runs.is_full() || conversations.is_full() {
+        out.push(Request::Answer { to: reply_to, answer: Answer::Refused(Refusal::Busy) });
         return;
     }
     let deadline = env.now.saturating_add(charter.budget.time);

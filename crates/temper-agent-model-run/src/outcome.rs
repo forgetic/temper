@@ -107,8 +107,16 @@ pub enum Problem {
     TooManyChildren { max: u32 },
     /// A child is of a kind its verdict does not allow.
     KindNotAllowed { child: u32 },
+    /// A change with no title for its pull request.
+    EmptyTitle,
+    /// A change with no body for its pull request.
+    EmptyBody,
     /// A child lacks `field`, which its verdict requires of every child.
     MissingField { child: u32, field: Box<[u8]> },
+    /// A child has `field`, which its verdict requires, with nothing in it.
+    EmptyField { child: u32, field: Box<[u8]> },
+    /// A child has `field` more than once.
+    RepeatedField { child: u32, field: Box<[u8]> },
 }
 
 /// What is wrong with a declared outcome: the first problems found, at most
@@ -131,9 +139,15 @@ impl Problems {
 pub fn judge(spec: &OutcomeSpec, declared: &Declared) -> Result<(), Problems> {
     let mut found = Found { listed: List::with_capacity(Problems::LISTED), more: 0 };
     match declared {
-        Declared::Change(Change { title: _, body: _ }) => {
+        Declared::Change(Change { title, body }) => {
             if spec.change.is_none() {
                 found.add(Problem::ChangeNotAllowed);
+            }
+            if title.is_empty() {
+                found.add(Problem::EmptyTitle);
+            }
+            if body.is_empty() {
+                found.add(Problem::EmptyBody);
             }
         }
         Declared::Verdict(verdict) => judge_verdict(&spec.verdicts, verdict, &mut found),
@@ -157,6 +171,29 @@ impl Found {
             Err(_) => self.more = self.more.saturating_add(1),
         }
     }
+
+    /// Adds a problem about the child `child`'s field `field`, copying the
+    /// field's name only if the problem is listed.
+    fn add_field(&mut self, child: u32, field: &[u8], problem: FieldProblem) {
+        if self.listed.room() == 0 {
+            self.more = self.more.saturating_add(1);
+            return;
+        }
+        let field = copy_of(field);
+        self.add(match problem {
+            FieldProblem::Missing => Problem::MissingField { child, field },
+            FieldProblem::Empty => Problem::EmptyField { child, field },
+            FieldProblem::Repeated => Problem::RepeatedField { child, field },
+        });
+    }
+}
+
+/// What is wrong with one of a child's fields.
+#[derive(Clone, Copy)]
+enum FieldProblem {
+    Missing,
+    Empty,
+    Repeated,
 }
 
 fn judge_verdict(rules: &[VerdictRule], verdict: &Verdict, found: &mut Found) {
@@ -164,7 +201,11 @@ fn judge_verdict(rules: &[VerdictRule], verdict: &Verdict, found: &mut Found) {
         found.add(Problem::VerdictNotAllowed);
         return;
     }
-    let Some(rule) = rule_named(rules, &verdict.name) else {
+    let named = match rule_named(rules, &verdict.name) {
+        Some(index) => rules.get(index),
+        None => None,
+    };
+    let Some(rule) = named else {
         found.add(Problem::UnknownVerdict);
         return;
     };
@@ -182,19 +223,33 @@ fn judge_verdict(rules: &[VerdictRule], verdict: &Verdict, found: &mut Found) {
             found.add(Problem::KindNotAllowed { child: index });
         }
         for field in &rule.fields {
-            if !has_field(&child.fields, field) {
-                found.add(Problem::MissingField { child: index, field: copy_of(field) });
+            let given = match field_named(&child.fields, field) {
+                Some(at) => child.fields.get(at),
+                None => None,
+            };
+            match given {
+                None => found.add_field(index, field, FieldProblem::Missing),
+                Some(given) if given.value.is_empty() => found.add_field(index, field, FieldProblem::Empty),
+                Some(_) => {}
+            }
+        }
+        // A name given more than once is said once, where it is first given.
+        for (at, field) in child.fields.iter().enumerate() {
+            let earlier = child.fields.get(..at).unwrap_or_default();
+            let later = child.fields.get(at.saturating_add(1)..).unwrap_or_default();
+            if field_named(earlier, &field.name).is_none() && field_named(later, &field.name).is_some() {
+                found.add_field(index, &field.name, FieldProblem::Repeated);
             }
         }
         index = index.saturating_add(1);
     }
 }
 
-#[expect(clippy::manual_find, reason = "find takes a closure, and step code has none")]
-fn rule_named<'a>(rules: &'a [VerdictRule], name: &[u8]) -> Option<&'a VerdictRule> {
-    for rule in rules {
+/// Where among `rules` the verdict named `name` is.
+fn rule_named(rules: &[VerdictRule], name: &[u8]) -> Option<usize> {
+    for (index, rule) in rules.iter().enumerate() {
         if *rule.name == *name {
-            return Some(rule);
+            return Some(index);
         }
     }
     None
@@ -210,13 +265,14 @@ fn names(labels: &[Box<[u8]>], label: &[u8]) -> bool {
     false
 }
 
-fn has_field(fields: &[Field], name: &[u8]) -> bool {
-    for field in fields {
+/// Where among `fields` the first named `name` is.
+fn field_named(fields: &[Field], name: &[u8]) -> Option<usize> {
+    for (at, field) in fields.iter().enumerate() {
         if *field.name == *name {
-            return true;
+            return Some(at);
         }
     }
-    false
+    None
 }
 
 /// Whether `spec` fits `limits` and can be met: it allows some outcome, lists
@@ -351,6 +407,26 @@ mod tests {
         child(b"nit", &[b"path", b"body"])
     }
 
+    /// A comment whose body is empty.
+    fn empty() -> Child {
+        let fields = Box::new([
+            Field { name: copy_of(b"path"), value: copy_of(b"a.rs") },
+            Field { name: copy_of(b"body"), value: copy_of(b"") },
+        ]);
+        Child { kind: copy_of(b"nit"), fields }
+    }
+
+    /// A comment that gives its path twice, and its body once.
+    fn twice() -> Child {
+        let fields = Box::new([
+            Field { name: copy_of(b"path"), value: copy_of(b"a.rs") },
+            Field { name: copy_of(b"body"), value: copy_of(b"Nit.") },
+            Field { name: copy_of(b"path"), value: copy_of(b"b.rs") },
+            Field { name: copy_of(b"path"), value: copy_of(b"c.rs") },
+        ]);
+        Child { kind: copy_of(b"nit"), fields }
+    }
+
     fn problems(listed: Box<[Problem]>, more: u32) -> Result<(), Problems> {
         Err(Problems { listed, more })
     }
@@ -361,7 +437,7 @@ mod tests {
 
     #[test]
     fn outcomes_are_judged_against_the_spec() {
-        let cases: [(OutcomeSpec, Declared, Result<(), Problems>); 13] = [
+        let cases: [(OutcomeSpec, Declared, Result<(), Problems>); 15] = [
             // What the spec allows.
             (review(true), change(), Ok(())),
             (OutcomeSpec { change: Some(ChangeSpec { checks: false }), verdicts: Box::new([]) }, change(), Ok(())),
@@ -403,6 +479,24 @@ mod tests {
                 review(false),
                 verdict(b"request-changes", Box::new([child(b"nit", &[b"body"]), child(b"blocking", &[])])),
                 problems(Box::new([missing(0, b"path"), missing(1, b"path"), missing(1, b"body")]), 0),
+            ),
+            // A change needs a title and a body; a required field, something
+            // in it; and no field may be given twice.
+            (
+                OutcomeSpec { change: Some(ChangeSpec { checks: false }), verdicts: Box::new([]) },
+                Declared::Change(Change { title: copy_of(b""), body: copy_of(b"") }),
+                problems(Box::new([Problem::EmptyTitle, Problem::EmptyBody]), 0),
+            ),
+            (
+                review(false),
+                verdict(b"request-changes", Box::new([empty(), twice()])),
+                problems(
+                    Box::new([
+                        Problem::EmptyField { child: 0, field: copy_of(b"body") },
+                        Problem::RepeatedField { child: 1, field: copy_of(b"path") },
+                    ]),
+                    0,
+                ),
             ),
             // Labels are compared byte for byte.
             (

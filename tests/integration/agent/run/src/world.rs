@@ -781,6 +781,12 @@ impl World {
         if let run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. } = &answer {
             assert!(self.pushed.contains(&owner), "a change is accepted only once it is pushed");
         }
+        // A run answers once its main conversation, if it opened one, has
+        // ended.
+        let main = self.run_of_owner.get(&owner).and_then(|run| self.views[run].main);
+        if let Some(main) = main {
+            assert!(self.opens[&main].ended, "a run answers once its main conversation has ended");
+        }
         let translated = translate::answer(&answer);
         start.answer = Some(answer);
         self.send(Lane::Worker, Delivery::Answered { owner, answer: translated });

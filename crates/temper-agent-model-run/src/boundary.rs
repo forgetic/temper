@@ -270,6 +270,13 @@ pub enum Fault {
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Answer {
     /// Refused at the entrance: nothing was done.
+    ///
+    /// A run is refused at its own entrance, before `Admitted`; or after
+    /// `Admitted`, when its main conversation is refused at the
+    /// conversations' entrance. The run then did nothing but look in its
+    /// checkout: `Busy` says the agent had no room for the conversation, and
+    /// a later retry may find some; `Invalid(Conversation)` that its opening
+    /// does not fit the conversations' limits, which a retry will not change.
     Refused(Refusal),
     /// The run finished with `outcome`, having spent `spent`. A change has
     /// been pushed.

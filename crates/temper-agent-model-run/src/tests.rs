@@ -259,6 +259,10 @@ fn starts_beyond_the_run_or_conversation_slots_are_refused_as_busy() {
     let _: (Token, Token) = h.admit(1);
     assert_eq!(answered(h.start(2, charter())), (2, Answer::Refused(Refusal::Busy)));
     assert_eq!(h.model.runs(), 1);
+
+    // A charter that can never fit is invalid, room or not.
+    let never = Charter { budget: Budget { turns: 0, ..BUDGET }, ..charter() };
+    assert_eq!(answered(h.start(3, never)), (3, Answer::Refused(Refusal::Invalid(Invalid::Budget))));
 }
 
 #[test]
