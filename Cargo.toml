@@ -8,6 +8,8 @@ members = [
     "crates/temper-agent-model-run",
     "crates/temper-agent-model-session",
     "testing/temper-llm-model",
+    "testing/temper-worker-model",
+    "tests/integration/agent/run",
     "tests/integration/agent/session",
 ]
 
@@ -23,6 +25,7 @@ temper-agent-model = { path = "crates/temper-agent-model" }
 temper-agent-model-run = { path = "crates/temper-agent-model-run" }
 temper-agent-model-session = { path = "crates/temper-agent-model-session" }
 temper-llm-model = { path = "testing/temper-llm-model" }
+temper-worker-model = { path = "testing/temper-worker-model" }
 
 # Panics are fail-stop and overflow traps, in every profile. (The test harness
 # needs unwinding, so cargo ignores `panic` for test targets.)

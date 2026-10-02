@@ -71,7 +71,7 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Start { reply_to, worker, charter } => run::start(model, env, reply_to, worker, charter, out),
         Event::Cancel { run } => run::cancel(model, run, out),
         Event::Started { conversation, peer } => run::started(model, conversation, peer, out),
-        Event::Yielded { conversation, stop, text: _ } => run::yielded(model, conversation, stop, out),
+        Event::Yielded { conversation, stop, text: _ } => run::yielded(model, env, conversation, stop, out),
         Event::Used { conversation, spend } => run::used(model, conversation, spend, out),
         Event::Ended { conversation, end, spend } => run::ended(model, conversation, end, spend, out),
     }

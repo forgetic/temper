@@ -1,10 +1,11 @@
 //! Runs: one agent instance, from its admission to its one answer.
 //!
 //! A `Start` admits a run, or refuses it at the entrance. An admitted run
-//! opens its main conversation and works until how it ends is decided; then it
-//! closes main, waits for main to end, and answers. The first ending decided
-//! wins, and the run answers only once main has ended, so nothing it started
-//! is still in flight.
+//! opens its main conversation and drives it: when the LLM stops without
+//! finishing, the run nudges it, within its nudges and its budget. It works
+//! until how it ends is decided; then it closes main, waits for main to end,
+//! and answers. The first ending decided wins, and the run answers only once
+//! main has ended, so nothing it started is still in flight.
 //!
 //! A run's transition table:
 //!
@@ -13,7 +14,9 @@
 //! -         start, no room               -         answer: busy
 //!           start, beyond the limits     -         answer: invalid
 //!           start                        Working   admitted, open main
-//! Working   main yielded                 Winding   close main: unfinished
+//! Working   main yielded                 Working   say: a nudge
+//!           main yielded, no nudge left  Winding   close main: unfinished
+//!           main yielded, no turn left   Winding   close main: out of budget
 //!           used, over the budget        Winding   close main: out of budget
 //!           deadline                     Winding   close main: out of time
 //!           cancel                       Winding   close main: cancelled
@@ -32,7 +35,7 @@
 //!           ended (refused)              Closed
 //! Unwanted  started                      Closing   close it
 //!           ended (refused)              Closed
-//! Running   used                         Running
+//! Running   yielded, used                Running
 //!           closed by its run            Closing   close it
 //!           ended                        Closed
 //! Closing   yielded, used                Closing
@@ -61,11 +64,16 @@ use crate::model::Model;
 /// brief.
 pub(crate) const BEGIN: &[u8] = b"Begin the work your brief describes.";
 
+/// What a run says to an LLM that stopped without finishing.
+pub(crate) const NUDGE: &[u8] = b"You stopped without finishing. Carry on with the work your brief describes.";
+
 #[derive(Debug)]
 pub(crate) struct Run {
     charter: Charter,
     /// What its conversations have spent.
     spent: Spend,
+    /// Nudges given.
+    nudges: u32,
     /// When its budget's time runs out.
     deadline: Time,
     state: State,
@@ -135,7 +143,7 @@ pub(crate) fn start(
     let opening = opening(&charter, Spend::ZERO, deadline.saturating_since(env.now));
     // A run is stored before its main conversation, which names it, and starts
     // work once main has a name too.
-    let run = Run { charter, spent: Spend::ZERO, deadline, state: State::Closed };
+    let run = Run { charter, spent: Spend::ZERO, nudges: 0, deadline, state: State::Closed };
     let id = runs.insert(run).expect("checked for room above");
     let conversation = Conversation { run: id, spent: Spend::ZERO, phase: Phase::Opening };
     let main = conversations.insert(conversation).expect("checked for room above");
@@ -176,25 +184,28 @@ pub(crate) fn started(model: &mut Model, conversation: Token, peer: Token, out: 
     };
 }
 
-pub(crate) fn yielded(model: &mut Model, conversation: Token, stop: Stop, out: &mut Queue<Request>) {
+pub(crate) fn yielded(model: &mut Model, env: &Env<Limits>, conversation: Token, stop: Stop, out: &mut Queue<Request>) {
     let Model { runs, conversations, alarms } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get(id).expect("a conversation lives until it has ended");
-    match &conversation.phase {
-        Phase::Running { .. } => {}
+    let peer = match &conversation.phase {
+        Phase::Running { peer } => *peer,
         // The yield crossed the run's close: there is nothing left to decide.
         Phase::Closing => return,
         Phase::Opening | Phase::Unwanted | Phase::Closed => {
             unreachable!("a conversation yields only between starting and ending")
         }
-    }
+    };
     let run_id = conversation.run;
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
         State::Working { reply_to, main } => {
             assert!(main == id, "a run's only conversation is its main one");
-            wind_down(conversations, reply_to, main, unfinished(stop, 0), out)
+            match nudge(run, stop, &env.limits) {
+                Ok(()) => say(reply_to, main, peer, out),
+                Err(failure) => wind_down(conversations, reply_to, main, failure, out),
+            }
         }
         State::Winding { .. } | State::Closed => {
             unreachable!("a run closes its conversation when it winds down, and it yields no more")
@@ -313,6 +324,12 @@ fn wind_down(
     State::Winding { reply_to, failure }
 }
 
+/// Working, main yielded and may be nudged: tell it to carry on.
+fn say(reply_to: ReplyTo, main: Id<Conversation>, peer: Token, out: &mut Queue<Request>) -> State {
+    out.push(Request::Say { peer, text: copy_of(NUDGE) });
+    State::Working { reply_to, main }
+}
+
 fn close(peer: Token, out: &mut Queue<Request>) -> Phase {
     out.push(Request::Close { peer });
     Phase::Closing
@@ -350,6 +367,20 @@ fn ending(end: End, spent: Spend) -> Answer {
         End::Budget(exhausted) => Answer::Failed { failure: Failure::Budget(exhausted), spent },
         End::Closed => unreachable!("a conversation ends closed only once its run has closed it, winding down"),
     }
+}
+
+/// Counts a nudge for a run whose LLM stopped without finishing for `stop`,
+/// or says how the run fails instead: when its nudges are used up, or no turn
+/// is left in its budget for the LLM to carry on with.
+fn nudge(run: &mut Run, stop: Stop, limits: &Limits) -> Result<(), Failure> {
+    if run.nudges >= limits.nudges {
+        return Err(unfinished(stop, run.nudges));
+    }
+    if run.spent.turns >= run.charter.budget.turns {
+        return Err(Failure::Budget(Exhausted::Turns));
+    }
+    run.nudges = run.nudges.saturating_add(1);
+    Ok(())
 }
 
 /// How a run fails when its LLM stops without finishing, through `nudges`

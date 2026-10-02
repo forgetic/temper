@@ -25,6 +25,9 @@ pub struct Limits {
     pub budget: Budget,
     /// The largest `max_tokens` a charter's LLM may ask for.
     pub max_tokens: u32,
+    /// Nudges a run gives its LLM when it stops without finishing, after which
+    /// the run fails.
+    pub nudges: u32,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`

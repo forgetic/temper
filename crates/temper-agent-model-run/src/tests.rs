@@ -36,6 +36,7 @@ const LIMITS: Limits = Limits {
         time: Duration::from_secs(3600),
     },
     max_tokens: 4096,
+    nudges: 2,
 };
 
 /// The model, its environment, and room for one step's output.
@@ -271,31 +272,52 @@ fn a_main_conversation_refused_at_its_entrance_refuses_the_run() {
 }
 
 #[test]
-fn a_yield_closes_main_and_the_run_answers_once_main_has_ended() {
+fn an_llm_that_stops_without_finishing_is_nudged_until_its_nudges_run_out() {
     let mut h = Harness::new(LIMITS);
     let (_, conversation) = h.running(1, 100);
     let peer = Token::new(100);
-    let yielded = Event::Yielded { conversation, stop: Stop::EndTurn, text: bytes(b"done, I think") };
-    assert_eq!(&*h.step(yielded), &[Request::Close { peer }]);
+    for _ in 0..LIMITS.nudges {
+        assert!(h.step(Event::Used { conversation, spend: spend(5) }).is_empty(), "within the budget");
+        assert_eq!(&*h.step(end_turn(conversation)), &[Request::Say { peer, text: bytes(super::run::NUDGE) }]);
+    }
+    assert!(h.step(Event::Used { conversation, spend: spend(5) }).is_empty(), "within the budget");
+    assert_eq!(&*h.step(end_turn(conversation)), &[Request::Close { peer }]);
     assert_eq!(h.model.next_deadline(), None);
     // A turn that won the race with the close is spent all the same.
     assert!(h.step(Event::Used { conversation, spend: spend(5) }).is_empty(), "winding down");
-    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: spend(5) });
-    let unfinished = Failure::Policy(Policy::Unfinished { nudges: 0 });
-    assert_eq!(answered(emitted), (1, failed(unfinished, spend(5))));
+    let total = Spend { turns: 4, input: 20, output: 40, cache_read: 0, cache_write: 0 };
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: total });
+    let unfinished = Failure::Policy(Policy::Unfinished { nudges: LIMITS.nudges });
+    assert_eq!(answered(emitted), (1, failed(unfinished, total)));
+}
+
+fn end_turn(conversation: Token) -> Event {
+    Event::Yielded { conversation, stop: Stop::EndTurn, text: bytes(b"done, I think") }
 }
 
 #[test]
-fn a_yield_that_shows_a_fault_fails_the_run_with_it() {
-    for (stop, fault) in
-        [(Stop::MaxTokens, Fault::Truncated), (Stop::Refusal, Fault::Refused), (Stop::NoCalls, Fault::Malformed)]
-    {
-        let mut h = Harness::new(LIMITS);
+fn an_llm_whose_last_stop_shows_a_fault_fails_the_run_with_it() {
+    let faults =
+        [(Stop::MaxTokens, Fault::Truncated), (Stop::Refusal, Fault::Refused), (Stop::NoCalls, Fault::Malformed)];
+    for (stop, fault) in faults {
+        let mut h = Harness::new(Limits { nudges: 0, ..LIMITS });
         let (_, conversation) = h.running(1, 100);
         drop(h.step(Event::Yielded { conversation, stop, text: bytes(b"") }));
         let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
         assert_eq!(answered(emitted), (1, failed(Failure::Model(fault), Spend::ZERO)));
     }
+}
+
+#[test]
+fn an_llm_with_no_turn_left_is_not_nudged() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.running(1, 100);
+    let all = Spend { turns: BUDGET.turns, ..spend(5) };
+    assert!(h.step(Event::Used { conversation, spend: all }).is_empty(), "at the budget");
+    let yielded = Event::Yielded { conversation, stop: Stop::EndTurn, text: bytes(b"") };
+    assert_eq!(&*h.step(yielded), &[Request::Close { peer: Token::new(100) }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: all });
+    assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Turns), all)));
 }
 
 #[test]
