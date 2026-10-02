@@ -14,9 +14,10 @@
 //!   [`Request::Hosting`].
 //! - The workspace's, which the parent translates to and from the checkout
 //!   sub-model's vocabulary. A [`Request::Prepare`] is ended by exactly one
-//!   [`Event::Prepared`] or [`Event::Unprepared`]; a [`Request::Push`] by one
-//!   [`Event::Pushed`], and a [`Request::Save`] by one [`Event::Saved`].
-//!   [`Request::Release`] is a notice. A prepared workspace is the run's until
+//!   [`Event::Prepared`] or [`Event::Unprepared`], also after a
+//!   [`Request::Abort`], which abandons it as its run is cancelled; a
+//!   [`Request::Push`] by one [`Event::Pushed`], and a [`Request::Save`] by
+//!   one [`Event::Saved`]. [`Request::Release`] is a notice. A prepared workspace is the run's until
 //!   it is released, and the host releases it only once nothing of the run is
 //!   running and nothing it asked of the workspace is in flight.
 //! - The agent's, which the parent translates to and from the agent
@@ -24,8 +25,10 @@
 //!   [`Event::Gone`], once the agent and everything it started are gone,
 //!   after an [`Event::Started`] unless the agent could not be started. In
 //!   between, the agent's run makes host calls ([`Event::Called`]), each
-//!   answered by exactly one [`Request::Reply`], yields, says how it finishes,
-//!   and may be faulted by the agent sub-model. [`Request::Deliver`] and
+//!   answered by exactly one [`Request::Reply`], also once the run has
+//!   withdrawn it ([`Event::Withdrawn`]); yields, says how it finishes, and may
+//!   be faulted by the agent sub-model, which also bounces an inbound event it
+//!   could not take ([`Event::Bounced`]), for the host to tell the engine. [`Request::Deliver`] and
 //!   [`Request::Stop`] are notices: an agent that has gone drops them, and a
 //!   stop shows in the start's `Gone`.
 //!
@@ -72,6 +75,13 @@ pub enum Event {
     /// A host call of the run, which the host answers with one `Reply`.
     /// `call` is the agent's name for it.
     Called { owner: Token, call: Token, ask: Ask },
+    /// The run withdrew its host call `call`, its own deadline for it having
+    /// passed. A relayed call is answered at once as withdrawn; a push goes
+    /// on, and is answered with how it went. A call answered already is not
+    /// in flight, and nothing happens.
+    Withdrawn { owner: Token, call: Token },
+    /// The agent could not take an inbound event for the run, for `bounce`.
+    Bounced { owner: Token, bounce: Bounce },
     /// The run yielded: it waits for its next inbound event.
     Yielded { owner: Token },
     /// The run said how it finishes. Its agent exits next. Said as it winds
@@ -105,6 +115,10 @@ pub enum Request {
     Hosting { runs: Box<[Hosting]> },
     /// Prepare `workspace` for the hosted run `owner`.
     Prepare { owner: Token, workspace: Workspace },
+    /// Abandon the prepare in flight for `owner`, whose run is cancelled. Its
+    /// terminal still comes: `Unprepared`, or `Prepared` if the prepare won
+    /// the race, and then the workspace is released.
+    Abort { owner: Token },
     /// Start an agent on `charter`, resumed from `snapshot` if there is one,
     /// in the prepared workspace `workspace`, which says where the
     /// repositories sit.
@@ -221,6 +235,9 @@ pub enum Reply {
     /// The run is cancelled or ending: nothing was done. A push in flight as
     /// the run leaves live is waited for, and answered with how it went.
     Unavailable,
+    /// The run withdrew the relayed call: nothing more is done for it, and
+    /// the engine's answer, if one comes, is dropped.
+    Withdrawn,
     /// The run has as many calls in flight as it may, or a push in flight
     /// already: nothing was done. Calls answered within the loop's current
     /// iteration keep their slots until its reclaim point, so a busy call may

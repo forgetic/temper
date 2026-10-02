@@ -240,6 +240,10 @@ fn release(hosted: Names) -> Request {
     Request::Release { workspace: hosted.workspace }
 }
 
+fn abort(hosted: Names) -> Request {
+    Request::Abort { owner: hosted.owner }
+}
+
 fn stop(hosted: Names) -> Request {
     Request::Stop { agent: hosted.agent }
 }
@@ -425,10 +429,10 @@ fn a_workspace_that_cannot_be_prepared_fails_the_run_with_nothing_to_release() {
 }
 
 #[test]
-fn a_cancel_as_the_workspace_is_prepared_waits_for_the_prepare_then_releases_it() {
+fn a_cancel_as_the_workspace_is_prepared_aborts_the_prepare_then_releases_it() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.admit(1);
-    assert!(h.cancel(hosted).is_empty(), "the prepare in flight is waited for");
+    assert_eq!(&*h.cancel(hosted), [abort(hosted)], "the prepare in flight is abandoned, and waited for");
     assert!(h.cancel(hosted).is_empty(), "a second cancel changes nothing");
     assert_eq!(&*h.inbound(hosted, b"hi"), [bounced(hosted, Bounce::Ending)]);
     assert_eq!(h.report()[0].phase, Phase::Ending);
@@ -441,7 +445,7 @@ fn a_cancel_as_the_workspace_is_prepared_waits_for_the_prepare_then_releases_it(
 fn a_cancel_as_the_workspace_fails_to_prepare_answers_cancelled() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.admit(1);
-    assert!(h.cancel(hosted).is_empty());
+    assert_eq!(&*h.cancel(hosted), [abort(hosted)]);
     let unprepared = Event::Unprepared { owner: hosted.owner, failure: Preparation::Transient, detail: bytes(b"x") };
     let cancelled = failed(Failure::Cancelled(Reason::Engine), b"", nothing());
     assert_eq!(&*h.step(unprepared), [answer(hosted, cancelled)], "the prepare's failure is not the answer's");
@@ -726,6 +730,76 @@ fn calls_beyond_the_runs_limit_and_a_second_push_are_busy() {
 }
 
 #[test]
+fn a_withdrawn_relay_is_answered_at_once_and_the_engines_answer_dropped() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    let first = h.relay(hosted, 7);
+    let second = h.relay(hosted, 8);
+    let withdrawn = Event::Withdrawn { owner: hosted.owner, call: Token::new(8) };
+    assert_eq!(&*h.step(withdrawn), [reply(hosted, 8, Reply::Withdrawn)]);
+    let again = Event::Withdrawn { owner: hosted.owner, call: Token::new(8) };
+    assert!(h.step(again).is_empty(), "answered already: nothing happens");
+    let late = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: second, answer: bytes(b"late") };
+    assert!(h.step(late).is_empty(), "the engine's answer to a withdrawn call is dropped");
+    let relayed = Event::Relayed { run: hosted.run, attempt: hosted.attempt, call: first, answer: bytes(b"page") };
+    assert_eq!(&*h.step(relayed), [reply(hosted, 7, Reply::Relayed { answer: bytes(b"page") })], "the other stands");
+    h.model.reclaim();
+    assert_eq!(h.model.calls(), 0, "the withdrawn call closed");
+    h.relay(hosted, 9);
+    h.relay(hosted, 10);
+}
+
+#[test]
+fn a_withdrawn_push_goes_on_and_is_answered_with_how_it_went() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    let push = h.push(hosted, 7);
+    assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(7) }).is_empty(), "a push goes on");
+    let pushed = Event::Pushed { owner: push, push: Box::new([Landing::Landed, Landing::Unchanged]) };
+    assert_eq!(&*h.step(pushed), [reply(hosted, 7, Reply::Pushed(Push::Done))]);
+}
+
+#[test]
+fn a_call_withdrawn_as_its_run_leaves_live_was_answered_already() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    h.relay(hosted, 7);
+    assert_eq!(&*h.cancel(hosted), [reply(hosted, 7, Reply::Unavailable), stop(hosted)]);
+    assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(7) }).is_empty());
+    assert!(h.step(Event::Withdrawn { owner: hosted.owner, call: Token::new(9) }).is_empty(), "never made");
+}
+
+#[test]
+fn an_event_the_agent_could_not_take_is_bounced_to_the_engine() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    let emitted = h.step(Event::Bounced { owner: hosted.owner, bounce: Bounce::Full });
+    assert_eq!(&*emitted, [bounced(hosted, Bounce::Full)]);
+    assert!(h.step(Event::Yielded { owner: hosted.owner }).is_empty());
+    let emitted = h.step(Event::Bounced { owner: hosted.owner, bounce: Bounce::Ending });
+    assert_eq!(&*emitted, [bounced(hosted, Bounce::Ending)], "waiting, as active");
+    assert_eq!(h.report()[0].phase, Phase::Waiting, "a bounce leaves the run where it is");
+    assert_eq!(&*h.cancel(hosted), [stop(hosted)]);
+    let emitted = h.step(Event::Bounced { owner: hosted.owner, bounce: Bounce::Ending });
+    assert_eq!(&*emitted, [bounced(hosted, Bounce::Ending)], "stopping");
+}
+
+#[test]
+fn a_hosted_run_is_found_by_its_owner_until_it_closes() {
+    let mut h = Harness::new(LIMITS);
+    let hosted = h.live(1);
+    let hosting = Hosting { run: hosted.run, attempt: hosted.attempt, phase: Phase::Active };
+    assert_eq!(h.model.hosting(hosted.owner), Some(hosting));
+    assert_eq!(h.model.hosting(Token::new(12_345)), None, "not a run's");
+    h.finish(hosted, Finish::Failed { failure: RunFailure::Model });
+    let ending = Hosting { phase: Phase::Ending, ..hosting };
+    assert_eq!(h.model.hosting(hosted.owner), Some(ending), "how it ends is decided");
+    h.gone(hosted, b"");
+    h.step(Event::Saved { owner: hosted.owner, save: Box::new([Landing::Unchanged, Landing::Unchanged]) });
+    assert_eq!(h.model.hosting(hosted.owner), None, "closed");
+}
+
+#[test]
 fn a_cancelled_run_answers_its_relayed_calls_as_unavailable_and_waits_for_its_push() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.live(1);
@@ -797,7 +871,7 @@ fn cancel_all_cancels_every_run_one_at_a_time_for_its_reason() {
     assert!(h.step(Event::CancelAll { reason: Reason::Contact }).is_empty());
     assert!(h.step(Event::CancelAll { reason: Reason::Shutdown }).is_empty(), "the first reason stands");
     assert!(h.model.is_ready());
-    assert!(h.resume().is_empty(), "the first is preparing: its prepare is waited for");
+    assert_eq!(&*h.resume(), [abort(first)], "the first is preparing: its prepare is abandoned");
     assert_eq!(&*h.resume(), [stop(second)]);
     assert!(!h.model.is_ready());
     let emitted = h.step(Event::Prepared { owner: first.owner, workspace: first.workspace });
@@ -814,7 +888,7 @@ fn a_run_that_answers_before_its_turn_on_the_ready_list_leaves_it() {
     assert!(h.step(Event::CancelAll { reason: Reason::Shutdown }).is_empty());
     let unprepared = Event::Unprepared { owner: first.owner, failure: Preparation::Transient, detail: bytes(b"") };
     assert_eq!(h.step(unprepared).len(), 1);
-    assert!(h.resume().is_empty(), "the second is cancelled");
+    assert_eq!(&*h.resume(), [abort(second)], "the second is cancelled");
     assert!(!h.model.is_ready(), "the first left the list as it answered");
     let emitted = h.step(Event::Prepared { owner: second.owner, workspace: second.workspace });
     let shutdown = failed(Failure::Cancelled(Reason::Shutdown), b"", nothing());

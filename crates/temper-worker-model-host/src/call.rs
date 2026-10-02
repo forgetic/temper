@@ -8,7 +8,9 @@
 //! -         called: push           Pushing   push
 //!           called: relay          Relayed   relay
 //! Pushing   pushed                 Closed    reply: how it went
+//!           withdrawn              Pushing
 //! Relayed   relayed                Closed    reply: the engine's answer
+//!           withdrawn              Closed    reply: withdrawn
 //!           its run leaves live    Closed    reply: unavailable
 //! ```
 //!
@@ -16,9 +18,9 @@
 //! is waited for even once its run has left live: it keeps its run stopping
 //! until it settles, its reply says how it went (an agent that has gone by
 //! then drops it), and what it landed counts. A relayed call is the engine's
-//! to answer, which a cancelled attempt never is: once its run leaves live the
-//! host answers it, and drops whatever the engine sends for it after. A call
-//! is retired as it closes.
+//! to answer, which a cancelled attempt never is: once its run leaves live, or
+//! withdraws it, the host answers it, and drops whatever the engine sends for
+//! it after. A call is retired as it closes.
 
 use temper_lib::{Id, Token};
 

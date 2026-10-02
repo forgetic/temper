@@ -2,7 +2,7 @@
 
 use temper_lib::{Env, Id, Map, Queue, Slab, Token};
 
-use crate::boundary::{Event, Reason, Request};
+use crate::boundary::{Event, Hosting, Reason, Request};
 use crate::call::Call;
 use crate::facts::{Fact, Facts};
 use crate::hosted::{self, Hosted};
@@ -63,6 +63,15 @@ impl Model {
         self.calls.len()
     }
 
+    /// The engine's names for the hosted run `owner` (the token the host's
+    /// requests for it carry) and where it is in its lifecycle, while it is
+    /// hosted: for its parent to tell the engine what the run's agent says
+    /// beside the host, its facts.
+    #[must_use]
+    pub fn hosting(&self, owner: Token) -> Option<Hosting> {
+        hosted::hosting(self, owner)
+    }
+
     /// Whether a run is ready to be cancelled. While one is, the loop resumes
     /// the top-level model, which calls [`resume`], at the start of the
     /// model's stage, before its input events.
@@ -104,6 +113,8 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Unprepared { owner, failure, detail } => hosted::unprepared(model, env, owner, failure, detail, out),
         Event::Started { owner, agent } => hosted::started(model, env, owner, agent, out),
         Event::Called { owner, call, ask } => hosted::called(model, env, owner, call, ask, out),
+        Event::Withdrawn { owner, call } => hosted::withdrawn(model, owner, call, out),
+        Event::Bounced { owner, bounce } => hosted::bounced(model, owner, bounce, out),
         Event::Yielded { owner } => hosted::yielded(model, owner, out),
         Event::Finished { owner, finish } => hosted::finished(model, env, owner, finish, out),
         Event::Faulted { owner, fault } => hosted::faulted(model, env, owner, fault, out),

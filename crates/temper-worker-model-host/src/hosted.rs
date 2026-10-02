@@ -33,7 +33,7 @@
 //! Preparing   prepared                      Starting    start
 //!             unprepared                    Closed      answer: unprepared
 //!             inbound                       Preparing   (held), or bounced: full
-//!             cancel                        Cancelling
+//!             cancel                        Cancelling  abort
 //! Cancelling  prepared                      Closed      release, answer: cancelled
 //!             unprepared                    Closed      answer: cancelled
 //!             inbound                       Cancelling  bounced: ending
@@ -48,16 +48,22 @@
 //!             cancel                        Unwanted
 //! Active      inbound                       Active      deliver
 //!             called                        Active      push, relay, or reply: busy
+//!             withdrawn: a relay            Active      reply: withdrawn
+//!             withdrawn: a push, or none    Active
+//!             bounced                       Active      bounced
 //!             yielded                       Waiting
 //!             finished                      Stopping    relays: unavailable, stop
 //!             faulted, cancel               Stopping    relays: unavailable, stop (stopped)
 //!             gone                          Stopping    relays: unavailable (exited)
 //! Waiting     inbound                       Active      deliver
 //!             called                        Active      push, relay, or reply: busy
+//!             withdrawn, bounced            Waiting     as Active
 //!             yielded                       Waiting
 //!             finished, faulted, cancel     Stopping    as Active
 //!             gone                          Stopping    as Active
 //! Stopping    called                        Stopping    reply: unavailable
+//!             withdrawn                     Stopping    (answered already, or a push)
+//!             bounced                       Stopping    bounced
 //!             finished, stopped             Stopping    (the run's own ending)
 //!             finished, said, or exited     Stopping
 //!             yielded, faulted              Stopping
@@ -72,7 +78,10 @@
 //! ```
 //!
 //! A pushed or relayed event moves its call (the `call` module), and leaves
-//! the run where it is. A stopping run has settled once its agent has gone
+//! the run where it is; so does a withdrawn one. A withdrawn relay is
+//! answered at once, and what the engine sends for it after is dropped; a
+//! withdrawn push goes on, and is answered with how it went once it settles:
+//! a push cannot be abandoned half way. A stopping run has settled once its agent has gone
 //! and its push in flight, if it has one, has settled; it then saves if the
 //! assignment asks, unless it ended with a landed change, and otherwise
 //! releases its workspace and answers. That follows from the state, in one
@@ -90,7 +99,8 @@
 //!
 //! Inbound events that come while the run is not live yet are held, in the
 //! order they came, up to the limit, and delivered as its agent starts; past
-//! the limit they are bounced, and the engine keeps them. A run that never
+//! the limit they are bounced, and the engine keeps them. One its agent could
+//! not take is bounced to the engine the same way. A run that never
 //! goes live drops what it held: its answer says it took nothing.
 
 use alloc::boxed::Box;
@@ -457,6 +467,41 @@ pub(crate) fn called(
     conclude(model, id, out);
 }
 
+pub(crate) fn withdrawn(model: &mut Model, owner: Token, call: Token, out: &mut Queue<Request>) {
+    let Model { hosted, calls, .. } = model;
+    let id = Id::<Hosted>::from_token(owner);
+    let entry = hosted.get_mut(id).expect("a run lives until its agent has gone");
+    match &entry.state {
+        State::Active { .. } | State::Waiting { .. } => withdraw(entry, calls, call, out),
+        // Its relays were answered as it left live, and its push goes on.
+        State::Stopping { .. } => {}
+        State::Preparing { .. }
+        | State::Cancelling { .. }
+        | State::Starting { .. }
+        | State::Unwanted { .. }
+        | State::Saving { .. }
+        | State::Closed => unreachable!("only an agent that has started and not gone withdraws a call"),
+    }
+    conclude(model, id, out);
+}
+
+pub(crate) fn bounced(model: &mut Model, owner: Token, bounce: Bounce, out: &mut Queue<Request>) {
+    let id = Id::<Hosted>::from_token(owner);
+    let entry = model.hosted.get(id).expect("a run lives until its agent has gone");
+    match &entry.state {
+        State::Active { .. } | State::Waiting { .. } | State::Stopping { .. } => {
+            out.push(Request::Bounced { run: entry.run, attempt: entry.attempt, bounce });
+        }
+        State::Preparing { .. }
+        | State::Cancelling { .. }
+        | State::Starting { .. }
+        | State::Unwanted { .. }
+        | State::Saving { .. }
+        | State::Closed => unreachable!("only an agent that has started and not gone bounces an event"),
+    }
+    conclude(model, id, out);
+}
+
 pub(crate) fn yielded(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
     let id = Id::<Hosted>::from_token(owner);
     let entry = model.hosted.get_mut(id).expect("a run lives until its agent has gone");
@@ -626,6 +671,23 @@ pub(crate) fn saved(model: &mut Model, owner: Token, save: Box<[Landing]>, out: 
     conclude(model, id, out);
 }
 
+/// The engine's names for the hosted run `owner`, and where it is, unless it
+/// has closed.
+pub(crate) fn hosting(model: &Model, owner: Token) -> Option<Hosting> {
+    let entry = model.hosted.get(Id::<Hosted>::from_token(owner))?;
+    match &entry.state {
+        State::Closed => None,
+        state @ (State::Preparing { .. }
+        | State::Cancelling { .. }
+        | State::Starting { .. }
+        | State::Unwanted { .. }
+        | State::Active { .. }
+        | State::Waiting { .. }
+        | State::Stopping { .. }
+        | State::Saving { .. }) => Some(Hosting { run: entry.run, attempt: entry.attempt, phase: phase(state) }),
+    }
+}
+
 /// The hosted run the engine names `run`, if it hosts that attempt at it.
 fn fenced(names: &Map<Token, Id<Hosted>>, hosted: &Slab<Hosted>, run: Token, attempt: Token) -> Option<Id<Hosted>> {
     let id = *names.get(&run)?;
@@ -639,8 +701,11 @@ fn stop(model: &mut Model, env: &Env<Limits>, id: Id<Hosted>, reason: Reason, ou
     let entry = hosted.get_mut(id).expect("a run on the names or the ready list is hosted");
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        // A prepare in flight is waited for.
-        State::Preparing { reply_to, .. } => State::Cancelling { reply_to, reason },
+        // A prepare in flight is abandoned, and its end waited for.
+        State::Preparing { reply_to, .. } => {
+            out.push(Request::Abort { owner: id.token() });
+            State::Cancelling { reply_to, reason }
+        }
         State::Starting { reply_to, workspace, held: _ } => State::Unwanted { reply_to, workspace, reason },
         State::Active { reply_to, workspace, agent } | State::Waiting { reply_to, workspace, agent } => {
             let ending = Ending::Stopped { failure: Failure::Cancelled(reason), detail: Box::new([]) };
@@ -840,6 +905,34 @@ fn serve(
             out.push(Request::Relay { run: entry.run, attempt: entry.attempt, call: call_id.token(), body });
         }
     }
+}
+
+/// The live run withdrew the call its agent names `call`: a relay in flight is
+/// answered as withdrawn, and closes. A push goes on, and is answered once it
+/// settles; a call answered already is not found, and nothing happens.
+fn withdraw(entry: &mut Hosted, calls: &mut Slab<Call>, call: Token, out: &mut Queue<Request>) {
+    let mut found = None;
+    for call_id in &entry.relays {
+        let relayed = calls.get(*call_id).expect("a run's calls live until they close");
+        let named = match relayed.state {
+            call::State::Relayed { agent: _, call: named } => named,
+            call::State::Pushing { .. } | call::State::Closed => unreachable!("a run's relays are relayed calls"),
+        };
+        if named == call {
+            found = Some(*call_id);
+        }
+    }
+    let Some(call_id) = found else {
+        return;
+    };
+    let relayed = calls.get_mut(call_id).expect("found above");
+    let state = mem::replace(&mut relayed.state, call::State::Closed);
+    match state {
+        call::State::Relayed { agent, call } => out.push(Request::Reply { agent, call, reply: Reply::Withdrawn }),
+        call::State::Pushing { .. } | call::State::Closed => unreachable!("found among the run's relays"),
+    }
+    calls.retire(call_id);
+    entry.relays.remove(&call_id);
 }
 
 /// The run leaves live: each of its relayed calls in flight is answered as

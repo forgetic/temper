@@ -588,6 +588,8 @@ impl World {
             Event::Inbound { .. }
             | Event::Cancel { .. }
             | Event::Relayed { .. }
+            | Event::Withdrawn { .. }
+            | Event::Bounced { .. }
             | Event::Yielded { .. }
             | Event::Faulted { .. } => Taken::Other,
         }
@@ -682,6 +684,7 @@ impl World {
             Request::Relay { .. }
             | Request::Bounced { .. }
             | Request::Hosting { .. }
+            | Request::Abort { .. }
             | Request::Start { .. }
             | Request::Deliver { .. }
             | Request::Reply { .. }
@@ -738,7 +741,7 @@ impl World {
                     self.path("pushes settled during a stop");
                     match reply {
                         Reply::Pushed(_) => {}
-                        Reply::Relayed { .. } | Reply::Unavailable | Reply::Busy => {
+                        Reply::Relayed { .. } | Reply::Unavailable | Reply::Busy | Reply::Withdrawn => {
                             panic!("a push kept through the stop says how it went: {reply:?}")
                         }
                     }
@@ -748,7 +751,7 @@ impl World {
                 match reply {
                     Reply::Unavailable => self.stats.unavailable += 1,
                     Reply::Busy => self.stats.busy += 1,
-                    Reply::Relayed { .. } | Reply::Pushed(_) => {}
+                    Reply::Relayed { .. } | Reply::Pushed(_) | Reply::Withdrawn => {}
                 }
                 self.parcel(Request::Reply { agent, call, reply });
             }
@@ -758,6 +761,11 @@ impl World {
             }
             Request::Prepare { .. } => {
                 assert!(!self.shut, "a worker shutting down admits no more runs");
+                self.parcel(request);
+            }
+            Request::Abort { owner } => {
+                let hosted = self.hosted.get(&owner).expect("an abort is of a hosted run");
+                assert!(hosted.prepared.is_none(), "an abort is of a prepare in flight");
                 self.parcel(request);
             }
             Request::Start { owner, .. } => {

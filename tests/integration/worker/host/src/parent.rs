@@ -124,6 +124,9 @@ pub struct Tally {
     pub saves_failed: u32,
     /// Deliveries, replies and stops that found their agent gone.
     pub dropped: u32,
+    /// Prepares abandoned as their runs were cancelled: each still ends as it
+    /// was going to.
+    pub aborts: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -261,6 +264,12 @@ impl Parent {
     pub fn take(&mut self, request: Request) -> Vec<Out> {
         match request {
             Request::Prepare { owner, workspace } => self.prepare(owner, &workspace),
+            // A notice: the prepare still ends as it was going to, which the
+            // world checks the host takes.
+            Request::Abort { owner: _ } => {
+                self.tally.aborts += 1;
+                Vec::new()
+            }
             Request::Start { owner, workspace, charter: _, snapshot: _ } => self.start(owner, workspace),
             Request::Deliver { agent, event: _ } => self.deliver(agent),
             Request::Reply { agent, call: _, reply: _ } => self.reply(agent),

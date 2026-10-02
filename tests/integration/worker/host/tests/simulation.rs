@@ -196,6 +196,7 @@ fn random_worlds_settle_and_reach_every_ending() {
             ("requests to agents gone", stats.parent.dropped),
             ("saves with a branch moved", stats.parent.saves_moved),
             ("saves with a push failed", stats.parent.saves_failed),
+            ("prepares aborted", stats.parent.aborts),
         ];
         for (path, count) in paths {
             if count > 0 {
@@ -220,5 +221,5 @@ fn random_worlds_settle_and_reach_every_ending() {
     ];
     let missing: Vec<&str> = paths.iter().copied().filter(|path| !seen.contains(path)).collect();
     assert!(missing.is_empty(), "every path is taken: {missing:?} are not");
-    assert_eq!(seen.len(), 14 + paths.len(), "every path is taken: only {seen:?} are");
+    assert_eq!(seen.len(), 15 + paths.len(), "every path is taken: only {seen:?} are");
 }

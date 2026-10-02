@@ -208,6 +208,7 @@ impl Engine {
             }
             Request::Hosting { .. }
             | Request::Prepare { .. }
+            | Request::Abort { .. }
             | Request::Start { .. }
             | Request::Deliver { .. }
             | Request::Reply { .. }

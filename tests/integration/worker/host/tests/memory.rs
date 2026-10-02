@@ -89,9 +89,11 @@ impl Measured {
                 Request::Answer { answer, .. } => Asked::Answer { answer },
                 Request::Bounced { bounce, .. } => Asked::Bounced { bounce },
                 Request::Hosting { runs } => Asked::Hosting { runs: runs.len() },
-                Request::Deliver { .. } | Request::Reply { .. } | Request::Stop { .. } | Request::Release { .. } => {
-                    Asked::Other
-                }
+                Request::Abort { .. }
+                | Request::Deliver { .. }
+                | Request::Reply { .. }
+                | Request::Stop { .. }
+                | Request::Release { .. } => Asked::Other,
             });
         }
         self.meter.check(measured, self.bound, self.env.limits);
