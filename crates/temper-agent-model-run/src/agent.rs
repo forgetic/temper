@@ -13,7 +13,7 @@
 //! runs out no later than its call's deadline. A refused ask is a tool error
 //! too.
 //!
-//! Choosing the model (agent-model.md, section 9): the charter lists the LLMs
+//! Choosing the model (agent-model.md, section 5): the charter lists the LLMs
 //! a sub-agent may run on; the asking LLM may name one of them, by its model,
 //! compared byte for byte; otherwise the child runs on main's.
 //!
