@@ -87,6 +87,11 @@ impl<K: Ord> Set<K> {
         self.keys.last()
     }
 
+    /// Removes the least key, and hands it over.
+    pub fn pop_first(&mut self) -> Option<K> {
+        self.keys.pop_first()
+    }
+
     /// The keys, in order.
     pub fn iter(&self) -> btree_set::Iter<'_, K> {
         self.keys.iter()
@@ -122,6 +127,19 @@ mod tests {
         assert!(!set.remove(&1));
         assert_eq!(set.insert(3), Ok(true), "removing makes room");
         assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn the_least_key_is_taken_first_and_makes_room() {
+        let mut set = Set::with_capacity(2);
+        assert_eq!(set.pop_first(), None);
+        assert_eq!(set.insert(5_u8), Ok(true));
+        assert_eq!(set.insert(4), Ok(true));
+        assert_eq!(set.pop_first(), Some(4));
+        assert_eq!(set.insert(6), Ok(true), "taking a key makes room");
+        assert_eq!(set.pop_first(), Some(5));
+        assert_eq!(set.pop_first(), Some(6));
+        assert!(set.is_empty());
     }
 
     #[test]

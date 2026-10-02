@@ -8,6 +8,7 @@ members = [
     "crates/temper-agent-model-run",
     "crates/temper-agent-model-session",
     "crates/temper-agent-model-tools",
+    "crates/temper-engine-model-notes",
     "crates/temper-engine-model-plan",
     "crates/temper-engine-model-rules",
     "crates/temper-worker-model",
