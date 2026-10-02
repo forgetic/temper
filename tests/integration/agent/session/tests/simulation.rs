@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use temper_agent_model_session::llm::Failure;
 use temper_agent_model_session::{Budget, Dimension, End, Limits, Spec, Yield};
-use temper_agent_model_session_tests::{BUDGET, Count, Ended, Settings, Span, World, spec};
+use temper_agent_model_session_tests::{BUDGET, Count, Ended, Settings, Span, Told, World, spec};
 use temper_lib::{Duration, Rng, Time};
 use temper_llm_model::Config;
 
@@ -282,6 +282,29 @@ fn a_seed_replays_to_the_same_run() {
     assert_ne!(replay(14).0, trace);
 }
 
+/// Facts are told on the side: sessions that keep none of them make the same
+/// requests at the same times as sessions that keep them all, and the facts
+/// kept add up to what crossed the boundary (checked by `World::run`).
+#[test]
+fn facts_change_nothing_the_sessions_do() {
+    for seed in 0..100 {
+        let run = |facts| {
+            let noisy = noisy(seed);
+            let settings = Settings { agent: Limits { facts, ..noisy.agent }, ..noisy };
+            let mut world = World::new(settings);
+            submit_noisily(&mut world, &settings, seed);
+            world.run(ITERATIONS);
+            (world.trace().to_vec(), world.stats(), world.told())
+        };
+        let (trace, stats, (told, lost)) = run(4096);
+        assert_eq!(lost, 0, "seed {seed}: room for every fact");
+        assert!(told.ended > 0, "seed {seed}: facts were told");
+        let (silent, same, (none, dropped)) = run(0);
+        assert!(silent == trace && same == stats, "seed {seed}: the same requests, at the same times");
+        assert_eq!((none, dropped > 0), (Told::default(), true), "seed {seed}: every fact dropped");
+    }
+}
+
 /// Hundreds of worlds with random limits, faults, schedules and openers: each
 /// settles, with every session ended once and nothing left alive or in flight
 /// (checked by `World::run`), and between them they reach every way a session
@@ -354,6 +377,7 @@ fn noisy(seed: u64) -> Settings {
             backoff_base: Duration::from_millis(50),
             backoff_max: Duration::from_secs(2),
             call_timeout,
+            facts: pick(0, 24),
             ..calm.agent
         },
         provider: Config {

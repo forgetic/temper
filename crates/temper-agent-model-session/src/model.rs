@@ -3,6 +3,7 @@
 use temper_lib::{Deadlines, Env, Queue, Rng, Slab, Time};
 
 use crate::boundary::{Event, Request};
+use crate::facts::{Fact, Facts};
 use crate::limits::{self, Limits};
 use crate::session::{self, Alarm, Session};
 
@@ -18,6 +19,7 @@ pub struct Model {
     pub(crate) sessions: Slab<Session>,
     pub(crate) alarms: Deadlines<Alarm>,
     pub(crate) rng: Rng,
+    pub(crate) facts: Facts,
 }
 
 impl Model {
@@ -29,6 +31,7 @@ impl Model {
             sessions: Slab::with_capacity(limits.sessions),
             alarms: Deadlines::with_capacity(alarms),
             rng: Rng::new(seed),
+            facts: Facts::with_capacity(limits.facts),
         }
     }
 
@@ -52,6 +55,19 @@ impl Model {
             Some(at) => at <= now,
             None => false,
         }
+    }
+
+    /// The oldest fact not yet drained. The parent drains them at its own
+    /// pace; what does not fit meanwhile is dropped and counted.
+    pub fn pop_fact(&mut self) -> Option<Fact> {
+        self.facts.pop()
+    }
+
+    /// How many facts were dropped for want of room, since the model was
+    /// made.
+    #[must_use]
+    pub fn facts_lost(&self) -> u64 {
+        self.facts.lost()
     }
 
     /// The reclaim point: frees what closed in this iteration.

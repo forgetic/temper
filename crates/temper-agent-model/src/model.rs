@@ -52,6 +52,18 @@ impl Model {
         self.session.is_due(now)
     }
 
+    /// The oldest fact the sessions told and the loop has not drained yet.
+    /// They are the session's own for now, passed through as they are.
+    pub fn pop_fact(&mut self) -> Option<session::Fact> {
+        self.session.pop_fact()
+    }
+
+    /// How many facts were dropped for want of room.
+    #[must_use]
+    pub fn facts_lost(&self) -> u64 {
+        self.session.facts_lost()
+    }
+
     /// The reclaim point: frees what closed in this iteration.
     pub fn reclaim(&mut self) {
         self.session.reclaim();

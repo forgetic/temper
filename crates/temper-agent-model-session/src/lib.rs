@@ -14,6 +14,10 @@
 //!
 //! The conversation is provider-neutral ([`llm`]): the protocol layer speaks
 //! each provider's wire format.
+//!
+//! What happens is also told as content-free [`Fact`]s, kept in a bounded
+//! queue the parent drains ([`Model::pop_fact`]); what does not fit is dropped
+//! and counted, and nothing the session decides depends on it.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -21,6 +25,7 @@
 extern crate alloc;
 
 mod boundary;
+mod facts;
 mod limits;
 pub mod llm;
 mod model;
@@ -29,5 +34,6 @@ mod session;
 mod tests;
 
 pub use boundary::{Budget, Dimension, End, Event, Request, Spec, ToolCall, Yield};
+pub use facts::Fact;
 pub use limits::{Limits, worst_case};
 pub use model::{MAX_OUT, Model, fire, step};

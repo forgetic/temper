@@ -11,8 +11,9 @@
 //! that faces the protocol layer: it owns its children's state, and routes each
 //! event to the child it is for and each child's requests back out. Today it
 //! holds only the session sub-model (`temper-agent-model-session`), one
-//! conversation with an LLM; the run sub-model will sit between the protocol
-//! layer and the sessions.
+//! conversation with an LLM, and passes its facts through for the loop to
+//! drain; the run sub-model will sit between the protocol layer and the
+//! sessions.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
@@ -30,4 +31,4 @@ pub use boundary::{Event, Request};
 pub use limits::{Limits, worst_case};
 pub use model::{MAX_OUT, Model, fire, step};
 // The payloads are the session's: a parent may use its children's types.
-pub use temper_agent_model_session::{Budget, Dimension, End, Spec, ToolCall, Yield, llm};
+pub use temper_agent_model_session::{Budget, Dimension, End, Fact, Spec, ToolCall, Yield, llm};

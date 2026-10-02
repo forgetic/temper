@@ -1,6 +1,7 @@
-use temper_lib::{Deadlines, Duration, List, Slab};
+use temper_lib::{Deadlines, Duration, List, Queue, Slab};
 
 use crate::boundary::Budget;
+use crate::facts::Fact;
 use crate::llm::Message;
 use crate::session::{Alarm, Session};
 
@@ -30,6 +31,9 @@ pub struct Limits {
     pub backoff_max: Duration,
     /// How long the protocol layer gives each call.
     pub call_timeout: Duration,
+    /// Facts kept until the parent drains them. Beyond them, facts are
+    /// dropped and counted.
+    pub facts: u32,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
@@ -37,14 +41,16 @@ pub struct Limits {
 ///
 /// It counts the containers, their bookkeeping included, and the payloads, not
 /// allocator overhead. The prompts of calls in flight are copies held by the
-/// protocol layer, which counts them.
+/// protocol layer, and the texts of yields copies held by the opener, which
+/// count them. Facts own nothing beyond their queue.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let sessions = Slab::<Session>::worst_case(limits.sessions)?;
     let alarms = Deadlines::<Alarm>::worst_case(alarms(limits)?)?;
+    let facts = Queue::<Fact>::worst_case(limits.facts)?;
     // Each session owns its transcript's list and up to its byte limit.
     let session = List::<Message>::worst_case(limits.messages)?.checked_add(limits.session_bytes)?;
-    sessions.checked_add(alarms)?.checked_add(u64::from(limits.sessions).checked_mul(session)?)
+    sessions.checked_add(alarms)?.checked_add(facts)?.checked_add(u64::from(limits.sessions).checked_mul(session)?)
 }
 
 /// The alarm table's capacity: every session may have two alarms armed.

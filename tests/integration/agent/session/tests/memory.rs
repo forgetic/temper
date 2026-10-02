@@ -84,6 +84,7 @@ const LIMITS: Limits = Limits {
     backoff_base: Duration::from_secs(60),
     backoff_max: Duration::from_secs(60),
     call_timeout: Duration::from_secs(30),
+    facts: 64,
 };
 
 /// What a step asked for last, without the payload.

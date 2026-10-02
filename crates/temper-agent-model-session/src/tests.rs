@@ -1,12 +1,13 @@
 //! Feed the model events, inspect the requests that come out.
 
 use alloc::boxed::Box;
+use core::mem::size_of;
 
 use temper_lib::{Duration, Env, Queue, Time, Token};
 
 use crate::llm::{Block, Completion, Endpoint, Failure, Message, Prompt, Role, Stop, Tool, Usage};
 use crate::{
-    Budget, Dimension, End, Event, Limits, MAX_OUT, Model, Request, Spec, ToolCall, Yield, fire, step, worst_case,
+    Budget, Dimension, End, Event, Fact, Limits, MAX_OUT, Model, Request, Spec, ToolCall, Yield, fire, step, worst_case,
 };
 
 /// The budget every spec asks for, unless a test says otherwise: the most the
@@ -30,6 +31,7 @@ const LIMITS: Limits = Limits {
     backoff_base: Duration::from_millis(100),
     backoff_max: Duration::from_secs(1),
     call_timeout: Duration::from_secs(30),
+    facts: 64,
 };
 
 const OUT_OF_TIME: End = End::Budget { spent: Dimension::Time };
@@ -123,6 +125,14 @@ impl Harness {
         let (session, _) = self.open_with(1, spec);
         drop(yielded(self.step(Event::Completed { owner: session, completion: answer })));
         session
+    }
+
+    /// Drains the facts told so far, checking that they are `expected`.
+    fn told(&mut self, expected: &[Fact]) {
+        for fact in expected {
+            assert_eq!(self.model.pop_fact().as_ref(), Some(fact));
+        }
+        assert_eq!(self.model.pop_fact(), None, "nothing more was told");
     }
 
     fn after(&mut self, span: Duration) {
@@ -634,8 +644,106 @@ fn a_transcript_with_no_room_for_another_message_ends_the_session() {
 }
 
 #[test]
+fn a_session_tells_what_happens_as_facts() {
+    let mut h = Harness::new(LIMITS);
+    let opener = Token::new(1);
+    let (owner, _) = h.open(1);
+    h.told(&[Fact::Opened { opener }, Fact::CompletionStarted { opener, attempt: 0, messages: 1, max_tokens: 1024 }]);
+
+    drop(running(h.step(Event::Completed { owner, completion: ls() })));
+    h.told(&[
+        Fact::CompletionAnswered { opener, stop: Stop::ToolUse, blocks: 1 },
+        Fact::Used { opener, usage: USAGE },
+        Fact::ToolStarted { opener, block: 0 },
+    ]);
+    drop(calling(h.step(Event::ToolDone { owner, output: bytes(b"main.rs"), error: false })));
+    h.told(&[
+        Fact::ToolFinished { opener, output: 7, error: false },
+        Fact::CompletionStarted { opener, attempt: 0, messages: 3, max_tokens: 1024 },
+    ]);
+    drop(yielded(h.step(Event::Completed { owner, completion: done() })));
+    h.told(&[
+        Fact::CompletionAnswered { opener, stop: Stop::EndTurn, blocks: 1 },
+        Fact::Used { opener, usage: USAGE },
+        Fact::Yielded { opener, stop: Yield::Done },
+    ]);
+    let end = h.step(Event::Close { session: owner });
+    let Some(Request::Ended { opener: _, end, turns, usage }) = end else {
+        panic!("expected the end, not {end:?}");
+    };
+    h.told(&[Fact::Ended { opener, end, turns, usage }]);
+}
+
+#[test]
+fn retries_cancels_and_refusals_are_told_too() {
+    let mut h = Harness::new(Limits { sessions: 1, ..LIMITS });
+    let opener = Token::new(1);
+    let (owner, _) = h.open(1);
+    assert_eq!(h.step(Event::Failed { owner, failure: Failure::Overloaded }), None);
+    let retry = h.model.next_deadline().expect("a retry is armed");
+    let started = Fact::CompletionStarted { opener, attempt: 0, messages: 1, max_tokens: 1024 };
+    let delay = retry.saturating_since(Time::ZERO);
+    h.told(&[
+        Fact::Opened { opener },
+        started,
+        Fact::CompletionFailed { opener, failure: Failure::Overloaded },
+        Fact::CompletionRetried { opener, attempt: 1, delay },
+    ]);
+    h.env.now = retry;
+    drop(calling(h.fire()));
+    h.told(&[Fact::CompletionStarted { opener, attempt: 1, messages: 1, max_tokens: 1024 }]);
+
+    let refused = Token::new(2);
+    drop(h.step(Event::Open { opener: refused, spec: spec() }));
+    h.told(&[Fact::Ended { opener: refused, end: End::Busy, turns: 0, usage: Usage::ZERO }]);
+
+    assert_eq!(h.step(Event::Close { session: owner }), Some(Request::Cancel { owner }));
+    h.told(&[]);
+    drop(h.step(Event::Cancelled { owner }));
+    let end = Fact::Ended { opener, end: End::Closed, turns: 0, usage: Usage::ZERO };
+    h.told(&[Fact::CompletionCancelled { opener }, end]);
+}
+
+/// Opens a session, has the LLM call a tool and the tool run, and returns
+/// the session's name and what came out.
+fn drive(h: &mut Harness) -> (Token, Prompt, Option<Request>, Option<Request>) {
+    let (owner, prompt) = h.open(1);
+    let tool = h.step(Event::Completed { owner, completion: ls() });
+    let call = h.step(Event::ToolDone { owner, output: bytes(b"main.rs"), error: false });
+    (owner, prompt, tool, call)
+}
+
+#[test]
+fn facts_beyond_their_room_are_dropped_and_counted_and_change_nothing() {
+    let mut full = Harness::new(Limits { facts: 2, ..LIMITS });
+    let mut none = Harness::new(Limits { facts: 0, ..LIMITS });
+    let mut roomy = Harness::new(LIMITS);
+    let requests = drive(&mut roomy);
+    assert_eq!(drive(&mut full), requests);
+    assert_eq!(drive(&mut none), requests);
+    // Two facts on opening, three on the completion, two on the tool's result.
+    assert_eq!((full.model.facts_lost(), none.model.facts_lost(), roomy.model.facts_lost()), (5, 7, 0));
+    let opener = Token::new(1);
+    full.told(&[
+        Fact::Opened { opener },
+        Fact::CompletionStarted { opener, attempt: 0, messages: 1, max_tokens: 1024 },
+    ]);
+    none.told(&[]);
+
+    // Drained, there is room again; what was dropped stays counted.
+    let (owner, ..) = requests;
+    drop(yielded(full.step(Event::Completed { owner, completion: done() })));
+    let answered = Fact::CompletionAnswered { opener, stop: Stop::EndTurn, blocks: 1 };
+    full.told(&[answered, Fact::Used { opener, usage: USAGE }]);
+    assert_eq!(full.model.facts_lost(), 6);
+}
+
+#[test]
 fn the_worst_case_is_bounded_or_refused() {
     let bytes = worst_case(&LIMITS).expect("the test limits fit");
     assert!(bytes > 2 * LIMITS.session_bytes, "every session may hold its bytes");
+    let told = worst_case(&Limits { facts: LIMITS.facts + 1, ..LIMITS }).expect("the test limits fit");
+    let fact = u64::try_from(size_of::<Fact>()).expect("a size fits");
+    assert_eq!(told - bytes, fact, "the facts' queue is counted, and nothing else of theirs");
     assert_eq!(worst_case(&Limits { sessions: u32::MAX, session_bytes: u64::MAX, ..LIMITS }), None);
 }

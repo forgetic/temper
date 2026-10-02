@@ -9,7 +9,7 @@ use temper_lib::{Duration, Env, Queue, Time, Token};
 
 use crate::llm::{Block, Completion, Endpoint, Failure, Message, Role, Stop, Tool, Usage};
 use crate::{
-    Budget, Dimension, End, Event, Limits, MAX_OUT, Model, Request, Spec, ToolCall, Yield, fire, step, worst_case,
+    Budget, Dimension, End, Event, Fact, Limits, MAX_OUT, Model, Request, Spec, ToolCall, Yield, fire, step, worst_case,
 };
 
 const BUDGET: Budget = Budget {
@@ -32,6 +32,7 @@ const LIMITS: Limits = Limits {
         backoff_base: Duration::from_millis(100),
         backoff_max: Duration::from_secs(1),
         call_timeout: Duration::from_secs(30),
+        facts: 64,
     },
 };
 
@@ -252,6 +253,21 @@ fn an_expired_tool_run_is_cancelled_and_its_cancellation_reaches_the_session() {
     h.expire();
     assert_eq!(h.fire(), Some(Request::CancelTool { owner }));
     assert_eq!(h.step(Event::ToolCancelled { owner }), Some(ended(OUT_OF_TIME, 1)));
+}
+
+#[test]
+fn the_sessions_facts_pass_through_to_the_loop() {
+    let mut h = Harness::new();
+    let session = h.open_yielded();
+    assert_eq!(h.model.pop_fact(), Some(Fact::Opened { opener: opener() }));
+    assert_eq!(h.step(Event::Close { session }), Some(ended(End::Closed, 1)));
+    let mut last = None;
+    for _ in 0..LIMITS.session.facts {
+        let Some(fact) = h.model.pop_fact() else { break };
+        last = Some(fact);
+    }
+    assert_eq!(last, Some(Fact::Ended { opener: opener(), end: End::Closed, turns: 1, usage: usage() }));
+    assert_eq!(h.model.facts_lost(), 0);
 }
 
 #[test]

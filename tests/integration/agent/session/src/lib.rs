@@ -12,9 +12,10 @@
 //! continue only to a yielded session, a yield or an end only with nothing in
 //! flight, no completion started past a session's budget, an end that adds up
 //! what was used) and the universal invariants once it settles (no live
-//! entities, nothing in flight, every session ended).
+//! entities, nothing in flight, every session ended, and facts that add up to
+//! what crossed the boundary unless some were dropped).
 
 pub mod translate;
 mod world;
 
-pub use world::{BUDGET, Count, Ended, Session, Settings, Span, Stats, World, spec};
+pub use world::{BUDGET, Count, Ended, Session, Settings, Span, Stats, Told, World, spec};

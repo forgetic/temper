@@ -87,6 +87,7 @@ impl Settings {
                 backoff_base: Duration::from_millis(200),
                 backoff_max: Duration::from_secs(5),
                 call_timeout: Duration::from_secs(60),
+                facts: 256,
             },
             provider: provider::Config {
                 calls: 16,
@@ -155,6 +156,23 @@ pub struct Stats {
     pub closes: u32,
     /// Continues and closes that reached a session after it had ended.
     pub stale: u32,
+}
+
+/// The facts the sessions told, by kind, as the loop drained them.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Told {
+    pub opened: u32,
+    pub completions_started: u32,
+    pub completions_answered: u32,
+    pub completions_failed: u32,
+    pub completions_cancelled: u32,
+    pub completions_retried: u32,
+    pub tools_started: u32,
+    pub tools_finished: u32,
+    pub tools_cancelled: u32,
+    pub yielded: u32,
+    pub used: u32,
+    pub ended: u32,
 }
 
 /// A session as its opener saw it.
@@ -250,6 +268,7 @@ pub struct World {
     openers: BTreeMap<Token, u64>,
 
     stats: Stats,
+    told: Told,
     trace: Vec<String>,
 }
 
@@ -281,6 +300,7 @@ impl World {
             sessions: BTreeMap::new(),
             openers: BTreeMap::new(),
             stats: Stats::default(),
+            told: Told::default(),
             trace: Vec::new(),
         }
     }
@@ -293,6 +313,13 @@ impl World {
     #[must_use]
     pub fn stats(&self) -> Stats {
         self.stats
+    }
+
+    /// The facts the sessions told, and how many they dropped for want of
+    /// room.
+    #[must_use]
+    pub fn told(&self) -> (Told, u64) {
+        (self.told, self.agent.facts_lost())
     }
 
     /// What crossed between the models and the world, in order, with times.
@@ -354,6 +381,10 @@ impl World {
         while self.agent_out.room() >= agent::MAX_OUT && self.agent.is_due(self.now) {
             self.log("agent alarm");
             agent::fire(&mut self.agent, &self.agent_env, &mut self.agent_out);
+        }
+        // The facts, drained as the shell would write them out.
+        while let Some(fact) = self.agent.pop_fact() {
+            self.tell(fact);
         }
         while self.provider_out.room() >= provider::MAX_OUT {
             let Some(event) = self.provider_in.pop_front() else { break };
@@ -652,6 +683,44 @@ impl World {
         [wire, self.agent.next_deadline(), self.provider.next_deadline()].into_iter().flatten().min()
     }
 
+    fn tell(&mut self, fact: agent::Fact) {
+        let told = &mut self.told;
+        let count = match fact {
+            agent::Fact::Opened { .. } => &mut told.opened,
+            agent::Fact::CompletionStarted { .. } => &mut told.completions_started,
+            agent::Fact::CompletionAnswered { .. } => &mut told.completions_answered,
+            agent::Fact::CompletionFailed { .. } => &mut told.completions_failed,
+            agent::Fact::CompletionCancelled { .. } => &mut told.completions_cancelled,
+            agent::Fact::CompletionRetried { .. } => &mut told.completions_retried,
+            agent::Fact::ToolStarted { .. } => &mut told.tools_started,
+            agent::Fact::ToolFinished { .. } => &mut told.tools_finished,
+            agent::Fact::ToolCancelled { .. } => &mut told.tools_cancelled,
+            agent::Fact::Yielded { .. } => &mut told.yielded,
+            agent::Fact::Used { .. } => &mut told.used,
+            agent::Fact::Ended { .. } => &mut told.ended,
+        };
+        *count += 1;
+    }
+
+    /// What the facts must add up to when none were dropped: what the world
+    /// saw cross the boundary.
+    fn assert_told(&self) {
+        let (told, stats) = (&self.told, &self.stats);
+        let count = |n: usize| u32::try_from(n).expect("a small world");
+        let opened = count(self.sessions.values().filter(|session| session.session.is_some()).count());
+        let turns: u32 = self.sessions.values().map(|session| session.turns).sum();
+        assert_eq!((told.opened, told.ended), (opened, count(self.sessions.len())), "an open and an end each");
+        assert_eq!(told.completions_started, stats.calls, "a fact for every call");
+        let ended = told.completions_answered + told.completions_failed + told.completions_cancelled;
+        assert_eq!(ended, stats.calls, "a fact for the end of every call");
+        assert_eq!(told.completions_cancelled, stats.cancels, "a fact for every cancelled call");
+        assert_eq!(told.used, turns, "a fact for every completion's usage");
+        assert_eq!(told.tools_started, stats.tool_runs, "a fact for every tool run");
+        assert_eq!(told.tools_finished + told.tools_cancelled, stats.tool_runs, "a fact for the end of every run");
+        assert_eq!(told.tools_cancelled, stats.tool_cancels, "a fact for every cancelled run");
+        assert_eq!(told.yielded, stats.yields, "a fact for every yield");
+    }
+
     /// The invariants of a world where nothing is left to happen.
     fn assert_settled(&self) {
         assert_eq!(self.agent.sessions(), 0, "every session has ended and been reclaimed");
@@ -666,6 +735,9 @@ impl World {
         );
         for (opener, session) in &self.sessions {
             assert!(session.ended.is_some(), "session {opener} has ended");
+        }
+        if self.agent.facts_lost() == 0 {
+            self.assert_told();
         }
     }
 

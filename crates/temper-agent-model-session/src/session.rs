@@ -46,6 +46,10 @@
 //! Backoff, Tooling and Yielded; the retry alarm in Backoff. Both follow from
 //! the state, in one place ([`follow`]), which also retires a session once it
 //! is Closed.
+//!
+//! Every transition tells what happened as facts: the entry point tells of
+//! the event it was given (a completion or a tool run ending, a retry), and
+//! [`tell`] of the requests the transition made, in one place.
 
 use alloc::boxed::Box;
 use core::mem::{self, size_of};
@@ -53,6 +57,7 @@ use core::mem::{self, size_of};
 use temper_lib::{Deadlines, Duration, Env, Id, List, Queue, Rng, Slab, Time, Token, Writer};
 
 use crate::boundary::{Budget, Dimension, End, Request, Spec, ToolCall, Yield};
+use crate::facts::{Fact, Facts};
 use crate::limits::Limits;
 use crate::llm::{Block, Completion, Endpoint, Failure, Message, Prompt, Role, Stop, Tool, Usage};
 use crate::model::Model;
@@ -120,15 +125,17 @@ pub(crate) enum Alarm {
 }
 
 // Entry points, one per event or alarm: look the session up, take its state
-// out, run the cell's handler, follow the new state.
+// out, run the cell's handler, then tell what happened and follow the new
+// state ([`conclude`]).
 
 pub(crate) fn open(model: &mut Model, env: &Env<Limits>, opener: Token, spec: Spec, out: &mut Queue<Request>) {
+    let mark = out.len();
     if model.sessions.is_full() {
-        out.push(refused(opener, End::Busy));
+        refuse(&mut model.facts, opener, End::Busy, out);
         return;
     }
     let Some(conversation) = admit(opener, spec, &env.limits, env.now) else {
-        out.push(refused(opener, End::Invalid));
+        refuse(&mut model.facts, opener, End::Invalid, out);
         return;
     };
     // Closed until the first call is made, which a budget just admitted pays
@@ -138,7 +145,7 @@ pub(crate) fn open(model: &mut Model, env: &Env<Limits>, opener: Token, spec: Sp
     out.push(Request::Opened { opener, session: id.token() });
     let session = model.sessions.get_mut(id).expect("inserted above");
     session.state = call(&session.conversation, id, 0, env, out);
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn resume(
@@ -148,6 +155,7 @@ pub(crate) fn resume(
     content: Box<[u8]>,
     out: &mut Queue<Request>,
 ) {
+    let mark = out.len();
     let Some(id) = addressed(&model.sessions, session) else {
         return;
     };
@@ -161,10 +169,11 @@ pub(crate) fn resume(
         }
         State::Closed => unreachable!("an addressed session has not ended"),
     };
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn close(model: &mut Model, session: Token, out: &mut Queue<Request>) {
+    let mark = out.len();
     let Some(id) = addressed(&model.sessions, session) else {
         return;
     };
@@ -178,7 +187,7 @@ pub(crate) fn close(model: &mut Model, session: Token, out: &mut Queue<Request>)
         State::Closing { end } => State::Closing { end },
         State::Closed => unreachable!("an addressed session has not ended"),
     };
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn completed(
@@ -188,8 +197,11 @@ pub(crate) fn completed(
     completion: Completion,
     out: &mut Queue<Request>,
 ) {
+    let mark = out.len();
     let id = Id::from_token(owner);
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
+    let (opener, stop, blocks) = (session.conversation.opener, completion.stop, count(completion.content.len()));
+    model.facts.push(Fact::CompletionAnswered { opener, stop, blocks });
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
@@ -199,28 +211,40 @@ pub(crate) fn completed(
             unreachable!("a completion ends a call in flight")
         }
     };
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn failed(model: &mut Model, env: &Env<Limits>, owner: Token, failure: Failure, out: &mut Queue<Request>) {
-    let Model { sessions, alarms, rng } = model;
+    let mark = out.len();
     let id = Id::from_token(owner);
-    let session = sessions.get_mut(id).expect("a session lives until its requests have ended");
+    let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
+    let opener = session.conversation.opener;
+    model.facts.push(Fact::CompletionFailed { opener, failure });
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
-        State::Calling { attempt } => call_failed(conversation, attempt, failure, rng, env, out),
+        State::Calling { attempt } => call_failed(conversation, attempt, failure, &mut model.rng, env, out),
         State::Closing { end } => finish(conversation, end, out),
         State::Backoff { .. } | State::Tooling { .. } | State::Yielded | State::Closed => {
             unreachable!("a failure ends a call in flight")
         }
     };
-    follow(sessions, alarms, id);
+    // A retry is told with its wait: no request goes out until then.
+    match &session.state {
+        State::Backoff { attempt, until } => {
+            let delay = until.saturating_since(env.now);
+            model.facts.push(Fact::CompletionRetried { opener, attempt: *attempt, delay });
+        }
+        State::Calling { .. } | State::Tooling { .. } | State::Yielded | State::Closing { .. } | State::Closed => {}
+    }
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
+    let mark = out.len();
     let id = Id::from_token(owner);
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
+    model.facts.push(Fact::CompletionCancelled { opener: session.conversation.opener });
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
         State::Closing { end } => finish(&session.conversation, end, out),
@@ -228,7 +252,7 @@ pub(crate) fn cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request
             unreachable!("a cancellation answers a cancel, sent only on the way to Closing")
         }
     };
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn tool_done(
@@ -239,8 +263,11 @@ pub(crate) fn tool_done(
     error: bool,
     out: &mut Queue<Request>,
 ) {
+    let mark = out.len();
     let id = Id::from_token(owner);
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
+    let fact = Fact::ToolFinished { opener: session.conversation.opener, output: size(&output), error };
+    model.facts.push(fact);
     let state = mem::replace(&mut session.state, State::Closed);
     let conversation = &mut session.conversation;
     session.state = match state {
@@ -253,12 +280,14 @@ pub(crate) fn tool_done(
             unreachable!("a tool result ends a tool run in flight")
         }
     };
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn tool_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
+    let mark = out.len();
     let id = Id::from_token(owner);
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
+    model.facts.push(Fact::ToolCancelled { opener: session.conversation.opener });
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
         State::Closing { end } => finish(&session.conversation, end, out),
@@ -266,10 +295,11 @@ pub(crate) fn tool_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Re
             unreachable!("a cancellation answers a cancel, sent only on the way to Closing")
         }
     };
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn expire(model: &mut Model, id: Id<Session>, out: &mut Queue<Request>) {
+    let mark = out.len();
     let session = model.sessions.get_mut(id).expect("an alarm is cancelled before its session closes");
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
@@ -280,10 +310,11 @@ pub(crate) fn expire(model: &mut Model, id: Id<Session>, out: &mut Queue<Request
             unreachable!("the expiry alarm runs only in Calling, Backoff, Tooling and Yielded")
         }
     };
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: &mut Queue<Request>) {
+    let mark = out.len();
     let session = model.sessions.get_mut(id).expect("an alarm is cancelled before its session closes");
     let state = mem::replace(&mut session.state, State::Closed);
     session.state = match state {
@@ -292,7 +323,7 @@ pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: 
             unreachable!("the retry alarm runs only in Backoff")
         }
     };
-    follow(&mut model.sessions, &mut model.alarms, id);
+    conclude(model, id, out, mark);
 }
 
 /// The session an opener's handle names, or `None` if it has ended: the handle
@@ -307,6 +338,58 @@ fn addressed(sessions: &Slab<Session>, session: Token) -> Option<Id<Session>> {
         | State::Yielded
         | State::Closing { .. } => Some(id),
         State::Closed => None,
+    }
+}
+
+/// Applied after every transition: what it tells, and what the new state
+/// implies. `mark` is where the requests the transition made begin in `out`.
+fn conclude(model: &mut Model, id: Id<Session>, out: &Queue<Request>, mark: u32) {
+    let session = model.sessions.get(id).expect("a session lives until it is retired");
+    tell(&mut model.facts, session, out, mark);
+    follow(&mut model.sessions, &mut model.alarms, id);
+}
+
+/// What a transition tells, derived from the requests it made: a fact for
+/// each but the cancels, whose outcome is told when it comes.
+fn tell(facts: &mut Facts, session: &Session, out: &Queue<Request>, mark: u32) {
+    let opener = session.conversation.opener;
+    let made = usize::try_from(mark).expect("a u32 fits in a usize");
+    for request in out.iter().skip(made) {
+        let fact = match request {
+            Request::Opened { opener, session: _ } => Fact::Opened { opener: *opener },
+            Request::Yielded { opener, stop, text: _ } => Fact::Yielded { opener: *opener, stop: *stop },
+            Request::Used { opener, usage } => Fact::Used { opener: *opener, usage: *usage },
+            Request::Ended { opener, end, turns, usage } => {
+                Fact::Ended { opener: *opener, end: *end, turns: *turns, usage: *usage }
+            }
+            Request::Complete { owner: _, prompt, timeout: _ } => {
+                let (messages, max_tokens) = (count(prompt.messages.len()), prompt.max_tokens);
+                Fact::CompletionStarted { opener, attempt: attempt(&session.state), messages, max_tokens }
+            }
+            Request::Tool { owner: _, call: _ } => Fact::ToolStarted { opener, block: block(&session.state) },
+            Request::Cancel { .. } | Request::CancelTool { .. } => continue,
+        };
+        facts.push(fact);
+    }
+}
+
+/// The retries of the call a session has just asked for.
+fn attempt(state: &State) -> u32 {
+    match state {
+        State::Calling { attempt } => *attempt,
+        State::Backoff { .. } | State::Tooling { .. } | State::Yielded | State::Closing { .. } | State::Closed => {
+            unreachable!("a session that asks for a completion is calling")
+        }
+    }
+}
+
+/// The block of the tool call a session has just asked to run.
+fn block(state: &State) -> u32 {
+    match state {
+        State::Tooling { tools } => tools.block,
+        State::Calling { .. } | State::Backoff { .. } | State::Yielded | State::Closing { .. } | State::Closed => {
+            unreachable!("a session that runs a tool is tooling")
+        }
     }
 }
 
@@ -513,9 +596,10 @@ fn finish(conversation: &Conversation, end: End, out: &mut Queue<Request>) -> St
 /// How a session ends when its time budget runs out.
 const OUT_OF_TIME: End = End::Budget { spent: Dimension::Time };
 
-/// The end of a session refused at the entrance, which never opened.
-fn refused(opener: Token, end: End) -> Request {
-    Request::Ended { opener, end, turns: 0, usage: Usage::ZERO }
+/// Refuses an open at the entrance: the session ends without having opened.
+fn refuse(facts: &mut Facts, opener: Token, end: End, out: &mut Queue<Request>) {
+    facts.push(Fact::Ended { opener, end, turns: 0, usage: Usage::ZERO });
+    out.push(Request::Ended { opener, end, turns: 0, usage: Usage::ZERO });
 }
 
 /// The conversation for `spec`, or `None` if the spec does not fit the limits.
@@ -765,4 +849,15 @@ fn payload_cost(block: &Block) -> Option<u64> {
 
 fn len(bytes: &[u8]) -> Option<u64> {
     u64::try_from(bytes.len()).ok()
+}
+
+/// A count for a fact, which saturates rather than fails: facts decide
+/// nothing.
+fn count(items: usize) -> u32 {
+    u32::try_from(items).unwrap_or(u32::MAX)
+}
+
+/// A size for a fact, likewise.
+fn size(bytes: &[u8]) -> u64 {
+    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
 }
