@@ -7,10 +7,10 @@ use temper_lib::{Duration, Env, List, Queue, Time};
 
 use crate::{
     Action, AgentSpec, Batch, Budget, ChangeSpec, Charter, Ci, Commit, Config, Decision, Due, Envelope, Facts, Finish,
-    Gate, Goal, Grants, Growing, Growth, Hold, Key, Limits, Mergeable, Plan, Problem, Problems, Progress, Pull,
-    PullState, Record, Relations, Repair, Repo, Repository, Resume, Review, Reviewed, Run, Sections, SessionSpec,
-    Sources, Step, Target, Template, Verdict, WaitSpec, Waits, Wake, Why, Work, Write, accept, check, due, grow,
-    max_out, worst_case,
+    Gate, Goal, Grants, Growing, Growth, Hold, Inbound, Key, Limits, Mergeable, Plan, Problem, Problems, Progress,
+    Pull, PullState, Record, Relations, Repair, Repo, Repository, Resume, Review, Reviewed, Run, Sections, SessionSpec,
+    Source, Sources, Step, Target, Template, Verdict, WaitSpec, Waits, Wake, Why, Woken, Work, Write, accept, check,
+    due, grow, max_out, wake, worst_case,
 };
 
 /// The most a run may ask for.
@@ -770,6 +770,91 @@ fn a_change_reviewed_by_an_agent_runs_a_review_of_its_exact_head() {
     assert_eq!(repair.why, Why::Repair(Repair::ChangesRequested));
     // A verdict on an earlier head counts for nothing.
     assert_eq!(ran(&reviewed(&change, Verdict::Approve, head(1)), &unapproved).why, Why::Review { head: head(2) });
+}
+
+// Wakes.
+
+fn inbound(source: Source, at: u64) -> Inbound {
+    Inbound { source, at: Time::from_nanos(at) }
+}
+
+/// Woken by its own changes and its relations, three at a time or once the
+/// oldest is 200 old; by messages; and every 5000 after its last turn.
+const BATCHED: Wake = Wake {
+    on: Sources { own: true, related: true, subscribed: false, messages: true },
+    every: Some(Duration::from_nanos(5_000)),
+    batch: Batch { count: 3, age: Some(Duration::from_nanos(200)) },
+};
+
+/// The last turn, long enough ago for the timer not to matter.
+const LAST: Time = Time::from_nanos(900);
+
+#[test]
+fn events_a_rule_does_not_name_wake_nothing() {
+    assert_eq!(wake(&env(), &WAKE, &[], LAST), Woken::No);
+    assert_eq!(wake(&env(), &WAKE, &[inbound(Source::Subscribed, 990)], LAST), Woken::No);
+    let deaf = Wake { on: Sources { own: false, related: false, subscribed: false, messages: false }, ..WAKE };
+    let all = [
+        inbound(Source::Own, 990),
+        inbound(Source::Dependency, 990),
+        inbound(Source::Child, 990),
+        inbound(Source::Subscribed, 990),
+        inbound(Source::Message, 990),
+    ];
+    assert_eq!(wake(&env(), &deaf, &all, LAST), Woken::No);
+}
+
+#[test]
+fn an_event_a_rule_names_wakes_at_once_without_a_batch() {
+    for source in [Source::Own, Source::Dependency, Source::Child, Source::Message] {
+        assert_eq!(wake(&env(), &WAKE, &[inbound(source, 990)], LAST), Woken::Now);
+    }
+    let subscribed = Wake { on: Sources { subscribed: true, ..WAKE.on }, ..WAKE };
+    assert_eq!(wake(&env(), &subscribed, &[inbound(Source::Subscribed, 990)], LAST), Woken::Now);
+}
+
+#[test]
+fn a_batch_wakes_once_it_is_full_or_its_oldest_is_old() {
+    let two = [inbound(Source::Own, 900), inbound(Source::Child, 950)];
+    assert_eq!(wake(&env(), &BATCHED, &two, LAST), Woken::At(Time::from_nanos(1_100)));
+    let three = [inbound(Source::Own, 900), inbound(Source::Child, 950), inbound(Source::Dependency, 990)];
+    assert_eq!(wake(&env(), &BATCHED, &three, LAST), Woken::Now);
+    let old = [inbound(Source::Own, 800), inbound(Source::Child, 950)];
+    assert_eq!(wake(&env(), &BATCHED, &old, LAST), Woken::Now);
+    let counted = Wake { batch: Batch { count: 3, age: None }, ..BATCHED };
+    assert_eq!(wake(&env(), &counted, &two, LAST), Woken::At(Time::from_nanos(5_900)));
+    let untimed = Wake { every: None, ..counted };
+    assert_eq!(wake(&env(), &untimed, &two, LAST), Woken::No);
+}
+
+#[test]
+fn a_message_is_never_batched() {
+    let message = [inbound(Source::Own, 990), inbound(Source::Message, 995)];
+    assert_eq!(wake(&env(), &BATCHED, &message, LAST), Woken::Now);
+    let unheard = Wake { on: Sources { messages: false, ..BATCHED.on }, ..BATCHED };
+    assert_eq!(wake(&env(), &unheard, &message, LAST), Woken::At(Time::from_nanos(1_190)));
+}
+
+#[test]
+fn a_timer_wakes_a_while_after_the_last_turn() {
+    let timed = Wake { every: Some(Duration::from_nanos(500)), ..WAKE };
+    assert_eq!(wake(&env(), &timed, &[], Time::from_nanos(600)), Woken::At(Time::from_nanos(1_100)));
+    assert_eq!(wake(&env(), &timed, &[], Time::from_nanos(500)), Woken::Now);
+    // The sooner of the timer and the batch.
+    let both = Wake { every: Some(Duration::from_nanos(100)), ..BATCHED };
+    let one = [inbound(Source::Own, 990)];
+    assert_eq!(wake(&env(), &both, &one, Time::from_nanos(900)), Woken::Now);
+    assert_eq!(wake(&env(), &both, &one, Time::from_nanos(980)), Woken::At(Time::from_nanos(1_080)));
+}
+
+#[test]
+fn only_as_many_events_as_the_limits_say_are_read() {
+    let mut inbox = [inbound(Source::Subscribed, 990); 10];
+    inbox[8] = inbound(Source::Own, 990);
+    inbox[9] = inbound(Source::Message, 990);
+    assert_eq!(wake(&env(), &WAKE, &inbox, LAST), Woken::No);
+    inbox[7] = inbound(Source::Own, 990);
+    assert_eq!(wake(&env(), &WAKE, &inbox, LAST), Woken::Now);
 }
 
 // Limits.
