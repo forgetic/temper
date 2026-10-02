@@ -336,9 +336,9 @@ fn ran(owner: Token, content: &[u8]) -> Event {
     Event::Done { owner, done: loaded(content) }
 }
 
-/// A fact the tools told, as the session passes it on.
-fn by_tools(fact: tools::Fact) -> Fact {
-    Fact::Tools { fact }
+/// A fact the tools told, as the session for `opener` passes it on.
+fn by_tools(opener: Token, fact: tools::Fact) -> Fact {
+    Fact::Tools { opener, fact }
 }
 
 fn result(id: &[u8], outcome: Outcome) -> Block {
@@ -478,7 +478,7 @@ fn an_invalid_call_is_answered_with_its_problem_and_nothing_runs_for_it() {
 
     let opener = Token::new(1);
     let started = Fact::CompletionStarted { opener, attempt: 0, messages: 1, max_tokens: 1024 };
-    let kit = Fact::Tools { fact: tools::Fact::Opened { session: owner } };
+    let kit = Fact::Tools { opener, fact: tools::Fact::Opened { session: owner } };
     let opening = [h.model.pop_fact(), h.model.pop_fact(), h.model.pop_fact()];
     assert_eq!(opening, [Some(Fact::Opened { opener }), Some(started), Some(kit)]);
     let answered = Fact::CompletionAnswered { opener, stop: Stop::ToolUse, blocks: 3, calls: 3, invalid: 2 };
@@ -697,12 +697,12 @@ fn the_tools_tell_of_each_call_and_the_session_passes_it_on() {
     h.told(&[
         Fact::Opened { opener },
         Fact::CompletionStarted { opener, attempt: 0, messages: 1, max_tokens: 1024 },
-        by_tools(tools::Fact::Opened { session: owner }),
+        by_tools(opener, tools::Fact::Opened { session: owner }),
         Fact::CompletionAnswered { opener, stop: Stop::ToolUse, blocks: 3, calls: 2, invalid: 0 },
         Fact::Used { opener, usage: USAGE },
-        by_tools(tools::Fact::Started { session: owner, tool: read }),
-        by_tools(tools::Fact::Started { session: owner, tool: read }),
-        by_tools(tools::Fact::Answered { session: owner, tool: read, verdict: tools::Verdict::Read, bytes: 1 }),
+        by_tools(opener, tools::Fact::Started { session: owner, tool: read }),
+        by_tools(opener, tools::Fact::Started { session: owner, tool: read }),
+        by_tools(opener, tools::Fact::Answered { session: owner, tool: read, verdict: tools::Verdict::Read, bytes: 1 }),
     ]);
 }
 
@@ -818,14 +818,14 @@ fn delegated_calls_are_told_as_they_start_and_end() {
     h.told(&[
         Fact::Opened { opener },
         Fact::CompletionStarted { opener, attempt: 0, messages: 1, max_tokens: 1024 },
-        Fact::Tools { fact: tools::Fact::Opened { session: owner } },
+        Fact::Tools { opener, fact: tools::Fact::Opened { session: owner } },
         Fact::CompletionAnswered { opener, stop: Stop::ToolUse, blocks: 2, calls: 2, invalid: 0 },
         Fact::Used { opener, usage: USAGE },
         Fact::DelegateStarted { opener, block: 0 },
         Fact::DelegateStarted { opener, block: 1 },
         Fact::DelegateAnswered { opener, bytes: 3, error: true },
         // The kit closes as the session does, with nothing of its own to settle.
-        Fact::Tools { fact: tools::Fact::Closed { session: owner } },
+        Fact::Tools { opener, fact: tools::Fact::Closed { session: owner } },
         Fact::DelegateCancelled { opener },
         Fact::Ended { opener, end: End::Closed, turns: 1, usage: USAGE },
     ]);
@@ -1245,20 +1245,20 @@ fn a_session_tells_what_happens_as_facts() {
     h.told(&[
         Fact::Opened { opener },
         Fact::CompletionStarted { opener, attempt: 0, messages: 1, max_tokens: 1024 },
-        by_tools(tools::Fact::Opened { session: owner }),
+        by_tools(opener, tools::Fact::Opened { session: owner }),
     ]);
 
     let (run, _) = running(h.step(Event::Completed { owner, completion: reading() }));
     h.told(&[
         Fact::CompletionAnswered { opener, stop: Stop::ToolUse, blocks: 1, calls: 1, invalid: 0 },
         Fact::Used { opener, usage: USAGE },
-        by_tools(tools::Fact::Started { session: owner, tool: tools::Tool::Read }),
+        by_tools(opener, tools::Fact::Started { session: owner, tool: tools::Tool::Read }),
     ]);
     drop(calling(h.step(ran(run, b"main.rs"))));
     let verdict = tools::Verdict::Read;
     h.told(&[
         Fact::CompletionStarted { opener, attempt: 0, messages: 3, max_tokens: 1024 },
-        by_tools(tools::Fact::Answered { session: owner, tool: tools::Tool::Read, verdict, bytes: 7 }),
+        by_tools(opener, tools::Fact::Answered { session: owner, tool: tools::Tool::Read, verdict, bytes: 7 }),
     ]);
     drop(yielded(h.step(Event::Completed { owner, completion: done() })));
     h.told(&[
@@ -1270,7 +1270,7 @@ fn a_session_tells_what_happens_as_facts() {
     let Some(Request::Ended { opener: _, end, turns, usage }) = end else {
         panic!("expected the end, not {end:?}");
     };
-    h.told(&[Fact::Ended { opener, end, turns, usage }, by_tools(tools::Fact::Closed { session: owner })]);
+    h.told(&[Fact::Ended { opener, end, turns, usage }, by_tools(opener, tools::Fact::Closed { session: owner })]);
 }
 
 #[test]
@@ -1285,7 +1285,7 @@ fn retries_cancels_and_refusals_are_told_too() {
     h.told(&[
         Fact::Opened { opener },
         started,
-        Fact::Tools { fact: tools::Fact::Opened { session: owner } },
+        Fact::Tools { opener, fact: tools::Fact::Opened { session: owner } },
         Fact::CompletionFailed { opener, failure: Failure::Overloaded },
         Fact::CompletionRetried { opener, attempt: 1, delay },
     ]);
@@ -1298,7 +1298,7 @@ fn retries_cancels_and_refusals_are_told_too() {
     h.told(&[Fact::Ended { opener: refused, end: End::Busy, turns: 0, usage: Usage::ZERO }]);
 
     assert_eq!(h.step(Event::Close { session: owner }), Some(Request::Cancel { owner }));
-    h.told(&[Fact::Tools { fact: tools::Fact::Closed { session: owner } }]);
+    h.told(&[Fact::Tools { opener, fact: tools::Fact::Closed { session: owner } }]);
     drop(h.step(Event::Cancelled { owner }));
     let end = Fact::Ended { opener, end: End::Closed, turns: 0, usage: Usage::ZERO };
     h.told(&[Fact::CompletionCancelled { opener }, end]);

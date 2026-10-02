@@ -638,13 +638,31 @@ pub(crate) fn rested(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out:
     conclude(model, env, id, out, mark);
 }
 
-/// Passes the tools' facts on among the session's own, as the tools' parent.
+/// Passes the tools' facts on among the session's own, as the tools' parent,
+/// each with the opener of the session whose kit it is of. Each pass drains
+/// the tools' queue, which holds no more facts than it takes, so a fact goes
+/// on at the end of the entry point that told it, while its session is there
+/// still: a session is reclaimed at the reclaim point at the earliest.
 pub(crate) fn pass_on_facts(model: &mut Model, env: &Env<Limits>) {
     for _ in 0..env.limits.tools.facts {
         let Some(fact) = model.calls.tools.pop_fact() else {
             break;
         };
-        model.facts.push(Fact::Tools { fact });
+        let session = model.sessions.get(Id::from_token(kit_session(fact)));
+        let opener = session.expect("a kit's session lives until the reclaim point").conversation.opener;
+        model.facts.push(Fact::Tools { opener, fact });
+    }
+}
+
+/// The session, as the tools name it, whose kit `fact` is of.
+const fn kit_session(fact: tools::Fact) -> Token {
+    match fact {
+        tools::Fact::Opened { session }
+        | tools::Fact::Refused { session, .. }
+        | tools::Fact::Started { session, .. }
+        | tools::Fact::Answered { session, .. }
+        | tools::Fact::Closing { session, .. }
+        | tools::Fact::Closed { session } => session,
     }
 }
 

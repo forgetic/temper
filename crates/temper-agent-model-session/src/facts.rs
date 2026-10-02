@@ -33,7 +33,9 @@ pub enum Fact {
     CompletionRetried { opener: Token, attempt: u32, delay: Duration },
     /// What the session's own tools told, of the kit the session has: its
     /// calls starting and being answered, and the kit opening and closing.
-    Tools { fact: tools::Fact },
+    /// The tools name the session by its own token; `opener` names its
+    /// conversation, as every other fact does.
+    Tools { opener: Token, fact: tools::Fact },
     /// The tool call at `block` of the last message was delegated to the
     /// opener.
     DelegateStarted { opener: Token, block: u32 },

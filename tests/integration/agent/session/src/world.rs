@@ -1157,6 +1157,18 @@ impl World {
     }
 
     fn tell(&mut self, fact: agent::Fact) {
+        if let agent::Fact::Tools { opener, fact } = fact {
+            let (tools::Fact::Opened { session }
+            | tools::Fact::Refused { session, .. }
+            | tools::Fact::Started { session, .. }
+            | tools::Fact::Answered { session, .. }
+            | tools::Fact::Closing { session, .. }
+            | tools::Fact::Closed { session }) = fact;
+            assert!(self.sessions.contains_key(&opener.raw()), "a kit's fact names an opener that opened");
+            if let Some(&known) = self.openers.get(&session) {
+                assert_eq!(known, opener.raw(), "a kit's fact names the opener of its session");
+            }
+        }
         let told = &mut self.told;
         if let agent::Fact::CompletionAnswered { calls, invalid, .. } = fact {
             told.calls += calls;
@@ -1169,7 +1181,7 @@ impl World {
             agent::Fact::CompletionFailed { .. } => &mut told.completions_failed,
             agent::Fact::CompletionCancelled { .. } => &mut told.completions_cancelled,
             agent::Fact::CompletionRetried { .. } => &mut told.completions_retried,
-            agent::Fact::Tools { fact } => match fact {
+            agent::Fact::Tools { opener: _, fact } => match fact {
                 tools::Fact::Opened { .. } => &mut told.kits_opened,
                 tools::Fact::Closed { .. } => &mut told.kits_closed,
                 tools::Fact::Started { .. } => &mut told.tools_started,

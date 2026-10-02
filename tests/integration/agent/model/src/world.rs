@@ -1317,7 +1317,7 @@ impl World {
                 session::Fact::CompletionRetried { .. }
                 | session::Fact::DelegateAnswered { .. }
                 | session::Fact::DelegateCancelled { .. } => {}
-                session::Fact::Tools { fact } => match fact {
+                session::Fact::Tools { opener: _, fact } => match fact {
                     tools::Fact::Started { .. } => told.tools_started += 1,
                     tools::Fact::Answered { .. } => told.tools_answered += 1,
                     tools::Fact::Opened { .. }
