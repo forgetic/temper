@@ -14,6 +14,10 @@
 //! [`Event::Done`], after a [`Request::Cancel`] too, and its `owner`, the
 //! hold's token, is echoed on it.
 //!
+//! A step ends at most one of a client's prepares, pushes and saves (one
+//! `Prepared`, `Pushed` or `Saved`), beside the `Held` of a prepare it
+//! admits or the `Released` of a hold released as that ended.
+//!
 //! A hold runs one operation at a time: a prepare, a push or a save. A push
 //! or a save asked for while another is under way, or of a hold whose
 //! prepare did not succeed, is refused. A request that names a hold that has

@@ -415,6 +415,29 @@ fn a_live_run_cancelled_winds_down_and_its_own_ending_is_the_answer() {
 }
 
 #[test]
+fn an_agent_that_exits_without_a_word_is_faulted_and_gone_in_one_step() {
+    let mut h = Harness::new(&LIMITS);
+    h.connect();
+    let r = h.live(1);
+    assert!(h.step(Event::Exited { owner: r.agent }).is_empty(), "what it wrote is still read");
+    assert!(h.step(Event::Reaped { owner: r.agent, detail: bytes(b"bye") }).is_empty());
+    // The agent sub-model tells the host the agent failed, then that it has
+    // gone: the host stops it (a stale name by then), saves its work, then
+    // answers.
+    let emitted = h.step(Event::Hangup { owner: r.agent });
+    let [Request::Io { op: Op::Commit { .. }, .. }] = &*emitted else {
+        panic!("expected the save's commit, got {emitted:?}");
+    };
+    let emitted = h.git(emitted, false);
+    let failed = host::Answer::Failed {
+        failure: host::Failure::Agent(host::AgentFailure::Exited),
+        detail: bytes(b"bye"),
+        work: work(&[], Some(Box::new([host::Landing::Unchanged]))),
+    };
+    assert_eq!(&*emitted, [answer(r, failed)]);
+}
+
+#[test]
 fn a_workspace_that_cannot_be_prepared_is_released_and_the_run_fails() {
     let mut h = Harness::new(&LIMITS);
     h.connect();
@@ -534,7 +557,11 @@ fn a_push_the_forge_refuses_fails_and_the_run_is_told() {
 
 #[test]
 fn an_inbound_event_the_agent_cannot_take_is_bounced_to_the_engine() {
-    let limits = Limits { agent: agent::Limits { events: 1, ..LIMITS.agent }, ..LIMITS };
+    let limits = Limits {
+        host: host::Limits { held: 1, ..LIMITS.host },
+        agent: agent::Limits { events: 1, ..LIMITS.agent },
+        ..LIMITS
+    };
     let mut h = Harness::new(&limits);
     h.connect();
     let r = h.live(1);
@@ -745,6 +772,7 @@ fn the_worst_case_is_bounded_or_refused() {
         Limits { host: host::Limits { snapshot_bytes: 31, ..LIMITS.host }, ..LIMITS },
         Limits { host: host::Limits { outcome_bytes: 33, ..LIMITS.host }, ..LIMITS },
         Limits { host: host::Limits { event_bytes: 17, ..LIMITS.host }, ..LIMITS },
+        Limits { host: host::Limits { held: 5, ..LIMITS.host }, ..LIMITS },
         Limits { agent: agent::Limits { call_bytes: 65, ..LIMITS.agent }, ..LIMITS },
         Limits {
             checkout: checkout::Limits { message_bytes: 8, ..LIMITS.checkout },
@@ -771,9 +799,12 @@ fn the_worst_case_is_bounded_or_refused() {
 #[test]
 fn max_out_follows_the_longest_chain_of_hand_offs() {
     // The host emits 4 a step at most here (two calls, then a stop and an
-    // answer); an entry point takes 5 host steps, 13 of each capability and
-    // one more of the checkout; and on connecting, 2 answers and 2 relays
-    // follow the hello.
+    // answer). An agent's step tells the host two things at most, each a
+    // host step whose 4 requests may each be answered at once, so an entry
+    // point takes 2 * (1 + 4) host steps; 1 + 2 * 4 * 3 of each capability
+    // (the first, those answering the first host steps, two for each that
+    // follows), and one more of the checkout. On connecting, 2 answers and 2
+    // relays follow the hello.
     assert_eq!(host::max_out(&LIMITS.host), 4);
-    assert_eq!(max_out(&LIMITS), 5 * 4 + 14 * checkout::MAX_OUT + 13 * agent::MAX_OUT + 2 + 2);
+    assert_eq!(max_out(&LIMITS), 10 * 4 + 26 * checkout::MAX_OUT + 25 * agent::MAX_OUT + 2 + 2);
 }

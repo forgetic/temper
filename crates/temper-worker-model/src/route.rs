@@ -14,7 +14,7 @@ use crate::boundary::{Event, Request};
 use crate::facts::Fact;
 use crate::limits::{self, Limits};
 use crate::link::Stalled;
-use crate::model::Model;
+use crate::model::{self, Model};
 use crate::translate;
 use crate::workspace::{self, Write};
 
@@ -39,7 +39,7 @@ pub(crate) fn event(model: &mut Model, env: &Env<Limits>, event: Event) {
     let event = match event {
         Event::Connected => {
             model.link.connected();
-            model.keep(Fact::Connected);
+            model::keep(model, Fact::Connected);
             // The host reports what it hosts, and the hello follows.
             return host_step(model, env, host::Event::Report);
         }
@@ -47,7 +47,7 @@ pub(crate) fn event(model: &mut Model, env: &Env<Limits>, event: Event) {
             let open = model.link.is_up();
             model.link.lost(env);
             if open {
-                model.keep(Fact::Lost);
+                model::keep(model, Fact::Lost);
             }
             return;
         }
@@ -156,11 +156,11 @@ fn from_host(model: &mut Model, env: &Env<Limits>, request: host::Request, out: 
 /// One of the checkout's requests: out to io, or to the host.
 fn from_checkout(model: &mut Model, env: &Env<Limits>, request: checkout::Request, out: &mut Queue<Request>) {
     match request {
-        checkout::Request::Held { client, hold } => workspace::held(model, client, hold),
+        checkout::Request::Held { client, hold } => workspace::held(model, env, client, hold),
         checkout::Request::Prepared { client, prepared } => workspace::prepared(model, env, client, prepared),
         checkout::Request::Pushed { client, outcome } => workspace::wrote(model, env, client, outcome, true),
         checkout::Request::Saved { client, outcome } => workspace::wrote(model, env, client, outcome, false),
-        checkout::Request::Released { client } => workspace::released(model, client),
+        checkout::Request::Released { client } => workspace::released(model, env, client),
         checkout::Request::Io { owner, op, deadline } => out.push(Request::Io { owner, op, deadline }),
         checkout::Request::Cancel { owner } => out.push(Request::CancelIo { owner }),
     }
@@ -180,7 +180,7 @@ fn from_agent(model: &mut Model, env: &Env<Limits>, request: agent::Request, out
         }
         agent::Request::Wait { owner, process } => return out.push(Request::Wait { owner, process }),
         agent::Request::Reap { owner, process } => return out.push(Request::Reap { owner, process }),
-        agent::Request::Told { client, fact } => return model.tell(client, fact),
+        agent::Request::Told { client, fact } => return model::tell(model, client, fact),
         agent::Request::Started { client, agent } => host::Event::Started { owner: client, agent },
         agent::Request::Called { client, call, ask } => {
             host::Event::Called { owner: client, call, ask: translate::ask(ask) }

@@ -25,6 +25,12 @@
 //!   watchdog pauses while a call waits for the client's answer, so what
 //!   bounds a relayed call is the run's own deadline for it: past it, the
 //!   run withdraws the call, and the client answers it at once.
+//!
+//!   A step tells the client at most two things: one for what it took (what
+//!   the run said, how the agent failed, that it started), and, as the agent
+//!   settles, that it has gone. A step for one of the client's own records
+//!   tells it at most one: a spawn refused at the entrance has gone, and a
+//!   delivery may bounce; none settles an agent, as only io's terminals do.
 //! - io's, through the protocol layer, which speaks the channel over the
 //!   process's pipes and runs the process tree. A [`Request::Spawn`] is ended
 //!   by exactly one [`Event::Spawned`] or [`Event::Unspawned`], by its

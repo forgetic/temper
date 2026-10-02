@@ -43,8 +43,10 @@ pub struct Limits {
 /// processes); what it admits must be what an agent is spawned with (a
 /// charter and a snapshot no larger than the agent sub-model takes), and the
 /// two must agree on what a run hands back (its outcome, its snapshot) and
-/// on what goes down to it (an inbound event no larger than an agent takes);
-/// and a run's push message, as the agent sub-model bounds a call, and the
+/// on what goes down to it (an inbound event no larger than an agent takes,
+/// and no more held for a run until it is live than may wait for it in its
+/// agent, so that those delivered as it starts never bounce); and a run's
+/// push message, as the agent sub-model bounds a call, and the
 /// save's must fit a commit message. A backoff must be a wait, and no longer
 /// than its ceiling.
 ///
@@ -66,6 +68,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         && host_limits.snapshot_bytes == agent_limits.snapshot_bytes
         && host_limits.outcome_bytes == agent_limits.outcome_bytes
         && host_limits.event_bytes <= agent_limits.event_bytes
+        && host_limits.held <= agent_limits.events
         && agent_limits.call_bytes <= u64::from(checkout_limits.message_bytes)
         && len(SAVED) <= u64::from(checkout_limits.message_bytes)
         && Duration::ZERO < limits.redial
@@ -123,23 +126,38 @@ pub(crate) fn facts(limits: &Limits) -> Option<u32> {
     limits.host.facts.checked_add(limits.checkout.facts)?.checked_add(limits.agent.facts)
 }
 
-/// The most host steps an entry point takes: one for the event it is for, or
-/// for what the capability it is for tells the host (an agent sub-model's step
-/// tells its client at most one thing, and a checkout's ends at most one
-/// prepare, push or save); and one more for each request that step makes,
-/// whose capability may answer it at once (an agent's bounce, a prepare
-/// refused, a push or a save with nothing to do). What the host makes of such
-/// an answer leads back to it no more: an answer to the engine, a reply to the
-/// run, a release.
+/// The most an agent sub-model's step tells its client, as its boundary says:
+/// one thing for what it took, then that the agent has gone. A step for one
+/// of the client's own records tells it at most one, which is never that the
+/// agent has gone, but for a spawn refused at the entrance.
+const TOLD: u32 = 2;
+
+/// The most a checkout's step tells its client that leads anywhere, as its
+/// boundary says: one prepare, push or save ended.
+const ENDED: u32 = 1;
+
+/// The most host steps an entry point takes that do not answer one of the
+/// host's own requests: the step for the event, if the event is for the
+/// host, or one for each thing the capability the event is for tells it.
+const fn first_steps() -> u32 {
+    if TOLD > ENDED { TOLD } else { ENDED }
+}
+
+/// The most host steps an entry point takes: the first ones, and one more for
+/// each request each of those makes, whose capability may answer it at once
+/// (a delivery bounced, a prepare refused, a push or a save with nothing to
+/// do, a spawn refused, which the limits rule out). What the host makes of
+/// such an answer leads back to it no more: an answer to the engine, a reply
+/// to the run, a release.
 pub(crate) const fn host_steps(limits: &Limits) -> u32 {
-    host::max_out(&limits.host).saturating_add(1)
+    first_steps().saturating_mul(host::max_out(&limits.host).saturating_add(1))
 }
 
 /// The most steps an entry point takes of each capability: the one it is for,
-/// one for each request of the first host step, and two for each of the host
+/// one for each request of each first host step, and two for each of the host
 /// steps that follow (a release and an answer, at most).
 const fn capability_steps(limits: &Limits) -> u32 {
-    host::max_out(&limits.host).saturating_mul(3).saturating_add(1)
+    first_steps().saturating_mul(host::max_out(&limits.host)).saturating_mul(3).saturating_add(1)
 }
 
 /// Room for what the host emits in an entry point.

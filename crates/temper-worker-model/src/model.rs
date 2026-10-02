@@ -4,14 +4,15 @@
 //! protocol layer out.
 //!
 //! The host is the hub, and its capabilities answer it: a hand-off goes from a
-//! capability to the host, from the host to a capability, and at most once
-//! more back and forth, when a capability answers a request of the host at
-//! once (the agent sub-model bounces an event it cannot take, the checkout
-//! refuses a prepare, or ends a push or a save with nothing to do) and the host
-//! answers the engine, replies to the run or releases the workspace, which
-//! leads back to it no more. No hand-off waits on a ready list: an entry point
-//! completes them all, and [`max_out`] follows from the sub-models' along that
-//! chain (the `limits` module).
+//! capability to the host (an agent sub-model's step tells the host at most
+//! two things, a checkout's one, as their boundaries say), from the host to a
+//! capability, and at most once more back and forth, when a capability answers
+//! a request of the host at once (the agent sub-model bounces an event it
+//! cannot take, the checkout refuses a prepare, or ends a push or a save with
+//! nothing to do) and the host answers the engine, replies to the run or
+//! releases the workspace, which leads back to it no more. No hand-off waits
+//! on a ready list: an entry point completes them all, and [`max_out`]
+//! follows from the sub-models' along that chain (the `limits` module).
 
 use alloc::boxed::Box;
 
@@ -219,22 +220,22 @@ impl Model {
         self.agent.reclaim();
         self.workspaces.reclaim();
     }
+}
 
-    /// Keeps `fact` if there is room for it, and counts it otherwise.
-    pub(crate) fn keep(&mut self, fact: Fact) {
-        if self.facts.try_push(fact).is_err() {
-            self.lost = self.lost.saturating_add(1);
-        }
+/// Keeps `fact` if there is room for it, and counts it otherwise.
+pub(crate) fn keep(model: &mut Model, fact: Fact) {
+    if model.facts.try_push(fact).is_err() {
+        model.lost = model.lost.saturating_add(1);
     }
+}
 
-    /// A fact the agent of the hosted run `client` told, for the engine under
-    /// the run's names.
-    pub(crate) fn tell(&mut self, client: Token, fact: Box<[u8]>) {
-        let Some(hosting) = self.host.hosting(client) else { unreachable!("a run is hosted until its agent has gone") };
-        let told = Told { run: hosting.run, attempt: hosting.attempt, fact };
-        if self.told.try_push(told).is_err() {
-            self.told_lost = self.told_lost.saturating_add(1);
-        }
+/// A fact the agent of the hosted run `client` told, for the engine under the
+/// run's names: kept while there is room, dropped and counted otherwise.
+pub(crate) fn tell(model: &mut Model, client: Token, fact: Box<[u8]>) {
+    let Some(hosting) = model.host.hosting(client) else { unreachable!("a run is hosted until its agent has gone") };
+    let told = Told { run: hosting.run, attempt: hosting.attempt, fact };
+    if model.told.try_push(told).is_err() {
+        model.told_lost = model.told_lost.saturating_add(1);
     }
 }
 
@@ -259,7 +260,7 @@ pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
         match model.link.fire(env, out) {
             Some(Fired::Dialled) | None => {}
             Some(Fired::Grace) => {
-                model.keep(Fact::Grace);
+                keep(model, Fact::Grace);
                 let cancel = host::Event::CancelAll { reason: host::Reason::Contact };
                 route::host_step(model, env, cancel);
             }
@@ -292,18 +293,18 @@ fn gather(model: &mut Model, limits: &Limits) {
         let Some(fact) = model.host.pop_fact() else {
             break;
         };
-        model.keep(Fact::Host { fact });
+        keep(model, Fact::Host { fact });
     }
     for _ in 0..limits.checkout.facts {
         let Some(fact) = model.checkout.pop_fact() else {
             break;
         };
-        model.keep(Fact::Checkout { fact });
+        keep(model, Fact::Checkout { fact });
     }
     for _ in 0..limits.agent.facts {
         let Some(fact) = model.agent.pop_fact() else {
             break;
         };
-        model.keep(Fact::Agent { fact });
+        keep(model, Fact::Agent { fact });
     }
 }
