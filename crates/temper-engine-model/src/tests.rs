@@ -375,6 +375,8 @@ struct Change {
     ci: forge::Ci,
     merged: Option<[u8; 32]>,
     reviews: List<api::Review>,
+    /// Its base moved under it, unread: a merge is refused for a conflict.
+    conflicts: bool,
 }
 
 #[derive(Debug)]
@@ -634,12 +636,18 @@ impl Forge {
                     ci: forge::Ci::Passed,
                     merged: None,
                     reviews: List::with_capacity(4),
+                    conflicts: false,
                 };
                 self.pulls.push(change).unwrap();
                 Ok(api::Answer::Created(item.number))
             }
             api::Op::Merge { number, head } => {
                 let item = Item { repository, number };
+                if let Some(change) = self.change(item)
+                    && change.conflicts
+                {
+                    return (Err(api::Error::Conflict), decoded);
+                }
                 let merged = match self.change(item) {
                     Some(change) if change.merged.is_none() && change.commit == head => {
                         change.merged = Some([8; 32]);
@@ -1277,6 +1285,49 @@ fn change_step(name: &[u8]) -> plan::Step {
         after: Box::new([]),
         gates: Box::new([]),
     }
+}
+
+/// A session's task, a change into `main`, pushed and its pull request
+/// opened: the world, the change's item, its pull request's, and its head.
+fn opened_change() -> (World, Item, Item, [u8; 32]) {
+    let (mut world, session) = World::session();
+    let tasks = crate::boundary::Outcome::Tasks { tasks: Box::new([change_step(b"fix")]), text: copy_of(b"on it") };
+    world.deliver(Event::Answer { channel: Token::new(1), item: session, attempt: 1, answer: ended(tasks) });
+    let change = Item { repository: 0, number: 2 };
+    let head = [1; 32];
+    world.forge.branches.push((copy_of(b"temper/2"), head)).unwrap();
+    let landed = crate::boundary::Landed { repository: 0, commit: head };
+    let outcome = crate::boundary::Outcome::Change { message: copy_of(b"fixed") };
+    let answer = crate::boundary::Answer::Ended { outcome, work: crate::boundary::Work { landed: Box::new([landed]) } };
+    world.deliver(Event::Answer { channel: Token::new(1), item: change, attempt: 1, answer });
+    let pull = Item { repository: 0, number: 3 };
+    assert!(world.forge.change(pull).is_some(), "the engine opens its pull request");
+    (world, change, pull, head)
+}
+
+#[test]
+fn a_merge_refused_for_a_conflict_sends_the_change_back_for_a_rebase() {
+    let (mut world, change, pull, head) = opened_change();
+    world.forge.change(pull).unwrap().conflicts = true;
+    let review = api::Review {
+        id: 500,
+        author: ALICE,
+        verdict: api::Verdict::Approve,
+        commit: head,
+        key: None,
+        body: copy_of(b"ok"),
+    };
+    world.forge.change(pull).unwrap().reviews.push(review).unwrap();
+    world.forge.issue(pull).unwrap().updated = world.env().now;
+    world.deliver(Event::Hint { repository: 0, item: Some(pull.number), commit: None, branch: None });
+    for _ in 0_u32..10 {
+        world.wait(30);
+    }
+    assert!(world.forge.change(pull).unwrap().merged.is_none(), "the forge refused the merge");
+    assert_ne!(held_for(&mut world, change), Some(work::Hold::Writes), "a conflict is not a write failed for good");
+    let assigned = assignment(&world.seen).expect("a run is assigned");
+    assert_eq!(assigned.item, change, "the change runs again");
+    assert_eq!(assigned.charter.why, plan::Why::Repair(plan::Repair::Conflicts), "to repair the conflict");
 }
 
 #[test]

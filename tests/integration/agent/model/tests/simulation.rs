@@ -344,7 +344,6 @@ fn a_forge_that_fills_fails_the_world() {
 /// (engine-model.md, 5.1; the plan's `Repair::Conflicts`), as it does when it
 /// reads the conflict before it merges.
 #[test]
-#[ignore = "engine: a merge refused for a conflict holds the item for its writes instead of repairing the change"]
 fn a_merge_refused_for_a_conflict_sends_the_change_back_for_repair() {
     let hand = |checks| Hand {
         at: Duration::ZERO,

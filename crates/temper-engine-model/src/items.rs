@@ -94,6 +94,9 @@ pub(crate) struct Entry {
     /// Its pull request was merged by the engine, at this commit, which the
     /// working set may not show yet.
     pub(crate) merged: Option<[u8; 32]>,
+    /// The head the forge refused to merge for a conflict, which the
+    /// working set may not show yet.
+    pub(crate) conflicted: Option<[u8; 32]>,
     /// The permission the rules want of whoever accepts what it holds.
     pub(crate) wants: Option<Permission>,
     /// The person's call that opened it as a session, answered once its
@@ -306,6 +309,7 @@ impl Entry {
             closed: false,
             blocked: false,
             merged: None,
+            conflicted: None,
             wants: None,
             opened: None,
         }

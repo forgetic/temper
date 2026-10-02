@@ -249,6 +249,9 @@ pub(crate) fn facts(model: &Model, env: &Env<Limits>, entry: &Entry) -> plan::Fa
                 if entry.merged.is_some() {
                     pull.state = plan::PullState::Merged;
                 }
+                if entry.conflicted == Some(pull.head.0) {
+                    pull.merge = plan::Mergeable::Conflicts;
+                }
                 Some(pull)
             }
             None => None,
@@ -1300,6 +1303,14 @@ fn written(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, result: Result<f
         Err(forge::Failure::Forge(api::Error::Stale | api::Error::Closed)) => {
             return finish(model, env, id, Finish::Stale);
         }
+        // Its base moved under it since the working set read it: the head
+        // conflicts, as if it had been read so, and is the change's to
+        // repair (engine-model.md, 5.1).
+        Err(forge::Failure::Forge(api::Error::Conflict)) if merging(model, id).is_some() => {
+            let head = merging(model, id);
+            get_mut(model, id).conflicted = head;
+            return finish(model, env, id, Finish::Stale);
+        }
         Err(_) => return finish(model, env, id, Finish::Failed),
     };
     made(model, env, id, written);
@@ -1321,6 +1332,21 @@ fn deleting(model: &Model, id: Id<Entry>) -> bool {
         | plan::Write::Progress(_)
         | plan::Write::Goal(_)
         | plan::Write::Release { .. } => false,
+    }
+}
+
+/// The head the write in hand merges, if it is a merge.
+fn merging(model: &Model, id: Id<Entry>) -> Option<[u8; 32]> {
+    match in_hand(model, id)? {
+        plan::Write::Merge { head } => Some(head.0),
+        plan::Write::Create { .. }
+        | plan::Write::OpenPull { .. }
+        | plan::Write::ReopenPull
+        | plan::Write::Close
+        | plan::Write::DeleteBranch
+        | plan::Write::Progress(_)
+        | plan::Write::Goal(_)
+        | plan::Write::Release { .. } => None,
     }
 }
 
