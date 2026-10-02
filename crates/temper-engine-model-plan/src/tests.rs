@@ -1040,6 +1040,44 @@ fn an_outcome_of_another_primitives_is_invalid() {
     }
 }
 
+// The output's bounds.
+
+/// Names for steps, as many as the test limits allow a plan.
+const NAMES: [&str; 8] = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+
+/// Agent steps named `NAMES[from..to]`, each after the one before it, or
+/// each on its own.
+fn numbered(from: usize, to: usize, chained: bool) -> Box<[Step]> {
+    let mut steps = List::with_capacity(u32::try_from(to.saturating_sub(from)).expect("a test's few steps"));
+    for index in from..to {
+        let after: &[&str] = match index.checked_sub(1) {
+            Some(before) if chained => &NAMES[before..index],
+            Some(_) | None => &[],
+        };
+        steps.push(agent(NAMES[index], after)).expect("room for each step");
+    }
+    steps.into_boxed()
+}
+
+#[test]
+fn the_output_has_room_for_the_largest_decision() {
+    let steps = usize::try_from(LIMITS.steps).expect("fits");
+    let mut out = out();
+    assert_eq!(accept(&config(), &env(), &plan(numbered(0, steps, true)), &mut out), Ok(()));
+    assert_eq!(out.len(), LIMITS.steps + 1, "an item for each step, and the goal");
+    let mut out = super::tests::out();
+    let started = Goal { steps: names(&["s0"]), envelope: Envelope { agents: LIMITS.steps, ..envelope() }, ..goal() };
+    let added = Outcome::Steps(numbered(1, steps, true));
+    let applied = apply(&config(), &env(), &record(grower("build")), Some(&started), &facts(), &added, &mut out);
+    assert_eq!(applied, WRITES);
+    assert_eq!(out.len(), LIMITS.steps + 1, "the items, the goal, and the step that grew it");
+    let tasks = Outcome::Tasks(numbered(0, usize::try_from(LIMITS.tasks).expect("fits"), false));
+    let mut out = super::tests::out();
+    assert_eq!(apply(&config(), &env(), &record(session("chat")), None, &facts(), &tasks, &mut out), WRITES);
+    assert_eq!(out.len(), LIMITS.tasks);
+    assert!(max_out(&LIMITS) >= LIMITS.steps + 2 && max_out(&LIMITS) >= LIMITS.tasks);
+}
+
 // Limits.
 
 #[test]
