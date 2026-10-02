@@ -7,6 +7,7 @@ members = [
     "crates/temper-agent-model",
     "crates/temper-agent-model-run",
     "crates/temper-agent-model-session",
+    "crates/temper-agent-model-tools",
     "testing/temper-llm-model",
     "testing/temper-worker-model",
     "tests/integration/agent/run",
@@ -24,6 +25,7 @@ temper-lib = { path = "crates/temper-lib" }
 temper-agent-model = { path = "crates/temper-agent-model" }
 temper-agent-model-run = { path = "crates/temper-agent-model-run" }
 temper-agent-model-session = { path = "crates/temper-agent-model-session" }
+temper-agent-model-tools = { path = "crates/temper-agent-model-tools" }
 temper-llm-model = { path = "testing/temper-llm-model" }
 temper-worker-model = { path = "testing/temper-worker-model" }
 
