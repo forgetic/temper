@@ -252,6 +252,24 @@ fn an_opener_that_closes_a_tooling_session_has_its_tool_cancelled() {
 }
 
 #[test]
+fn a_tool_call_that_runs_out_of_time_goes_back_to_the_llm_and_the_conversation_goes_on() {
+    let calm = Settings::calm(20);
+    let settings = Settings {
+        agent: Limits { tool_timeout: Duration::from_secs(1), ..calm.agent },
+        tool: Span::millis(5_000, 5_000),
+        ..calm
+    };
+    let mut world = World::new(settings);
+    let opener = world.submit(Time::ZERO, spec(b"fix the build"));
+    world.run(ITERATIONS);
+
+    assert_eq!(yields(&world, opener), [(Yield::Done, &b"done"[..])]);
+    assert_eq!((end(&world, opener), turns(&world, opener)), (End::Closed, 3));
+    let stats = world.stats();
+    assert_eq!((stats.tool_runs, stats.tool_timeouts, stats.tool_cancels), (2, 2, 0));
+}
+
+#[test]
 fn the_turn_budget_ends_a_session_that_keeps_calling_tools() {
     let calm = Settings::calm(12);
     let mut world = World::new(Settings { provider: Config { tool_rounds: 100, ..calm.provider }, ..calm });
@@ -351,7 +369,7 @@ fn facts_change_nothing_the_sessions_do() {
 fn random_worlds_settle_with_every_session_ended() {
     let mut ends = BTreeSet::new();
     let mut stops = BTreeSet::new();
-    let (mut stale, mut invalid, mut not_run, mut parallel) = (0, 0, 0, 0);
+    let (mut stale, mut invalid, mut not_run, mut parallel, mut tool_timeouts) = (0, 0, 0, 0, 0);
     for seed in 0..300 {
         let settings = noisy(seed);
         let mut world = World::new(settings);
@@ -359,6 +377,7 @@ fn random_worlds_settle_with_every_session_ended() {
         world.run(ITERATIONS);
         stale += world.stats().stale;
         parallel = parallel.max(world.stats().most_parallel);
+        tool_timeouts += world.stats().tool_timeouts;
         invalid += world.told().0.invalid_calls;
         not_run += world.stats().not_run;
         for (_, session) in world.sessions() {
@@ -395,6 +414,7 @@ fn random_worlds_settle_with_every_session_ended() {
     assert_eq!(stops, ["Done", "Malformed", "Refused", "Truncated"].into_iter().map(String::from).collect());
     assert!(stale > 0, "some continues and closes reached sessions that had ended");
     assert!(parallel > 1, "some reads ran side by side");
+    assert!(tool_timeouts > 0, "some tool calls ran out of time");
     assert!(
         invalid > 0 && not_run > 0,
         "some calls were malformed, and some were cut short and not run: {invalid} {not_run}"
@@ -408,6 +428,7 @@ fn noisy(seed: u64) -> Settings {
     let calm = Settings::calm(seed);
     let mut millis = |low: u64, high: u64| Duration::from_millis(rng.between(low, high));
     let call_timeout = millis(500, 5_000);
+    let tool_timeout = millis(500, 5_000);
     let session_timeout = millis(2_000, 120_000);
     let latency_max = millis(10, 4_000);
     let think = millis(0, 5_000);
@@ -423,6 +444,7 @@ fn noisy(seed: u64) -> Settings {
             backoff_base: Duration::from_millis(50),
             backoff_max: Duration::from_secs(2),
             call_timeout,
+            tool_timeout,
             facts: pick(0, 24),
             parallel_tools: pick(1, 4),
             ..calm.agent

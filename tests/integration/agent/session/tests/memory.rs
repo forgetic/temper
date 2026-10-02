@@ -85,6 +85,7 @@ const LIMITS: Limits = Limits {
     backoff_base: Duration::from_secs(60),
     backoff_max: Duration::from_secs(60),
     call_timeout: Duration::from_secs(30),
+    tool_timeout: Duration::from_secs(20),
     facts: 64,
     parallel_tools: 1,
 };

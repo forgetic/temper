@@ -33,6 +33,7 @@ const LIMITS: Limits = Limits {
         backoff_base: Duration::from_millis(100),
         backoff_max: Duration::from_secs(1),
         call_timeout: Duration::from_secs(30),
+        tool_timeout: Duration::from_secs(20),
         facts: 64,
         parallel_tools: 2,
     },
@@ -197,10 +198,10 @@ fn an_open_reaches_the_session_and_its_opening_and_call_come_back_out() {
 fn a_completion_reaches_the_session_and_its_tool_run_comes_back_out() {
     let mut h = Harness::new();
     let owner = h.open();
-    let Some(Request::Tool { owner: _, call }) = h.complete(owner, ls()) else {
+    let Some(Request::Tool { owner: _, call, deadline }) = h.complete(owner, ls()) else {
         panic!("expected a tool run");
     };
-    assert_eq!(call, list());
+    assert_eq!((call, deadline), (list(), Time::ZERO.saturating_add(LIMITS.session.tool_timeout)));
 }
 
 #[test]

@@ -5,7 +5,9 @@
 //! for tools, the session runs them and sends their results back, in call
 //! order, in another call. They run in batches: adjacent calls that read run
 //! together, up to `Limits::parallel_tools`, and a call that writes runs
-//! alone; each run has a token of its own. A call the protocol layer could
+//! alone; each run has a token of its own, and carries its deadline, which
+//! whoever runs it races: a call that runs out of time comes back as such,
+//! and goes to the LLM like any other result. A call the protocol layer could
 //! not decode is answered with its problem, and nothing runs for it. When the LLM stops calling
 //! tools, the session yields to its opener, which continues it with a new user
 //! message or closes it; the message goes back after a result for each call
@@ -436,7 +438,7 @@ fn tell(facts: &mut Facts, runs: &Slab<Run>, session: &Session, out: &Queue<Requ
                 let (messages, max_tokens) = (count(prompt.messages.len()), prompt.max_tokens);
                 Fact::CompletionStarted { opener, attempt: attempt(&session.state), messages, max_tokens }
             }
-            Request::Tool { owner, call: _ } => {
+            Request::Tool { owner, call: _, deadline: _ } => {
                 let run = runs.get(Id::from_token(*owner)).expect("a run lives while its call is asked for");
                 Fact::ToolStarted { opener, block: run.block }
             }
@@ -562,7 +564,8 @@ fn advance(
                 }
                 let run = Run { session: id, slot: tools.slots.len(), block: index };
                 let run = runs.insert(run).expect("the run slab has room for every session's batches");
-                out.push(Request::Tool { owner: run.token(), call: call.clone() });
+                let deadline = env.now.saturating_add(env.limits.tool_timeout);
+                out.push(Request::Tool { owner: run.token(), call: call.clone(), deadline });
                 tools.slots.push(Slot::Running { run }).expect("a slot for every call");
                 tools.running = tools.running.saturating_add(1);
                 batch = Some(effect);

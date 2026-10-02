@@ -89,6 +89,7 @@ impl Settings {
                 backoff_base: Duration::from_millis(200),
                 backoff_max: Duration::from_secs(5),
                 call_timeout: Duration::from_secs(60),
+                tool_timeout: Duration::from_secs(60),
                 facts: 256,
                 parallel_tools: 4,
             },
@@ -148,6 +149,8 @@ pub struct Stats {
     pub tool_runs: u32,
     /// Tool runs the agent cancelled.
     pub tool_cancels: u32,
+    /// Tool runs that ran out of time.
+    pub tool_timeouts: u32,
     /// Tool calls the session answered as not run, as the LLM stopped
     /// before it could use them.
     pub not_run: u32,
@@ -470,12 +473,18 @@ impl World {
                     self.stats.cancels += 1;
                 }
             }
-            agent::Request::Tool { owner, call } => {
+            agent::Request::Tool { owner, call, deadline } => {
                 let session = *self.runs.get(&owner).expect("a run is worked out from the step that started it");
                 let effect = tools::effect(&call);
                 self.batched(session, effect);
-                let outcome = self.run_tool(&call);
-                let at = self.now.saturating_add(self.draw(self.settings.tool));
+                assert!(deadline > self.now, "a run gets some time");
+                // The tools run the race with the deadline.
+                let mut outcome = self.run_tool(&call);
+                let mut at = self.now.saturating_add(self.draw(self.settings.tool));
+                if at > deadline {
+                    (outcome, at) = (Outcome::TimedOut, deadline);
+                    self.stats.tool_timeouts += 1;
+                }
                 let delivery = self.schedule(at, Delivery::ToolDone { owner, outcome });
                 let running = Running { delivery, session, effect };
                 assert!(self.tools.insert(owner, running).is_none(), "each run has a token of its own");
@@ -903,7 +912,9 @@ fn describe_agent_request(request: &agent::Request) -> String {
             format!("complete {} with {messages} messages, at most {most} tokens, within {timeout:?}", owner.raw())
         }
         agent::Request::Cancel { owner } => format!("cancel {}", owner.raw()),
-        agent::Request::Tool { owner, call } => format!("tool {} {call:?}", owner.raw()),
+        agent::Request::Tool { owner, call, deadline } => {
+            format!("tool {} {call:?} by {}", owner.raw(), deadline.as_nanos())
+        }
         agent::Request::CancelTool { owner } => format!("cancel tool {}", owner.raw()),
     }
 }

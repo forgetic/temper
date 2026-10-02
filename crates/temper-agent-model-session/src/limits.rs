@@ -39,6 +39,10 @@ pub struct Limits {
     pub backoff_max: Duration,
     /// How long the protocol layer gives each call.
     pub call_timeout: Duration,
+    /// How long a tool call may run. Its deadline goes with it, and a call
+    /// that runs out of time is answered as such, to the LLM; the session's
+    /// own expiry cancels whatever is still running then.
+    pub tool_timeout: Duration,
     /// Facts kept until the parent drains them. Beyond them, facts are
     /// dropped and counted.
     pub facts: u32,

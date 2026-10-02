@@ -34,7 +34,7 @@ pub(crate) fn request(request: session::Request) -> Request {
         session::Request::Ended { opener, end, turns, usage } => Request::Ended { opener, end, turns, usage },
         session::Request::Complete { owner, prompt, timeout } => Request::Complete { owner, prompt, timeout },
         session::Request::Cancel { owner } => Request::Cancel { owner },
-        session::Request::Tool { owner, call } => Request::Tool { owner, call },
+        session::Request::Tool { owner, call, deadline } => Request::Tool { owner, call, deadline },
         session::Request::CancelTool { owner } => Request::CancelTool { owner },
     }
 }

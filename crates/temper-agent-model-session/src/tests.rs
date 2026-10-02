@@ -35,6 +35,7 @@ const LIMITS: Limits = Limits {
     backoff_base: Duration::from_millis(100),
     backoff_max: Duration::from_secs(1),
     call_timeout: Duration::from_secs(30),
+    tool_timeout: Duration::from_secs(20),
     facts: 64,
     parallel_tools: 2,
 };
@@ -109,7 +110,7 @@ impl Harness {
         let mut runs = List::with_capacity(MAX_OUT);
         while let Some(request) = self.out.pop() {
             match request {
-                Request::Tool { owner, call: _ } | Request::CancelTool { owner } => {
+                Request::Tool { owner, .. } | Request::CancelTool { owner } => {
                     runs.push(owner).expect("room for a batch");
                 }
                 Request::Used { .. } => {}
@@ -259,7 +260,7 @@ fn calling(request: Option<Request>) -> (Token, Prompt) {
 }
 
 fn running(request: Option<Request>) -> (Token, Call) {
-    let Some(Request::Tool { owner, call }) = request else {
+    let Some(Request::Tool { owner, call, deadline: _ }) = request else {
         panic!("expected a tool run, not {request:?}");
     };
     (owner, call)
@@ -393,6 +394,24 @@ fn the_calls_a_yield_leaves_are_answered_when_the_opener_continues() {
     let (_, prompt) = calling(h.step(Event::Continue { session, content: bytes(b"go on") }));
     let last = prompt.messages.last().expect("the opener's message goes last");
     assert_eq!(last.content.first(), Some(&Block::ToolResult { id: bytes(b"c1"), result: Returned::NotRun }));
+}
+
+#[test]
+fn a_tool_call_carries_its_deadline_and_one_that_runs_out_of_time_goes_back_to_the_llm() {
+    let mut h = Harness::new(LIMITS);
+    let (owner, _) = h.open(1);
+    h.after(Duration::from_secs(1));
+    step(&mut h.model, &h.env, Event::Completed { owner, completion: ls() }, &mut h.out);
+    drop(h.out.pop());
+    let Some(Request::Tool { owner: run, call: _, deadline }) = h.one() else {
+        panic!("expected a tool run");
+    };
+    assert_eq!(deadline, h.env.now.saturating_add(LIMITS.tool_timeout));
+    // Whoever runs the call runs the race: the session arms nothing for it.
+    assert_eq!(h.model.next_deadline(), Some(Time::ZERO.saturating_add(BUDGET.time)));
+    h.env.now = deadline;
+    let (_, prompt) = calling(h.step(Event::ToolDone { owner: run, outcome: Outcome::TimedOut }));
+    assert_eq!(&*prompt.messages[2].content, &[result(b"c1", Outcome::TimedOut)]);
 }
 
 #[test]

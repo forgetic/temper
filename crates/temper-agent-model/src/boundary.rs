@@ -19,7 +19,7 @@ use alloc::boxed::Box;
 use temper_agent_model_session::llm::{Completion, Failure, Prompt, Usage};
 use temper_agent_model_session::{End, Spec, Yield};
 use temper_agent_model_tools as tools;
-use temper_lib::{Duration, Token};
+use temper_lib::{Duration, Time, Token};
 
 /// protocol -> model
 #[derive(PartialEq, Eq, Debug)]
@@ -64,8 +64,8 @@ pub enum Request {
     /// Abandon the `Complete` in flight for `owner`. Its terminal event still
     /// comes: `Cancelled`, or whichever outcome won the race.
     Cancel { owner: Token },
-    /// Run a call of the tools the session owns.
-    Tool { owner: Token, call: tools::Call },
+    /// Run a call of the tools the session owns, and answer it by `deadline`.
+    Tool { owner: Token, call: tools::Call, deadline: Time },
     /// Abandon the `Tool` in flight for `owner`. Its terminal event still
     /// comes: `ToolCancelled`, or `ToolDone` if the run won the race.
     CancelTool { owner: Token },
