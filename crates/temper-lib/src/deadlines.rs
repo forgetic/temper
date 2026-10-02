@@ -1,9 +1,6 @@
 //! The deadline table each layer keeps for its own timers (section 9).
 
-use alloc::collections::{BTreeMap, BTreeSet};
-use core::mem::{align_of, size_of};
-
-use crate::Time;
+use crate::{Map, Set, Time};
 
 /// Timers, each named by a key of the owning layer's choosing, with at most
 /// one timer per key.
@@ -16,34 +13,30 @@ use crate::Time;
 /// Timers that fall due at the same time fire in key order.
 ///
 /// The capacity bounds the table, but unlike a slab or a queue it is not
-/// allocated up front: the two B-trees allocate nodes as they fill (6.1), and
-/// [`Deadlines::worst_case`] counts those nodes.
+/// allocated up front: its two indexes are B-trees that allocate nodes as they
+/// fill (6.1), and [`Deadlines::worst_case`] counts those nodes.
 #[derive(Debug)]
 pub struct Deadlines<K> {
-    by_time: BTreeSet<(Time, K)>,
-    by_key: BTreeMap<K, Time>,
-    capacity: u32,
+    by_time: Set<(Time, K)>,
+    by_key: Map<K, Time>,
 }
 
 impl<K: Ord + Copy> Deadlines<K> {
     #[must_use]
     pub fn with_capacity(capacity: u32) -> Deadlines<K> {
-        Deadlines { by_time: BTreeSet::new(), by_key: BTreeMap::new(), capacity }
+        Deadlines { by_time: Set::with_capacity(capacity), by_key: Map::with_capacity(capacity) }
     }
 
     /// The most heap a table of `capacity` timers takes, or `None` past a
     /// `u64`.
     #[must_use]
     pub fn worst_case(capacity: u32) -> Option<u64> {
-        // A set's values take no room.
-        let by_time = btree(capacity, size_of::<(Time, K)>(), 0, align_of::<(Time, K)>())?;
-        let by_key = btree(capacity, size_of::<K>(), size_of::<Time>(), align_of::<(K, Time)>())?;
-        by_time.checked_add(by_key)
+        Set::<(Time, K)>::worst_case(capacity)?.checked_add(Map::<K, Time>::worst_case(capacity)?)
     }
 
     #[must_use]
     pub fn len(&self) -> u32 {
-        u32::try_from(self.by_key.len()).expect("no more timers than the capacity")
+        self.by_key.len()
     }
 
     #[must_use]
@@ -54,21 +47,18 @@ impl<K: Ord + Copy> Deadlines<K> {
     /// Arms the timer `key` to fall due at `at`, moving it if it is already
     /// armed. Hands the key back when the table is full.
     pub fn arm(&mut self, key: K, at: Time) -> Result<(), K> {
-        match self.by_key.get(&key) {
-            Some(&old) => {
+        match self.by_key.insert(key, at) {
+            Ok(Some(old)) => {
                 let armed = self.by_time.remove(&(old, key));
                 assert!(armed, "both indexes hold every timer");
             }
-            None => {
-                if self.len() >= self.capacity {
-                    return Err(key);
-                }
-            }
+            Ok(None) => {}
+            Err((key, _)) => return Err(key),
         }
-        let previous = self.by_key.insert(key, at);
-        let fresh = self.by_time.insert((at, key));
+        let Ok(fresh) = self.by_time.insert((at, key)) else {
+            unreachable!("both indexes have the same capacity");
+        };
         assert!(fresh, "both indexes hold every timer");
-        let _: Option<Time> = previous;
         Ok(())
     }
 
@@ -93,42 +83,12 @@ impl<K: Ord + Copy> Deadlines<K> {
         if at > now {
             return None;
         }
-        let popped = self.by_time.pop_first();
-        assert!(popped == Some((at, key)), "the first timer is the one popped");
+        let armed = self.by_time.remove(&(at, key));
+        assert!(armed, "the first timer is the one removed");
         let armed = self.by_key.remove(&key);
         assert!(armed == Some(at), "both indexes hold every timer");
         Some(key)
     }
-}
-
-/// The standard library's B-tree nodes (`B = 6` in `alloc::collections::btree`)
-/// hold at most 11 entries, and every node but the root at least 5. Nothing
-/// checks these against the library but a test with a counting allocator.
-const NODE_CAPACITY: usize = 11;
-const NODE_MIN: u64 = 5;
-
-/// The most heap a B-tree of `entries` keys and values of `key` and `value`
-/// bytes takes: a node for every `NODE_MIN` entries and one for the root, each
-/// priced as an internal node, the larger kind.
-fn btree(entries: u32, key: usize, value: usize, align: usize) -> Option<u64> {
-    let word = size_of::<usize>();
-    let align = align.max(word);
-    // A leaf node: its parent link, its index in the parent and its length,
-    // then its keys and values. Each part is rounded up to the alignment, so
-    // the bound holds whatever order the fields are laid out in.
-    let header = word.checked_add(size_of::<u16>().checked_mul(2)?)?;
-    let leaf = round_up(header, align)?
-        .checked_add(round_up(key.checked_mul(NODE_CAPACITY)?, align)?)?
-        .checked_add(round_up(value.checked_mul(NODE_CAPACITY)?, align)?)?;
-    // An internal node: a leaf and an edge either side of each entry.
-    let edges = word.checked_mul(NODE_CAPACITY.checked_add(1)?)?;
-    let internal = u64::try_from(leaf.checked_add(round_up(edges, align)?)?).ok()?;
-    let nodes = (u64::from(entries) / NODE_MIN).checked_add(1)?;
-    nodes.checked_mul(internal)
-}
-
-fn round_up(bytes: usize, align: usize) -> Option<usize> {
-    bytes.checked_next_multiple_of(align)
 }
 
 #[cfg(test)]

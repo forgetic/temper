@@ -1,6 +1,6 @@
 [package]
 name = "temper-lib"
-description = "Handles, slabs, queues, deadline tables, time and randomness for the step crates"
+description = "Handles, slabs, queues, maps, deadline tables, time and randomness for the step crates"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

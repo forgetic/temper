@@ -6,7 +6,7 @@ use std::mem::size_of;
 
 use temper_agent_model_session::llm::{Block, Completion, Endpoint, Failure, Stop, Tool, Usage};
 use temper_agent_model_session::{Event, Limits, MAX_OUT, Model, Request, Task, worst_case};
-use temper_lib::{Deadlines, Duration, Env, List, Queue, ReplyTo, Rng, Slab, Time, Token};
+use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, ReplyTo, Rng, Set, Slab, Time, Token};
 
 /// Counts the heap each thread allocates, so that tests running side by side
 /// do not see each other's.
@@ -180,6 +180,68 @@ fn a_deadline_table_stays_within_its_worst_case_whatever_its_keys_and_order() {
             churn(capacity, seed, |n| u8::try_from(n % 256).expect("below 256"));
             churn(capacity, seed, |n| (u32::try_from(n).expect("a small key"), 7_u32));
             churn(capacity, seed, |n| [n; 4]);
+        }
+    }
+}
+
+/// Inserts, replaces, updates and removes entries at random in a map of
+/// `capacity`, checking its heap against its worst case after every change.
+/// `payload` is the heap each entry's key and value own, which is the owner's
+/// to count: the bound adds it per entry held.
+fn traffic<K: Ord, V>(capacity: u32, seed: u64, key: fn(u64) -> K, value: fn(u64) -> V, payload: u64) {
+    let bound = Map::<K, V>::worst_case(capacity).expect("a test capacity fits");
+    let mut rng = Rng::new(seed);
+    let base = heap::live();
+    let mut map = Map::with_capacity(capacity);
+    let keys = u64::from(capacity) * 2;
+    for _ in 0..u64::from(capacity) * 20 {
+        match rng.below(8) {
+            0..=4 => drop(map.insert(key(rng.below(keys)), value(rng.next_u64()))),
+            5 => {
+                if let Some(slot) = map.get_mut(&key(rng.below(keys))) {
+                    *slot = value(rng.next_u64());
+                }
+            }
+            _ => drop(map.remove(&key(rng.below(keys)))),
+        }
+        let held = held(base);
+        let owned = u64::from(map.len()) * payload;
+        assert!(
+            held <= bound + owned,
+            "{capacity} entries hold {held} bytes, more than their worst case of {bound} and {owned}"
+        );
+    }
+}
+
+/// The same for a set.
+fn members<K: Ord>(capacity: u32, seed: u64, key: fn(u64) -> K) {
+    let bound = Set::<K>::worst_case(capacity).expect("a test capacity fits");
+    let mut rng = Rng::new(seed);
+    let base = heap::live();
+    let mut set = Set::with_capacity(capacity);
+    let keys = u64::from(capacity) * 2;
+    for _ in 0..u64::from(capacity) * 20 {
+        if rng.chance(600) {
+            drop(set.insert(key(rng.below(keys))));
+        } else {
+            let _: bool = set.remove(&key(rng.below(keys)));
+        }
+        let held = held(base);
+        assert!(held <= bound, "{capacity} keys hold {held} bytes, more than their worst case of {bound}");
+    }
+}
+
+#[test]
+fn maps_and_sets_stay_within_their_worst_case_whatever_their_keys_and_values() {
+    for capacity in [1, 2, 11, 64, 1000] {
+        for seed in 0..4 {
+            traffic(capacity, seed, |n| u8::try_from(n % 256).expect("below 256"), |_| (), 0);
+            traffic(capacity, seed, |n| (u32::try_from(n).expect("a small key"), 7_u32), |n| n, 0);
+            traffic(capacity, seed, |n| [n; 4], |n| [n.to_be_bytes()[7]; 3], 0);
+            // Keys that own their bytes, as paths do: eight each.
+            traffic(capacity, seed, |n| Box::<[u8]>::from(n.to_be_bytes()), |n| n, 8);
+            members(capacity, seed, |n| u16::try_from(n).expect("a small key"));
+            members(capacity, seed, |n| [n; 3]);
         }
     }
 }
