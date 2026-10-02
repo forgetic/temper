@@ -174,6 +174,38 @@ fn a_shutdown_cancels_the_live_runs_and_ends_once_they_answered() {
 }
 
 #[test]
+fn a_worker_shutting_down_out_of_reach_delivers_its_answers_if_the_channel_opens_before_it_is_done() {
+    // The worker is told to shut down with runs live, and the channel drops
+    // and stays down past the worker's grace. Some agents wind down at once,
+    // and their runs answer; the others ignore the cancel and the terminate,
+    // and are killed only once the channel has opened again.
+    let worlds = worlds(16, |calm| {
+        let calm = dropping(calm, Span::millis(25_000, 35_000), Span::millis(62_000, 75_000), 30);
+        let limits = calm.worker;
+        Settings {
+            worker: Limits {
+                agent: temper_worker_model::agent::Limits {
+                    grace: Duration::from_secs(80),
+                    kill_after: Duration::from_secs(30),
+                    ..limits.agent
+                },
+                ..limits
+            },
+            engine: Config { window: Duration::from_secs(20), ..calm.engine },
+            script: script::Script { deaf_to_cancel: 500, stubborn: 1000, ..calm.script },
+            shutdowns: 1000,
+            shutdown_at: Span::millis(20_000, 30_000),
+            ..calm
+        }
+    });
+    for (stats, _) in &worlds {
+        assert!(stats.done, "{stats:?}");
+    }
+    let delivered = worlds.iter().filter(|(stats, _)| stats.kept_past_grace > 0 && stats.abandoned == 0).count();
+    assert!(delivered > 0, "answers kept past the grace, with a run left, are delivered once the channel opens");
+}
+
+#[test]
 fn a_hung_agent_is_stopped_by_the_watchdog() {
     let worlds = worlds(4, |calm| fated(calm, Fates { hang: 1, ..NONE }));
     assert!(total(&worlds, |stats, _| count(stats, "agent no progress")) > 0);

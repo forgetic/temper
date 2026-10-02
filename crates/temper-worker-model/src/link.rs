@@ -35,8 +35,10 @@
 //! the hello lists.
 //!
 //! A worker shutting down cancels every run, and is done once each has
-//! answered and the engine has every answer; while the channel is down past
-//! the grace, an answer it keeps or makes is given up instead, and counted.
+//! answered and the engine has every answer. It keeps its answers while any
+//! run is left, as a channel may yet open: one that does delivers them as
+//! usual. Once no run is left, and the channel is still down past the grace,
+//! it gives up the answers it keeps instead, and counts them.
 //!
 //! The transition table. A dial is ended by one `lost`, after a `connected`
 //! if the channel opened; every other cell is unreachable by that contract.
@@ -206,7 +208,6 @@ impl Link {
             }
             Alarm::Grace => {
                 self.past = true;
-                self.give_up();
                 Some(Fired::Grace)
             }
         }
@@ -251,16 +252,15 @@ impl Link {
         self.alarms.arm(Alarm::Dial, env.now.saturating_add(wait)).expect("room for the link's alarms");
     }
 
-    /// The worker shuts down: once past the grace, what it cannot deliver is
-    /// given up.
+    /// The worker shuts down: it admits no more runs, and once none is left,
+    /// out of reach past the grace, it gives up what it cannot deliver.
     pub(crate) fn shut(&mut self) {
         self.shut = true;
-        self.give_up();
     }
 
     /// The answer for the run `run`'s attempt `attempt`: kept until the engine
-    /// acknowledges it, and sent now if there is a channel; given up by a
-    /// worker shutting down past the grace. A refusal goes once, now.
+    /// acknowledges it, or the worker gives it up, and sent now if there is a
+    /// channel. A refusal goes once, now.
     pub(crate) fn answer(&mut self, run: Token, attempt: Token, answer: host::Answer, out: &mut Queue<Request>) {
         let refused = match answer {
             host::Answer::Refused(_) => true,
@@ -271,10 +271,6 @@ impl Link {
             // step it comes in.
             assert!(self.is_up(), "a refusal is made with the channel open");
             out.push(Request::Answer { run, attempt, answer });
-            return;
-        }
-        if self.shut && self.past {
-            self.abandoned = self.abandoned.saturating_add(1);
             return;
         }
         if self.is_up() {
@@ -376,8 +372,10 @@ impl Link {
         }
     }
 
-    /// A worker shutting down past the grace gives up the answers it keeps.
-    fn give_up(&mut self) {
+    /// A worker shutting down, out of reach past the grace, gives up the
+    /// answers it keeps. Its parent calls this once no run is left: no answer
+    /// is to come that a channel opening could deliver with the rest.
+    pub(crate) fn give_up(&mut self) {
         if !(self.shut && self.past) {
             return;
         }

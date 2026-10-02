@@ -442,6 +442,7 @@ fn a_charter_and_snapshot_of_exactly_the_limits_are_admitted_and_passed_on() {
 fn a_workspace_that_cannot_be_prepared_fails_the_run_with_nothing_to_release() {
     let mut h = Harness::new(LIMITS);
     let hosted = h.admit(1);
+    assert_eq!(h.model.unanswered(), 1);
     let unprepared = Event::Unprepared {
         owner: hosted.owner,
         failure: Preparation::Missing { repository: 0, missing: Missing::Branch },
@@ -450,6 +451,7 @@ fn a_workspace_that_cannot_be_prepared_fails_the_run_with_nothing_to_release() {
     let emitted = h.step(unprepared);
     let failure = Failure::Unprepared(Preparation::Missing { repository: 0, missing: Missing::Branch });
     assert_eq!(&*emitted, [answer(hosted, failed(failure, b"h branch", nothing()))], "the detail's tail");
+    assert_eq!(h.model.unanswered(), 0, "answered at once");
     assert_eq!(h.model.hosted(), 1, "retired, and reclaimed at the reclaim point");
     h.model.reclaim();
     assert_eq!(h.model.hosted(), 0);

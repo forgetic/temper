@@ -850,6 +850,100 @@ fn a_worker_shutting_down_out_of_reach_past_the_grace_gives_up_its_answers() {
     assert!(h.model.is_done());
 }
 
+/// Two runs live, the channel lost, and the worker told to shut down: both
+/// are cancelled, and the first goes, its answer kept.
+fn shutting_down_out_of_reach(h: &mut Harness) -> (Names, Names) {
+    h.connect();
+    let first = h.live(1);
+    let second = h.live(2);
+    assert!(h.step(Event::Lost).is_empty());
+    assert!(h.step(Event::Shutdown).is_empty());
+    for r in [first, second] {
+        assert_eq!(&*h.resume(), [send(r, Down::Cancel)]);
+        assert!(h.step(Event::Sent { owner: r.agent }).is_empty());
+    }
+    let emitted = h.goes(first);
+    assert!(h.git(emitted, false).is_empty(), "kept without a channel");
+    h.model.reclaim();
+    (first, second)
+}
+
+/// The clock moves to `secs`, and every alarm due fires: every dial fails,
+/// and the agents' trees are signalled.
+fn out_of_reach_until(h: &mut Harness, secs: u64) {
+    h.at(secs);
+    for _ in 0..ROUNDS {
+        if !h.model.is_due(h.env.now) {
+            return;
+        }
+        for request in h.fire() {
+            let emitted = match request {
+                Request::Dial => h.step(Event::Lost),
+                Request::Signal { owner, .. } => h.step(Event::Signalled { owner }),
+                other @ (Request::Hello { .. }
+                | Request::Answer { .. }
+                | Request::Relay { .. }
+                | Request::Bounced { .. }
+                | Request::Spawn { .. }
+                | Request::Send { .. }
+                | Request::Read { .. }
+                | Request::Wait { .. }
+                | Request::Reap { .. }
+                | Request::Io { .. }
+                | Request::CancelIo { .. }) => panic!("only dials and signals: {other:?}"),
+            };
+            assert!(emitted.is_empty(), "nothing follows: {emitted:?}");
+        }
+    }
+    panic!("the alarms settle within {ROUNDS} rounds");
+}
+
+#[test]
+fn a_worker_shutting_down_keeps_its_answers_while_a_run_is_left_and_delivers_them_once_back() {
+    let mut h = Harness::new(&LIMITS);
+    let (first, second) = shutting_down_out_of_reach(&mut h);
+    out_of_reach_until(&mut h, 31);
+    assert_eq!((h.model.held(), h.model.abandoned()), (1, 0), "past the grace, a run is left: the answer is kept");
+    // The channel opens again before the last run has answered.
+    out_of_reach_until(&mut h, 40);
+    let dial = h.model.next_deadline().expect("a dial");
+    h.env.now = dial;
+    let emitted = h.connect();
+    let hosting = [
+        Hosted { run: second.run, attempt: second.attempt, phase: Phase::Ending },
+        Hosted { run: first.run, attempt: first.attempt, phase: Phase::Answered },
+    ];
+    let [Request::Hello { hello }, Request::Answer { run, .. }] = &*emitted else {
+        panic!("expected the hello and the answer kept, got {emitted:?}");
+    };
+    assert_eq!(&*hello.hosting, hosting);
+    assert_eq!(*run, first.run, "the answer kept goes after the hello");
+    let emitted = h.goes(second);
+    let [Request::Answer { run, .. }] = &*h.git(emitted, false) else {
+        panic!("the last run answers on the channel");
+    };
+    assert_eq!(*run, second.run);
+    h.model.reclaim();
+    for r in [first, second] {
+        assert!(h.step(Event::Acknowledged { run: r.run, attempt: r.attempt }).is_empty());
+    }
+    assert!(h.model.is_done());
+    assert_eq!(h.model.abandoned(), 0, "every answer delivered");
+}
+
+#[test]
+fn a_worker_shutting_down_out_of_reach_gives_up_its_answers_once_no_run_is_left() {
+    let mut h = Harness::new(&LIMITS);
+    let (_, second) = shutting_down_out_of_reach(&mut h);
+    out_of_reach_until(&mut h, 31);
+    assert_eq!(h.model.held(), 1, "kept while a run is left");
+    let emitted = h.goes(second);
+    assert!(h.git(emitted, false).is_empty(), "nothing goes without a channel");
+    assert_eq!((h.model.held(), h.model.abandoned()), (0, 2), "both given up as the last run answers");
+    h.model.reclaim();
+    assert!(h.model.is_done());
+}
+
 // Limits.
 
 #[test]

@@ -278,9 +278,14 @@ pub fn resume(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     settle(model, env, out);
 }
 
-/// Completes the hand-offs, then gathers the facts.
+/// Completes the hand-offs, then gathers the facts. A worker shutting down
+/// with no run left gives up the answers it cannot deliver, if the engine is
+/// out of reach past the grace.
 fn settle(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     route::hand_off(model, env, out);
+    if model.host.unanswered() == 0 {
+        model.link.give_up();
+    }
     gather(model, &env.limits);
 }
 

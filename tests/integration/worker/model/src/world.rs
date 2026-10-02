@@ -381,6 +381,9 @@ pub struct Stats {
     /// acknowledgements the worker heard.
     pub resent: u32,
     pub acknowledgements: u32,
+    /// Answers a worker shutting down kept past its grace, out of reach, and
+    /// delivered once the channel opened again.
+    pub kept_past_grace: u32,
     pub abandoned: u64,
     /// Dials, those that opened a channel and those that failed; channels
     /// dropped; hellos; and what the engine sent that was lost in flight, and
@@ -570,6 +573,8 @@ pub struct World {
     down_since: Option<Time>,
     /// When the worker was last out of reach past its grace.
     graced: Option<Time>,
+    /// The answers the worker has given up so far.
+    abandoned: u64,
 
     /// Inbound events framed for each attempt.
     places: BTreeMap<Token, u64>,
@@ -644,6 +649,7 @@ impl World {
             up: false,
             down_since: None,
             graced: None,
+            abandoned: 0,
             places: BTreeMap::new(),
             attempts: BTreeMap::new(),
             open: BTreeSet::new(),
@@ -777,6 +783,13 @@ impl World {
         let hosted = self.worker.host().hosted();
         assert!(hosted <= self.settings.worker.host.slots, "runs stay within their slots");
         self.stats.peak = self.stats.peak.max(hosted);
+        let abandoned = self.worker.abandoned();
+        if abandoned > self.abandoned {
+            assert!(self.shut && !self.up, "only a worker shutting down out of reach gives answers up");
+            assert!(self.graced.is_some(), "past its grace");
+            assert_eq!(self.worker.host().unanswered(), 0, "with no run left, whose answer could go with them");
+            self.abandoned = abandoned;
+        }
         if self.shut && self.worker.is_done() {
             self.stop();
         }
@@ -932,6 +945,9 @@ impl World {
                 Phase::Answered => {
                     self.following.insert(hosted.attempt);
                     self.stats.held += 1;
+                    if self.shut && self.graced.is_some() {
+                        self.stats.kept_past_grace += 1;
+                    }
                 }
                 Phase::Preparing | Phase::Starting | Phase::Active | Phase::Waiting | Phase::Ending => {}
             }

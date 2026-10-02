@@ -61,6 +61,12 @@ impl Model {
         self.hosted.len()
     }
 
+    /// Runs that have not answered yet: those hosted, closed ones aside.
+    #[must_use]
+    pub fn unanswered(&self) -> u32 {
+        self.names.len()
+    }
+
     /// Host calls in flight, closed ones included until they are reclaimed.
     #[must_use]
     pub fn calls(&self) -> u32 {
