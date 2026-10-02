@@ -7,9 +7,10 @@
 //! message is the call's result, and it is closed. One that ends without
 //! yielding returns how it ended, as a tool error for its asker to read, not a
 //! failure of the run. Either way, the call returns only once the child has
-//! ended. Withdrawing the call closes the child, and a closing child
-//! withdraws its own calls in turn: closing cascades down the tree, each owner
-//! closing what it owns, one event at a time. A refused ask is a tool error
+//! ended. Withdrawing the call, or its deadline passing, closes the child, and
+//! a closing child withdraws its own calls in turn: closing cascades down the
+//! tree, each owner closing what it owns, one event at a time. A child's time
+//! runs out no later than its call's deadline. A refused ask is a tool error
 //! too.
 //!
 //! Choosing the model (agent-model.md, section 9): the charter lists the LLMs
@@ -21,15 +22,17 @@
 //! -          ask refused                  -          return: refused, or busy
 //!            ask                          Working    open the child
 //! Working    child yielded                Answering  close the child
-//!            withdraw                     Closing    close the child
+//!            withdraw, deadline           Closing    close the child
 //!            child ended                  Closed     return: unanswered
-//! Answering  withdraw                     Answering
+//! Answering  withdraw, deadline           Answering
 //!            child ended                  Closed     return: answered
-//! Closing    child ended                  Closed     return: cancelled
+//! Closing    child yielded, withdraw      Closing
+//!            child ended                  Closed     return: cancelled, or timed out
 //! ```
 //!
 //! Every other cell is unreachable: a child yields or ends once, before its
-//! call has returned, and a call is withdrawn at most once.
+//! call has returned, a call is withdrawn at most once, and its deadline's
+//! alarm is cancelled when it is.
 
 use alloc::boxed::Box;
 use core::mem;
@@ -39,6 +42,7 @@ use temper_lib::{Duration, Id};
 
 use crate::boundary::{AskRefusal, End, Returned, Stop};
 use crate::budget::{Budget, Spend};
+use crate::call::{self, Withdrawal};
 use crate::charter::{Charter, Families, Llm};
 use crate::limits::Limits;
 use crate::run::Conversation;
@@ -51,8 +55,8 @@ pub(crate) enum Child {
     /// It yielded `text`, the first of `cut` more bytes, for `stop`, and is
     /// being closed.
     Answering { child: Id<Conversation>, text: Box<[u8]>, cut: u64, stop: Stop },
-    /// The call was withdrawn, and the child is being closed.
-    Closing { child: Id<Conversation> },
+    /// The call was stopped for `why`, and the child is being closed.
+    Closing { child: Id<Conversation>, why: Withdrawal },
     /// Terminal: holds nothing.
     Closed,
 }
@@ -138,22 +142,28 @@ pub(crate) fn yielded(call: &mut Child, text: &[u8], stop: Stop, limits: &Limits
             let cut = u64::try_from(text.len().saturating_sub(kept.len())).expect("a usize fits in a u64");
             (Child::Answering { child, text: copy_of(kept), cut, stop }, Some(child))
         }
-        // Withdrawn already, and being closed.
-        Child::Closing { child } => (Child::Closing { child }, None),
+        // Stopped already, and being closed.
+        Child::Closing { child, why } => (Child::Closing { child, why }, None),
         Child::Answering { .. } | Child::Closed => unreachable!("a child yields at most once before it is closed"),
     };
     *call = next;
     close
 }
 
-/// The call was withdrawn: the child to close, if it is not closing already.
-pub(crate) fn withdraw(call: &mut Child) -> Option<Id<Conversation>> {
+/// The call is stopped for `why`: the child to close, if it is not closing
+/// already.
+pub(crate) fn withdraw(call: &mut Child, why: Withdrawal) -> Option<Id<Conversation>> {
     let state = mem::replace(call, Child::Closed);
     let (next, close) = match state {
-        Child::Working { child } => (Child::Closing { child }, Some(child)),
+        Child::Working { child } => (Child::Closing { child, why }, Some(child)),
         // It has answered, and is being closed: the answer stands.
         Child::Answering { child, text, cut, stop } => (Child::Answering { child, text, cut, stop }, None),
-        Child::Closing { .. } | Child::Closed => unreachable!("a call is withdrawn once"),
+        // Its deadline stopped it before its asker withdrew it.
+        Child::Closing { child, why: first } => {
+            assert!(why == Withdrawal::Withdrawn, "a withdraw cancels its call's deadline");
+            (Child::Closing { child, why: first }, None)
+        }
+        Child::Closed => unreachable!("a call is stopped only while it is in flight"),
     };
     *call = next;
     close
@@ -164,7 +174,7 @@ pub(crate) fn ended(call: &mut Child, end: End) -> Returned {
     match mem::replace(call, Child::Closed) {
         Child::Working { child: _ } => Returned::Unanswered { end },
         Child::Answering { child: _, text, cut, stop } => Returned::Answered { text, cut, stop },
-        Child::Closing { child: _ } => Returned::Cancelled,
+        Child::Closing { child: _, why } => call::stopped(why),
         Child::Closed => unreachable!("a child ends once"),
     }
 }

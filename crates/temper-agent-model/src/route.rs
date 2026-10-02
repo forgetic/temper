@@ -141,18 +141,16 @@ fn from_session(model: &mut Model, env: &Env<Limits>, request: session::Request,
             free(model, id);
             run::Event::Ended { conversation: opener, end: translate::end(end), spend: translate::spend(turns, usage) }
         }
-        session::Request::Delegate { owner, opener, call, deadline: _ } => {
-            // The deadline is the session's expiry, which is the run's own
-            // deadline, as a session's time is what the run has left: the run
-            // bounds the call by it. Once the run's Delegated carries a
-            // deadline of its own, it is passed on here.
+        session::Request::Delegate { owner, opener, call, deadline } => {
+            // The deadline is the session's expiry: the run runs the race, and
+            // returns the call once what it started has settled.
             let id = peer(model, opener);
             let ask = model.peers.get_mut(id).expect("found above").take(call);
             model.tickets = model.tickets.saturating_sub(1);
             let flight = Flight { peer: id, withdrawn: false, answer: Due::Waiting };
             let fresh = model.flights.insert(owner, flight).expect("room for a batch of each session");
             assert!(fresh.is_none(), "a session names its calls in flight apart");
-            run::Event::Delegated { conversation: opener, call: owner, ask }
+            run::Event::Delegated { conversation: opener, call: owner, ask, deadline }
         }
         session::Request::Withdraw { owner } => {
             let flight = model.flights.get_mut(&owner).expect("a call is withdrawn while it is in flight");

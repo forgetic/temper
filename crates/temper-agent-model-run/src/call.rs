@@ -6,10 +6,18 @@
 //! echo back (no record carries the run's name for it to the session), so a
 //! bounded map finds a call by its conversation and that name, for a
 //! `Withdraw`.
+//!
+//! Each call has a deadline, its conversation's own expiry, and the run runs
+//! the race (5.3): an alarm per call, under the same limit. Past it, the run
+//! stops what the call is doing, and returns it as timed out once that has
+//! settled, so a call never returns with anything it started still in flight.
+//! A conversation withdraws a call only as it closes, and a call its deadline
+//! stopped first stays stopped for that.
 
 use temper_lib::{Id, Map, Slab, Token};
 
 use crate::agent::Child;
+use crate::boundary::Returned;
 use crate::land::Landing;
 use crate::run::{Conversation, Run};
 
@@ -31,6 +39,23 @@ pub(crate) enum Work {
     Landing(Landing),
     /// A sub-agent's.
     Child(Child),
+}
+
+/// Why a call is stopped before it is done.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Withdrawal {
+    /// Its conversation withdrew it, closing.
+    Withdrawn,
+    /// Its deadline passed first.
+    Expired,
+}
+
+/// What a call stopped for `why` returns, once what it was doing has settled.
+pub(crate) fn stopped(why: Withdrawal) -> Returned {
+    match why {
+        Withdrawal::Withdrawn => Returned::Cancelled,
+        Withdrawal::Expired => Returned::TimedOut,
+    }
 }
 
 /// The calls in flight, and the names their conversations know them by.

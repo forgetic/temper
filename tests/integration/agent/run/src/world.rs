@@ -135,7 +135,6 @@ impl Settings {
                 shares: 0,
                 changes: 500,
                 good: 1000,
-                finish_deadline: Span::millis(600_000, 600_000),
                 odd_stops: 0,
                 settle: Span::millis(1, 500),
                 races: 500,

@@ -144,6 +144,7 @@ fn fill(limits: Limits) {
         asked
     };
     let spend = Spend { turns: 1, input: 1, output: 1, cache_read: 1, cache_write: 1 };
+    let expiry = Time::ZERO.saturating_add(limits.budget.time);
     for run in 0..limits.runs {
         let worker = Token::new(u64::from(run));
         let start = Event::Start { reply_to: ReplyTo::new(worker), worker, charter: charter(limits.run_bytes) };
@@ -164,8 +165,8 @@ fn fill(limits: Limits) {
         let families =
             Families { tools: Tools { inspect: true, modify: false, shell: false }, forge: false, agents: false };
         let ask = Ask::SubAgent { brief: bytes(10), families, llm: Some(bytes(1)), share: None };
-        let [Asked::Open { conversation: child }] = step(Event::Delegated { conversation, call: worker, ask })[..]
-        else {
+        let delegated = Event::Delegated { conversation, call: worker, ask, deadline: expiry };
+        let [Asked::Open { conversation: child }] = step(delegated)[..] else {
             panic!("the sub-agent opens");
         };
         assert!(step(Event::Started { conversation: child, peer: worker }).is_empty(), "starting is quiet");
@@ -177,7 +178,8 @@ fn fill(limits: Limits) {
         assert_eq!(step(ended), [Asked::Other], "its call returns its answer");
         let change = Change { title: bytes(1), body: bytes(limits.outcome_bytes - 1) };
         let ask = Ask::Finish { outcome: Declared::Change(change) };
-        let finish = Event::Delegated { conversation, call: Token::new(u64::from(run) + 1_000_000), ask };
+        let call = Token::new(u64::from(run) + 1_000_000);
+        let finish = Event::Delegated { conversation, call, ask, deadline: expiry };
         let [Asked::Check { owner }, Asked::Other] = step(finish)[..] else {
             panic!("the change is being checked");
         };

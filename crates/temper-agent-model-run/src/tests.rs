@@ -467,10 +467,18 @@ fn the_worst_case_is_bounded_or_refused() {
 
 // Finishing.
 
+/// When a conversation of a run started at zero expires: the run's deadline.
+const EXPIRY: Time = Time::from_nanos(BUDGET.time.as_nanos());
+
 /// What a run's main conversation asks when it finishes with `outcome`, as
 /// its call `call`.
 fn finish(conversation: Token, call: u64, outcome: Declared) -> Event {
-    Event::Delegated { conversation, call: Token::new(call), ask: Ask::Finish { outcome } }
+    finish_by(conversation, call, outcome, EXPIRY)
+}
+
+/// The same, with the call due by `deadline`.
+fn finish_by(conversation: Token, call: u64, outcome: Declared, deadline: Time) -> Event {
+    Event::Delegated { conversation, call: Token::new(call), ask: Ask::Finish { outcome }, deadline }
 }
 
 fn returned(call: u64, result: Returned) -> Request {
@@ -677,6 +685,42 @@ fn a_withdrawn_landing_stops_what_is_in_flight_and_returns_once_it_has() {
 }
 
 #[test]
+fn a_landing_past_its_deadline_is_stopped_and_returns_timed_out_once_it_has() {
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
+    let minute = Duration::from_secs(60);
+    let emitted = h.step(finish_by(conversation, 7, Declared::Change(change()), Time::ZERO.saturating_add(minute)));
+    let [Request::Check { owner, deadline, .. }, Request::Checking { .. }] = &*emitted else {
+        panic!("expected the first check, got {emitted:?}");
+    };
+    // The checks keep their own limit; the call's deadline is the run's.
+    assert_eq!(*deadline, Time::ZERO.saturating_add(LIMITS.check_timeout));
+    let owner = *owner;
+    h.after(minute);
+    assert_eq!(&*h.fire(), &[Request::Abort { owner }]);
+    assert!(!h.model.is_due(h.env.now), "a call's deadline fires once");
+    // Checks that pass before the abort lands push nothing.
+    assert_eq!(&*h.step(Event::Checked { owner, ran: ran(0, b"") }), &[returned(7, Returned::TimedOut)]);
+    assert_eq!(h.step(end_turn(conversation)).len(), 1, "the run goes on: a nudge");
+    h.model.reclaim();
+
+    // Past its deadline while it is pushed.
+    let deadline = h.env.now.saturating_add(minute);
+    let emitted = h.step(finish_by(conversation, 8, Declared::Change(change()), deadline));
+    let [Request::Check { owner, .. }, Request::Checking { .. }] = &*emitted else {
+        panic!("expected the first check, got {emitted:?}");
+    };
+    let owner = *owner;
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    h.after(minute);
+    assert_eq!(&*h.fire(), &[Request::CancelHost { owner }]);
+    assert_eq!(&*h.step(Event::HostCancelled { owner }), &[returned(8, Returned::TimedOut)]);
+    h.model.reclaim();
+    assert_eq!(h.model.calls(), 0);
+}
+
+#[test]
 fn past_the_budget_a_finish_in_the_turn_in_flight_still_counts() {
     let mut h = Harness::new(LIMITS);
     let (_, conversation) = h.running(1, 100);
@@ -814,8 +858,10 @@ fn a_push_that_lands_after_the_deadline_wins_over_it() {
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
     h.after(BUDGET.time);
+    // The run's deadline is main's expiry, and its call's deadline.
     assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(100) }]);
-    // The push lands before main withdraws its call.
+    assert_eq!(&*h.fire(), &[Request::CancelHost { owner }]);
+    // The push wins the race with its cancel.
     assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(7, Returned::Accepted)]);
     assert!(h.step(Event::Withdraw { conversation, call: Token::new(7) }).is_empty(), "returned already");
     let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
@@ -823,18 +869,20 @@ fn a_push_that_lands_after_the_deadline_wins_over_it() {
     assert_eq!(answered(emitted), (1, accepted));
 
     // Over the budget, too.
-    let (_, conversation) = h.coding(2, 101);
+    let mut h = Harness::new(LIMITS);
+    let (_, conversation) = h.coding(1, 100);
     drop(h.step(Event::Used { conversation, spend: spend(BUDGET.input + 1) }));
     let owner = h.land(conversation, 8);
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
     drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
     h.after(BUDGET.time);
-    assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(101) }]);
-    assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(8) }), &[Request::CancelHost { owner }]);
+    assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(100) }]);
+    assert_eq!(&*h.fire(), &[Request::CancelHost { owner }]);
+    assert!(h.step(Event::Withdraw { conversation, call: Token::new(8) }).is_empty(), "stopped already");
     assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(8, Returned::Accepted)]);
     let total = spend(BUDGET.input + 1);
     let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: total });
-    assert_eq!(answered(emitted), (2, Answer::Accepted { outcome: Declared::Change(change()), spent: total }));
+    assert_eq!(answered(emitted), (1, Answer::Accepted { outcome: Declared::Change(change()), spent: total }));
 }
 
 #[test]
@@ -919,7 +967,15 @@ fn ask(
     share: Option<Spend>,
 ) -> Event {
     let ask = Ask::SubAgent { brief: bytes(b"Find the parser."), families: wanted, llm, share };
-    Event::Delegated { conversation, call: Token::new(call), ask }
+    Event::Delegated { conversation, call: Token::new(call), ask, deadline: EXPIRY }
+}
+
+/// What `conversation` asks for a sub-agent that may inspect, as its call
+/// `call` due by `deadline`.
+fn ask_by(conversation: Token, call: u64, deadline: Time) -> Event {
+    let ask =
+        Ask::SubAgent { brief: bytes(b"Find it."), families: families(true, false, false), llm: None, share: None };
+    Event::Delegated { conversation, call: Token::new(call), ask, deadline }
 }
 
 impl Harness {
@@ -1085,6 +1141,38 @@ fn a_withdrawn_sub_agent_is_closed_and_its_call_returns_once_it_has_ended() {
 }
 
 #[test]
+fn a_sub_agent_past_its_deadline_is_closed_and_returns_timed_out_once_it_has_ended() {
+    let mut h = Harness::new(LIMITS);
+    let (_, main) = h.running_on(1, 100, agents());
+    let minute = Duration::from_secs(60);
+    let emitted = h.step(ask_by(main, 7, Time::ZERO.saturating_add(minute)));
+    let [Request::Open { conversation: child, opening }] = &*emitted else { panic!("expected the sub-agent to open") };
+    assert_eq!(opening.budget.time, minute, "its time runs out by its call's deadline");
+    let child = *child;
+    drop(h.step(Event::Started { conversation: child, peer: Token::new(101) }));
+    h.after(minute);
+    assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(101) }]);
+    // Its answer crossed the close.
+    let yielded = Event::Yielded { conversation: child, stop: Stop::EndTurn, text: bytes(b"late") };
+    assert!(h.step(yielded).is_empty(), "closing already");
+    let emitted = h.step(Event::Ended { conversation: child, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(&*emitted, &[returned(7, Returned::TimedOut)]);
+    assert_eq!(h.step(end_turn(main)).len(), 1, "the run goes on: main is nudged");
+    h.model.reclaim();
+
+    // One withdrawn first returns as cancelled, its deadline no longer armed.
+    let emitted = h.step(ask_by(main, 8, h.env.now.saturating_add(minute)));
+    let [Request::Open { conversation: child, .. }] = &*emitted else { panic!("expected the sub-agent to open") };
+    let child = *child;
+    drop(h.step(Event::Started { conversation: child, peer: Token::new(102) }));
+    drop(h.step(Event::Withdraw { conversation: main, call: Token::new(8) }));
+    h.after(minute);
+    assert!(!h.model.is_due(h.env.now), "a withdraw cancels its call's deadline");
+    let emitted = h.step(Event::Ended { conversation: child, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(&*emitted, &[returned(8, Returned::Cancelled)]);
+}
+
+#[test]
 fn a_cancel_closes_the_tree_one_owner_at_a_time() {
     let mut h = Harness::new(LIMITS);
     let (run, main) = h.running_on(1, 100, agents());
@@ -1096,6 +1184,10 @@ fn a_cancel_closes_the_tree_one_owner_at_a_time() {
         &*h.step(Event::Withdraw { conversation: main, call: Token::new(7) }),
         &[Request::Close { peer: Token::new(101) }]
     );
+    // A call that crosses its conversation's close returns at once, and opens
+    // nothing.
+    let crossed = ask(child, 9, families(true, false, false), None, None);
+    assert_eq!(&*h.step(crossed), &[returned(9, Returned::Cancelled)]);
     assert_eq!(
         &*h.step(Event::Withdraw { conversation: child, call: Token::new(8) }),
         &[Request::Close { peer: Token::new(102) }]

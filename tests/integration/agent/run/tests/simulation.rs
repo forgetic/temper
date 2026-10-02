@@ -248,17 +248,17 @@ fn an_outcome_that_does_not_fit_is_rejected_and_the_llm_tries_again() {
 }
 
 #[test]
-fn a_finish_past_its_deadline_is_withdrawn_and_its_checks_aborted() {
+fn a_finish_past_its_deadline_has_its_checks_aborted_and_times_out() {
     let settings = finishing(18);
     let world = settled(&Settings {
-        partner: Script { changes: 1000, finish_deadline: Span::millis(1_000, 3_000), ..settings.partner },
-        checkout: Checkouts { check: Span::millis(500, 6_000), ..settings.checkout },
+        worker: Config { time_min: Duration::from_secs(2), time_max: Duration::from_secs(10), ..settings.worker },
+        partner: Script { changes: 1000, turn: Span::millis(100, 2_000), ..settings.partner },
+        checkout: Checkouts { check: Span::millis(2_000, 8_000), ..settings.checkout },
         races: 0,
         ..settings
     });
     let stats = world.stats();
-    assert!(stats.partner.withdrawn > 0 && stats.aborts > 0, "{stats:?}");
-    assert!(stats.partner.cancelled > 0, "{stats:?}");
+    assert!(stats.aborts > 0 && stats.partner.timed_out > 0, "{stats:?}");
 }
 
 #[test]
@@ -379,7 +379,6 @@ fn noisy(seed: u64) -> Settings {
         shares: small(pick(0, 500)),
         changes: small(pick(0, 1000)),
         good: small(pick(0, 1000)),
-        finish_deadline: Span::millis(100, pick(100, 30_000)),
         yields: small(pick(0, 500)),
         odd_stops: small(pick(0, 300)),
         settle: Span::millis(0, pick(0, 2_000)),

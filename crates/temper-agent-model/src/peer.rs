@@ -251,6 +251,7 @@ fn returned_cost(returned: &run::Returned) -> Option<u64> {
         | run::Returned::Moved
         | run::Returned::Unpushed
         | run::Returned::Cancelled
+        | run::Returned::TimedOut
         | run::Returned::Busy
         | run::Returned::Unanswered { .. }
         | run::Returned::Refused { .. } => 0,

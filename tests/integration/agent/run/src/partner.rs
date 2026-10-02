@@ -19,10 +19,11 @@
 //!   it starts a turn only while turns, input and output each have some left; after a turn that went past any part of its share, it
 //!   settles that turn's call, if it made one, and ends out of budget. It
 //!   expires, out of time, when its time runs out.
-//! - A finish in flight past its deadline is withdrawn, and the LLM carries
-//!   on once it returns.
+//! - A call carries the conversation's expiry as its deadline, and the run
+//!   runs the race: the conversation waits for the call to return, past its
+//!   expiry too, then carries on, or ends out of time if it has expired.
 //! - `Say` comes only while it is yielded; `Close` at any time. Closed, it
-//!   withdraws its finish in flight and waits for it to return, settles for
+//!   withdraws its call in flight and waits for it to return, settles for
 //!   a while (a turn in flight may win the race with the close and be spent),
 //!   then sends its one `Ended`. A `Say` or `Close` for a conversation that
 //!   has ended is dropped, as a stale handle is.
@@ -69,8 +70,6 @@ pub struct Script {
     /// rather than a verdict, and that it fits the fake worker's charters.
     pub changes: u32,
     pub good: u32,
-    /// How long a call may take before the conversation withdraws it.
-    pub finish_deadline: Span,
     /// The chance, per mille, that a yield stops for something other than the
     /// end of a turn.
     pub odd_stops: u32,
@@ -110,8 +109,9 @@ pub struct Tally {
     pub moved: u32,
     pub unpushed: u32,
     pub cancelled: u32,
+    pub timed_out: u32,
     pub busy: u32,
-    /// Finishes withdrawn: past their deadline, or as the conversation closed.
+    /// Calls withdrawn as the conversation closed.
     pub withdrawn: u32,
     /// Conversations that ended at a ceiling of their share, or out of time.
     pub ceilings: u32,
@@ -159,25 +159,15 @@ enum Phase {
     Turning,
     /// Waiting for `Say` or `Close`: its wake is the expiry.
     Yielded,
-    /// Its call `call` (a finish, or an ask for a sub-agent) is in flight: its
-    /// wake is the call's deadline or the expiry. `over` is the part of the
-    /// share the turn that called it went past, if any.
+    /// Its call `call` (a finish, or an ask for a sub-agent) is in flight,
+    /// with no wake: the run returns it by the conversation's expiry. `over`
+    /// is the part of the share the turn that called it went past, if any.
     Calling { call: Token, over: Option<Exhausted> },
-    /// It withdrew its call `call`, and waits for its return; then `then`.
-    Withdrawn { call: Token, then: Then },
+    /// Closed, it withdrew its call `call`, and waits for its return; then it
+    /// settles.
+    Withdrawn { call: Token },
     /// Closed, settling: its wake ends it. `in_flight` says a turn was.
     Closing { in_flight: bool },
-}
-
-/// What a conversation does once its withdrawn finish returns.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Then {
-    /// The LLM carries on, or the conversation ends past its share.
-    CarryOn { over: Option<Exhausted> },
-    /// It ends, out of time.
-    Expire,
-    /// It settles, closed.
-    Close,
 }
 
 impl Partner {
@@ -267,20 +257,15 @@ impl Partner {
         let in_flight = match talk.phase {
             Phase::Turning => true,
             Phase::Yielded => false,
-            // It withdraws its finish in flight and waits for it to return,
+            // It withdraws its call in flight and waits for it to return,
             // with no wake.
             Phase::Calling { call, over: _ } => {
-                talk.phase = Phase::Withdrawn { call, then: Then::Close };
-                talk.wake += 1;
+                talk.phase = Phase::Withdrawn { call };
                 out.push(Out::Event(Event::Withdraw { conversation, call }));
                 self.tally.withdrawn += 1;
                 return;
             }
-            Phase::Withdrawn { call, then: _ } => {
-                talk.phase = Phase::Withdrawn { call, then: Then::Close };
-                return;
-            }
-            Phase::Closing { .. } => panic!("the run closes a conversation once"),
+            Phase::Withdrawn { .. } | Phase::Closing { .. } => panic!("the run closes a conversation once"),
         };
         talk.phase = Phase::Closing { in_flight };
         self.wake(now.saturating_add(settle), peer, out);
@@ -296,36 +281,35 @@ impl Partner {
             Returned::Moved => self.tally.moved += 1,
             Returned::Unpushed => self.tally.unpushed += 1,
             Returned::Cancelled => self.tally.cancelled += 1,
+            Returned::TimedOut => self.tally.timed_out += 1,
             Returned::Busy => self.tally.busy += 1,
             Returned::Answered { .. } => self.tally.answered += 1,
             Returned::Unanswered { .. } => self.tally.unanswered += 1,
             Returned::Refused { .. } => self.tally.ask_refused += 1,
         }
         let talk = self.talks.get_mut(&peer).expect("a conversation outlives its calls");
-        let then = match talk.phase {
-            Phase::Calling { call: finishing, over } => {
-                assert_eq!(finishing, call, "a conversation has one finish in flight");
-                Then::CarryOn { over }
-            }
-            Phase::Withdrawn { call: withdrawn, then } => {
-                assert_eq!(withdrawn, call, "a conversation has one finish in flight");
-                then
-            }
-            Phase::Turning | Phase::Yielded | Phase::Closing { .. } => {
-                panic!("a return comes while its call is in flight")
-            }
-        };
         let expires = talk.expires;
-        match then {
-            Then::CarryOn { over: Some(exhausted) } => self.end(peer, End::Budget(exhausted), out),
-            Then::CarryOn { over: None } if now >= expires => self.end(peer, End::Budget(Exhausted::Time), out),
-            Then::CarryOn { over: None } => self.carry_on(now, peer, out),
-            Then::Expire => self.end(peer, End::Budget(Exhausted::Time), out),
-            Then::Close => {
+        if *result == Returned::TimedOut {
+            assert!(now >= expires, "a call times out only once its deadline has passed");
+        }
+        match talk.phase {
+            Phase::Calling { call: calling, over } => {
+                assert_eq!(calling, call, "a conversation has one call in flight");
+                match over {
+                    Some(exhausted) => self.end(peer, End::Budget(exhausted), out),
+                    None if now >= expires => self.end(peer, End::Budget(Exhausted::Time), out),
+                    None => self.carry_on(now, peer, out),
+                }
+            }
+            Phase::Withdrawn { call: withdrawn } => {
+                assert_eq!(withdrawn, call, "a conversation has one call in flight");
                 let settle = self.draw(self.script.settle);
                 let talk = self.talks.get_mut(&peer).expect("a live conversation");
                 talk.phase = Phase::Closing { in_flight: false };
                 self.wake(now.saturating_add(settle), peer, out);
+            }
+            Phase::Turning | Phase::Yielded | Phase::Closing { .. } => {
+                panic!("a return comes while its call is in flight")
             }
         }
     }
@@ -336,7 +320,7 @@ impl Partner {
         if talk.wake != wake {
             return;
         }
-        let (phase, expires, conversation) = (talk.phase, talk.expires, talk.conversation);
+        let (phase, expires) = (talk.phase, talk.expires);
         match phase {
             Phase::Turning if now >= expires => self.end(peer, End::Budget(Exhausted::Time), out),
             Phase::Turning => self.turn(now, peer, out),
@@ -344,14 +328,7 @@ impl Partner {
                 assert!(now >= expires, "a yielded conversation wakes only when it expires");
                 self.end(peer, End::Budget(Exhausted::Time), out);
             }
-            Phase::Calling { call, over } => {
-                // Past the call's deadline, or the conversation's.
-                let then = if now >= expires { Then::Expire } else { Then::CarryOn { over } };
-                talk.phase = Phase::Withdrawn { call, then };
-                out.push(Out::Event(Event::Withdraw { conversation, call }));
-                self.tally.withdrawn += 1;
-            }
-            Phase::Withdrawn { .. } => unreachable!("a withdrawn finish waits without a wake"),
+            Phase::Calling { .. } | Phase::Withdrawn { .. } => unreachable!("a call in flight waits without a wake"),
             Phase::Closing { in_flight } => {
                 if in_flight && self.rng.chance(self.script.races) {
                     self.spend(peer, out);
@@ -378,9 +355,9 @@ impl Partner {
             self.tally.faults += 1;
             self.end(peer, End::Fault(fault), out);
         } else if roll < finishing && finish {
-            self.finish(now, peer, over, out);
+            self.finish(peer, over, out);
         } else if roll >= finishing && roll < asking && agents && over.is_none() {
-            self.ask(now, peer, out);
+            self.ask(peer, out);
         } else if let Some(exhausted) = over {
             // Past its share with no call to settle: it ends.
             self.tally.ceilings += 1;
@@ -407,14 +384,14 @@ impl Partner {
     }
 
     /// The LLM calls `finish`, with an outcome drawn from the script.
-    fn finish(&mut self, now: Time, peer: Token, over: Option<Exhausted>, out: &mut Vec<Out>) {
+    fn finish(&mut self, peer: Token, over: Option<Exhausted>, out: &mut Vec<Out>) {
         let outcome = self.outcome();
         self.tally.finishes += 1;
-        self.call(now, peer, over, Ask::Finish { outcome }, out);
+        self.call(peer, over, Ask::Finish { outcome }, out);
     }
 
     /// The LLM asks for a sub-agent, as the script draws it.
-    fn ask(&mut self, now: Time, peer: Token, out: &mut Vec<Out>) {
+    fn ask(&mut self, peer: Token, out: &mut Vec<Out>) {
         let own = self.talks[&peer].families;
         let bad = self.rng.chance(self.script.bad_asks);
         let mut families = Families { agents: self.rng.chance(500) && own.agents, ..own };
@@ -441,20 +418,18 @@ impl Partner {
         };
         let brief = b"Look into the parser, and say what you found."[..].into();
         self.tally.asks += 1;
-        self.call(now, peer, None, Ask::SubAgent { brief, families, llm, share }, out);
+        self.call(peer, None, Ask::SubAgent { brief, families, llm, share }, out);
     }
 
     /// The LLM's turn called the run for `ask`, `over` its share if it went
-    /// past it.
-    fn call(&mut self, now: Time, peer: Token, over: Option<Exhausted>, ask: Ask, out: &mut Vec<Out>) {
+    /// past it. The call is due by the conversation's expiry.
+    fn call(&mut self, peer: Token, over: Option<Exhausted>, ask: Ask, out: &mut Vec<Out>) {
         let call = self.mint();
-        let deadline = self.draw(self.script.finish_deadline);
         let talk = self.talks.get_mut(&peer).expect("a live conversation calls");
         talk.phase = Phase::Calling { call, over };
-        let (conversation, expires) = (talk.conversation, talk.expires);
+        let (conversation, deadline) = (talk.conversation, talk.expires);
         self.calls.insert(call, peer);
-        out.push(Out::Event(Event::Delegated { conversation, call, ask }));
-        self.wake(now.saturating_add(deadline).min(expires), peer, out);
+        out.push(Out::Event(Event::Delegated { conversation, call, ask, deadline }));
     }
 
     /// An outcome to declare: a change or a verdict, one that fits the fake

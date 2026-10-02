@@ -33,7 +33,7 @@ impl Model {
             runs: Slab::with_capacity(limits.runs),
             conversations: Slab::with_capacity(limits.conversations),
             calls: Calls::with_capacity(limits.calls),
-            alarms: Deadlines::with_capacity(limits.runs),
+            alarms: Deadlines::with_capacity(limits.runs.saturating_add(limits.calls)),
             facts: Facts::with_capacity(limits.facts),
         }
     }
@@ -112,7 +112,9 @@ fn take(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Requ
         Event::Ended { conversation, end, spend } => run::ended(model, conversation, end, spend, out),
         Event::Read { owner, read } => run::read(model, env, owner, read, out),
         Event::Probed { owner, executable } => run::probed(model, env, owner, executable, out),
-        Event::Delegated { conversation, call, ask } => run::delegated(model, env, conversation, call, ask, out),
+        Event::Delegated { conversation, call, ask, deadline } => {
+            run::delegated(model, env, conversation, call, ask, deadline, out);
+        }
         Event::Withdraw { conversation, call } => run::withdraw(model, conversation, call, out),
         Event::Checked { owner, ran } => run::checked(model, env, owner, ran, out),
         Event::Aborted { owner } => run::aborted(model, owner, out),
@@ -133,6 +135,7 @@ pub fn fire(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Request>) {
     let mark = out.len();
     match alarm {
         Alarm::Deadline { run } => run::deadline(model, run, out),
+        Alarm::Call { call } => run::expired(model, call, out),
     }
     facts::tell(&mut model.facts, &model.runs, &model.conversations, out, mark);
 }

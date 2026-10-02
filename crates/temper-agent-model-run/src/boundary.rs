@@ -23,7 +23,9 @@
 //!   `peer`, the token it gave back when it started (4.2). A conversation's
 //!   [`Event::Delegated`] call is ended by exactly one [`Request::Return`],
 //!   after an [`Event::Withdraw`] too; the call is named by the
-//!   conversation's own token for it, `call`.
+//!   conversation's own token for it, `call`. It carries its deadline, and
+//!   the run runs the race: past it, the run stops what the call is doing and
+//!   returns it as timed out, once that has settled.
 //!
 //! A request's `owner` is the run's token for what asked: the run itself for
 //! a read or a probe, a finishing call for a check, a push or their cancels.
@@ -63,10 +65,13 @@ pub enum Event {
     /// failure or a deadline passed reads as not.
     Probed { owner: Token, executable: bool },
     /// A call the conversation's LLM made of the run, which the run answers
-    /// with one `Return`.
-    Delegated { conversation: Token, call: Token, ask: Ask },
-    /// The conversation abandons its call `call`: it is closing, or the call's
-    /// time ran out. Its `Return` still comes.
+    /// with one `Return`. `deadline` is the conversation's own expiry: past
+    /// it, the run stops what the call is doing, and returns `TimedOut` once
+    /// that has settled. The conversation waits for the return, past its
+    /// expiry too, unless it closes.
+    Delegated { conversation: Token, call: Token, ask: Ask, deadline: Time },
+    /// The conversation abandons its call `call`: it is closing. Its `Return`
+    /// still comes, once what the call was doing has settled.
     Withdraw { conversation: Token, call: Token },
     /// Terminal for `Check`: what the checks' process did.
     Checked { owner: Token, ran: Ran },
@@ -153,6 +158,10 @@ pub enum Returned {
     /// Nothing was decided: the call was withdrawn, or the run is ending
     /// otherwise.
     Cancelled,
+    /// Nothing was decided: the call's deadline passed first, and what it was
+    /// doing was stopped (its sub-agent closed, its checks or its push
+    /// abandoned).
+    TimedOut,
     /// The run has no room for another call now; it may have later.
     Busy,
     /// The sub-agent's last message: at most the run's limit of its first

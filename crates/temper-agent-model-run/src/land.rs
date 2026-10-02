@@ -15,9 +15,9 @@
 //! A failing check, or a push that fails, goes back to the LLM as feedback,
 //! and it carries on. A push that finds the branch moved ends the run: the
 //! push is a fast-forward from where the run started, so no later one can
-//! land, and the LLM cannot fix that. The call is its conversation's:
-//! a withdraw stops what is in flight, and the call returns once that has
-//! settled. A change is accepted only once it is pushed, and once it is
+//! land, and the LLM cannot fix that. The call is its conversation's: a
+//! withdraw, or its deadline passing, stops what is in flight, and the call
+//! returns once that has settled. A change is accepted only once it is pushed, and once it is
 //! pushed it is accepted, whatever its run is winding down for meanwhile: it
 //! is on the forge. Checks that pass once the run may no longer finish push
 //! nothing.
@@ -30,16 +30,19 @@
 //!            checked, passed, the last    Pushing    push
 //!            checked, passed, run ending  Closed     return: cancelled
 //!            checked, failed              Closed     return: checks failed
-//!            withdraw                     Aborting   abort
-//! Aborting   checked, aborted             Closed     return: cancelled
+//!            withdraw, deadline           Aborting   abort
+//! Aborting   checked, aborted             Closed     return: cancelled, or timed out
+//!            withdraw                     Aborting
 //! Pushing    pushed                       Closed     return: accepted, moved (the run ends) or unpushed
-//!            withdraw                     Unpushing  cancel the host call
+//!            withdraw, deadline           Unpushing  cancel the host call
 //! Unpushing  pushed                       Closed     return: as for Pushing
-//!            host cancelled               Closed     return: cancelled
+//!            host cancelled               Closed     return: cancelled, or timed out
+//!            withdraw                     Unpushing
 //! ```
 //!
 //! Every other cell is unreachable: one terminal per request, a withdraw at
-//! most once per call, and a cancel's terminal only after the cancel.
+//! most once per call, its deadline's alarm cancelled when it is withdrawn,
+//! and a cancel's terminal only after the cancel.
 
 use core::mem;
 
@@ -47,7 +50,7 @@ use temper_lib::bytes::copy_of;
 use temper_lib::{Env, Id, Queue, Token};
 
 use crate::boundary::{Exit, Place, Push, Ran, Request, Returned};
-use crate::call::Call;
+use crate::call::{self, Call, Withdrawal};
 use crate::charter::Repository;
 use crate::limits::Limits;
 use crate::outcome::Change;
@@ -66,12 +69,13 @@ pub(crate) struct Landing {
 enum Stage {
     /// The checks at `check` among the run's are running.
     Checking { check: u32 },
-    /// Withdrawn while its checks ran: they are being stopped.
-    Aborting,
+    /// Stopped for `why` while its checks ran: they are being stopped.
+    Aborting { why: Withdrawal },
     /// The worker is pushing it.
     Pushing,
-    /// Withdrawn while the worker pushed it: the host call is being cancelled.
-    Unpushing,
+    /// Stopped for `why` while the worker pushed it: the host call is being
+    /// cancelled.
+    Unpushing { why: Withdrawal },
     /// Terminal: holds nothing.
     Closed,
 }
@@ -127,16 +131,16 @@ pub(crate) fn checked(
                 back(owner, Returned::ChecksFailed { repository, ran }, Settled::Refused, out)
             }
         },
-        Stage::Aborting => back(owner, Returned::Cancelled, Settled::Cancelled, out),
-        Stage::Pushing | Stage::Unpushing | Stage::Closed => unreachable!("checks end only while they run"),
+        Stage::Aborting { why } => back(owner, call::stopped(why), Settled::Cancelled, out),
+        Stage::Pushing | Stage::Unpushing { .. } | Stage::Closed => unreachable!("checks end only while they run"),
     }
 }
 
 pub(crate) fn aborted(landing: &mut Landing, owner: Token, out: &mut Queue<Request>) -> Settled {
     let stage = mem::replace(&mut landing.stage, Stage::Closed);
     match stage {
-        Stage::Aborting => back(owner, Returned::Cancelled, Settled::Cancelled, out),
-        Stage::Checking { .. } | Stage::Pushing | Stage::Unpushing | Stage::Closed => {
+        Stage::Aborting { why } => back(owner, call::stopped(why), Settled::Cancelled, out),
+        Stage::Checking { .. } | Stage::Pushing | Stage::Unpushing { .. } | Stage::Closed => {
             unreachable!("an abort's terminal comes after the abort")
         }
     }
@@ -147,7 +151,7 @@ pub(crate) fn pushed(landing: &mut Landing, owner: Token, push: Push, out: &mut 
     let stage = mem::replace(&mut landing.stage, Stage::Closed);
     match stage {
         // A push that won the race with a withdraw has landed all the same.
-        Stage::Pushing | Stage::Unpushing => match push {
+        Stage::Pushing | Stage::Unpushing { .. } => match push {
             Push::Done => {
                 let change = landing.change.clone();
                 back(owner, Returned::Accepted, Settled::Pushed(change), out)
@@ -155,7 +159,7 @@ pub(crate) fn pushed(landing: &mut Landing, owner: Token, push: Push, out: &mut 
             Push::Moved => back(owner, Returned::Moved, Settled::Stale, out),
             Push::Failed => back(owner, Returned::Unpushed, Settled::Refused, out),
         },
-        Stage::Checking { .. } | Stage::Aborting | Stage::Closed => {
+        Stage::Checking { .. } | Stage::Aborting { .. } | Stage::Closed => {
             unreachable!("a push ends only while it is in flight")
         }
     }
@@ -164,26 +168,35 @@ pub(crate) fn pushed(landing: &mut Landing, owner: Token, push: Push, out: &mut 
 pub(crate) fn host_cancelled(landing: &mut Landing, owner: Token, out: &mut Queue<Request>) -> Settled {
     let stage = mem::replace(&mut landing.stage, Stage::Closed);
     match stage {
-        Stage::Unpushing => back(owner, Returned::Cancelled, Settled::Cancelled, out),
-        Stage::Checking { .. } | Stage::Aborting | Stage::Pushing | Stage::Closed => {
+        Stage::Unpushing { why } => back(owner, call::stopped(why), Settled::Cancelled, out),
+        Stage::Checking { .. } | Stage::Aborting { .. } | Stage::Pushing | Stage::Closed => {
             unreachable!("a host call's cancel comes back only after the cancel")
         }
     }
 }
 
-/// The conversation withdraws the call `id`: stop what is in flight.
-pub(crate) fn withdraw(landing: &mut Landing, id: Id<Call>, out: &mut Queue<Request>) {
+/// The call `id` is stopped for `why`: stop what is in flight.
+pub(crate) fn withdraw(landing: &mut Landing, id: Id<Call>, why: Withdrawal, out: &mut Queue<Request>) {
     let stage = mem::replace(&mut landing.stage, Stage::Closed);
     landing.stage = match stage {
         Stage::Checking { check: _ } => {
             out.push(Request::Abort { owner: id.token() });
-            Stage::Aborting
+            Stage::Aborting { why }
         }
         Stage::Pushing => {
             out.push(Request::CancelHost { owner: id.token() });
-            Stage::Unpushing
+            Stage::Unpushing { why }
         }
-        Stage::Aborting | Stage::Unpushing | Stage::Closed => unreachable!("a call is withdrawn once"),
+        // Its deadline stopped it before its conversation withdrew it.
+        Stage::Aborting { why: first } => {
+            assert!(why == Withdrawal::Withdrawn, "a withdraw cancels its call's deadline");
+            Stage::Aborting { why: first }
+        }
+        Stage::Unpushing { why: first } => {
+            assert!(why == Withdrawal::Withdrawn, "a withdraw cancels its call's deadline");
+            Stage::Unpushing { why: first }
+        }
+        Stage::Closed => unreachable!("a call is stopped only while it is in flight"),
     };
 }
 

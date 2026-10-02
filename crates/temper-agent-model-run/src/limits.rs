@@ -24,8 +24,8 @@ pub struct Limits {
     pub outlets: u32,
     /// Verdicts an outcome spec may list.
     pub verdicts: u32,
-    /// Calls of conversations to the run in flight at once, across runs. A
-    /// call beyond them is answered as busy.
+    /// Calls of conversations to the run in flight at once, across runs, each
+    /// with an alarm for its deadline. A call beyond them is answered as busy.
     pub calls: u32,
     /// The largest budget a charter may ask for, part by part.
     pub budget: Budget,
@@ -70,7 +70,8 @@ pub struct Limits {
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     let runs = Slab::<Run>::worst_case(limits.runs)?;
     let conversations = Slab::<Conversation>::worst_case(limits.conversations)?;
-    let alarms = Deadlines::<Alarm>::worst_case(limits.runs)?;
+    // A deadline per run, and one per call.
+    let alarms = Deadlines::<Alarm>::worst_case(limits.runs.checked_add(limits.calls)?)?;
     // Each run holds its charter, up to its byte limit, and what it found in
     // its checkout: a guide and a mark for checks per repository.
     let guides = List::<Guide>::worst_case(limits.repositories)?

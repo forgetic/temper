@@ -86,7 +86,8 @@
 //! never rests yielded; a finish is a write, which a conversation runs alone,
 //! so it has at most one landing at a time. The deadline alarm runs while a
 //! run prepares, works or is over its budget; it follows from the state, in
-//! one place ([`follow`]), which also retires a run once it is Closed.
+//! one place ([`follow`]), which also retires a run once it is Closed. A
+//! call's alarm runs from the call's start until it returns or is withdrawn.
 
 use alloc::boxed::Box;
 use core::mem;
@@ -100,7 +101,7 @@ use crate::boundary::{
     Returned, Stop,
 };
 use crate::budget::{Exhausted, Spend};
-use crate::call::{Call, Calls, Work};
+use crate::call::{Call, Calls, Withdrawal, Work};
 use crate::charter::{self, Charter, Families, count};
 use crate::facts::{Asked, Fact};
 use crate::land::{self, Settled};
@@ -188,11 +189,13 @@ enum Phase {
     Closed,
 }
 
-/// A run's timers, named by what they are for.
+/// The timers of runs and their calls, named by what they are for.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Alarm {
-    /// Its budget's time runs out.
+    /// The budget's time of the run `run` runs out.
     Deadline { run: Id<Run> },
+    /// The deadline of the call `call` passes.
+    Call { call: Id<Call> },
 }
 
 // Entry points, one per event or alarm: look the conversation or run up, take
@@ -421,17 +424,19 @@ pub(crate) fn delegated(
     conversation: Token,
     call: Token,
     ask: Ask,
+    deadline: Time,
     out: &mut Queue<Request>,
 ) {
     let Model { runs, conversations, calls, alarms, facts } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get(id).expect("a conversation lives until it has ended");
-    match &conversation.phase {
-        Phase::Running { .. } | Phase::Closing => {}
+    let closing = match &conversation.phase {
+        Phase::Running { .. } => false,
+        Phase::Closing => true,
         Phase::Pending | Phase::Opening | Phase::Unwanted | Phase::Closed => {
             unreachable!("a conversation calls only between starting and ending")
         }
-    }
+    };
     let run_id = conversation.run;
     facts.about(run_id.token());
     let asked = match &ask {
@@ -439,6 +444,11 @@ pub(crate) fn delegated(
         Ask::SubAgent { .. } => Asked::SubAgent,
     };
     facts.push(Fact::Called { run: run_id.token(), conversation: id.token(), call, ask: asked });
+    // The call crossed its conversation's close: it would be withdrawn at once.
+    if closing {
+        out.push(Request::Return { call, result: Returned::Cancelled });
+        return;
+    }
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
@@ -450,18 +460,22 @@ pub(crate) fn delegated(
         State::Working { reply_to, main } => match ask {
             Ask::Finish { outcome } => {
                 assert!(main == id, "only main is offered finish");
-                finish(run, run_id, conversations, calls, reply_to, main, None, call, outcome, env, out)
+                let made = Asking { call, deadline };
+                finish(run, run_id, conversations, calls, alarms, reply_to, main, None, made, outcome, env, out)
             }
             Ask::SubAgent { brief, families, llm, share } => {
                 let wanted = Wanted { brief, families, llm, share };
-                sub_agent(run, run_id, conversations, calls, id, call, wanted, env, out);
+                let made = Asking { call, deadline };
+                sub_agent(run, run_id, conversations, calls, alarms, id, made, wanted, env, out);
                 State::Working { reply_to, main }
             }
         },
         State::Over { reply_to, main, exhausted } => match ask {
             Ask::Finish { outcome } => {
                 assert!(main == id, "only main is offered finish");
-                finish(run, run_id, conversations, calls, reply_to, main, Some(exhausted), call, outcome, env, out)
+                let made = Asking { call, deadline };
+                let over = Some(exhausted);
+                finish(run, run_id, conversations, calls, alarms, reply_to, main, over, made, outcome, env, out)
             }
             // Past the budget, nothing new is opened.
             Ask::SubAgent { .. } => {
@@ -482,16 +496,15 @@ pub(crate) fn withdraw(model: &mut Model, conversation: Token, call: Token, out:
     let Some(id) = model.calls.find(conversation, call) else {
         return;
     };
-    let call = model.calls.get_mut(id).expect("a named call lives");
-    model.facts.about(call.run.token());
-    match &mut call.work {
-        Work::Landing(landing) => land::withdraw(landing, id, out),
-        Work::Child(child) => {
-            if let Some(child) = agent::withdraw(child) {
-                close(&mut model.conversations, child, out);
-            }
-        }
-    }
+    // The call is settling now: its deadline no longer matters.
+    model.alarms.cancel(Alarm::Call { call: id });
+    stop_call(model, id, Withdrawal::Withdrawn, out);
+}
+
+/// The deadline of the call `id` passed before it returned: stop what it is
+/// doing.
+pub(crate) fn expired(model: &mut Model, id: Id<Call>, out: &mut Queue<Request>) {
+    stop_call(model, id, Withdrawal::Expired, out);
 }
 
 pub(crate) fn checked(model: &mut Model, env: &Env<Limits>, owner: Token, ran: Ran, out: &mut Queue<Request>) {
@@ -569,10 +582,7 @@ pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spe
             Work::Landing(_) => unreachable!("a sub-agent serves a sub-agent's call"),
         };
         out.push(Request::Return { call: call.owner, result });
-        let asking = call.conversation;
-        calls.retire(asker);
-        let asking = conversations.get_mut(asking).expect("a conversation outlives its calls");
-        asking.calls = asking.calls.checked_sub(1).expect("a conversation counts its calls");
+        retire_call(calls, alarms, conversations, asker);
         return;
     }
     let state = mem::replace(&mut run.state, State::Closed);
@@ -636,7 +646,7 @@ fn follow(runs: &mut Slab<Run>, alarms: &mut Deadlines<Alarm>, id: Id<Run>) {
     };
     let alarm = Alarm::Deadline { run: id };
     if let Some(at) = deadline {
-        alarms.arm(alarm, at).expect("the alarm table has room for one alarm per run");
+        alarms.arm(alarm, at).expect("the alarm table has room for an alarm per run and per call");
     } else {
         alarms.cancel(alarm);
     }
@@ -661,11 +671,7 @@ fn settle(model: &mut Model, id: Id<Call>, settled: Settled, out: &mut Queue<Req
     if settled == Settled::Going {
         return;
     }
-    let call = calls.get(id).expect("a call lives until it returns");
-    let (run_id, conversation) = (call.run, call.conversation);
-    calls.retire(id);
-    let conversation = conversations.get_mut(conversation).expect("a conversation outlives its calls");
-    conversation.calls = conversation.calls.checked_sub(1).expect("a conversation counts its calls");
+    let run_id = retire_call(calls, alarms, conversations, id);
     let run = runs.get_mut(run_id).expect("a run lives until its calls have returned");
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match settled {
@@ -787,23 +793,25 @@ fn stop(
     answer(reply_to, Answer::Failed { failure, spent: run.spent }, out)
 }
 
-/// Working, or over the budget's `over` part: main called `finish` as `call`.
-/// A refused outcome is returned at once; an accepted verdict ends the run; a
-/// change lands, and the run goes on meanwhile.
+/// Working, or over the budget's `over` part: main called `finish` as
+/// `made`. A refused outcome is returned at once; an accepted verdict ends the
+/// run; a change lands, by the call's deadline, and the run goes on meanwhile.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn finish(
     run: &mut Run,
     run_id: Id<Run>,
     conversations: &mut Slab<Conversation>,
     calls: &mut Calls,
+    alarms: &mut Deadlines<Alarm>,
     reply_to: ReplyTo,
     main: Id<Conversation>,
     over: Option<Exhausted>,
-    call: Token,
+    made: Asking,
     declared: Declared,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) -> State {
+    let Asking { call, deadline } = made;
     let conversation = conversations.get(main).expect("main lives while its run works");
     assert!(conversation.calls == 0, "a finish is a write, which a conversation runs alone");
     let max = env.limits.outcome_bytes;
@@ -835,7 +843,7 @@ fn finish(
                 };
             }
             let work = Work::Landing(land::landing(change));
-            let id = calls.insert(Call { run: run_id, conversation: main, owner: call, work });
+            let id = begin_call(calls, alarms, Call { run: run_id, conversation: main, owner: call, work }, deadline);
             match &mut calls.get_mut(id).expect("inserted above").work {
                 Work::Landing(landing) => land::begin(landing, id, run, env, out),
                 Work::Child(_) => unreachable!("inserted as a landing"),
@@ -850,6 +858,12 @@ fn finish(
     }
 }
 
+/// A call a conversation made: its token for it, and its deadline.
+struct Asking {
+    call: Token,
+    deadline: Time,
+}
+
 /// What a conversation asks for when it asks for a sub-agent.
 struct Wanted {
     brief: Box<[u8]>,
@@ -858,23 +872,25 @@ struct Wanted {
     share: Option<Spend>,
 }
 
-/// Working: the conversation `asker` asked for a sub-agent as its call `call`.
-/// Open it, or return why not.
+/// Working: the conversation `asker` asked for a sub-agent as `made`. Open
+/// it, with no more time than to the call's deadline, or return why not.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn sub_agent(
     run: &mut Run,
     run_id: Id<Run>,
     conversations: &mut Slab<Conversation>,
     calls: &mut Calls,
+    alarms: &mut Deadlines<Alarm>,
     asker: Id<Conversation>,
-    call: Token,
+    made: Asking,
     wanted: Wanted,
     env: &Env<Limits>,
     out: &mut Queue<Request>,
 ) {
+    let Asking { call, deadline } = made;
     let asking = conversations.get(asker).expect("a conversation lives until it has ended");
-    let means =
-        Means { spent: run.spent, conversations: run.conversations, left: run.deadline.saturating_since(env.now) };
+    let left = run.deadline.min(deadline).saturating_since(env.now);
+    let means = Means { spent: run.spent, conversations: run.conversations, left };
     let planned = agent::plan(
         &run.charter,
         means,
@@ -898,7 +914,8 @@ fn sub_agent(
     }
     // A call is stored before its child, which names it, and holds the child
     // once the child has a name too.
-    let id = calls.insert(Call { run: run_id, conversation: asker, owner: call, work: Work::Child(Child::Closed) });
+    let unnamed = Call { run: run_id, conversation: asker, owner: call, work: Work::Child(Child::Closed) };
+    let id = begin_call(calls, alarms, unnamed, deadline);
     let child = Conversation {
         run: run_id,
         asker: Some(id),
@@ -924,6 +941,45 @@ fn sub_agent(
         llm: plan.llm,
     };
     out.push(Request::Open { conversation: child.token(), opening });
+}
+
+/// Stores `call`, there being room, and arms its deadline.
+fn begin_call(calls: &mut Calls, alarms: &mut Deadlines<Alarm>, call: Call, deadline: Time) -> Id<Call> {
+    let id = calls.insert(call);
+    alarms.arm(Alarm::Call { call: id }, deadline).expect("the alarm table has room for an alarm per call");
+    id
+}
+
+/// Stops what the call `id` is doing, for `why`; it returns once that has
+/// settled.
+fn stop_call(model: &mut Model, id: Id<Call>, why: Withdrawal, out: &mut Queue<Request>) {
+    let call = model.calls.get_mut(id).expect("a call lives until it returns, and its alarm with it");
+    model.facts.about(call.run.token());
+    match &mut call.work {
+        Work::Landing(landing) => land::withdraw(landing, id, why, out),
+        Work::Child(child) => {
+            if let Some(child) = agent::withdraw(child, why) {
+                close(&mut model.conversations, child, out);
+            }
+        }
+    }
+}
+
+/// Retires the call `id`, which has returned: its alarm is cancelled, and its
+/// conversation has a call fewer in flight. The run it is of.
+fn retire_call(
+    calls: &mut Calls,
+    alarms: &mut Deadlines<Alarm>,
+    conversations: &mut Slab<Conversation>,
+    id: Id<Call>,
+) -> Id<Run> {
+    let call = calls.get(id).expect("a call lives until it returns");
+    let (run, conversation) = (call.run, call.conversation);
+    calls.retire(id);
+    alarms.cancel(Alarm::Call { call: id });
+    let conversation = conversations.get_mut(conversation).expect("a conversation outlives its calls");
+    conversation.calls = conversation.calls.checked_sub(1).expect("a conversation counts its calls");
+    run
 }
 
 /// Working, an ending decided: close main, and wait for it to end.

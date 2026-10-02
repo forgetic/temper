@@ -168,6 +168,7 @@ pub(crate) const fn failed(returned: &run::Returned) -> bool {
         | run::Returned::Moved
         | run::Returned::Unpushed
         | run::Returned::Cancelled
+        | run::Returned::TimedOut
         | run::Returned::Busy
         | run::Returned::Unanswered { .. }
         | run::Returned::Refused { .. } => true,
@@ -187,6 +188,7 @@ pub(crate) fn copy(returned: &run::Returned) -> run::Returned {
         run::Returned::Moved => run::Returned::Moved,
         run::Returned::Unpushed => run::Returned::Unpushed,
         run::Returned::Cancelled => run::Returned::Cancelled,
+        run::Returned::TimedOut => run::Returned::TimedOut,
         run::Returned::Busy => run::Returned::Busy,
         run::Returned::Answered { text, cut, stop } => {
             run::Returned::Answered { text: copy_of(text), cut: *cut, stop: *stop }
