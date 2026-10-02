@@ -38,7 +38,7 @@ use temper_lib::{Env, Id, List, Queue, Time, Token};
 use crate::boundary::{Inbound, Item, Phase, Related};
 use crate::facts::Fact;
 use crate::items::{self, Applying, Doing, Entry, Job, Of, Writes};
-use crate::limits::Limits;
+use crate::limits::{self, Limits};
 use crate::model::{self, Model};
 use crate::route;
 use crate::translate;
@@ -1451,10 +1451,10 @@ fn created(model: &mut Model, env: &Env<Limits>, id: Id<Entry>, record: plan::Re
         child_entry.holding = Some(id);
     }
     if let Some(goal) = goal {
-        join(model, goal, &name, item);
+        join(model, goal, &name, item, env.limits.plan.steps);
     }
     if goal != Some(parent) {
-        join(model, parent, &name, item);
+        join(model, parent, &name, item, env.limits.plan.steps);
     }
     unwritten
 }
@@ -1478,19 +1478,32 @@ fn resolve(model: &Model, goal: Option<Item>, after: &[Box<[u8]>], limits: &Limi
     found.into_boxed()
 }
 
-/// `item`, of the step `name`, joins the steps of `to`.
-fn join(model: &mut Model, to: Item, name: &[u8], item: Item) {
+/// `item`, of the step `name`, joins the steps of `to`, which keeps as many
+/// as a plan holds: past them, the one done first makes room, and if none
+/// is done, it does not join (its own record names its parent and goal).
+fn join(model: &mut Model, to: Item, name: &[u8], item: Item, most: u32) {
     let Some(id) = items::find(model, to) else { return };
     let Some(entry) = model.items.get_mut(id) else { return };
-    for child in &entry.relations.children {
+    let mut done: Option<usize> = None;
+    for (index, child) in entry.relations.children.iter().enumerate() {
         if child.item == item {
             return;
         }
+        if done.is_none() && child.done.is_some() {
+            done = Some(index);
+        }
     }
-    let count = entry.relations.children.len().saturating_add(1);
-    let mut children = List::with_capacity(u32::try_from(count).unwrap_or(u32::MAX));
-    for child in &entry.relations.children {
-        children.push(child.clone()).expect("room for each of them");
+    let full = !limits::within(entry.relations.children.len().saturating_add(1), most);
+    let dropped = match done {
+        Some(index) if full => Some(index),
+        Some(_) | None if full => return,
+        Some(_) | None => None,
+    };
+    let mut children = List::with_capacity(most);
+    for (index, child) in entry.relations.children.iter().enumerate() {
+        if Some(index) != dropped {
+            children.push(child.clone()).expect("room for each of them");
+        }
     }
     children.push(Related { name: copy_of(name), item, done: None }).expect("room for each of them");
     entry.relations.children = children.into_boxed();

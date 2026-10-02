@@ -95,6 +95,11 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(Queue::<plan::Write>::worst_case(plan::max_out(&limits.plan))?)?
         .checked_add(Queue::<rules::Finding>::worst_case(rules::max_out(&limits.rules))?)?;
     let facts = Queue::<Fact>::worst_case(facts(limits)?)?;
+    // What the top level asks of the protocol itself as it routes, and the
+    // people's watches being taken.
+    let own =
+        Queue::<crate::boundary::Request>::worst_case(routed(limits))?
+            .checked_add(Map::<Token, temper_lib::ReplyTo>::worst_case(limits.asks)?)?;
     children
         .checked_add(table)?
         .checked_add(waited)?
@@ -104,6 +109,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(starts)?
         .checked_add(roomless)?
         .checked_add(queues)?
+        .checked_add(own)?
         .checked_add(facts)
 }
 
@@ -131,8 +137,8 @@ pub(crate) fn within(len: usize, most: u32) -> bool {
 
 /// What one entry holds beyond its own size, by the bounds of what it holds:
 /// its step and its goal's plan (names, dependencies, instructions), its
-/// relations, its inbox, an assignment's charter and snapshot, and the
-/// writes of an application.
+/// relations, its inbox, an assignment's charter and snapshot, the outcome
+/// being applied, and the writes of an application.
 fn entry_bytes(limits: &Limits) -> Option<u64> {
     let plan = &limits.plan;
     let name = u64::from(plan.name_bytes);
@@ -146,7 +152,11 @@ fn entry_bytes(limits: &Limits) -> Option<u64> {
         .checked_add(u64::from(plan.instruction_bytes))?
         .checked_add(u64::from(limits.fleet.workstream_bytes))?;
     let writes = u64::from(plan::max_out(plan)).checked_mul(step)?;
+    // The outcome being applied: its words, and a plan or steps as large as
+    // a goal's.
+    let outcome = u64::from(limits.text_bytes).checked_add(goal)?;
     step.checked_mul(2)?
+        .checked_add(outcome)?
         .checked_add(goal.checked_mul(2)?)?
         .checked_add(relations)?
         .checked_add(inbox)?

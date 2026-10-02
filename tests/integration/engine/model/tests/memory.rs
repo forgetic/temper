@@ -39,12 +39,6 @@ const SMALL: Limits = Limits {
 /// forgotten, as far as the engine reads them.
 const COMMENTS: usize = 6;
 
-/// What the engine holds beyond its worst case, measured under `SMALL`: a
-/// new engine holds about 2 KB more than `worst_case` says, and a full one
-/// about 35 KB more. Until its worst case counts it, the tests that run
-/// measure against this margin, and the strict ones are ignored.
-const UNCOUNTED: u64 = 48 * 1_024;
-
 fn bytes(len: u32, fill: u8) -> Box<[u8]> {
     vec![fill; usize::try_from(len).expect("fits")].into_boxed_slice()
 }
@@ -627,7 +621,7 @@ fn run(limits: &Limits, seed: u64, rounds: u32, margin: u64) -> (Measured, Drive
 #[test]
 fn every_entry_point_stays_within_the_worst_case() {
     for seed in 0..10 {
-        let (model, driver) = run(&SMALL, seed, 600, UNCOUNTED);
+        let (model, driver) = run(&SMALL, seed, 600, 0);
         assert!(model.fullest <= model.bound, "seed {seed}: {} held of a worst case of {}", model.fullest, model.bound);
         assert!(!driver.issues.is_empty(), "seed {seed}: the engine made items");
     }
@@ -638,7 +632,7 @@ fn the_engine_full_to_its_limits_stays_within_its_worst_case() {
     let mut most = 0;
     let mut bound = 0;
     for seed in 0..4 {
-        let (model, _) = run(&SMALL, seed, 1_500, UNCOUNTED);
+        let (model, _) = run(&SMALL, seed, 1_500, 0);
         most = most.max(model.fullest);
         bound = model.bound;
         assert!(model.model.items() > 0, "seed {seed}: items were held");
@@ -648,18 +642,9 @@ fn the_engine_full_to_its_limits_stays_within_its_worst_case() {
     assert!(most.saturating_mul(2) > bound, "{most} held of a worst case of {bound}");
 }
 
-/// The engine's worst case counts less than a new engine holds.
+/// A new engine holds no more than its worst case says.
 #[test]
-#[ignore = "the engine's worst case does not yet count all that Model::new holds"]
 fn a_new_engine_holds_no_more_than_its_worst_case() {
     let model = Measured::new(&SMALL, 0);
     assert_eq!(model.excess, 0, "a new engine holds {} bytes beyond its worst case", model.excess);
-}
-
-#[test]
-#[ignore = "the engine's worst case does not yet count all it holds"]
-fn every_entry_point_stays_within_the_worst_case_exactly() {
-    for seed in 0..10 {
-        run(&SMALL, seed, 600, 0);
-    }
 }
