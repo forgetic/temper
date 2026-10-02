@@ -5,7 +5,7 @@ its parts, what each is responsible for, and how they fit together. The
 mechanics are those of `programming-model.md`; the worker it drives is
 described in `worker-model.md`, and the agent in `agent-model.md`. Each
 part's details are settled as it is built; what is still open is listed
-in section 14.
+in section 15.
 
 ## 1. In one page
 
@@ -29,6 +29,9 @@ in section 14.
   changes, waits and sessions. The primitives are the engine's code. The
   rules are the deployment's, and a plan can add to them but never loosen
   them, which is what makes plans written by agents safe to run.
+- **Temper learns.** Notes keep what runs and people learn, scoped to the
+  deployment, a repository or a goal. Every brief lists the notes in its
+  scope, and a run recalls the ones it needs (section 10).
 - **Level-triggered.** What is due follows from the forge's state, not
   from the events that announced it. Webhooks are hints that make the
   engine look sooner; polling is the backstop. Before writing, the engine
@@ -38,7 +41,7 @@ in section 14.
   that was interrupted resumes where it stopped.
 - **The model is complete** (programming-model.md, section 4). A world of
   models and fakes runs everything the engine does, with no protocol and
-  no io (section 13).
+  no io (section 14).
 - **One engine per deployment.** Scaling out is a later problem with known
   solutions. What depends on it now is that the engine is the only writer
   of its own records.
@@ -79,6 +82,7 @@ temper-engine-model                  the engine loop's entry point: forge, worke
 ├── temper-engine-model-forge        the working set and the client: live work, reads, keyed writes, request budget
 ├── temper-engine-model-fleet        workers: slots, placement, attempts, contact, relaying
 ├── temper-engine-model-brief        a run's brief, from typed sections within a byte budget
+├── temper-engine-model-notes        notes: scopes, entries, the index a brief carries
 └── temper-engine-model-views        facts in; live streams and retained traces out
 ```
 
@@ -113,7 +117,7 @@ store.
   the labels a plan declares as inputs. Editing any other label changes
   nothing the engine relies on. One label marks every item the engine
   tracks, which makes it the index the engine finds live work by
-  (section 11).
+  (section 12).
 - **One live run at most.** An item's work is one run at a time: a
   supervisor never races itself, and two runs never write the same
   branch.
@@ -298,9 +302,9 @@ plan's goal.
   what needs judgement: a step held for a person, an escalation from a
   run, the budget crossing a threshold, a stall, a person's message. By
   default each wake is a fresh run whose brief is the goal, the plan's
-  status, what changed since its last turn and the notes it left itself.
-  It acts within the plan's envelope, asks a person beyond it, writes its
-  notes and ends.
+  status, what changed since its last turn, and the goal's notes
+  (section 10). It acts within the plan's envelope, asks a person beyond
+  it, notes what its next turn should know, and ends.
 - **Resume or start fresh** is the engine's choice at each wake, and the
   run cannot tell the difference. A snapshot is a cache the engine never
   looks inside: a lost, oversized or stale one means starting fresh from
@@ -328,6 +332,8 @@ says. A plan's gates are added to them, never subtracted. For example:
   and a person's approving review;
 - writes go only to the deployment's repositories;
 - a plan beyond a size or a budget needs a person's acceptance;
+- a note scoped wider than a goal needs a person's acceptance, where the
+  deployment wants it;
 - spending is bounded per run, per goal and per deployment;
 - who may accept, steer, cancel or release follows their permission on
   the repository, as the forge reports it.
@@ -358,12 +364,49 @@ The engine renders the brief of every run (agent-model.md, 4.1) from
 typed sections the step selects: the item and its lineage, the comments
 since the run's last turn, the outcomes of its dependencies, the CI
 failures on its pull request's head with their output, review comments, its
-earlier attempts and why they failed, the plan's status, the notes it left
-itself, the template it follows. Each section has a byte budget, and what
-does not fit is cut with a note saying so. What the LLM needs to know
+earlier attempts and why they failed, the plan's status, the index of the
+notes in its scope (section 10), the template it follows. Each section has
+a byte budget, and what does not fit is cut, with a line saying how much. What the LLM needs to know
 reaches it as sections, never folded into its instructions as prose.
 
-## 10. Views
+## 10. Notes
+
+Notes are what temper learns over time and passes on: a convention a
+reviewer keeps asking for, why an approach was dropped, which test is
+flaky, what a person prefers. They are to runs what memory is to a coding
+agent at a terminal.
+
+- **An entry** has a one-line description, a body, a scope and
+  references. The scope is the deployment, a repository or a goal; the
+  references name items, closed ones included. Each entry says who wrote
+  it: a person, or a run and the item it ran for.
+- **On the forge,** like everything that must last, where people can read,
+  correct and delete entries. Notes are hints: where a note and the forge
+  disagree, the forge is right.
+- **Written through an outlet.** A run writes a note with its `note`
+  outlet, which the engine applies like any outcome (4.4): keyed,
+  repeat-safe and checked by the rules, which may want a person to accept
+  a note of wide scope. People write notes directly.
+- **Read in two steps.** A brief carries the index of the notes in its
+  scope, one line per entry, within its section's budget, saying how many
+  more there are when they do not all fit. A run asks for the entries it
+  wants with a `recall` read, by name or by a search of their
+  descriptions, and follows their references on demand. The working set
+  holds the indexes; entries are fetched when they are asked for.
+- **Curated.** A session on a slow timer can merge duplicates, rewrite what
+  has drifted and drop what is stale, through the same outlet.
+- **A supervisor's memory** is its goal's notes (section 6): what one turn
+  leaves for the next.
+- **Knowledge of the code itself** (conventions, pitfalls, architecture)
+  belongs in the repository, as `AGENTS.md` does: versioned and reviewed
+  with the code, and found by runs in their checkout. A note that proves
+  durable can move there through a change.
+
+The notes sub-model knows scopes, entries and indexes, and nothing of
+plans: which notes are in a run's scope, what of their index fits a
+brief's budget, what a search finds, and what a write changes.
+
+## 11. Views
 
 What runs report (agent-model.md, section 7) reaches the engine through
 the workers, best effort. The views sub-model:
@@ -377,7 +420,7 @@ the workers, best effort. The views sub-model:
 
 Nothing the engine decides depends on a fact arriving.
 
-## 11. The forge
+## 12. The forge
 
 The forge sub-model is the engine's knowledge of the forge and its only
 way to change it. It holds live work, not the forge: what it holds, and
@@ -387,7 +430,8 @@ forge's history. Anything else, closed items included, is a read away.
 - **A working set, not a copy.** It holds what the engine's decisions
   need about the items that are not done: their records, their pull
   requests' heads, CI and reviews on those heads, whether their
-  dependencies have finished. An item enters when the engine creates it
+  dependencies have finished, and the indexes of the notes in their
+  scopes. An item enters when the engine creates it
   or takes it in, and leaves once it is done, which on the forge means
   closed. Closed issues and pull requests are not held, whether the
   engine never tracked them or has finished with them.
@@ -415,7 +459,7 @@ forge's history. Anything else, closed items included, is a read away.
 - **A request budget** keeps the engine within the forge's rate limits,
   with reads for writes ahead of keeping up.
 
-## 12. Below the model
+## 13. Below the model
 
 What the protocol and io layers owe the model, to be designed after it:
 
@@ -430,7 +474,7 @@ What the protocol and io layers owe the model, to be designed after it:
 - **Configuration:** a deployment's repositories, rules, templates and
   limits.
 
-## 13. The world
+## 14. The world
 
 The engine's world runs the model against fakes that share none of its
 types (programming-model.md, section 11):
@@ -441,15 +485,19 @@ types (programming-model.md, section 11):
   and people who comment and edit;
 - **workers** hosting scripted runs: outcomes, failures, yields, parks,
   lost contact and reconnection;
-- **people** who chat, accept and reject plans, and release held work.
+- **people** who chat, accept and reject plans, release held work, and
+  write and correct notes.
 
 The engine, workers and agents meet in a larger world, with the fake LLM
 provider in place of a real one.
 
-## 14. Open questions
+## 15. Open questions
 
 - **People on the forge:** whether a person's messages are written with
   their own forge credentials or by the engine on their behalf.
+- **Notes on the forge:** what form they take (an issue per scope with
+  an entry per comment, a wiki, files), and how a search reaches entries
+  when there are many.
 - **Where templates live:** deployment configuration first; later, a
   repository the engine reads through the forge's API.
 - **The rules' vocabulary,** and what an envelope can bound, settled as
