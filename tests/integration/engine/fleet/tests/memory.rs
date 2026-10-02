@@ -1,0 +1,249 @@
+//! Memory stays within the worst case (programming-style.md, 6.4), measured by
+//! a counting allocator: every worker in contact holding as many workstream
+//! keys as it may, every attempt tracked, every relayed call kept, and every
+//! entry point on the way.
+
+use temper_engine_model_fleet::{
+    Answer, Bounce, Event, Hello, Hosted, Limits, Model, Phase, Request, fire, max_out, resume, step, worst_case,
+};
+use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
+use temper_world::heap::{self, Meter};
+
+#[global_allocator]
+static HEAP: heap::Counting = heap::Counting;
+
+const LIMITS: Limits = Limits {
+    workers: 3,
+    slots: 3,
+    workstreams: 3,
+    workstream_bytes: 32,
+    attempts: 12,
+    calls: 4,
+    grace: Duration::from_secs(10),
+    facts: 16,
+};
+
+/// The fleet under `limits`, measured: each step's peak is checked against
+/// the worst case, less what it handed out in requests, which their receivers
+/// count.
+struct Measured {
+    model: Model,
+    env: Env<Limits>,
+    out: Queue<Request>,
+    meter: Meter,
+    bound: u64,
+    names: u64,
+}
+
+impl Measured {
+    fn new(limits: Limits) -> Measured {
+        let bound = worst_case(&limits).expect("the test limits fit");
+        let meter = Meter::new();
+        let model = Model::new(&limits);
+        let out = Queue::with_capacity(max_out(&limits));
+        Measured { model, env: Env { now: Time::ZERO, limits }, out, meter, bound, names: 0 }
+    }
+
+    fn name(&mut self) -> Token {
+        self.names += 1;
+        Token::new(self.names)
+    }
+
+    fn step(&mut self, event: Event) -> Vec<Request> {
+        self.meter.start();
+        step(&mut self.model, &self.env, event, &mut self.out);
+        self.drain()
+    }
+
+    /// Places what can be placed, one resume at a time.
+    fn settle(&mut self) -> Vec<Request> {
+        let mut requests = Vec::new();
+        while self.model.is_ready() {
+            self.meter.start();
+            resume(&mut self.model, &self.env, &mut self.out);
+            requests.extend(self.drain());
+        }
+        requests
+    }
+
+    /// Moves the clock to `secs` and fires every alarm due.
+    fn at(&mut self, secs: u64) -> Vec<Request> {
+        self.env.now = Time::ZERO.saturating_add(Duration::from_secs(secs));
+        let mut requests = Vec::new();
+        while self.model.is_due(self.env.now) {
+            self.meter.start();
+            fire(&mut self.model, &self.env, &mut self.out);
+            requests.extend(self.drain());
+        }
+        requests
+    }
+
+    fn drain(&mut self) -> Vec<Request> {
+        let measured = self.meter.end();
+        let mut requests = Vec::with_capacity(self.out.len() as usize);
+        while let Some(request) = self.out.pop() {
+            requests.push(request);
+        }
+        self.meter.check(measured, self.bound, self.env.limits);
+        // The iteration ends: the reclaim point.
+        self.model.reclaim();
+        while self.model.pop_fact().is_some() {}
+        requests
+    }
+
+    /// A hello on `channel`, holding as many keys as a worker may, of the
+    /// most bytes, and hosting `hosting`.
+    fn hello(&mut self, channel: Token, hosting: Vec<Hosted>) -> Vec<Request> {
+        let limits = self.env.limits;
+        let workstreams =
+            (0..limits.workstreams).map(|nth| key(&limits, channel.raw() * 100 + u64::from(nth))).collect();
+        self.step(Event::Hello { channel, hello: Hello { slots: limits.slots, workstreams, hosting: hosting.into() } })
+    }
+
+    /// Starts an attempt of a run of its own, with a key of the most bytes.
+    fn start(&mut self) -> (Token, Token) {
+        let (run, attempt) = (self.name(), self.name());
+        let workstream = key(&self.env.limits, run.raw());
+        let asked = self.step(Event::Start { reply_to: ReplyTo::new(attempt), run, attempt, workstream });
+        assert!(asked.is_empty(), "a start waits for placement: {asked:?}");
+        (run, attempt)
+    }
+}
+
+/// A key of the most bytes a key may have, telling `nth` from the others.
+fn key(limits: &Limits, nth: u64) -> Box<[u8]> {
+    let mut key = vec![b'k'; limits.workstream_bytes as usize];
+    key[..8].copy_from_slice(&nth.to_be_bytes());
+    key.into()
+}
+
+/// The channels of the workers, `C1` and on.
+fn channel(nth: u32) -> Token {
+    Token::new(1_000_000 + u64::from(nth))
+}
+
+/// The attempts placed, with their workers' channels.
+fn placed(requests: &[Request]) -> Vec<(Token, Token, Token)> {
+    let mut placed = Vec::new();
+    for request in requests {
+        if let Request::Assign { channel, run, attempt } = request {
+            placed.push((*channel, *run, *attempt));
+        }
+    }
+    placed
+}
+
+/// Fills the fleet: every worker in contact with its keys, every attempt
+/// tracked, as many placed as there are slots, and every relayed call kept.
+fn fill(limits: Limits) -> (Measured, Vec<(Token, Token, Token)>, Vec<ReplyTo>) {
+    let mut fleet = Measured::new(limits);
+    for nth in 0..limits.workers {
+        assert!(fleet.hello(channel(nth), Vec::new()).is_empty());
+    }
+    for _ in 0..limits.attempts {
+        fleet.start();
+    }
+    let placed = placed(&fleet.settle());
+    assert_eq!(u32::try_from(placed.len()).expect("a few"), limits.workers * limits.slots, "every slot taken");
+    let mut calls = Vec::new();
+    for (nth, &(_, run, attempt)) in placed.iter().enumerate().take(limits.calls as usize) {
+        let call = Token::new(nth as u64);
+        let up = fleet.step(Event::Relay { run, attempt, call, body: Token::new(nth as u64) });
+        let Some(Request::Relay { reply_to, .. }) = up.into_iter().next() else {
+            panic!("a call relayed up");
+        };
+        calls.push(reply_to);
+    }
+    assert_eq!(fleet.model.workers(), limits.workers);
+    assert_eq!(fleet.model.attempts(), limits.attempts);
+    assert_eq!(fleet.model.calls(), limits.calls);
+    (fleet, placed, calls)
+}
+
+#[test]
+fn a_fleet_full_to_its_limits_stays_within_its_worst_case() {
+    let (mut fleet, placed, calls) = fill(LIMITS);
+    // At its fullest, the fleet holds a fair share of the bound: it is not
+    // padded beyond use.
+    let fullest = fleet.meter.held();
+    assert!(fullest.saturating_mul(3) > fleet.bound, "{fullest} held of a worst case of {}", fleet.bound);
+    // One more is refused, at the entrance.
+    let (run, attempt) = (fleet.name(), fleet.name());
+    let workstream = key(&LIMITS, run.raw());
+    let refused = fleet.step(Event::Start { reply_to: ReplyTo::new(attempt), run, attempt, workstream });
+    assert!(matches!(refused[..], [Request::Refused { .. }]), "{refused:?}");
+    let up =
+        fleet.step(Event::Relay { run: placed[5].1, attempt: placed[5].2, call: Token::new(9), body: Token::new(9) });
+    assert!(matches!(up[..], [Request::Drop { .. }]), "a call beyond the room is dropped: {up:?}");
+    // Drained: every call answered, every attempt answered or lost.
+    for (nth, to) in calls.into_iter().enumerate() {
+        let down = fleet.step(Event::Relayed { to, answer: Token::new(100 + nth as u64) });
+        assert!(matches!(down[..], [Request::Relayed { .. }]), "{down:?}");
+    }
+    // Each attempt answered frees a slot for one waiting.
+    let mut out = placed;
+    while !out.is_empty() {
+        for (channel, run, attempt) in out {
+            let payload = Token::new(200 + attempt.raw());
+            fleet.step(Event::Answer { channel, run, attempt, answer: Answer::Ended, payload });
+        }
+        out = self::placed(&fleet.settle());
+    }
+    assert_eq!((fleet.model.attempts(), fleet.model.calls()), (0, 0));
+}
+
+#[test]
+fn every_entry_point_stays_within_the_worst_case() {
+    let mut fleet = Measured::new(LIMITS);
+    // Hellos: a worker with strays and answers it holds, and one hosting an
+    // attempt of a claimed run.
+    let (r1, a1, r2, a2) = (fleet.name(), fleet.name(), fleet.name(), fleet.name());
+    let hosting = vec![
+        Hosted { run: r1, attempt: a1, phase: Phase::Active },
+        Hosted { run: r2, attempt: a2, phase: Phase::Answered },
+    ];
+    assert!(fleet.hello(channel(0), hosting).is_empty());
+    fleet.step(Event::Answer {
+        channel: channel(0),
+        run: r2,
+        attempt: a2,
+        answer: Answer::Ended,
+        payload: Token::new(1),
+    });
+    fleet.step(Event::Adopt { reply_to: ReplyTo::new(a2), run: r2, attempt: a2 });
+    fleet.step(Event::Adopt { reply_to: ReplyTo::new(a1), run: r1, attempt: a1 });
+    let (r3, a3) = fleet.start();
+    let placed = placed(&fleet.settle());
+    assert_eq!(placed.len(), 1);
+    // Calls, answers, inbound events, bounces and facts.
+    let up = fleet.step(Event::Relay { run: r3, attempt: a3, call: Token::new(1), body: Token::new(2) });
+    let Some(Request::Relay { reply_to, .. }) = up.into_iter().next() else {
+        panic!("a call relayed up");
+    };
+    fleet.step(Event::Relayed { to: reply_to, answer: Token::new(3) });
+    fleet.step(Event::Inbound { run: r3, attempt: a3, event: Token::new(4) });
+    fleet.step(Event::Bounced { run: r3, attempt: a3, bounce: Bounce::Full });
+    fleet.step(Event::Told { run: r3, attempt: a3, fact: Token::new(5) });
+    fleet.step(Event::Cancel { run: r1, attempt: a1 });
+    // A worker lost, back on another channel, and lost for good.
+    fleet.step(Event::Lost { channel: channel(0) });
+    let hosting = vec![Hosted { run: r3, attempt: a3, phase: Phase::Active }];
+    fleet.hello(channel(1), hosting);
+    fleet.step(Event::Answer {
+        channel: channel(1),
+        run: r3,
+        attempt: a3,
+        answer: Answer::Failed,
+        payload: Token::new(6),
+    });
+    fleet.step(Event::Answer {
+        channel: channel(1),
+        run: r3,
+        attempt: a3,
+        answer: Answer::Failed,
+        payload: Token::new(7),
+    });
+    fleet.at(30);
+    fleet.settle();
+    assert_eq!((fleet.model.attempts(), fleet.model.calls()), (0, 0));
+}

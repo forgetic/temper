@@ -25,6 +25,7 @@ members = [
     "tests/integration/agent/session",
     "tests/integration/agent/tools",
     "tests/integration/checkout",
+    "tests/integration/engine/fleet",
     "tests/integration/engine/forge",
     "tests/integration/engine/notes",
     "tests/integration/engine/plan",
