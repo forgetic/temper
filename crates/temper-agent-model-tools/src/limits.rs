@@ -1,8 +1,10 @@
-use temper_lib::{Duration, List, Slab};
+use temper_lib::{Duration, Id, List, Map, Set, Slab};
 
 use crate::authority::Mount;
+use crate::job::{self, Job};
 use crate::kit::Kit;
-use crate::path::Name;
+use crate::knowledge::Seen;
+use crate::path::{Name, Place};
 
 /// The tools sub-model's limits (section 7), handed by its parent to every step
 /// read-only.
@@ -39,13 +41,26 @@ pub struct Limits {
 /// outcomes answered.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
-    let kits = Slab::<Kit>::worst_case(limits.kits)?;
-    kits.checked_add(u64::from(limits.kits).checked_mul(kit(limits)?)?)
+    let kits = Slab::<Kit>::worst_case(limits.kits)?.checked_add(u64::from(limits.kits).checked_mul(kit(limits)?)?)?;
+    // Only running jobs hold a place, at most `calls` a kit; the slab has more
+    // slots, for the jobs answered in an iteration.
+    let running = u64::from(limits.kits).checked_mul(u64::from(limits.calls))?;
+    let jobs = Slab::<Job>::worst_case(job::slots(limits)?)?.checked_add(running.checked_mul(job::held(limits))?)?;
+    kits.checked_add(jobs)
 }
 
 /// What one kit holds beyond its slot: its authority, each path in it at most
-/// `path_bytes` joined.
+/// `path_bytes` joined; what its LLM knows, a place for each file; and its
+/// jobs' names.
 fn kit(limits: &Limits) -> Option<u64> {
+    let known = u64::from(limits.known_files).checked_mul(u64::from(limits.path_bytes))?;
+    let knowledge = Map::<Place, Seen>::worst_case(limits.known_files)?.checked_add(known)?;
+    let jobs = Set::<Id<Job>>::worst_case(limits.calls)?;
+    authority(limits)?.checked_add(knowledge)?.checked_add(jobs)
+}
+
+/// What a kit's authority holds, each path in it at most `path_bytes` joined.
+fn authority(limits: &Limits) -> Option<u64> {
     let path_bytes = u64::from(limits.path_bytes);
     // A name is at least a byte, and a slash parts it from the next.
     let cwd_names = limits.path_bytes.checked_add(1)? / 2;

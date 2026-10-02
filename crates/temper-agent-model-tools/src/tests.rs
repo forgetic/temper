@@ -3,13 +3,16 @@
 
 use alloc::boxed::Box;
 
-use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
+use temper_lib::{Duration, Env, Id, List, Queue, ReplyTo, Time, Token};
 
 use crate::authority::{self, Located};
+use crate::kit::Kit;
+use crate::knowledge::Knowledge;
 use crate::path;
+use crate::window::{self, Span};
 use crate::{
-    Authority, Call, Effect, Event, Grants, Limits, Model, Name, Outcome, Part, Path, Place, Refusal, Repo, Request,
-    effect, max_out, step, worst_case,
+    Authority, Call, Done, Effect, Entry, Event, Fault, Grants, Kind, Limits, Model, Name, Op, Outcome, Part, Path,
+    Place, Refusal, Repo, Request, Version, effect, max_out, step, worst_case,
 };
 
 const LIMITS: Limits = Limits {
@@ -47,6 +50,52 @@ impl Harness {
         let request = self.out.pop();
         assert!(self.out.is_empty(), "one request at most");
         request
+    }
+
+    /// Every request one event emits.
+    fn emit(&mut self, event: Event) -> Box<[Request]> {
+        step(&mut self.model, &self.env, event, &mut self.out);
+        let max_out = max_out(&self.env.limits);
+        let mut requests = List::with_capacity(max_out);
+        for _ in 0..max_out {
+            if let Some(request) = self.out.pop() {
+                requests.push(request).expect("no more than max_out");
+            }
+        }
+        assert!(self.out.is_empty(), "no more than max_out");
+        requests.into_boxed()
+    }
+
+    /// Sends `call` to `kit`, as call `name`, with a minute to run.
+    fn send(&mut self, kit: Token, name: u64, call: Call) -> Option<Request> {
+        let reply_to = ReplyTo::new(Token::new(name));
+        let deadline = self.env.now.saturating_add(Duration::from_secs(60));
+        self.step(Event::Call { kit, reply_to, call, deadline })
+    }
+
+    /// Sends `call` to `kit`, which asks io for an operation, and returns it.
+    fn start(&mut self, kit: Token, name: u64, call: Call) -> (Token, Op) {
+        match self.send(kit, name, call) {
+            Some(Request::Io { owner, op, deadline }) => {
+                let limit = self.env.now.saturating_add(self.env.limits.file_timeout);
+                assert_eq!(deadline, limit, "a file operation has the tools' own deadline, the sooner");
+                (owner, op)
+            }
+            other => panic!("expected an operation, not {other:?}"),
+        }
+    }
+
+    /// Ends the operation of `owner` with `done`, and returns the answer.
+    fn end(&mut self, owner: Token, done: Done) -> (u64, Outcome) {
+        match self.step(Event::Done { owner, done }) {
+            Some(Request::Answer { to, outcome }) => (to.into_token().raw(), outcome),
+            other => panic!("expected an answer, not {other:?}"),
+        }
+    }
+
+    fn knowledge(&self, kit: Token) -> &Knowledge {
+        let kit: &Kit = self.model.kits.get(Id::from_token(kit)).expect("the kit is open");
+        &kit.knowledge
     }
 
     /// Opens a kit for `session` with `authority`, and returns its token.
@@ -331,7 +380,6 @@ fn calls_are_refused_at_the_entrance() {
         (modify, write(b"src/big.rs", 1025), Outcome::TooLarge { size: 1025 }),
         (inspect, read(b"a/very/long/path/that/does/not/fit/in/the/sixty/four/bytes/allowed"), Outcome::TooLong),
         // What passes the entrance does not run yet.
-        (inspect, read(b"src/lib.rs"), Outcome::Unsupported),
         (modify, write(b"src/big.rs", 1024), Outcome::Unsupported),
         (ALL, shell, Outcome::Unsupported),
     ];
@@ -354,4 +402,214 @@ fn the_worst_case_is_bounded_or_refused() {
     let paths = u64::from(LIMITS.kits) * u64::from(LIMITS.repos + 1) * u64::from(LIMITS.path_bytes);
     assert!(bytes > paths, "every kit may hold its paths");
     assert_eq!(worst_case(&Limits { kits: u32::MAX, path_bytes: u32::MAX, ..LIMITS }), None);
+}
+
+fn place(root: u64, path: &[u8]) -> Place {
+    Place { root: Token::new(root), path: Box::from(path) }
+}
+
+fn version(n: u64) -> Version {
+    Version::new([n, 0, 0, 0])
+}
+
+fn entry(name: &[u8], kind: Kind) -> Entry {
+    Entry { name: Name::new(Box::from(name)).expect("a test name"), kind }
+}
+
+fn span(skip: u32, lines: Option<u32>) -> Span {
+    Span { skip, lines }
+}
+
+fn read_of(content: &[u8], skipped: u32, lines: u32, total: u32, cut: bool) -> Outcome {
+    Outcome::Read { content: Box::from(content), skipped, lines, total, cut }
+}
+
+#[test]
+fn a_read_answers_with_whole_lines_within_its_limit() {
+    let table: [(&[u8], Span, u32, Outcome); 14] = [
+        (b"a\nb\nc\n", span(0, None), 100, read_of(b"a\nb\nc\n", 0, 3, 3, false)),
+        (b"a\nb\nc", span(0, None), 100, read_of(b"a\nb\nc", 0, 3, 3, false)),
+        (b"a\nb\nc\n", span(1, None), 100, read_of(b"b\nc\n", 1, 2, 3, false)),
+        (b"a\nb\nc\n", span(1, Some(1)), 100, read_of(b"b\n", 1, 1, 3, false)),
+        (b"a\nb\nc\n", span(3, None), 100, read_of(b"", 3, 0, 3, false)),
+        (b"a\nb\nc\n", span(9, None), 100, read_of(b"", 3, 0, 3, false)),
+        (b"a\nb\nc\n", span(0, Some(0)), 100, read_of(b"", 0, 0, 3, false)),
+        (b"aa\nbb\ncc\n", span(0, None), 6, read_of(b"aa\nbb\n", 0, 2, 3, false)),
+        (b"aa\nbb\ncc\n", span(0, None), 5, read_of(b"aa\n", 0, 1, 3, false)),
+        (b"", span(0, None), 4, read_of(b"", 0, 0, 0, false)),
+        (b"\n\n", span(0, None), 4, read_of(b"\n\n", 0, 2, 2, false)),
+        // A line longer than a read is cut.
+        (b"aaaaaa\nb\n", span(0, None), 4, read_of(b"aaaa", 0, 1, 2, true)),
+        (b"aaaaaa", span(0, None), 4, read_of(b"aaaa", 0, 1, 1, true)),
+        (b"a\nbbbbbb\n", span(1, Some(5)), 4, read_of(b"bbbb", 1, 1, 2, true)),
+    ];
+    for (content, span, max, expected) in table {
+        let read = window::window(Box::from(content), span, max);
+        assert_eq!(read, expected, "{content:?} {span:?} {max}");
+    }
+}
+
+#[test]
+fn a_kit_forgets_the_file_read_longest_ago() {
+    let mut knowledge = Knowledge::new(2);
+    knowledge.record(place(1, b"a"), version(1));
+    knowledge.record(place(1, b"b"), version(2));
+    knowledge.record(place(1, b"a"), version(3));
+    knowledge.record(place(1, b"c"), version(4));
+    assert_eq!(knowledge.version(&place(1, b"a")), Some(version(3)));
+    assert_eq!(knowledge.version(&place(1, b"b")), None, "b was read longest ago");
+    assert_eq!(knowledge.version(&place(1, b"c")), Some(version(4)));
+    assert_eq!(knowledge.version(&place(2, b"c")), None, "places are per repository");
+    knowledge.forget(&place(1, b"a"));
+    assert_eq!(knowledge.version(&place(1, b"a")), None);
+
+    let mut amnesiac = Knowledge::new(0);
+    amnesiac.record(place(1, b"a"), version(1));
+    assert_eq!(amnesiac.version(&place(1, b"a")), None);
+}
+
+#[test]
+fn a_read_loads_the_file_and_answers_with_its_window() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    let (owner, op) = h.start(kit, 7, Call::Read { path: path(b"src/lib.rs"), skip: 1, lines: Some(1) });
+    assert_eq!(op, Op::Load { at: place(1, b"src/lib.rs"), max: LIMITS.file_bytes });
+    assert_eq!(h.model.jobs(), 1);
+    let content = Box::from(&b"one\ntwo\nthree\n"[..]);
+    let (call, outcome) = h.end(owner, Done::Loaded { content, version: version(5) });
+    let expected = Outcome::Read { content: Box::from(&b"two\n"[..]), skipped: 1, lines: 1, total: 3, cut: false };
+    assert_eq!((call, outcome), (7, expected));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), Some(version(5)));
+    h.model.reclaim();
+    assert_eq!(h.model.jobs(), 0);
+}
+
+#[test]
+fn a_read_of_nothing_is_not_found_and_the_kit_knows_it() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    let (owner, _) = h.start(kit, 1, read(b"src/lib.rs"));
+    drop(h.end(owner, Done::Loaded { content: bytes(b""), version: version(5) }));
+    let (owner, _) = h.start(kit, 2, read(b"src/lib.rs"));
+    assert_eq!(h.end(owner, Done::Missing), (2, Outcome::NotFound));
+    assert_eq!(h.knowledge(kit).version(&place(1, b"src/lib.rs")), None);
+}
+
+#[test]
+fn every_other_end_of_a_load_answers_for_itself() {
+    let table = [
+        (Done::NotFile, Outcome::NotFile),
+        (Done::NotDirectory, Outcome::NotDirectory),
+        (Done::TooLarge { size: 4096 }, Outcome::TooLarge { size: 4096 }),
+        (Done::Escapes, Outcome::Outside),
+        (Done::Failed { fault: Fault::Denied }, Outcome::Failed { fault: Fault::Denied }),
+        (Done::TimedOut, Outcome::TimedOut),
+        (Done::Cancelled, Outcome::Cancelled),
+    ];
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    for (done, expected) in table {
+        let (owner, _) = h.start(kit, 1, read(b"link"));
+        assert_eq!(h.end(owner, done), (1, expected));
+    }
+    assert_eq!(h.knowledge(kit).version(&place(1, b"link")), None);
+}
+
+#[test]
+fn a_listing_scans_the_directory() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    let (owner, op) = h.start(kit, 1, Call::List { path: path(b"vendor/lib") });
+    assert_eq!(op, Op::Scan { at: place(2, b""), max: LIMITS.list_entries });
+    let entries: Box<[Entry]> = Box::new([entry(b"Cargo.toml", Kind::File), entry(b"src", Kind::Directory)]);
+    let (_, outcome) = h.end(owner, Done::Scanned { entries: entries.clone(), more: 3 });
+    assert_eq!(outcome, Outcome::Listed { entries, more: 3 });
+
+    let table = [
+        (Done::Missing, Outcome::NotFound),
+        (Done::NotDirectory, Outcome::NotDirectory),
+        (Done::Escapes, Outcome::Outside),
+        (Done::Failed { fault: Fault::Other }, Outcome::Failed { fault: Fault::Other }),
+        (Done::TimedOut, Outcome::TimedOut),
+        (Done::Cancelled, Outcome::Cancelled),
+    ];
+    for (done, expected) in table {
+        let (owner, _) = h.start(kit, 1, Call::List { path: path(b"src") });
+        assert_eq!(h.end(owner, done), (1, expected));
+    }
+}
+
+#[test]
+fn calls_beyond_a_kits_room_are_busy() {
+    let mut h = Harness::new(Limits { calls: 2, ..LIMITS });
+    let kit = h.open(1, authority(ALL));
+    let (first, _) = h.start(kit, 1, read(b"a"));
+    drop(h.start(kit, 2, read(b"b")));
+    assert_eq!(h.call(kit, read(b"c")), Outcome::Busy);
+    // Another kit has room of its own.
+    let other = h.open(2, authority(ALL));
+    drop(h.start(other, 3, read(b"c")));
+    // An answered call makes room at once.
+    drop(h.end(first, Done::Missing));
+    drop(h.start(kit, 4, read(b"c")));
+}
+
+#[test]
+fn a_call_past_its_deadline_times_out_at_the_entrance() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    h.env.now = Time::ZERO.saturating_add(Duration::from_secs(5));
+    let reply_to = ReplyTo::new(Token::new(1));
+    let call = Event::Call { kit, reply_to, call: read(b"a"), deadline: h.env.now };
+    let answer = h.step(call);
+    assert_eq!(answer, Some(Request::Answer { to: ReplyTo::new(Token::new(1)), outcome: Outcome::TimedOut }));
+    // A call due sooner than the tools' own limit keeps its own deadline.
+    let soon = h.env.now.saturating_add(Duration::from_secs(1));
+    let call = Event::Call { kit, reply_to: ReplyTo::new(Token::new(2)), call: read(b"a"), deadline: soon };
+    match h.step(call) {
+        Some(Request::Io { deadline, .. }) => assert_eq!(deadline, soon),
+        other => panic!("expected an operation, not {other:?}"),
+    }
+}
+
+#[test]
+fn closing_a_kit_cancels_its_calls_and_ends_with_the_last() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(9, authority(ALL));
+    let (first, _) = h.start(kit, 1, read(b"a"));
+    let (second, _) = h.start(kit, 2, Call::List { path: path(b".") });
+    let cancels = h.emit(Event::Close { kit });
+    let mut cancelled = [first, second];
+    cancelled.sort_unstable();
+    let expected: Box<[Request]> =
+        Box::new([Request::CancelIo { owner: cancelled[0] }, Request::CancelIo { owner: cancelled[1] }]);
+    assert_eq!(cancels, expected);
+    assert_eq!(h.end(first, Done::Cancelled), (1, Outcome::Cancelled));
+    // The listing won its race with the cancel.
+    let last = h.emit(Event::Done { owner: second, done: Done::Scanned { entries: Box::new([]), more: 0 } });
+    let expected: Box<[Request]> = Box::new([
+        Request::Answer {
+            to: ReplyTo::new(Token::new(2)),
+            outcome: Outcome::Listed { entries: Box::new([]), more: 0 },
+        },
+        Request::Closed { session: Token::new(9) },
+    ]);
+    assert_eq!(last, expected);
+    h.model.reclaim();
+    assert_eq!((h.model.kits(), h.model.jobs()), (0, 0));
+}
+
+#[test]
+fn a_kit_whose_calls_end_and_start_in_one_iteration_has_room() {
+    let mut h = Harness::new(Limits { kits: 1, calls: 1, ..LIMITS });
+    let kit = h.open(1, authority(ALL));
+    let (mut owner, _) = h.start(kit, 1, read(b"a"));
+    for name in 2..10 {
+        h.model.reclaim();
+        // The call ends, and the next starts before the reclaim point.
+        drop(h.end(owner, Done::Missing));
+        let (next, _) = h.start(kit, name, read(b"a"));
+        assert_eq!(h.model.jobs(), 2, "the answered job waits for the reclaim point");
+        owner = next;
+    }
 }

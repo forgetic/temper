@@ -3,6 +3,7 @@
 use temper_lib::{Env, Queue, Slab};
 
 use crate::boundary::{Event, Request};
+use crate::job::{self, Job};
 use crate::kit::{self, Kit};
 use crate::limits::Limits;
 
@@ -19,13 +20,15 @@ pub const fn max_out(limits: &Limits) -> u32 {
 #[derive(Debug)]
 pub struct Model {
     pub(crate) kits: Slab<Kit>,
+    pub(crate) jobs: Slab<Job>,
 }
 
 impl Model {
     /// A model with room for `limits`.
     #[must_use]
     pub fn new(limits: &Limits) -> Model {
-        Model { kits: Slab::with_capacity(limits.kits) }
+        let jobs = job::slots(limits).expect("worst_case accepted the limits");
+        Model { kits: Slab::with_capacity(limits.kits), jobs: Slab::with_capacity(jobs) }
     }
 
     /// Kits present, closed ones included until they are reclaimed.
@@ -34,8 +37,15 @@ impl Model {
         self.kits.len()
     }
 
+    /// Calls running, answered ones included until they are reclaimed.
+    #[must_use]
+    pub fn jobs(&self) -> u32 {
+        self.jobs.len()
+    }
+
     /// The reclaim point: frees what closed in this iteration.
     pub fn reclaim(&mut self) {
+        self.jobs.reclaim();
         self.kits.reclaim();
     }
 }
@@ -44,8 +54,8 @@ impl Model {
 pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<Request>) {
     match event {
         Event::Open { session, authority } => kit::open(model, env, session, authority, out),
-        Event::Call { kit, reply_to, call, deadline: _ } => kit::call(model, env, kit, reply_to, call, out),
+        Event::Call { kit, reply_to, call, deadline } => kit::call(model, env, kit, reply_to, call, deadline, out),
         Event::Close { kit } => kit::close(model, kit, out),
-        Event::Done { .. } => unreachable!("io ends only the operations the tools ask for, and they ask for none yet"),
+        Event::Done { owner, done } => job::done(model, env, owner, done, out),
     }
 }

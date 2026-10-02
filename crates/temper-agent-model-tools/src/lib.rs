@@ -29,12 +29,15 @@ extern crate alloc;
 mod authority;
 mod boundary;
 mod call;
+mod job;
 mod kit;
+mod knowledge;
 mod limits;
 mod model;
 mod path;
 #[cfg(test)]
 mod tests;
+mod window;
 
 pub use authority::{Authority, Grants, Repo};
 pub use boundary::{Done, Event, Expect, Op, Refusal, Request, Version};

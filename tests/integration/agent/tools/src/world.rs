@@ -1,0 +1,521 @@
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use temper_agent_model_tools as tools;
+use temper_agent_model_tools::{Authority, Call, Done, Fault, Grants, Op, Outcome, Refusal, Repo};
+use temper_checkout_fake::Checkout;
+use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
+
+use crate::translate;
+
+/// Durations drawn uniformly from `min..=max`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Span {
+    pub min: Duration,
+    pub max: Duration,
+}
+
+impl Span {
+    #[must_use]
+    pub const fn millis(min: u64, max: u64) -> Span {
+        Span { min: Duration::from_millis(min), max: Duration::from_millis(max) }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Settings {
+    /// Seeds the world.
+    pub seed: u64,
+    pub tools: tools::Limits,
+    /// How long io takes to run an operation.
+    pub io: Span,
+    /// The chance, per mille, that an operation fails with a fault.
+    pub faults: u32,
+    /// The chance, per mille, that a cancel loses its race and the operation
+    /// ends as it would have.
+    pub late_cancels: u32,
+    /// How long the session takes between one step of its script and the
+    /// next.
+    pub think: Span,
+    /// How long the session gives each call.
+    pub call_timeout: Duration,
+}
+
+impl Settings {
+    /// A world where nothing goes wrong: no faults, io well within every
+    /// deadline, room for a few kits.
+    #[must_use]
+    pub const fn calm(seed: u64) -> Settings {
+        Settings {
+            seed,
+            tools: tools::Limits {
+                kits: 4,
+                calls: 8,
+                repos: 4,
+                path_bytes: 256,
+                known_files: 16,
+                file_bytes: 4096,
+                read_bytes: 1024,
+                list_entries: 16,
+                file_timeout: Duration::from_secs(10),
+            },
+            io: Span::millis(1, 20),
+            faults: 0,
+            late_cancels: 0,
+            think: Span::millis(1, 100),
+            call_timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+/// What a session does with its kit, one step at a time, before it closes it.
+pub enum Step {
+    /// Sends the calls together, and waits for every answer.
+    Calls(Vec<Call>),
+    /// Sends the calls, and goes on without waiting.
+    Send(Vec<Call>),
+    /// Changes the checkout, as something other than the agent would.
+    Change(Box<dyn FnOnce(&mut Checkout)>),
+    /// Waits.
+    Sleep(Duration),
+}
+
+/// What the world counted.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Stats {
+    /// Calls the sessions made.
+    pub calls: u32,
+    /// Operations the tools asked of io.
+    pub ops: u32,
+    /// Operations that failed with a fault.
+    pub faults: u32,
+    /// Operations that ran out of time.
+    pub timeouts: u32,
+    /// Operations the tools cancelled, and those whose cancel lost the race.
+    pub cancels: u32,
+    pub late_cancels: u32,
+}
+
+/// Something on its way, delivered at its time.
+enum Delivery {
+    /// A session opens its kit.
+    Open { session: u64 },
+    /// A session takes the next step of its script.
+    Next { session: u64 },
+    /// io has run the operation of `owner`.
+    Ran { owner: Token },
+    /// The deadline of the operation of `owner` passes.
+    Deadline { owner: Token },
+}
+
+/// An operation in flight, as io keeps it.
+struct Pending {
+    op: Op,
+    /// When it runs, and when its deadline passes, as deliveries.
+    ran: (Time, u64),
+    deadline: (Time, u64),
+}
+
+/// A session, as the world plays it.
+struct Session {
+    authority: Option<Authority>,
+    script: VecDeque<Step>,
+    state: State,
+    /// The calls it sent, in order.
+    calls: Vec<u64>,
+    /// The calls of its last `Calls` step not answered yet.
+    awaited: BTreeSet<u64>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum State {
+    /// Its open is on its way, or the tools have not answered it.
+    Opening,
+    /// Running its script with its kit.
+    Running {
+        kit: Token,
+    },
+    /// Waiting for the answers to its last `Calls` step.
+    Waiting {
+        kit: Token,
+    },
+    /// Its close has been sent.
+    Closing,
+    Closed,
+    Refused(Refusal),
+}
+
+pub struct World {
+    now: Time,
+    rng: Rng,
+    settings: Settings,
+    checkout: Checkout,
+
+    tools: tools::Model,
+    env: Env<tools::Limits>,
+    tools_in: VecDeque<tools::Event>,
+    tools_out: Queue<tools::Request>,
+
+    /// Deliveries in flight, by time and then by the order they were sent.
+    wire: BTreeMap<(Time, u64), Delivery>,
+    /// Names for sessions, calls and deliveries.
+    serial: u64,
+    sessions: BTreeMap<u64, Session>,
+    /// Every call made, by name: whose it is, and its answer once it came.
+    calls: BTreeMap<u64, (u64, Option<Outcome>)>,
+    /// io's operations in flight.
+    ops: BTreeMap<Token, Pending>,
+
+    stats: Stats,
+    trace: Vec<String>,
+}
+
+impl World {
+    /// A world over `checkout`, whose roots name the repositories of the
+    /// authorities its sessions open kits with.
+    #[must_use]
+    pub fn new(settings: Settings, checkout: Checkout) -> World {
+        assert!(tools::worst_case(&settings.tools).is_some(), "the shell refuses limits it cannot provision");
+        let room = tools::max_out(&settings.tools).saturating_mul(2);
+        World {
+            now: Time::ZERO,
+            rng: Rng::new(settings.seed),
+            settings,
+            checkout,
+            tools: tools::Model::new(&settings.tools),
+            env: Env { now: Time::ZERO, limits: settings.tools },
+            tools_in: VecDeque::new(),
+            tools_out: Queue::with_capacity(room),
+            wire: BTreeMap::new(),
+            serial: 0,
+            sessions: BTreeMap::new(),
+            calls: BTreeMap::new(),
+            ops: BTreeMap::new(),
+            stats: Stats::default(),
+            trace: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn now(&self) -> Time {
+        self.now
+    }
+
+    #[must_use]
+    pub fn stats(&self) -> Stats {
+        self.stats
+    }
+
+    #[must_use]
+    pub fn checkout(&self) -> &Checkout {
+        &self.checkout
+    }
+
+    /// What crossed between the tools and the world, in order, with times.
+    #[must_use]
+    pub fn trace(&self) -> &[String] {
+        &self.trace
+    }
+
+    /// A session that opens a kit with `authority` at `at`, runs `script`
+    /// with it, and closes it. Returns the session's name.
+    pub fn session(&mut self, at: Time, authority: Authority, script: Vec<Step>) -> u64 {
+        let session = self.next_serial();
+        let state = State::Opening;
+        let script = script.into();
+        let entry = Session { authority: Some(authority), script, state, calls: Vec::new(), awaited: BTreeSet::new() };
+        self.sessions.insert(session, entry);
+        self.schedule(at, Delivery::Open { session });
+        session
+    }
+
+    /// The answers to the calls `session` made, in the order it made them.
+    #[must_use]
+    pub fn answers(&self, session: u64) -> Vec<&Outcome> {
+        let calls = &self.sessions.get(&session).expect("a session the world made").calls;
+        calls.iter().map(|call| self.calls[call].1.as_ref().expect("every call is answered")).collect()
+    }
+
+    /// Why the tools refused to open a kit for `session`, if they did.
+    #[must_use]
+    pub fn refusal(&self, session: u64) -> Option<Refusal> {
+        match self.sessions.get(&session).expect("a session the world made").state {
+            State::Refused(refusal) => Some(refusal),
+            State::Opening | State::Running { .. } | State::Waiting { .. } | State::Closing | State::Closed => None,
+        }
+    }
+
+    /// The names of every session.
+    pub fn sessions(&self) -> impl Iterator<Item = u64> + '_ {
+        self.sessions.keys().copied()
+    }
+
+    /// Runs until nothing is left to happen, then checks the invariants of a
+    /// settled world. Panics if it takes more than `iterations`.
+    pub fn run(&mut self, iterations: u32) {
+        for _ in 0..iterations {
+            self.iterate();
+            if self.has_work_now() {
+                continue;
+            }
+            let Some(next) = self.next_time() else {
+                self.assert_settled();
+                return;
+            };
+            assert!(next > self.now, "time moves forward");
+            self.now = next;
+        }
+        panic!("the world did not settle in {iterations} iterations");
+    }
+
+    /// One iteration of the loop, as the shell would run it.
+    fn iterate(&mut self) {
+        self.env.now = self.now;
+        self.deliver();
+
+        // The tools take their events while they have room for what one more
+        // may produce.
+        let max_out = tools::max_out(&self.settings.tools);
+        while self.tools_out.room() >= max_out {
+            let Some(event) = self.tools_in.pop_front() else { break };
+            self.log(&format!("tools <- {event:?}"));
+            tools::step(&mut self.tools, &self.env, event, &mut self.tools_out);
+        }
+
+        // What they asked for, carried out at the end of the iteration.
+        while let Some(request) = self.tools_out.pop() {
+            self.log(&format!("tools -> {request:?}"));
+            self.request(request);
+        }
+
+        // The reclaim point.
+        self.tools.reclaim();
+        let limits = &self.settings.tools;
+        assert!(self.tools.kits() <= limits.kits, "kits stay within their slots");
+        assert!(self.tools.jobs() <= limits.kits * limits.calls * 2, "jobs stay within their slots");
+    }
+
+    /// The tools' requests, answered the way the session and io would.
+    fn request(&mut self, request: tools::Request) {
+        match request {
+            tools::Request::Opened { session, kit } => {
+                let entry = self.session_mut(session.raw());
+                assert_eq!(entry.state, State::Opening, "a kit opens once");
+                entry.state = State::Running { kit };
+                self.next(session.raw());
+            }
+            tools::Request::Refused { session, refusal } => {
+                let entry = self.session_mut(session.raw());
+                assert_eq!(entry.state, State::Opening, "an open is answered once");
+                entry.state = State::Refused(refusal);
+            }
+            tools::Request::Answer { to, outcome } => {
+                let call = to.into_token().raw();
+                let (session, answer) = self.calls.get_mut(&call).expect("an answer to a call that was made");
+                assert!(answer.is_none(), "a call is answered once");
+                *answer = Some(outcome);
+                let session = *session;
+                let entry = self.session_mut(session);
+                entry.awaited.remove(&call);
+                if let State::Waiting { kit } = entry.state
+                    && entry.awaited.is_empty()
+                {
+                    entry.state = State::Running { kit };
+                    self.next(session);
+                }
+            }
+            tools::Request::Closed { session } => {
+                let entry = self.sessions.get(&session.raw()).expect("a session the world made");
+                assert_eq!(entry.state, State::Closing, "a kit closes once, when asked");
+                for call in &entry.calls {
+                    assert!(self.calls[call].1.is_some(), "a kit answers every call before it closes");
+                }
+                self.session_mut(session.raw()).state = State::Closed;
+            }
+            tools::Request::Io { owner, op, deadline } => {
+                let ran = self.now.saturating_add(self.draw(self.settings.io));
+                let ran = self.schedule(ran, Delivery::Ran { owner });
+                let deadline = self.schedule(deadline, Delivery::Deadline { owner });
+                let pending = Pending { op, ran, deadline };
+                assert!(self.ops.insert(owner, pending).is_none(), "an operation's owner has one in flight");
+                self.stats.ops += 1;
+            }
+            tools::Request::CancelIo { owner } => {
+                // An operation that has ended has its terminal on the way: the
+                // cancel lost the race and changes nothing.
+                if !self.ops.contains_key(&owner) {
+                    return;
+                }
+                self.stats.cancels += 1;
+                if self.rng.chance(self.settings.late_cancels) {
+                    self.stats.late_cancels += 1;
+                    return;
+                }
+                let pending = self.ops.remove(&owner).expect("checked above");
+                self.wire.remove(&pending.ran);
+                self.wire.remove(&pending.deadline);
+                self.tools_in.push_back(tools::Event::Done { owner, done: Done::Cancelled });
+            }
+        }
+    }
+
+    /// Hands every delivery that is due to its destination.
+    fn deliver(&mut self) {
+        while let Some(entry) = self.wire.first_entry() {
+            if entry.key().0 > self.now {
+                break;
+            }
+            match entry.remove() {
+                Delivery::Open { session } => {
+                    let authority = self.session_mut(session).authority.take().expect("a session opens once");
+                    self.tools_in.push_back(tools::Event::Open { session: Token::new(session), authority });
+                }
+                Delivery::Next { session } => self.step(session),
+                Delivery::Ran { owner } => {
+                    let pending = self.ops.remove(&owner).expect("a run is withdrawn when its operation ends first");
+                    self.wire.remove(&pending.deadline);
+                    let done = if self.rng.chance(self.settings.faults) {
+                        self.stats.faults += 1;
+                        Done::Failed { fault: self.fault() }
+                    } else {
+                        translate::perform(&mut self.checkout, pending.op)
+                    };
+                    self.tools_in.push_back(tools::Event::Done { owner, done });
+                }
+                Delivery::Deadline { owner } => {
+                    let pending =
+                        self.ops.remove(&owner).expect("a deadline is withdrawn when its operation ends first");
+                    self.wire.remove(&pending.ran);
+                    self.tools_in.push_back(tools::Event::Done { owner, done: Done::TimedOut });
+                    self.stats.timeouts += 1;
+                }
+            }
+        }
+    }
+
+    /// The session takes the next step of its script, or closes its kit once
+    /// it has run out.
+    fn step(&mut self, session: u64) {
+        let entry = self.session_mut(session);
+        let State::Running { kit } = entry.state else {
+            unreachable!("a session steps while it runs");
+        };
+        let Some(step) = entry.script.pop_front() else {
+            entry.state = State::Closing;
+            self.tools_in.push_back(tools::Event::Close { kit });
+            return;
+        };
+        match step {
+            Step::Calls(calls) => {
+                let sent = self.send(session, kit, calls);
+                let entry = self.session_mut(session);
+                entry.awaited.extend(sent);
+                if entry.awaited.is_empty() {
+                    self.next(session);
+                } else {
+                    entry.state = State::Waiting { kit };
+                }
+            }
+            Step::Send(calls) => {
+                drop(self.send(session, kit, calls));
+                self.next(session);
+            }
+            Step::Change(change) => {
+                change(&mut self.checkout);
+                self.log("checkout changed");
+                self.next(session);
+            }
+            Step::Sleep(span) => {
+                let at = self.now.saturating_add(span);
+                self.schedule(at, Delivery::Next { session });
+            }
+        }
+    }
+
+    /// Sends `calls` to `kit`, for `session`, and returns their names.
+    fn send(&mut self, session: u64, kit: Token, calls: Vec<Call>) -> Vec<u64> {
+        let mut names = Vec::new();
+        for call in calls {
+            let name = self.next_serial();
+            self.calls.insert(name, (session, None));
+            self.session_mut(session).calls.push(name);
+            let deadline = self.now.saturating_add(self.settings.call_timeout);
+            let reply_to = ReplyTo::new(Token::new(name));
+            self.tools_in.push_back(tools::Event::Call { kit, reply_to, call, deadline });
+            self.stats.calls += 1;
+            names.push(name);
+        }
+        names
+    }
+
+    /// Schedules the session's next step, after it has thought about it.
+    fn next(&mut self, session: u64) {
+        let at = self.now.saturating_add(self.draw(self.settings.think));
+        self.schedule(at, Delivery::Next { session });
+    }
+
+    fn has_work_now(&self) -> bool {
+        !self.tools_in.is_empty() || self.wire.first_key_value().is_some_and(|((at, _), _)| *at <= self.now)
+    }
+
+    fn next_time(&self) -> Option<Time> {
+        self.wire.first_key_value().map(|((at, _), _)| *at)
+    }
+
+    /// The invariants of a world where nothing is left to happen.
+    fn assert_settled(&self) {
+        assert_eq!(self.tools.kits(), 0, "every kit has closed and been reclaimed");
+        assert_eq!(self.tools.jobs(), 0, "every job has ended and been reclaimed");
+        assert!(self.ops.is_empty(), "no operation is in flight");
+        assert!(self.wire.is_empty() && self.tools_in.is_empty(), "nothing is on its way");
+        for (name, session) in &self.sessions {
+            let ended = matches!(session.state, State::Closed | State::Refused(_));
+            assert!(ended, "session {name} ended, not {:?}", session.state);
+        }
+        for (call, (_, answer)) in &self.calls {
+            assert!(answer.is_some(), "call {call} was answered");
+        }
+    }
+
+    fn session_mut(&mut self, session: u64) -> &mut Session {
+        self.sessions.get_mut(&session).expect("a session the world made")
+    }
+
+    fn fault(&mut self) -> Fault {
+        match self.rng.below(3) {
+            0 => Fault::Denied,
+            1 => Fault::NoSpace,
+            _ => Fault::Other,
+        }
+    }
+
+    fn schedule(&mut self, at: Time, delivery: Delivery) -> (Time, u64) {
+        let key = (at, self.next_serial());
+        self.wire.insert(key, delivery);
+        key
+    }
+
+    fn draw(&mut self, span: Span) -> Duration {
+        Duration::from_nanos(self.rng.between(span.min.as_nanos(), span.max.as_nanos()))
+    }
+
+    fn next_serial(&mut self) -> u64 {
+        self.serial += 1;
+        self.serial
+    }
+
+    fn log(&mut self, line: &str) {
+        self.trace.push(format!("{:>16} {line}", self.now.as_nanos()));
+    }
+}
+
+/// A repository of `checkout` at `mount`, made a root.
+pub fn repo(checkout: &mut Checkout, mount: &[u8], writable: bool) -> Repo {
+    let root = checkout.root(mount.strip_prefix(b"/").expect("a mount is absolute"));
+    Repo { mount: translate::names(mount), root: translate::token(root), writable }
+}
+
+/// An authority whose relative paths start at `cwd`.
+#[must_use]
+pub fn authority(cwd: &[u8], repos: Vec<Repo>, grants: Grants) -> Authority {
+    Authority { cwd: translate::names(cwd), repos: repos.into(), grants }
+}

@@ -50,6 +50,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-agent-model-tools-tests"
+version = "0.0.0"
+dependencies = [
+ "temper-agent-model-tools",
+ "temper-checkout-fake",
+ "temper-lib",
+]
+
+[[package]]
+name = "temper-checkout-fake"
+version = "0.0.0"
+
+[[package]]
 name = "temper-lib"
 version = "0.0.0"
 

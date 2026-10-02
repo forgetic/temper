@@ -1,0 +1,30 @@
+[package]
+name = "temper-agent-model-tools-tests"
+description = "The tools sub-model's world: a simulation against a fake checkout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+temper-lib.workspace = true
+temper-agent-model-tools.workspace = true
+temper-checkout-fake.workspace = true
+
+# Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
+# tests/integration/clippy.toml bans what would make a run unrepeatable.
+[lints.rust]
+unsafe_code = "deny"                  # not forbid: tests/memory.rs's counting allocator expects it
+elided_lifetimes_in_paths = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_panics_doc = "allow"          # the world asserts its invariants by panicking
+wildcard_enum_match_arm = "deny"      # a new variant must break the translation
+match_wildcard_for_single_variants = "deny"
+unwrap_used = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+disallowed_types = "deny"
+disallowed_methods = "deny"
