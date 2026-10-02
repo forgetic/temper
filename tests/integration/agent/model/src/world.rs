@@ -402,6 +402,7 @@ pub struct Told {
     pub answered: u32,
     pub refused: u32,
     pub returns_cancelled: u32,
+    pub unpushed: u32,
     pub checks_started: u32,
     pub checks_finished: u32,
     pub pushed: u32,
@@ -826,6 +827,7 @@ impl World {
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
                 self.calls.open(call, Call { owner, deadline });
                 assert!(self.calling.insert(owner, call).is_none(), "a session has one call in flight");
+                offers(&prompt);
                 self.count_results(owner, &prompt);
                 let query = translate::query(prompt);
                 self.send(Delivery::Query { call, query });
@@ -862,6 +864,11 @@ impl World {
     fn answered(&mut self, worker: Token, answer: &run::Answer) {
         let state = self.runs.get(&worker).expect("the agent answers starts the worker made");
         assert!(state.answer.is_none(), "one answer per start");
+        if let Some(run) = state.run
+            && self.agent.facts_lost() == 0
+        {
+            assert_eq!(self.live_of(run), 0, "a run answers once its conversations have all ended");
+        }
         assert!(self.pushes.values().all(|of| *of != worker), "a run answers once its pushes have ended");
         let spent = match answer {
             run::Answer::Refused(_) => {
@@ -1292,7 +1299,8 @@ impl World {
                         Return::Answered => told.answered += 1,
                         Return::Refused => told.refused += 1,
                         Return::Cancelled => told.returns_cancelled += 1,
-                        Return::Moved | Return::Unpushed | Return::TimedOut | Return::Busy | Return::Unanswered => {}
+                        Return::Unpushed => told.unpushed += 1,
+                        Return::Moved | Return::TimedOut | Return::Busy | Return::Unanswered => {}
                     }
                 }
                 run_facts::Fact::CheckStarted { .. } => told.checks_started += 1,
@@ -1494,6 +1502,25 @@ impl World {
 
     fn log(&mut self, line: &str) {
         self.trace.log(self.now, line);
+    }
+}
+
+/// Checks what `prompt` offers against whose conversation it is, which its
+/// system text tells: a sub-agent's starts with the brief its asker wrote,
+/// which the scripts start with their cue, and main's with the charter's.
+/// Only main may finish; an explorer only inspects; a fixer has every family
+/// of tools, which the run gave it only if main had them.
+fn offers(prompt: &agent::llm::Prompt) {
+    let finish = prompt.served.contains(&agent::llm::Served::Finish);
+    let sub_agent = prompt.system.starts_with(b"@");
+    assert!(finish != sub_agent, "only main may finish");
+    let inspect = tools::Grants { inspect: true, modify: false, shell: false };
+    if prompt.system.starts_with(b"@explore") || prompt.system.starts_with(b"@burn") {
+        assert_eq!(prompt.tools, inspect, "a sub-agent has the families it was asked with");
+    }
+    if prompt.system.starts_with(b"@fix") {
+        let all = tools::Grants { inspect: true, modify: true, shell: true };
+        assert_eq!(prompt.tools, all, "a sub-agent has the families it was asked with");
     }
 }
 

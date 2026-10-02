@@ -19,11 +19,13 @@
 //! run's checkout, the run's asks and answers as tool calls and results, its
 //! checks and pushes, sub-agents nested in their askers' calls, a budget
 //! spent across sessions, cancels and deadlines cascading down the tree. It
-//! checks the boundary contracts as it goes (one answer per start, one
-//! terminal per request, a push only once the checks passed, an answer that
-//! fits what happened to its run and adds up what its conversations used,
-//! no conversation opened past the budget and no more than one completion
-//! each after it) and the universal invariants once it settles (no live
+//! checks the boundary contracts as it goes (one answer per start, given once
+//! the run's conversations have all ended; one terminal per request; a push
+//! only once the checks the run found passed; an answer that fits what
+//! happened to its run and adds up what its conversations used; no
+//! conversation opened past the budget, and no more than one completion each
+//! after it; only main offered `finish`, and a sub-agent the families it was
+//! asked with) and the universal invariants once it settles (no live
 //! entities, every ticket freed, the ready list drained, nothing in flight,
 //! and facts that add up to what crossed the boundary unless some were
 //! dropped).

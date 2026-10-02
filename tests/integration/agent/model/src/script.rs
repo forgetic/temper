@@ -14,13 +14,14 @@ use temper_llm_model::api::{Finish, Line, Script, Turn};
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Job {
     /// Reads, edits, runs a command, finishes with a change whose checks
-    /// fail, fixes it, and finishes again.
+    /// fail, fixes it, and finishes again; and once more if the push fails.
     Coding,
     /// Reads and searches, finishes with a verdict the run rejects, then
     /// with one it takes.
     Review,
     /// Asks two read-only sub-agents side by side, then a writable one that
-    /// fixes the code and asks one of its own, then finishes with a change.
+    /// fixes the code and asks one of its own (and tries to finish, which it
+    /// may not), then finishes with a change.
     Delegating,
     /// Asks two sub-agents that read on and on, spending the run's turns
     /// between them.
@@ -111,6 +112,8 @@ fn coding() -> Vec<Turn> {
         // The checks failed: they want 43.
         calls(vec![edit("41", "43")]),
         calls(vec![change("The answer is 43 now.")]),
+        // The push failed: again.
+        calls(vec![change("The answer is 43 now, pushed again.")]),
     ]
 }
 
@@ -139,14 +142,17 @@ fn delegating() -> Vec<Turn> {
 }
 
 fn exploring() -> Vec<Turn> {
-    vec![calls(vec![read("src/lib.rs"), read("AGENTS.md")]), says("The answer is in src/lib.rs, and should be 43.")]
+    // A long answer, which a run may cut to its limit.
+    let answer = "The answer is in src/lib.rs, and should be 43. ".repeat(8);
+    vec![calls(vec![read("src/lib.rs"), read("AGENTS.md")]), says(&answer)]
 }
 
 fn fixing() -> Vec<Turn> {
     vec![
         calls(vec![read("src/lib.rs")]),
         calls(vec![edit("42", "43")]),
-        calls(vec![sub_agent("@explore Check that the answer is 43.", "inspect", "")]),
+        // A sub-agent may not finish: the call is answered as no tool's.
+        calls(vec![sub_agent("@explore Check that the answer is 43.", "inspect", ""), change("Done.")]),
         says("The answer is 43 now."),
     ]
 }

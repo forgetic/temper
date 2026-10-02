@@ -90,6 +90,7 @@ fn sub_agents_nest_and_their_answers_come_back_to_their_askers_as_results() {
     // explorer of its own, two deep.
     let (told, _) = world.told();
     assert_eq!((told.sub_agents, told.answered, told.deepest, told.opened), (4, 4, 2, 5));
+    assert_eq!(told.finishes, 1, "the fixer's finish never reached the run");
     assert_eq!(run.widest, 3);
     assert_eq!(world.stats().sub_answers, 4, "each answer came back to its asker");
 }
@@ -129,6 +130,24 @@ fn a_push_that_finds_the_branch_moved_ends_the_run_stale() {
     assert_eq!((&run.checked[..], &run.pushes[..]), (&[false, true][..], &[Push::Moved][..]));
     let (told, _) = world.told();
     assert_eq!((told.finishes, told.checks_failed, told.accepted), (2, 1, 0));
+}
+
+#[test]
+fn a_push_that_fails_is_told_to_the_llm_which_finishes_again() {
+    let calm = Settings::calm(9);
+    let settings = Settings { worker: Config { push_failures: 1000, ..calm.worker }, ..calm }
+        .drawing(|charter| charter.tools.write && charter.tools.shell);
+    let mut world = World::new(settings);
+    world.run(ITERATIONS);
+
+    // The script finishes once more after the push fails, then stops; the
+    // run nudges it, and fails it once it stops again.
+    let run = only(&world);
+    assert!(matches!(run.answer, Some(Answer::Failed { failure: Failure::Policy(_), .. })), "{:?}", run.answer);
+    assert_eq!(run.checked, [false, true, true], "each finish is checked afresh");
+    assert_eq!(run.pushes, [Push::Failed, Push::Failed]);
+    let (told, _) = world.told();
+    assert_eq!((told.finishes, told.unpushed, told.yielded), (3, 2, 2));
 }
 
 /// `count` settings from `settings`, each with a seed of its own whose first
@@ -216,9 +235,10 @@ fn checks_that_run_past_their_deadline_are_stopped_and_fail() {
     let run = only(&world);
     assert!(matches!(run.answer, Some(Answer::Failed { failure: Failure::Policy(_), .. })), "{:?}", run.answer);
     let stats = world.stats();
-    assert_eq!((stats.checks, stats.check_timeouts, stats.pushes), (2, 2, 0));
+    // Each of the script's three finishes.
+    assert_eq!((stats.checks, stats.check_timeouts, stats.pushes), (3, 3, 0));
     let (told, _) = world.told();
-    assert_eq!((told.checks_failed, told.checks_finished), (2, 2));
+    assert_eq!((told.checks_failed, told.checks_finished), (3, 3));
 }
 
 /// How the runs of many random worlds ended, by kind.
