@@ -26,9 +26,10 @@ pub struct Limits {
     pub users: u32,
     /// Labels defined in a repository.
     pub labels: u32,
-    /// Items in a repository, and comments on an item.
+    /// Items in a repository; comments on an item, and items it depends on.
     pub items: u32,
     pub comments: u32,
+    pub dependencies: u32,
     /// Reviews of a pull request.
     pub reviews: u32,
     /// Branches of a repository.
@@ -152,11 +153,18 @@ fn item(limits: &Limits) -> Option<u64> {
     let body = u64::from(limits.body_bytes);
     let labels = Set::<Box<[u8]>>::worst_case(limits.labels)?.checked_add(times(limits.labels, name)?)?;
     let comments = Map::<u64, Posted>::worst_case(limits.comments)?.checked_add(times(limits.comments, body)?)?;
+    let dependencies = Set::<u64>::worst_case(limits.dependencies)?;
     let pull = name
         .checked_mul(2)?
+        .checked_add(Set::<u64>::worst_case(limits.users)?)?
         .checked_add(List::<Review>::worst_case(limits.reviews)?)?
         .checked_add(times(limits.reviews, body)?)?;
-    u64::from(limits.title_bytes).checked_add(body)?.checked_add(labels)?.checked_add(comments)?.checked_add(pull)
+    u64::from(limits.title_bytes)
+        .checked_add(body)?
+        .checked_add(labels)?
+        .checked_add(comments)?
+        .checked_add(dependencies)?
+        .checked_add(pull)
 }
 
 /// What one commit's tree owns.
@@ -180,15 +188,19 @@ fn answer(limits: &Limits) -> Option<u64> {
     let head = name.checked_add(u64::try_from(size_of::<Head>()).ok()?)?;
     let items = times(limits.page_size, listed)?;
     let item = summary.checked_add(times(limits.page_size, comment)?)?;
+    let number = u64::try_from(size_of::<u64>()).ok()?;
     let pull = name
         .checked_mul(2)?
+        .checked_add(times(limits.users, number)?)?
         .checked_add(times(limits.reviews, review)?)?
         .checked_add(times(limits.contexts, status)?)?;
+    let dependencies = times(limits.dependencies, number)?;
+    let labels = names(limits.labels, limits)?;
     let tree = times(limits.files, file)?;
     let pages = times(limits.page_size, named)?.checked_add(name)?;
     let page = name.checked_add(content)?;
     let cloned = name.checked_add(times(limits.branches, head)?)?;
-    Some(items.max(item).max(pull).max(tree).max(pages).max(page).max(cloned))
+    Some(items.max(item).max(pull).max(tree).max(pages).max(page).max(cloned).max(dependencies).max(labels))
 }
 
 /// What a summary of an item owns: its text and its labels.
@@ -205,7 +217,10 @@ fn observation(limits: &Limits) -> Option<u64> {
     let posted = name.checked_add(body)?;
     let labelled = name.checked_add(names(limits.labels, limits)?)?;
     let wiki = name.checked_mul(2)?.checked_add(u64::from(limits.content_bytes))?;
-    Some(opened.max(posted).max(labelled).max(wiki).max(name.checked_mul(2)?))
+    let number = u64::try_from(size_of::<u64>()).ok()?;
+    let depends = name.checked_add(times(limits.dependencies, number)?)?;
+    let requested = name.checked_add(times(limits.users, number)?)?;
+    Some(opened.max(posted).max(labelled).max(wiki).max(depends).max(requested).max(name.checked_mul(2)?))
 }
 
 /// What a boxed list of `count` names owns.

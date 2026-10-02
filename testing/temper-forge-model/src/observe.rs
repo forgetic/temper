@@ -65,6 +65,29 @@ pub enum Observation {
         labels: Box<[Box<[u8]>]>,
         by: u64,
     },
+    /// The item `number` now has `title` and `body`.
+    Revised {
+        repository: Box<[u8]>,
+        number: u64,
+        title: Box<[u8]>,
+        body: Box<[u8]>,
+        by: u64,
+    },
+    /// The item `number` now depends on `dependencies`.
+    Depends {
+        repository: Box<[u8]>,
+        number: u64,
+        dependencies: Box<[u64]>,
+        by: u64,
+    },
+    /// The users asked to review the pull request `number` are now
+    /// `reviewers`.
+    Requested {
+        repository: Box<[u8]>,
+        number: u64,
+        reviewers: Box<[u64]>,
+        by: u64,
+    },
     /// The label `label` was defined.
     Defined {
         repository: Box<[u8]>,
@@ -165,12 +188,15 @@ pub struct Branches {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Operation {
     CreateIssue,
+    EditItem,
+    SetDependencies,
     Comment,
     EditComment,
     DeleteComment,
     SetLabels,
     DefineLabel,
     OpenPull,
+    SetReviewers,
     Review,
     Merge,
     Close,
@@ -192,12 +218,15 @@ pub(crate) fn subject(op: &Op) -> Option<(Operation, Option<u64>, Option<u64>)> 
         Op::Read(_) => return None,
         Op::Write(write) => match write {
             Write::CreateIssue { .. } => (Operation::CreateIssue, None, None),
+            Write::EditItem { number, .. } => (Operation::EditItem, Some(*number), None),
+            Write::SetDependencies { number, .. } => (Operation::SetDependencies, Some(*number), None),
             Write::Comment { number, .. } => (Operation::Comment, Some(*number), None),
             Write::EditComment { .. } => (Operation::EditComment, None, None),
             Write::DeleteComment { .. } => (Operation::DeleteComment, None, None),
             Write::SetLabels { number, .. } => (Operation::SetLabels, Some(*number), None),
             Write::DefineLabel { .. } => (Operation::DefineLabel, None, None),
             Write::OpenPull { .. } => (Operation::OpenPull, None, None),
+            Write::SetReviewers { number, .. } => (Operation::SetReviewers, Some(*number), None),
             Write::Review { number, .. } => (Operation::Review, Some(*number), None),
             Write::Merge { number, head } => (Operation::Merge, Some(*number), Some(*head)),
             Write::Close { number } => (Operation::Close, Some(*number), None),

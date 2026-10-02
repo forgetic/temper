@@ -57,6 +57,8 @@ pub(crate) struct Item {
     pub(crate) state: State,
     pub(crate) labels: Set<Box<[u8]>>,
     pub(crate) comments: Map<u64, Comment>,
+    /// The items of the same repository it depends on.
+    pub(crate) dependencies: Set<u64>,
     pub(crate) created: Time,
     pub(crate) updated: Time,
     pub(crate) pull: Option<Pull>,
@@ -80,6 +82,8 @@ pub(crate) struct Pull {
     pub(crate) commit: u64,
     /// The commit its merge made.
     pub(crate) merged: Option<u64>,
+    /// The users asked to review it who have not yet.
+    pub(crate) requested: Set<u64>,
     pub(crate) reviews: List<Review>,
 }
 
@@ -322,6 +326,15 @@ impl Comment {
     }
 }
 
+/// A copy of the numbers in `set`, in their order.
+pub(crate) fn numbers(set: &Set<u64>) -> Box<[u64]> {
+    let mut numbers = List::with_capacity(set.len());
+    for &number in set {
+        numbers.push(number).expect("a list as long as the set");
+    }
+    numbers.into_boxed()
+}
+
 /// A copy of the names in `set`, in their order.
 pub(crate) fn names(set: &Set<Box<[u8]>>) -> Box<[Box<[u8]>]> {
     let mut names = List::with_capacity(set.len());
@@ -335,6 +348,14 @@ pub(crate) fn names(set: &Set<Box<[u8]>>) -> Box<[Box<[u8]>]> {
 pub(crate) fn fits(bytes: &[u8], limit: u32) -> Result<(), Error> {
     match u32::try_from(bytes.len()) {
         Ok(len) if len <= limit => Ok(()),
+        Ok(_) | Err(_) => Err(Error::TooLarge),
+    }
+}
+
+/// Refuses a list of numbers longer than `count`.
+pub(crate) fn fit_numbers(numbers: &[u64], count: u32) -> Result<(), Error> {
+    match u32::try_from(numbers.len()) {
+        Ok(len) if len <= count => Ok(()),
         Ok(_) | Err(_) => Err(Error::TooLarge),
     }
 }

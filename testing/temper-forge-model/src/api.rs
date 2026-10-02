@@ -51,6 +51,13 @@ pub enum Read {
     /// The item `number` and a page of its comments with ids above `after`.
     /// Answered by [`Answer::Item`].
     Item { number: u64, after: u64 },
+    /// The comment `id`. Answered by [`Answer::Comment`].
+    Comment { id: u64 },
+    /// The items the item `number` depends on, which block it. Answered by
+    /// [`Answer::Dependencies`].
+    Dependencies { number: u64 },
+    /// The labels defined. Answered by [`Answer::Labels`].
+    Labels,
     /// The pull request `number`, its reviews and the statuses on its head.
     /// Answered by [`Answer::Pull`].
     Pull { number: u64 },
@@ -93,6 +100,20 @@ pub enum Write {
         number: u64,
         body: Box<[u8]>,
     },
+    /// Edits the title, the body, or both, of the item `number`: its
+    /// author's, or anyone's with write permission. A title says something.
+    EditItem {
+        number: u64,
+        title: Option<Box<[u8]>>,
+        body: Option<Box<[u8]>>,
+    },
+    /// Makes the items the item `number` depends on exactly `dependencies`,
+    /// items of the same repository other than it, none of which depends on
+    /// it. Needs write permission.
+    SetDependencies {
+        number: u64,
+        dependencies: Box<[u64]>,
+    },
     /// Edits the comment `id`, to say something: its author's, or anyone's
     /// with write permission.
     EditComment {
@@ -121,6 +142,14 @@ pub enum Write {
         body: Box<[u8]>,
         head: Box<[u8]>,
         base: Box<[u8]>,
+    },
+    /// Makes the users asked to review the open pull request `number`
+    /// exactly `reviewers`, each of whom may read and none of whom is its
+    /// author. A request ends when its reviewer reviews. Needs write
+    /// permission.
+    SetReviewers {
+        number: u64,
+        reviewers: Box<[u64]>,
     },
     /// Reviews the open pull request `number` at its head.
     Review {
@@ -212,6 +241,15 @@ pub enum Answer {
     /// In their contexts' order.
     Statuses(Box<[Status]>),
     Permission(Permission),
+    /// A comment, and the item it is on.
+    Comment {
+        number: u64,
+        comment: Comment,
+    },
+    /// Item numbers, in their order.
+    Dependencies(Box<[u64]>),
+    /// Label names, in their order.
+    Labels(Box<[Box<[u8]>]>),
     /// Where a branch is, or what a fetch fetched.
     Commit(u64),
     Tree(Box<[File]>),
@@ -262,6 +300,8 @@ pub enum Error {
     /// A label of that name is defined, or an open pull request has the same
     /// head and base.
     Exists,
+    /// An item would depend on itself, or on an item that depends on it.
+    Circular,
     /// The head has nothing the base does not have.
     NothingToMerge,
     /// A title or a comment's body that must say something is empty.
@@ -353,6 +393,8 @@ pub struct Pull {
     pub merged: Option<u64>,
     /// Whether the head merges into the base without a conflict.
     pub mergeable: bool,
+    /// The users asked to review it who have not yet, in their order.
+    pub reviewers: Box<[u64]>,
     pub reviews: Box<[Review]>,
     pub statuses: Box<[Status]>,
 }

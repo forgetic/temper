@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 use core::mem;
 
 use temper_lib::bytes::copy_of;
-use temper_lib::{Deadlines, Duration, Env, Id, Map, Queue, ReplyTo, Rng, Slab, Time};
+use temper_lib::{Deadlines, Duration, Env, Id, Map, Queue, ReplyTo, Rng, Set, Slab, Time};
 
 use crate::boundary::{Event, Request};
 
@@ -205,6 +205,15 @@ impl Model {
         &self.repositories.get(self.id(repository)).expect("a repository of the forge").branches
     }
 
+    /// The commits `repository` has: what its branches reach, and what was
+    /// pushed or merged. A working tree's git cloning it has them all. (A
+    /// world that wants the moves of branches git's way keeps them from the
+    /// observations.)
+    #[must_use]
+    pub fn has(&self, repository: &[u8]) -> &Set<u64> {
+        &self.repositories.get(self.id(repository)).expect("a repository of the forge").has
+    }
+
     /// The commit `commit`: its parent and its tree. A working tree's git
     /// fetching it walks its parents here.
     #[must_use]
@@ -347,6 +356,10 @@ fn execute(model: &mut Model, env: &Env<Config>, user: u64, repository: &[u8], o
         }
         Op::Write(write) => match write {
             Write::CreateIssue { title, body, labels } => issues::create(model, env, id, user, title, body, labels),
+            Write::EditItem { number, title, body } => issues::revise(model, env, id, user, number, title, body),
+            Write::SetDependencies { number, dependencies } => {
+                issues::depend(model, env, id, user, number, dependencies)
+            }
             Write::Comment { number, body } => issues::comment(model, env, id, user, number, body),
             Write::EditComment { id: comment, body } => issues::edit(model, env, id, user, comment, body),
             Write::DeleteComment { id: comment } => issues::remove(model, env, id, user, comment),
@@ -355,6 +368,7 @@ fn execute(model: &mut Model, env: &Env<Config>, user: u64, repository: &[u8], o
             Write::Close { number } => issues::close(model, env, id, user, number),
             Write::Reopen { number } => issues::reopen(model, env, id, user, number),
             Write::OpenPull { title, body, head, base } => pulls::open(model, env, id, user, title, body, head, base),
+            Write::SetReviewers { number, reviewers } => pulls::request(model, env, id, user, number, reviewers),
             Write::Review { number, verdict, body } => pulls::review(model, env, id, user, number, verdict, body),
             Write::Merge { number, head } => pulls::merge(model, env, id, user, number, head),
             Write::DeleteBranch { branch } => git::delete(model, env, id, user, &branch),

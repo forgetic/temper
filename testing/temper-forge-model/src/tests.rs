@@ -17,6 +17,7 @@ const LIMITS: Limits = Limits {
     labels: 3,
     items: 6,
     comments: 4,
+    dependencies: 3,
     reviews: 6,
     branches: 4,
     commits: 32,
@@ -1543,4 +1544,107 @@ fn refused_writes_and_rejected_pushes_are_observed() {
         },
     ];
     assert_eq!(h.observations().as_slice(), expected, "reads and unknown repositories aside");
+}
+
+// Edits, dependencies, reviewers, and the reads of one comment and the labels.
+
+fn retitle(number: u64, title: &[u8]) -> Op {
+    write(Write::EditItem { number, title: Some(copy_of(title)), body: None })
+}
+
+fn depend(number: u64, dependencies: &[u64]) -> Op {
+    write(Write::SetDependencies { number, dependencies: Box::from(dependencies) })
+}
+
+fn request(number: u64, reviewers: &[u64]) -> Op {
+    write(Write::SetReviewers { number, reviewers: Box::from(reviewers) })
+}
+
+#[test]
+fn an_items_title_and_body_are_edited_by_its_author_or_a_writer() {
+    let mut h = Harness::new(CALM);
+    let number = h.issue(PERSON, b"tpyo");
+    let theirs = h.issue(ENGINE, b"theirs");
+    h.wait(Duration::from_secs(10));
+    let edited = h.env.now;
+    assert_eq!(h.ok(PERSON, retitle(number, b"typo")), Answer::Done);
+    let (item, _) = h.item(number);
+    assert_eq!((&*item.title, &*item.body), (&b"typo"[..], &b"body"[..]));
+    assert_eq!(item.updated, edited, "an edit of the item updates it");
+    let rebody = write(Write::EditItem { number, title: None, body: Some(copy_of(b"rewritten")) });
+    assert_eq!(h.ok(MAINTAINER, rebody), Answer::Done, "a writer edits anyone's");
+    assert_eq!(&*h.item(number).0.body, b"rewritten");
+    assert_eq!(h.call(PERSON, retitle(number, b"")), Err(Error::Empty));
+    assert_eq!(h.call(PERSON, retitle(theirs, b"mine")), Err(Error::Forbidden));
+    let observed = h.observations();
+    let revised = Observation::Revised {
+        repository: repository(),
+        number,
+        title: copy_of(b"typo"),
+        body: copy_of(b"rewritten"),
+        by: MAINTAINER,
+    };
+    assert!(observed.as_slice().contains(&revised), "observed with what it now says");
+}
+
+#[test]
+fn dependencies_are_set_as_a_whole_within_a_repository_without_cycles() {
+    let mut h = Harness::new(CALM);
+    for title in [b"one", b"two", b"six", b"ten"] {
+        h.issue(ENGINE, title);
+    }
+    assert_eq!(h.ok(ENGINE, depend(1, &[3, 2, 3])), Answer::Done);
+    assert_eq!(h.ok(PERSON, read(Read::Dependencies { number: 1 })), Answer::Dependencies(Box::new([2, 3])));
+    assert_eq!(h.call(ENGINE, depend(2, &[1])), Err(Error::Circular), "two that depend on each other");
+    assert_eq!(h.call(ENGINE, depend(4, &[4])), Err(Error::Circular), "on itself");
+    assert_eq!(h.call(ENGINE, depend(4, &[9])), Err(Error::Missing(What::Item)));
+    assert_eq!(h.call(ENGINE, depend(4, &[1, 2, 3, 1])), Err(Error::TooLarge));
+    assert_eq!(h.call(PERSON, depend(4, &[1])), Err(Error::Forbidden), "needs write");
+    assert_eq!(h.ok(ENGINE, depend(1, &[4])), Answer::Done);
+    assert_eq!(h.ok(PERSON, read(Read::Dependencies { number: 1 })), Answer::Dependencies(Box::new([4])), "a set");
+    assert_eq!(h.call(PERSON, read(Read::Dependencies { number: 9 })), Err(Error::Missing(What::Item)));
+}
+
+#[test]
+fn reviewers_are_requested_as_a_set_until_they_review() {
+    let mut h = Harness::new(CALM);
+    h.issue(PERSON, b"question");
+    assert_eq!(h.call(ENGINE, request(1, &[MAINTAINER])), Err(Error::Missing(What::Pull)));
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    assert_eq!(h.ok(ENGINE, request(2, &[MAINTAINER, PERSON])), Answer::Done);
+    assert_eq!(&*h.pull(2).reviewers, [PERSON, MAINTAINER]);
+    assert_eq!(h.call(ENGINE, request(2, &[ENGINE])), Err(Error::Forbidden), "not its author");
+    assert_eq!(h.call(ENGINE, request(2, &[STRANGER])), Err(Error::Forbidden), "not who may not read");
+    assert_eq!(h.call(PERSON, request(2, &[MAINTAINER])), Err(Error::Forbidden), "asking needs write");
+    h.ok(MAINTAINER, review(2, Verdict::Comment));
+    assert_eq!(&*h.pull(2).reviewers, [PERSON], "a review answers the request");
+    h.ok(ENGINE, write(Write::Close { number: 2 }));
+    assert_eq!(h.call(ENGINE, request(2, &[MAINTAINER])), Err(Error::Closed));
+}
+
+#[test]
+fn one_comment_and_the_defined_labels_are_read() {
+    let mut h = Harness::new(CALM);
+    let number = h.issue(ENGINE, b"talk");
+    let id = h.comment(PERSON, number, b"hello");
+    let Answer::Comment { number: on, comment } = h.ok(ENGINE, read(Read::Comment { id })) else {
+        unreachable!("a comment");
+    };
+    assert_eq!((on, comment.id, comment.author, &*comment.body), (number, id, PERSON, &b"hello"[..]));
+    assert_eq!(h.call(ENGINE, read(Read::Comment { id: 99 })), Err(Error::Missing(What::Comment)));
+    assert_eq!(h.ok(PERSON, read(Read::Labels)), Answer::Labels(names(&[b"bug", b"temper"])));
+}
+
+#[test]
+fn a_repository_has_what_its_branches_reach_and_what_was_pushed() {
+    let mut h = Harness::new(CALM);
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    let more = h.commit(work, &[(b"src", b"two")]);
+    let stray = h.commit(FIRST, &[(b"src", b"stray")]);
+    h.push(ENGINE, b"work", more).expect("pushed");
+    let has = h.model.has(REPOSITORY);
+    assert!(has.contains(&FIRST) && has.contains(&work) && has.contains(&more));
+    assert!(!has.contains(&stray), "a commit no one pushed");
 }

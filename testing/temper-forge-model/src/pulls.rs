@@ -23,7 +23,7 @@ use crate::hooks::Hook;
 use crate::limits::Limits;
 use crate::model::{self, Config, Model};
 use crate::observe::{Branches, Observation};
-use crate::store::{Item, Pull, Repository, fits};
+use crate::store::{Item, Pull, Repository, fit_numbers, fits, numbers};
 
 /// Opens a pull request to merge `head` into `base`.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the call's fields as they come")]
@@ -58,7 +58,14 @@ pub(crate) fn open(
         return Err(Error::Empty);
     }
     repository.room()?;
-    let pull = Pull { head, base, commit, merged: None, reviews: List::with_capacity(limits.reviews) };
+    let pull = Pull {
+        head,
+        base,
+        commit,
+        merged: None,
+        requested: Set::with_capacity(limits.users),
+        reviews: List::with_capacity(limits.reviews),
+    };
     let item = Item {
         title,
         body,
@@ -66,6 +73,7 @@ pub(crate) fn open(
         state: State::Open,
         labels: Set::with_capacity(limits.labels),
         comments: Map::with_capacity(limits.comments),
+        dependencies: Set::with_capacity(limits.dependencies),
         created: model::clock(env),
         updated: model::clock(env),
         pull: Some(pull),
@@ -87,6 +95,47 @@ pub(crate) fn open(
     model::changed(model, env, id, observation, Hook::item(Change::Pull, number));
     ci::start(model, env, id, commit);
     Ok(Answer::Created(number))
+}
+
+/// Makes the users asked to review the open pull request `number` exactly
+/// `reviewers`.
+pub(crate) fn request(
+    model: &mut Model,
+    env: &Env<Config>,
+    id: Id<Repository>,
+    user: u64,
+    number: u64,
+    reviewers: Box<[u64]>,
+) -> Result<Answer, Error> {
+    let limits = &env.limits.limits;
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    repository.require(user, Permission::Write)?;
+    fit_numbers(&reviewers, limits.users)?;
+    let item = repository.item(number)?;
+    if item.pull.is_none() {
+        return Err(Error::Missing(What::Pull));
+    }
+    if item.state == State::Closed {
+        return Err(Error::Closed);
+    }
+    let mut set = Set::with_capacity(limits.users);
+    for &reviewer in &reviewers {
+        // Forgejo asks neither the author nor whoever may not read.
+        if reviewer == item.author || repository.permission(reviewer) < Permission::Read {
+            return Err(Error::Forbidden);
+        }
+        if set.insert(reviewer).is_err() {
+            return Err(Error::TooLarge);
+        }
+    }
+    let observed = numbers(&set);
+    let item = repository.item_mut(number)?;
+    item.pull.as_mut().expect("a pull request").requested = set;
+    repository.touch(number, model::clock(env));
+    let observation =
+        Observation::Requested { repository: copy_of(&repository.name), number, reviewers: observed, by: user };
+    model::changed(model, env, id, observation, Hook::item(Change::Pull, number));
+    Ok(Answer::Done)
 }
 
 /// Reviews the open pull request `number` at its head. Its author may only
@@ -123,6 +172,8 @@ pub(crate) fn review(
     if pull.reviews.push(review).is_err() {
         return Err(Error::Full);
     }
+    // The reviewer's request, if they were asked, is answered.
+    pull.requested.remove(&user);
     repository.touch(number, model::clock(env));
     let observation = Observation::Reviewed {
         repository: copy_of(&repository.name),
@@ -211,6 +262,7 @@ pub(crate) fn view(model: &Model, limits: &Limits, repository: &Repository, numb
         reviews.push(review.clone()).expect("a list as long as the reviews");
     }
     let statuses = statuses(repository, limits, pull.commit);
+    let reviewers = numbers(&pull.requested);
     Ok(Answer::Pull(PullView {
         number,
         state: item.state,
@@ -220,6 +272,7 @@ pub(crate) fn view(model: &Model, limits: &Limits, repository: &Repository, numb
         base_commit,
         merged: pull.merged,
         mergeable,
+        reviewers,
         reviews: reviews.into_boxed(),
         statuses,
     }))

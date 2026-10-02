@@ -31,7 +31,7 @@ use temper_lib::{Id, List, Time};
 use crate::api::{Answer, Error, File, Kind, Read, State, What};
 use crate::limits::Limits;
 use crate::model::{self, Config, Model};
-use crate::store::Repository;
+use crate::store::{Repository, names, numbers};
 use crate::{pulls, wiki};
 
 /// What `read` answers on the repository `id`.
@@ -43,6 +43,16 @@ pub(crate) fn read(model: &Model, config: &Config, id: Id<Repository>, read: &Re
             Ok(items(repository, config, *state, *kind, labels, *since, *page, *limit))
         }
         Read::Item { number, after } => item(repository, limits, *number, *after),
+        Read::Comment { id } => {
+            let Some(&number) = repository.comments.get(id) else {
+                return Err(Error::Missing(What::Comment));
+            };
+            let item = repository.item(number)?;
+            let comment = item.comments.get(id).expect("the index names comments").view(*id);
+            Ok(Answer::Comment { number, comment })
+        }
+        Read::Dependencies { number } => Ok(Answer::Dependencies(numbers(&repository.item(*number)?.dependencies))),
+        Read::Labels => Ok(Answer::Labels(names(&repository.labels))),
         Read::Pull { number } => pulls::view(model, limits, repository, *number),
         Read::PullFor { head, base } => match repository.newest_pull(head, base) {
             Some(number) => pulls::view(model, limits, repository, number),

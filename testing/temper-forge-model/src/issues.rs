@@ -14,7 +14,7 @@ use crate::ci;
 use crate::hooks::Hook;
 use crate::model::{self, Config, Model};
 use crate::observe::Observation;
-use crate::store::{Comment, Item, Repository, fit_names, fits, names};
+use crate::store::{Comment, Item, Repository, fit_names, fit_numbers, fits, names, numbers};
 
 /// Opens an issue carrying `labels`.
 pub(crate) fn create(
@@ -50,6 +50,7 @@ pub(crate) fn create(
         state: State::Open,
         labels,
         comments: Map::with_capacity(limits.comments),
+        dependencies: Set::with_capacity(limits.dependencies),
         created: model::clock(env),
         updated: model::clock(env),
         pull: None,
@@ -99,6 +100,83 @@ pub(crate) fn comment(
         Observation::Commented { repository: copy_of(&repository.name), number, id: comment, body: observed, by: user };
     model::changed(model, env, id, observation, Hook::item(Change::Comment, number));
     Ok(Answer::Commented(comment))
+}
+
+/// Edits the title, the body, or both, of the item `number`: the user's
+/// own, or any with write permission.
+pub(crate) fn revise(
+    model: &mut Model,
+    env: &Env<Config>,
+    id: Id<Repository>,
+    user: u64,
+    number: u64,
+    title: Option<Box<[u8]>>,
+    body: Option<Box<[u8]>>,
+) -> Result<Answer, Error> {
+    let limits = &env.limits.limits;
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    may_change(repository, user, number)?;
+    if let Some(title) = &title {
+        fits(title, limits.title_bytes)?;
+        if title.is_empty() {
+            return Err(Error::Empty);
+        }
+    }
+    if let Some(body) = &body {
+        fits(body, limits.body_bytes)?;
+    }
+    let item = repository.items.get_mut(&number).expect("an item to edit");
+    if let Some(title) = title {
+        item.title = title;
+    }
+    if let Some(body) = body {
+        item.body = body;
+    }
+    let change = change(item.kind());
+    let observation = Observation::Revised {
+        repository: copy_of(&repository.name),
+        number,
+        title: copy_of(&item.title),
+        body: copy_of(&item.body),
+        by: user,
+    };
+    repository.touch(number, model::clock(env));
+    model::changed(model, env, id, observation, Hook::item(change, number));
+    Ok(Answer::Done)
+}
+
+/// Makes the items the item `number` depends on exactly `dependencies`.
+pub(crate) fn depend(
+    model: &mut Model,
+    env: &Env<Config>,
+    id: Id<Repository>,
+    user: u64,
+    number: u64,
+    dependencies: Box<[u64]>,
+) -> Result<Answer, Error> {
+    let limits = &env.limits.limits;
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    repository.require(user, Permission::Write)?;
+    repository.item(number)?;
+    fit_numbers(&dependencies, limits.dependencies)?;
+    let mut set = Set::with_capacity(limits.dependencies);
+    for &dependency in &dependencies {
+        if dependency == number || repository.item(dependency)?.dependencies.contains(&number) {
+            return Err(Error::Circular);
+        }
+        if set.insert(dependency).is_err() {
+            return Err(Error::TooLarge);
+        }
+    }
+    let observed = numbers(&set);
+    let item = repository.item_mut(number)?;
+    item.dependencies = set;
+    let change = change(item.kind());
+    repository.touch(number, model::clock(env));
+    let observation =
+        Observation::Depends { repository: copy_of(&repository.name), number, dependencies: observed, by: user };
+    model::changed(model, env, id, observation, Hook::item(change, number));
+    Ok(Answer::Done)
 }
 
 /// Edits the comment `comment`: the user's own, or anyone's for a user
