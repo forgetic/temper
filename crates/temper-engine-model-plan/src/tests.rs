@@ -6,9 +6,11 @@ use core::mem::size_of;
 use temper_lib::{Duration, Env, List, Queue, Time};
 
 use crate::{
-    AgentSpec, Batch, Budget, ChangeSpec, Charter, Config, Envelope, Gate, Goal, Grants, Growing, Growth, Key, Limits,
-    Plan, Problem, Problems, Progress, Record, Repo, Repository, Resume, Review, SessionSpec, Sources, Step, Target,
-    Template, WaitSpec, Wake, Work, Write, accept, check, grow, max_out, worst_case,
+    Action, AgentSpec, Batch, Budget, ChangeSpec, Charter, Ci, Commit, Config, Decision, Due, Envelope, Facts, Finish,
+    Gate, Goal, Grants, Growing, Growth, Hold, Key, Limits, Mergeable, Plan, Problem, Problems, Progress, Pull,
+    PullState, Record, Relations, Repair, Repo, Repository, Resume, Review, Reviewed, Run, Sections, SessionSpec,
+    Sources, Step, Target, Template, Verdict, WaitSpec, Waits, Wake, Why, Work, Write, accept, check, due, grow,
+    max_out, worst_case,
 };
 
 /// The most a run may ask for.
@@ -446,6 +448,328 @@ fn growth_is_checked_against_the_plan_it_joins() {
         Err(Problems { listed: Box::new([Problem::TooManySteps { max: LIMITS.steps }]), more: 0 })
     );
     assert!(out.is_empty());
+}
+
+// What is due.
+
+/// An item made at 100, with no relations, nothing pushed and nothing
+/// decided, its inbox quiet.
+fn facts() -> Facts {
+    Facts {
+        created: Time::from_nanos(100),
+        dependencies: Relations::NONE,
+        children: Relations::NONE,
+        branch: None,
+        pull: None,
+        decision: None,
+        snapshot: false,
+        woken: false,
+    }
+}
+
+fn record(step: Step) -> Record {
+    Record { step, progress: Progress::NEW, goal: None }
+}
+
+fn head(count: u8) -> Commit {
+    Commit([count; 32])
+}
+
+/// An open pull request at `head` that is ready to merge: CI passed, a person
+/// approves, it merges cleanly.
+fn ready(head: Commit) -> Pull {
+    Pull {
+        head,
+        state: PullState::Open,
+        ci: Ci::Passed,
+        approvals: 1,
+        changes_requested: false,
+        merge: Mergeable::Clean,
+        base_moved: false,
+    }
+}
+
+fn pulled(pull: Pull) -> Facts {
+    Facts { branch: Some(pull.head), pull: Some(pull), ..facts() }
+}
+
+/// What is due for `record`, and the writes it asks for.
+fn decide(record: &Record, facts: &Facts) -> (Due, Box<[Write]>) {
+    let mut out = out();
+    let due = due(&config(), &env(), record, facts, &mut out);
+    (due, writes(&mut out))
+}
+
+/// What is due, which writes nothing.
+fn decided(record: &Record, facts: &Facts) -> Due {
+    let (due, writes) = decide(record, facts);
+    assert!(writes.is_empty(), "{due:?} writes nothing: {writes:?}");
+    due
+}
+
+/// The run that is due.
+fn ran(record: &Record, facts: &Facts) -> Run {
+    let due = decided(record, facts);
+    let Due::Run(run) = due else {
+        panic!("a run is due, not {due:?}");
+    };
+    run
+}
+
+/// What every brief carries.
+const SECTIONS: Sections = Sections {
+    item: true,
+    comments: true,
+    dependencies: false,
+    ci: false,
+    reviews: false,
+    pull: false,
+    attempts: true,
+    plan: false,
+    notes: true,
+    template: false,
+};
+
+const DONE: Relations = Relations { total: 2, done: 2, last_done: Some(Time::from_nanos(500)) };
+const HALF: Relations = Relations { total: 2, done: 1, last_done: Some(Time::from_nanos(500)) };
+
+#[test]
+fn every_step_waits_for_its_dependencies() {
+    let waiting = Facts { dependencies: HALF, ..facts() };
+    for step in [agent("a", &[]), change("b", &[]), wait("c", WaitSpec::Steps, &[]), session("d")] {
+        assert_eq!(decided(&record(step), &waiting), Due::Nothing(Waits::Dependencies));
+    }
+}
+
+#[test]
+fn an_agent_step_runs_with_its_charter() {
+    let step = agent_with("a", Charter { template: Some(bytes("fix")), ..charter(70) });
+    let run = ran(&record(step), &Facts { dependencies: DONE, ..facts() });
+    assert_eq!(
+        run,
+        Run {
+            why: Why::Work,
+            sections: Sections { dependencies: true, template: true, ..SECTIONS },
+            finish: Finish::Report { grows: false },
+            grants: GRANTS,
+            budget: Budget { tokens: 70, ..BUDGET },
+            instructions: bytes("do it"),
+            template: Some(0),
+            resume: false,
+        }
+    );
+}
+
+#[test]
+fn a_template_the_configuration_lost_is_left_out() {
+    let step = agent_with("a", Charter { template: Some(bytes("refactor")), ..charter(70) });
+    let run = ran(&record(step), &facts());
+    assert_eq!((run.template, run.sections), (None, SECTIONS));
+}
+
+#[test]
+fn an_agent_step_that_grows_its_plan_sees_the_plan() {
+    let step = step("a", Work::Agent(AgentSpec { charter: charter(1), grows: true }), &[]);
+    let run = ran(&record(step), &facts());
+    assert_eq!((run.finish, run.sections), (Finish::Report { grows: true }, Sections { plan: true, ..SECTIONS }));
+}
+
+#[test]
+fn a_gate_of_acceptance_waits_for_a_persons_decision() {
+    for step in [agent("a", &[]), wait("b", WaitSpec::Steps, &[]), session("c")] {
+        let gated = record(gated(step, Box::new([Gate::Accepted])));
+        let woken = Facts { woken: true, ..facts() };
+        assert_eq!(decided(&gated, &woken), Due::Nothing(Waits::Acceptance));
+        let rejected = Facts { decision: Some(Decision::Rejected), ..woken };
+        assert_eq!(decided(&gated, &rejected), Due::Hold(Hold::Rejected));
+        let accepted = Facts { decision: Some(Decision::Accepted), ..woken };
+        assert_ne!(decide(&gated, &accepted).0, Due::Nothing(Waits::Acceptance));
+    }
+}
+
+#[test]
+fn a_finished_agent_step_is_done_once_its_children_are() {
+    let finished = Record { progress: Progress { finished: true, ..Progress::NEW }, ..record(agent("a", &[])) };
+    assert_eq!(decided(&finished, &Facts { children: HALF, ..facts() }), Due::Nothing(Waits::Children));
+    assert_eq!(decide(&finished, &Facts { children: DONE, ..facts() }), (Due::Done, Box::from([Write::Close])));
+    assert_eq!(decide(&finished, &facts()), (Due::Done, Box::from([Write::Close])));
+}
+
+#[test]
+fn a_wait_on_steps_is_done_with_them() {
+    let after = record(wait("a", WaitSpec::Steps, &["b"]));
+    assert_eq!(decide(&after, &Facts { dependencies: DONE, ..facts() }), (Due::Done, Box::from([Write::Close])));
+}
+
+#[test]
+fn a_wait_on_a_decision_ends_when_a_person_accepts() {
+    let decision = record(wait("a", WaitSpec::Decision, &[]));
+    assert_eq!(decided(&decision, &facts()), Due::Nothing(Waits::Decision));
+    let accepted = Facts { decision: Some(Decision::Accepted), ..facts() };
+    assert_eq!(decide(&decision, &accepted), (Due::Done, Box::from([Write::Close])));
+    let rejected = Facts { decision: Some(Decision::Rejected), ..facts() };
+    assert_eq!(decided(&decision, &rejected), Due::Hold(Hold::Rejected));
+}
+
+#[test]
+fn a_wait_on_a_time_counts_from_its_last_dependency_or_its_making() {
+    let alone = record(wait("a", WaitSpec::Time(Duration::from_nanos(1_000)), &[]));
+    assert_eq!(decided(&alone, &facts()), Due::Nothing(Waits::Time(Time::from_nanos(1_100))));
+    let later = Env { now: Time::from_nanos(1_100), limits: LIMITS };
+    let mut out = out();
+    assert_eq!(due(&config(), &later, &alone, &facts(), &mut out), Due::Done);
+    assert_eq!(*writes(&mut out), [Write::Close]);
+    let after = record(wait("a", WaitSpec::Time(Duration::from_nanos(1_000)), &["b"]));
+    let done = Facts { dependencies: DONE, ..facts() };
+    assert_eq!(decided(&after, &done), Due::Nothing(Waits::Time(Time::from_nanos(1_500))));
+}
+
+#[test]
+fn a_chatting_session_runs_when_woken_and_resumes_its_snapshot() {
+    let chatting = record(session("a"));
+    assert_eq!(decided(&chatting, &facts()), Due::Nothing(Waits::Wake));
+    let run = ran(&chatting, &Facts { woken: true, ..facts() });
+    assert_eq!(
+        (run.why, run.finish, run.sections, run.resume),
+        (Why::Turn, Finish::Turn { supervising: false }, SECTIONS, false)
+    );
+    let parked = Facts { woken: true, snapshot: true, ..facts() };
+    assert!(ran(&chatting, &parked).resume, "chatting, it resumes");
+}
+
+#[test]
+fn a_supervising_session_starts_fresh_and_ends_with_its_goal() {
+    let supervising = Record { goal: Some(goal()), ..record(session("a")) };
+    let parked = Facts { woken: true, snapshot: true, children: HALF, ..facts() };
+    let run = ran(&supervising, &parked);
+    assert_eq!(
+        (run.finish, run.sections, run.resume),
+        (Finish::Turn { supervising: true }, Sections { plan: true, ..SECTIONS }, false)
+    );
+    let always = Record {
+        step: step("a", Work::Session(SessionSpec { charter: charter(1), resume: Resume::Always }), &[]),
+        ..supervising.clone()
+    };
+    assert!(ran(&always, &parked).resume, "a session that always resumes");
+    let never = record(step("a", Work::Session(SessionSpec { charter: charter(1), resume: Resume::Never }), &[]));
+    assert!(!ran(&never, &parked).resume, "a session that never resumes");
+    let finished = Facts { children: DONE, ..parked };
+    assert_eq!(decide(&supervising, &finished), (Due::Done, Box::from([Write::Close])));
+}
+
+#[test]
+fn a_change_is_produced_then_its_pull_request_opened() {
+    let produce = ran(&record(change("a", &[])), &facts());
+    assert_eq!(
+        (produce.why, produce.finish, produce.budget.tokens),
+        (Why::Produce, Finish::Change { checks: true }, 100)
+    );
+    let pushed = Facts { branch: Some(head(1)), ..facts() };
+    assert_eq!(
+        decide(&record(change("a", &[])), &pushed),
+        (Due::Act(Action::OpenPull), Box::from([Write::OpenPull { base: bytes("main") }]))
+    );
+}
+
+#[test]
+fn a_change_waits_for_ci_on_its_head() {
+    let change = record(change("a", &[]));
+    for ci in [Ci::None, Ci::Pending] {
+        assert_eq!(decided(&change, &pulled(Pull { ci, ..ready(head(1)) })), Due::Nothing(Waits::Ci));
+    }
+}
+
+#[test]
+fn a_change_is_repaired_with_a_brief_that_says_why() {
+    let change = record(change("a", &[]));
+    let cases = [
+        (Pull { ci: Ci::Failed, ..ready(head(1)) }, Repair::CiFailed, Sections { ci: true, ..SECTIONS }),
+        (
+            Pull { changes_requested: true, ..ready(head(1)) },
+            Repair::ChangesRequested,
+            Sections { reviews: true, ..SECTIONS },
+        ),
+        (Pull { base_moved: true, ..ready(head(1)) }, Repair::BaseMoved, Sections { pull: true, ..SECTIONS }),
+        (
+            Pull { merge: Mergeable::Conflicts, ci: Ci::Pending, ..ready(head(1)) },
+            Repair::Conflicts,
+            Sections { pull: true, ..SECTIONS },
+        ),
+    ];
+    for (pull, repair, sections) in cases {
+        let run = ran(&change, &pulled(pull));
+        assert_eq!(
+            (run.why, run.finish, run.sections),
+            (Why::Repair(repair), Finish::Change { checks: true }, sections)
+        );
+    }
+}
+
+#[test]
+fn a_change_repaired_to_the_limit_is_held_when_it_needs_more() {
+    let repaired =
+        Record { progress: Progress { repairs: LIMITS.repairs, ..Progress::NEW }, ..record(change("a", &[])) };
+    let failed = pulled(Pull { ci: Ci::Failed, ..ready(head(1)) });
+    assert_eq!(decided(&repaired, &failed), Due::Hold(Hold::Repairs));
+    assert_eq!(decide(&repaired, &pulled(ready(head(1)))).0, Due::Act(Action::Merge));
+}
+
+#[test]
+fn a_change_reviewed_by_a_person_waits_for_an_approval_of_its_head() {
+    let change = record(change("a", &[]));
+    assert_eq!(decided(&change, &pulled(Pull { approvals: 0, ..ready(head(1)) })), Due::Nothing(Waits::Review));
+}
+
+#[test]
+fn a_change_lands_at_exactly_its_head_once_it_merges_cleanly() {
+    let change = record(change("a", &[]));
+    let unknown = pulled(Pull { merge: Mergeable::Unknown, ..ready(head(1)) });
+    assert_eq!(decided(&change, &unknown), Due::Nothing(Waits::Mergeable));
+    assert_eq!(
+        decide(&change, &pulled(ready(head(1)))),
+        (Due::Act(Action::Merge), Box::from([Write::Merge { head: head(1) }]))
+    );
+    let merged = pulled(Pull { state: PullState::Merged, ..ready(head(1)) });
+    assert_eq!(decide(&change, &merged), (Due::Done, Box::from([Write::Close, Write::DeleteBranch])));
+    let closed = pulled(Pull { state: PullState::Closed, ..ready(head(1)) });
+    assert_eq!(decided(&change, &closed), Due::Hold(Hold::PullClosed));
+}
+
+#[test]
+fn a_changes_gates_add_to_its_review() {
+    let gates: Box<[Gate]> = Box::new([Gate::Approvals(2), Gate::Accepted]);
+    let change = record(gated(change("a", &[]), gates));
+    assert_eq!(decided(&change, &pulled(ready(head(1)))), Due::Nothing(Waits::Approvals));
+    let approved = pulled(Pull { approvals: 2, ..ready(head(1)) });
+    assert_eq!(decided(&change, &approved), Due::Nothing(Waits::Acceptance));
+    let rejected = Facts { decision: Some(Decision::Rejected), ..approved };
+    assert_eq!(decided(&change, &rejected), Due::Hold(Hold::Rejected));
+    let accepted = Facts { decision: Some(Decision::Accepted), ..approved };
+    assert_eq!(decide(&change, &accepted).0, Due::Act(Action::Merge));
+    // Before it lands, the acceptance gate waits for nothing.
+    assert_eq!(ran(&change, &facts()).why, Why::Produce);
+}
+
+/// `change`, reviewed by an agent at `head`.
+fn reviewed(change: &Record, verdict: Verdict, head: Commit) -> Record {
+    Record { progress: Progress { review: Some(Reviewed { head, verdict }), ..Progress::NEW }, ..change.clone() }
+}
+
+#[test]
+fn a_change_reviewed_by_an_agent_runs_a_review_of_its_exact_head() {
+    let spec = ChangeSpec { review: Review::Agent(charter(30)), ..change_spec() };
+    let change = record(change_with("a", spec));
+    let unapproved = pulled(Pull { approvals: 0, ..ready(head(2)) });
+    let review = ran(&change, &unapproved);
+    assert_eq!(
+        (review.why, review.finish, review.sections, review.budget.tokens),
+        (Why::Review { head: head(2) }, Finish::Verdict, Sections { reviews: true, ..SECTIONS }, 30)
+    );
+    assert_eq!(decide(&reviewed(&change, Verdict::Approve, head(2)), &unapproved).0, Due::Act(Action::Merge));
+    let repair = ran(&reviewed(&change, Verdict::Changes, head(2)), &unapproved);
+    assert_eq!(repair.why, Why::Repair(Repair::ChangesRequested));
+    // A verdict on an earlier head counts for nothing.
+    assert_eq!(ran(&reviewed(&change, Verdict::Approve, head(1)), &unapproved).why, Why::Review { head: head(2) });
 }
 
 // Limits.

@@ -3,7 +3,9 @@
 //! engine's plan policy. It knows the primitives (agent steps, changes, waits
 //! and sessions), plans as graphs of steps under a goal, gates, wake rules,
 //! envelopes and templates. It checks a plan before it exists, says what
-//! accepting it makes, and what growing it does to its envelope.
+//! accepting it makes, and what growing it does to its envelope. It says
+//! what is due for an item, from its step and the facts about it: a run and
+//! the parts of its charter, an engine action, or nothing yet.
 //!
 //! It knows nothing of the forge's API, the workers, the record's encoding or
 //! the mechanics of an item's lifecycle, and it never checks the rules: it
@@ -27,6 +29,8 @@ extern crate alloc;
 mod accept;
 mod check;
 mod config;
+mod due;
+mod facts;
 mod limits;
 mod plan;
 mod record;
@@ -37,6 +41,8 @@ mod write;
 pub use accept::{Growing, accept, grow};
 pub use check::{Problem, Problems, check};
 pub use config::{Config, Repo, Template};
+pub use due::{Action, Due, Finish, Hold, Repair, Run, Sections, Waits, Why, due};
+pub use facts::{Ci, Decision, Facts, Mergeable, Pull, PullState, Relations};
 pub use limits::{Limits, max_out, worst_case};
 pub use plan::{
     AgentSpec, Batch, Budget, ChangeSpec, Charter, Commit, Envelope, Gate, Grants, Growth, Plan, Repository, Resume,
