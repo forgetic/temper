@@ -42,4 +42,4 @@ mod tests;
 pub use boundary::{Budget, Dimension, End, Event, Request, Spec, Yield};
 pub use facts::Fact;
 pub use limits::{Limits, MAX_PARALLEL, worst_case};
-pub use model::{Model, fire, max_out, resume, step};
+pub use model::{Model, fire, max_out, max_to_opener, resume, step};

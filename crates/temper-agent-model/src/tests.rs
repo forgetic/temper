@@ -267,6 +267,20 @@ fn the_limits_fit_and_a_session_must_take_what_the_run_asks() {
 }
 
 #[test]
+fn what_an_entry_point_may_emit_grows_with_the_tools_cancels_only_once() {
+    assert_eq!(max_out(&LIMITS), 144);
+    // A kit's close cancels as many operations as the tools run, which go out
+    // to io and lead nowhere else: what the run is sent does not grow with
+    // them.
+    let tools = tools::Limits { calls: 256, ..LIMITS.session.tools };
+    let wide = Limits { session: session::Limits { parallel_tools: 8, tools, ..LIMITS.session }, ..LIMITS };
+    assert_eq!(max_out(&wide), 6006);
+    let wider =
+        Limits { session: session::Limits { tools: tools::Limits { calls: 512, ..tools }, ..wide.session }, ..wide };
+    assert_eq!(max_out(&wider) - max_out(&wide), 21 * 256, "a kit's cancels for each session step");
+}
+
+#[test]
 fn a_run_opens_main_as_a_session_through_to_its_first_call_to_the_llm() {
     let mut h = Harness::new();
     let (_, main, prompt) = h.admit(7, charter());

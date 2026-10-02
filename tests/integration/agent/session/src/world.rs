@@ -568,19 +568,25 @@ impl World {
         // its alarms, while it has room for what one more may produce.
         while self.agent_stage.has_room() && self.agent.is_ready() {
             self.log("agent ready");
+            let from = self.agent_stage.out.len();
             agent::resume(&mut self.agent, &self.agent_stage.env, &mut self.agent_stage.out);
+            self.check_sent(from);
         }
         while let Some(event) = self.agent_stage.next_event() {
             self.log(&format!("agent <- {}", describe_agent_event(&event)));
             let ended = ended_run(&event);
+            let from = self.agent_stage.out.len();
             agent::step(&mut self.agent, &self.agent_stage.env, event, &mut self.agent_stage.out);
+            self.check_sent(from);
             if let Some(run) = ended {
                 self.runs.remove(&run);
             }
         }
         while self.agent_stage.has_room() && self.agent.is_due(self.now) {
             self.log("agent alarm");
+            let from = self.agent_stage.out.len();
             agent::fire(&mut self.agent, &self.agent_stage.env, &mut self.agent_stage.out);
+            self.check_sent(from);
         }
         // The facts, drained as the shell would write them out.
         while let Some(fact) = self.agent.pop_fact() {
@@ -613,6 +619,29 @@ impl World {
 
     /// The agent's requests, carried out the way its opener, its protocol
     /// layer and the tools would.
+    /// Checks what the entry point that emitted the requests past `from`
+    /// sent the opener, which a parent counts on: the records that name it,
+    /// and the delegated calls and their withdraws.
+    fn check_sent(&self, from: u32) {
+        let mut sent = 0;
+        for request in self.agent_stage.out.iter().skip(usize::try_from(from).expect("small")) {
+            match request {
+                agent::Request::Opened { .. }
+                | agent::Request::Yielded { .. }
+                | agent::Request::Used { .. }
+                | agent::Request::Ended { .. }
+                | agent::Request::Delegate { .. }
+                | agent::Request::Withdraw { .. } => sent += 1,
+                agent::Request::Complete { .. }
+                | agent::Request::Cancel { .. }
+                | agent::Request::Io { .. }
+                | agent::Request::CancelIo { .. } => {}
+            }
+        }
+        let most = agent::max_to_opener(&self.agent_stage.env.limits);
+        assert!(sent <= most, "an entry point sent its opener {sent} requests, more than {most}");
+    }
+
     fn agent_request(&mut self, request: agent::Request) {
         self.log(&format!("agent -> {}", describe_agent_request(&request)));
         match request {

@@ -20,6 +20,16 @@ pub const fn max_out(limits: &Limits) -> u32 {
     2_u32.saturating_add(limits.parallel_tools).saturating_add(tools::max_out(&limits.tools))
 }
 
+/// The most of those requests that are for the opener (the session's records
+/// that name it, and its delegated calls and their withdraws): the session's
+/// own two, and a batch of delegated calls, a request each, or the withdraws
+/// closing sends for one (a step starts a batch or cancels one, never both).
+/// The tools' operations and their cancels never reach the opener.
+#[must_use]
+pub const fn max_to_opener(limits: &Limits) -> u32 {
+    2_u32.saturating_add(limits.parallel_tools)
+}
+
 /// The session sub-model's state.
 #[derive(Debug)]
 pub struct Model {
