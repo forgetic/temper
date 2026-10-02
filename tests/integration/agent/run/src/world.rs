@@ -279,6 +279,9 @@ struct RunView {
     /// deadline came while it prepared or worked.
     decided: bool,
     spent: run::Spend,
+    /// Its conversations opened and not ended, and the most it had at once.
+    live: u32,
+    peak: u32,
     /// The roots whose checks a change must pass before it is pushed: of the
     /// writable repositories, when the spec wants checks, those with checks,
     /// less those io failed to look in.
@@ -553,7 +556,7 @@ impl World {
         self.worker.reclaim();
         assert!(self.run.runs() <= self.settings.run.runs, "runs stay within their slots");
         assert!(self.run.conversations() <= self.settings.run.conversations, "conversations stay within their slots");
-        assert!(self.run.calls() <= self.settings.run.conversations, "calls stay within their slots");
+        assert!(self.run.calls() <= self.settings.run.calls, "calls stay within their slots");
     }
 
     /// The run's requests, carried out the way the top level, the protocol
@@ -574,6 +577,8 @@ impl World {
                     started: false,
                     decided: false,
                     spent: run::Spend::ZERO,
+                    live: 0,
+                    peak: 0,
                     answered: None,
                 };
                 self.views.insert(run, view);
@@ -615,7 +620,9 @@ impl World {
                 self.io_request(request);
             }
             run::Request::Check { owner, program, deadline, tail } => {
-                self.run_of_call.insert(owner, current.expect("a check is made in a step about its run"));
+                let run = current.expect("a check is made in a step about its run");
+                self.assert_alone(run);
+                self.run_of_call.insert(owner, run);
                 self.landing.insert(owner);
                 self.check(owner, &program, deadline, tail);
             }
@@ -623,7 +630,9 @@ impl World {
                 self.send(Lane::Worker, Delivery::Checking { job: worker, deadline });
             }
             run::Request::Push { worker, owner, change } => {
-                self.run_of_call.insert(owner, current.expect("a push is made in a step about its run"));
+                let run = current.expect("a push is made in a step about its run");
+                self.assert_alone(run);
+                self.run_of_call.insert(owner, run);
                 self.landing.insert(owner);
                 self.pushes.open(owner, Pushing { job: worker });
                 // Checked is pushed: every repository whose checks the change
@@ -809,7 +818,12 @@ impl World {
         assert!(fresh, "conversations have distinct names");
         let run = current.expect("a run opens a conversation in a step about it");
         self.run_of_conversation.insert(conversation, run);
+        // Checked is pushed: nothing opens while a change is checked or pushed.
+        let landing = self.landing.iter().any(|owner| self.run_of_call.get(owner) == Some(&run));
+        assert!(!landing, "a run opens no conversation while its change is checked or pushed");
         let view = self.views.get_mut(&run).expect("a run is admitted before it opens a conversation");
+        view.live += 1;
+        view.peak = view.peak.max(view.live);
         match self.asked.take() {
             None => {
                 assert!(view.main.is_none(), "a run opens main once, and sub-agents when asked");
@@ -837,13 +851,21 @@ impl World {
         self.send(Lane::Conversations, Delivery::Open { conversation, opening });
     }
 
+    /// Checked is pushed: from a run's first check to its push, nothing but
+    /// main is live in it, so nothing else may write to the checkout.
+    fn assert_alone(&self, run: Token) {
+        let view = &self.views[&run];
+        assert_eq!(view.live, 1, "main is its run's only conversation while its change is checked and pushed");
+    }
+
     /// The run's answer, checked against its budget and what it did: the
     /// worker's name for the run.
     fn answer(&mut self, to: ReplyTo, answer: run::Answer) -> Token {
         let owner = to.into_token();
         let start = self.starts.get_mut(&owner).expect("an answer is to a start that was made");
         assert!(start.answer.is_none(), "a start is answered once");
-        assert_within(&start.budget, &answer, self.partner.turn_max());
+        let peak = self.run_of_owner.get(&owner).map_or(0, |run| self.views[run].peak);
+        assert_within(&start.budget, &answer, self.partner.turn_max(), peak);
         // A change is accepted only once it is pushed, and once it is pushed,
         // whatever the run was winding down for.
         let change = matches!(&answer, run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. });
@@ -1151,6 +1173,8 @@ impl World {
         }
         open.ended = ended;
         if ended {
+            let run = self.run_of_conversation[conversation];
+            self.views.get_mut(&run).expect("a run outlives its conversations").live -= 1;
             for ledger in self.calls.values() {
                 assert!(
                     ledger.conversation != *conversation || ledger.returned,
@@ -1279,29 +1303,28 @@ impl RunView {
     }
 }
 
-/// A run spends within its budget, give or take three turns: the one that
-/// crossed it, the one main has in flight then, and one more that wins its
-/// race with the close. A conversation keeps to its own share, but main's
-/// share was the whole budget when it opened, and its sub-agents spend from
-/// the same budget; so their spending may make the run cross while main has
-/// room left in its share, main keeps the turn it has in flight, as a session
-/// does, and is closed at its next. The partner starts a turn the moment one ends,
-/// so the close finds one in flight; a session would run the calls of its
-/// completion first. (Only one conversation of a run takes turns at a time
-/// here: an asker waits on its sub-agent.)
-fn assert_within(budget: &run::Budget, answer: &run::Answer, turn: run::Spend) {
+/// A run spends within its budget, give or take a turn per conversation it
+/// had live at once, and two. The run sums `Used` and closes main once the
+/// total crosses its budget: at main's next turn when main crossed it, at
+/// once when a sub-agent did, the close cascading down the tree. A
+/// conversation keeps to its own share, but a share is carved from what the
+/// run had left when it opened, and the others spend from the same budget,
+/// so none may have reached its own ceiling by then. After the crossing turn,
+/// the conversation whose `Used` crossed may finish one more completion
+/// before it is closed, and each conversation may finish the completion it
+/// has in flight when its close comes, one that wins the race with it: the
+/// partner starts a turn the moment one ends, so a close always finds one in
+/// flight, where a session would run its completion's calls first.
+fn assert_within(budget: &run::Budget, answer: &run::Answer, turn: run::Spend, peak: u32) {
     let (run::Answer::Failed { spent, .. } | run::Answer::Accepted { spent, .. }) = answer else { return };
-    let turn = turn.saturating_add(turn).saturating_add(turn);
+    let turns = u64::from(peak) + 2;
+    let over = |spent: u64, budget: u64, turn: u64| spent <= budget.saturating_add(turn.saturating_mul(turns));
     assert!(
-        spent.turns <= budget.turns.saturating_add(turn.turns),
-        "{spent:?} is within the turns of {budget:?}, and three"
-    );
-    let over = |spent: u64, budget: u64, turn: u64| spent <= budget.saturating_add(turn);
-    assert!(
-        over(spent.input, budget.input, turn.input)
+        over(u64::from(spent.turns), u64::from(budget.turns), u64::from(turn.turns))
+            && over(spent.input, budget.input, turn.input)
             && over(spent.output, budget.output, turn.output)
             && over(spent.cache_read, budget.cache_read, turn.cache_read)
             && over(spent.cache_write, budget.cache_write, turn.cache_write),
-        "{spent:?} is within {budget:?} and three turns of at most {turn:?} between them"
+        "{spent:?} is within {budget:?} and {turns} turns of at most {turn:?} between them"
     );
 }
