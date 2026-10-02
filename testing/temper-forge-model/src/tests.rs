@@ -357,13 +357,22 @@ impl Harness {
 
     /// Opens a pull request of `head` into `main`, as the engine.
     fn open(&mut self, head: &[u8]) -> Result<Answer, Error> {
-        let op = write(Write::OpenPull {
-            title: copy_of(b"change"),
-            body: copy_of(b"body"),
-            head: copy_of(head),
-            base: copy_of(MAIN),
-        });
+        let op = open_op(head);
         self.call(ENGINE, op)
+    }
+
+    /// Takes what the forge emitted, noting each answer's token, which must
+    /// be new.
+    fn drain(&mut self, answered: &mut temper_lib::Set<u64>) {
+        while let Some(request) = self.out.pop() {
+            match request {
+                Request::Reply { to, result: _ } => {
+                    let fresh = answered.insert(to.into_token().raw()).expect("room");
+                    assert!(fresh, "a call is answered once");
+                }
+                Request::Hook { .. } => {}
+            }
+        }
     }
 
     /// The observations not drained yet.
@@ -1548,6 +1557,16 @@ fn refused_writes_and_rejected_pushes_are_observed() {
 
 // Edits, dependencies, reviewers, and the reads of one comment and the labels.
 
+/// Opens a pull request of `head` into `main`.
+fn open_op(head: &[u8]) -> Op {
+    write(Write::OpenPull {
+        title: copy_of(b"change"),
+        body: copy_of(b"body"),
+        head: copy_of(head),
+        base: copy_of(MAIN),
+    })
+}
+
 fn retitle(number: u64, title: &[u8]) -> Op {
     write(Write::EditItem { number, title: Some(copy_of(title)), body: None })
 }
@@ -1647,4 +1666,166 @@ fn a_repository_has_what_its_branches_reach_and_what_was_pushed() {
     let has = h.model.has(REPOSITORY);
     assert!(has.contains(&FIRST) && has.contains(&work) && has.contains(&more));
     assert!(!has.contains(&stray), "a commit no one pushed");
+}
+
+// Bounds: rate windows, a full store, and one answer per call under every fault.
+
+#[test]
+fn more_callers_than_rate_windows_wait_for_the_first_to_end() {
+    let mut h = Harness::new(Config { rate_limit: 5, ..CALM });
+    let started = h.env.now;
+    for user in 10..10 + u64::from(LIMITS.users) {
+        assert_eq!(h.call(user, read(Read::Labels)), Err(Error::Forbidden), "taken, then refused for permission");
+    }
+    let reset = started.saturating_add(Duration::from_secs(60));
+    assert_eq!(h.call(99, read(Read::Labels)), Err(Error::RateLimited { reset }), "every window is running");
+    assert_eq!(h.model.tally().crowded, 1);
+    assert_eq!(h.model.tally().limited, 0, "counted apart");
+    h.env.now = reset;
+    assert_eq!(h.call(99, read(Read::Labels)), Err(Error::Forbidden), "an ended window is reused");
+    assert_eq!(h.ok(PERSON, read(Read::Labels)), Answer::Labels(names(&[b"bug", b"temper"])));
+}
+
+#[test]
+fn a_full_store_refuses_counted_and_says_it_has_no_room() {
+    let mut h = Harness::new(Config { limits: Limits { commits: 3, ..LIMITS }, ..CALM });
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    crate::advance(&mut h.model, &h.env, REPOSITORY, MAIN, b"other", b"x", MAINTAINER).expect("the last room");
+    assert_eq!(h.model.room().commits, 0);
+    assert_eq!(crate::commit(&mut h.model, &h.env.limits, FIRST, files(&[])), Err(Error::Full));
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    assert_eq!(h.call(ENGINE, merge(1, work)), Err(Error::Full));
+    assert_eq!(h.model.tally().full, 1);
+}
+
+#[test]
+fn statuses_of_commits_no_head_shows_are_forgotten_to_make_room() {
+    let mut h = Harness::new(Config { limits: Limits { statuses: 3, ..LIMITS }, ..CALM });
+    let one = h.commit(FIRST, &[(b"src", b"one")]);
+    let two = h.commit(one, &[(b"src", b"two")]);
+    let other = h.commit(FIRST, &[(b"lib", b"one")]);
+    h.push(ENGINE, b"work", one).expect("pushed");
+    h.push(ENGINE, b"other", other).expect("pushed");
+    h.ok(MAINTAINER, status(FIRST, b"review", Check::Passed));
+    assert_eq!(h.model.room().statuses, 0);
+    h.push(ENGINE, b"work", two).expect("pushed before the first's CI reported");
+    assert_eq!(h.model.tally().forgotten, 1, "the first is no head, and its checks are cancelled");
+    h.settle();
+    assert_eq!(h.model.tally().verdicts, 2, "the other's and the second's");
+    assert_eq!(h.ok(PERSON, read(Read::Statuses { commit: one })), Answer::Statuses(Box::new([])));
+    let more = h.commit(two, &[(b"src", b"three")]);
+    h.ok(ENGINE, create_branch(b"keep", two));
+    h.push(ENGINE, b"work", more).expect("pushed");
+    assert_eq!(h.model.tally().unreported, 1, "every commit with statuses is a head");
+    let busy = status(more, b"review", Check::Passed);
+    assert_eq!(h.call(MAINTAINER, busy), Err(Error::Full));
+}
+
+#[test]
+fn every_call_is_answered_once_under_every_fault() {
+    let mut faults = [0_u32; 5];
+    for seed in 0..32_u64 {
+        let config = Config {
+            latency_min: Duration::from_millis(10),
+            latency_max: Duration::from_secs(2),
+            late: 100,
+            unavailable: 100,
+            timeouts: 100,
+            rate_limit: 6,
+            rate_window: Duration::from_secs(5),
+            hooks_late: 100,
+            hooks_lost: 100,
+            ..CALM
+        };
+        let mut h = Harness::seeded(config, setup(), seed);
+        let mut rng = temper_lib::Rng::new(seed);
+        let work = h.commit(FIRST, &[(b"src", b"one")]);
+        let mut answered: temper_lib::Set<u64> = temper_lib::Set::with_capacity(256);
+        let mut sent: u64 = 0;
+        for _ in 0..64_u32 {
+            for _ in 0..rng.between(0, 3) {
+                sent = sent.checked_add(1).expect("few");
+                let user = [ENGINE, PERSON, MAINTAINER][usize::try_from(rng.below(3)).expect("small")];
+                let op = match rng.below(6) {
+                    0 => create(b"issue", b"body", &[]),
+                    1 => write(Write::Comment { number: 1, body: copy_of(b"hi") }),
+                    2 => Op::Git(Git::Push { branch: copy_of(b"work"), commit: work }),
+                    3 => open_op(b"work"),
+                    4 => merge(1, work),
+                    _ => read(Read::Items {
+                        state: None,
+                        kind: None,
+                        labels: names(&[]),
+                        since: Time::ZERO,
+                        page: 1,
+                        limit: 0,
+                    }),
+                };
+                let event =
+                    Event::Call { reply_to: ReplyTo::new(Token::new(sent)), user, repository: repository(), op };
+                step(&mut h.model, &h.env, event, &mut h.out);
+                h.drain(&mut answered);
+            }
+            if let Some(at) = h.model.next_deadline() {
+                h.env.now = h.env.now.max(at);
+                fire(&mut h.model, &h.env, &mut h.out);
+                h.drain(&mut answered);
+            }
+            h.model.reclaim();
+        }
+        for _ in 0..4096_u32 {
+            let Some(at) = h.model.next_deadline() else {
+                break;
+            };
+            h.env.now = h.env.now.max(at);
+            fire(&mut h.model, &h.env, &mut h.out);
+            h.drain(&mut answered);
+        }
+        h.model.reclaim();
+        assert_eq!(u64::from(answered.len()), sent, "seed {seed}: every call answered");
+        assert_eq!(h.model.calls(), 0);
+        assert_eq!(u64::from(h.model.tally().answered), sent);
+        let tally = h.model.tally();
+        for (fault, count) in
+            faults.iter_mut().zip([tally.busy, tally.unavailable, tally.timeouts, tally.limited, tally.late])
+        {
+            *fault = fault.saturating_add(count);
+        }
+    }
+    assert!(!faults.contains(&0), "busy, unavailable, timed out, rate-limited and late calls all came: {faults:?}");
+}
+
+#[test]
+fn modify_and_delete_or_two_adds_conflict_unless_they_agree() {
+    let mut h = Harness::new(CALM);
+    // The head deletes the readme, which the base changed.
+    let deleted = crate::commit(&mut h.model, &h.env.limits, FIRST, files(&[(b"ci", b"green")]))
+        .expect("room")
+        .expect("a change");
+    h.push(ENGINE, b"delete", deleted).expect("pushed");
+    h.open(b"delete").expect("opened");
+    // Another head adds what the base adds too, differently, and a third
+    // the same.
+    let added = h.commit(FIRST, &[(b"new", b"ours")]);
+    h.push(ENGINE, b"add", added).expect("pushed");
+    h.open(b"add").expect("opened");
+    let same = h.commit(FIRST, &[(b"new", b"theirs")]);
+    h.push(ENGINE, b"same", same).expect("pushed");
+    h.open(b"same").expect("opened");
+    let changed = h.commit(FIRST, &[(b"README", b"changed"), (b"new", b"theirs")]);
+    h.push(MAINTAINER, MAIN, changed).expect("the base moves");
+    assert_eq!(h.call(ENGINE, merge(1, deleted)), Err(Error::Conflict), "modify and delete");
+    assert_eq!(h.call(ENGINE, merge(2, added)), Err(Error::Conflict), "two adds");
+    assert!(matches_merged(&h.call(ENGINE, merge(3, same))), "two adds that agree");
+    // The other way: the base deletes what a head changed.
+    let mut h = Harness::new(CALM);
+    let edited = h.commit(FIRST, &[(b"README", b"edited")]);
+    h.push(ENGINE, b"edit", edited).expect("pushed");
+    h.open(b"edit").expect("opened");
+    let gone = crate::commit(&mut h.model, &h.env.limits, FIRST, files(&[(b"ci", b"green")]))
+        .expect("room")
+        .expect("a change");
+    h.push(MAINTAINER, MAIN, gone).expect("the base moves");
+    assert_eq!(h.call(ENGINE, merge(1, edited)), Err(Error::Conflict), "delete and modify");
 }

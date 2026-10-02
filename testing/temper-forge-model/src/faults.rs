@@ -30,12 +30,10 @@ pub(crate) fn admit(model: &mut Model, env: &Env<Config>, user: u64) -> Result<(
             }
             Some(window) => *window = fresh,
             None => {
-                if model.windows.insert(user, fresh).is_err() {
-                    // More users than the limits keep windows for: they wait
-                    // as if theirs were spent.
-                    model.tally.limited = model.tally.limited.saturating_add(1);
-                    return Err(Error::RateLimited { reset: fresh.end });
+                if model.windows.len() >= model.windows.capacity() {
+                    reuse(model, env)?;
                 }
+                model.windows.insert(user, fresh).expect("checked for room above");
             }
         }
     }
@@ -44,6 +42,35 @@ pub(crate) fn admit(model: &mut Model, env: &Env<Config>, user: u64) -> Result<(
         return Err(Error::Unavailable);
     }
     Ok(())
+}
+
+/// Makes room for a new caller's window by forgetting one that has ended,
+/// the first in user order; or, when every window is running, refuses the
+/// caller until the first of them ends, counted apart from the rate's
+/// refusals.
+fn reuse(model: &mut Model, env: &Env<Config>) -> Result<(), Error> {
+    let mut ended = None;
+    let mut first: Option<Time> = None;
+    for (&user, window) in &model.windows {
+        if window.end <= env.now {
+            ended = Some(user);
+            break;
+        }
+        first = Some(match first {
+            Some(end) => end.min(window.end),
+            None => window.end,
+        });
+    }
+    match ended {
+        Some(user) => {
+            model.windows.remove(&user);
+            Ok(())
+        }
+        None => {
+            model.tally.crowded = model.tally.crowded.saturating_add(1);
+            Err(Error::RateLimited { reset: first.expect("a full table has a window") })
+        }
+    }
 }
 
 /// What the caller hears of a call that was made: `result`, or, by chance, a

@@ -76,8 +76,13 @@ pub struct Tally {
     /// out, having been made.
     pub unavailable: u32,
     pub timeouts: u32,
-    /// Calls refused for their user's rate.
+    /// Calls refused for their user's rate, and those refused because every
+    /// rate window the limits keep was running.
     pub limited: u32,
+    pub crowded: u32,
+    /// Writes refused because the store or a repository was full: a world
+    /// whose forge fills tests a forge that refuses everything.
+    pub full: u32,
     /// Calls answered late.
     pub late: u32,
     /// Webhooks delivered, those of them late, those lost by chance, and those
@@ -86,11 +91,13 @@ pub struct Tally {
     pub hooks_late: u32,
     pub hooks_lost: u32,
     pub hooks_dropped: u32,
-    /// CI verdicts reported, contexts left pending by chance, and commits CI
-    /// did not report on for want of room.
+    /// CI verdicts reported, contexts left pending by chance, commits CI did
+    /// not report on for want of room, and commits whose statuses were
+    /// forgotten to make room, being no longer any head.
     pub verdicts: u32,
     pub silent: u32,
     pub unreported: u32,
+    pub forgotten: u32,
 }
 
 impl Tally {
@@ -100,6 +107,8 @@ impl Tally {
         unavailable: 0,
         timeouts: 0,
         limited: 0,
+        crowded: 0,
+        full: 0,
         late: 0,
         hooks: 0,
         hooks_late: 0,
@@ -108,7 +117,15 @@ impl Tally {
         verdicts: 0,
         silent: 0,
         unreported: 0,
+        forgotten: 0,
     };
+}
+
+/// What more the forge has room for (see [`Model::room`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Room {
+    pub commits: u32,
+    pub statuses: u32,
 }
 
 /// The fake forge's state.
@@ -253,6 +270,19 @@ impl Model {
         self.tally
     }
 
+    /// What more the forge has room for: commits in its store, and statuses
+    /// in the repository with the least room for them.
+    #[must_use]
+    pub fn room(&self) -> Room {
+        let commits = self.commits.capacity().saturating_sub(self.commits.len());
+        let mut statuses = u32::MAX;
+        for (_, &id) in &self.names {
+            let repository = self.repositories.get(id).expect("a named repository");
+            statuses = statuses.min(repository.statuses.capacity().saturating_sub(repository.statuses.len()));
+        }
+        Room { commits, statuses }
+    }
+
     /// Calls held, answered ones included until they are reclaimed.
     #[must_use]
     pub fn calls(&self) -> u32 {
@@ -333,6 +363,9 @@ fn call(
             if let Err(error) = result
                 && let Some((what, number, commit)) = subject
             {
+                if error == Error::Full {
+                    model.tally.full = model.tally.full.saturating_add(1);
+                }
                 refused(model, repository, what, number, commit, error, user);
             }
             faults::finish(model, env, result)

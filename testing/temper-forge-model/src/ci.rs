@@ -35,12 +35,14 @@ pub(crate) fn start(model: &mut Model, env: &Env<Config>, id: Id<Repository>, co
         return;
     }
     if !repository.statuses.contains_key(&commit) {
-        if repository.statuses.len() >= repository.statuses.capacity() {
+        if !room(model, id) {
             model.tally.unreported = model.tally.unreported.saturating_add(1);
             return;
         }
-        repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).expect("checked for room above");
+        let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+        repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).expect("room was made");
     }
+    let repository = model.repositories.get(id).expect("a repository of the forge");
     let contexts = u32::try_from(repository.checks.contexts.len()).expect("contexts within the limits");
     for context in 0..contexts {
         let Some(name) = name(model, id, context) else {
@@ -112,16 +114,47 @@ pub(crate) fn status(
         return Err(Error::Missing(What::Commit));
     }
     if !repository.statuses.contains_key(&commit) {
-        if repository.statuses.len() >= repository.statuses.capacity() {
+        if !room(model, id) {
             return Err(Error::Full);
         }
-        repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).expect("checked for room above");
+        let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+        repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).expect("room was made");
     }
     if !set(model, id, commit, &context, Status { state, author: user, at: model::clock(env) }) {
         return Err(Error::Full);
     }
     reported(model, env, id, commit, context, state, user);
     Ok(Answer::Done)
+}
+
+/// Whether the repository `id` has room for the statuses of one more
+/// commit, making it if it must by forgetting those of the oldest commit
+/// that is no longer any branch's head or any open pull request's, and its
+/// pending checks with them. Forgejo keeps every status; a fake that keeps
+/// a bounded number forgets only what no head shows.
+fn room(model: &mut Model, id: Id<Repository>) -> bool {
+    let repository = model.repositories.get(id).expect("a repository of the forge");
+    if repository.statuses.len() < repository.statuses.capacity() {
+        return true;
+    }
+    let mut stale = None;
+    for (&commit, _) in &repository.statuses {
+        if !repository.is_head(commit) {
+            stale = Some(commit);
+            break;
+        }
+    }
+    let Some(commit) = stale else {
+        return false;
+    };
+    let contexts = u32::try_from(repository.checks.contexts.len()).expect("contexts within the limits");
+    let repository = model.repositories.get_mut(id).expect("a repository of the forge");
+    repository.statuses.remove(&commit);
+    for context in 0..contexts {
+        model.timers.cancel(Alarm::Check { repository: id, commit, context });
+    }
+    model.tally.forgotten = model.tally.forgotten.saturating_add(1);
+    true
 }
 
 /// The name of the context `context` of the repository's checks.

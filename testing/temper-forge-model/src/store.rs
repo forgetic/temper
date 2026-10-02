@@ -258,6 +258,24 @@ impl Repository {
         newest
     }
 
+    /// Whether `commit` is a branch's head or an open pull request's.
+    pub(crate) fn is_head(&self, commit: u64) -> bool {
+        for (_, &at) in &self.branches {
+            if at == commit {
+                return true;
+            }
+        }
+        for (_, item) in &self.items {
+            if let Some(pull) = &item.pull
+                && item.state == State::Open
+                && pull.commit == commit
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// The open pull requests whose head is `commit`.
     pub(crate) fn heads(&self, commit: u64) -> List<u64> {
         let mut numbers = List::with_capacity(self.items.len());

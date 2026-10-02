@@ -63,6 +63,6 @@ mod tests;
 pub use boundary::{Event, Request};
 pub use git::{Object, Tree};
 pub use limits::{Limits, worst_case};
-pub use model::{Config, MAX_OUT, Model, Tally, fire, step};
+pub use model::{Config, MAX_OUT, Model, Room, Tally, fire, step};
 pub use observe::{Branches, Observation, Operation};
 pub use scenario::{advance, commit, grant, repository, set_reachable, set_refusing};

@@ -98,10 +98,15 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
         .checked_add(times(limits.observations, observation(limits)?)?)?;
     // A merge walks the base's history into a set, and makes a tree it may
     // refuse; a branch moving or a status reported lists the pull requests
-    // that follow it.
+    // that follow it; what a call brings is held until it is stored or
+    // dropped; a write replaces what an item held, an observation is made
+    // before a full queue drops it.
     let scratch = Set::<u64>::worst_case(limits.commits)?
         .checked_add(tree(limits)?)?
-        .checked_add(List::<u64>::worst_case(limits.items)?)?;
+        .checked_add(List::<u64>::worst_case(limits.items)?)?
+        .checked_add(call(limits)?)?
+        .checked_add(item(limits)?)?
+        .checked_add(observation(limits)?)?;
     repositories
         .checked_add(commits)?
         .checked_add(calls)?
@@ -120,7 +125,7 @@ fn repository(limits: &Limits) -> Option<u64> {
     // setup: the contexts of its checks and its protection, the cue's path
     // and what it holds, the protected branch.
     let setup = name
-        .checked_mul(4)?
+        .checked_mul(5)?
         .checked_add(names(limits.contexts, limits)?.checked_mul(2)?)?
         .checked_add(u64::from(limits.content_bytes))?;
     let permissions = Map::<u64, Permission>::worst_case(limits.users)?;
@@ -201,6 +206,23 @@ fn answer(limits: &Limits) -> Option<u64> {
     let page = name.checked_add(content)?;
     let cloned = name.checked_add(times(limits.branches, head)?)?;
     Some(items.max(item).max(pull).max(tree).max(pages).max(page).max(cloned).max(dependencies).max(labels))
+}
+
+/// The most a call within the limits brings: the repository's name, and
+/// the largest of an issue's text and labels, a pull request's text and
+/// branches, a wiki page, a set of numbers, or a working tree's commit.
+fn call(limits: &Limits) -> Option<u64> {
+    let name = u64::from(limits.name_bytes);
+    let number = u64::try_from(size_of::<u64>()).ok()?;
+    let issue = summary(limits)?;
+    let pull =
+        u64::from(limits.title_bytes).checked_add(u64::from(limits.body_bytes))?.checked_add(name.checked_mul(2)?)?;
+    let page = name.checked_add(u64::from(limits.content_bytes))?;
+    let numbers = times(limits.users.max(limits.dependencies), number)?;
+    let file =
+        name.checked_add(u64::from(limits.content_bytes))?.checked_add(u64::try_from(size_of::<File>()).ok()?)?;
+    let commit = times(limits.files, file)?;
+    name.checked_add(issue.max(pull).max(page).max(numbers).max(commit))
 }
 
 /// What a summary of an item owns: its text and its labels.
