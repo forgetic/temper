@@ -1,7 +1,10 @@
 //! The whole worker in its world: scenarios, replay, and a sweep of random
 //! worlds.
 
-use temper_worker_model_tests::{Settings, World};
+use std::collections::BTreeMap;
+
+use temper_fake_engine_model::Endings;
+use temper_worker_model_tests::{Settings, World, translate};
 
 const ITERATIONS: u32 = 2_000_000;
 
@@ -34,4 +37,27 @@ fn a_seed_replays_to_the_same_run() {
         (world.trace().to_vec(), (world.stats(), world.tally(), world.now()))
     });
     assert!(trace.len() > 100, "the world did something");
+}
+
+#[test]
+fn random_worlds_settle_and_reach_every_ending() {
+    let mut answers = BTreeMap::new();
+    let mut endings = Endings { finished: 0, rejected: 0, held: 0, parked: 0, cancelled: 0 };
+    for seed in 0..400 {
+        let world = run(&Settings::rough(seed));
+        for (kind, count) in world.stats().answers {
+            *answers.entry(kind).or_insert(0) += count;
+        }
+        let ended = world.tally().endings;
+        endings.finished += ended.finished;
+        endings.rejected += ended.rejected;
+        endings.held += ended.held;
+        endings.parked += ended.parked;
+        endings.cancelled += ended.cancelled;
+    }
+    for kind in translate::ANSWER_KINDS {
+        assert!(answers.contains_key(kind), "some run is answered {kind}: {answers:?}");
+    }
+    let Endings { finished, rejected, held, parked, cancelled } = endings;
+    assert!(finished > 0 && rejected > 0 && held > 0 && parked > 0 && cancelled > 0, "every ending: {endings:?}");
 }

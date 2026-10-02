@@ -50,6 +50,10 @@ pub struct Git {
     /// How long a cancel takes to reach io, and io to tell that a deadline
     /// passed or that a cancel won.
     pub network: Span,
+    /// The chance, per mille, that an operation stalls: it takes a drawn
+    /// `stall` instead, which may run past its deadline.
+    pub stalls: u32,
+    pub stall: Span,
     /// The chance, per mille, that io fails an operation on the worker's side.
     pub broken: u32,
     /// The chance, per mille, that an operation that reaches the forge finds
@@ -122,6 +126,87 @@ impl Settings {
             shutdown_at: Span::millis(10_000, 120_000),
         }
     }
+
+    /// A world where everything that can go wrong does, now and then: an
+    /// engine that overbooks, cancels, sends stale traffic, assigns beyond
+    /// the worker's limits and starts from what the forge may not have; a
+    /// channel that drops, for less and more than the worker's grace; a
+    /// forge that fails, refuses and moves branches; process trees that fail
+    /// to spawn and leave children; agents that misbehave every way the
+    /// script knows; and, in some worlds, a shutdown. A world for the random
+    /// sweep.
+    #[must_use]
+    pub fn rough(seed: u64) -> Settings {
+        let calm = Settings::calm(seed);
+        Settings {
+            worker: Limits {
+                agent: agent::Limits { wall_time: Duration::from_secs(300), ..calm.worker.agent },
+                ..calm.worker
+            },
+            engine: Config {
+                items: 10,
+                window: Duration::from_secs(120),
+                commits: 50,
+                branches: 300,
+                saves: 700,
+                invalid: 50,
+                brief_max: 320,
+                permanent: 300,
+                overbook: 200,
+                inbound: 3,
+                event_max: 96,
+                resends: 500,
+                cancels: 200,
+                late_cancels: 300,
+                stale: 300,
+                relay_errors: 200,
+                keeps: 700,
+                ..calm.engine
+            },
+            network: Network {
+                hop: Span::millis(1, 300),
+                drops: 3,
+                drop: 700,
+                outage: Span::millis(1_000, 150_000),
+                ..calm.network
+            },
+            git: Git {
+                stalls: 20,
+                broken: 20,
+                unreachable: 30,
+                refusing: 30,
+                cancels_lost: 200,
+                advance: 200,
+                trunks: 300,
+                branched: 700,
+                ..calm.git
+            },
+            tree: tree::Script { unspawned: 30, children: 2, lingering: 200, holding: 200, stubborn: 200, ..calm.tree },
+            script: script::Script {
+                fates: Fates {
+                    ended: 8,
+                    parked: 4,
+                    failed: 3,
+                    crash: 1,
+                    hang: 1,
+                    overrun: 1,
+                    garbage: 1,
+                    duplicate: 1,
+                    trailing: 1,
+                    oversized: 1,
+                    deaf: 1,
+                    mute: 1,
+                },
+                slow_exits: 100,
+                deaf_to_cancel: 100,
+                mute: 50,
+                stubborn: 100,
+                ..calm.script
+            },
+            shutdowns: 300,
+            ..calm
+        }
+    }
 }
 
 /// The calm worker's limits: room for three runs of up to three
@@ -184,7 +269,14 @@ fn engine() -> Config {
         items: 6,
         window: Duration::from_secs(60),
         workers: 1,
-        workstreams: Box::new([b"parser".as_slice().into(), b"lexer".as_slice().into(), b"docs".as_slice().into()]),
+        workstreams: Box::new([
+            b"parser".as_slice().into(),
+            b"lexer".as_slice().into(),
+            b"docs".as_slice().into(),
+            b"site".as_slice().into(),
+            b"tools".as_slice().into(),
+            b"build".as_slice().into(),
+        ]),
         repositories: Box::new([
             origin(b"temper", b"ai/temper"),
             origin(b"docs", b"ai/docs"),
@@ -248,6 +340,8 @@ const GIT: Git = Git {
     local: Span::millis(1, 50),
     remote: Span::millis(10, 500),
     network: Span::millis(1, 20),
+    stalls: 0,
+    stall: Span::millis(5_000, 120_000),
     broken: 0,
     unreachable: 0,
     refusing: 0,
@@ -546,8 +640,10 @@ pub struct World {
     /// Inbound events framed for each attempt.
     places: BTreeMap<Token, u64>,
     attempts: BTreeMap<Token, Attempt>,
-    /// Attempts the worker was given and has not answered.
+    /// Attempts the worker was given and has not answered, and those whose
+    /// answers it gave up.
     open: BTreeSet<Token>,
+    given_up: BTreeSet<Token>,
     /// Attempts a hello listed as answered, whose answers follow it.
     following: BTreeSet<Token>,
     /// Attempts the engine's cancel reached the worker for, by the place among
@@ -614,6 +710,7 @@ impl World {
             places: BTreeMap::new(),
             attempts: BTreeMap::new(),
             open: BTreeSet::new(),
+            given_up: BTreeSet::new(),
             following: BTreeSet::new(),
             cancelled: BTreeMap::new(),
             routed: 0,
@@ -868,7 +965,20 @@ impl World {
         assert_eq!(hello.slots, self.settings.worker.host.slots, "the hello says the worker's slots");
         let listed: BTreeSet<Token> = hello.hosting.iter().map(|hosted| hosted.attempt).collect();
         assert_eq!(listed.len(), hello.hosting.len(), "a hello lists each run once");
-        assert_eq!(listed, self.open, "a hello lists exactly the runs the worker was given and has not answered");
+        // Of the runs it was given and has not answered, it lists all but those
+        // whose answers it gave up, shutting down out of reach past its grace.
+        let unlisted: Vec<Token> = self.open.difference(&listed).copied().collect();
+        assert!(listed.is_subset(&self.open), "a hello lists only runs the worker was given and has not answered");
+        let given_up = u64::try_from(self.given_up.len() + unlisted.len()).expect("fits");
+        assert_eq!(
+            given_up,
+            self.worker.abandoned(),
+            "a hello lists every run the worker has not answered or given up"
+        );
+        for attempt in unlisted {
+            self.open.remove(&attempt);
+            self.given_up.insert(attempt);
+        }
         for hosted in &hello.hosting {
             let record = self.attempts.get(&hosted.attempt).expect("a run listed was assigned");
             assert_eq!(record.run, hosted.run, "a run is listed by its names");
@@ -891,7 +1001,7 @@ impl World {
         assert!(self.up, "an answer goes on a channel open");
         let record = self.attempts.get_mut(&attempt).expect("an answer is for an attempt the worker was given");
         assert_eq!(record.run, run, "an answer names its run");
-        assert!(!record.answered, "an attempt is answered once");
+        assert!(!record.answered && !self.given_up.contains(&attempt), "an attempt is answered once, unless given up");
         record.answered = true;
         let assigned = record.at;
         let agent = record.agent;
@@ -1339,7 +1449,13 @@ impl World {
             }
         }
         let git = self.settings.git;
-        let span = if op.is_remote() { git.remote } else { git.local };
+        let span = if self.rng.chance(git.stalls) {
+            git.stall
+        } else if op.is_remote() {
+            git.remote
+        } else {
+            git.local
+        };
         let mut ends = self.now.saturating_add(span.draw(&mut self.rng));
         let mut work = if self.rng.chance(git.broken) {
             self.stats.op_broken += 1;
@@ -1589,7 +1705,12 @@ impl World {
         // Its neighbours.
         self.tree.assert_settled();
         self.ops.assert_settled();
-        assert!(self.open.is_empty(), "every run the worker was given was answered: {:?}", self.open);
+        let open = u64::try_from(self.open.len() + self.given_up.len()).expect("fits");
+        assert_eq!(
+            open,
+            self.worker.abandoned(),
+            "every run the worker was given was answered, or its answer given up"
+        );
         for (owner, agent) in &self.agents {
             assert!(gone(&self.tree, agent), "agent {owner:?} has gone");
         }
