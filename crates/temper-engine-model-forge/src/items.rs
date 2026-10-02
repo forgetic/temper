@@ -697,6 +697,8 @@ fn absorb(entry: &mut Entry, limits: &Limits, summary: &Summary, out: &mut Queue
     }
     let most = usize::try_from(limits.labels).expect("a u32 fits in a usize");
     assert!(summary.labels.len() <= most, "the protocol layer brings the labels the limits hold");
+    // The old labels go before the new are kept.
+    entry.labels = Box::new([]);
     entry.labels = copy_labels(&summary.labels);
     if entry.record.is_some() {
         out.push(Request::Changed { item: entry.item, labels: copy_labels(&summary.labels) });

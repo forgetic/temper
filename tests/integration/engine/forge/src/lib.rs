@@ -35,7 +35,10 @@
 //! written, every change reaching the working set within the polling bound
 //! whatever webhooks are lost, and no call before a rate limit's reset. And
 //! the invariants once it settles: nothing in flight, no call, read or write
-//! left in the sub-model, and the referee's verdict passed.
+//! left in the sub-model, and the referee's verdict passed. Its own state is
+//! bounded too: a world that grows its trace or its deliveries past their
+//! bounds, or does not settle in the iterations it is given, fails with its
+//! seed.
 
 pub mod parent;
 pub mod people;

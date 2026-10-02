@@ -14,12 +14,13 @@
 //! - **A comment's revision** is a digest of its body, so it changes whenever
 //!   the body does, at any resolution of the forge's clock.
 //! - **Pages** are the sub-model's: a listing asks the fake for a page of the
-//!   sub-model's size, and a page of comments is cut to it.
+//!   sub-model's size, and a page of comments or reviews is cut to it; and so
+//!   are texts, to its limits, once what is marked at their heads is read.
 
 use std::collections::BTreeMap;
 
 use temper_engine_model_forge::api as engine;
-use temper_engine_model_forge::{Ci, Position};
+use temper_engine_model_forge::{Ci, Limits, Position};
 use temper_forge_model::api as forge;
 use temper_lib::Token;
 
@@ -265,7 +266,7 @@ pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
 }
 
 /// The sub-model's answer for what the fake answered a call that asked
-/// `asked`, cutting a page of comments or reviews to `page`.
+/// `asked`, cutting a page of comments or reviews, and texts, to `limits`.
 ///
 /// # Errors
 ///
@@ -273,27 +274,27 @@ pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
 pub fn answer(
     asked: Asked,
     result: Result<forge::Answer, forge::Error>,
-    page: u32,
+    limits: &Limits,
 ) -> Result<engine::Answer, engine::Error> {
     let answer = result.map_err(error)?;
-    let page = usize::try_from(page).expect("a page fits a usize");
+    let page = usize::try_from(limits.page).expect("a page fits a usize");
     let answer = match (asked, answer) {
         (Asked::Items, forge::Answer::Items { items, more }) => {
-            engine::Answer::Items { items: items.iter().map(summary).collect(), more }
+            engine::Answer::Items { items: items.iter().map(|item| summary(item, limits)).collect(), more }
         }
         (Asked::Item, forge::Answer::Item { item, comments, more }) => {
             let cut = comments.len() > page;
-            let comments = comments.iter().take(page).map(comment).collect();
-            engine::Answer::Item { item: summary(&item), comments, more: more || cut }
+            let comments = comments.iter().take(page).map(|found| comment(found, limits)).collect();
+            engine::Answer::Item { item: summary(&item, limits), comments, more: more || cut }
         }
         (Asked::Comment { number }, forge::Answer::Comment { number: on, comment: found }) => {
             if on != number {
                 return Err(engine::Error::Missing);
             }
-            engine::Answer::Comment(comment(&found))
+            engine::Answer::Comment(comment(&found, limits))
         }
         (Asked::Pull { reviews }, forge::Answer::Pull(found)) => {
-            engine::Answer::Pull(pull(&found, usize::try_from(reviews).expect("fits"), page))
+            engine::Answer::Pull(pull(&found, usize::try_from(reviews).expect("fits"), limits))
         }
         (Asked::Statuses, forge::Answer::Statuses(statuses)) => {
             engine::Answer::Statuses(statuses.iter().map(status).collect())
@@ -313,7 +314,8 @@ pub fn answer(
             next,
         },
         (Asked::Page, forge::Answer::Page(found)) => {
-            engine::Answer::Page(engine::Page { name: found.name, content: found.content, revision: found.revision })
+            let content = cut(&found.content, limits.body_bytes);
+            engine::Answer::Page(engine::Page { name: found.name, content, revision: found.revision })
         }
         (Asked::Create, forge::Answer::Created(number)) => engine::Answer::Created(number),
         (Asked::Post { revision }, forge::Answer::Commented(id)) => engine::Answer::Commented { id, revision },
@@ -364,7 +366,13 @@ fn kind_of(kind: engine::Kind) -> forge::Kind {
     }
 }
 
-fn summary(item: &forge::Summary) -> engine::Summary {
+/// `text`, cut to `most` bytes.
+fn cut(text: &[u8], most: u32) -> Box<[u8]> {
+    let most = usize::try_from(most).expect("fits");
+    text[..text.len().min(most)].into()
+}
+
+fn summary(item: &forge::Summary, limits: &Limits) -> engine::Summary {
     engine::Summary {
         number: item.number,
         kind: match item.kind {
@@ -378,24 +386,25 @@ fn summary(item: &forge::Summary) -> engine::Summary {
         author: item.author,
         key: key_of(&item.body).map(Vec::into_boxed_slice),
         labels: item.labels.clone(),
-        title: item.title.clone(),
-        body: item.body.clone(),
+        title: cut(&item.title, limits.title_bytes),
+        body: cut(&item.body, limits.body_bytes),
         updated: item.updated,
     }
 }
 
-fn comment(comment: &forge::Comment) -> engine::Comment {
+fn comment(comment: &forge::Comment, limits: &Limits) -> engine::Comment {
     engine::Comment {
         id: comment.id,
         author: comment.author,
         revision: digest(&comment.body),
         mark: mark(&comment.body),
-        body: comment.body.clone(),
+        body: cut(&comment.body, limits.body_bytes),
     }
 }
 
 /// A pull request, with the page of its reviews after the first `skip`.
-fn pull(pull: &forge::Pull, skip: usize, page: usize) -> engine::Pull {
+fn pull(pull: &forge::Pull, skip: usize, limits: &Limits) -> engine::Pull {
+    let page = usize::try_from(limits.page).expect("a page fits a usize");
     engine::Pull {
         number: pull.number,
         state: match pull.state {
@@ -421,10 +430,10 @@ fn pull(pull: &forge::Pull, skip: usize, page: usize) -> engine::Pull {
                     forge::Verdict::Comment => engine::Verdict::Comment,
                 },
                 commit: commit(review.commit),
-                body: review.body.clone(),
+                body: cut(&review.body, limits.body_bytes),
             })
             .collect(),
-        statuses: pull.statuses.iter().map(status).collect(),
+        statuses: pull.statuses.iter().take(page).map(status).collect(),
     }
 }
 

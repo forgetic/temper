@@ -476,6 +476,8 @@ fn slow_listed(model: &mut Model, env: &Env<Limits>, repository: u32, page: u32,
         }
     };
     let next = if more { page.saturating_add(1) } else { 1 };
+    // The last page's candidates go before this one's are kept.
+    scan_mut(model, repository).candidates = List::with_capacity(0);
     let mut candidates = List::with_capacity(env.limits.page);
     for summary in &items {
         let item = Item { repository, number: summary.number };

@@ -3,6 +3,7 @@ use core::mem::size_of;
 
 use temper_lib::{Deadlines, Duration, Id, List, Map, Queue, Slab};
 
+use crate::api::{Answer, Comment, PageName, Pull, Review, Status, Summary};
 use crate::boundary::Item;
 use crate::calls::Call;
 use crate::facts::Fact;
@@ -34,12 +35,14 @@ pub struct Limits {
     /// Calls out to the forge at once.
     pub calls: u32,
     /// The most entries an answer brings: items or comments of a page, the
-    /// reviews or statuses of a pull request. The protocol layer asks for no
-    /// more.
+    /// reviews or statuses of a pull request, wiki page names. The protocol
+    /// layer asks for no more.
     pub page: u32,
     /// The most bytes of a label, a key, a branch or a wiki page's name.
     pub name_bytes: u32,
-    /// The most bytes of a title, and of a body or a wiki page's content.
+    /// The most bytes of a title, and of a body or a wiki page's content: of
+    /// what a write carries, and of what an answer brings, which the protocol
+    /// layer cuts to them (the sub-model carries text and never reads it).
     pub title_bytes: u32,
     pub body_bytes: u32,
     /// The request budget: the calls made in a window of `window`, which
@@ -99,15 +102,42 @@ fn write_bytes(limits: &Limits) -> Option<u64> {
         .checked_add(names)
 }
 
+/// The most bytes an answer brings in: a page of items, an item and a page
+/// of its comments, a pull request with a page of its reviews and its
+/// statuses, a page of wiki page names, or a wiki page.
+fn answer_bytes(limits: &Limits) -> Option<u64> {
+    let page = u64::from(limits.page);
+    let name = u64::from(limits.name_bytes);
+    let text = u64::from(limits.title_bytes).checked_add(u64::from(limits.body_bytes))?;
+    let summary =
+        size(size_of::<Summary>())?.checked_add(labels_bytes(limits)?)?.checked_add(text)?.checked_add(name)?;
+    let items = page.checked_mul(summary)?;
+    let comment = size(size_of::<Comment>())?.checked_add(u64::from(limits.body_bytes))?.checked_add(name)?;
+    let item = summary.checked_add(page.checked_mul(comment)?)?;
+    let review = size(size_of::<Review>())?.checked_add(u64::from(limits.body_bytes))?;
+    let status = size(size_of::<Status>())?.checked_add(name)?;
+    let pull = size(size_of::<Pull>())?
+        .checked_add(name.checked_mul(2)?)?
+        .checked_add(page.checked_mul(review)?)?
+        .checked_add(page.checked_mul(status)?)?;
+    let pages = page.checked_mul(size(size_of::<PageName>())?.checked_add(name)?)?.checked_add(name)?;
+    let wiki = name.checked_add(u64::from(limits.body_bytes))?;
+    items.max(item).max(pull).max(pages).max(wiki).checked_add(size(size_of::<Answer>())?)
+}
+
+fn size(bytes: usize) -> Option<u64> {
+    u64::try_from(bytes).ok()
+}
+
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`
 /// if it does not fit a `u64`, or the limits are not ones it can run under.
 ///
 /// It counts the containers, their bookkeeping included, and the payloads,
 /// not allocator overhead: each item's labels and inbox, each write's
-/// payload, each read's names, each repository's slow-pass candidates, and
-/// the two labels of its configuration. What it hands up (an answer, a view,
-/// labels) is made in the step that hands it, and is its receiver's to count;
-/// what comes in (a page, a body) is its sender's.
+/// payload, each read's names, each repository's slow-pass candidates, the
+/// two labels of its configuration, and the answer a step takes in, which it
+/// holds until the step ends. What it hands up (an answer, a view, labels) is
+/// made in the step that hands it, and is its receiver's to count.
 #[must_use]
 pub fn worst_case(limits: &Limits) -> Option<u64> {
     if limits.rate == 0 || limits.calls == 0 || limits.page == 0 || limits.repositories == 0 {
@@ -131,6 +161,7 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let facts = Queue::<Fact>::worst_case(limits.facts)?;
     let config = names;
     held.checked_add(items)?
+        .checked_add(answer_bytes(limits)?)?
         .checked_add(writes)?
         .checked_add(reads)?
         .checked_add(scans)?

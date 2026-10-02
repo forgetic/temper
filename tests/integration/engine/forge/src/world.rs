@@ -33,6 +33,11 @@ pub const LABELS: [&[u8]; 6] = [TRACKING, HAND_IN, WORKING, WAITING, b"bug", b"f
 /// Room in the sub-model's output queue beyond what one step may emit.
 const SLACK: u32 = 2;
 
+/// The world's own bounds: lines of its trace, and deliveries scheduled at
+/// once. A world past either fails with its seed, rather than grow.
+const TRACE: usize = 400_000;
+const DELIVERIES: u32 = 20_000;
+
 /// What the sub-model told, by kind: each must be reached by the sweep.
 pub const ENDINGS: [&str; 23] = [
     "announced: found",
@@ -310,6 +315,7 @@ pub struct World {
     forge_out: Queue<forge::Request>,
 
     wire: Schedule<Delivery>,
+    scheduled: u32,
     /// The parent's deliveries in flight, which a restart withdraws.
     pending: Vec<Key>,
     /// The engine's calls out, by the protocol layer's names; those of the
@@ -384,6 +390,7 @@ impl World {
             forge_env: Env { now: Time::ZERO, limits: settings.forge },
             forge_out: Queue::with_capacity(16),
             wire: Schedule::new(),
+            scheduled: 0,
             pending: Vec::new(),
             calls: Ledger::new("engine call"),
             owned: Ledger::new("sub-model call"),
@@ -397,7 +404,7 @@ impl World {
             trace: Trace::default(),
             settings,
         };
-        world.wire.send(Time::ZERO, Delivery::People);
+        world.send(Time::ZERO, Delivery::People);
         world
     }
 
@@ -458,6 +465,7 @@ impl World {
         self.stage.tick(now);
         self.forge_env.now = now;
         while let Some(delivery) = self.wire.next(now) {
+            self.scheduled -= 1;
             self.deliver(delivery);
         }
         while self.forge.is_due(now) {
@@ -480,7 +488,7 @@ impl World {
             sub::resume(&mut self.model, &self.stage.env, &mut self.stage.out);
         }
         while let Some(event) = self.stage.next_event() {
-            self.trace.log(now, format!("forge <- {}", describe(&event)));
+            self.log(format!("forge <- {}", describe(&event)));
             sub::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
         }
         while self.stage.has_room() && self.model.is_due(now) {
@@ -526,7 +534,7 @@ impl World {
                 }
                 if !self.people.is_done() {
                     let gap = self.people.gap();
-                    self.wire.send(self.now.saturating_add(gap), Delivery::People);
+                    self.send(self.now.saturating_add(gap), Delivery::People);
                 }
             }
             Delivery::Deadline(name) => {
@@ -580,7 +588,7 @@ impl World {
     fn schedule(&mut self, actions: Vec<(Duration, Action)>) {
         for (delay, action) in actions {
             let at = self.now.saturating_add(delay);
-            let key = self.wire.send(at, Delivery::Parent(action));
+            let key = self.send(at, Delivery::Parent(action));
             self.pending.push(key);
         }
     }
@@ -664,8 +672,8 @@ impl World {
                 self.stats.late += 1;
                 return;
             }
-            self.wire.withdraw(out.deadline);
-            let result = translate::answer(out.asked, result, self.settings.limits.page);
+            self.withdraw(out.deadline);
+            let result = translate::answer(out.asked, result, &self.settings.limits);
             if let Err(sub::api::Error::RateLimited { reset }) = result {
                 self.end("limited");
                 self.observe(Seen::Limited { reset });
@@ -692,7 +700,7 @@ impl World {
 
     /// What the sub-model asked for.
     fn request(&mut self, request: Request) {
-        self.trace.log(self.now, format!("forge -> {}", describe_request(&request)));
+        self.log(format!("forge -> {}", describe_request(&request)));
         match request {
             Request::Call { call, repository, op } => {
                 self.stats.sent += 1;
@@ -700,7 +708,7 @@ impl World {
                 self.owned.open((self.life, call), ());
                 let (asked, op) = translate::op(op, self.settings.limits.page, self.parent.fill());
                 let name = self.wire.name();
-                let deadline = self.wire.send(self.now.saturating_add(self.settings.timeout), Delivery::Deadline(name));
+                let deadline = self.send(self.now.saturating_add(self.settings.timeout), Delivery::Deadline(name));
                 self.calls.open(name, Out { call, asked, life: self.life, deadline, expired: false });
                 let reply_to = ReplyTo::new(Token::new(name));
                 let repository = REPOSITORIES[usize::try_from(repository).expect("few")].into();
@@ -796,7 +804,7 @@ impl World {
     /// out still reach the forge; their answers are dropped.
     fn restart(&mut self) {
         self.stats.restarts += 1;
-        self.trace.log(self.now, "the engine restarts");
+        self.log("the engine restarts".to_owned());
         self.life += 1;
         let seed = self.rng.next_u64();
         self.model = Model::new(&self.settings.limits, deployment(), seed);
@@ -805,16 +813,40 @@ impl World {
         self.stage.tick(self.now);
         let keys: Vec<Key> = self.calls.values().map(|out| out.deadline).collect();
         for key in keys {
-            self.wire.withdraw(key);
+            self.withdraw(key);
         }
         for key in std::mem::take(&mut self.pending) {
-            self.wire.withdraw(key);
+            self.withdraw(key);
         }
         self.owned = Ledger::new("sub-model call");
         self.reads = Ledger::new("fresh read");
         self.writes = Ledger::new("write");
         self.parent.restart();
         self.observe(Seen::Restarted);
+    }
+
+    /// Schedules `delivery` at `at`, within the world's bound.
+    fn send(&mut self, at: Time, delivery: Delivery) -> Key {
+        self.scheduled += 1;
+        assert!(
+            self.scheduled <= DELIVERIES,
+            "seed {}: more deliveries scheduled than the world holds",
+            self.settings.seed
+        );
+        self.wire.send(at, delivery)
+    }
+
+    /// Withdraws the delivery of `key`, if it is still in flight.
+    fn withdraw(&mut self, key: Key) {
+        if self.wire.withdraw(key).is_some() {
+            self.scheduled -= 1;
+        }
+    }
+
+    /// Logs `line` in the trace, within the world's bound.
+    fn log(&mut self, line: String) {
+        assert!(self.trace.lines().len() < TRACE, "seed {}: the trace grew past its bound", self.settings.seed);
+        self.trace.log(self.now, line);
     }
 
     fn end(&mut self, ending: &'static str) {
