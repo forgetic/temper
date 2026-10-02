@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_checkout_fake::Checkout;
-use temper_checkout_fake::git::{Forge, Tree as Files};
+use temper_checkout_fake::git::{Remote, Tree as Files};
 use temper_fake_engine_model::{self as engine, Config, IDENTITY, Origin};
 use temper_lib::{Duration, Rng, Time, Token};
 use temper_worker_model::agent::{self, channel::Down, channel::Reply};
@@ -9,6 +9,7 @@ use temper_worker_model::checkout::git::{Commit, Place};
 use temper_worker_model::{self as worker, Event, Hello, Limits, Model, Phase, Request, host};
 use temper_worker_model_agent_tests::script::{self, Fates, Said, Sizes};
 use temper_worker_model_agent_tests::tree::{self, Tree};
+use temper_worker_model_checkout_tests::forge::Forge;
 use temper_worker_model_checkout_tests::translate as io;
 use temper_world::{Ledger, Schedule, Span, Stage, Trace};
 
@@ -1102,11 +1103,7 @@ impl World {
             let commit =
                 *space.checked.get(&repository.name).expect("every repository is checked out before its run starts");
             let files = files(&self.disk, workspace, &repository.name);
-            assert_eq!(
-                files,
-                self.forge.object(commit).tree,
-                "an agent starts in the tree its repository was checked out at"
-            );
+            assert_eq!(files, self.forge.tree(commit), "an agent starts in the tree its repository was checked out at");
             if let Some(branch) = &repository.saved {
                 let key = (repository.remote.clone(), branch.clone());
                 let saved = self.saves.get(&key).expect("a run starts from saved work only where a save landed");

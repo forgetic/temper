@@ -19,9 +19,10 @@
 //!   wait for inbound events, park, end, fail and misbehave; and which edit
 //!   the working trees of their workspace before they ask to push, and now
 //!   and then as they go, so that what the worker commits is what they wrote;
-//! - **git and files:** the fake forge and disk (`temper_checkout_fake`),
-//!   through the checkout world's translation of the checkout's operations,
-//!   after a latency, racing their deadlines and the cancels of an aborted
+//! - **git and files:** the fake disk (`temper_checkout_fake`) and the fake
+//!   forge (`temper_forge_model`), through the checkout world's translation
+//!   of the checkout's operations and its route to the forge, after a
+//!   latency, racing their deadlines and the cancels of an aborted
 //!   prepare; with remotes seeded from the fake engine's names, and the
 //!   faults the world scripts: unreachable repositories, refused pushes,
 //!   starting points the forge does not have, and another party moving a

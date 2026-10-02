@@ -1,15 +1,17 @@
-//! io's git and files, on the fake forge and disk, through the checkout
-//! world's translation of the checkout's operations: each after a latency,
+//! io's git and files, on the fake disk and the fake forge, through the
+//! checkout world's translation of the checkout's operations and its route to
+//! the forge: each after a latency,
 //! racing its deadline and the cancel of an aborted prepare, with the faults
 //! the world scripts; and what moves on the forge, and what lands, checked as
 //! it does.
 
-use temper_checkout_fake::git::{Forge, Move, Remote, Tree as Files};
+use temper_checkout_fake::git::{Remote, Tree as Files};
 use temper_checkout_fake::{Checkout, in_git};
 use temper_fake_engine_model::{BASE, IDENTITY};
 use temper_lib::{Rng, Time, Token};
 use temper_worker_model::Event;
 use temper_worker_model::checkout::git::{Done, Fault, Kind, Op, Place, Want};
+use temper_worker_model_checkout_tests::forge::{Forge, Move};
 use temper_worker_model_checkout_tests::translate as io;
 use temper_world::{Key, Span};
 
@@ -218,22 +220,13 @@ impl World {
             | Op::CheckOut { .. }
             | Op::Commit { .. } => None,
         };
-        let moves = self.forge.moves().len();
+        self.forge.at(self.now);
         let done = io::perform(&mut self.forge, &mut self.disk, op);
         if let Some(remote) = &remote {
             self.forge.set_reachable(remote, true);
             self.forge.set_refusing(remote, false);
         }
-        for Move { remote, branch, from, to } in &self.forge.moves()[moves..] {
-            if let Some(from) = from {
-                assert!(
-                    self.forge.is_ancestor(*from, *to),
-                    "{}: {} moved only by a fast-forward",
-                    String::from_utf8_lossy(remote),
-                    String::from_utf8_lossy(branch)
-                );
-            }
-        }
+        self.check_moves();
         let space = self.spaces.entry(workspace).or_default();
         if made {
             *space = Space { hold: Some(owner), agent: space.agent, ..Space::default() };
@@ -246,7 +239,7 @@ impl World {
         if let Some((repository, remote, commit, branch)) = pushed
             && done == Done::Succeeded
         {
-            let tree = &self.forge.object(commit).tree;
+            let tree = &self.forge.tree(commit);
             if self.save_branches.contains(&branch) {
                 let left = space.left.get(&repository).expect("a save is of a repository checked out");
                 assert_eq!(tree, left, "saved work is exactly the tree its agent left");
@@ -279,7 +272,24 @@ impl World {
         }
         self.stats.advanced += 1;
         let content = format!("another party, {}", self.stats.advanced);
+        self.forge.at(self.now);
         self.forge.advance(remote, branch, b"OTHER", content.as_bytes());
+        self.check_moves();
+    }
+
+    /// The branches the forge moved since the world last looked, each a
+    /// fast-forward.
+    fn check_moves(&mut self) {
+        for Move { remote, branch, from, to } in self.forge.moves() {
+            if let Some(from) = from {
+                assert!(
+                    self.forge.is_ancestor(from, to),
+                    "{}: {} moved only by a fast-forward",
+                    String::from_utf8_lossy(&remote),
+                    String::from_utf8_lossy(&branch)
+                );
+            }
+        }
     }
 }
 
@@ -296,7 +306,7 @@ pub(super) fn files(disk: &Checkout, workspace: Token, repository: &[u8]) -> Fil
 /// workstream's branch in it or not. Returns it, and the commit the engine's
 /// one hash stands for: the first repository's first.
 pub(super) fn seed_forge(rng: &mut Rng, settings: &Settings) -> (Forge, u64) {
-    let mut forge = Forge::new();
+    let mut forge = Forge::new(settings.seed);
     let mut first = None;
     for origin in &settings.engine.repositories {
         let default: &[u8] = if rng.chance(settings.git.trunks) { b"trunk" } else { BASE };
@@ -307,7 +317,10 @@ pub(super) fn seed_forge(rng: &mut Rng, settings: &Settings) -> (Forge, u64) {
         for key in &settings.engine.workstreams {
             if rng.chance(settings.git.branched) {
                 let branch = [PUSH_PREFIX, key].concat();
-                forge.create(&origin.remote, &branch, commit).expect("a branch is created on a forge that works");
+                let created = forge.create_branch(&origin.remote, &branch, commit);
+                created.expect("a branch is created on a forge that works");
+                // Setting up moves no branch the world checks.
+                drop(forge.moves());
             }
         }
     }
