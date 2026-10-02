@@ -329,6 +329,14 @@ fn checks_that_run_past_their_deadline_are_stopped_and_fail() {
     assert_eq!((told.checks_failed, told.checks_finished), (3 * count, 3 * count));
 }
 
+#[test]
+#[should_panic(expected = "for want of it")]
+fn a_forge_that_fills_fails_the_world() {
+    let mut settings = Settings::calm(1);
+    settings.forge.limits = temper_forge_model::Limits { items: 1, ..settings.forge.limits };
+    World::new(settings).run(ITERATIONS);
+}
+
 /// Two changes to the same code handed in at once, one that lands an answer
 /// of 41 (its checks are not asked for) and one that lands 43: both pass CI
 /// and are approved, and the engine merges them one after the other, before

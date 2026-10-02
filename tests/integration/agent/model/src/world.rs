@@ -227,8 +227,9 @@ pub fn config() -> engine::Config {
 }
 
 /// The fake forge's limits: room for every commit and file the runs make,
-/// whatever their LLMs write. Nothing fills: a forge that refused for want of
-/// room would fail the world.
+/// whatever their LLMs write, and for every call, webhook and CI verdict.
+/// Nothing fills: a forge that refuses a write, a call, a webhook or a
+/// verdict for want of room fails the world.
 pub const FORGE: forge::Limits = forge::Limits {
     repositories: 2,
     users: 16,
@@ -1503,6 +1504,11 @@ impl World {
         self.stores.assert_settled();
         let tally = self.forge.tally();
         assert_eq!(tally.forgotten, 0, "seed {seed}: the forge kept every call it took: {tally:?}");
+        assert_eq!(
+            (tally.busy, tally.full, tally.hooks_dropped, tally.unreported),
+            (0, 0, 0, 0),
+            "seed {seed}: nothing filled the forge: {tally:?}"
+        );
         assert!(self.attempts.values().all(|attempt| attempt.answered), "seed {seed}: every attempt was answered");
         assert_eq!(self.stats.reported, self.stats.assigned, "seed {seed}: the worker answered every assignment");
         // The worker.

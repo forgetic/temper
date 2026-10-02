@@ -262,6 +262,12 @@ impl World {
                 Observation::Refused { what, number, error, by, .. } => {
                     self.log(&format!("the forge refuses {what:?} on {number:?} by {by}: {error:?}"));
                     self.stats.conflicts += u32::from(*error == forge::api::Error::Conflict);
+                    assert!(
+                        *error != forge::api::Error::Full,
+                        "seed {}: the forge has room for everything the world makes, yet refused {what:?} on \
+                         {number:?} by {by} for want of it",
+                        self.settings.seed
+                    );
                 }
             }
             self.observe(Seen::Forge(observation.clone()));
