@@ -9,15 +9,17 @@
 //! addresses the session by that name, and every record back carries the
 //! opener's token (4.2). And requests out with exactly one terminal event in
 //! (a [`Request::Complete`] is ended by one of [`Event::Completed`],
-//! [`Event::Failed`] or [`Event::Cancelled`]). A request's `owner` is the
-//! session's token, echoed on its terminal event.
+//! [`Event::Failed`] or [`Event::Cancelled`]; a [`Request::Delegate`], to the
+//! opener, by [`Event::Answered`] or [`Event::AnswerCancelled`]). A request's
+//! `owner` is the session's token, or a tool run's own, echoed on its terminal
+//! event.
 
 use alloc::boxed::Box;
 
 use temper_agent_model_tools as tools;
 use temper_lib::{Duration, Time, Token};
 
-use crate::llm::{Completion, Endpoint, Failure, Prompt, Usage};
+use crate::llm::{Answer, Completion, Descriptor, Endpoint, Failure, Prompt, Usage};
 
 /// parent -> session
 #[derive(PartialEq, Eq, Debug)]
@@ -42,6 +44,10 @@ pub enum Event {
     ToolDone { owner: Token, outcome: tools::Outcome },
     /// Terminal for `Tool`, after `CancelTool`: the run was abandoned.
     ToolCancelled { owner: Token },
+    /// Terminal for `Delegate`: the opener's answer, a success or a failure.
+    Answered { owner: Token, answer: Answer },
+    /// Terminal for `Delegate`, after `Withdraw`: the call was abandoned.
+    AnswerCancelled { owner: Token },
 }
 
 /// session -> parent
@@ -73,6 +79,14 @@ pub enum Request {
     /// Abandon the `Tool` in flight for `owner`. Its terminal event still
     /// comes: `ToolCancelled`, or `ToolDone` if the run won the race.
     CancelTool { owner: Token },
+    /// Ask the opener to serve the delegated call `call`, a ticket, and to
+    /// answer it by `deadline`: the opener runs the race, and answers a call
+    /// that loses as a failure.
+    Delegate { owner: Token, opener: Token, call: Token, deadline: Time },
+    /// Abandon the `Delegate` in flight for `owner`, as the session closes.
+    /// Its terminal event still comes: `AnswerCancelled`, or `Answered` if
+    /// the answer won the race.
+    Withdraw { owner: Token },
 }
 
 /// What a session is opened for.
@@ -82,8 +96,10 @@ pub struct Spec {
     /// The provider's name for the model.
     pub model: Box<[u8]>,
     pub system: Box<[u8]>,
-    /// The families of the session's own tools the LLM may call.
+    /// The families of the session's own tools the LLM may call, and the tools
+    /// its opener serves.
     pub tools: tools::Grants,
+    pub delegated: Box<[Descriptor]>,
     /// The first user message.
     pub prompt: Box<[u8]>,
     /// The most tokens each answer may take, and fewer once the output budget

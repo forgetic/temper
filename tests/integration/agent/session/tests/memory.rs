@@ -4,9 +4,11 @@
 
 use std::mem::size_of;
 
-use temper_agent_model_session::llm::{Block, Completion, Decoded, Endpoint, Failure, Problem, Stop, Usage};
+use temper_agent_model_session::llm::{
+    Block, Completion, Decoded, Descriptor, Endpoint, Failure, Problem, Stop, Usage,
+};
 use temper_agent_model_session::{Budget, Event, Limits, MAX_OUT, MAX_PARALLEL, Model, Request, Spec, worst_case};
-use temper_agent_model_tools::{Call, Grants, Name, Outcome, Part, Path};
+use temper_agent_model_tools::{Call, Effect, Grants, Name, Outcome, Part, Path};
 use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
 
 /// Counts the heap each thread allocates, so that tests running side by side
@@ -86,6 +88,7 @@ const LIMITS: Limits = Limits {
     backoff_max: Duration::from_secs(60),
     call_timeout: Duration::from_secs(30),
     tool_timeout: Duration::from_secs(20),
+    delegate_timeout: Duration::from_secs(40),
     facts: 64,
     parallel_tools: 1,
 };
@@ -133,7 +136,9 @@ fn fill(limits: Limits, route: Route) {
                 | Request::Used { .. }
                 | Request::Ended { .. }
                 | Request::Cancel { .. }
-                | Request::CancelTool { .. } => Asked::Other,
+                | Request::CancelTool { .. }
+                | Request::Delegate { .. }
+                | Request::Withdraw { .. } => Asked::Other,
             });
         }
         let held = held(base);
@@ -142,8 +147,8 @@ fn fill(limits: Limits, route: Route) {
     };
     let (block, part) = (size(size_of::<Block>()), size(size_of::<Part>()));
     for opener in 0..limits.sessions {
-        // What the model charges, as it charges it: the spec's names and
-        // prompt; then, by tool, the assistant's message with its call and
+        // What the model charges, as it charges it: the spec's names, the
+        // tools its opener serves and its prompt; then, by tool, the assistant's message with its call and
         // room for its result, then the result's id and output; by an invalid
         // call, the message with its problem and room for its answer, then
         // the answer's id and the problem again; or, by talk, the assistant's
@@ -153,11 +158,15 @@ fn fill(limits: Limits, route: Route) {
             model: bytes(1),
             system: bytes(1),
             tools: Grants { inspect: true, modify: false, shell: false },
+            delegated: Box::new([
+                Descriptor { ticket: Token::new(1), effect: Effect::Write },
+                Descriptor { ticket: Token::new(2), effect: Effect::Read },
+            ]),
             prompt: bytes(1),
             max_tokens: 1,
             budget: limits.budget,
         };
-        let spec_cost = 2 + (block + 1);
+        let spec_cost = 2 + 2 * size(size_of::<Descriptor>()) + (block + 1);
 
         let opener = Token::new(u64::from(opener));
         let Some(Asked::Complete { owner }) = step(Event::Open { opener, spec }) else {

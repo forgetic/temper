@@ -12,7 +12,7 @@
 use alloc::boxed::Box;
 
 use temper_agent_model_tools as tools;
-use temper_lib::Duration;
+use temper_lib::{Duration, Token};
 
 /// A provider endpoint the protocol layer is configured with: which provider,
 /// where, with which credentials. The model only names it.
@@ -56,6 +56,10 @@ pub enum Block {
 pub enum Decoded {
     /// A call to one of the tools the session owns.
     Owned { call: tools::Call },
+    /// A call to one of the tools the opener serves, with `effect`: the typed
+    /// call is the opener's, kept under `ticket` (a ticket names a value the
+    /// session cannot, and the layer that holds it resolves it).
+    Delegated { ticket: Token, effect: tools::Effect },
     /// A call that is no call: the session answers it with its problem, and
     /// runs nothing.
     Invalid { problem: Problem },
@@ -68,11 +72,33 @@ pub enum Returned {
     /// The tools' outcome: a success, or a failure, one that ran out of time
     /// included.
     Owned { outcome: tools::Outcome },
+    /// The opener's answer to a delegated call.
+    Delegated { answer: Answer },
     /// The call was malformed, and this is why.
     Invalid { problem: Problem },
     /// Nothing ran for the call: the LLM stopped for another reason than
     /// calling tools, its answer cut short or its turn ended.
     NotRun,
+}
+
+/// A tool the opener serves, which the prompt offers the LLM: `ticket` names
+/// it, and its schema is the opener's. Calls to it read or write as `effect`
+/// says, and are scheduled so.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Descriptor {
+    pub ticket: Token,
+    pub effect: tools::Effect,
+}
+
+/// The opener's answer to a delegated call: what it says is the opener's,
+/// kept under `ticket`, and takes `bytes`, which count against the session's
+/// byte limit as if the session held them; `error` marks a failure, one that
+/// ran out of time included.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Answer {
+    pub ticket: Token,
+    pub bytes: u64,
+    pub error: bool,
 }
 
 /// Why the protocol layer could not decode a tool call.
@@ -106,8 +132,9 @@ pub struct Prompt {
     pub model: Box<[u8]>,
     pub system: Box<[u8]>,
     /// The families of tools the LLM may call, whose schemas the protocol
-    /// layer offers it.
+    /// layer offers it, and the tools the opener serves.
     pub tools: tools::Grants,
+    pub delegated: Box<[Descriptor]>,
     /// The conversation so far, oldest first, ending with a user message.
     pub messages: Box<[Message]>,
     /// The most tokens the answer may take.

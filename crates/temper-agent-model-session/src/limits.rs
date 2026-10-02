@@ -44,6 +44,8 @@ pub struct Limits {
     /// that runs out of time is answered as such, to the LLM; the session's
     /// own expiry cancels whatever is still running then.
     pub tool_timeout: Duration,
+    /// The same for a delegated call, which the opener serves.
+    pub delegate_timeout: Duration,
     /// Facts kept until the parent drains them. Beyond them, facts are
     /// dropped and counted.
     pub facts: u32,

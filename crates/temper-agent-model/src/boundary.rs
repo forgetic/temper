@@ -16,7 +16,7 @@
 
 use alloc::boxed::Box;
 
-use temper_agent_model_session::llm::{Completion, Failure, Prompt, Usage};
+use temper_agent_model_session::llm::{Answer, Completion, Failure, Prompt, Usage};
 use temper_agent_model_session::{End, Spec, Yield};
 use temper_agent_model_tools as tools;
 use temper_lib::{Duration, Time, Token};
@@ -43,6 +43,10 @@ pub enum Event {
     ToolDone { owner: Token, outcome: tools::Outcome },
     /// Terminal for `Tool`, after `CancelTool`: the run was abandoned.
     ToolCancelled { owner: Token },
+    /// Terminal for `Delegate`: the opener's answer.
+    Answered { owner: Token, answer: Answer },
+    /// Terminal for `Delegate`, after `Withdraw`: the call was abandoned.
+    AnswerCancelled { owner: Token },
 }
 
 /// model -> protocol
@@ -69,4 +73,9 @@ pub enum Request {
     /// Abandon the `Tool` in flight for `owner`. Its terminal event still
     /// comes: `ToolCancelled`, or `ToolDone` if the run won the race.
     CancelTool { owner: Token },
+    /// Ask the opener to serve the delegated call `call`, by `deadline`.
+    Delegate { owner: Token, opener: Token, call: Token, deadline: Time },
+    /// Abandon the `Delegate` in flight for `owner`. Its terminal event still
+    /// comes: `AnswerCancelled`, or `Answered` if the answer won the race.
+    Withdraw { owner: Token },
 }

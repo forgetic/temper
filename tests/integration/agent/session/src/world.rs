@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use temper_agent_model_session as agent;
-use temper_agent_model_session::llm::{Block, Endpoint, Failure, Prompt, Returned, Usage};
+use temper_agent_model_session::llm::{Answer, Block, Descriptor, Endpoint, Failure, Prompt, Returned, Usage};
 use temper_agent_model_tools::{self as tools, Effect, Entry, Fault, Grants, Kind, Name, Outcome};
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 use temper_llm_model as provider;
 
+use crate::tickets::{SERVED, Ticketed, Tickets};
 use crate::translate;
 
 /// Room in each model's output queue beyond what one step may emit. Small, so
@@ -76,6 +77,11 @@ pub struct Settings {
     /// The chance, per mille, that the opener sends a close twice, the second
     /// a network draw after the first.
     pub double_close: u32,
+    /// The chance, per mille, that the opener serves its own tools, a finish
+    /// and a lookup, to a session it opens.
+    pub serve: u32,
+    /// How long the opener takes to answer a call it serves.
+    pub serving: Span,
 }
 
 impl Settings {
@@ -97,6 +103,7 @@ impl Settings {
                 backoff_max: Duration::from_secs(5),
                 call_timeout: Duration::from_secs(60),
                 tool_timeout: Duration::from_secs(60),
+                delegate_timeout: Duration::from_secs(120),
                 facts: 256,
                 parallel_tools: 4,
             },
@@ -126,6 +133,8 @@ impl Settings {
             abandon_after: Span::millis(0, 10_000),
             cancels_lost: 0,
             double_close: 0,
+            serve: 0,
+            serving: Span::millis(10, 2_000),
         }
     }
 }
@@ -138,6 +147,7 @@ pub fn spec(prompt: &[u8]) -> agent::Spec {
         model: b"fake-1"[..].into(),
         system: b"You are a coding agent."[..].into(),
         tools: Grants { inspect: true, modify: true, shell: true },
+        delegated: Box::new([]),
         prompt: prompt.into(),
         max_tokens: 1024,
         budget: BUDGET,
@@ -186,6 +196,16 @@ pub struct Stats {
     pub ran_after_cancel: u32,
     /// Closes that reached a session already closing.
     pub closed_while_closing: u32,
+    /// Calls delegated to the opener; withdrawn, or whose answer won the race
+    /// with the withdraw; answered as timed out by the opener itself.
+    pub delegates: u32,
+    pub withdraws: u32,
+    pub withdraws_lost: u32,
+    pub answered_after_withdraw: u32,
+    pub delegate_timeouts: u32,
+    /// Finishes the opener refused, and accepted.
+    pub finishes_refused: u32,
+    pub finishes_accepted: u32,
 }
 
 /// The facts the sessions told, by kind, as the loop drained them.
@@ -203,6 +223,9 @@ pub struct Told {
     pub yielded: u32,
     pub used: u32,
     pub ended: u32,
+    pub delegates_started: u32,
+    pub delegates_answered: u32,
+    pub delegates_cancelled: u32,
     /// Tool calls the completions made, and those that could not be decoded.
     pub calls: u32,
     pub invalid_calls: u32,
@@ -234,6 +257,8 @@ pub struct Session {
     waiting: bool,
     /// The opener has closed it.
     closed: bool,
+    /// Finishes it has called.
+    finishes: u32,
 }
 
 /// How a session ended.
@@ -281,6 +306,14 @@ enum Delivery {
     ToolCancelled {
         owner: Token,
     },
+    AnswerCancelled {
+        owner: Token,
+    },
+    /// The opener's answer to a delegated call arrives.
+    Answered {
+        owner: Token,
+        answer: Answer,
+    },
     /// A tool run finishes.
     ToolDone {
         owner: Token,
@@ -295,6 +328,10 @@ struct Running {
     /// The session that started it.
     session: Token,
     effect: Effect,
+    /// Run by the opener, which serves it, rather than the tools; and a
+    /// finish it accepts, after which it closes the session.
+    served: bool,
+    accepts: bool,
 }
 
 /// A call of the agent in flight, as its protocol layer would keep it.
@@ -302,6 +339,9 @@ struct Call {
     owner: Token,
     /// The deadline's delivery, withdrawn when the call ends first.
     deadline: (Time, u64),
+    /// The session's opener, and the tools it served in the query.
+    opener: u64,
+    served: Box<[Descriptor]>,
 }
 
 pub struct World {
@@ -337,6 +377,8 @@ pub struct World {
     cancel_lost: BTreeSet<Token>,
     run_cancel_lost: BTreeSet<Token>,
     closing: BTreeSet<Token>,
+    /// The opener's tickets, as the top level would keep them.
+    tickets: Tickets,
     /// Calls the provider has not answered yet.
     serving: BTreeSet<u64>,
     /// The sessions opened, by the opener's name for each, and the opener's
@@ -377,6 +419,7 @@ impl World {
             cancel_lost: BTreeSet::new(),
             run_cancel_lost: BTreeSet::new(),
             closing: BTreeSet::new(),
+            tickets: Tickets::default(),
             serving: BTreeSet::new(),
             sessions: BTreeMap::new(),
             openers: BTreeMap::new(),
@@ -411,8 +454,16 @@ impl World {
 
     /// Has the opener open a session for `spec` at `at`. Returns the opener's
     /// name for it.
-    pub fn submit(&mut self, at: Time, spec: agent::Spec) -> u64 {
+    pub fn submit(&mut self, at: Time, mut spec: agent::Spec) -> u64 {
         let opener = self.next_serial();
+        if self.rng.chance(self.settings.serve) {
+            let mut served = Vec::new();
+            for (name, effect, schema) in SERVED {
+                let ticket = self.tickets.issue(opener, Ticketed::Tool { name, effect, schema });
+                served.push(Descriptor { ticket, effect });
+            }
+            spec.delegated = served.into();
+        }
         self.schedule(at, Delivery::Open { opener, spec });
         opener
     }
@@ -515,9 +566,11 @@ impl World {
                 self.stats.not_run += not_run(&prompt);
                 let call = self.next_serial();
                 let deadline = self.schedule(self.now.saturating_add(timeout), Delivery::Deadline { call });
-                self.calls.insert(call, Call { owner, deadline });
+                let opener = *self.openers.get(&owner).expect("a session calls the LLM while it lives");
+                let served = prompt.delegated.clone();
+                self.calls.insert(call, Call { owner, deadline, opener, served });
                 assert!(self.calling.insert(owner, call).is_none(), "a session has one call in flight");
-                let query = translate::query(prompt);
+                let query = translate::query(prompt, &self.tickets);
                 self.send(Delivery::Query { call, query });
                 self.stats.calls += 1;
             }
@@ -550,13 +603,16 @@ impl World {
                     self.stats.tool_timeouts += 1;
                 }
                 let delivery = self.schedule(at, Delivery::ToolDone { owner, outcome });
-                let running = Running { delivery, session, effect };
+                let running = Running { delivery, session, effect, served: false, accepts: false };
                 assert!(self.tools.insert(owner, running).is_none(), "each run has a token of its own");
                 self.stats.tool_runs += 1;
             }
             agent::Request::CancelTool { owner } => {
                 let session = *self.runs.get(&owner).expect("a run is cancelled while the agent waits for its end");
                 self.closing.insert(session);
+                if let Some(run) = self.tools.get(&owner) {
+                    assert!(!run.served, "the tools cancel only the runs they were asked for");
+                }
                 if self.tools.contains_key(&owner) && self.rng.chance(self.settings.cancels_lost) {
                     self.run_cancel_lost.insert(owner);
                     self.stats.tool_cancels_lost += 1;
@@ -564,6 +620,24 @@ impl World {
                     self.wire.remove(&delivery).expect("a tool run in flight has its result on the way");
                     self.send(Delivery::ToolCancelled { owner });
                     self.stats.tool_cancels += 1;
+                }
+            }
+            agent::Request::Delegate { owner, opener, call, deadline } => {
+                self.serve(owner, opener.raw(), call, deadline);
+            }
+            agent::Request::Withdraw { owner } => {
+                let session = *self.runs.get(&owner).expect("a call is withdrawn while the agent waits for its end");
+                self.closing.insert(session);
+                if let Some(run) = self.tools.get(&owner) {
+                    assert!(run.served, "the opener withdraws only the calls it serves");
+                }
+                if self.tools.contains_key(&owner) && self.rng.chance(self.settings.cancels_lost) {
+                    self.run_cancel_lost.insert(owner);
+                    self.stats.withdraws_lost += 1;
+                } else if let Some(Running { delivery, .. }) = self.tools.remove(&owner) {
+                    self.wire.remove(&delivery).expect("a served call in flight has its answer on the way");
+                    self.send(Delivery::AnswerCancelled { owner });
+                    self.stats.withdraws += 1;
                 }
             }
         }
@@ -660,6 +734,7 @@ impl World {
             self.openers.remove(&name);
             self.closing.remove(&name);
         }
+        self.tickets.free(opener);
         self.sessions.get_mut(&opener).expect("looked up above").ended = Some(ended);
     }
 
@@ -675,6 +750,48 @@ impl World {
             agent::Dimension::CacheWrite => usage.cache_write_tokens > budget.cache_write,
             agent::Dimension::Time => Some(self.now) >= session.expires,
         }
+    }
+
+    /// The opener serves the delegated call `call` for the session of `opener`,
+    /// by `deadline`: a finish it refuses the first time, as its tests fail,
+    /// and accepts after; a lookup, which is slow. It runs the race with the
+    /// deadline itself.
+    fn serve(&mut self, owner: Token, opener: u64, call: Token, deadline: Time) {
+        let session = *self.runs.get(&owner).expect("a run is worked out from the step that started it");
+        let Ticketed::Call { tool, arguments: _ } = self.tickets.resolve(call).clone() else {
+            panic!("a delegated call's ticket names a call");
+        };
+        let effect = SERVED.iter().find(|(name, ..)| *name == tool).expect("a call to a served tool").1;
+        self.batched(session, effect);
+        let state = self.sessions.get_mut(&opener).expect("the opener serves the sessions it opened");
+        let (mut text, mut error, mut accepts): (&[u8], bool, bool) = match tool {
+            b"finish" => {
+                state.finishes += 1;
+                if state.finishes == 1 {
+                    (b"not finished: the tests fail", true, false)
+                } else {
+                    (b"accepted", false, true)
+                }
+            }
+            _ => (b"the forge says: fine", false, false),
+        };
+        let mut at = self.now.saturating_add(self.draw(self.settings.serving));
+        if at > deadline {
+            (text, error, accepts, at) = (b"timed out", true, false, deadline);
+            self.stats.delegate_timeouts += 1;
+        } else if tool == b"finish" {
+            if accepts {
+                self.stats.finishes_accepted += 1;
+            } else {
+                self.stats.finishes_refused += 1;
+            }
+        }
+        let ticket = self.tickets.issue(opener, Ticketed::Answer { text: text.into(), error });
+        let answer = Answer { ticket, bytes: u64::try_from(text.len()).expect("a short answer"), error };
+        let delivery = self.schedule(at, Delivery::Answered { owner, answer });
+        let running = Running { delivery, session, effect, served: true, accepts };
+        assert!(self.tools.insert(owner, running).is_none(), "each run has a token of its own");
+        self.stats.delegates += 1;
     }
 
     /// What the fake tools make of `call`: what a checkout would answer, or,
@@ -708,7 +825,10 @@ impl World {
             agent::Event::Completed { owner, .. }
             | agent::Event::Failed { owner, .. }
             | agent::Event::Cancelled { owner } => (Some(*owner), None),
-            agent::Event::ToolDone { owner, .. } | agent::Event::ToolCancelled { owner } => {
+            agent::Event::ToolDone { owner, .. }
+            | agent::Event::ToolCancelled { owner }
+            | agent::Event::Answered { owner, .. }
+            | agent::Event::AnswerCancelled { owner } => {
                 (Some(*self.runs.get(owner).expect("a run's end is for a run the agent started")), Some(*owner))
             }
             agent::Event::Continue { session, .. } | agent::Event::Close { session } => (Some(*session), None),
@@ -721,7 +841,7 @@ impl World {
     fn attribute(&mut self, made: u32, session: Option<Token>) {
         let skip = usize::try_from(made).expect("a small queue");
         for request in self.agent_out.iter().skip(skip) {
-            if let agent::Request::Tool { owner, .. } = request {
+            if let agent::Request::Tool { owner, .. } | agent::Request::Delegate { owner, .. } = request {
                 let session = session.expect("tool runs start in a step for their session");
                 assert!(self.runs.insert(*owner, session).is_none(), "each run has a token of its own");
             }
@@ -803,20 +923,22 @@ impl World {
                     // The fake refuses a transcript a real provider would:
                     // a call without its result, a result without its call.
                     assert!(result != Err(provider::api::Error::InvalidRequest), "the agent sends well-formed queries");
-                    if let Some(owner) = self.end_call(call) {
+                    if let Some(Call { owner, opener, served, .. }) = self.end_call(call) {
                         if self.cancel_lost.remove(&owner) {
                             match result {
                                 Ok(_) => self.stats.answered_after_cancel += 1,
                                 Err(_) => self.stats.failed_after_cancel += 1,
                             }
                         }
-                        self.agent_in.push_back(translate::outcome(owner, result));
+                        let event = translate::outcome(owner, result, &mut self.tickets, opener, &served);
+                        self.agent_in.push_back(event);
                     } else {
                         self.stats.late_answers += 1;
                     }
                 }
                 Delivery::Deadline { call } => {
-                    let owner = self.end_call(call).expect("a deadline is withdrawn when its call ends first");
+                    let Call { owner, .. } =
+                        self.end_call(call).expect("a deadline is withdrawn when its call ends first");
                     if self.cancel_lost.remove(&owner) {
                         self.stats.failed_after_cancel += 1;
                     }
@@ -825,6 +947,20 @@ impl World {
                 }
                 Delivery::Cancelled { owner } => self.agent_in.push_back(agent::Event::Cancelled { owner }),
                 Delivery::ToolCancelled { owner } => self.agent_in.push_back(agent::Event::ToolCancelled { owner }),
+                Delivery::AnswerCancelled { owner } => self.agent_in.push_back(agent::Event::AnswerCancelled { owner }),
+                Delivery::Answered { owner, answer } => {
+                    let run = self.tools.remove(&owner).expect("a withdrawn call's answer is withdrawn");
+                    if self.run_cancel_lost.remove(&owner) {
+                        self.stats.answered_after_withdraw += 1;
+                    }
+                    self.agent_in.push_back(agent::Event::Answered { owner, answer });
+                    // The opener has its finish, and closes the session.
+                    if run.accepts {
+                        let opener = *self.openers.get(&run.session).expect("a session lives while its calls run");
+                        self.sessions.get_mut(&opener).expect("the opener's session").nudges = 0;
+                        self.send(Delivery::Close { opener });
+                    }
+                }
                 Delivery::ToolDone { owner, outcome } => {
                     let run = self.tools.remove(&owner);
                     assert!(run.is_some(), "a cancelled tool run's result is withdrawn");
@@ -855,6 +991,7 @@ impl World {
             abandon,
             waiting: false,
             closed: false,
+            finishes: 0,
         };
         assert!(self.sessions.insert(opener, session).is_none(), "openers have distinct names");
         self.agent_in.push_back(agent::Event::Open { opener: Token::new(opener), spec });
@@ -862,11 +999,11 @@ impl World {
 
     /// Ends the agent's call `call` if it is still in flight, withdrawing its
     /// deadline, and returns its owner.
-    fn end_call(&mut self, call: u64) -> Option<Token> {
-        let Call { owner, deadline } = self.calls.remove(&call)?;
-        self.calling.remove(&owner);
-        self.wire.remove(&deadline);
-        Some(owner)
+    fn end_call(&mut self, call: u64) -> Option<Call> {
+        let ended = self.calls.remove(&call)?;
+        self.calling.remove(&ended.owner);
+        self.wire.remove(&ended.deadline);
+        Some(ended)
     }
 
     fn has_work_now(&self) -> bool {
@@ -898,6 +1035,9 @@ impl World {
             agent::Fact::ToolStarted { .. } => &mut told.tools_started,
             agent::Fact::ToolFinished { .. } => &mut told.tools_finished,
             agent::Fact::ToolCancelled { .. } => &mut told.tools_cancelled,
+            agent::Fact::DelegateStarted { .. } => &mut told.delegates_started,
+            agent::Fact::DelegateAnswered { .. } => &mut told.delegates_answered,
+            agent::Fact::DelegateCancelled { .. } => &mut told.delegates_cancelled,
             agent::Fact::Yielded { .. } => &mut told.yielded,
             agent::Fact::Used { .. } => &mut told.used,
             agent::Fact::Ended { .. } => &mut told.ended,
@@ -922,6 +1062,10 @@ impl World {
         assert_eq!(told.tools_finished + told.tools_cancelled, stats.tool_runs, "a fact for the end of every run");
         assert_eq!(told.tools_cancelled, stats.tool_cancels, "a fact for every cancelled run");
         assert_eq!(told.yielded, stats.yields, "a fact for every yield");
+        assert_eq!(told.delegates_started, stats.delegates, "a fact for every delegated call");
+        let delegates_ended = told.delegates_answered + told.delegates_cancelled;
+        assert_eq!(delegates_ended, stats.delegates, "a fact for the end of every delegated call");
+        assert_eq!(told.delegates_cancelled, stats.withdraws, "a fact for every withdrawn call");
     }
 
     /// The invariants of a world where nothing is left to happen.
@@ -931,6 +1075,7 @@ impl World {
         assert_eq!(self.provider.calls(), 0, "the provider holds no call");
         assert!(self.calls.is_empty() && self.calling.is_empty(), "no call is in flight");
         assert!(self.tools.is_empty() && self.runs.is_empty(), "no tool is running, and every run's end was heard");
+        assert!(self.tickets.is_empty(), "every session's tickets were freed when it ended");
         assert!(self.cancel_lost.is_empty() && self.run_cancel_lost.is_empty(), "every lost cancel's race ended");
         assert!(self.serving.is_empty(), "the provider answered every call");
         assert!(
@@ -988,6 +1133,8 @@ fn describe_agent_event(event: &agent::Event) -> String {
             format!("tool done {} {outcome:?}", owner.raw())
         }
         agent::Event::ToolCancelled { owner } => format!("tool cancelled {}", owner.raw()),
+        agent::Event::Answered { owner, answer } => format!("answered {} {answer:?}", owner.raw()),
+        agent::Event::AnswerCancelled { owner } => format!("answer cancelled {}", owner.raw()),
     }
 }
 
@@ -1010,6 +1157,10 @@ fn describe_agent_request(request: &agent::Request) -> String {
             format!("tool {} {call:?} by {}", owner.raw(), deadline.as_nanos())
         }
         agent::Request::CancelTool { owner } => format!("cancel tool {}", owner.raw()),
+        agent::Request::Delegate { owner, opener, call, deadline } => {
+            format!("delegate {} for {} {call:?} by {}", owner.raw(), opener.raw(), deadline.as_nanos())
+        }
+        agent::Request::Withdraw { owner } => format!("withdraw {}", owner.raw()),
     }
 }
 

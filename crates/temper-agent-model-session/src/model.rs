@@ -93,6 +93,8 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Cancelled { owner } => session::cancelled(model, owner, out),
         Event::ToolDone { owner, outcome } => session::tool_done(model, env, owner, outcome, out),
         Event::ToolCancelled { owner } => session::tool_cancelled(model, owner, out),
+        Event::Answered { owner, answer } => session::delegate_answered(model, env, owner, answer, out),
+        Event::AnswerCancelled { owner } => session::delegate_cancelled(model, owner, out),
     }
 }
 

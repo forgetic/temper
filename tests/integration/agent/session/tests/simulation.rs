@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use temper_agent_model_session::llm::Failure;
 use temper_agent_model_session::{Budget, Dimension, End, Limits, Spec, Yield};
 use temper_agent_model_session_tests::{BUDGET, Count, Ended, Settings, Span, Told, World, spec};
+use temper_agent_model_tools::Grants;
 use temper_lib::{Duration, Rng, Time};
 use temper_llm_model::Config;
 
@@ -303,6 +304,66 @@ fn a_tool_run_that_wins_its_race_with_a_cancel_still_ends_the_session() {
     assert_eq!((stats.tool_cancels_lost, stats.ran_after_cancel, stats.tool_cancels), (1, 1, 0));
 }
 
+/// A spec that grants no tools of the session's own, so that the LLM calls
+/// only those the opener serves.
+fn served_only() -> Spec {
+    Spec { tools: Grants { inspect: false, modify: false, shell: false }, ..spec(b"fix the build") }
+}
+
+#[test]
+fn a_finish_is_refused_once_then_accepted_and_the_opener_closes_the_session() {
+    let calm = Settings::calm(23);
+    let settings = Settings { serve: 1000, provider: Config { tool_rounds: 20, ..calm.provider }, ..calm };
+    let mut world = World::new(settings);
+    let opener = world.submit(Time::ZERO, served_only());
+    world.run(ITERATIONS);
+
+    assert_eq!(end(&world, opener), End::Closed);
+    let stats = world.stats();
+    assert_eq!((stats.finishes_refused, stats.finishes_accepted), (1, 1));
+    assert!(stats.delegates >= 2 && stats.tool_runs == 0, "{stats:?}");
+}
+
+#[test]
+fn an_answer_races_its_withdraw() {
+    for (lost, withdrawn, answered) in [(1000, 0, 1), (0, 1, 0)] {
+        let calm = Settings::calm(24);
+        let settings = Settings {
+            serve: 1000,
+            serving: Span::millis(30_000, 30_000),
+            abandon: 1000,
+            abandon_after: Span::millis(5_000, 5_000),
+            cancels_lost: lost,
+            ..calm
+        };
+        let mut world = World::new(settings);
+        let opener = world.submit(Time::ZERO, served_only());
+        world.run(ITERATIONS);
+
+        assert_eq!((end(&world, opener), turns(&world, opener)), (End::Closed, 1));
+        let stats = world.stats();
+        assert_eq!((stats.withdraws, stats.answered_after_withdraw), (withdrawn, answered));
+    }
+}
+
+#[test]
+fn the_opener_answers_a_call_past_its_deadline_as_timed_out_and_the_conversation_goes_on() {
+    let calm = Settings::calm(25);
+    let settings = Settings {
+        agent: Limits { delegate_timeout: Duration::from_secs(1), ..calm.agent },
+        serve: 1000,
+        serving: Span::millis(5_000, 5_000),
+        ..calm
+    };
+    let mut world = World::new(settings);
+    let opener = world.submit(Time::ZERO, served_only());
+    world.run(ITERATIONS);
+
+    assert_eq!(yields(&world, opener), [(Yield::Done, &b"done"[..])]);
+    let stats = world.stats();
+    assert_eq!((stats.delegates, stats.delegate_timeouts, stats.withdraws), (2, 2, 0));
+}
+
 #[test]
 fn the_turn_budget_ends_a_session_that_keeps_calling_tools() {
     let calm = Settings::calm(12);
@@ -406,6 +467,7 @@ fn random_worlds_settle_with_every_session_ended() {
     let (mut stale, mut invalid, mut not_run, mut parallel, mut tool_timeouts) = (0, 0, 0, 0, 0);
     let mut failures = BTreeSet::new();
     let mut races = [0; 4];
+    let mut served = [0; 6];
     for seed in 0..300 {
         let settings = noisy(seed);
         let mut world = World::new(settings);
@@ -417,6 +479,17 @@ fn random_worlds_settle_with_every_session_ended() {
         invalid += world.told().0.invalid_calls;
         not_run += world.stats().not_run;
         let stats = world.stats();
+        let delegated = [
+            stats.delegates,
+            stats.withdraws,
+            stats.answered_after_withdraw,
+            stats.delegate_timeouts,
+            stats.finishes_refused,
+            stats.finishes_accepted,
+        ];
+        for (count, more) in served.iter_mut().zip(delegated) {
+            *count += more;
+        }
         let won = [
             stats.answered_after_cancel,
             stats.failed_after_cancel,
@@ -464,6 +537,10 @@ fn random_worlds_settle_with_every_session_ended() {
     assert!(stale > 0, "some continues and closes reached sessions that had ended");
     assert!(parallel > 1, "some reads ran side by side");
     assert!(
+        served.iter().all(|&count| count > 0),
+        "the opener served calls, some withdrawn, some answered all the same, some late, finishes refused and accepted: {served:?}"
+    );
+    assert!(
         races.iter().all(|&count| count > 0),
         "calls, failures and runs won races with cancels, and closes came twice: {races:?}"
     );
@@ -485,6 +562,7 @@ fn noisy(seed: u64) -> Settings {
     let mut millis = |low: u64, high: u64| Duration::from_millis(rng.between(low, high));
     let call_timeout = millis(500, 5_000);
     let tool_timeout = millis(500, 5_000);
+    let delegate_timeout = millis(500, 5_000);
     let session_timeout = millis(2_000, 120_000);
     let latency_max = millis(10, 4_000);
     let think = millis(0, 5_000);
@@ -501,6 +579,7 @@ fn noisy(seed: u64) -> Settings {
             backoff_max: Duration::from_secs(2),
             call_timeout,
             tool_timeout,
+            delegate_timeout,
             facts: pick(0, 24),
             parallel_tools: pick(1, 4),
             ..calm.agent
@@ -530,6 +609,8 @@ fn noisy(seed: u64) -> Settings {
         abandon_after: Span::millis(0, 30_000),
         cancels_lost: pick(0, 600),
         double_close: pick(0, 500),
+        serve: pick(0, 800),
+        serving: Span::millis(10, 5_000),
         ..calm
     }
 }

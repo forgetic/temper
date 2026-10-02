@@ -7,8 +7,10 @@ use alloc::boxed::Box;
 use temper_agent_model_session as session;
 use temper_lib::{Duration, Env, Queue, Time, Token};
 
-use crate::llm::{Block, Completion, Decoded, Endpoint, Failure, Message, Returned, Role, Stop, Usage};
-use crate::tools::{Call, Entry, Grants, Kind, Name, Outcome, Part, Path};
+use crate::llm::{
+    Answer, Block, Completion, Decoded, Descriptor, Endpoint, Failure, Message, Returned, Role, Stop, Usage,
+};
+use crate::tools::{Call, Effect, Entry, Grants, Kind, Name, Outcome, Part, Path};
 use crate::{
     Budget, Dimension, End, Event, Fact, Limits, MAX_OUT, Model, Request, Spec, Yield, fire, step, worst_case,
 };
@@ -34,6 +36,7 @@ const LIMITS: Limits = Limits {
         backoff_max: Duration::from_secs(1),
         call_timeout: Duration::from_secs(30),
         tool_timeout: Duration::from_secs(20),
+        delegate_timeout: Duration::from_secs(40),
         facts: 64,
         parallel_tools: 2,
     },
@@ -133,6 +136,7 @@ fn spec() -> Spec {
         model: bytes(b"model"),
         system: bytes(b"be brief"),
         tools: Grants { inspect: true, modify: false, shell: false },
+        delegated: Box::new([Descriptor { ticket: Token::new(7), effect: Effect::Write }]),
         prompt: bytes(b"fix the bug"),
         max_tokens: 1024,
         budget: BUDGET,
@@ -285,6 +289,31 @@ fn the_sessions_facts_pass_through_to_the_loop() {
     }
     assert_eq!(last, Some(Fact::Ended { opener: opener(), end: End::Closed, turns: 1, usage: usage() }));
     assert_eq!(h.model.facts_lost(), 0);
+}
+
+#[test]
+fn a_delegated_call_goes_out_and_its_answer_and_its_withdrawal_reach_the_session() {
+    let mut h = Harness::new();
+    let owner = h.open();
+    let call = Decoded::Delegated { ticket: Token::new(9), effect: Effect::Write };
+    let content = Box::new([Block::ToolCall { id: bytes(b"f"), name: bytes(b"finish"), input: bytes(b"{}"), call }]);
+    let finish = Completion { content, stop: Stop::ToolUse, usage: usage() };
+    let Some(Request::Delegate { owner: run, opener: to, call, deadline: _ }) = h.complete(owner, finish.clone())
+    else {
+        panic!("expected the call delegated");
+    };
+    assert_eq!((to, call), (opener(), Token::new(9)));
+    let answer = Answer { ticket: Token::new(11), bytes: 2, error: false };
+    let Some(Request::Complete { .. }) = h.step(Event::Answered { owner: run, answer }) else {
+        panic!("expected the answer sent back");
+    };
+
+    let owner = h.open();
+    let Some(Request::Delegate { owner: run, .. }) = h.complete(owner, finish) else {
+        panic!("expected the call delegated");
+    };
+    assert_eq!(h.step(Event::Close { session: owner }), Some(Request::Withdraw { owner: run }));
+    assert_eq!(h.step(Event::AnswerCancelled { owner: run }), Some(ended(End::Closed, 1)));
 }
 
 #[test]

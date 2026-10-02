@@ -37,6 +37,13 @@ pub enum Fact {
     ToolFinished { opener: Token, output: u64, failed: bool },
     /// The tool run was abandoned.
     ToolCancelled { opener: Token },
+    /// The tool call at `block` of the last message was delegated to the
+    /// opener.
+    DelegateStarted { opener: Token, block: u32 },
+    /// The opener answered, with `bytes`; `error` marks a failure.
+    DelegateAnswered { opener: Token, bytes: u64, error: bool },
+    /// The delegated call was withdrawn.
+    DelegateCancelled { opener: Token },
     /// The session yielded.
     Yielded { opener: Token, stop: Yield },
     /// A completion came back, and used one turn and `usage`.

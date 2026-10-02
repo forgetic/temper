@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 
 use temper_agent_model_session::Event;
 use temper_agent_model_session::llm as agent;
-use temper_agent_model_tools::{Call, Grants, Name, Outcome, Part, Path};
+
+use crate::tickets::{Ticketed, Tickets};
+use temper_agent_model_tools::{Call, Effect, Grants, Name, Outcome, Part, Path};
 use temper_lib::Token;
 use temper_llm_model::api as provider;
 
@@ -27,25 +29,41 @@ enum Family {
     Shell,
 }
 
-/// The provider's query for an agent's prompt. There is one provider, so the
-/// endpoint names nothing.
+/// The provider's query for an agent's prompt, its tickets resolved in
+/// `tickets`: the tools the opener serves, and its answers. There is one
+/// provider, so the endpoint names nothing.
 #[must_use]
-pub fn query(prompt: agent::Prompt) -> provider::Query {
-    let agent::Prompt { endpoint: _, model, system, tools, messages, max_tokens } = prompt;
-    provider::Query {
-        model,
-        system,
-        tools: offer(tools),
-        messages: messages.into_iter().map(message).collect(),
-        max_tokens,
+pub fn query(prompt: agent::Prompt, tickets: &Tickets) -> provider::Query {
+    let agent::Prompt { endpoint: _, model, system, tools, delegated, messages, max_tokens } = prompt;
+    let mut offered = offer(tools).into_vec();
+    for descriptor in &delegated {
+        let Ticketed::Tool { name, effect, schema } = tickets.resolve(descriptor.ticket) else {
+            panic!("a descriptor's ticket names a tool");
+        };
+        assert_eq!(*effect, descriptor.effect, "a descriptor says what its tool does");
+        offered.push(provider::ToolSpec {
+            name: (*name).into(),
+            description: b"Served.".as_slice().into(),
+            parameters: (*schema).into(),
+        });
     }
+    let messages = messages.into_iter().map(|message| translate_message(message, tickets)).collect();
+    provider::Query { model, system, tools: offered.into(), messages, max_tokens }
 }
 
-/// The agent's terminal event for the provider's answer to the call of `owner`.
+/// The agent's terminal event for the provider's answer to the call of `owner`,
+/// a call of the session of `opener` that offered the tools of `served`. A
+/// call to one of those is kept in `tickets`, as the top level would keep it.
 #[must_use]
-pub fn outcome(owner: Token, result: Result<provider::Answer, provider::Error>) -> Event {
+pub fn outcome(
+    owner: Token,
+    result: Result<provider::Answer, provider::Error>,
+    tickets: &mut Tickets,
+    opener: u64,
+    served: &[agent::Descriptor],
+) -> Event {
     match result {
-        Ok(answer) => Event::Completed { owner, completion: completion(answer) },
+        Ok(answer) => Event::Completed { owner, completion: completion(answer, tickets, opener, served) },
         Err(error) => Event::Failed { owner, failure: failure(error) },
     }
 }
@@ -68,19 +86,27 @@ fn offer(grants: Grants) -> Box<[provider::ToolSpec]> {
         .collect()
 }
 
-fn message(message: agent::Message) -> provider::Message {
+fn translate_message(message: agent::Message, tickets: &Tickets) -> provider::Message {
     let role = match message.role {
         agent::Role::User => provider::Role::User,
         agent::Role::Assistant => provider::Role::Assistant,
     };
-    provider::Message { role, parts: message.content.into_iter().map(part).collect() }
+    provider::Message { role, parts: message.content.into_iter().map(|block| part(block, tickets)).collect() }
 }
 
-fn part(block: agent::Block) -> provider::Part {
+fn part(block: agent::Block, tickets: &Tickets) -> provider::Part {
     match block {
         agent::Block::Text { text } => provider::Part::Text { text },
         // The call goes back as the LLM wrote it.
         agent::Block::ToolCall { id, name, input, call: _ } => provider::Part::ToolCall { id, name, arguments: input },
+        agent::Block::ToolResult { id, result: agent::Returned::Delegated { answer } } => {
+            let Ticketed::Answer { text, error } = tickets.resolve(answer.ticket) else {
+                panic!("an answer's ticket names an answer");
+            };
+            assert_eq!(u64::try_from(text.len()), Ok(answer.bytes), "an answer counts its bytes");
+            assert_eq!(*error, answer.error, "an answer says whether it failed");
+            provider::Part::ToolOutput { id, output: text.clone(), is_error: *error }
+        }
         agent::Block::ToolResult { id, result } => {
             let (output, is_error) = render(&result);
             provider::Part::ToolOutput { id, output, is_error }
@@ -88,7 +114,12 @@ fn part(block: agent::Block) -> provider::Part {
     }
 }
 
-fn completion(answer: provider::Answer) -> agent::Completion {
+fn completion(
+    answer: provider::Answer,
+    tickets: &mut Tickets,
+    opener: u64,
+    served: &[agent::Descriptor],
+) -> agent::Completion {
     let stop = match answer.finish {
         provider::Finish::Stop => agent::Stop::EndTurn,
         provider::Finish::ToolCalls => agent::Stop::ToolUse,
@@ -102,18 +133,33 @@ fn completion(answer: provider::Answer) -> agent::Completion {
         cache_read_tokens: cached_tokens,
         cache_write_tokens: cache_creation_tokens,
     };
-    agent::Completion { content: answer.parts.into_iter().map(block).collect(), stop, usage }
+    let content = answer.parts.into_iter().map(|part| block(part, tickets, opener, served)).collect();
+    agent::Completion { content, stop, usage }
 }
 
-fn block(part: provider::Part) -> agent::Block {
+fn block(part: provider::Part, tickets: &mut Tickets, opener: u64, served: &[agent::Descriptor]) -> agent::Block {
     match part {
         provider::Part::Text { text } => agent::Block::Text { text },
         provider::Part::ToolCall { id, name, arguments } => {
-            let call = decode(&name, &arguments);
+            let call = match delegated(&name, served, tickets) {
+                Some((tool, effect)) => {
+                    let ticket = tickets.issue(opener, Ticketed::Call { tool, arguments: arguments.clone() });
+                    agent::Decoded::Delegated { ticket, effect }
+                }
+                None => decode(&name, &arguments),
+            };
             agent::Block::ToolCall { id, name, input: arguments, call }
         }
         provider::Part::ToolOutput { .. } => unreachable!("the fake answers with text and tool calls"),
     }
+}
+
+/// The tool of `served` named `name`, if the call is to one of them.
+fn delegated(name: &[u8], served: &[agent::Descriptor], tickets: &Tickets) -> Option<(&'static [u8], Effect)> {
+    served.iter().find_map(|descriptor| match tickets.resolve(descriptor.ticket) {
+        Ticketed::Tool { name: tool, effect, .. } => (*tool == name).then_some((*tool, *effect)),
+        Ticketed::Call { .. } | Ticketed::Answer { .. } => panic!("a descriptor's ticket names a tool"),
+    })
 }
 
 fn failure(error: provider::Error) -> agent::Failure {
@@ -210,6 +256,7 @@ pub fn render(result: &agent::Returned) -> (Box<[u8]>, bool) {
             (text, failed)
         }
         agent::Returned::Invalid { problem } => (format!("malformed call: {problem:?}").into_bytes().into(), true),
+        agent::Returned::Delegated { .. } => unreachable!("the opener's answers are rendered from their tickets"),
         agent::Returned::NotRun => (b"not run: the answer stopped first".as_slice().into(), true),
     }
 }

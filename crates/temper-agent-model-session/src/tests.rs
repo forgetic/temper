@@ -3,11 +3,12 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
-use temper_agent_model_tools::{Call, Grants, Name, Outcome, Part, Path};
+use temper_agent_model_tools::{Call, Effect, Grants, Name, Outcome, Part, Path};
 use temper_lib::{Duration, Env, List, Queue, Time, Token};
 
 use crate::llm::{
-    Block, Completion, Decoded, Endpoint, Failure, Message, Problem, Prompt, Returned, Role, Stop, Usage,
+    Answer, Block, Completion, Decoded, Descriptor, Endpoint, Failure, Message, Problem, Prompt, Returned, Role, Stop,
+    Usage,
 };
 use crate::{
     Budget, Dimension, End, Event, Fact, Limits, MAX_OUT, MAX_PARALLEL, Model, Request, Spec, Yield, fire, step,
@@ -36,6 +37,7 @@ const LIMITS: Limits = Limits {
     backoff_max: Duration::from_secs(1),
     call_timeout: Duration::from_secs(30),
     tool_timeout: Duration::from_secs(20),
+    delegate_timeout: Duration::from_secs(40),
     facts: 64,
     parallel_tools: 2,
 };
@@ -94,7 +96,9 @@ impl Harness {
                 | Request::Complete { .. }
                 | Request::Cancel { .. }
                 | Request::Tool { .. }
-                | Request::CancelTool { .. }) => {
+                | Request::CancelTool { .. }
+                | Request::Delegate { .. }
+                | Request::Withdraw { .. }) => {
                     assert!(one.is_none(), "one request at most besides Used");
                     one = Some(request);
                 }
@@ -110,7 +114,10 @@ impl Harness {
         let mut runs = List::with_capacity(MAX_OUT);
         while let Some(request) = self.out.pop() {
             match request {
-                Request::Tool { owner, .. } | Request::CancelTool { owner } => {
+                Request::Tool { owner, .. }
+                | Request::CancelTool { owner }
+                | Request::Delegate { owner, .. }
+                | Request::Withdraw { owner } => {
                     runs.push(owner).expect("room for a batch");
                 }
                 Request::Used { .. } => {}
@@ -177,6 +184,7 @@ fn spec() -> Spec {
         model: bytes(b"model"),
         system: bytes(b"be brief"),
         tools: Grants { inspect: true, modify: true, shell: false },
+        delegated: Box::new([FINISH]),
         prompt: bytes(b"fix the bug"),
         max_tokens: 1024,
         budget: BUDGET,
@@ -220,6 +228,20 @@ fn invalid(id: &[u8], problem: Problem) -> Block {
 /// Writes `name`.
 fn write(name: &[u8]) -> Call {
     Call::Write { path: path(name), content: bytes(b"x") }
+}
+
+/// The tool the opener serves in every spec: a finish, which writes.
+const FINISH: Descriptor = Descriptor { ticket: Token::new(7), effect: Effect::Write };
+
+/// The LLM's call `id` to a tool the opener serves, kept under `ticket`.
+fn delegated(id: &[u8], ticket: u64, effect: Effect) -> Block {
+    let call = Decoded::Delegated { ticket: Token::new(ticket), effect };
+    Block::ToolCall { id: bytes(id), name: bytes(b"finish"), input: bytes(b"{}"), call }
+}
+
+/// The opener's answer, kept under `ticket`.
+fn answer(ticket: u64, bytes: u64, error: bool) -> Answer {
+    Answer { ticket: Token::new(ticket), bytes, error }
 }
 
 /// A read that found `content`.
@@ -504,6 +526,125 @@ fn each_run_is_told_as_it_starts_and_ends() {
         Fact::ToolStarted { opener, block: 1 },
         Fact::ToolStarted { opener, block: 2 },
         Fact::ToolFinished { opener, output: 1, failed: false },
+    ]);
+}
+
+#[test]
+fn a_delegated_call_goes_to_the_opener_and_its_answer_goes_back_to_the_llm() {
+    let mut h = Harness::new(LIMITS);
+    let (owner, prompt) = h.open(1);
+    assert_eq!(&*prompt.delegated, &[FINISH], "the prompt offers what the opener serves");
+    let content = Box::new([delegated(b"c1", 9, Effect::Write)]);
+    step(&mut h.model, &h.env, Event::Completed { owner, completion: completion(content, Stop::ToolUse) }, &mut h.out);
+    drop(h.out.pop());
+    let Some(Request::Delegate { owner: run, opener, call, deadline }) = h.one() else {
+        panic!("expected the call delegated");
+    };
+    assert_eq!((opener, call), (Token::new(1), Token::new(9)));
+    assert_eq!(deadline, h.env.now.saturating_add(LIMITS.delegate_timeout), "the opener runs the race");
+    let (_, prompt) = calling(h.step(Event::Answered { owner: run, answer: answer(11, 20, true) }));
+    let result = Block::ToolResult { id: bytes(b"c1"), result: Returned::Delegated { answer: answer(11, 20, true) } };
+    assert_eq!(&*prompt.messages[2].content, &[result]);
+}
+
+#[test]
+fn owned_and_delegated_calls_run_in_one_order_of_batches() {
+    let mut h = Harness::new(LIMITS);
+    let (owner, _) = h.open(1);
+    let content = Box::new([
+        tool_call(b"a", cat(b"a")),
+        delegated(b"b", 9, Effect::Read),
+        delegated(b"c", 10, Effect::Write),
+        tool_call(b"d", cat(b"d")),
+    ]);
+    // A read of the tools and one the opener serves, together.
+    step(&mut h.model, &h.env, Event::Completed { owner, completion: completion(content, Stop::ToolUse) }, &mut h.out);
+    drop(h.out.pop());
+    let Some(Request::Tool { owner: read_a, .. }) = h.out.pop() else { panic!("expected the tools' read") };
+    let Some(Request::Delegate { owner: read_b, call, .. }) = h.one() else { panic!("expected the opener's read") };
+    assert_eq!(call, Token::new(9));
+    assert_eq!(h.step(Event::Answered { owner: read_b, answer: answer(20, 3, false) }), None);
+    // The write alone, then the last read.
+    let Some(Request::Delegate { owner: write_c, call, .. }) = h.step(ran(read_a, b"a")) else {
+        panic!("expected the opener's write");
+    };
+    assert_eq!(call, Token::new(10));
+    let (read_d, _) = running(h.step(Event::Answered { owner: write_c, answer: answer(21, 3, false) }));
+    let (_, prompt) = calling(h.step(ran(read_d, b"d")));
+    let results = [
+        result(b"a", read(b"a")),
+        Block::ToolResult { id: bytes(b"b"), result: Returned::Delegated { answer: answer(20, 3, false) } },
+        Block::ToolResult { id: bytes(b"c"), result: Returned::Delegated { answer: answer(21, 3, false) } },
+        result(b"d", read(b"d")),
+    ];
+    assert_eq!(&*prompt.messages[2].content, &results);
+}
+
+#[test]
+fn closing_withdraws_the_delegated_calls_in_flight_and_waits_for_their_terminals() {
+    let mut h = Harness::new(LIMITS);
+    let (owner, _) = h.open(1);
+    let content = Box::new([tool_call(b"a", cat(b"a")), delegated(b"b", 9, Effect::Read)]);
+    let runs = h.batch(Event::Completed { owner, completion: completion(content, Stop::ToolUse) });
+    let &[read_a, read_b] = runs.as_slice() else { panic!("two runs, not {runs:?}") };
+    step(&mut h.model, &h.env, Event::Close { session: owner }, &mut h.out);
+    assert_eq!(h.out.pop(), Some(Request::CancelTool { owner: read_a }));
+    assert_eq!(h.out.pop(), Some(Request::Withdraw { owner: read_b }));
+    // The answer won its race with the withdraw; the session still waits.
+    assert_eq!(h.step(Event::Answered { owner: read_b, answer: answer(20, 3, false) }), None);
+    assert_eq!(h.step(Event::ToolCancelled { owner: read_a }), Some(ended(End::Closed, 1)));
+
+    // And as the session runs out of time.
+    let (owner, _) = h.open(1);
+    let content = Box::new([delegated(b"b", 9, Effect::Read)]);
+    let runs = h.batch(Event::Completed { owner, completion: completion(content, Stop::ToolUse) });
+    h.after(BUDGET.time);
+    assert_eq!(h.fire(), Some(Request::Withdraw { owner: runs.as_slice()[0] }));
+    assert_eq!(h.step(Event::AnswerCancelled { owner: runs.as_slice()[0] }), Some(ended(OUT_OF_TIME, 1)));
+}
+
+#[test]
+fn an_answer_counts_against_the_byte_limit() {
+    let mut h = Harness::new(Limits { session_bytes: 2048, ..LIMITS });
+    let (owner, _) = h.open(1);
+    let content = Box::new([delegated(b"b", 9, Effect::Read), tool_call(b"a", cat(b"a"))]);
+    let runs = h.batch(Event::Completed { owner, completion: completion(content, Stop::ToolUse) });
+    let &[read_b, read_a] = runs.as_slice() else { panic!("two runs, not {runs:?}") };
+    let end = h.step(Event::Answered { owner: read_b, answer: answer(20, 4096, false) });
+    assert_eq!(end, Some(Request::CancelTool { owner: read_a }));
+    assert_eq!(h.step(Event::ToolCancelled { owner: read_a }), Some(ended(End::TranscriptFull, 1)));
+}
+
+#[test]
+fn the_turn_that_crosses_a_budget_still_has_its_delegated_calls_answered() {
+    let mut h = Harness::new(LIMITS);
+    let (owner, _) = h.open_with(1, budget(Budget { input: 9, ..BUDGET }));
+    let content = Box::new([delegated(b"f", 9, Effect::Write)]);
+    let runs = h.batch(Event::Completed { owner, completion: completion(content, Stop::ToolUse) });
+    let end = h.step(Event::Answered { owner: runs.as_slice()[0], answer: answer(20, 3, false) });
+    assert_eq!(end, Some(ended(End::Budget { spent: Dimension::Input }, 1)));
+}
+
+#[test]
+fn delegated_calls_are_told_as_they_start_and_end() {
+    let mut h = Harness::new(LIMITS);
+    let opener = Token::new(1);
+    let (owner, _) = h.open(1);
+    let content = Box::new([delegated(b"a", 9, Effect::Read), delegated(b"b", 10, Effect::Read)]);
+    let runs = h.batch(Event::Completed { owner, completion: completion(content, Stop::ToolUse) });
+    assert_eq!(h.step(Event::Answered { owner: runs.as_slice()[0], answer: answer(20, 3, true) }), None);
+    drop(h.batch(Event::Close { session: owner }));
+    drop(h.step(Event::AnswerCancelled { owner: runs.as_slice()[1] }));
+    h.told(&[
+        Fact::Opened { opener },
+        Fact::CompletionStarted { opener, attempt: 0, messages: 1, max_tokens: 1024 },
+        Fact::CompletionAnswered { opener, stop: Stop::ToolUse, blocks: 2, calls: 2, invalid: 0 },
+        Fact::Used { opener, usage: USAGE },
+        Fact::DelegateStarted { opener, block: 0 },
+        Fact::DelegateStarted { opener, block: 1 },
+        Fact::DelegateAnswered { opener, bytes: 3, error: true },
+        Fact::DelegateCancelled { opener },
+        Fact::Ended { opener, end: End::Closed, turns: 1, usage: USAGE },
     ]);
 }
 

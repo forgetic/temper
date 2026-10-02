@@ -3,11 +3,13 @@
 //!
 //! An `Open` opens a session and the session calls the LLM. While the LLM asks
 //! for tools, the session runs them and sends their results back, in call
-//! order, in another call. They run in batches: adjacent calls that read run
-//! together, up to `Limits::parallel_tools`, and a call that writes runs
-//! alone. Each run has a token of its own and carries its deadline, which
-//! whoever runs it races: a call that runs out of time comes back as such,
-//! and goes to the LLM like any other result. A call the protocol layer could
+//! order, in another call. A call is to the session's own tools, run by the
+//! tools sub-model, or to one the opener serves, delegated to it; either kind
+//! runs in batches: adjacent calls that read run together, up to
+//! `Limits::parallel_tools`, and a call that writes runs alone. Each run has a
+//! token of its own and carries its deadline, which whoever runs it races: a
+//! call that runs out of time comes back as such, and goes to the LLM like
+//! any other result. A call the protocol layer could
 //! not decode is answered with its problem as it is reached, and nothing runs
 //! for it; a message with no owned call goes straight back. When the LLM
 //! stops calling tools, the session yields to its opener, which continues it
@@ -25,17 +27,17 @@
 //! state     event or alarm             next      requests
 //! (none)    open, admitted             Calling   opened, complete
 //!           open, busy or invalid      (none)    ended: busy, invalid
-//! Calling   completed, tool use        Tooling   used, the first batch's tools
+//! Calling   completed, tool use        Tooling   used, the first batch's runs
 //!           completed, otherwise       Yielded   used, yielded
 //!           failed, transient          Backoff
 //!           failed, otherwise          Closed    ended: failed
 //!           close, expiry              Closing   cancel
 //! Backoff   retry                      Calling   complete
 //!           close, expiry              Closed    ended: closed, budget (time)
-//! Tooling   tool done, batch running   Tooling
-//!           tool done, more calls      Tooling   the next batch's tools
-//!           tool done, no more         Calling   complete
-//!           close, expiry              Closing   a cancel for each run
+//! Tooling   a run done, batch running  Tooling
+//!           a run done, more calls     Tooling   the next batch's runs
+//!           a run done, no more        Calling   complete
+//!           close, expiry              Closing   a cancel or withdraw per run
 //! Yielded   continue                   Calling   complete
 //!           close, expiry              Closed    ended: closed, budget (time)
 //! Closing   completed                  Closed    used, ended
@@ -45,6 +47,10 @@
 //!           close                      Closing   (already closing)
 //! Closed    continue, close            Closed    (dropped: the handle is stale)
 //! ```
+//!
+//! A run is done when the tools answer it (tool done) or the opener does
+//! (answered); it ends while closing when it is done all the same, or when its
+//! cancel or withdraw wins (tool cancelled, answer cancelled).
 //!
 //! Wherever the table calls the LLM (`complete`), the session first checks its
 //! budget and its transcript, and ends instead: as out of budget, naming the
@@ -77,7 +83,8 @@ use crate::boundary::{Budget, Dimension, End, Request, Spec, Yield};
 use crate::facts::{Fact, Facts};
 use crate::limits::Limits;
 use crate::llm::{
-    Block, Completion, Decoded, Endpoint, Failure, Message, Problem, Prompt, Returned, Role, Stop, Usage,
+    Answer, Block, Completion, Decoded, Descriptor, Endpoint, Failure, Message, Problem, Prompt, Returned, Role, Stop,
+    Usage,
 };
 use crate::model::Model;
 
@@ -96,6 +103,7 @@ struct Conversation {
     model: Box<[u8]>,
     system: Box<[u8]>,
     tools: Grants,
+    delegated: Box<[Descriptor]>,
     max_tokens: u32,
     /// The conversation so far, oldest first, starting with the spec's prompt.
     transcript: List<Message>,
@@ -156,14 +164,27 @@ enum Slot {
     Done { result: Block },
 }
 
-/// An owned tool call running for a session, named by its own token: the
-/// call at `block` of the session's last message, which fills `slot`.
+/// A tool call running for a session, named by its own token: the call at
+/// `block` of the session's last message, which fills `slot`, run `by` the
+/// tools or the opener.
 #[derive(Debug)]
 pub(crate) struct Run {
     session: Id<Session>,
     slot: u32,
     block: u32,
+    by: By,
 }
+
+/// Who runs a call: the tools, or the opener, which serves a delegated one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum By {
+    Tools,
+    Opener,
+}
+
+// A call's slot, while its message's calls run, takes no more room than the
+// block its result becomes, which is what each call is charged ([`held`]).
+const _: () = assert!(size_of::<Slot>() <= size_of::<Block>(), "a slot takes no more room than a block");
 
 /// A session's timers, named by what they are for.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -230,7 +251,7 @@ pub(crate) fn close(model: &mut Model, session: Token, out: &mut Queue<Request>)
     session.state = match state {
         State::Calling { attempt: _ } => cancel_call(id, End::Closed, out),
         State::Backoff { attempt: _, until: _ } | State::Yielded => finish(&session.conversation, End::Closed, out),
-        State::Tooling { tools } => cancel_tools(tools, End::Closed, out),
+        State::Tooling { tools } => cancel_tools(&model.runs, tools, End::Closed, out),
         // It is already ending, with the end it had first.
         State::Closing { end, waiting } => State::Closing { end, waiting },
         State::Closed => unreachable!("an addressed session has not ended"),
@@ -319,7 +340,8 @@ pub(crate) fn tool_done(
     out: &mut Queue<Request>,
 ) {
     let mark = out.len();
-    let Run { session: id, slot, block } = ended_run(&mut model.runs, owner);
+    let Run { session: id, slot, block, by } = ended_run(&mut model.runs, owner);
+    assert!(by == By::Tools, "the tools end only the runs they were asked for");
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
     let output = outcome_cost(&outcome).unwrap_or(u64::MAX);
     let fact = Fact::ToolFinished { opener: session.conversation.opener, output, failed: !succeeded(&outcome) };
@@ -343,7 +365,8 @@ pub(crate) fn tool_done(
 
 pub(crate) fn tool_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
     let mark = out.len();
-    let Run { session: id, slot: _, block: _ } = ended_run(&mut model.runs, owner);
+    let Run { session: id, slot: _, block: _, by } = ended_run(&mut model.runs, owner);
+    assert!(by == By::Tools, "the tools end only the runs they were asked for");
     let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
     model.facts.push(Fact::ToolCancelled { opener: session.conversation.opener });
     let state = mem::replace(&mut session.state, State::Closed);
@@ -361,6 +384,57 @@ pub(crate) fn tool_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Re
     conclude(model, id, out, mark);
 }
 
+pub(crate) fn delegate_answered(
+    model: &mut Model,
+    env: &Env<Limits>,
+    owner: Token,
+    answer: Answer,
+    out: &mut Queue<Request>,
+) {
+    let mark = out.len();
+    let Run { session: id, slot, block, by } = ended_run(&mut model.runs, owner);
+    assert!(by == By::Opener, "the opener answers only the calls delegated to it");
+    let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
+    let Answer { ticket: _, bytes, error } = answer;
+    model.facts.push(Fact::DelegateAnswered { opener: session.conversation.opener, bytes, error });
+    let state = mem::replace(&mut session.state, State::Closed);
+    let conversation = &mut session.conversation;
+    session.state = match state {
+        State::Tooling { tools } => {
+            let result = Block::ToolResult { id: call_id(conversation, block), result: Returned::Delegated { answer } };
+            tool_ran(conversation, id, &mut model.runs, tools, slot, result, env, out)
+        }
+        State::Closing { end, waiting: Waiting::Tools { pending } } => settled(conversation, end, pending, out),
+        State::Calling { .. }
+        | State::Backoff { .. }
+        | State::Yielded
+        | State::Closing { waiting: Waiting::Call, .. }
+        | State::Closed => unreachable!("an answer ends a delegated call in flight"),
+    };
+    conclude(model, id, out, mark);
+}
+
+pub(crate) fn delegate_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Request>) {
+    let mark = out.len();
+    let Run { session: id, slot: _, block: _, by } = ended_run(&mut model.runs, owner);
+    assert!(by == By::Opener, "the opener answers only the calls delegated to it");
+    let session = model.sessions.get_mut(id).expect("a session lives until its requests have ended");
+    model.facts.push(Fact::DelegateCancelled { opener: session.conversation.opener });
+    let state = mem::replace(&mut session.state, State::Closed);
+    session.state = match state {
+        State::Closing { end, waiting: Waiting::Tools { pending } } => {
+            settled(&session.conversation, end, pending, out)
+        }
+        State::Calling { .. }
+        | State::Backoff { .. }
+        | State::Tooling { .. }
+        | State::Yielded
+        | State::Closing { waiting: Waiting::Call, .. }
+        | State::Closed => unreachable!("a cancelled answer answers a withdraw, sent on the way to Closing"),
+    };
+    conclude(model, id, out, mark);
+}
+
 pub(crate) fn expire(model: &mut Model, id: Id<Session>, out: &mut Queue<Request>) {
     let mark = out.len();
     let session = model.sessions.get_mut(id).expect("an alarm is cancelled before its session closes");
@@ -368,7 +442,7 @@ pub(crate) fn expire(model: &mut Model, id: Id<Session>, out: &mut Queue<Request
     session.state = match state {
         State::Calling { attempt: _ } => cancel_call(id, OUT_OF_TIME, out),
         State::Backoff { attempt: _, until: _ } | State::Yielded => finish(&session.conversation, OUT_OF_TIME, out),
-        State::Tooling { tools } => cancel_tools(tools, OUT_OF_TIME, out),
+        State::Tooling { tools } => cancel_tools(&model.runs, tools, OUT_OF_TIME, out),
         State::Closing { .. } | State::Closed => {
             unreachable!("the expiry alarm runs only in Calling, Backoff, Tooling and Yielded")
         }
@@ -394,7 +468,7 @@ pub(crate) fn retry(model: &mut Model, env: &Env<Limits>, id: Id<Session>, out: 
 fn ended_run(runs: &mut Slab<Run>, owner: Token) -> Run {
     let id = Id::from_token(owner);
     let run = runs.get(id).expect("a run lives until its terminal event");
-    let ended = Run { session: run.session, slot: run.slot, block: run.block };
+    let ended = Run { session: run.session, slot: run.slot, block: run.block, by: run.by };
     runs.retire(id);
     ended
 }
@@ -443,7 +517,11 @@ fn tell(facts: &mut Facts, runs: &Slab<Run>, session: &Session, out: &Queue<Requ
                 let run = runs.get(Id::from_token(*owner)).expect("a run lives while its call is asked for");
                 Fact::ToolStarted { opener, block: run.block }
             }
-            Request::Cancel { .. } | Request::CancelTool { .. } => continue,
+            Request::Delegate { owner, opener: _, call: _, deadline: _ } => {
+                let run = runs.get(Id::from_token(*owner)).expect("a run lives while its call is asked for");
+                Fact::DelegateStarted { opener, block: run.block }
+            }
+            Request::Cancel { .. } | Request::CancelTool { .. } | Request::Withdraw { .. } => continue,
         };
         facts.push(fact);
     }
@@ -563,13 +641,27 @@ fn advance(
                     next = index;
                     break;
                 }
-                let run = Run { session: id, slot: tools.slots.len(), block: index };
+                let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Tools };
                 let run = runs.insert(run).expect("the run slab has room for every session's batches");
                 let deadline = env.now.saturating_add(env.limits.tool_timeout);
                 out.push(Request::Tool { owner: run.token(), call: call.clone(), deadline });
                 tools.slots.push(Slot::Running { run }).expect("a slot for every call");
                 tools.running = tools.running.saturating_add(1);
                 batch = Some(effect);
+            }
+            Block::ToolCall { id: _, name: _, input: _, call: Decoded::Delegated { ticket, effect } } => {
+                if !joins(batch, *effect, tools.running, env.limits.parallel_tools) {
+                    next = index;
+                    break;
+                }
+                let run = Run { session: id, slot: tools.slots.len(), block: index, by: By::Opener };
+                let run = runs.insert(run).expect("the run slab has room for every session's batches");
+                let deadline = env.now.saturating_add(env.limits.delegate_timeout);
+                let (opener, call) = (conversation.opener, *ticket);
+                out.push(Request::Delegate { owner: run.token(), opener, call, deadline });
+                tools.slots.push(Slot::Running { run }).expect("a slot for every call");
+                tools.running = tools.running.saturating_add(1);
+                batch = Some(*effect);
             }
             Block::ToolCall { id: call, name: _, input: _, call: Decoded::Invalid { problem } } => {
                 // Its answer was counted when the message was recorded.
@@ -682,7 +774,7 @@ fn tool_ran(
     let fits = charge(conversation, payload_cost(&result), &env.limits);
     *tools.slots.get_mut(slot).expect("a run fills its own slot") = Slot::Done { result };
     if !fits {
-        return abandon(conversation, tools, End::TranscriptFull, out);
+        return abandon(conversation, runs, tools, End::TranscriptFull, out);
     }
     if tools.running > 0 {
         return State::Tooling { tools };
@@ -739,11 +831,18 @@ fn cancel_call(id: Id<Session>, end: End, out: &mut Queue<Request>) -> State {
     State::Closing { end, waiting: Waiting::Call }
 }
 
-/// Cancels the runs in flight, to end with `end` once each has settled.
-fn cancel_tools(tools: Tools, end: End, out: &mut Queue<Request>) -> State {
+/// Cancels the runs in flight, the tools' and the opener's, to end with `end`
+/// once each has settled.
+fn cancel_tools(runs: &Slab<Run>, tools: Tools, end: End, out: &mut Queue<Request>) -> State {
     for slot in &tools.slots {
         match slot {
-            Slot::Running { run } => out.push(Request::CancelTool { owner: run.token() }),
+            Slot::Running { run } => {
+                let owner = run.token();
+                match runs.get(*run).expect("a run in flight is in the slab").by {
+                    By::Tools => out.push(Request::CancelTool { owner }),
+                    By::Opener => out.push(Request::Withdraw { owner }),
+                }
+            }
             Slot::Done { .. } => {}
         }
     }
@@ -751,11 +850,11 @@ fn cancel_tools(tools: Tools, end: End, out: &mut Queue<Request>) -> State {
 }
 
 /// Ends with `end` at once, or once the runs in flight have settled.
-fn abandon(conversation: &Conversation, tools: Tools, end: End, out: &mut Queue<Request>) -> State {
+fn abandon(conversation: &Conversation, runs: &Slab<Run>, tools: Tools, end: End, out: &mut Queue<Request>) -> State {
     if tools.running == 0 {
         return finish(conversation, end, out);
     }
-    cancel_tools(tools, end, out)
+    cancel_tools(runs, tools, end, out)
 }
 
 /// Counts a completion that came back, and tells the opener.
@@ -789,7 +888,7 @@ fn admit(opener: Token, spec: Spec, limits: &Limits, now: Time) -> Option<Conver
         return None;
     }
     let content: Box<[Block]> = Box::new([Block::Text { text: spec.prompt }]);
-    let bytes = spec_cost(&spec.model, &spec.system, &content)?;
+    let bytes = spec_cost(&spec.model, &spec.system, &spec.delegated, &content)?;
     if bytes > limits.session_bytes {
         return None;
     }
@@ -801,6 +900,7 @@ fn admit(opener: Token, spec: Spec, limits: &Limits, now: Time) -> Option<Conver
         model: spec.model,
         system: spec.system,
         tools: spec.tools,
+        delegated: spec.delegated,
         max_tokens: spec.max_tokens,
         transcript,
         bytes,
@@ -859,6 +959,7 @@ fn complete(id: Id<Session>, conversation: &Conversation, limits: &Limits) -> Re
         model: conversation.model.clone(),
         system: conversation.system.clone(),
         tools: conversation.tools,
+        delegated: conversation.delegated.clone(),
         messages: conversation.transcript.to_boxed(),
         max_tokens,
     };
@@ -906,7 +1007,9 @@ fn tally(content: &[Block]) -> (u32, u32) {
     let (mut calls, mut invalid): (u32, u32) = (0, 0);
     for block in content {
         match block {
-            Block::ToolCall { call: Decoded::Owned { .. }, .. } => calls = calls.saturating_add(1),
+            Block::ToolCall { call: Decoded::Owned { .. } | Decoded::Delegated { .. }, .. } => {
+                calls = calls.saturating_add(1);
+            }
             Block::ToolCall { call: Decoded::Invalid { .. }, .. } => {
                 calls = calls.saturating_add(1);
                 invalid = invalid.saturating_add(1);
@@ -975,23 +1078,29 @@ fn charge(conversation: &mut Conversation, cost: Option<u64>, limits: &Limits) -
     true
 }
 
-/// What a spec costs: its names and its first message.
-fn spec_cost(model: &[u8], system: &[u8], content: &[Block]) -> Option<u64> {
-    len(model)?.checked_add(len(system)?)?.checked_add(content_cost(content)?)
+/// What a spec costs: its names, the tools its opener serves, and its first
+/// message.
+fn spec_cost(model: &[u8], system: &[u8], delegated: &[Descriptor], content: &[Block]) -> Option<u64> {
+    let descriptor = u64::try_from(size_of::<Descriptor>()).ok()?;
+    let delegated = descriptor.checked_mul(u64::try_from(delegated.len()).ok()?)?;
+    len(model)?.checked_add(len(system)?)?.checked_add(delegated)?.checked_add(content_cost(content)?)
 }
 
 /// What an assistant message with `calls` tool calls costs while its tools run:
-/// the message, a slot for each call's result, and the answers to the invalid
-/// calls, which are known already.
+/// the message, a block for each call's result, which is no less than the slot
+/// the result waits in, and the answers to the invalid calls, which are known
+/// already.
 fn held(content: &[Block], calls: u32) -> Option<u64> {
-    let slots = u64::try_from(size_of::<Slot>()).ok()?.checked_mul(u64::from(calls))?;
+    let slots = u64::try_from(size_of::<Block>()).ok()?.checked_mul(u64::from(calls))?;
     let mut cost = content_cost(content)?.checked_add(slots)?;
     for block in content {
         match block {
             Block::ToolCall { id, name: _, input: _, call: Decoded::Invalid { problem } } => {
                 cost = cost.checked_add(len(id)?)?.checked_add(problem_cost(problem)?)?;
             }
-            Block::ToolCall { call: Decoded::Owned { .. }, .. } | Block::Text { .. } | Block::ToolResult { .. } => {}
+            Block::ToolCall { call: Decoded::Owned { .. } | Decoded::Delegated { .. }, .. }
+            | Block::Text { .. }
+            | Block::ToolResult { .. } => {}
         }
     }
     Some(cost)
@@ -1016,8 +1125,10 @@ fn payload_cost(block: &Block) -> Option<u64> {
     match block {
         Block::Text { text } => len(text),
         Block::ToolCall { id, name, input, call } => {
+            // A delegated call is the opener's to hold.
             let decoded = match call {
                 Decoded::Owned { call } => call_cost(call)?,
+                Decoded::Delegated { ticket: _, effect: _ } => 0,
                 Decoded::Invalid { problem } => problem_cost(problem)?,
             };
             len(id)?.checked_add(len(name)?)?.checked_add(len(input)?)?.checked_add(decoded)
@@ -1025,6 +1136,8 @@ fn payload_cost(block: &Block) -> Option<u64> {
         Block::ToolResult { id, result } => {
             let returned = match result {
                 Returned::Owned { outcome } => outcome_cost(outcome)?,
+                // The opener holds its answer, and the session counts it.
+                Returned::Delegated { answer } => answer.bytes,
                 Returned::Invalid { problem } => problem_cost(problem)?,
                 Returned::NotRun => 0,
             };

@@ -15,6 +15,7 @@
 //! entities, nothing in flight, every session ended, and facts that add up to
 //! what crossed the boundary unless some were dropped).
 
+pub mod tickets;
 pub mod translate;
 mod world;
 

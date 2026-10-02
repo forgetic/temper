@@ -22,6 +22,8 @@ pub(crate) fn event(event: Event) -> session::Event {
         Event::Cancelled { owner } => session::Event::Cancelled { owner },
         Event::ToolDone { owner, outcome } => session::Event::ToolDone { owner, outcome },
         Event::ToolCancelled { owner } => session::Event::ToolCancelled { owner },
+        Event::Answered { owner, answer } => session::Event::Answered { owner, answer },
+        Event::AnswerCancelled { owner } => session::Event::AnswerCancelled { owner },
     }
 }
 
@@ -36,5 +38,9 @@ pub(crate) fn request(request: session::Request) -> Request {
         session::Request::Cancel { owner } => Request::Cancel { owner },
         session::Request::Tool { owner, call, deadline } => Request::Tool { owner, call, deadline },
         session::Request::CancelTool { owner } => Request::CancelTool { owner },
+        session::Request::Delegate { owner, opener, call, deadline } => {
+            Request::Delegate { owner, opener, call, deadline }
+        }
+        session::Request::Withdraw { owner } => Request::Withdraw { owner },
     }
 }
