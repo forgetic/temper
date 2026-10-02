@@ -334,13 +334,16 @@ fn pages_past_the_limits_are_left_out_of_the_index() {
     assert_eq!(read, 4, "the first four it may name: a, b, c and d");
     let [Request::Indexed { lines, .. }] = &*h.resume() else { panic!("answered") };
     assert_eq!(**lines, [line(REPO, b"a"), line(REPO, b"b"), line(REPO, b"c")], "d's description is too long");
-    let mut facts = 0_u32;
+    let (mut listed, mut left_out) = (0_u32, 0_u32);
     while let Some(fact) = h.model.pop_fact() {
         if fact == (Fact::Listed { pages: 4, left_out: 2 }) {
-            facts = facts.checked_add(1).unwrap();
+            listed = listed.checked_add(1).unwrap();
+        }
+        if fact == Fact::LeftOut {
+            left_out = left_out.checked_add(1).unwrap();
         }
     }
-    assert_eq!(facts, 1);
+    assert_eq!((listed, left_out), (1, 1), "the listing's two, then d");
 }
 
 #[test]
@@ -368,7 +371,7 @@ fn a_recall_by_name_reads_the_page_afresh() {
     let [Request::Fetch { owner: fetch, scope: REPO, name }] = &*asked else { panic!("read afresh: {asked:?}") };
     assert_eq!(&**name, b"aa");
     let asked = h.read(*fetch, b"aa, edited", 5);
-    let entry = Entry { scope: REPO, name: Box::from(*b"aa"), page: page(b"aa, edited") };
+    let entry = Entry { scope: REPO, name: Box::from(*b"aa"), revision: 5, page: page(b"aa, edited") };
     assert_eq!(*asked, [Request::Recalled { reply_to: reply(2), entries: Box::new([entry]), failed: 0 }]);
     // A page that is gone is left out; one that cannot be read is counted.
     for (fetched, failed) in [(Fetched::Gone, 0), (Fetched::Failed, 1)] {
@@ -393,7 +396,7 @@ fn a_recall_by_search_reads_what_the_index_finds_in_turn() {
     let [Request::Fetch { owner, name, .. }] = &*asked else { panic!("{asked:?}") };
     assert_eq!(&**name, b"test style", "at most the recall's limit of two");
     let asked = h.step(Event::Fetched { owner: *owner, fetched: Fetched::Gone });
-    let entry = Entry { scope: REPO, name: Box::from(*b"flaky test"), page: page(b"flaky test") };
+    let entry = Entry { scope: REPO, name: Box::from(*b"flaky test"), revision: 1, page: page(b"flaky test") };
     assert_eq!(*asked, [Request::Recalled { reply_to: reply(2), entries: Box::new([entry]), failed: 0 }]);
 }
 
@@ -408,8 +411,13 @@ fn a_note_written_is_learned_by_the_index() {
     assert_eq!((&**name, written), (&b"new"[..], &page(b"new")));
     let asked = h.step(Event::Wrote { owner: *owner, wrote: Wrote::Done { revision: 1 } });
     assert_eq!(*asked, [Request::Noted { reply_to: reply(2), noted: Noted::Done }]);
-    let change = Change::Revise(page(b"aa, revised"));
+    // A revision of the page the run recalled at revision 1, which it still
+    // is: read afresh, then edited.
+    let change = Change::Revise { page: page(b"aa, revised"), revision: 1 };
     let asked = h.step(Event::Note { reply_to: reply(3), scope: REPO, name: Box::from(*b"aa"), change });
+    let [Request::Fetch { owner, name, .. }] = &*asked else { panic!("read afresh: {asked:?}") };
+    assert_eq!(&**name, b"aa");
+    let asked = h.read(*owner, b"aa", 1);
     let [Request::Edit { owner, .. }] = &*asked else { panic!("{asked:?}") };
     h.step(Event::Wrote { owner: *owner, wrote: Wrote::Done { revision: 2 } });
     let [Request::Indexed { lines, .. }] = &*h.step(Event::Index { reply_to: reply(4), scopes: RUN, budget: 1000 })
@@ -443,7 +451,7 @@ fn a_note_that_finds_the_wiki_otherwise_says_so() {
     assert_eq!(&**name, b"bb");
     let asked = h.read(owner(&asked[1..]), b"theirs", 4);
     assert!(asked.is_empty());
-    let asked = h.step(note(4, b"cc", Change::Revise(page(b"cc"))));
+    let asked = h.step(note(4, b"cc", Change::New(page(b"cc"))));
     let asked = h.step(Event::Wrote { owner: owner(&asked), wrote: Wrote::Failed });
     assert_eq!(*asked, [Request::Noted { reply_to: reply(4), noted: Noted::Unavailable }]);
     let [Request::Indexed { lines, .. }] = &*h.step(Event::Index { reply_to: reply(5), scopes: RUN, budget: 1000 })
@@ -453,6 +461,51 @@ fn a_note_that_finds_the_wiki_otherwise_says_so() {
     let mut theirs = line(REPO, b"theirs");
     theirs.name = Box::from(*b"bb");
     assert_eq!(**lines, [theirs]);
+}
+
+#[test]
+fn a_revision_of_a_page_written_since_the_run_recalled_it_is_refused_as_moved() {
+    let mut h = read(&[b"aa", b"bb"], &[]);
+    let change = Change::Revise { page: page(b"mine"), revision: 1 };
+    let asked = h.step(note(2, b"aa", change));
+    let asked = h.read(owner(&asked), b"theirs", 2);
+    assert_eq!(*asked, [Request::Noted { reply_to: reply(2), noted: Noted::Moved }], "nothing written");
+    let [Request::Indexed { lines, .. }] = &*h.step(Event::Index { reply_to: reply(3), scopes: RUN, budget: 1000 })
+    else {
+        panic!("answered")
+    };
+    let mut theirs = line(REPO, b"theirs");
+    theirs.name = Box::from(*b"aa");
+    assert_eq!(**lines, [theirs, line(REPO, b"bb")], "the index learned what was read");
+    // Gone, or not read.
+    let asked = h.step(note(4, b"bb", Change::Revise { page: page(b"mine"), revision: 1 }));
+    let asked = h.step(Event::Fetched { owner: owner(&asked), fetched: Fetched::Gone });
+    assert_eq!(*asked, [Request::Noted { reply_to: reply(4), noted: Noted::Missing }]);
+    let asked = h.step(note(5, b"aa", Change::Revise { page: page(b"mine"), revision: 2 }));
+    let asked = h.step(Event::Fetched { owner: owner(&asked), fetched: Fetched::Failed });
+    assert_eq!(*asked, [Request::Noted { reply_to: reply(5), noted: Noted::Unavailable }]);
+}
+
+#[test]
+fn a_pass_reads_what_its_listing_wanted_while_hints_and_notes_wait_for_it() {
+    let mut h = Harness::new(LIMITS);
+    let asked = h.step(Event::Index { reply_to: reply(1), scopes: RUN, budget: 1000 });
+    assert!(h.list(listing(&asked, DEPLOYMENT), &[]).is_empty());
+    let asked = h.list(listing(&asked, REPO), &[(b"aa", 1), (b"bb", 1)]);
+    let [Request::Fetch { owner: first, .. }] = &*asked else { panic!("{asked:?}") };
+    // A storm of hints and a note: none of it goes ahead of the pass.
+    for name in [b"cc", b"dd", b"ee", b"aa"] {
+        assert!(h.step(Event::Changed { scope: REPO, name: Box::from(*name) }).is_empty());
+    }
+    assert!(h.step(Event::Refresh { scope: REPO }).is_empty());
+    assert!(h.step(note(2, b"ff", Change::New(page(b"ff")))).is_empty());
+    let asked = h.read(*first, b"aa", 1);
+    let [Request::Fetch { owner: second, name, .. }] = &*asked else { panic!("{asked:?}") };
+    assert_eq!(&**name, b"bb", "the pass's own read");
+    let asked = h.read(*second, b"bb", 1);
+    let [Request::Create { .. }] = &*asked else { panic!("the pass ended, then the note: {asked:?}") };
+    let [Request::Indexed { lines, .. }] = &*h.resume() else { panic!("answered once the pass ended") };
+    assert_eq!(**lines, [line(REPO, b"aa"), line(REPO, b"bb")]);
 }
 
 #[test]

@@ -74,6 +74,13 @@ impl<D> Schedule<D> {
     pub fn is_empty(&self) -> bool {
         self.due.is_empty()
     }
+
+    /// How many deliveries are in flight: what a world caps, so that a run
+    /// that never settles fails fast instead of growing.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.due.len()
+    }
 }
 
 impl<D> Default for Schedule<D> {

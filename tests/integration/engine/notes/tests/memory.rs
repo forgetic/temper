@@ -197,7 +197,9 @@ fn fill(limits: Limits) {
     let refused = notes.step(Event::Index { reply_to, scopes: Scopes { repository: 0, goal: None }, budget: 1 });
     assert_eq!(refused, [Asked::Answer], "refused as busy");
     notes.settle(reads, 2);
-    // Recalls reading as many pages as they may, each of the limits.
+    // Recalls reading as many pages as they may, each of the limits; the
+    // first keeps the deployment's scope, in the place of a full one,
+    // evicted.
     for _ in 0..limits.calls {
         let reply_to = notes.reply();
         let recall =
@@ -243,7 +245,7 @@ fn paths(limits: Limits) {
     for wrote in [Wrote::Missing, Wrote::Exists, Wrote::Failed] {
         let reply_to = notes.reply();
         let note =
-            Event::Note { reply_to, scope: scope(0), name: name(&limits, 2), change: Change::Revise(page(&limits)) };
+            Event::Note { reply_to, scope: scope(0), name: name(&limits, 2), change: Change::New(page(&limits)) };
         // The scope could not be listed: it is listed again first.
         let mut asked = notes.step(note);
         let mut written = false;
@@ -260,6 +262,16 @@ fn paths(limits: Limits) {
             asked.extend(more);
         }
         assert!(written);
+    }
+    // A revision, read afresh first: written over if it has not moved, refused
+    // as moved if it has.
+    for recalled in [4, 3] {
+        let reply_to = notes.reply();
+        let change = Change::Revise { page: page(&limits), revision: recalled };
+        let asked = notes.step(Event::Note { reply_to, scope: scope(0), name: name(&limits, 3), change });
+        let [Asked::Fetch(owner)] = asked[..] else { panic!("read afresh") };
+        let asked = notes.step(Event::Fetched { owner, fetched: Fetched::Page { revision: 4, page: page(&limits) } });
+        notes.settle(asked, 5);
     }
     for fetched in [Fetched::Failed, Fetched::Gone] {
         let reply_to = notes.reply();

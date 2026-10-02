@@ -47,7 +47,8 @@ pub(crate) fn ops(limits: &Limits) -> Option<u32> {
 ///
 /// It counts the containers, their bookkeeping included, and the payloads,
 /// not allocator overhead: each scope kept with a full index, as many pages
-/// lacking, and its queues of calls; each call holding the most one may (a
+/// lacking and as many for its pass to read, and its queues of calls, with
+/// one scope's queues more for an eviction; each call holding the most one may (a
 /// note's page, or a recall's entries); the operations in flight; and the
 /// event in hand, a listing of a scope's pages or a page read. What goes out
 /// in a request is moved out in the step that makes it, and is its
@@ -65,12 +66,17 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     let entries = u64::from(limits.entries);
     let known = name.checked_add(description)?.checked_add(references)?;
     let index = Map::<Box<[u8]>, Known>::worst_case(limits.entries)?.checked_add(entries.checked_mul(known)?)?;
-    let lacking = Set::<Box<[u8]>>::worst_case(limits.entries)?.checked_add(entries.checked_mul(name)?)?;
+    // The pages lacking, and those its pass reads: as many again.
+    let lacking =
+        Set::<Box<[u8]>>::worst_case(limits.entries)?.checked_add(entries.checked_mul(name)?)?.checked_mul(2)?;
     let queues = Queue::<Id<Call>>::worst_case(limits.calls)?.checked_mul(2)?;
     let kept = index.checked_add(lacking)?.checked_add(queues)?.checked_add(name)?;
+    // A scope evicted is replaced in place, the new one's queues made while
+    // the old one is still whole.
     let scopes = Slab::<Kept>::worst_case(limits.scopes)?
         .checked_add(Map::<Scope, Id<Kept>>::worst_case(limits.scopes)?)?
-        .checked_add(u64::from(limits.scopes).checked_mul(kept)?)?;
+        .checked_add(u64::from(limits.scopes).checked_mul(kept)?)?
+        .checked_add(queues)?;
     // A call: a search's query; a note's name and page, and what of it the
     // index learns once it is written; a recall's query, the names it wants
     // and the entries it read.

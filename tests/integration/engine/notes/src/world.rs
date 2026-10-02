@@ -13,6 +13,11 @@ use crate::referee::{Notes, Seen, Stimulus};
 /// the loop's flow control is exercised.
 const SLACK: u32 = 2;
 
+/// The most lines a trace keeps, and deliveries in flight: a run past them
+/// fails, with its seed, rather than grow.
+const MAX_TRACE: usize = 200_000;
+const MAX_DELIVERIES: usize = 10_000;
+
 /// The scopes of the world: the deployment's, two repositories', and a goal
 /// in each.
 pub const SCOPES: [Scope; 5] = [
@@ -54,7 +59,7 @@ pub const LIMITS: Limits = Limits {
 };
 
 /// How a world's calls ended, by kind, for the sweep.
-pub const ENDINGS: [&str; 13] = [
+pub const ENDINGS: [&str; 14] = [
     "indexed",
     "cut",
     "unread",
@@ -64,6 +69,7 @@ pub const ENDINGS: [&str; 13] = [
     "noted",
     "missing",
     "exists",
+    "moved",
     "unavailable",
     "busy",
     "oversized",
@@ -217,12 +223,13 @@ enum Op {
     Delete(Scope, Box<[u8]>),
 }
 
-/// What a call asked, as the parent keeps it until its answer.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// What a call asked, as the parent keeps it until its answer: a recall by
+/// name, which page.
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Asked {
     Index,
     Search,
-    Recall,
+    Recall(Option<(Scope, Vec<u8>)>),
     Note,
 }
 
@@ -241,11 +248,14 @@ pub struct World {
     wiki: BTreeMap<(Scope, Vec<u8>), (u64, Page)>,
     revisions: u64,
     listings: u64,
-    /// The calls in flight, the wiki operations in flight, and the listings
-    /// the notes took in during this iteration.
+    /// The calls in flight, the wiki operations in flight; the listings on
+    /// their way to the notes, by their operation; and those the notes took
+    /// in during this iteration, each with how many requests its steps had
+    /// emitted before.
     calls: Ledger<u64, Asked>,
     ops: Ledger<u64, ()>,
-    taken_in: Vec<u64>,
+    listings_of: BTreeMap<u64, u64>,
+    taken_in: Vec<(usize, u64)>,
     /// The pages the last lines answered name.
     last_lines: Vec<(Scope, Vec<u8>)>,
     calls_left: u32,
@@ -272,6 +282,7 @@ impl World {
             listings: 0,
             calls: Ledger::new("call"),
             ops: Ledger::new("wiki operation"),
+            listings_of: BTreeMap::new(),
             taken_in: Vec::new(),
             last_lines: Vec::new(),
             calls_left: settings.calls,
@@ -328,6 +339,7 @@ impl World {
     pub fn index(&mut self, scopes: Scopes, iterations: u32) -> Vec<(Scope, Vec<u8>)> {
         let token = self.wire.name();
         self.calls.open(token, Asked::Index);
+        self.observe(Seen::Asked { call: token, page: None });
         self.stage.push(Event::Index { reply_to: ReplyTo::new(Token::new(token)), scopes, budget: u32::MAX });
         self.last_lines.clear();
         self.run(iterations);
@@ -349,7 +361,7 @@ impl World {
             assert!(next > self.now, "time moves forward");
             self.now = next;
         }
-        panic!("the world did not settle in {iterations} iterations");
+        panic!("seed {}: the world did not settle in {iterations} iterations", self.settings.seed);
     }
 
     /// One iteration of the loop, as the shell would run it.
@@ -371,15 +383,38 @@ impl World {
             notes::resume(&mut self.model, &self.stage.env, &mut self.stage.out);
         }
         while let Some(event) = self.stage.next_event() {
-            self.trace.log(now, format!("notes <- {}", describe(&event)));
+            // A listing is taken in as the notes step it: the answers emitted
+            // before it are judged against the listing before.
+            let listing = match &event {
+                Event::Listed { owner, pages: Some(_) } => self.listings_of.remove(&owner.raw()),
+                Event::Listed { pages: None, .. }
+                | Event::Index { .. }
+                | Event::Search { .. }
+                | Event::Recall { .. }
+                | Event::Note { .. }
+                | Event::Refresh { .. }
+                | Event::Changed { .. }
+                | Event::Fetched { .. }
+                | Event::Wrote { .. } => None,
+            };
+            if let Some(listing) = listing {
+                self.taken_in.push((usize::try_from(self.stage.out.len()).expect("small"), listing));
+            }
+            self.log(format!("notes <- {}", describe(&event)));
             notes::step(&mut self.model, &self.stage.env, event, &mut self.stage.out);
         }
-        // What the steps asked for, at the end of the iteration; then the
-        // listings the notes took in, which the answers above may predate.
+        // What the steps asked for, at the end of the iteration, in the
+        // order they asked, each listing taken in among them where it was.
+        let mut taken_in = std::mem::take(&mut self.taken_in).into_iter().peekable();
+        let mut emitted = 0;
         while let Some(request) = self.stage.out.pop() {
+            while let Some((_, listing)) = taken_in.next_if(|(before, _)| *before <= emitted) {
+                self.observe(Seen::TakenIn { listing });
+            }
             self.request(request);
+            emitted += 1;
         }
-        for listing in std::mem::take(&mut self.taken_in) {
+        for (_, listing) in taken_in {
             self.observe(Seen::TakenIn { listing });
         }
         while let Some(fact) = self.model.pop_fact() {
@@ -403,7 +438,7 @@ impl World {
                     self.stage.push(Event::Refresh { scope });
                 }
                 if self.calls_left > 0 || self.edits_left > 0 {
-                    self.wire.send(self.now.saturating_add(self.settings.poll), Delivery::Poll);
+                    self.deliver_at(self.now.saturating_add(self.settings.poll), Delivery::Poll);
                 }
             }
             Delivery::Serve { owner, op } => self.serve(owner, op),
@@ -420,8 +455,9 @@ impl World {
                     | Event::Changed { .. } => unreachable!("the wiki answers with terminals"),
                 };
                 self.ops.end(owner);
+                self.assert_contract(&event);
                 if let Some(listing) = listing {
-                    self.taken_in.push(listing);
+                    self.listings_of.insert(owner, listing);
                 }
                 self.stage.push(event);
             }
@@ -434,7 +470,7 @@ impl World {
         self.calls_left -= 1;
         if self.calls_left > 0 {
             let at = self.now.saturating_add(self.settings.call_gap.draw(&mut self.rng));
-            self.wire.send(at, Delivery::Call);
+            self.deliver_at(at, Delivery::Call);
         }
         self.stats.calls += 1;
         let token = self.wire.name();
@@ -450,15 +486,23 @@ impl World {
             (Asked::Search, Event::Search { reply_to, scopes, query: word, most })
         } else if draw < settings.searches + settings.recalls {
             let scope = SCOPES[self.pick(SCOPES.len())];
-            (Asked::Recall, Event::Recall { reply_to, recall: Recall::Name { scope, name } })
+            let page = Some((scope, name.to_vec()));
+            (Asked::Recall(page), Event::Recall { reply_to, recall: Recall::Name { scope, name } })
         } else if draw < settings.searches + settings.recalls + settings.recall_searches {
             let most = u32::try_from(self.rng.between(1, 5)).expect("small");
-            (Asked::Recall, Event::Recall { reply_to, recall: Recall::Search { scopes, query: word, most } })
+            (Asked::Recall(None), Event::Recall { reply_to, recall: Recall::Search { scopes, query: word, most } })
         } else if draw < settings.searches + settings.recalls + settings.recall_searches + settings.notes {
             let scope = SCOPES[self.pick(SCOPES.len())];
             let change = match self.rng.below(3) {
                 0 => Change::New(self.page(Author::Run { repository: 0, number: 7 })),
-                1 => Change::Revise(self.page(Author::Run { repository: 1, number: 9 })),
+                1 => {
+                    // The revision the run recalled: the page's now, or an
+                    // older one now and then, which someone wrote over.
+                    let now = self.wiki.get(&(scope, name.to_vec())).map_or(0, |(revision, _)| *revision);
+                    let revision = if self.rng.chance(700) { now } else { now.saturating_sub(1) };
+                    let page = self.page(Author::Run { repository: 1, number: 9 });
+                    Change::Revise { page, revision }
+                }
                 _ => Change::Remove,
             };
             (Asked::Note, Event::Note { reply_to, scope, name, change })
@@ -466,10 +510,12 @@ impl World {
             let budget = u32::try_from(self.rng.below(120)).expect("small");
             (Asked::Index, Event::Index { reply_to, scopes, budget })
         };
+        let page = match &asked {
+            Asked::Recall(page) => page.clone(),
+            Asked::Index | Asked::Search | Asked::Note => None,
+        };
         self.calls.open(token, asked);
-        if asked == Asked::Recall {
-            self.observe(Seen::Asked { call: token });
-        }
+        self.observe(Seen::Asked { call: token, page });
         self.stage.push(event);
     }
 
@@ -479,7 +525,7 @@ impl World {
         self.edits_left -= 1;
         if self.edits_left > 0 {
             let at = self.now.saturating_add(self.settings.edit_gap.draw(&mut self.rng));
-            self.wire.send(at, Delivery::Edit);
+            self.deliver_at(at, Delivery::Edit);
         }
         self.stats.edits += 1;
         let scope = SCOPES[self.pick(SCOPES.len())];
@@ -494,16 +540,45 @@ impl World {
         if self.rng.chance(self.settings.hinted) {
             self.stats.hints += 1;
             let at = self.now.saturating_add(self.settings.hint_after.draw(&mut self.rng));
-            self.wire.send(at, Delivery::Hint { scope, name: name.to_vec() });
+            self.deliver_at(at, Delivery::Hint { scope, name: name.to_vec() });
+        }
+    }
+
+    /// The parent's contract (`Event::Listed`, `Event::Fetched`): listings
+    /// and pages cut to the notes' limits.
+    fn assert_contract(&self, event: &Event) {
+        let limits = self.settings.limits;
+        let seed = self.settings.seed;
+        let fits = |len: usize, most: u32| u32::try_from(len).is_ok_and(|len| len <= most);
+        match event {
+            Event::Listed { pages: Some(pages), .. } => {
+                assert!(fits(pages.len(), limits.entries), "seed {seed}: a listing cut to the notes' entries");
+            }
+            Event::Fetched { fetched: Fetched::Page { page, .. }, .. } => {
+                let within = fits(page.description.len(), limits.description_bytes)
+                    && fits(page.body.len(), limits.body_bytes)
+                    && fits(page.references.len(), limits.references);
+                assert!(within, "seed {seed}: a page cut to the notes' limits");
+            }
+            Event::Listed { pages: None, .. }
+            | Event::Fetched { .. }
+            | Event::Wrote { .. }
+            | Event::Index { .. }
+            | Event::Search { .. }
+            | Event::Recall { .. }
+            | Event::Note { .. }
+            | Event::Refresh { .. }
+            | Event::Changed { .. } => {}
         }
     }
 
     /// What the notes asked for, carried as the parent would.
     fn request(&mut self, request: Request) {
-        self.trace.log(self.now, format!("notes -> {}", describe_request(&request)));
+        self.log(format!("notes -> {}", describe_request(&request)));
         match request {
             Request::Indexed { reply_to, lines, more, unread } => {
-                self.calls.end(reply_to.into_token().raw());
+                let call = reply_to.into_token().raw();
+                assert_eq!(self.calls.end(call), Asked::Index, "an index is answered as one");
                 self.end("indexed");
                 if more > 0 {
                     self.end("cut");
@@ -511,42 +586,46 @@ impl World {
                 if unread > 0 {
                     self.end("unread");
                 }
-                self.lines(&lines);
+                self.lines(lines);
+                self.observe(Seen::Answered { call });
             }
             Request::Found { reply_to, lines, .. } => {
-                self.calls.end(reply_to.into_token().raw());
+                let call = reply_to.into_token().raw();
+                assert_eq!(self.calls.end(call), Asked::Search, "a search is answered as one");
                 self.end("found");
-                self.lines(&lines);
+                self.lines(lines);
+                self.observe(Seen::Answered { call });
             }
             Request::Recalled { reply_to, entries, failed } => {
                 let call = reply_to.into_token().raw();
-                assert_eq!(self.calls.end(call), Asked::Recall, "a recall is answered as one");
+                let Asked::Recall(_) = self.calls.end(call) else { panic!("a recall is answered as one") };
                 self.end("recalled");
                 if failed > 0 {
                     self.end("read failed");
                 }
                 self.stats.entries += u32::try_from(entries.len()).expect("few");
-                self.observe(Seen::Recalled { call, entries: entries.into_vec() });
+                self.observe(Seen::Recalled { call, entries: entries.into_vec(), failed });
             }
             Request::Noted { reply_to, noted } => {
-                assert_eq!(self.calls.end(reply_to.into_token().raw()), Asked::Note, "a note is answered as one");
+                let call = reply_to.into_token().raw();
+                assert_eq!(self.calls.end(call), Asked::Note, "a note is answered as one");
                 self.end(match noted {
                     Noted::Done => "noted",
                     Noted::Missing => "missing",
                     Noted::Exists => "exists",
+                    Noted::Moved => "moved",
                     Noted::Unavailable => "unavailable",
                 });
+                self.observe(Seen::Answered { call });
             }
             Request::Refused { reply_to, refusal } => {
                 let call = reply_to.into_token().raw();
-                let asked = self.calls.end(call);
+                self.calls.end(call);
                 self.end(match refusal {
                     Refusal::Busy => "busy",
                     Refusal::Oversized => "oversized",
                 });
-                if asked == Asked::Recall {
-                    self.observe(Seen::Recalled { call, entries: Vec::new() });
-                }
+                self.observe(Seen::Answered { call });
             }
             Request::List { owner, scope } => self.send(owner, Op::List(scope)),
             Request::Fetch { owner, scope, name } => self.send(owner, Op::Fetch(scope, name)),
@@ -560,7 +639,28 @@ impl World {
     fn send(&mut self, owner: Token, op: Op) {
         self.ops.open(owner.raw(), ());
         let at = self.now.saturating_add(self.settings.latency.draw(&mut self.rng));
-        self.wire.send(at, Delivery::Serve { owner: owner.raw(), op });
+        self.deliver_at(at, Delivery::Serve { owner: owner.raw(), op });
+    }
+
+    /// Sends `delivery`, due at `at`, within the world's bound on what is in
+    /// flight.
+    fn deliver_at(&mut self, at: Time, delivery: Delivery) {
+        assert!(
+            self.wire.len() < MAX_DELIVERIES,
+            "seed {}: no more than {MAX_DELIVERIES} deliveries in flight",
+            self.settings.seed
+        );
+        self.wire.send(at, delivery);
+    }
+
+    /// Logs `line` in the trace, within the world's bound on it.
+    fn log(&mut self, line: String) {
+        assert!(
+            self.trace.lines().len() < MAX_TRACE,
+            "seed {}: a trace of no more than {MAX_TRACE} lines",
+            self.settings.seed
+        );
+        self.trace.log(self.now, line);
     }
 
     /// The wiki serves `op`, or fails it, and its answer goes back, late
@@ -644,7 +744,7 @@ impl World {
             self.stats.lates += 1;
             back = back.saturating_add(self.settings.lateness.draw(&mut self.rng));
         }
-        self.wire.send(self.now.saturating_add(back), Delivery::Answer { event, listing });
+        self.deliver_at(self.now.saturating_add(back), Delivery::Answer { event, listing });
     }
 
     /// Makes or edits the page `name` of `scope`, and returns its revision.
@@ -679,11 +779,10 @@ impl World {
     }
 
     /// The lines of an answer, for the referee.
-    fn lines(&mut self, lines: &[notes::Line]) {
+    fn lines(&mut self, lines: Box<[notes::Line]>) {
         self.stats.lines += u32::try_from(lines.len()).expect("few");
-        let lines: Vec<(Scope, Vec<u8>)> = lines.iter().map(|line| (line.scope, line.name.to_vec())).collect();
-        self.last_lines.clone_from(&lines);
-        self.observe(Seen::Lines { lines });
+        self.last_lines = lines.iter().map(|line| (line.scope, line.name.to_vec())).collect();
+        self.observe(Seen::Lines { lines: lines.into_vec() });
     }
 
     fn end(&mut self, ending: &'static str) {

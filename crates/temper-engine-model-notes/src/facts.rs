@@ -31,6 +31,9 @@ pub enum Fact {
     },
     /// A scope's pages could not be listed.
     Unlisted,
+    /// A page read or written was left out of its scope's index, which was
+    /// full, or the page past the limits.
+    LeftOut,
     /// A page was read, for an index or a recall, or could not be.
     Read,
     Unread,

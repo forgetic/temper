@@ -4,24 +4,40 @@
 //! is taken in the order it was asked: a page read before a listing is never
 //! taken in after it.
 //!
+//! Its pass (its first, or another for a scope that could never be listed)
+//! is a listing, then the reads of the pages that listing wanted, and the
+//! calls that need the scope wait for it. What changes meanwhile (a hint, a
+//! note written, a listing asked for) waits for the pass to end, so that no
+//! stream of changes holds the calls waiting back.
+//!
+//! When idle, it starts the first of these:
+//!
+//! | Pass | Wanted | Becomes | Does |
+//! |---|---|---|---|
+//! | listing | its listing | listing | asks for the list |
+//! | reading | a page its listing wanted | fetching | asks for the page |
+//! | reading | nothing more | idle, follows | ends the pass: the calls waiting for it go on |
+//! | ended | a note waits to be written, new or removed | writing | asks for the write |
+//! | ended | a note waits to be revised | checking | asks for the page afresh |
+//! | ended | a page is lacking (listed at a revision it does not know, or changed) | fetching | asks for the page |
+//! | ended | a listing (`Refresh`, a `Changed` with no room) | listing | asks for the list |
+//!
+//! And on an operation's end:
+//!
 //! | Busy | Event | Becomes | Does |
 //! |---|---|---|---|
-//! | idle | a note waits to be written | writing | asks for the write |
-//! | idle | a page is lacking | fetching | asks for the page |
-//! | idle | in a pass, a listing taken in and no page lacking | idle, follows | ends the pass: the calls waiting for it go on |
-//! | idle | a listing is wanted (a new scope, `Refresh`, a `Changed` with no room) | listing | asks for the list |
-//! | listing | `Listed`, pages | idle, follows | marks the entries listed, wants the pages it does not know at their revision, forgets the entries no longer listed |
+//! | listing | `Listed`, pages | idle, follows | marks the entries listed, wants the pages it does not know at their revision (in a pass, those the pass reads), forgets the entries no longer listed |
 //! | listing | `Listed`, none | idle, follows | keeps what it knew |
-//! | fetching | `Fetched`, a page | idle, follows | learns its line; one past the limits is left out, and forgotten |
+//! | fetching | `Fetched`, a page | idle, follows | learns its line; one past the limits, or with no room, is left out, and forgotten |
 //! | fetching | `Fetched`, gone | idle, follows | forgets the entry |
 //! | fetching | `Fetched`, failed | idle, follows | keeps what it knew |
+//! | checking | `Fetched`, at the revision the note names | writing | learns its line, asks for the edit |
+//! | checking | `Fetched`, another revision, gone or failed | idle, follows | learns what it read, answers the note: moved, missing, unavailable |
 //! | writing | `Wrote` | idle, follows | learns what the write did, and answers the note |
-//! | listing, fetching, writing | another kind of terminal | | the contract rules it out |
+//! | listing, fetching, checking, writing | another kind of terminal | | the contract rules it out |
 //!
-//! A hint that comes while it is busy waits until it is idle: `Refresh`
-//! wants a listing, `Changed` the page. A scope is kept until a call needs
-//! room for another, and is evicted only once it is idle with no call
-//! pinning it, the least recently used first.
+//! A scope is kept until a call needs room for another, and is evicted only
+//! once it is idle with no call pinning it, the least recently used first.
 
 use alloc::boxed::Box;
 
@@ -37,8 +53,8 @@ use crate::model::{self, Model, Op};
 #[derive(Debug)]
 pub(crate) struct Kept {
     pub(crate) scope: Scope,
-    /// Where its pass stands: its first, or another for a scope that could
-    /// never be listed. Until it has ended, the calls that need it wait.
+    /// Where its pass stands. Until it has ended, the calls that need it
+    /// wait.
     pub(crate) pass: Pass,
     /// Whether its pages have been listed once: until then its index is not
     /// known.
@@ -73,12 +89,12 @@ pub(crate) struct Known {
 }
 
 /// A kept scope's pass: a listing, then the reads it wanted.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Debug)]
 pub(crate) enum Pass {
     /// Until a listing is taken in, or fails.
     Listing,
-    /// Reading the pages the listing wanted.
-    Reading,
+    /// Reading the pages the listing wanted, those left.
+    Reading(Set<Box<[u8]>>),
     Ended,
 }
 
@@ -89,6 +105,10 @@ pub(crate) enum Busy {
     Listing,
     Fetching {
         name: Box<[u8]>,
+    },
+    /// Reading afresh the page the note `call` revises.
+    Checking {
+        call: Id<Call>,
     },
     /// Writing for the note `call`.
     Writing {
@@ -119,7 +139,7 @@ impl Kept {
     fn is_idle(&self) -> bool {
         let idle = match self.busy {
             Busy::Idle => true,
-            Busy::Listing | Busy::Fetching { .. } | Busy::Writing { .. } => false,
+            Busy::Listing | Busy::Fetching { .. } | Busy::Checking { .. } | Busy::Writing { .. } => false,
         };
         idle && self.writes.is_empty() && self.pins == 0
     }
@@ -161,7 +181,7 @@ pub(crate) fn keep(
             kept.used = model.uses;
             let ended = match kept.pass {
                 Pass::Ended => true,
-                Pass::Listing | Pass::Reading => false,
+                Pass::Listing | Pass::Reading(_) => false,
             };
             if !kept.listed && ended {
                 kept.pass = Pass::Listing;
@@ -204,7 +224,8 @@ fn least_used(model: &Model) -> Option<Id<Kept>> {
     for (_, id) in &model.scopes {
         let kept = model.kept.get(*id).expect("a scope kept is in the slab");
         if kept.is_idle() && (least.is_none() || kept.used < oldest) {
-            (least, oldest) = (Some(*id), kept.used);
+            least = Some(*id);
+            oldest = kept.used;
         }
     }
     least
@@ -217,50 +238,72 @@ pub(crate) fn unpin(model: &mut Model, scope: Scope) {
     kept.pins = kept.pins.checked_sub(1).expect("a scope is unpinned once for each pin");
 }
 
-/// Starts what the kept scope `id` is to do next, if it is idle: a write, a
-/// page's read, a listing; and ends its pass once a listing has been taken
-/// in and no page is lacking, so that listings asked for meanwhile do not
-/// hold the calls waiting back.
+/// Starts what the kept scope `id` is to do next, if it is idle: its pass's
+/// listing and reads first, ending the pass once they are done; then a
+/// write, a page's read, a listing.
 pub(crate) fn follow(model: &mut Model, id: Id<Kept>, out: &mut Queue<Request>) {
     let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
     match kept.busy {
         Busy::Idle => {}
-        Busy::Listing | Busy::Fetching { .. } | Busy::Writing { .. } => return,
+        Busy::Listing | Busy::Fetching { .. } | Busy::Checking { .. } | Busy::Writing { .. } => return,
     }
     let scope = kept.scope;
-    if let Some(note) = kept.writes.pop() {
-        kept.busy = Busy::Writing { call: note };
-        let op = model::start(model, Op::Scope(id));
-        call::send(model, note, op, out);
+    let read = match &mut kept.pass {
+        Pass::Listing => {
+            if kept.relist {
+                kept.relist = false;
+                kept.busy = Busy::Listing;
+                let op = model::start(model, Op::Scope(id));
+                out.push(Request::List { owner: op.token(), scope });
+            }
+            return;
+        }
+        Pass::Reading(names) => names.pop_first(),
+        Pass::Ended => None,
+    };
+    if let Some(name) = read {
+        kept.lacking.remove(&name);
+        fetch(model, id, name, out);
         return;
     }
-    if let Some(name) = kept.lacking.pop_first() {
-        kept.busy = Busy::Fetching { name: name.clone() };
-        let op = model::start(model, Op::Scope(id));
-        out.push(Request::Fetch { owner: op.token(), scope, name });
-        return;
-    }
-    let reading = match kept.pass {
-        Pass::Reading => true,
+    let ended = match kept.pass {
+        Pass::Reading(_) => {
+            kept.pass = Pass::Ended;
+            true
+        }
         Pass::Listing | Pass::Ended => false,
     };
-    if reading {
-        kept.pass = Pass::Ended;
+    if ended {
         for _ in 0..kept.waiting.len() {
             let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
-            let Some(waiting) = kept.waiting.pop() else {
-                break;
-            };
+            let waiting = kept.waiting.pop().expect("as many as were counted");
             call::wake(model, waiting);
         }
     }
     let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
+    if let Some(note) = kept.writes.pop() {
+        call::send(model, id, note, out);
+        return;
+    }
+    if let Some(name) = kept.lacking.pop_first() {
+        fetch(model, id, name, out);
+        return;
+    }
     if kept.relist {
         kept.relist = false;
         kept.busy = Busy::Listing;
         let op = model::start(model, Op::Scope(id));
         out.push(Request::List { owner: op.token(), scope });
     }
+}
+
+/// The kept scope `id` reads the page `name`.
+fn fetch(model: &mut Model, id: Id<Kept>, name: Box<[u8]>, out: &mut Queue<Request>) {
+    let kept = model.kept.get_mut(id).expect("a scope kept is in the slab");
+    let scope = kept.scope;
+    kept.busy = Busy::Fetching { name: name.clone() };
+    let op = model::start(model, Op::Scope(id));
+    out.push(Request::Fetch { owner: op.token(), scope, name });
 }
 
 /// The pages of `scope` may have changed: they are listed again, if it is
@@ -301,11 +344,17 @@ pub(crate) fn listed(
     let kept = model.kept.get_mut(id).expect("a scope with an operation in flight is kept");
     match kept.busy {
         Busy::Listing => kept.busy = Busy::Idle,
-        Busy::Idle | Busy::Fetching { .. } | Busy::Writing { .. } => unreachable!("a list ends a listing"),
+        Busy::Idle | Busy::Fetching { .. } | Busy::Checking { .. } | Busy::Writing { .. } => {
+            unreachable!("a list ends a listing")
+        }
     }
-    kept.pass = match kept.pass {
-        Pass::Listing | Pass::Reading => Pass::Reading,
-        Pass::Ended => Pass::Ended,
+    // A pass's listing is taken in: the pass reads what it wants.
+    let in_pass = match kept.pass {
+        Pass::Listing => {
+            kept.pass = Pass::Reading(Set::with_capacity(env.limits.entries));
+            true
+        }
+        Pass::Reading(_) | Pass::Ended => false,
     };
     let Some(pages) = pages else {
         model.facts.push(Fact::Unlisted);
@@ -330,7 +379,18 @@ pub(crate) fn listed(
             }
             None => true,
         };
-        if wanted && kept.lacking.insert(page.name).is_err() {
+        if !wanted {
+            continue;
+        }
+        let room = if in_pass {
+            match &mut kept.pass {
+                Pass::Reading(names) => names.insert(page.name).is_ok(),
+                Pass::Listing | Pass::Ended => unreachable!("the pass reads what its listing wants"),
+            }
+        } else {
+            kept.lacking.insert(page.name).is_ok()
+        };
+        if !room {
             left_out = left_out.saturating_add(1);
         }
     }
@@ -355,13 +415,22 @@ pub(crate) fn fetched(model: &mut Model, env: &Env<Limits>, id: Id<Kept>, fetche
     let kept = model.kept.get_mut(id).expect("a scope with an operation in flight is kept");
     let name = match &kept.busy {
         Busy::Fetching { name } => name.clone(),
+        Busy::Checking { call } => {
+            let note = *call;
+            kept.busy = Busy::Idle;
+            call::checked(model, env, id, note, fetched, out);
+            return;
+        }
         Busy::Idle | Busy::Listing | Busy::Writing { .. } => unreachable!("a read ends a fetch"),
     };
     kept.busy = Busy::Idle;
     let fact = match fetched {
         Fetched::Page { revision, page } => {
-            learn(kept, &env.limits, name, revision, page);
-            Fact::Read
+            if learn(kept, &env.limits, name, revision, page) {
+                Fact::Read
+            } else {
+                Fact::LeftOut
+            }
         }
         Fetched::Gone => {
             kept.entries.remove(&name);
@@ -378,7 +447,9 @@ pub(crate) fn wrote(model: &mut Model, id: Id<Kept>, wrote: Wrote, out: &mut Que
     let kept = model.kept.get_mut(id).expect("a scope with an operation in flight is kept");
     let note = match kept.busy {
         Busy::Writing { call } => call,
-        Busy::Idle | Busy::Listing | Busy::Fetching { .. } => unreachable!("a write ends a write"),
+        Busy::Idle | Busy::Listing | Busy::Fetching { .. } | Busy::Checking { .. } => {
+            unreachable!("a write ends a write")
+        }
     };
     kept.busy = Busy::Idle;
     call::written(model, id, note, wrote, out);
@@ -386,17 +457,16 @@ pub(crate) fn wrote(model: &mut Model, id: Id<Kept>, wrote: Wrote, out: &mut Que
 }
 
 /// Learns the line of the page `name` at `revision`, as the last listing
-/// would have named it; a page past the limits, or one with no room left,
-/// is left out, and forgotten if it was known.
-pub(crate) fn learn(kept: &mut Kept, limits: &Limits, name: Box<[u8]>, revision: u64, page: Page) {
+/// would have named it, and says whether it did: a page past the limits, or
+/// one with no room left, is left out, and forgotten if it was known.
+pub(crate) fn learn(kept: &mut Kept, limits: &Limits, name: Box<[u8]>, revision: u64, page: Page) -> bool {
     if !fits(&page, limits) {
         kept.entries.remove(&name);
-        return;
+        return false;
     }
     let Page { description, author, references, body: _ } = page;
     let known = Known { revision, description, author, references, listing: kept.listings };
-    // With no room left for a new entry, it is left out.
-    let _left_out = kept.entries.insert(name, known).is_err();
+    kept.entries.insert(name, known).is_ok()
 }
 
 /// Whether `name` may name an entry under `limits`.

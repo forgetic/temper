@@ -87,11 +87,13 @@ pub struct Line {
     pub references: Box<[Reference]>,
 }
 
-/// An entry recalled, as its page was when it was read.
+/// An entry recalled, as its page was when it was read, at `revision`: what
+/// a run revising it names.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Entry {
     pub scope: Scope,
     pub name: Box<[u8]>,
+    pub revision: u64,
     pub page: Page,
 }
 
@@ -103,11 +105,15 @@ pub enum Recall {
     Search { scopes: Scopes, query: Box<[u8]>, most: u32 },
 }
 
-/// What a `note` write does to an entry.
+/// What a `note` write does to an entry. A revision names the revision the
+/// run recalled: the notes read the page afresh first, and refuse it as
+/// moved if a person, or another run, wrote it since, since the forge is
+/// right. The wiki has no conditional edit, so a write made between that
+/// read and the edit is still overwritten: the window is short, not closed.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Change {
     New(Page),
-    Revise(Page),
+    Revise { page: Page, revision: u64 },
     Remove,
 }
 
@@ -119,6 +125,9 @@ pub enum Noted {
     Missing,
     /// A new entry's page is there already.
     Exists,
+    /// A revised entry's page was written since the revision the run
+    /// recalled: nothing was written.
+    Moved,
     /// The wiki could not be written.
     Unavailable,
 }
@@ -168,8 +177,10 @@ pub enum Event {
     /// The lines of `scopes` whose descriptions hold `query`, the first
     /// `most`. Answered by exactly one `Found`, or `Refused`.
     Search { reply_to: ReplyTo, scopes: Scopes, query: Box<[u8]>, most: u32 },
-    /// A run's `recall`, read afresh from the wiki. Answered by exactly one
-    /// `Recalled`, or `Refused`.
+    /// A run's `recall`, read afresh from the wiki as it is when the read is
+    /// served. A recall is not ordered after a note the run is writing: a
+    /// run recalls what it noted once its `Noted` came. Answered by exactly
+    /// one `Recalled`, or `Refused`.
     Recall { reply_to: ReplyTo, recall: Recall },
     /// A `note` write, the rules having passed it. Answered by exactly one
     /// `Noted`, or `Refused`.
@@ -181,9 +192,13 @@ pub enum Event {
     /// read again, if the scope is kept.
     Changed { scope: Scope, name: Box<[u8]> },
     /// Terminal for `List`: the scope's pages, or `None` if they could not be
-    /// listed.
+    /// listed. The parent's contract: at most the limits' `entries` pages, the
+    /// protocol layer cutting a longer list there.
     Listed { owner: Token, pages: Option<Box<[Listed]>> },
-    /// Terminal for `Fetch`.
+    /// Terminal for `Fetch`. The parent's contract: a page within the limits'
+    /// description, body and references, the protocol layer cutting a
+    /// longer one (a page the notes find past them is left out all the
+    /// same).
     Fetched { owner: Token, fetched: Fetched },
     /// Terminal for `Create`, `Edit` and `Delete`.
     Wrote { owner: Token, wrote: Wrote },

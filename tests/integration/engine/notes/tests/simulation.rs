@@ -60,19 +60,23 @@ fn once_people_stop_the_index_holds_what_the_wiki_holds() {
 }
 
 #[test]
-fn a_wiki_that_fails_and_answers_late_still_answers_every_recall() {
-    let settings = Settings {
-        failures: 300,
-        late: 300,
-        lateness: temper_world::Span::millis(0, 20_000),
-        hinted: 300,
-        ..Settings::calm(3)
-    };
-    let world = run(settings);
-    let stats = world.stats();
-    assert!(count(&stats, "recalled") > 0 && count(&stats, "read failed") > 0, "{stats:?}");
-    assert!(count(&stats, "unavailable") > 0, "a write that failed is told: {stats:?}");
-    assert!(stats.failures > 0 && stats.lates > 0, "{stats:?}");
+fn a_wiki_that_fails_and_answers_late_still_answers_every_call() {
+    let mut endings = BTreeSet::new();
+    for seed in 0..8 {
+        let settings = Settings {
+            failures: 300,
+            late: 300,
+            lateness: temper_world::Span::millis(0, 20_000),
+            hinted: 300,
+            ..Settings::calm(seed)
+        };
+        let stats = run(settings).stats();
+        assert!(stats.failures > 0 && stats.lates > 0, "{stats:?}");
+        endings.extend(stats.endings.keys().copied());
+    }
+    for ending in ["recalled", "read failed", "unavailable"] {
+        assert!(endings.contains(ending), "{ending}: a read or a write that failed is told: {endings:?}");
+    }
 }
 
 #[test]

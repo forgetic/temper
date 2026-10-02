@@ -21,7 +21,7 @@ use crate::boundary::{
     Author, Change, Entry, Fetched, Line, Noted, Page, Recall, Reference, Refusal, Request, Scope, Scopes, Wrote,
 };
 use crate::facts::Fact;
-use crate::kept::{self, Known, Pass};
+use crate::kept::{self, Busy, Kept, Known, Pass};
 use crate::limits::Limits;
 use crate::model::{self, Model, Op};
 
@@ -63,6 +63,15 @@ enum Kind {
         scope: Scope,
         name: Box<[u8]>,
         change: Change,
+    },
+    /// A revision, its page being read afresh, to write `page` over it only
+    /// if it is still at `revision`.
+    Checking {
+        reply_to: ReplyTo,
+        scope: Scope,
+        name: Box<[u8]>,
+        page: Page,
+        revision: u64,
     },
     Sent {
         reply_to: ReplyTo,
@@ -180,7 +189,7 @@ pub(crate) fn note(
     out: &mut Queue<Request>,
 ) {
     let fits = match &change {
-        Change::New(page) | Change::Revise(page) => kept::fits(page, &env.limits),
+        Change::New(page) | Change::Revise { page, .. } => kept::fits(page, &env.limits),
         Change::Remove => true,
     };
     if !fits || !kept::named(&name, &env.limits) {
@@ -206,13 +215,13 @@ pub(crate) fn note(
 /// Admits a call that needs `scopes` kept, and answers it at once if they
 /// have all been read once; otherwise it waits for them.
 fn admit(model: &mut Model, env: &Env<Limits>, scopes: Scopes, kind: Kind, out: &mut Queue<Request>) {
-    let (order, count) = order(scopes);
-    let order = order.get(..count).expect("two or three scopes");
+    let order = order(scopes);
+    let order = order.as_slice();
     let refusal = if model.calls.is_full() { Err(Refusal::Busy) } else { kept::keep(model, env, order, out) };
     if let Err(refusal) = refusal {
         let reply_to = match kind {
             Kind::Index { reply_to, .. } | Kind::Search { reply_to, .. } | Kind::Finding { reply_to, .. } => reply_to,
-            Kind::Reading { .. } | Kind::Queued { .. } | Kind::Sent { .. } | Kind::Answered => {
+            Kind::Reading { .. } | Kind::Queued { .. } | Kind::Checking { .. } | Kind::Sent { .. } | Kind::Answered => {
                 unreachable!("only an index, a search or a recall by search waits for its scopes")
             }
         };
@@ -225,7 +234,7 @@ fn admit(model: &mut Model, env: &Env<Limits>, scopes: Scopes, kind: Kind, out: 
         let kept_id = *model.scopes.get(scope).expect("kept above");
         let kept = model.kept.get_mut(kept_id).expect("a scope kept is in the slab");
         let waiting = match kept.pass {
-            Pass::Listing | Pass::Reading => true,
+            Pass::Listing | Pass::Reading(_) => true,
             Pass::Ended => false,
         };
         if waiting {
@@ -278,7 +287,7 @@ fn go_on(model: &mut Model, env: &Env<Limits>, id: Id<Call>, out: &mut Queue<Req
             model.calls.get_mut(id).expect("in flight").kind = Kind::Reading { reply_to, reading };
             read(model, id, out);
         }
-        Kind::Reading { .. } | Kind::Queued { .. } | Kind::Sent { .. } | Kind::Answered => {
+        Kind::Reading { .. } | Kind::Queued { .. } | Kind::Checking { .. } | Kind::Sent { .. } | Kind::Answered => {
             unreachable!("only a call waiting for its scopes goes on")
         }
     }
@@ -293,6 +302,7 @@ fn read(model: &mut Model, id: Id<Call>, out: &mut Queue<Request>) {
         | Kind::Search { .. }
         | Kind::Finding { .. }
         | Kind::Queued { .. }
+        | Kind::Checking { .. }
         | Kind::Sent { .. }
         | Kind::Answered => unreachable!("only a recall reads"),
     };
@@ -309,6 +319,7 @@ fn read(model: &mut Model, id: Id<Call>, out: &mut Queue<Request>) {
         | Kind::Search { .. }
         | Kind::Finding { .. }
         | Kind::Queued { .. }
+        | Kind::Checking { .. }
         | Kind::Sent { .. }
         | Kind::Answered => unreachable!("matched above"),
     };
@@ -325,15 +336,16 @@ pub(crate) fn fetched(model: &mut Model, env: &Env<Limits>, id: Id<Call>, fetche
         | Kind::Search { .. }
         | Kind::Finding { .. }
         | Kind::Queued { .. }
+        | Kind::Checking { .. }
         | Kind::Sent { .. }
         | Kind::Answered => unreachable!("only a recall reads"),
     };
     let index = reading.next.checked_sub(1).expect("a read was asked for");
     let wanted = reading.wanted.get(index).expect("the page read is one wanted");
     let fact = match fetched {
-        Fetched::Page { revision: _, page } => {
+        Fetched::Page { revision, page } => {
             if kept::fits(&page, &env.limits) {
-                let entry = Entry { scope: wanted.scope, name: wanted.name.clone(), page };
+                let entry = Entry { scope: wanted.scope, name: wanted.name.clone(), revision, page };
                 let pushed = reading.entries.push(entry);
                 assert!(pushed.is_ok(), "room for every page wanted");
             } else {
@@ -351,48 +363,104 @@ pub(crate) fn fetched(model: &mut Model, env: &Env<Limits>, id: Id<Call>, fetche
     read(model, id, out);
 }
 
-/// The note `call` has its turn in the kept scope its write is for: the
-/// write goes out as `op`.
-pub(crate) fn send(model: &mut Model, call: Id<Call>, op: Id<Op>, out: &mut Queue<Request>) {
+/// The note `call` has its turn in the kept scope `kept_id`: a new or a
+/// removed entry is written at once; a revised one has its page read afresh
+/// first.
+pub(crate) fn send(model: &mut Model, kept_id: Id<Kept>, call: Id<Call>, out: &mut Queue<Request>) {
     let entry = model.calls.get_mut(call).expect("a note waiting is in flight");
     let (reply_to, scope, name, change) = match mem::replace(&mut entry.kind, Kind::Answered) {
         Kind::Queued { reply_to, scope, name, change } => (reply_to, scope, name, change),
         Kind::Sent { .. }
+        | Kind::Checking { .. }
         | Kind::Index { .. }
         | Kind::Search { .. }
         | Kind::Finding { .. }
         | Kind::Reading { .. }
         | Kind::Answered => unreachable!("only a note waits to write"),
     };
-    let owner = op.token();
-    let (request, line) = match change {
+    let owner = model::start(model, Op::Scope(kept_id)).token();
+    let (busy, kind, request) = match change {
         Change::New(page) => {
-            let line = learned(&page);
-            (Request::Create { owner, scope, name: name.clone(), page }, Some(line))
+            let line = Some(learned(&page));
+            let kind = Kind::Sent { reply_to, scope, name: name.clone(), line };
+            (Busy::Writing { call }, kind, Request::Create { owner, scope, name, page })
         }
-        Change::Revise(page) => {
-            let line = learned(&page);
-            (Request::Edit { owner, scope, name: name.clone(), page }, Some(line))
+        Change::Revise { page, revision } => {
+            let kind = Kind::Checking { reply_to, scope, name: name.clone(), page, revision };
+            (Busy::Checking { call }, kind, Request::Fetch { owner, scope, name })
         }
-        Change::Remove => (Request::Delete { owner, scope, name: name.clone() }, None),
+        Change::Remove => {
+            let kind = Kind::Sent { reply_to, scope, name: name.clone(), line: None };
+            (Busy::Writing { call }, kind, Request::Delete { owner, scope, name })
+        }
     };
-    entry.kind = Kind::Sent { reply_to, scope, name, line };
+    model.calls.get_mut(call).expect("in flight").kind = kind;
+    model.kept.get_mut(kept_id).expect("a scope kept is in the slab").busy = busy;
     out.push(request);
+}
+
+/// The page the note `call` revises was read afresh: it is written over only
+/// if it is still at the revision the run recalled; otherwise the note is
+/// answered with what was read.
+pub(crate) fn checked(
+    model: &mut Model,
+    env: &Env<Limits>,
+    kept_id: Id<Kept>,
+    call: Id<Call>,
+    fetched: Fetched,
+    out: &mut Queue<Request>,
+) {
+    let entry = model.calls.get_mut(call).expect("a note checking is in flight");
+    let (reply_to, scope, name, page, recalled) = match mem::replace(&mut entry.kind, Kind::Answered) {
+        Kind::Checking { reply_to, scope, name, page, revision } => (reply_to, scope, name, page, revision),
+        Kind::Queued { .. }
+        | Kind::Sent { .. }
+        | Kind::Index { .. }
+        | Kind::Search { .. }
+        | Kind::Finding { .. }
+        | Kind::Reading { .. }
+        | Kind::Answered => unreachable!("only a revision checks"),
+    };
+    let kept = model.kept.get_mut(kept_id).expect("a scope with an operation in flight is kept");
+    let (noted, fact) = match fetched {
+        Fetched::Page { revision, page: read } => {
+            let fact =
+                if kept::learn(kept, &env.limits, name.clone(), revision, read) { Fact::Read } else { Fact::LeftOut };
+            if revision == recalled {
+                // As the run recalled it: written over.
+                model.facts.push(fact);
+                let owner = model::start(model, Op::Scope(kept_id)).token();
+                let line = Some(learned(&page));
+                model.calls.get_mut(call).expect("in flight").kind =
+                    Kind::Sent { reply_to, scope, name: name.clone(), line };
+                model.kept.get_mut(kept_id).expect("a scope kept is in the slab").busy = Busy::Writing { call };
+                out.push(Request::Edit { owner, scope, name, page });
+                return;
+            }
+            (Noted::Moved, fact)
+        }
+        Fetched::Gone => {
+            kept.entries.remove(&name);
+            (Noted::Missing, Fact::Read)
+        }
+        Fetched::Failed => (Noted::Unavailable, Fact::Unread),
+    };
+    model.facts.push(fact);
+    kept::unpin(model, scope);
+    model.calls.retire(call);
+    model.facts.push(Fact::Answered);
+    out.push(Request::Noted { reply_to, noted });
+    kept::follow(model, kept_id, out);
 }
 
 /// The write of the note `call` ended: the kept scope `kept` learns what it
 /// did, and the note is answered.
-pub(crate) fn written(
-    model: &mut Model,
-    kept_id: Id<kept::Kept>,
-    call: Id<Call>,
-    wrote: Wrote,
-    out: &mut Queue<Request>,
-) {
+pub(crate) fn written(model: &mut Model, kept_id: Id<Kept>, call: Id<Call>, wrote: Wrote, out: &mut Queue<Request>) {
     let entry = model.calls.get_mut(call).expect("a note writing is in flight");
     let (reply_to, scope, name, line) = match mem::replace(&mut entry.kind, Kind::Answered) {
         Kind::Sent { reply_to, scope, name, line } => (reply_to, scope, name, line),
         Kind::Queued { .. }
+        | Kind::Checking { .. }
         | Kind::Index { .. }
         | Kind::Search { .. }
         | Kind::Finding { .. }
@@ -405,8 +473,10 @@ pub(crate) fn written(
             match line {
                 Some(Learned { description, author, references }) => {
                     let known = Known { revision, description, author, references, listing: kept.listings };
-                    // With no room left for a new entry, it is left out.
-                    let _left_out = kept.entries.insert(name, known).is_err();
+                    if kept.entries.insert(name, known).is_err() {
+                        // With no room left for a new entry, it is left out.
+                        model.facts.push(Fact::LeftOut);
+                    }
                 }
                 None => {
                     kept.entries.remove(&name);
@@ -438,8 +508,8 @@ pub(crate) fn written(
 /// it.
 fn answer(model: &mut Model, call: Id<Call>, scopes: Option<Scopes>, request: Request, out: &mut Queue<Request>) {
     if let Some(scopes) = scopes {
-        let (order, count) = order(scopes);
-        for scope in order.get(..count).expect("two or three scopes") {
+        let order = order(scopes);
+        for scope in order.as_slice() {
             kept::unpin(model, *scope);
         }
     }
@@ -456,11 +526,26 @@ fn refuse(model: &mut Model, reply_to: ReplyTo, refusal: Refusal, out: &mut Queu
 
 /// The scopes of a run's notes, narrowest first: its goal's, if it has one,
 /// its repository's, the deployment's; and how many there are.
-fn order(scopes: Scopes) -> ([Scope; 3], usize) {
+fn order(scopes: Scopes) -> Order {
     let repository = Scope::Repository(scopes.repository);
     match scopes.goal {
-        Some(number) => ([Scope::Goal { repository: scopes.repository, number }, repository, Scope::Deployment], 3),
-        None => ([repository, Scope::Deployment, Scope::Deployment], 2),
+        Some(number) => {
+            let goal = Scope::Goal { repository: scopes.repository, number };
+            Order { scopes: [goal, repository, Scope::Deployment], count: 3 }
+        }
+        None => Order { scopes: [repository, Scope::Deployment, Scope::Deployment], count: 2 },
+    }
+}
+
+/// A run's scopes, in order: the first `count` of `scopes`.
+struct Order {
+    scopes: [Scope; 3],
+    count: usize,
+}
+
+impl Order {
+    fn as_slice(&self) -> &[Scope] {
+        self.scopes.get(..self.count).expect("two or three scopes")
     }
 }
 
@@ -468,10 +553,10 @@ fn order(scopes: Scopes) -> ([Scope; 3], usize) {
 /// as many as fit `budget` bytes of names and descriptions; and how many more
 /// there are, from the first that did not fit.
 fn indexed(model: &Model, env: &Env<Limits>, scopes: Scopes, budget: u32) -> (Box<[Line]>, u32) {
-    let (order, count) = order(scopes);
+    let order = order(scopes);
     let mut lines = List::with_capacity(env.limits.lines);
     let (mut spent, mut more) = (0_u64, 0_u32);
-    for scope in order.get(..count).expect("two or three scopes") {
+    for scope in order.as_slice() {
         let Some(id) = model.scopes.get(scope) else {
             continue;
         };
@@ -495,10 +580,10 @@ fn indexed(model: &Model, env: &Env<Limits>, scopes: Scopes, budget: u32) -> (Bo
 /// first and by name within a scope, the first `most`; and how many more
 /// there are.
 fn found(model: &Model, scopes: Scopes, query: &[u8], most: u32) -> (Box<[Line]>, u32) {
-    let (order, count) = order(scopes);
+    let order = order(scopes);
     let mut lines = List::with_capacity(most);
     let mut more: u32 = 0;
-    for scope in order.get(..count).expect("two or three scopes") {
+    for scope in order.as_slice() {
         let Some(id) = model.scopes.get(scope) else {
             continue;
         };
@@ -532,9 +617,9 @@ fn line(scope: Scope, name: &[u8], known: &Known) -> Line {
 /// The pages of `scopes` whose descriptions hold `query`, the first `most`,
 /// for a recall to read.
 fn wanted(model: &Model, scopes: Scopes, query: &[u8], most: u32) -> List<Wanted> {
-    let (order, count) = order(scopes);
+    let order = order(scopes);
     let mut wanted = List::with_capacity(most);
-    for scope in order.get(..count).expect("two or three scopes") {
+    for scope in order.as_slice() {
         let Some(id) = model.scopes.get(scope) else {
             continue;
         };
@@ -551,9 +636,9 @@ fn wanted(model: &Model, scopes: Scopes, query: &[u8], most: u32) -> List<Wanted
 
 /// How many of `scopes` have never been listed.
 fn unread(model: &Model, scopes: Scopes) -> u32 {
-    let (order, count) = order(scopes);
+    let order = order(scopes);
     let mut unread: u32 = 0;
-    for scope in order.get(..count).expect("two or three scopes") {
+    for scope in order.as_slice() {
         let listed = match model.scopes.get(scope) {
             Some(id) => model.kept.get(*id).expect("a scope kept is in the slab").listed,
             None => false,
