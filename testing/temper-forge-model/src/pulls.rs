@@ -61,8 +61,8 @@ pub(crate) fn open(
         state: State::Open,
         labels: Set::with_capacity(limits.labels),
         comments: Map::with_capacity(limits.comments),
-        created: env.now,
-        updated: env.now,
+        created: model::clock(env),
+        updated: model::clock(env),
         pull: Some(pull),
     };
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
@@ -110,10 +110,10 @@ pub(crate) fn review(
     }
     let commit = pull.commit;
     let observed = copy_of(&body);
-    if pull.reviews.push(Review { author: user, verdict, commit, body, at: env.now }).is_err() {
+    if pull.reviews.push(Review { author: user, verdict, commit, body, at: model::clock(env) }).is_err() {
         return Err(Error::Full);
     }
-    repository.touch(number, env.now);
+    repository.touch(number, model::clock(env));
     let observation = Observation::Reviewed {
         repository: copy_of(&repository.name),
         number,
@@ -169,7 +169,7 @@ pub(crate) fn merge(
     let item = repository.items.get_mut(&number).expect("the pull request merged");
     item.state = State::Closed;
     item.pull.as_mut().expect("a pull request").merged = Some(commit);
-    repository.touch(number, env.now);
+    repository.touch(number, model::clock(env));
     let observation = Observation::Merged { repository: copy_of(&repository.name), number, head, commit, by: user };
     model::changed(model, env, id, observation, Change::Pull, Some(number));
     git::moved(model, env, id, &base, Some(onto), commit, user);

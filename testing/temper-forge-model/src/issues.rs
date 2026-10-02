@@ -41,8 +41,8 @@ pub(crate) fn create(
         state: State::Open,
         labels,
         comments: Map::with_capacity(limits.comments),
-        created: env.now,
-        updated: env.now,
+        created: model::clock(env),
+        updated: model::clock(env),
         pull: None,
     };
     let number = repository.number(item)?;
@@ -75,11 +75,12 @@ pub(crate) fn comment(
     let comment = model.comments.checked_add(1).expect("comment ids do not run out");
     let observed = copy_of(&body);
     let item = repository.item_mut(number)?;
-    if item.comments.insert(comment, Comment { author: user, body, created: env.now, edited: None }).is_err() {
+    if item.comments.insert(comment, Comment { author: user, body, created: model::clock(env), edited: None }).is_err()
+    {
         return Err(Error::Full);
     }
     repository.comments.insert(comment, number).expect("the index has room for every comment");
-    repository.touch(number, env.now);
+    repository.touch(number, model::clock(env));
     model.comments = comment;
     let observation =
         Observation::Commented { repository: copy_of(&repository.name), number, id: comment, body: observed, by: user };
@@ -108,8 +109,10 @@ pub(crate) fn edit(
     }
     let observed = copy_of(&body);
     kept.body = body;
-    kept.edited = Some(env.now);
-    repository.touch(number, env.now);
+    kept.edited = Some(model::clock(env));
+    if env.limits.edit_updates {
+        repository.touch(number, model::clock(env));
+    }
     let observation =
         Observation::Edited { repository: copy_of(&repository.name), number, id: comment, body: observed, by: user };
     model::changed(model, env, id, observation, Change::Comment, Some(number));
@@ -135,7 +138,9 @@ pub(crate) fn remove(
     }
     item.comments.remove(&comment);
     repository.comments.remove(&comment);
-    repository.touch(number, env.now);
+    if env.limits.edit_updates {
+        repository.touch(number, model::clock(env));
+    }
     let observation = Observation::Removed { repository: copy_of(&repository.name), number, id: comment, by: user };
     model::changed(model, env, id, observation, Change::Comment, Some(number));
     Ok(Answer::Done)
@@ -160,7 +165,7 @@ pub(crate) fn label(
     let item = repository.item_mut(number)?;
     item.labels = labels;
     let change = change(item.kind());
-    repository.touch(number, env.now);
+    repository.touch(number, model::clock(env));
     let observation =
         Observation::Labelled { repository: copy_of(&repository.name), number, labels: observed, by: user };
     model::changed(model, env, id, observation, change, Some(number));
@@ -206,7 +211,7 @@ pub(crate) fn close(
     }
     item.state = State::Closed;
     let change = change(item.kind());
-    repository.touch(number, env.now);
+    repository.touch(number, model::clock(env));
     let observation = Observation::Closed { repository: copy_of(&repository.name), number, by: user };
     model::changed(model, env, id, observation, change, Some(number));
     Ok(Answer::Done)
@@ -251,7 +256,7 @@ pub(crate) fn reopen(
         pull.commit = head;
     }
     let change = change(item.kind());
-    repository.touch(number, env.now);
+    repository.touch(number, model::clock(env));
     let observation = Observation::Reopened { repository: copy_of(&repository.name), number, by: user };
     model::changed(model, env, id, observation, change, Some(number));
     if let Some(head) = head {

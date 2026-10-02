@@ -2,24 +2,45 @@
 //! comments, a pull request with its reviews and statuses, a user's
 //! permission, a branch, a commit's tree or one file of it, and the wiki.
 //! Reads change nothing; the caller checked the permission.
+//!
+//! Listing items is Forgejo's: those updated at or after `since`, both at
+//! the forge's resolution (Forgejo's is a second), least recently updated
+//! first and then by number, a page at a time by page number. Each page is
+//! read from the order as it is when its call arrives; nothing holds the
+//! order between pages. So what a pass over the pages finds is this: every
+//! item that matched when the pass began and did not change during it,
+//! unless an item listed before it changed meanwhile, moving to the end and
+//! shifting the rest back by one, so that one item can fall on a page the
+//! pass already read. An item that changes during the pass shows an updated
+//! time no earlier than the pass's start, which is how a client knows the
+//! pass moved under it. What moves an item's updated time is what moves it
+//! on Forgejo: a new comment, a review, its labels, its title or body, a
+//! push to a pull request's head, closing, reopening, merging; not a status
+//! on its head, nor editing or deleting a comment (unless the configuration
+//! says otherwise). A client that keeps up lists again from the newest
+//! updated time it has seen, inclusive, drops what it has already seen at
+//! that time, and lists again from the same `since` after a pass that moved
+//! under it; CI it learns from status webhooks and by reading the statuses
+//! of the heads it holds.
 
 use alloc::boxed::Box;
 
 use temper_lib::bytes::copy_of;
 use temper_lib::{Id, List, Time};
 
-use crate::api::{Answer, Cursor, Error, File, Kind, Read, State, What};
+use crate::api::{Answer, Error, File, Kind, Read, State, What};
 use crate::limits::Limits;
-use crate::model::Model;
+use crate::model::{self, Config, Model};
 use crate::store::Repository;
 use crate::{pulls, wiki};
 
 /// What `read` answers on the repository `id`.
-pub(crate) fn read(model: &Model, limits: &Limits, id: Id<Repository>, read: &Read) -> Result<Answer, Error> {
+pub(crate) fn read(model: &Model, config: &Config, id: Id<Repository>, read: &Read) -> Result<Answer, Error> {
+    let limits = &config.limits;
     let repository = model.repositories.get(id).expect("a repository of the forge");
     match read {
-        Read::Items { state, kind, labels, since, after } => {
-            Ok(items(repository, limits, *state, *kind, labels, *since, *after))
+        Read::Items { state, kind, labels, since, page, limit } => {
+            Ok(items(repository, config, *state, *kind, labels, *since, *page, *limit))
         }
         Read::Item { number, after } => item(repository, limits, *number, *after),
         Read::Pull { number } => pulls::view(model, limits, repository, *number),
@@ -65,27 +86,27 @@ pub(crate) fn read(model: &Model, limits: &Limits, id: Id<Repository>, read: &Re
     }
 }
 
-/// A page of the items that match, in the order they were last updated.
+/// A page of the items that match, least recently updated first.
+#[expect(clippy::too_many_arguments, reason = "a listing takes the read's filters as they come")]
 fn items(
     repository: &Repository,
-    limits: &Limits,
+    config: &Config,
     state: Option<State>,
     kind: Option<Kind>,
     labels: &[Box<[u8]>],
     since: Time,
-    after: Option<Cursor>,
+    page: u32,
+    limit: u32,
 ) -> Answer {
-    let mut items = List::with_capacity(limits.page_size);
-    let mut last = None;
-    let mut next = None;
+    let size = if limit == 0 { config.limits.page_size } else { limit.min(config.limits.page_size) };
+    let since = model::stamp(config, since);
+    // Forgejo takes a page before the first as the first.
+    let skip = u64::from(page.saturating_sub(1)).saturating_mul(u64::from(size));
+    let mut skipped: u64 = 0;
+    let mut items = List::with_capacity(size);
+    let mut more = false;
     for &(updated, number) in &repository.recent {
-        let cursor = Cursor { updated, number };
         if updated < since {
-            continue;
-        }
-        if let Some(after) = after
-            && cursor <= after
-        {
             continue;
         }
         let item = repository.items.get(&number).expect("the listing index names items");
@@ -99,14 +120,17 @@ fn items(
         if !wanted {
             continue;
         }
+        if skipped < skip {
+            skipped = skipped.saturating_add(1);
+            continue;
+        }
         if items.room() == 0 {
-            next = last;
+            more = true;
             break;
         }
         items.push(item.summary(number)).expect("checked for room above");
-        last = Some(cursor);
     }
-    Answer::Items { items: items.into_boxed(), next }
+    Answer::Items { items: items.into_boxed(), more }
 }
 
 /// The item `number` and a page of its comments with ids above `after`.

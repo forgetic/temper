@@ -53,6 +53,15 @@ pub struct Config {
     pub hook_max: Duration,
     pub hooks_late: u32,
     pub hooks_lost: u32,
+    /// The resolution of the times the forge keeps and shows: an item's
+    /// created and updated times, a comment's, a review's, a status's.
+    /// Forgejo keeps seconds. Zero: the clock's own.
+    pub resolution: Duration,
+    /// Whether a status reported on an open pull request's head moves its
+    /// updated time, and whether editing or deleting a comment moves its
+    /// item's. Neither does on Forgejo.
+    pub status_updates: bool,
+    pub edit_updates: bool,
 }
 
 /// What the forge has done, for a world to check at settle.
@@ -214,7 +223,7 @@ impl Model {
         let Some(&id) = self.names.get(repository) else {
             return Err(Error::Missing(What::Repository));
         };
-        reads::read(self, &config.limits, id, read)
+        reads::read(self, config, id, read)
     }
 
     /// The next observation, oldest first.
@@ -327,7 +336,7 @@ fn execute(model: &mut Model, env: &Env<Config>, user: u64, repository: &[u8], o
         Op::Read(read) => {
             let repository = model.repositories.get(id).expect("a named repository");
             repository.require(user, Permission::Read)?;
-            reads::read(model, &env.limits.limits, id, &read)
+            reads::read(model, &env.limits, id, &read)
         }
         Op::Write(write) => match write {
             Write::CreateIssue { title, body, labels } => issues::create(model, env, id, user, title, body, labels),
@@ -363,6 +372,20 @@ fn answer(model: &mut Model, id: Id<Call>, out: &mut Queue<Request>) {
     };
     model.calls.retire(id);
     model.tally.answered = model.tally.answered.saturating_add(1);
+}
+
+/// The time now, at the forge's resolution: what it keeps and shows.
+pub(crate) fn clock(env: &Env<Config>) -> Time {
+    stamp(&env.limits, env.now)
+}
+
+/// `time` at the forge's resolution.
+pub(crate) fn stamp(config: &Config, time: Time) -> Time {
+    let nanos = time.as_nanos();
+    match nanos.checked_rem(config.resolution.as_nanos()) {
+        Some(part) => Time::from_nanos(nanos.saturating_sub(part)),
+        None => time,
+    }
 }
 
 /// Something changed on `repository`: what a world sees, and what its

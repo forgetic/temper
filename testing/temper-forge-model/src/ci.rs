@@ -6,7 +6,8 @@
 //! follows content for real). CI runs once per commit and repository. Users
 //! with write permission report statuses of their own.
 //!
-//! A status on a commit updates the open pull requests whose head it is.
+//! As on Forgejo, a status is the commit's, and moves no pull request's
+//! updated time, unless the configuration says otherwise.
 
 use alloc::boxed::Box;
 
@@ -41,11 +42,10 @@ pub(crate) fn start(model: &mut Model, env: &Env<Config>, id: Id<Repository>, co
     }
     let contexts = u32::try_from(repository.checks.contexts.len()).expect("contexts within the limits");
     for context in 0..contexts {
-        let at = env.now;
         let Some(name) = name(model, id, context) else {
             break;
         };
-        let pending = Status { state: Check::Pending, author: env.limits.ci, at };
+        let pending = Status { state: Check::Pending, author: env.limits.ci, at: model::clock(env) };
         if !set(model, id, commit, &name, pending) {
             model.tally.unreported = model.tally.unreported.saturating_add(1);
             return;
@@ -61,7 +61,7 @@ pub(crate) fn start(model: &mut Model, env: &Env<Config>, id: Id<Repository>, co
         }
         let span = faults::draw(model, min, max);
         let alarm = Alarm::Check { repository: id, commit, context };
-        model.timers.arm(alarm, at.saturating_add(span)).expect("a timer per context of a commit with statuses");
+        model.timers.arm(alarm, env.now.saturating_add(span)).expect("a timer per context of a commit with statuses");
     }
 }
 
@@ -86,7 +86,7 @@ pub(crate) fn report(model: &mut Model, env: &Env<Config>, id: Id<Repository>, c
             if model.rng.chance(passes) { Check::Passed } else { Check::Failed }
         }
     };
-    let status = Status { state, author: env.limits.ci, at: env.now };
+    let status = Status { state, author: env.limits.ci, at: model::clock(env) };
     let kept = set(model, id, commit, &name, status);
     assert!(kept, "a pending status is replaced");
     model.tally.verdicts = model.tally.verdicts.saturating_add(1);
@@ -116,7 +116,7 @@ pub(crate) fn status(
         }
         repository.statuses.insert(commit, Map::with_capacity(limits.contexts)).expect("checked for room above");
     }
-    if !set(model, id, commit, &context, Status { state, author: user, at: env.now }) {
+    if !set(model, id, commit, &context, Status { state, author: user, at: model::clock(env) }) {
         return Err(Error::Full);
     }
     reported(model, env, id, commit, context, state, user);
@@ -142,8 +142,9 @@ fn set(model: &mut Model, id: Id<Repository>, commit: u64, context: &[u8], statu
     statuses.insert(copy_of(context), status).is_ok()
 }
 
-/// `context` on `commit` became `state`: observed, heard, and the pull
-/// requests whose head it is are updated.
+/// `context` on `commit` became `state`: observed and heard. Where the
+/// configuration says so (Forgejo does not), the open pull requests whose
+/// head it is are updated.
 fn reported(
     model: &mut Model,
     env: &Env<Config>,
@@ -154,9 +155,11 @@ fn reported(
     by: u64,
 ) {
     let repository = model.repositories.get_mut(id).expect("a repository of the forge");
-    let heads = repository.heads(commit);
-    for &number in &heads {
-        repository.touch(number, env.now);
+    if env.limits.status_updates {
+        let heads = repository.heads(commit);
+        for &number in &heads {
+            repository.touch(number, model::clock(env));
+        }
     }
     let observation = Observation::Reported { repository: copy_of(&repository.name), commit, context, state, by };
     model::changed(model, env, id, observation, Change::Status, None);

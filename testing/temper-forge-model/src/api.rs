@@ -40,11 +40,14 @@ pub enum Op {
 /// The reads: they change nothing. Each needs read permission.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Read {
-    /// A page of the items in `state` (either, if `None`) of `kind` (either,
-    /// if `None`) that carry every label of `labels` and were updated at or
-    /// after `since`, in the order they were last updated, from after
-    /// `after`. Answered by [`Answer::Items`].
-    Items { state: Option<State>, kind: Option<Kind>, labels: Box<[Box<[u8]>]>, since: Time, after: Option<Cursor> },
+    /// The page `page` (from one) of `limit` items (the most a page holds,
+    /// if zero or more) in `state` (either, if `None`) of `kind` (either, if
+    /// `None`) that carry every label of `labels` and were updated at or
+    /// after `since`, at the forge's resolution: least recently updated
+    /// first, then by number, as Forgejo pages them. Answered by
+    /// [`Answer::Items`]. Pages are offsets into an order that moves: see
+    /// the `reads` module for what a pass over them finds.
+    Items { state: Option<State>, kind: Option<Kind>, labels: Box<[Box<[u8]>]>, since: Time, page: u32, limit: u32 },
     /// The item `number` and a page of its comments with ids above `after`.
     /// Answered by [`Answer::Item`].
     Item { number: u64, after: u64 },
@@ -189,10 +192,10 @@ pub enum Want {
 /// The answer to a call that succeeded.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Answer {
-    /// A page of items, and where the next starts if there may be more.
+    /// A page of items, and whether a later page has more.
     Items {
         items: Box<[Summary]>,
-        next: Option<Cursor>,
+        more: bool,
     },
     /// An item and a page of its comments, oldest first, and whether more
     /// follow.
@@ -299,13 +302,6 @@ pub enum Kind {
 pub enum State {
     Open,
     Closed,
-}
-
-/// Where a page of items ends: the next page starts after it.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Cursor {
-    pub updated: Time,
-    pub number: u64,
 }
 
 /// An item as a listing shows it.

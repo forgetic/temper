@@ -18,8 +18,9 @@
 //! label not defined, someone else's comment, a stale head on merge, a merge
 //! its base's protection does not allow, a push that is not a fast-forward,
 //! what is past its limits), and it keeps what the API guarantees: one answer
-//! per call, numbers, comment ids and revisions that only grow, and an
-//! updated time that moves with every change to an item.
+//! per call, numbers, comment ids and revisions that only grow, and listings
+//! paged as Forgejo pages them, by an updated time kept in seconds that
+//! moves for what moves Forgejo's (the `reads` module).
 //!
 //! The forge moves on its own too. CI reports on every commit that becomes a
 //! head, by chance or as its content cues (the `ci` module); a repository's

@@ -282,7 +282,7 @@ pub(crate) fn moved(
         let item = repository.items.get_mut(&number).expect("a pull request that follows the branch");
         let pull = item.pull.as_mut().expect("a pull request");
         pull.commit = to;
-        repository.touch(number, env.now);
+        repository.touch(number, model::clock(env));
     }
     model::changed(model, env, id, observation, Change::Push, None);
     for &number in &following {

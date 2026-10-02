@@ -6,8 +6,8 @@ use temper_lib::bytes::copy_of;
 use temper_lib::{Duration, Env, List, Queue, ReplyTo, Time, Token};
 
 use crate::api::{
-    Answer, Change, Check, Checks, Comment, Created, Cue, Cursor, Error, File, Git, Head, Kind, Op, Page, PageName,
-    Permission, Protection, Pull, Pushed, Read, Setup, State, Summary, Verdict, Want, What, Write,
+    Answer, Change, Check, Checks, Comment, Created, Cue, Error, File, Git, Head, Kind, Op, Page, PageName, Permission,
+    Protection, Pull, Pushed, Read, Setup, State, Summary, Verdict, Want, What, Write,
 };
 use crate::{Config, Event, Limits, MAX_OUT, Model, Observation, Request, fire, step, worst_case};
 
@@ -52,6 +52,9 @@ const CALM: Config = Config {
     hook_max: Duration::from_secs(2),
     hooks_late: 0,
     hooks_lost: 0,
+    resolution: Duration::from_secs(1),
+    status_updates: false,
+    edit_updates: false,
 };
 
 /// The users: the engine and CI write, a person reads, a maintainer writes,
@@ -294,22 +297,18 @@ impl Harness {
         (item, comments)
     }
 
-    fn list(
-        &mut self,
-        user: u64,
-        state: Option<State>,
-        labels: &[&[u8]],
-        after: Option<Cursor>,
-    ) -> (List<u64>, Option<Cursor>) {
-        let op = read(Read::Items { state, kind: None, labels: names(labels), since: Time::ZERO, after });
-        let Answer::Items { items, next } = self.ok(user, op) else {
+    /// The numbers on page `page` of the items in `state` carrying
+    /// `labels`, and whether a later page has more.
+    fn list(&mut self, user: u64, state: Option<State>, labels: &[&[u8]], page: u32) -> (List<u64>, bool) {
+        let op = read(Read::Items { state, kind: None, labels: names(labels), since: Time::ZERO, page, limit: 0 });
+        let Answer::Items { items, more } = self.ok(user, op) else {
             unreachable!("a page of items");
         };
         let mut numbers = List::with_capacity(LIMITS.page_size);
         for item in &items {
             numbers.push(item.number).expect("a page");
         }
-        (numbers, next)
+        (numbers, more)
     }
 
     /// Where `branch` is.
@@ -416,22 +415,86 @@ fn an_issue_is_opened_with_labels_and_read_back() {
 }
 
 #[test]
-fn listings_page_through_items_in_the_order_they_were_last_updated() {
+fn listings_page_least_recently_updated_first_by_page_number() {
     let mut h = Harness::new(CALM);
     for title in [b"one", b"two", b"six"] {
         h.issue(ENGINE, title);
     }
     h.comment(PERSON, 1, b"bump");
-    let (page, next) = h.list(ENGINE, None, &[], None);
+    let (page, more) = h.list(ENGINE, None, &[], 1);
+    assert_eq!((numbers(&page), more), (&[2, 3][..], true));
+    let (page, more) = h.list(ENGINE, None, &[], 2);
+    assert_eq!((numbers(&page), more), (&[1][..], false), "the comment moved the first last");
+    assert_eq!(h.list(ENGINE, None, &[], 0).0.as_slice(), [2, 3], "a page before the first is the first");
+    assert!(h.list(ENGINE, None, &[], 3).0.is_empty());
+    let one = read(Read::Items { state: None, kind: None, labels: names(&[]), since: Time::ZERO, page: 3, limit: 1 });
+    let Answer::Items { items, more: false } = h.ok(ENGINE, one) else {
+        unreachable!("the last page");
+    };
+    assert_eq!(items[0].number, 1, "a limit below the most a page holds");
+    // An item that changes while a client pages moves to the end, and the
+    // one after it falls on the page already read, as on Forgejo.
+    let (page, _) = h.list(ENGINE, None, &[], 1);
     assert_eq!(numbers(&page), [2, 3]);
-    let next = next.expect("more follow");
-    let (page, last) = h.list(ENGINE, None, &[], Some(next));
-    assert_eq!(numbers(&page), [1], "the comment moved the first last");
-    assert_eq!(last, None);
-    // An item updated while paging comes again, after the cursor.
+    let changed = h.env.now;
     h.comment(PERSON, 2, b"again");
-    let (page, _) = h.list(ENGINE, None, &[], Some(next));
-    assert_eq!(numbers(&page), [1, 2]);
+    let (page, more) = h.list(ENGINE, None, &[], 2);
+    assert_eq!((numbers(&page), more), (&[2][..], false), "the first is missed this pass");
+    let (item, _) = h.item(2);
+    assert!(item.updated >= changed, "the pass sees it moved under it");
+    h.issue(ENGINE, b"four");
+    let (page, more) = h.list(ENGINE, None, &[], 2);
+    assert_eq!((numbers(&page), more), (&[2, 4][..], false), "an exactly full last page has no more");
+}
+
+#[test]
+fn listings_are_at_the_forges_resolution_with_since_inclusive_and_ties_by_number() {
+    let mut h = Harness::new(Config {
+        latency_min: Duration::from_millis(100),
+        latency_max: Duration::from_millis(100),
+        ..CALM
+    });
+    h.wait(Duration::from_millis(1500));
+    for title in [b"one", b"two", b"six"] {
+        h.issue(ENGINE, title);
+    }
+    h.comment(PERSON, 3, b"first");
+    h.comment(PERSON, 1, b"then");
+    let (item, _) = h.item(3);
+    assert_eq!(item.updated, Time::ZERO.saturating_add(Duration::from_secs(1)), "kept in seconds");
+    assert_eq!(numbers(&h.list(ENGINE, None, &[], 1).0), [1, 2], "the same second, by number");
+    h.wait(Duration::from_secs(1));
+    h.comment(PERSON, 2, b"later");
+    let since = Time::ZERO.saturating_add(Duration::from_millis(2900));
+    let recent = read(Read::Items { state: None, kind: None, labels: names(&[]), since, page: 1, limit: 0 });
+    let Answer::Items { items, more: false } = h.ok(ENGINE, recent) else {
+        unreachable!("one page");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].number, 2, "since is taken at the resolution, inclusive");
+    let mut h = Harness::new(Config { resolution: Duration::ZERO, ..CALM });
+    h.wait(Duration::from_millis(1500));
+    h.issue(ENGINE, b"one");
+    assert_eq!(h.item(1).0.created, Time::ZERO.saturating_add(Duration::from_millis(1500)), "the clock's own");
+}
+
+#[test]
+fn statuses_and_comment_edits_move_updated_times_only_where_configured() {
+    let mut h = Harness::new(Config { status_updates: true, edit_updates: true, ..CALM });
+    let work = h.commit(FIRST, &[(b"src", b"one")]);
+    h.push(ENGINE, b"work", work).expect("pushed");
+    h.open(b"work").expect("opened");
+    h.settle();
+    assert_eq!(h.item(1).0.updated, h.pull(1).statuses[0].at, "the verdict updated the pull request");
+    let id = h.comment(PERSON, 1, b"typo");
+    h.wait(Duration::from_secs(10));
+    h.ok(PERSON, edit(id, b"fixed"));
+    let (item, comments) = h.item(1);
+    assert_eq!(comments[0].edited, Some(item.updated), "the edit updated the item");
+    h.wait(Duration::from_secs(10));
+    let deleted = h.env.now;
+    h.ok(PERSON, write(Write::DeleteComment { id }));
+    assert_eq!(h.item(1).0.updated, deleted, "so did the deletion");
 }
 
 #[test]
@@ -440,21 +503,28 @@ fn listings_filter_by_state_kind_labels_and_time() {
     h.issue(ENGINE, b"one");
     h.ok(ENGINE, create(b"two", b"", &[b"temper"]));
     h.ok(ENGINE, write(Write::Close { number: 1 }));
-    let (page, _) = h.list(ENGINE, Some(State::Open), &[], None);
+    let (page, _) = h.list(ENGINE, Some(State::Open), &[], 1);
     assert_eq!(numbers(&page), [2]);
-    let (page, _) = h.list(ENGINE, Some(State::Closed), &[], None);
+    let (page, _) = h.list(ENGINE, Some(State::Closed), &[], 1);
     assert_eq!(numbers(&page), [1]);
-    let (page, _) = h.list(ENGINE, None, &[b"temper"], None);
+    let (page, _) = h.list(ENGINE, None, &[b"temper"], 1);
     assert_eq!(numbers(&page), [2]);
-    let (page, _) = h.list(ENGINE, None, &[b"temper", b"bug"], None);
+    let (page, _) = h.list(ENGINE, None, &[b"temper", b"bug"], 1);
     assert!(page.is_empty(), "every label must be there");
     let since = h.env.now;
-    let pulls =
-        read(Read::Items { state: None, kind: Some(Kind::Pull), labels: names(&[]), since: Time::ZERO, after: None });
-    assert_eq!(h.ok(ENGINE, pulls), Answer::Items { items: Box::new([]), next: None });
+    let pulls = read(Read::Items {
+        state: None,
+        kind: Some(Kind::Pull),
+        labels: names(&[]),
+        since: Time::ZERO,
+        page: 1,
+        limit: 0,
+    });
+    assert_eq!(h.ok(ENGINE, pulls), Answer::Items { items: Box::new([]), more: false });
     h.comment(PERSON, 2, b"later");
-    let recent = read(Read::Items { state: None, kind: Some(Kind::Issue), labels: names(&[]), since, after: None });
-    let Answer::Items { items, next: None } = h.ok(ENGINE, recent) else {
+    let recent =
+        read(Read::Items { state: None, kind: Some(Kind::Issue), labels: names(&[]), since, page: 1, limit: 0 });
+    let Answer::Items { items, more: false } = h.ok(ENGINE, recent) else {
         unreachable!("one page");
     };
     assert_eq!(items.len(), 1);
@@ -496,7 +566,7 @@ fn a_comment_is_edited_or_deleted_by_its_author_or_an_admin() {
     assert_eq!(h.ok(PERSON, edit(id, b"fixed")), Answer::Done);
     let (item, comments) = h.item(number);
     assert_eq!(&*comments[0].body, b"fixed");
-    assert_eq!(comments[0].edited, Some(item.updated), "an edit updates the item");
+    assert!(item.updated < comments[0].edited.expect("edited"), "an edit leaves the item's updated time");
     assert_eq!(h.ok(ADMIN, edit(id, b"moderated")), Answer::Done, "an admin edits anyone's");
     assert_eq!(h.call(ENGINE, write(Write::DeleteComment { id })), Err(Error::Forbidden));
     assert_eq!(h.ok(ADMIN, write(Write::DeleteComment { id })), Answer::Done);
@@ -932,7 +1002,7 @@ fn ci_runs_once_per_commit_and_a_status_updates_the_pull_requests_on_it() {
     h.ok(ENGINE, create_branch(b"copy", work));
     h.settle();
     assert_eq!(h.model.tally().verdicts, 1, "once for the commit");
-    assert_eq!(h.item(1).0.updated, h.pull(1).statuses[0].at, "the verdict updated the pull request");
+    assert!(h.item(1).0.updated < h.pull(1).statuses[0].at, "a verdict leaves the pull request's updated time");
     assert_eq!(h.call(PERSON, status(work, b"review", Check::Passed)), Err(Error::Forbidden));
     h.ok(MAINTAINER, status(work, b"review", Check::Passed));
     let pull = h.pull(1);
@@ -1136,7 +1206,7 @@ fn run(seed: u64) -> Run {
             head: copy_of(b"work"),
             base: copy_of(MAIN),
         }),
-        read(Read::Items { state: None, kind: None, labels: names(&[]), since: Time::ZERO, after: None }),
+        read(Read::Items { state: None, kind: None, labels: names(&[]), since: Time::ZERO, page: 1, limit: 0 }),
         put(b"home", b"notes"),
         read(Read::Pull { number: 2 }),
     ] {
