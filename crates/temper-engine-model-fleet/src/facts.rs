@@ -30,18 +30,21 @@ pub enum Fact {
     /// A worker listed an attempt the parent has not claimed: it waits to be
     /// adopted.
     Stray,
-    /// An attempt not adopted in time, or not the claim of its run, was
-    /// cancelled.
+    /// An attempt not adopted in time, not the claim of its run, or listed
+    /// beyond the room, was cancelled; or a kept answer was forgotten.
     Fenced,
     /// An attempt's answer went to the parent.
     Answered { answer: Answer },
+    /// A worker refused an attempt as busy: it is placed again.
+    Busy,
     /// An attempt was presumed lost.
     PresumedLost,
-    /// An answer the parent has, or that is for an attempt fenced off, was
-    /// acknowledged again and dropped.
+    /// An answer sent again, or for an attempt fenced off or no longer
+    /// tracked, was dropped.
     Duplicate,
-    /// Something a worker sent for an attempt fenced off or gone, or a reply
-    /// for one, was dropped.
+    /// Something a worker sent for an attempt fenced off or gone, from a
+    /// channel not in contact, or beyond what a hello may list; or a reply
+    /// for an attempt gone, was dropped.
     Dropped,
 }
 

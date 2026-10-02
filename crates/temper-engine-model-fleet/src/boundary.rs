@@ -6,28 +6,39 @@
 //!
 //! - The workers', which the parent routes to and from their channels
 //!   (worker-model.md, sections 2 and 4). A worker's channel is named by the
-//!   protocol's token for it, `channel`, and is known to the fleet from its
+//!   protocol's token for it, `channel`, and is in contact from its
 //!   [`Event::Hello`], the first thing said on it, until its
 //!   [`Event::Lost`]. [`Request::Assign`] is a call to the worker, answered
-//!   by one [`Event::Answer`] under the run's and the attempt's names, which
-//!   the fleet acknowledges ([`Request::Acknowledge`]) on the channel it came
-//!   on, a duplicate again. [`Request::Inbound`], [`Request::Cancel`] and
+//!   by one [`Event::Answer`] under the run's and the attempt's names. The
+//!   worker keeps the answer, and the slot it takes, until the fleet sends
+//!   [`Request::Acknowledge`], which it does once the parent has made the
+//!   answer durable, or once the answer is for an attempt fenced off; it
+//!   sends it again after every hello until then. A refusal goes once and
+//!   keeps nothing. [`Request::Inbound`], [`Request::Cancel`] and
 //!   [`Request::Relayed`] are notices to the worker hosting an attempt;
 //!   [`Event::Relay`] is a call of the run's, which the fleet passes up and
 //!   whose answer it passes down, at most once; [`Event::Bounced`] and
 //!   [`Event::Told`] are notices. [`Request::Refuse`] turns a worker away
-//!   at its hello: its channel is to be closed, and whatever it sends is
-//!   dropped. Everything a worker sends names a run and an attempt, and is
-//!   dropped unless that attempt is the parent's live claim (attempts are
-//!   fenced): only its answer is still taken once it is cancelled.
+//!   at its hello, when the fleet has no room for another: its channel is
+//!   to be closed. An answer from a channel not in contact is dropped, and
+//!   not acknowledged. Everything a worker sends names a run and an attempt,
+//!   and is dropped unless that attempt is the parent's live claim (attempts
+//!   are fenced): only its answer is still taken once it is cancelled.
 //! - The parent's own. [`Event::Start`] and [`Event::Adopt`] are calls,
 //!   each ended by exactly one of [`Request::Answered`], [`Request::Lost`],
 //!   [`Request::Withdrawn`] or [`Request::Refused`]; a start is told
-//!   [`Request::Placed`] before, once it is assigned, and an adoption once a
-//!   worker is found to host it. [`Event::Cancel`] and [`Event::Inbound`]
-//!   name an attempt, and an inbound event that does not reach a worker
-//!   comes back as [`Request::Undelivered`]. A [`Request::Relay`] is a call
-//!   the parent answers with exactly one [`Event::Relayed`].
+//!   [`Request::Placed`] before, each time it is assigned, and an adoption
+//!   once a worker is found to host it. An attempt a worker refuses as busy
+//!   is placed again, not ended. An answer handed to the parent is answered
+//!   by exactly one [`Event::Acknowledge`], once the parent has made it
+//!   durable or no longer wants it: until then its worker keeps it. After a
+//!   restart, the parent adopts the claims its records hold and then says
+//!   [`Event::Loaded`]; an attempt a worker lists that no claim adopts is
+//!   told as [`Request::Listed`], and waits to be adopted for the grace from
+//!   then. [`Event::Cancel`] and [`Event::Inbound`] name an attempt, and an
+//!   inbound event that does not reach a worker comes back as
+//!   [`Request::Undelivered`]. A [`Request::Relay`] is a call the parent
+//!   answers with exactly one [`Event::Relayed`].
 //!
 //! What the fleet passes through and never reads is the parent's. An
 //! assignment (its charter, workspace and snapshot) is named by its run and
@@ -63,13 +74,23 @@ pub enum Event {
     Inbound { run: Token, attempt: Token, event: Token },
     /// From the parent, the one answer to a `Relay`.
     Relayed { to: ReplyTo, answer: Token },
+    /// From the parent, the one answer to an `Answered`: the answer of the
+    /// attempt `attempt` of the run `run` is durable, or not wanted, and its
+    /// worker may forget it.
+    Acknowledge { run: Token, attempt: Token },
+    /// From the parent: its cold read after a restart is done, every claim
+    /// its records hold adopted. Attempts workers list that no claim adopts
+    /// wait to be adopted for the grace from now on, and those listed later
+    /// for the grace from their listing.
+    Loaded,
     /// From a worker, first on its channel: its slots, the workstreams it
     /// holds checkouts for, and the runs it hosts or holds answers of.
     Hello { channel: Token, hello: Hello },
     /// From the protocol: the channel of a worker closed.
     Lost { channel: Token },
     /// From a worker, the answer to an `Assign`: sent at once, and again
-    /// after every hello until it is acknowledged.
+    /// after every hello until it is acknowledged. Taken only from a channel
+    /// in contact.
     Answer { channel: Token, run: Token, attempt: Token, answer: Answer, payload: Token },
     /// From a worker, a host call of the attempt `attempt` of the run `run`,
     /// which the worker names `call`, relayed as it is.
@@ -96,14 +117,21 @@ pub enum Request {
     /// To a worker: the answer to its relayed call `call`.
     Relayed { channel: Token, run: Token, attempt: Token, call: Token, answer: Token },
     /// To a worker: the engine has the answer of the attempt `attempt` of the
-    /// run `run`, which the worker forgets.
+    /// run `run` durably, or does not want it, and the worker forgets it.
     Acknowledge { channel: Token, run: Token, attempt: Token },
     /// About a worker: the fleet has no room for it, or its hello is beyond
     /// the limits. Close its channel; it dials again later.
     Refuse { channel: Token },
     /// To the parent: the attempt is on a worker, assigned or found there.
     Placed { run: Token, attempt: Token },
-    /// To the parent, terminal for `Start` and `Adopt`: the worker's answer.
+    /// To the parent: a worker lists the attempt `attempt` of the run `run`,
+    /// which no claim adopts. It waits to be adopted for the grace, from the
+    /// parent's `Loaded` at the earliest, and is then cancelled.
+    Listed { run: Token, attempt: Token },
+    /// To the parent, terminal for `Start` and `Adopt`: the worker's answer,
+    /// never `Busy`. Each gets the parent's `Acknowledge`, until which its
+    /// worker keeps it (a refusal keeps nothing, and the fleet forgets it at
+    /// once).
     Answered { to: ReplyTo, run: Token, attempt: Token, answer: Answer, payload: Token },
     /// To the parent, terminal for `Start` and `Adopt`: the attempt is
     /// presumed lost, its worker out of contact past the grace or none
@@ -177,7 +205,8 @@ pub enum Answer {
     /// It failed, for a typed failure.
     Failed,
     /// Refused at the entrance, every slot taken or the worker shutting
-    /// down: the fleet places nothing more on that channel.
+    /// down: the fleet places the attempt again, and nothing more on that
+    /// worker until it frees a slot. Never handed to the parent.
     Busy,
     /// Refused at the entrance: the assignment does not fit the worker's
     /// limits.
@@ -220,7 +249,7 @@ pub enum Withdrawal {
 /// Why a start or an adoption was refused at the entrance.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Refusal {
-    /// The fleet tracks as many attempts as it may.
+    /// The fleet tracks as many of the parent's attempts as it may.
     Busy,
     /// The workstream key is empty, or longer than a key may be.
     Workstream,

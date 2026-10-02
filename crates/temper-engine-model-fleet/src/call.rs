@@ -51,6 +51,8 @@ fn live(model: &Model, id: Id<Attempt>) -> Live {
         State::Waiting { .. }
         | State::Adopted { .. }
         | State::Cancelled { .. }
+        | State::Handed { .. }
+        | State::Acknowledged { .. }
         | State::Stray { .. }
         | State::Kept { .. }
         | State::Fenced { .. }
@@ -116,9 +118,12 @@ pub(crate) fn inbound(model: &mut Model, run: Token, attempt: Token, event: Toke
             }
             State::Waiting { .. } => Undelivered::Unplaced,
             State::Adopted { .. } | State::Claimed { at: Where::Adrift { .. }, .. } => Undelivered::Adrift,
-            State::Cancelled { .. } | State::Stray { .. } | State::Kept { .. } | State::Fenced { .. } => {
-                Undelivered::Gone
-            }
+            State::Cancelled { .. }
+            | State::Handed { .. }
+            | State::Acknowledged { .. }
+            | State::Stray { .. }
+            | State::Kept { .. }
+            | State::Fenced { .. } => Undelivered::Gone,
             State::Closed => unreachable!("a closed attempt is no longer named"),
         },
         None => Undelivered::Gone,

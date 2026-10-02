@@ -1,6 +1,7 @@
 //! The attempts the fleet tracks (engine-model.md, 4.2 and section 8): each
-//! the parent's claim on a run, from its start or its adoption to its one
-//! answer, or one a worker hosts that the parent has not claimed.
+//! the parent's claim on a run, from its start or its adoption to the
+//! parent's acknowledgement of its answer; or one a worker hosts or holds the
+//! answer of that the parent has not claimed.
 //!
 //! A run's attempts share its workstream (the workstream is the item, and a
 //! run is named by its item), so no attempt of a run is placed while a worker
@@ -11,63 +12,86 @@
 //! dropped (attempts are fenced): only a cancelled attempt's answer still
 //! ends its call.
 //!
+//! An answer is acknowledged to its worker only once the parent has made it
+//! durable (its `Acknowledge`), or once it is for an attempt fenced off; until
+//! then the worker keeps it, and its slot, and sends it again after every
+//! hello, and the fleet drops what it sends again unacknowledged. A refusal
+//! keeps nothing: a busy one places the attempt again, and an invalid one is
+//! handed on and forgotten.
+//!
 //! An attempt's transition table. "On" is on the channel of a worker in
 //! contact, which it takes a slot of; "adrift", its worker's channel lost,
 //! kept until the grace passes. A listing is a hello's, "answered" when the
 //! worker holds the attempt's answer, which follows the hello.
 //!
 //! ```text
-//! state      event or alarm     next             emits
-//! (none)     start              Waiting          (a newer claim replaces its run's claim)
-//!            adopt              Adopted          (likewise)
-//!            listed, its run    Fenced on        cancel, unless answered
-//!              claimed
-//!            listed             Stray on
-//! Waiting    placed (resume)    Claimed on       assign; placed
-//!            listed             Claimed on       placed (it is hosted already)
-//!            cancel             (gone)           withdrawn: cancelled
-//!            replaced           (gone)           withdrawn: replaced
-//! Adopted    listed             Claimed on       placed
-//!            cancel             Cancelled adrift
-//!            replaced           Fenced adrift    withdrawn: replaced
-//!            answer             (gone)           acknowledge; answered
-//!            grace              (gone)           lost
-//! Claimed    listed             Claimed on       (moved)
-//!            cancel             Cancelled        cancel, if on
-//!            replaced           Fenced           cancel, if on; withdrawn: replaced
-//!            answer             (gone)           acknowledge; answered
-//!            channel lost       Claimed adrift
-//!            grace (adrift)     (gone)           lost
-//! Cancelled  listed             Cancelled on     cancel, unless answered
-//!            cancel             Cancelled
-//!            replaced           Fenced           withdrawn: replaced
-//!            answer             (gone)           acknowledge; answered
-//!            channel lost       Cancelled adrift
-//!            grace (adrift)     (gone)           lost
-//! Stray      listed             Stray on         (moved)
-//!            adopt              Claimed          placed
-//!            cancel             Fenced           cancel, if on
-//!            answer             Kept             acknowledge
-//!            channel lost       Stray adrift
-//!            its deadline       Fenced           cancel, if on
-//! Kept       adopt              (gone)           answered
-//!            cancel             (gone)           drop the answer
-//!            its deadline       (gone)           drop the answer
-//!            listed             Kept             (counted: its worker forgot it)
-//!            answer             Kept             acknowledge; drop (a duplicate)
-//! Fenced     listed             Fenced on        cancel, unless answered
-//!            answer             (gone)           acknowledge; drop
-//!            cancel             Fenced
-//!            channel lost       Fenced adrift
-//!            grace (adrift)     (gone)
+//! state         event or alarm      next              emits
+//! (none)        start               Waiting           (a newer claim replaces its run's claim)
+//!               adopt               Adopted           (likewise)
+//!               listed, its run     Fenced on         cancel, unless answered
+//!                 claimed
+//!               listed              Stray on          listed
+//! Waiting       placed (resume)     Claimed on        assign; placed
+//!               listed              Claimed on        placed (it is hosted already)
+//!               cancel              (gone)            withdrawn: cancelled
+//!               replaced            (gone)            withdrawn: replaced
+//! Adopted       listed              Claimed on        placed
+//!               cancel              Cancelled adrift
+//!               replaced            Fenced adrift     withdrawn: replaced
+//!               answer              Handed on         answered
+//!               grace               (gone)            lost
+//! Claimed       listed              Claimed on        (moved)
+//!               cancel              Cancelled         cancel, if on
+//!               replaced            Fenced            cancel, if on; withdrawn: replaced
+//!               answer              Handed on         answered
+//!               answer: invalid     (gone)            answered
+//!               answer: busy        Waiting           (placed again; its worker takes no more)
+//!               channel lost        Claimed adrift
+//!               grace (adrift)      (gone)            lost
+//! Cancelled     listed              Cancelled on      cancel, unless answered
+//!               cancel              Cancelled
+//!               replaced            Fenced            withdrawn: replaced
+//!               answer              Handed on         answered
+//!               answer: invalid     (gone)            answered
+//!               answer: busy        (gone)            withdrawn: cancelled
+//!               channel lost        Cancelled adrift
+//!               grace (adrift)      (gone)            lost
+//! Handed        acknowledge, on     (gone)            acknowledge
+//!               acknowledge, adrift Acknowledged
+//!               listed              Handed on         (moved)
+//!               answer              Handed            drop (sent again)
+//!               channel lost        Handed adrift
+//! Acknowledged  listed              (gone)            acknowledge
+//!               grace               (gone)
+//! Stray         listed              Stray on          (moved)
+//!               adopt               Claimed           placed
+//!               cancel              Fenced            cancel, if on
+//!               answer              Kept on
+//!               channel lost        Stray adrift
+//!               loaded              Stray             (its deadline: the grace from now)
+//!               its deadline        Fenced            cancel, if on
+//! Kept          adopt               Handed            answered
+//!               cancel              (gone)            acknowledge, if on; drop the answer
+//!                                   or Fenced adrift
+//!               its deadline        likewise
+//!               listed              Kept on           (moved)
+//!               answer              Kept              drop (sent again)
+//!               channel lost        Kept adrift
+//!               loaded              Kept              (its deadline: the grace from now)
+//! Fenced        listed              Fenced on         cancel, unless answered
+//!               answer              (gone)            acknowledge; drop
+//!               cancel              Fenced
+//!               channel lost        Fenced adrift
+//!               grace (adrift)      (gone)
 //! ```
 //!
-//! An answer for an attempt waiting to be placed, or one the fleet does not
-//! know (answered already, or never made), is acknowledged and dropped. A
-//! stray's deadline is the grace from its first listing, which comes no later
-//! than the grace of its worker's channel lost since. Only the parent's
-//! claims (Waiting, Adopted, Claimed, Cancelled) are replaced: a stray of the
-//! run is left to its deadline.
+//! An answer from a channel not in contact is dropped unacknowledged. One for
+//! an attempt the fleet does not know (acknowledged already, or never made)
+//! is acknowledged and dropped; one for an attempt waiting to be placed is
+//! dropped. Strays and kept answers wait for the parent's `Loaded` before
+//! their deadline runs, the grace from then or from their first listing,
+//! whichever is later. Only the parent's claims (Waiting, Adopted, Claimed,
+//! Cancelled) are replaced: a stray of the run is left to its deadline.
 //!
 //! What a state implies (the slot it takes, whether its run's next attempt
 //! waits for it, its place in the queue for a slot, whether it is its run's
@@ -91,6 +115,9 @@ pub(crate) struct Attempt {
     /// Its run's name, and its own, as the parent and the workers give them.
     pub(crate) run: Token,
     pub(crate) token: Token,
+    /// Whether a worker's listing made it, in the room kept for listings, or
+    /// the parent's start or adoption, in the room for claims.
+    pub(crate) listed: bool,
     pub(crate) state: State,
 }
 
@@ -107,21 +134,31 @@ pub(crate) struct Run {
 
 #[derive(Debug)]
 pub(crate) enum State {
-    /// Started: waits for a slot, and for no worker to host another attempt
-    /// of its run. `serial` is its place in the queue.
+    /// Started, or refused as busy: waits for a slot, and for no worker to
+    /// host another attempt of its run. `serial` is its place in the queue.
     Waiting { to: ReplyTo, workstream: Box<[u8]>, serial: u64 },
     /// Adopted after a restart, no worker having listed it yet: until the
     /// grace passes.
     Adopted { to: ReplyTo, until: Time },
-    /// The parent's live claim, on a worker or adrift.
-    Claimed { to: ReplyTo, at: Where },
+    /// The parent's live claim, on a worker or adrift, with its workstream to
+    /// be placed again if its worker refuses it as busy (empty when
+    /// adopted).
+    Claimed { to: ReplyTo, at: Where, workstream: Box<[u8]> },
     /// Cancelled by the parent: its answer still ends the call.
     Cancelled { to: ReplyTo, at: Where },
+    /// Its answer handed to the parent, which has yet to acknowledge it: its
+    /// worker keeps it, and its slot.
+    Handed { at: Where },
+    /// Its answer acknowledged by the parent while its worker was out of
+    /// contact: acknowledged to the worker once a hello lists it, until the
+    /// grace passes.
+    Acknowledged { until: Time },
     /// Listed by a worker, and not claimed: it waits to be adopted until
-    /// `until`.
-    Stray { at: Where, until: Time },
-    /// A stray's answer, acknowledged, kept for its adoption until `until`.
-    Kept { answer: Answer, payload: Token, until: Time },
+    /// `until`, which runs once the parent has loaded its claims.
+    Stray { at: Where, until: Option<Time> },
+    /// A stray's answer, kept for its adoption until `until`, as a stray
+    /// waits: its worker keeps it, and its slot.
+    Kept { answer: Answer, payload: Token, at: Where, until: Option<Time> },
     /// Cancelled for good, replaced or not adopted in time: whatever comes
     /// for it is dropped. It holds its run's next attempt back while a
     /// worker may host it.
@@ -144,7 +181,7 @@ pub(crate) enum Where {
 pub(crate) struct Implied {
     /// The channel whose slot it takes.
     on: Option<Id<Channel>>,
-    /// Whether a worker may host it.
+    /// Whether a worker may host it, live.
     held: bool,
     /// Its place in the queue for a slot.
     queued: Option<u64>,
@@ -155,17 +192,22 @@ pub(crate) struct Implied {
     closed: bool,
 }
 
+/// What nothing implies: an attempt not tracked yet.
+const UNTRACKED: Implied = Implied { on: None, held: false, queued: None, claim: false, deadline: None, closed: false };
+
 /// What `state` implies.
 pub(crate) fn implied(state: &State) -> Implied {
-    let none = Implied { on: None, held: false, queued: None, claim: false, deadline: None, closed: false };
+    let none = UNTRACKED;
     match state {
         State::Waiting { serial, .. } => Implied { queued: Some(*serial), claim: true, ..none },
         State::Adopted { until, .. } => Implied { held: true, claim: true, deadline: Some(*until), ..none },
         State::Claimed { at, .. } | State::Cancelled { at, .. } => {
             Implied { on: on(*at), held: true, claim: true, deadline: until(*at), ..none }
         }
-        State::Stray { at, until } => Implied { on: on(*at), held: true, deadline: Some(*until), ..none },
-        State::Kept { until, .. } => Implied { deadline: Some(*until), ..none },
+        State::Handed { at } => Implied { on: on(*at), ..none },
+        State::Acknowledged { until } => Implied { deadline: Some(*until), ..none },
+        State::Stray { at, until } => Implied { on: on(*at), held: true, deadline: *until, ..none },
+        State::Kept { at, until, .. } => Implied { on: on(*at), deadline: *until, ..none },
         State::Fenced { at } => Implied { on: on(*at), held: true, deadline: until(*at), ..none },
         State::Closed => Implied { closed: true, ..none },
     }
@@ -184,9 +226,6 @@ fn until(at: Where) -> Option<Time> {
         Where::Adrift { until } => Some(until),
     }
 }
-
-/// What nothing implies: an attempt not tracked yet.
-const UNTRACKED: Implied = Implied { on: None, held: false, queued: None, claim: false, deadline: None, closed: false };
 
 /// The names a request about an attempt carries.
 #[derive(Clone, Copy, Debug)]
@@ -212,7 +251,7 @@ pub(crate) fn start(
         Some(Refusal::Workstream)
     } else if model.names.contains_key(&(run, attempt)) {
         Some(Refusal::Duplicate)
-    } else if model.attempts.is_full() {
+    } else if !has_room(model, env) {
         Some(Refusal::Busy)
     } else {
         None
@@ -222,9 +261,8 @@ pub(crate) fn start(
         return;
     }
     replace(model, run, out);
-    let serial = model.serial;
-    model.serial = serial.checked_add(1).expect("a u64 counts every start");
-    insert(model, run, attempt, State::Waiting { to, workstream, serial });
+    let serial = next_serial(&mut model.serial);
+    insert(model, run, attempt, false, State::Waiting { to, workstream, serial });
 }
 
 /// Adopt: a stray claimed, a kept answer handed over, or a claim adrift
@@ -240,19 +278,24 @@ pub(crate) fn adopt(
 ) {
     let names = Names { run, attempt };
     let Some(&id) = model.names.get(&(run, attempt)) else {
-        if model.attempts.is_full() {
+        if !has_room(model, env) {
             refuse(model, to, names, Refusal::Busy, out);
             return;
         }
         replace(model, run, out);
         let until = env.now.saturating_add(env.limits.grace);
-        insert(model, run, attempt, State::Adopted { to, until });
+        insert(model, run, attempt, false, State::Adopted { to, until });
         return;
     };
     let entry = model.attempts.get(id).expect("a named attempt is tracked");
     match &entry.state {
         State::Stray { .. } | State::Kept { .. } => {}
-        State::Waiting { .. } | State::Adopted { .. } | State::Claimed { .. } | State::Cancelled { .. } => {
+        State::Waiting { .. }
+        | State::Adopted { .. }
+        | State::Claimed { .. }
+        | State::Cancelled { .. }
+        | State::Handed { .. }
+        | State::Acknowledged { .. } => {
             refuse(model, to, names, Refusal::Duplicate, out);
             return;
         }
@@ -269,20 +312,23 @@ pub(crate) fn adopt(
     let before = implied(&entry.state);
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
-        State::Stray { at, until: _ } => located(to, at, names, &mut model.facts, out),
-        State::Kept { answer, payload, until: _ } => handed(to, answer, payload, names, &mut model.facts, out),
+        State::Stray { at, until: _ } => located(to, at, Box::default(), names, &mut model.facts, out),
+        State::Kept { answer, payload, at, until: _ } => handed(to, answer, payload, at, names, &mut model.facts, out),
         State::Waiting { .. }
         | State::Adopted { .. }
         | State::Claimed { .. }
         | State::Cancelled { .. }
+        | State::Handed { .. }
+        | State::Acknowledged { .. }
         | State::Fenced { .. }
         | State::Closed => unreachable!("only a stray or a kept answer is adopted, as matched above"),
     };
     follow(model, id, before);
 }
 
-/// Cancel, from the parent. An attempt the fleet no longer tracks has
-/// answered, been lost or withdrawn, or was never made: nothing to cancel.
+/// Cancel, from the parent. An attempt the fleet no longer tracks, or whose
+/// answer it has handed on, has answered, been lost or withdrawn, or was
+/// never made: nothing to cancel.
 pub(crate) fn cancel(model: &mut Model, run: Token, attempt: Token, out: &mut Queue<Request>) {
     let Some(&id) = model.names.get(&(run, attempt)) else {
         return;
@@ -294,11 +340,44 @@ pub(crate) fn cancel(model: &mut Model, run: Token, attempt: Token, out: &mut Qu
     entry.state = match state {
         State::Waiting { to, workstream: _, serial: _ } => withdrawn(to, Withdrawal::Cancelled, names, out),
         State::Adopted { to, until } => State::Cancelled { to, at: Where::Adrift { until } },
-        State::Claimed { to, at } => cancelled(to, at, names, &model.channels, out),
+        State::Claimed { to, at, workstream: _ } => cancelled(to, at, names, &model.channels, out),
         State::Cancelled { to, at } => State::Cancelled { to, at },
+        State::Handed { at } => State::Handed { at },
+        State::Acknowledged { until } => State::Acknowledged { until },
         State::Stray { at, until: _ } => fenced(at, names, &model.channels, &mut model.facts, out),
-        State::Kept { answer: _, payload, until: _ } => dropped(payload, out),
+        State::Kept { answer: _, payload, at, until: _ } => {
+            forgotten(payload, at, names, &model.channels, &mut model.facts, out)
+        }
         State::Fenced { at } => State::Fenced { at },
+        State::Closed => unreachable!("a closed attempt is no longer named"),
+    };
+    follow(model, id, before);
+}
+
+/// Acknowledge, from the parent: the answer it was handed is durable, or not
+/// wanted, and its worker may forget it. One for an attempt the fleet no
+/// longer tracks (a refusal's, or one whose grace passed) changes nothing.
+pub(crate) fn acknowledge(model: &mut Model, run: Token, attempt: Token, out: &mut Queue<Request>) {
+    let Some(&id) = model.names.get(&(run, attempt)) else {
+        return;
+    };
+    let names = Names { run, attempt };
+    let entry = model.attempts.get_mut(id).expect("a named attempt is tracked");
+    let before = implied(&entry.state);
+    let state = mem::replace(&mut entry.state, State::Closed);
+    entry.state = match state {
+        State::Handed { at } => match at {
+            Where::On(channel) => acknowledged(channel, names, &model.channels, out),
+            Where::Adrift { until } => State::Acknowledged { until },
+        },
+        State::Waiting { .. }
+        | State::Adopted { .. }
+        | State::Claimed { .. }
+        | State::Cancelled { .. }
+        | State::Acknowledged { .. }
+        | State::Stray { .. }
+        | State::Kept { .. }
+        | State::Fenced { .. } => unreachable!("the parent acknowledges only an answer it was handed, once"),
         State::Closed => unreachable!("a closed attempt is no longer named"),
     };
     follow(model, id, before);
@@ -324,6 +403,8 @@ pub(crate) fn place(
         State::Adopted { .. }
         | State::Claimed { .. }
         | State::Cancelled { .. }
+        | State::Handed { .. }
+        | State::Acknowledged { .. }
         | State::Stray { .. }
         | State::Kept { .. }
         | State::Fenced { .. }
@@ -333,7 +414,7 @@ pub(crate) fn place(
 }
 
 /// Listed by the hello of the worker of `channel`: what it hosts is kept,
-/// cancelled again, or found.
+/// cancelled again, acknowledged or found.
 pub(crate) fn listed(
     model: &mut Model,
     env: &Env<Limits>,
@@ -348,6 +429,7 @@ pub(crate) fn listed(
         found(model, env, channel, names, answered, out);
         return;
     };
+    let on = Where::On(channel);
     let entry = model.attempts.get_mut(id).expect("a named attempt is tracked");
     let before = implied(&entry.state);
     let state = mem::replace(&mut entry.state, State::Closed);
@@ -355,28 +437,29 @@ pub(crate) fn listed(
         State::Waiting { to, workstream, serial: _ } => {
             hosted(to, workstream, channel, names, env, &mut model.channels, &mut model.facts, out)
         }
-        State::Adopted { to, until: _ } => located(to, Where::On(channel), names, &mut model.facts, out),
-        State::Claimed { to, at } => moved(to, at, channel, &mut model.facts),
+        State::Adopted { to, until: _ } => located(to, on, Box::default(), names, &mut model.facts, out),
+        State::Claimed { to, at, workstream } => moved(to, at, workstream, channel, &mut model.facts),
         State::Cancelled { to, at: _ } => {
-            again(Where::On(channel), answered, names, &model.channels, out);
-            State::Cancelled { to, at: Where::On(channel) }
+            again(on, answered, names, &model.channels, out);
+            State::Cancelled { to, at: on }
         }
-        State::Stray { at: _, until } => State::Stray { at: Where::On(channel), until },
-        State::Kept { answer, payload, until } => {
-            model.facts.push(Fact::Dropped);
-            State::Kept { answer, payload, until }
-        }
+        State::Handed { at: _ } => State::Handed { at: on },
+        State::Acknowledged { until: _ } => acknowledged(channel, names, &model.channels, out),
+        State::Stray { at: _, until } => State::Stray { at: on, until },
+        State::Kept { answer, payload, at: _, until } => State::Kept { answer, payload, at: on, until },
         State::Fenced { at: _ } => {
-            again(Where::On(channel), answered, names, &model.channels, out);
-            State::Fenced { at: Where::On(channel) }
+            again(on, answered, names, &model.channels, out);
+            State::Fenced { at: on }
         }
         State::Closed => unreachable!("a closed attempt is no longer named"),
     };
     follow(model, id, before);
 }
 
-/// An answer, on the channel `channel`: acknowledged in any case, and
-/// passed to the parent once, if the attempt is its claim.
+/// An answer, on the channel `channel`. Dropped unacknowledged if the channel
+/// is not in contact; otherwise handed to the parent once if the attempt is
+/// its claim, kept if it is a stray, and acknowledged and dropped if it is
+/// fenced off or not tracked.
 pub(crate) fn answer(
     model: &mut Model,
     channel: Token,
@@ -386,40 +469,81 @@ pub(crate) fn answer(
     payload: Token,
     out: &mut Queue<Request>,
 ) {
-    out.push(Request::Acknowledge { channel, run, attempt });
-    match answer {
-        Answer::Busy => channel::drain(model, channel),
-        Answer::Ended | Answer::Parked | Answer::Failed | Answer::Invalid => {}
-    }
-    let names = Names { run, attempt };
-    let Some(&id) = model.names.get(&(run, attempt)) else {
-        // The parent has it already, or it was lost, withdrawn or never made.
-        duplicate(payload, &mut model.facts, out);
+    let Some(&from) = model.tokens.get(&channel) else {
+        model.facts.push(Fact::Dropped);
+        out.push(Request::Drop { payload });
         return;
     };
+    let names = Names { run, attempt };
+    let Some(&id) = model.names.get(&(run, attempt)) else {
+        // Acknowledged already, its acknowledgement lost with a channel; or
+        // never made.
+        model.facts.push(Fact::Duplicate);
+        out.push(Request::Acknowledge { channel, run, attempt });
+        out.push(Request::Drop { payload });
+        return;
+    };
+    let on = Where::On(from);
     let entry = model.attempts.get_mut(id).expect("a named attempt is tracked");
     let before = implied(&entry.state);
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Waiting { to, workstream, serial } => {
-            duplicate(payload, &mut model.facts, out);
+            resent(payload, &mut model.facts, out);
             State::Waiting { to, workstream, serial }
         }
-        State::Adopted { to, until: _ } | State::Claimed { to, at: _ } | State::Cancelled { to, at: _ } => {
-            handed(to, answer, payload, names, &mut model.facts, out)
+        State::Adopted { to, until } => match answer {
+            Answer::Busy => {
+                resent(payload, &mut model.facts, out);
+                State::Adopted { to, until }
+            }
+            Answer::Ended | Answer::Parked | Answer::Failed | Answer::Invalid => {
+                handed(to, answer, payload, on, names, &mut model.facts, out)
+            }
+        },
+        State::Claimed { to, at: _, workstream } => match answer {
+            Answer::Busy => {
+                refused(payload, &mut model.facts, out);
+                let serial = next_serial(&mut model.serial);
+                State::Waiting { to, workstream, serial }
+            }
+            Answer::Ended | Answer::Parked | Answer::Failed | Answer::Invalid => {
+                handed(to, answer, payload, on, names, &mut model.facts, out)
+            }
+        },
+        State::Cancelled { to, at: _ } => match answer {
+            Answer::Busy => {
+                refused(payload, &mut model.facts, out);
+                withdrawn(to, Withdrawal::Cancelled, names, out)
+            }
+            Answer::Ended | Answer::Parked | Answer::Failed | Answer::Invalid => {
+                handed(to, answer, payload, on, names, &mut model.facts, out)
+            }
+        },
+        State::Handed { at } => {
+            resent(payload, &mut model.facts, out);
+            State::Handed { at }
         }
-        State::Stray { at: _, until } => State::Kept { answer, payload, until },
-        State::Kept { answer: kept, payload: held, until } => {
-            duplicate(payload, &mut model.facts, out);
-            State::Kept { answer: kept, payload: held, until }
+        State::Stray { at: _, until } => State::Kept { answer, payload, at: on, until },
+        State::Kept { answer: kept, payload: held, at, until } => {
+            resent(payload, &mut model.facts, out);
+            State::Kept { answer: kept, payload: held, at, until }
         }
-        State::Fenced { at: _ } => {
-            duplicate(payload, &mut model.facts, out);
+        // Acknowledged by the parent, or fenced off: its worker forgets it.
+        State::Acknowledged { until: _ } | State::Fenced { at: _ } => {
+            model.facts.push(Fact::Duplicate);
+            out.push(Request::Acknowledge { channel, run, attempt });
+            out.push(Request::Drop { payload });
             State::Closed
         }
         State::Closed => unreachable!("a closed attempt is no longer named"),
     };
     follow(model, id, before);
+    match answer {
+        // After the attempt has left its slot, which would lift the draining.
+        Answer::Busy => channel::drain(model, from),
+        Answer::Ended | Answer::Parked | Answer::Failed | Answer::Invalid => {}
+    }
 }
 
 /// Its worker's channel was lost: the attempt `id` is kept until `until`.
@@ -429,11 +553,13 @@ pub(crate) fn adrift(model: &mut Model, id: Id<Attempt>, until: Time) {
     let state = mem::replace(&mut entry.state, State::Closed);
     let at = Where::Adrift { until };
     entry.state = match state {
-        State::Claimed { to, at: _ } => State::Claimed { to, at },
+        State::Claimed { to, at: _, workstream } => State::Claimed { to, at, workstream },
         State::Cancelled { to, at: _ } => State::Cancelled { to, at },
+        State::Handed { at: _ } => State::Handed { at },
         State::Stray { at: _, until } => State::Stray { at, until },
+        State::Kept { answer, payload, at: _, until } => State::Kept { answer, payload, at, until },
         State::Fenced { at: _ } => State::Fenced { at },
-        State::Waiting { .. } | State::Adopted { .. } | State::Kept { .. } | State::Closed => {
+        State::Waiting { .. } | State::Adopted { .. } | State::Acknowledged { .. } | State::Closed => {
             unreachable!("only an attempt on a worker takes its slot")
         }
     };
@@ -449,18 +575,66 @@ pub(crate) fn expire(model: &mut Model, id: Id<Attempt>, out: &mut Queue<Request
     let state = mem::replace(&mut entry.state, State::Closed);
     entry.state = match state {
         State::Adopted { to, until: _ }
-        | State::Claimed { to, at: Where::Adrift { .. } }
+        | State::Claimed { to, at: Where::Adrift { .. }, .. }
         | State::Cancelled { to, at: Where::Adrift { .. } } => presumed(to, names, &mut model.facts, out),
-        State::Stray { at, until: _ } => fenced(at, names, &model.channels, &mut model.facts, out),
-        State::Kept { answer: _, payload, until: _ } => dropped(payload, out),
-        State::Fenced { at: Where::Adrift { .. } } => State::Closed,
+        State::Stray { at, until: Some(_) } => fenced(at, names, &model.channels, &mut model.facts, out),
+        State::Kept { answer: _, payload, at, until: Some(_) } => {
+            forgotten(payload, at, names, &model.channels, &mut model.facts, out)
+        }
+        State::Acknowledged { until: _ } | State::Fenced { at: Where::Adrift { .. } } => State::Closed,
         State::Waiting { .. }
         | State::Claimed { at: Where::On(_), .. }
         | State::Cancelled { at: Where::On(_), .. }
+        | State::Handed { .. }
+        | State::Stray { until: None, .. }
+        | State::Kept { until: None, .. }
         | State::Fenced { at: Where::On(_) }
         | State::Closed => unreachable!("no alarm runs in this state"),
     };
     follow(model, id, before);
+}
+
+/// Loaded: the deadline of every stray and kept answer waiting for it runs
+/// from now. Only their deadlines change, so their alarms are armed here.
+pub(crate) fn loaded(model: &mut Model, env: &Env<Limits>) {
+    model.loaded = true;
+    let at = env.now.saturating_add(env.limits.grace);
+    for (_, &id) in &model.names {
+        let entry = model.attempts.get_mut(id).expect("a named attempt is tracked");
+        let waits = match &entry.state {
+            State::Stray { until: None, .. } | State::Kept { until: None, .. } => true,
+            State::Waiting { .. }
+            | State::Adopted { .. }
+            | State::Claimed { .. }
+            | State::Cancelled { .. }
+            | State::Handed { .. }
+            | State::Acknowledged { .. }
+            | State::Stray { until: Some(_), .. }
+            | State::Kept { until: Some(_), .. }
+            | State::Fenced { .. }
+            | State::Closed => false,
+        };
+        if !waits {
+            continue;
+        }
+        let state = mem::replace(&mut entry.state, State::Closed);
+        entry.state = match state {
+            State::Stray { at: on, until: _ } => State::Stray { at: on, until: Some(at) },
+            State::Kept { answer, payload, at: on, until: _ } => {
+                State::Kept { answer, payload, at: on, until: Some(at) }
+            }
+            State::Waiting { .. }
+            | State::Adopted { .. }
+            | State::Claimed { .. }
+            | State::Cancelled { .. }
+            | State::Handed { .. }
+            | State::Acknowledged { .. }
+            | State::Fenced { .. }
+            | State::Closed => unreachable!("only a stray or a kept answer waits for the load, as matched above"),
+        };
+        let room = model.alarms.arm(id, at);
+        assert!(room.is_ok(), "an alarm per attempt");
+    }
 }
 
 /// Resumes the ready list: the first attempt in the queue whose run no
@@ -482,6 +656,8 @@ pub(crate) fn resume(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Reque
             State::Adopted { .. }
             | State::Claimed { .. }
             | State::Cancelled { .. }
+            | State::Handed { .. }
+            | State::Acknowledged { .. }
             | State::Stray { .. }
             | State::Kept { .. }
             | State::Fenced { .. }
@@ -500,6 +676,19 @@ pub(crate) fn resume(model: &mut Model, env: &Env<Limits>, out: &mut Queue<Reque
 
 // Cell handlers: each takes the source state's data by value and returns the
 // target state.
+
+/// Whether there is room for another of the parent's attempts: within its
+/// share, and in the table.
+fn has_room(model: &Model, env: &Env<Limits>) -> bool {
+    model.claims < env.limits.attempts && !model.attempts.is_full()
+}
+
+/// The next place in the queue for a slot.
+fn next_serial(serial: &mut u64) -> u64 {
+    let this = *serial;
+    *serial = this.checked_add(1).expect("a u64 counts every placing");
+    this
+}
 
 /// Refused at the entrance.
 fn refuse(model: &mut Model, to: ReplyTo, names: Names, refusal: Refusal, out: &mut Queue<Request>) {
@@ -524,14 +713,17 @@ fn replace(model: &mut Model, run: Token, out: &mut Queue<Request>) {
     entry.state = match state {
         State::Waiting { to, workstream: _, serial: _ } => withdrawn(to, Withdrawal::Replaced, names, out),
         State::Adopted { to, until } => superseded(to, Where::Adrift { until }, names, out),
-        State::Claimed { to, at } => {
+        State::Claimed { to, at, workstream: _ } => {
             again(at, false, names, &model.channels, out);
             superseded(to, at, names, out)
         }
         State::Cancelled { to, at } => superseded(to, at, names, out),
-        State::Stray { .. } | State::Kept { .. } | State::Fenced { .. } | State::Closed => {
-            unreachable!("a run's claim is the parent's")
-        }
+        State::Handed { .. }
+        | State::Acknowledged { .. }
+        | State::Stray { .. }
+        | State::Kept { .. }
+        | State::Fenced { .. }
+        | State::Closed => unreachable!("a run's claim is the parent's"),
     };
     follow(model, id, before);
 }
@@ -576,30 +768,63 @@ fn again(at: Where, answered: bool, names: Names, channels: &Slab<Channel>, out:
     }
 }
 
-/// A kept answer no one adopts: the parent forgets it.
-fn dropped(payload: Token, out: &mut Queue<Request>) -> State {
-    out.push(Request::Drop { payload });
+/// The parent has the answer durably: its worker forgets it.
+fn acknowledged(channel: Id<Channel>, names: Names, channels: &Slab<Channel>, out: &mut Queue<Request>) -> State {
+    let channel = channel::token(channels, channel);
+    out.push(Request::Acknowledge { channel, run: names.run, attempt: names.attempt });
     State::Closed
 }
 
-/// An answer the parent does not take: it forgets it.
-fn duplicate(payload: Token, facts: &mut Facts, out: &mut Queue<Request>) {
+/// A kept answer no one adopts: the parent forgets it, and its worker too
+/// if it is in contact; otherwise once a hello lists it, as for any attempt
+/// fenced off.
+fn forgotten(
+    payload: Token,
+    at: Where,
+    names: Names,
+    channels: &Slab<Channel>,
+    facts: &mut Facts,
+    out: &mut Queue<Request>,
+) -> State {
+    facts.push(Fact::Fenced);
+    out.push(Request::Drop { payload });
+    match at {
+        Where::On(channel) => acknowledged(channel, names, channels, out),
+        Where::Adrift { .. } => State::Fenced { at },
+    }
+}
+
+/// An answer sent again while the fleet keeps or has handed on the first, or
+/// for an attempt waiting to be placed: dropped, not acknowledged.
+fn resent(payload: Token, facts: &mut Facts, out: &mut Queue<Request>) {
     facts.push(Fact::Duplicate);
     out.push(Request::Drop { payload });
 }
 
-/// The answer goes to the parent, ending its call.
+/// A busy refusal: the parent forgets its payload, and the attempt goes on.
+fn refused(payload: Token, facts: &mut Facts, out: &mut Queue<Request>) {
+    facts.push(Fact::Busy);
+    out.push(Request::Drop { payload });
+}
+
+/// The answer goes to the parent, ending its call; its worker keeps it until
+/// the parent acknowledges it, unless it is a refusal, which keeps nothing.
 fn handed(
     to: ReplyTo,
     answer: Answer,
     payload: Token,
+    at: Where,
     names: Names,
     facts: &mut Facts,
     out: &mut Queue<Request>,
 ) -> State {
     facts.push(Fact::Answered { answer });
     out.push(Request::Answered { to, run: names.run, attempt: names.attempt, answer, payload });
-    State::Closed
+    match answer {
+        Answer::Invalid => State::Closed,
+        Answer::Ended | Answer::Parked | Answer::Failed => State::Handed { at },
+        Answer::Busy => unreachable!("a busy refusal is placed again, not handed on"),
+    }
 }
 
 /// Past the grace, no worker hosting it in contact: presumed lost.
@@ -611,22 +836,29 @@ fn presumed(to: ReplyTo, names: Names, facts: &mut Facts, out: &mut Queue<Reques
 
 /// An adopted attempt found, or a stray adopted: the parent's claim from now
 /// on, which the parent hears is on a worker.
-fn located(to: ReplyTo, at: Where, names: Names, facts: &mut Facts, out: &mut Queue<Request>) -> State {
+fn located(
+    to: ReplyTo,
+    at: Where,
+    workstream: Box<[u8]>,
+    names: Names,
+    facts: &mut Facts,
+    out: &mut Queue<Request>,
+) -> State {
     facts.push(Fact::Found);
     out.push(Request::Placed { run: names.run, attempt: names.attempt });
-    State::Claimed { to, at }
+    State::Claimed { to, at, workstream }
 }
 
 /// A claim listed again: on its worker's channel from now on.
-fn moved(to: ReplyTo, at: Where, channel: Id<Channel>, facts: &mut Facts) -> State {
+fn moved(to: ReplyTo, at: Where, workstream: Box<[u8]>, channel: Id<Channel>, facts: &mut Facts) -> State {
     match at {
         Where::On(_) => {}
         Where::Adrift { .. } => facts.push(Fact::Found),
     }
-    State::Claimed { to, at: Where::On(channel) }
+    State::Claimed { to, at: Where::On(channel), workstream }
 }
 
-/// Waiting, placed: assigned to the worker of `channel`, which keeps its
+/// Waiting, placed: assigned to the worker of `channel`, which holds its
 /// workstream from now on.
 #[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
 fn assigned(
@@ -640,11 +872,11 @@ fn assigned(
     out: &mut Queue<Request>,
 ) -> State {
     let entry = channels.get_mut(channel).expect("a worker chosen is in contact");
-    channel::cache(entry, &env.limits, workstream);
+    channel::cache(entry, &env.limits, &workstream);
     out.push(Request::Assign { channel: entry.token, run: names.run, attempt: names.attempt });
     out.push(Request::Placed { run: names.run, attempt: names.attempt });
     facts.push(Fact::Placed);
-    State::Claimed { to, at: Where::On(channel) }
+    State::Claimed { to, at: Where::On(channel), workstream }
 }
 
 /// Waiting, listed: a worker hosts it already, so it is not assigned again.
@@ -660,12 +892,14 @@ fn hosted(
     out: &mut Queue<Request>,
 ) -> State {
     let entry = channels.get_mut(channel).expect("a worker saying hello is in contact");
-    channel::cache(entry, &env.limits, workstream);
-    located(to, Where::On(channel), names, facts, out)
+    channel::cache(entry, &env.limits, &workstream);
+    located(to, Where::On(channel), workstream, names, facts, out)
 }
 
 /// Listed, and not tracked: fenced off at once if its run is claimed by
-/// another attempt, and otherwise a stray that waits to be adopted.
+/// another attempt, and otherwise a stray that waits to be adopted, which
+/// the parent hears of. Beyond the room kept for listings, it is cancelled
+/// and not tracked.
 fn found(
     model: &mut Model,
     env: &Env<Limits>,
@@ -674,55 +908,68 @@ fn found(
     answered: bool,
     out: &mut Queue<Request>,
 ) {
+    let at = Where::On(channel);
+    if model.attempts.is_full() {
+        model.facts.push(Fact::Fenced);
+        again(at, answered, names, &model.channels, out);
+        return;
+    }
     let claimed = match model.runs.get(&names.run) {
         Some(run) => run.claim.is_some(),
         None => false,
     };
-    let at = Where::On(channel);
     let state = if claimed {
         model.facts.push(Fact::Fenced);
         again(at, answered, names, &model.channels, out);
         State::Fenced { at }
     } else {
         model.facts.push(Fact::Stray);
-        State::Stray { at, until: env.now.saturating_add(env.limits.grace) }
+        out.push(Request::Listed { run: names.run, attempt: names.attempt });
+        let until = if model.loaded { Some(env.now.saturating_add(env.limits.grace)) } else { None };
+        State::Stray { at, until }
     };
-    insert(model, names.run, names.attempt, state);
+    insert(model, names.run, names.attempt, true, state);
 }
 
 // What a state implies, in one place.
 
 /// Tracks a new attempt in `state`. The entrance checked there is room.
-fn insert(model: &mut Model, run: Token, attempt: Token, state: State) {
-    let Ok(id) = model.attempts.insert(Attempt { run, token: attempt, state }) else {
+fn insert(model: &mut Model, run: Token, attempt: Token, listed: bool, state: State) {
+    let Ok(id) = model.attempts.insert(Attempt { run, token: attempt, listed, state }) else {
         unreachable!("the entrance checks there is room for an attempt");
     };
     let named = model.names.insert((run, attempt), id);
     assert!(named == Ok(None), "an attempt tracked is named once, with room for every one");
+    if !listed {
+        model.claims = model.claims.checked_add(1).expect("no more claims than tracked");
+    }
     follow(model, id, UNTRACKED);
 }
 
 /// Derives what the new state of the attempt `id` implies, given what its
-/// state `before` did: the slot it takes, its run's claim and how many of
-/// its attempts a worker may host, its place in the queue, its alarm; and
-/// retires it once it has closed.
+/// state `before` did: the slot it takes (a worker that frees one takes
+/// assignments again), its run's claim and how many of its attempts a worker
+/// may host, its place in the queue, its alarm; and retires it once it has
+/// closed.
 fn follow(model: &mut Model, id: Id<Attempt>, before: Implied) {
     let entry = model.attempts.get(id).expect("an attempt lives until it is reclaimed");
     let after = implied(&entry.state);
     let run = entry.run;
     let attempt = entry.token;
+    let listed = entry.listed;
     if before.on != after.on {
         if let Some(channel) = before.on {
             // Lost already, if it went adrift with its channel.
             if let Some(entry) = model.channels.get_mut(channel) {
                 entry.hosts.remove(&id);
+                entry.draining = false;
             }
             model.placing = true;
         }
         if let Some(channel) = after.on {
             let entry = model.channels.get_mut(channel).expect("an attempt is on a worker in contact");
             let room = entry.hosts.insert(id);
-            assert!(room.is_ok(), "a worker hosts no more attempts than a hello may list or its slots take");
+            assert!(room.is_ok(), "a worker hosts no more attempts than its listings or its slots take");
         }
     }
     if before.queued != after.queued {
@@ -768,5 +1015,8 @@ fn follow(model: &mut Model, id: Id<Attempt>, before: Implied) {
     if after.closed {
         model.names.remove(&(run, attempt));
         model.attempts.retire(id);
+        if !listed {
+            model.claims = model.claims.checked_sub(1).expect("a claim tracked was counted");
+        }
     }
 }

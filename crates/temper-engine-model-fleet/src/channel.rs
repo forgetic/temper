@@ -4,28 +4,32 @@
 //! its hello lists: the fleet needs no other name for it.
 //!
 //! A hello is the worker's entrance. It is turned away, its channel to be
-//! closed, if the fleet has no room for another worker, if it lists more
-//! runs than a worker may host, or if the fleet could not track every
-//! attempt it lists that it does not know; nothing of it is kept then. Its
-//! slots are used up to the limit, and the workstreams it lists up to the
-//! limit, each within the bytes of a key. Each run it lists is kept,
-//! cancelled again or found (see the attempts' table). A second hello on a
-//! channel breaks the worker's contract, and is counted and dropped.
+//! closed, only if the fleet has no room for another worker. Its slots are
+//! used up to the limit, and the workstreams it lists up to the limit, each
+//! within the bytes of a key. Each run it lists, up to the slots a worker
+//! may have, is kept, cancelled again, acknowledged or found (see the
+//! attempts' table); one beyond them, or beyond the room the fleet keeps for
+//! listings, is cancelled and not tracked; and past twice the slots, a
+//! listing is dropped and counted, to bound what a hello emits. A second
+//! hello on a channel breaks the worker's contract, and is counted and
+//! dropped.
 //!
 //! A lost channel's attempts are kept for the grace, adrift, and the worker
 //! is forgotten. A worker that refuses an assignment as busy is shutting
-//! down, or fuller than the fleet knew: nothing more is placed on it.
+//! down, or fuller than the fleet knew: nothing more is placed on it until
+//! it frees a slot.
 //!
 //! Placement takes a worker in contact with a free slot that holds the
 //! workstream's checkout, the first in the order of the protocol's names for
 //! the channels; or, with none, the one with the most free slots. A worker
 //! holds the workstreams its hello listed and those of the runs placed on it
-//! since, while there is room.
+//! since: placing one beyond the room evicts the one used longest ago.
 
 use alloc::boxed::Box;
 use core::mem;
 
-use temper_lib::{Env, Id, Queue, Set, Slab, Token};
+use temper_lib::bytes::copy_of;
+use temper_lib::{Env, Id, Map, Queue, Set, Slab, Token};
 
 use crate::attempt::{self, Attempt};
 use crate::boundary::{Hello, Hosted, Phase, Request};
@@ -40,12 +44,15 @@ pub(crate) struct Channel {
     pub(crate) token: Token,
     /// How many runs it hosts at once, as its hello said, within the limits.
     pub(crate) slots: u32,
-    /// It refused an assignment as busy: nothing more is placed on it.
+    /// It refused an assignment as busy, and has freed no slot since:
+    /// nothing is placed on it.
     pub(crate) draining: bool,
     /// The attempts it hosts or holds the answers of, each taking a slot.
     pub(crate) hosts: Set<Id<Attempt>>,
-    /// The workstreams it holds checkouts for.
-    pub(crate) workstreams: Set<Box<[u8]>>,
+    /// The workstreams it holds checkouts for, by when each was last used,
+    /// and the count that orders them.
+    pub(crate) workstreams: Map<u64, Box<[u8]>>,
+    pub(crate) uses: u64,
 }
 
 /// The most bytes of a key, as a slice's length.
@@ -58,13 +65,38 @@ pub(crate) fn token(channels: &Slab<Channel>, channel: Id<Channel>) -> Token {
     channels.get(channel).expect("an attempt is on a worker in contact").token
 }
 
-/// Keeps `workstream` among those `channel` holds, if it is not and there is
-/// room; drops it otherwise.
-pub(crate) fn cache(channel: &mut Channel, limits: &Limits, workstream: Box<[u8]>) {
-    if channel.workstreams.len() < limits.workstreams && workstream.len() <= bytes(limits.workstream_bytes) {
-        let room = channel.workstreams.insert(workstream);
-        assert!(room.is_ok(), "checked for room above");
+/// Whether `channel` holds `workstream`'s checkout, and when it last used it.
+fn holds(channel: &Channel, workstream: &[u8]) -> Option<u64> {
+    for (&used, key) in &channel.workstreams {
+        if **key == *workstream {
+            return Some(used);
+        }
     }
+    None
+}
+
+/// `channel` holds `workstream`'s checkout from now on, its latest used: in
+/// place of the one used longest ago if it holds as many as it may. A key
+/// empty or longer than a key may be is not kept.
+pub(crate) fn cache(channel: &mut Channel, limits: &Limits, workstream: &[u8]) {
+    if workstream.is_empty() || workstream.len() > bytes(limits.workstream_bytes) || limits.workstreams == 0 {
+        return;
+    }
+    let key = match holds(channel, workstream) {
+        Some(used) => channel.workstreams.remove(&used).expect("held above"),
+        None => {
+            if channel.workstreams.len() >= limits.workstreams
+                && let Some((&oldest, _)) = channel.workstreams.first()
+            {
+                channel.workstreams.remove(&oldest);
+            }
+            copy_of(workstream)
+        }
+    };
+    let used = channel.uses;
+    channel.uses = used.checked_add(1).expect("a u64 counts every use");
+    let room = channel.workstreams.insert(used, key);
+    assert!(room.is_ok(), "room was made above");
 }
 
 /// Hello, on a new channel: the worker is in contact, or turned away.
@@ -74,43 +106,49 @@ pub(crate) fn hello(model: &mut Model, env: &Env<Limits>, channel: Token, hello:
         model.facts.push(Fact::Dropped);
         return;
     }
-    let Hello { slots, workstreams, hosting } = hello;
-    let listed = u32::try_from(hosting.len()).unwrap_or(u32::MAX);
-    let mut unknown: u32 = 0;
-    for hosted in &hosting {
-        if !model.names.contains_key(&(hosted.run, hosted.attempt)) {
-            unknown = unknown.saturating_add(1);
-        }
-    }
-    let room = model.attempts.capacity().saturating_sub(model.attempts.len());
-    if model.channels.is_full() || listed > limits.slots || unknown > room {
+    if model.channels.is_full() {
         model.facts.push(Fact::TurnedAway);
         out.push(Request::Refuse { channel });
         return;
     }
+    let Hello { slots, workstreams, hosting } = hello;
     let mut worker = Channel {
         token: channel,
         slots: slots.min(limits.slots),
         draining: false,
         hosts: Set::with_capacity(limits.slots),
-        workstreams: Set::with_capacity(limits.workstreams),
+        workstreams: Map::with_capacity(limits.workstreams),
+        uses: 0,
     };
-    for workstream in workstreams {
-        if !workstream.is_empty() {
-            cache(&mut worker, limits, workstream);
-        }
+    for workstream in &workstreams {
+        cache(&mut worker, limits, workstream);
     }
     let Ok(id) = model.channels.insert(worker) else {
         unreachable!("checked for room above");
     };
     let named = model.tokens.insert(channel, id);
     assert!(named == Ok(None), "a channel is named once, with room for every worker");
+    let most = limits.slots.saturating_mul(2);
+    let mut listed: u32 = 0;
     for Hosted { run, attempt, phase } in hosting {
         let answered = match phase {
             Phase::Answered => true,
             Phase::Preparing | Phase::Starting | Phase::Active | Phase::Waiting | Phase::Ending => false,
         };
-        attempt::listed(model, env, id, run, attempt, answered, out);
+        if listed >= most {
+            model.facts.push(Fact::Dropped);
+            continue;
+        }
+        if listed >= limits.slots {
+            // More than a worker may host: cancelled, and not tracked.
+            model.facts.push(Fact::Fenced);
+            if !answered {
+                out.push(Request::Cancel { channel, run, attempt });
+            }
+        } else {
+            attempt::listed(model, env, id, run, attempt, answered, out);
+        }
+        listed = listed.saturating_add(1);
     }
     model.facts.push(Fact::Hello { listed });
     model.placing = true;
@@ -133,12 +171,9 @@ pub(crate) fn lost(model: &mut Model, env: &Env<Limits>, channel: Token) {
 }
 
 /// The worker of `channel` refused an assignment as busy: nothing more is
-/// placed on it.
-pub(crate) fn drain(model: &mut Model, channel: Token) {
-    let Some(&id) = model.tokens.get(&channel) else {
-        return;
-    };
-    model.channels.get_mut(id).expect("a named channel is in contact").draining = true;
+/// placed on it until it frees a slot.
+pub(crate) fn drain(model: &mut Model, channel: Id<Channel>) {
+    model.channels.get_mut(channel).expect("an answer's channel is in contact").draining = true;
 }
 
 /// The worker to place an attempt of `workstream` on: one with a free slot
@@ -151,7 +186,7 @@ pub(crate) fn choose(model: &Model, workstream: &[u8]) -> Option<Id<Channel>> {
         if channel.draining || free == 0 {
             continue;
         }
-        if channel.workstreams.contains(workstream) {
+        if holds(channel, workstream).is_some() {
             return Some(id);
         }
         best = match best {

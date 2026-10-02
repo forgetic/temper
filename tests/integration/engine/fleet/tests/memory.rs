@@ -180,12 +180,14 @@ fn a_fleet_full_to_its_limits_stays_within_its_worst_case() {
         let down = fleet.step(Event::Relayed { to, answer: Token::new(100 + nth as u64) });
         assert!(matches!(down[..], [Request::Relayed { .. }]), "{down:?}");
     }
-    // Each attempt answered frees a slot for one waiting.
+    // Each attempt answered, and its answer made durable, frees a slot for
+    // one waiting.
     let mut out = placed;
     while !out.is_empty() {
         for (channel, run, attempt) in out {
             let payload = Token::new(200 + attempt.raw());
             fleet.step(Event::Answer { channel, run, attempt, answer: Answer::Ended, payload });
+            fleet.step(Event::Acknowledge { run, attempt });
         }
         out = self::placed(&fleet.settle());
     }
@@ -195,22 +197,21 @@ fn a_fleet_full_to_its_limits_stays_within_its_worst_case() {
 #[test]
 fn every_entry_point_stays_within_the_worst_case() {
     let mut fleet = Measured::new(LIMITS);
-    // Hellos: a worker with strays and answers it holds, and one hosting an
-    // attempt of a claimed run.
+    // Hellos: a worker with strays and answers it holds, before the parent
+    // has loaded its claims.
     let (r1, a1, r2, a2) = (fleet.name(), fleet.name(), fleet.name(), fleet.name());
     let hosting = vec![
         Hosted { run: r1, attempt: a1, phase: Phase::Active },
         Hosted { run: r2, attempt: a2, phase: Phase::Answered },
     ];
-    assert!(fleet.hello(channel(0), hosting).is_empty());
-    fleet.step(Event::Answer {
-        channel: channel(0),
-        run: r2,
-        attempt: a2,
-        answer: Answer::Ended,
-        payload: Token::new(1),
-    });
+    let listed = fleet.hello(channel(0), hosting);
+    assert!(matches!(listed[..], [Request::Listed { .. }, Request::Listed { .. }]), "{listed:?}");
+    let answer =
+        Event::Answer { channel: channel(0), run: r2, attempt: a2, answer: Answer::Ended, payload: Token::new(1) };
+    fleet.step(answer);
+    fleet.step(Event::Loaded);
     fleet.step(Event::Adopt { reply_to: ReplyTo::new(a2), run: r2, attempt: a2 });
+    fleet.step(Event::Acknowledge { run: r2, attempt: a2 });
     fleet.step(Event::Adopt { reply_to: ReplyTo::new(a1), run: r1, attempt: a1 });
     let (r3, a3) = fleet.start();
     let placed = placed(&fleet.settle());
@@ -225,24 +226,27 @@ fn every_entry_point_stays_within_the_worst_case() {
     fleet.step(Event::Bounced { run: r3, attempt: a3, bounce: Bounce::Full });
     fleet.step(Event::Told { run: r3, attempt: a3, fact: Token::new(5) });
     fleet.step(Event::Cancel { run: r1, attempt: a1 });
+    // A busy refusal, placed again.
+    let (channel_of, ..) = placed[0];
+    let busy =
+        Event::Answer { channel: channel_of, run: r3, attempt: a3, answer: Answer::Busy, payload: Token::new(6) };
+    fleet.step(busy);
+    fleet.settle();
     // A worker lost, back on another channel, and lost for good.
     fleet.step(Event::Lost { channel: channel(0) });
     let hosting = vec![Hosted { run: r3, attempt: a3, phase: Phase::Active }];
     fleet.hello(channel(1), hosting);
-    fleet.step(Event::Answer {
-        channel: channel(1),
-        run: r3,
-        attempt: a3,
-        answer: Answer::Failed,
-        payload: Token::new(6),
-    });
-    fleet.step(Event::Answer {
-        channel: channel(1),
-        run: r3,
-        attempt: a3,
-        answer: Answer::Failed,
-        payload: Token::new(7),
-    });
+    for raw in [7, 8] {
+        let answer = Event::Answer {
+            channel: channel(1),
+            run: r3,
+            attempt: a3,
+            answer: Answer::Failed,
+            payload: Token::new(raw),
+        };
+        fleet.step(answer);
+    }
+    fleet.step(Event::Acknowledge { run: r3, attempt: a3 });
     fleet.at(30);
     fleet.settle();
     assert_eq!((fleet.model.attempts(), fleet.model.calls()), (0, 0));

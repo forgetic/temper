@@ -522,6 +522,8 @@ impl World {
             let at = world.moment();
             world.referee.inject(at, Stimulus::Restart);
         }
+        // A first start's cold read finds no claim.
+        world.stage.push(Event::Loaded);
         world
     }
 
@@ -890,7 +892,9 @@ impl World {
                     }
                 };
                 self.ended(to, run, attempt, End::Answered(said));
+                self.stage.push(Event::Acknowledge { run, attempt });
             }
+            Request::Listed { .. } => self.end("listed"),
             Request::Lost { to, run, attempt } => self.ended(to, run, attempt, End::Lost),
             Request::Withdrawn { to, run, attempt, withdrawal } => {
                 let end = match withdrawal {
@@ -941,6 +945,7 @@ impl World {
             Fact::Fenced => self.end("fenced"),
             Fact::Duplicate => self.end("duplicate"),
             Fact::Dropped => self.end("dropped"),
+            Fact::Busy => self.end("busy"),
             Fact::Hello { .. }
             | Fact::TurnedAway
             | Fact::Lost { .. }
@@ -1114,6 +1119,8 @@ impl World {
                 self.send(at, Delivery::Timeout { item, attempt });
             }
         }
+        // The cold read is done: strays' graces run from now.
+        self.stage.push(Event::Loaded);
     }
 }
 
@@ -1137,6 +1144,8 @@ fn describe(event: &Event) -> String {
         | Event::Answer { .. }
         | Event::Relay { .. }
         | Event::Bounced { .. }
-        | Event::Told { .. } => format!("{event:?}"),
+        | Event::Told { .. }
+        | Event::Acknowledge { .. }
+        | Event::Loaded => format!("{event:?}"),
     }
 }

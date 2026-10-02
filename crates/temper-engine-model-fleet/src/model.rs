@@ -7,16 +7,18 @@ use crate::boundary::{Event, Request};
 use crate::call::{self, Call};
 use crate::channel::{self, Channel};
 use crate::facts::{Fact, Facts};
-use crate::limits::Limits;
+use crate::limits::{self, Limits};
 
 /// The most requests a step, an alarm or a resume emits under `limits`: a
-/// request for each run a hello lists (a cancel again, or the parent told an
-/// attempt is found); or an adoption's three (the replaced claim's cancel and
-/// its withdrawal, and the adopted attempt's placing or answer). The parent
-/// reserves this much room in `out` before calling it.
+/// request for each run a hello lists, up to twice the slots (a cancel, an
+/// acknowledgement, or the parent told an attempt is found or listed); or an
+/// adoption's three (the replaced claim's cancel and its withdrawal, and the
+/// adopted attempt's placing or answer). The parent reserves this much room
+/// in `out` before calling it.
 #[must_use]
 pub const fn max_out(limits: &Limits) -> u32 {
-    if limits.slots > 3 { limits.slots } else { 3 }
+    let listed = limits.slots.saturating_mul(2);
+    if listed > 3 { listed } else { 3 }
 }
 
 /// The fleet's state.
@@ -41,6 +43,10 @@ pub struct Model {
     /// Something changed that may let a waiting attempt be placed: the ready
     /// list.
     pub(crate) placing: bool,
+    /// The parent's attempts tracked, within `Limits::attempts`.
+    pub(crate) claims: u32,
+    /// The parent has loaded its claims: strays' deadlines run.
+    pub(crate) loaded: bool,
     pub(crate) facts: Facts,
 }
 
@@ -48,17 +54,20 @@ impl Model {
     /// A model with room for `limits`.
     #[must_use]
     pub fn new(limits: &Limits) -> Model {
+        let tracked = limits::tracked(limits).expect("worst_case accepted the limits");
         Model {
             channels: Slab::with_capacity(limits.workers),
             tokens: Map::with_capacity(limits.workers),
-            attempts: Slab::with_capacity(limits.attempts),
-            names: Map::with_capacity(limits.attempts),
-            runs: Map::with_capacity(limits.attempts),
-            waiting: Map::with_capacity(limits.attempts),
+            attempts: Slab::with_capacity(tracked),
+            names: Map::with_capacity(tracked),
+            runs: Map::with_capacity(tracked),
+            waiting: Map::with_capacity(tracked),
             serial: 0,
-            alarms: Deadlines::with_capacity(limits.attempts),
+            alarms: Deadlines::with_capacity(tracked),
             calls: Slab::with_capacity(limits.calls),
             placing: false,
+            claims: 0,
+            loaded: false,
             facts: Facts::with_capacity(limits.facts),
         }
     }
@@ -143,6 +152,8 @@ pub fn step(model: &mut Model, env: &Env<Limits>, event: Event, out: &mut Queue<
         Event::Cancel { run, attempt } => attempt::cancel(model, run, attempt, out),
         Event::Inbound { run, attempt, event } => call::inbound(model, run, attempt, event, out),
         Event::Relayed { to, answer } => call::relayed(model, to, answer, out),
+        Event::Acknowledge { run, attempt } => attempt::acknowledge(model, run, attempt, out),
+        Event::Loaded => attempt::loaded(model, env),
         Event::Hello { channel, hello } => channel::hello(model, env, channel, hello, out),
         Event::Lost { channel } => channel::lost(model, env, channel),
         Event::Answer { channel, run, attempt, answer, payload } => {

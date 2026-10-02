@@ -8,16 +8,20 @@
 //! and the run waits, bounded, while none has one; never two attempts of a
 //! run's workstream at once. It fences attempts: once an attempt is
 //! cancelled or replaced, what its worker still sends is dropped, its answer
-//! aside. It acknowledges every answer, and passes each to the parent once.
-//! It keeps a lost worker's runs for a grace, and once the grace passes
+//! aside. It hands each answer to the parent once, and acknowledges it to
+//! the worker, which keeps it and its slot until then, only once the parent
+//! has made it durable. A worker that refuses an attempt as busy gets
+//! nothing more until it frees a slot, and the attempt is placed again. It
+//! keeps a lost worker's runs for a grace, and once the grace passes
 //! presumes them lost; a worker that comes back says what it hosts, and the
 //! fleet keeps what is still claimed and cancels the rest. After an engine
-//! restart the parent adopts the claims its records hold, and the same
-//! reports say which are live: a claim no worker reports within the grace is
-//! lost, and a run a worker reports that no claim adopts within it is
-//! cancelled. It relays inbound events and cancels down to a run's worker, a
-//! run's host calls up to the parent and their answers back, each call
-//! answered once, and its bounces and facts up.
+//! restart the parent adopts the claims its records hold, and says when it
+//! has: a claim no worker reports within the grace is lost, and a run a
+//! worker reports that no claim adopts within the grace from then is
+//! cancelled, the parent told of it meanwhile. It relays inbound events and
+//! cancels down to a run's worker, a run's host calls up to the parent and
+//! their answers back, each call answered once, and its bounces and facts
+//! up.
 //!
 //! Sans-io: [`step`], [`fire`] and [`resume`] turn events into requests and
 //! change nothing but the [`Model`] they are given. Every effect is a
