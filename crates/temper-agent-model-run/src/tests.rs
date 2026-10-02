@@ -10,8 +10,8 @@ use crate::outcome::{
 };
 use crate::prepare::{Found, Guide};
 use crate::{
-    Answer, Ask, Budget, Charter, End, Event, Exhausted, Exit, Failure, Fault, Invalid, Limits, MAX_OUT, Model,
-    Opening, Place, Policy, Push, Ran, Read, Refusal, Request, Returned, Spend, Stop, fire, step, worst_case,
+    Answer, Ask, AskRefusal, Budget, Charter, End, Event, Exhausted, Exit, Failure, Fault, Invalid, Limits, MAX_OUT,
+    Model, Opening, Place, Policy, Push, Ran, Read, Refusal, Request, Returned, Spend, Stop, fire, step, worst_case,
 };
 
 const BUDGET: Budget = Budget {
@@ -25,7 +25,7 @@ const BUDGET: Budget = Budget {
 
 const LIMITS: Limits = Limits {
     runs: 2,
-    conversations: 2,
+    conversations: 4,
     run_bytes: 4096,
     repositories: 2,
     outlets: 2,
@@ -40,6 +40,10 @@ const LIMITS: Limits = Limits {
         time: Duration::from_secs(3600),
     },
     max_tokens: 4096,
+    models: 2,
+    depth: 2,
+    run_conversations: 3,
+    answer_bytes: 16,
     nudges: 2,
     guide_bytes: 64,
     io_timeout: Duration::from_secs(10),
@@ -151,6 +155,7 @@ pub(crate) fn charter() -> Charter {
         outcome: OutcomeSpec { change: None, verdicts: Box::new([rule(b"approve", 0, 0), rule(b"request", 1, 8)]) },
         budget: BUDGET,
         llm: Llm { endpoint: Endpoint(1), model: bytes(b"model-a"), max_tokens: 1024 },
+        models: Box::new([]),
     }
 }
 
@@ -200,6 +205,7 @@ fn an_admitted_run_reads_its_checkout_then_opens_main_with_the_whole_budget() {
         checkout: charter().checkout,
         budget: BUDGET,
         finish: true,
+        families: crate::charter::Families { tools: charter().grants.tools, forge: true, agents: false },
     };
     assert_eq!(opening, &expected);
     assert_eq!(h.model.next_deadline(), Some(Time::ZERO.saturating_add(BUDGET.time)));
@@ -805,4 +811,231 @@ fn a_finish_with_no_room_for_its_call_is_busy_and_the_run_goes_on() {
     assert_eq!(&*emitted, &[returned(8, Returned::Busy)]);
     assert_eq!(h.model.calls(), 1);
     assert_eq!(h.step(end_turn(second)).len(), 1, "the run goes on: a nudge");
+}
+
+// Sub-agents.
+
+fn refused(refusal: AskRefusal) -> Returned {
+    Returned::Refused { refusal }
+}
+
+fn families(inspect: bool, modify: bool, agents: bool) -> crate::charter::Families {
+    crate::charter::Families { tools: Tools { inspect, modify, shell: false }, forge: false, agents }
+}
+
+/// The test charter, granting sub-agents and listing one LLM for them.
+fn agents() -> Charter {
+    let grants = Grants { agents: true, ..charter().grants };
+    let models = Box::new([Llm { endpoint: Endpoint(2), model: bytes(b"model-b"), max_tokens: 512 }]);
+    Charter { grants, models, ..charter() }
+}
+
+fn ask(
+    conversation: Token,
+    call: u64,
+    wanted: crate::charter::Families,
+    llm: Option<Box<[u8]>>,
+    share: Option<Spend>,
+) -> Event {
+    let ask = Ask::SubAgent { brief: bytes(b"Find the parser."), families: wanted, llm, share };
+    Event::Delegated { conversation, call: Token::new(call), ask }
+}
+
+impl Harness {
+    /// Starts a run of `charter` for call `call`, finding no guide, and its
+    /// main conversation as `peer`: the run's token and main's.
+    fn running_on(&mut self, call: u64, peer: u64, charter: Charter) -> (Token, Token) {
+        let emitted = self.start(call, charter);
+        let [Request::Admitted { run, .. }, Request::Read { .. }] = &*emitted else {
+            panic!("expected a read, got {emitted:?}");
+        };
+        let run = *run;
+        let emitted = self.step(Event::Read { owner: run, read: Read::Missing });
+        let [Request::Open { conversation, .. }] = &*emitted else {
+            panic!("expected main to open, got {emitted:?}");
+        };
+        let conversation = *conversation;
+        drop(self.step(Event::Started { conversation, peer: Token::new(peer) }));
+        (run, conversation)
+    }
+
+    /// Has `asker` ask for a sub-agent as `call`, started as `peer`: its
+    /// opening and its token.
+    fn child(&mut self, asker: Token, call: u64, wanted: crate::charter::Families, peer: u64) -> (Token, Opening) {
+        let emitted = self.step(ask(asker, call, wanted, None, None));
+        let Ok(one) = Box::<[Request; 1]>::try_from(emitted) else { panic!("expected one request") };
+        let [Request::Open { conversation, opening }] = *one else { panic!("expected the sub-agent to open") };
+        drop(self.step(Event::Started { conversation, peer: Token::new(peer) }));
+        (conversation, opening)
+    }
+}
+
+#[test]
+fn a_sub_agent_answers_with_its_last_message_once_it_has_ended() {
+    let mut h = Harness::new(LIMITS);
+    let (_, main) = h.running_on(1, 100, agents());
+    drop(h.step(Event::Used { conversation: main, spend: spend(100) }));
+    let (child, opening) = h.child(main, 7, families(true, false, false), 101);
+    assert_eq!((&opening.llm, opening.finish, opening.families), (&agents().llm, false, families(true, false, false)));
+    let left = Budget { turns: BUDGET.turns - 1, input: BUDGET.input - 100, output: BUDGET.output - 10, ..BUDGET };
+    assert_eq!(opening.budget, left, "its share is what the run has left");
+    assert!(opening.system.starts_with(b"Find the parser."), "its brief is its asker's");
+    drop(h.step(Event::Used { conversation: child, spend: spend(50) }));
+    let yielded =
+        Event::Yielded { conversation: child, stop: Stop::EndTurn, text: bytes(b"The parser is in src/parse.rs.") };
+    assert_eq!(&*h.step(yielded), &[Request::Close { peer: Token::new(101) }], "a sub-agent that yields is done");
+    let emitted = h.step(Event::Ended { conversation: child, end: End::Closed, spend: spend(50) });
+    let answer = Returned::Answered { text: bytes(b"The parser is in"), cut: 14, stop: Stop::EndTurn };
+    assert_eq!(&*emitted, &[returned(7, answer)], "its answer, cut at the limit");
+    h.model.reclaim();
+    assert_eq!((h.model.conversations(), h.model.calls()), (1, 0));
+}
+
+#[test]
+fn a_sub_agent_runs_on_the_llm_named_for_it_among_the_charters() {
+    let mut h = Harness::new(LIMITS);
+    let (_, main) = h.running_on(1, 100, agents());
+    let emitted = h.step(ask(main, 7, families(true, false, false), Some(bytes(b"model-b")), None));
+    let [Request::Open { opening, .. }] = &*emitted else { panic!("expected the sub-agent to open") };
+    assert_eq!(&opening.llm, &agents().models[0]);
+    let share = Spend { turns: 2, input: 500, output: 1_000_000, cache_read: 0, cache_write: 0 };
+    let emitted = h.step(ask(main, 8, families(true, false, false), None, Some(share)));
+    let [Request::Open { opening, .. }] = &*emitted else { panic!("expected the sub-agent to open") };
+    let budget =
+        Budget { turns: 2, input: 500, output: BUDGET.output, cache_read: 0, cache_write: 0, time: BUDGET.time };
+    assert_eq!(opening.budget, budget, "a share asked for, no larger than what is left");
+}
+
+#[test]
+fn an_ask_the_run_cannot_grant_returns_why_and_the_run_goes_on() {
+    // Not granted sub-agents, or wider families than its own.
+    let mut h = Harness::new(LIMITS);
+    let (_, main) = h.running_on(1, 100, charter());
+    assert_eq!(
+        &*h.step(ask(main, 7, families(true, false, false), None, None)),
+        &[returned(7, refused(AskRefusal::NotGranted))]
+    );
+    let (_, main) = h.running_on(2, 101, agents());
+    assert_eq!(
+        &*h.step(ask(main, 8, families(true, true, false), None, None)),
+        &[returned(8, refused(AskRefusal::NotGranted))]
+    );
+    // An LLM the charter does not list.
+    assert_eq!(
+        &*h.step(ask(main, 9, families(true, false, false), Some(bytes(b"model-z")), None)),
+        &[returned(9, refused(AskRefusal::UnknownLlm))]
+    );
+    // A share with no turn in it.
+    let none = Spend { turns: 0, ..spend(10) };
+    assert_eq!(
+        &*h.step(ask(main, 10, families(true, false, false), None, Some(none))),
+        &[returned(10, refused(AskRefusal::Unworkable))]
+    );
+
+    // Too deep, and too many.
+    let mut h = Harness::new(Limits { depth: 1, ..LIMITS });
+    let (_, main) = h.running_on(1, 100, agents());
+    let (child, _) = h.child(main, 7, families(true, false, true), 101);
+    assert_eq!(
+        &*h.step(ask(child, 8, families(true, false, false), None, None)),
+        &[returned(8, refused(AskRefusal::TooDeep))]
+    );
+    let mut h = Harness::new(Limits { run_conversations: 2, ..LIMITS });
+    let (_, main) = h.running_on(1, 100, agents());
+    drop(h.child(main, 7, families(true, false, false), 101));
+    assert_eq!(
+        &*h.step(ask(main, 8, families(true, false, false), None, None)),
+        &[returned(8, refused(AskRefusal::TooMany))]
+    );
+
+    // No room for the call or the conversation.
+    let mut h = Harness::new(Limits { calls: 1, run_conversations: 3, ..LIMITS });
+    let (_, main) = h.running_on(1, 100, agents());
+    drop(h.child(main, 7, families(true, false, false), 101));
+    assert_eq!(&*h.step(ask(main, 8, families(true, false, false), None, None)), &[returned(8, Returned::Busy)]);
+
+    // Past the budget.
+    let mut h = Harness::new(LIMITS);
+    let (_, main) = h.running_on(1, 100, agents());
+    drop(h.step(Event::Used { conversation: main, spend: spend(BUDGET.input + 1) }));
+    assert_eq!(
+        &*h.step(ask(main, 7, families(true, false, false), None, None)),
+        &[returned(7, refused(AskRefusal::Over))]
+    );
+}
+
+#[test]
+fn a_sub_agent_that_ends_without_answering_returns_how_it_ended() {
+    let mut h = Harness::new(LIMITS);
+    let (_, main) = h.running_on(1, 100, agents());
+    let (child, _) = h.child(main, 7, families(true, false, false), 101);
+    let emitted = h.step(Event::Ended { conversation: child, end: End::Fault(Fault::Provider), spend: Spend::ZERO });
+    assert_eq!(&*emitted, &[returned(7, Returned::Unanswered { end: End::Fault(Fault::Provider) })]);
+    assert_eq!(h.step(end_turn(main)).len(), 1, "the run goes on: main is nudged");
+}
+
+#[test]
+fn a_withdrawn_sub_agent_is_closed_and_its_call_returns_once_it_has_ended() {
+    let mut h = Harness::new(LIMITS);
+    let (_, main) = h.running_on(1, 100, agents());
+    let (child, _) = h.child(main, 7, families(true, false, false), 101);
+    assert_eq!(
+        &*h.step(Event::Withdraw { conversation: main, call: Token::new(7) }),
+        &[Request::Close { peer: Token::new(101) }]
+    );
+    // Its answer crossed the close: the call is cancelled all the same.
+    let yielded = Event::Yielded { conversation: child, stop: Stop::EndTurn, text: bytes(b"late") };
+    assert!(h.step(yielded).is_empty(), "closing already");
+    let emitted = h.step(Event::Ended { conversation: child, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(&*emitted, &[returned(7, Returned::Cancelled)]);
+    h.model.reclaim();
+
+    // One withdrawn before it starts is closed once it does.
+    let emitted = h.step(ask(main, 8, families(true, false, false), None, None));
+    let [Request::Open { conversation: child, .. }] = &*emitted else { panic!("expected the sub-agent to open") };
+    let child = *child;
+    assert!(h.step(Event::Withdraw { conversation: main, call: Token::new(8) }).is_empty(), "not started yet");
+    assert_eq!(
+        &*h.step(Event::Started { conversation: child, peer: Token::new(102) }),
+        &[Request::Close { peer: Token::new(102) }]
+    );
+    let emitted = h.step(Event::Ended { conversation: child, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(&*emitted, &[returned(8, Returned::Cancelled)]);
+}
+
+#[test]
+fn a_cancel_closes_the_tree_one_owner_at_a_time() {
+    let mut h = Harness::new(LIMITS);
+    let (run, main) = h.running_on(1, 100, agents());
+    let (child, _) = h.child(main, 7, families(true, false, true), 101);
+    let (grandchild, _) = h.child(child, 8, families(true, false, false), 102);
+    // The run closes main only; each closing conversation withdraws its calls.
+    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
+    assert_eq!(
+        &*h.step(Event::Withdraw { conversation: main, call: Token::new(7) }),
+        &[Request::Close { peer: Token::new(101) }]
+    );
+    assert_eq!(
+        &*h.step(Event::Withdraw { conversation: child, call: Token::new(8) }),
+        &[Request::Close { peer: Token::new(102) }]
+    );
+    let emitted = h.step(Event::Ended { conversation: grandchild, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(&*emitted, &[returned(8, Returned::Cancelled)]);
+    let emitted = h.step(Event::Ended { conversation: child, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(&*emitted, &[returned(7, Returned::Cancelled)]);
+    let emitted = h.step(Event::Ended { conversation: main, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, cancelled()));
+}
+
+#[test]
+fn a_sub_agent_that_spends_past_the_budget_winds_the_run_down() {
+    let mut h = Harness::new(LIMITS);
+    let (_, main) = h.running_on(1, 100, agents());
+    let (child, _) = h.child(main, 7, families(true, false, false), 101);
+    let emitted = h.step(Event::Used { conversation: child, spend: spend(BUDGET.input + 1) });
+    assert_eq!(&*emitted, &[Request::Close { peer: Token::new(100) }], "main is closed, and closes the rest");
+    drop(h.step(Event::Withdraw { conversation: main, call: Token::new(7) }));
+    drop(h.step(Event::Ended { conversation: child, end: End::Closed, spend: spend(BUDGET.input + 1) }));
+    let emitted = h.step(Event::Ended { conversation: main, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Input), spend(BUDGET.input + 1))));
 }

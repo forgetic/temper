@@ -34,7 +34,7 @@ use alloc::boxed::Box;
 use temper_lib::{ReplyTo, Time, Token};
 
 use crate::budget::{Budget, Exhausted, Spend};
-use crate::charter::{Charter, Checkout, Llm, Tools};
+use crate::charter::{Charter, Checkout, Families, Llm, Tools};
 use crate::outcome::{Change, Declared, Problems};
 
 /// parent -> run
@@ -126,6 +126,12 @@ pub enum Request {
 pub enum Ask {
     /// Finish the run with `outcome`.
     Finish { outcome: Declared },
+    /// Open a sub-agent: a conversation of its own on `brief`, with families
+    /// of tools no wider than the asker's, on the LLM named `llm` among the
+    /// charter's (the main conversation's if none is named), and a share of
+    /// the budget no larger than `share` (what the run has left, if none is
+    /// asked for). Its last message is the call's result.
+    SubAgent { brief: Box<[u8]>, families: Families, llm: Option<Box<[u8]>>, share: Option<Spend> },
 }
 
 /// The run's answer to a delegated call.
@@ -146,6 +152,33 @@ pub enum Returned {
     Cancelled,
     /// The run has no room for another call now; it may have later.
     Busy,
+    /// The sub-agent's last message: at most the run's limit of its first
+    /// bytes, with the `cut` bytes past them dropped, and why it stopped.
+    Answered { text: Box<[u8]>, cut: u64, stop: Stop },
+    /// The sub-agent ended without an answer: refused at its entrance, its
+    /// LLM failed, or its share of the budget ran out.
+    Unanswered { end: End },
+    /// The run would not open the sub-agent.
+    Refused { refusal: AskRefusal },
+}
+
+/// Why a run would not open a sub-agent.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum AskRefusal {
+    /// The asker may not ask for sub-agents, or asked for families of tools
+    /// it does not have itself.
+    NotGranted,
+    /// The sub-agent would be nested deeper than a run's limit.
+    TooDeep,
+    /// The run has as many conversations as it may have at once.
+    TooMany,
+    /// The charter has no LLM of that name for sub-agents.
+    UnknownLlm,
+    /// The share asked for, or what the run has left, leaves no room for a
+    /// turn.
+    Unworkable,
+    /// The run has spent past its budget.
+    Over,
 }
 
 /// What a check's process did: how it ended, and the tail of what it wrote,
@@ -218,8 +251,12 @@ pub struct Opening {
     /// the time to the run's deadline. The conversation keeps to it.
     pub budget: Budget,
     /// Whether its LLM may call `finish`, which the conversation runs as a
-    /// write: alone, never beside another call.
+    /// write: alone, never beside another call. Only main may.
     pub finish: bool,
+    /// The families it has: its tools, and whether its LLM may ask for
+    /// sub-agents, a call whose effect follows the families asked for (a
+    /// sub-agent that may modify or run commands is a write).
+    pub families: Families,
 }
 
 /// Why a conversation's LLM stopped calling tools.
@@ -312,7 +349,8 @@ pub enum Invalid {
     /// The budget asks for more than the limits allow, or for no turns, input,
     /// output or time.
     Budget,
-    /// The LLM's `max_tokens` is zero or beyond the limits.
+    /// The LLM's `max_tokens`, or a sub-agent LLM's, is zero or beyond the
+    /// limits, or there are more sub-agent LLMs than a run may hold.
     Llm,
     /// The main conversation was refused: its opening does not fit the
     /// conversations' limits.

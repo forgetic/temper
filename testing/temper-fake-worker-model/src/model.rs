@@ -69,6 +69,8 @@ pub struct Config {
     pub changes: u32,
     pub checks: u32,
     pub verdicts: u32,
+    /// The chance, per mille, that a charter grants sub-agents.
+    pub agents: u32,
     /// The time to push, drawn from `push_min..=push_max`.
     pub push_min: Duration,
     pub push_max: Duration,

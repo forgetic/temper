@@ -360,6 +360,9 @@ fn noisy(seed: u64) -> Settings {
         cache: pick(0, 2_000),
         faults: small(pick(0, 100)),
         finishes: small(pick(0, 300)),
+        asks: small(pick(0, 300)),
+        bad_asks: small(pick(0, 300)),
+        shares: small(pick(0, 500)),
         changes: small(pick(0, 1000)),
         good: small(pick(0, 1000)),
         finish_deadline: Span::millis(100, pick(100, 30_000)),
@@ -385,6 +388,16 @@ fn noisy(seed: u64) -> Settings {
         ..run
     };
     let inject = small(pick(0, 150));
+    // Sub-agents: room for a few, nested a little.
+    let run = Limits {
+        conversations: run.conversations.saturating_mul(small(pick(1, 3))),
+        calls: small(pick(1, 8)),
+        depth: small(pick(0, 3)),
+        run_conversations: small(pick(1, 4)),
+        answer_bytes: small(pick(0, 200)),
+        ..run
+    };
+    let worker = Config { agents: small(pick(0, 1000)), ..worker };
     Settings {
         run,
         worker,
@@ -467,5 +480,62 @@ fn deadlines_find_runs_in_every_state_they_run_in() {
     }
     for cell in ["preparing", "opening", "working"] {
         assert!(deadlines.get(cell).is_some_and(|count| *count > 0), "no deadline found a run {cell}: {deadlines:?}");
+    }
+}
+
+/// A world where the LLM asks for sub-agents, nested, and finishes now and
+/// then.
+fn asking(seed: u64) -> Settings {
+    let calm = Settings::calm(seed);
+    Settings {
+        worker: Config { agents: 1000, ..calm.worker },
+        partner: Script { asks: 300, finishes: 50, yields: 100, ..calm.partner },
+        ..calm
+    }
+}
+
+#[test]
+fn sub_agents_answer_their_askers_and_end_before_their_calls_return() {
+    let world = settled(&asking(30));
+    let stats = world.stats();
+    assert!(stats.children > 4 && stats.partner.answered > 0, "{stats:?}");
+}
+
+#[test]
+fn asks_the_run_cannot_grant_are_refused_and_the_llm_goes_on() {
+    let settings = asking(31);
+    let world = settled(&Settings { partner: Script { bad_asks: 1000, ..settings.partner }, ..settings });
+    let stats = world.stats();
+    assert!(stats.partner.ask_refused > 0 && stats.children == 0, "{stats:?}");
+    let shallow = Settings { run: Limits { depth: 0, ..settings.run }, ..settings };
+    assert_eq!(settled(&shallow).stats().children, 0, "no sub-agent at depth zero");
+}
+
+#[test]
+fn sub_agents_with_a_small_share_come_back_unanswered_when_it_runs_out() {
+    let settings = asking(32);
+    let partner = Script { shares: 1000, yields: 0, ..settings.partner };
+    let stats = settled(&Settings { partner, ..settings }).stats();
+    assert!(stats.partner.unanswered > 0, "{stats:?}");
+}
+
+#[test]
+fn a_cancelled_run_closes_its_sub_agents_down_the_tree() {
+    let settings = asking(33);
+    let worker = Config {
+        cancels: 1000,
+        cancel_min: Duration::from_secs(5),
+        cancel_max: Duration::from_secs(60),
+        ..settings.worker
+    };
+    let partner = Script { turn: Span::millis(1_000, 10_000), ..settings.partner };
+    let world = settled(&Settings { worker, partner, ..settings });
+    let stats = world.stats();
+    assert!(stats.children > 0 && stats.partner.withdrawn > 0, "{stats:?}");
+    for answer in answers(&world) {
+        assert!(
+            matches!(answer, Answer::Failed { failure: Failure::Cancelled, .. } | Answer::Accepted { .. }),
+            "{answer:?}"
+        );
     }
 }

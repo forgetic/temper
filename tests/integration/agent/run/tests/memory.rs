@@ -4,11 +4,11 @@
 
 use std::mem::size_of;
 
-use temper_agent_model_run::charter::{Checkout, Endpoint, Grants, Llm, Outlet, Repository, Tools};
+use temper_agent_model_run::charter::{Checkout, Endpoint, Families, Grants, Llm, Outlet, Repository, Tools};
 use temper_agent_model_run::outcome::{Change, ChangeSpec, Children, Declared, OutcomeSpec, VerdictRule};
 use temper_agent_model_run::{
-    Answer, Ask, Budget, Charter, Event, Invalid, Limits, MAX_OUT, Model, Read, Refusal, Request, Spend, Stop,
-    worst_case,
+    Answer, Ask, Budget, Charter, End, Event, Exit, Invalid, Limits, MAX_OUT, Model, Push, Ran, Read, Refusal, Request,
+    Spend, Stop, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
 
@@ -82,14 +82,18 @@ const BUDGET: Budget = Budget {
 
 const LIMITS: Limits = Limits {
     runs: 1,
-    conversations: 1,
+    conversations: 2,
     run_bytes: 1024,
     repositories: 1,
     outlets: 1,
     verdicts: 1,
-    calls: 1,
+    calls: 2,
     budget: BUDGET,
     max_tokens: 1024,
+    models: 1,
+    depth: 1,
+    run_conversations: 2,
+    answer_bytes: 128,
     nudges: 1,
     guide_bytes: 512,
     io_timeout: Duration::from_secs(5),
@@ -103,7 +107,8 @@ const LIMITS: Limits = Limits {
 /// and a brief of the rest.
 fn charter(held: u64) -> Charter {
     let label = size(size_of::<Box<[u8]>>());
-    let parts = (size(size_of::<Repository>()) + 1) + (size(size_of::<Outlet>()) + 1) + 1;
+    let parts =
+        (size(size_of::<Repository>()) + 1) + (size(size_of::<Outlet>()) + 1) + 1 + (size(size_of::<Llm>()) + 1);
     let rule = size(size_of::<VerdictRule>()) + 1 + 2 * (label + 1);
     Charter {
         brief: bytes(held - parts - rule),
@@ -127,6 +132,7 @@ fn charter(held: u64) -> Charter {
         },
         budget: BUDGET,
         llm: Llm { endpoint: Endpoint(0), model: bytes(1), max_tokens: 1 },
+        models: Box::new([Llm { endpoint: Endpoint(0), model: bytes(1), max_tokens: 1 }]),
     }
 }
 
@@ -135,7 +141,7 @@ fn charter(held: u64) -> Charter {
 enum Asked {
     Read { owner: Token },
     Probe { owner: Token },
-    Check,
+    Check { owner: Token },
     Open { conversation: Token },
     Answer { answer: Answer },
     Other,
@@ -143,9 +149,12 @@ enum Asked {
 
 /// Fills every run of a model under `limits` with a charter of exactly its
 /// byte limit and a guide of exactly its limit too, and has each one's main
-/// conversation start, spend, yield, be nudged, and finish with a change of
-/// exactly the outcome limit, which is being checked, checking the heap
-/// against the worst case after every step.
+/// conversation start, spend, yield, be nudged, ask for a sub-agent that
+/// answers with more than the answer limit, and finish with a change of
+/// exactly the outcome limit, which is checked and pushed: each run ends
+/// winding down with the change, while the calls that returned still hold
+/// their copies until the reclaim point. The heap is checked against the
+/// worst case after every step.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
@@ -163,7 +172,7 @@ fn fill(limits: Limits) {
                 Request::Open { conversation, .. } => Asked::Open { conversation },
                 Request::Read { owner, .. } => Asked::Read { owner },
                 Request::Probe { owner, .. } => Asked::Probe { owner },
-                Request::Check { .. } => Asked::Check,
+                Request::Check { owner, .. } => Asked::Check { owner },
                 Request::Answer { answer, to: _ } => Asked::Answer { answer },
                 Request::Admitted { .. }
                 | Request::Say { .. }
@@ -197,17 +206,37 @@ fn fill(limits: Limits) {
         assert!(step(Event::Used { conversation, spend }).is_empty(), "within the budget");
         let yielded = Event::Yielded { conversation, stop: Stop::EndTurn, text: bytes(100) };
         assert_eq!(step(yielded), [Asked::Other], "nudged");
+        let families =
+            Families { tools: Tools { inspect: true, modify: false, shell: false }, forge: false, agents: false };
+        let ask = Ask::SubAgent { brief: bytes(10), families, llm: Some(bytes(1)), share: None };
+        let [Asked::Open { conversation: child }] = step(Event::Delegated { conversation, call: worker, ask })[..]
+        else {
+            panic!("the sub-agent opens");
+        };
+        assert!(step(Event::Started { conversation: child, peer: worker }).is_empty(), "starting is quiet");
+        assert!(step(Event::Used { conversation: child, spend }).is_empty(), "within the budget");
+        let answer = bytes(u64::from(limits.answer_bytes) + 10);
+        let yielded = Event::Yielded { conversation: child, stop: Stop::EndTurn, text: answer };
+        assert_eq!(step(yielded), [Asked::Other], "the sub-agent is closed");
+        let ended = Event::Ended { conversation: child, end: End::Closed, spend };
+        assert_eq!(step(ended), [Asked::Other], "its call returns its answer");
         let change = Change { title: bytes(1), body: bytes(limits.outcome_bytes - 1) };
         let ask = Ask::Finish { outcome: Declared::Change(change) };
-        let finish = Event::Delegated { conversation, call: worker, ask };
-        assert_eq!(step(finish)[..], [Asked::Check, Asked::Other], "the change is being checked");
+        let finish = Event::Delegated { conversation, call: Token::new(u64::from(run) + 1_000_000), ask };
+        let [Asked::Check { owner }, Asked::Other] = step(finish)[..] else {
+            panic!("the change is being checked");
+        };
+        let ran = Ran { exit: Exit::Code { code: 0 }, output: bytes(0), cut: 0 };
+        assert_eq!(step(Event::Checked { owner, ran }), [Asked::Other], "checked, it is pushed");
+        assert_eq!(step(Event::Pushed { owner, push: Push::Done }), [Asked::Other, Asked::Other], "accepted");
     }
     let held = held(base);
-    let full = u64::from(limits.runs) * (limits.run_bytes + u64::from(limits.guide_bytes) + limits.outcome_bytes);
+    let charters = limits.run_bytes + u64::from(limits.guide_bytes);
+    let full = u64::from(limits.runs) * (charters + 2 * limits.outcome_bytes + u64::from(limits.answer_bytes));
     assert!(held >= full, "{limits:?}: every run holds its byte limit");
 
     // A byte more is refused.
-    let mut model = Model::new(&Limits { runs: 1, conversations: 1, ..limits });
+    let mut model = Model::new(&Limits { runs: 1, conversations: 2, ..limits });
     let worker = Token::new(0);
     let start = Event::Start { reply_to: ReplyTo::new(worker), worker, charter: charter(limits.run_bytes + 1) };
     temper_agent_model_run::step(&mut model, &env, start, &mut out);
@@ -218,6 +247,6 @@ fn fill(limits: Limits) {
 #[test]
 fn a_model_with_every_run_full_stays_within_its_worst_case() {
     fill(LIMITS);
-    fill(Limits { runs: 64, conversations: 64, calls: 64, run_bytes: 65_536, guide_bytes: 32_768, ..LIMITS });
-    fill(Limits { runs: 1000, conversations: 1000, calls: 1000, run_bytes: 2048, guide_bytes: 16, ..LIMITS });
+    fill(Limits { runs: 64, conversations: 128, calls: 128, run_bytes: 65_536, guide_bytes: 32_768, ..LIMITS });
+    fill(Limits { runs: 1000, conversations: 2000, calls: 2000, run_bytes: 2048, guide_bytes: 16, ..LIMITS });
 }

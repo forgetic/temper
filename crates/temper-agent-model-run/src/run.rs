@@ -90,12 +90,14 @@ use core::mem;
 use temper_lib::bytes::copy_of;
 use temper_lib::{Deadlines, Duration, Env, Id, Queue, ReplyTo, Slab, Time, Token};
 
+use crate::agent::{self, Child, Means};
 use crate::boundary::{
-    Answer, Ask, End, Failure, Fault, Invalid, Opening, Policy, Push, Ran, Read, Refusal, Request, Returned, Stop,
+    Answer, Ask, AskRefusal, End, Failure, Fault, Invalid, Opening, Policy, Push, Ran, Read, Refusal, Request,
+    Returned, Stop,
 };
 use crate::budget::{Exhausted, Spend};
 use crate::call::{Call, Calls, Work};
-use crate::charter::{self, Charter, count};
+use crate::charter::{self, Charter, Families, count};
 use crate::land::{self, Settled};
 use crate::limits::Limits;
 use crate::model::Model;
@@ -116,6 +118,8 @@ pub(crate) struct Run {
     nudges: u32,
     /// Outcomes `finish` refused: rejected, or not landed.
     rejected: u32,
+    /// Its conversations, main included, opened and not ended.
+    conversations: u32,
     /// When its budget's time runs out.
     deadline: Time,
     state: State,
@@ -146,10 +150,16 @@ enum Ending {
     Failed(Failure),
 }
 
-/// A conversation a run opened.
+/// A conversation a run opened: main, or a sub-agent.
 #[derive(Debug)]
 pub(crate) struct Conversation {
     run: Id<Run>,
+    /// The sub-agent call it serves, if it is a sub-agent.
+    asker: Option<Id<Call>>,
+    /// Its families of tools, and how deep it is: main is at zero, a sub-agent
+    /// one deeper than its asker.
+    families: Families,
+    depth: u32,
     /// What it has spent, by its `Used` so far.
     spent: Spend,
     /// Its calls to the run in flight.
@@ -206,10 +216,21 @@ pub(crate) fn start(
     let found = Found::with_capacity(count(charter.checkout.repositories.len()));
     // A run is stored before its main conversation, which names it, and starts
     // once main has a name too: main's slot is the run's from its admission.
-    let run =
-        Run { charter, found, worker, spent: Spend::ZERO, nudges: 0, rejected: 0, deadline, state: State::Closed };
+    let run = Run {
+        charter,
+        found,
+        worker,
+        spent: Spend::ZERO,
+        nudges: 0,
+        rejected: 0,
+        conversations: 1,
+        deadline,
+        state: State::Closed,
+    };
     let id = runs.insert(run).expect("checked for room above");
-    let conversation = Conversation { run: id, spent: Spend::ZERO, calls: 0, phase: Phase::Pending };
+    let families = Families::of(&runs.get(id).expect("inserted above").charter.grants);
+    let conversation =
+        Conversation { run: id, asker: None, families, depth: 0, spent: Spend::ZERO, calls: 0, phase: Phase::Pending };
     let main = conversations.insert(conversation).expect("checked for room above");
     out.push(Request::Admitted { worker, run: id.token() });
     let run = runs.get_mut(id).expect("inserted above");
@@ -285,15 +306,22 @@ pub(crate) fn started(model: &mut Model, conversation: Token, peer: Token, out: 
     let phase = mem::replace(&mut conversation.phase, Phase::Closed);
     conversation.phase = match phase {
         Phase::Opening => Phase::Running { peer },
-        Phase::Unwanted => close(peer, out),
+        Phase::Unwanted => closing(peer, out),
         Phase::Pending | Phase::Running { .. } | Phase::Closing | Phase::Closed => {
             unreachable!("a conversation starts once it is opened, before anything else")
         }
     };
 }
 
-pub(crate) fn yielded(model: &mut Model, env: &Env<Limits>, conversation: Token, stop: Stop, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+pub(crate) fn yielded(
+    model: &mut Model,
+    env: &Env<Limits>,
+    conversation: Token,
+    stop: Stop,
+    text: &[u8],
+    out: &mut Queue<Request>,
+) {
+    let Model { runs, conversations, calls, alarms } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get(id).expect("a conversation lives until it has ended");
     let peer = match &conversation.phase {
@@ -304,12 +332,24 @@ pub(crate) fn yielded(model: &mut Model, env: &Env<Limits>, conversation: Token,
             unreachable!("a conversation yields only between starting and ending")
         }
     };
+    // A sub-agent that yields is done: its last message is its answer.
+    if let Some(asker) = conversation.asker {
+        let call = calls.get_mut(asker).expect("a sub-agent's call lives until it has ended");
+        let close_child = match &mut call.work {
+            Work::Child(child) => agent::yielded(child, text, stop, &env.limits),
+            Work::Landing(_) => unreachable!("a sub-agent serves a sub-agent's call"),
+        };
+        if let Some(child) = close_child {
+            close(conversations, child, out);
+        }
+        return;
+    }
     let run_id = conversation.run;
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
         State::Working { reply_to, main } => {
-            assert!(main == id, "a run's only conversation is its main one");
+            assert!(main == id, "a conversation with no asker is main");
             match nudge(run, stop, &env.limits) {
                 Ok(()) => say(reply_to, main, peer, prompt::nudge(stop, run.nudges, env.limits.nudges), out),
                 Err(failure) => wind_down(conversations, reply_to, main, Ending::Failed(failure), out),
@@ -319,7 +359,7 @@ pub(crate) fn yielded(model: &mut Model, env: &Env<Limits>, conversation: Token,
             wind_down(conversations, reply_to, main, Ending::Failed(Failure::Budget(exhausted)), out)
         }
         State::Preparing { .. } | State::Stopping { .. } | State::Winding { .. } | State::Closed => {
-            unreachable!("a run's conversation yields only while it works: it is closed when the run winds down")
+            unreachable!("main yields only while its run works: it is closed when the run winds down")
         }
     };
     follow(runs, alarms, run_id);
@@ -336,13 +376,18 @@ pub(crate) fn used(model: &mut Model, conversation: Token, spend: Spend, out: &m
         }
     }
     conversation.spent = conversation.spent.saturating_add(spend);
-    let run_id = conversation.run;
+    let (run_id, child) = (conversation.run, conversation.asker.is_some());
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     run.spent = run.spent.saturating_add(spend);
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
-        // Past the budget, main keeps the turn now in flight.
+        // Past the budget, main keeps the turn now in flight: it may finish.
+        // A sub-agent may not, and main has no turn in flight while it waits
+        // on one: the run winds down at once.
         State::Working { reply_to, main } => match run.charter.budget.overspent(run.spent) {
+            Some(exhausted) if child => {
+                wind_down(conversations, reply_to, main, Ending::Failed(Failure::Budget(exhausted)), out)
+            }
             Some(exhausted) => State::Over { reply_to, main, exhausted },
             None => State::Working { reply_to, main },
         },
@@ -377,21 +422,35 @@ pub(crate) fn delegated(
     }
     let run_id = conversation.run;
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
-    let Ask::Finish { outcome } = ask;
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
-        State::Working { reply_to, main } => {
-            assert!(main == id, "a run's only conversation is its main one");
-            finish(run, run_id, conversations, calls, reply_to, main, None, call, outcome, env, out)
-        }
-        State::Over { reply_to, main, exhausted } => {
-            finish(run, run_id, conversations, calls, reply_to, main, Some(exhausted), call, outcome, env, out)
-        }
         // The call crossed the run's close.
         State::Winding { reply_to, ending } => {
             out.push(Request::Return { call, result: Returned::Cancelled });
             State::Winding { reply_to, ending }
         }
+        State::Working { reply_to, main } => match ask {
+            Ask::Finish { outcome } => {
+                assert!(main == id, "only main is offered finish");
+                finish(run, run_id, conversations, calls, reply_to, main, None, call, outcome, env, out)
+            }
+            Ask::SubAgent { brief, families, llm, share } => {
+                let wanted = Wanted { brief, families, llm, share };
+                sub_agent(run, run_id, conversations, calls, id, call, wanted, env, out);
+                State::Working { reply_to, main }
+            }
+        },
+        State::Over { reply_to, main, exhausted } => match ask {
+            Ask::Finish { outcome } => {
+                assert!(main == id, "only main is offered finish");
+                finish(run, run_id, conversations, calls, reply_to, main, Some(exhausted), call, outcome, env, out)
+            }
+            // Past the budget, nothing new is opened.
+            Ask::SubAgent { .. } => {
+                out.push(Request::Return { call, result: Returned::Refused { refusal: AskRefusal::Over } });
+                State::Over { reply_to, main, exhausted }
+            }
+        },
         State::Preparing { .. } | State::Stopping { .. } | State::Closed => {
             unreachable!("a run's conversation calls only while the run works or winds down")
         }
@@ -408,6 +467,11 @@ pub(crate) fn withdraw(model: &mut Model, conversation: Token, call: Token, out:
     let call = model.calls.get_mut(id).expect("a named call lives");
     match &mut call.work {
         Work::Landing(landing) => land::withdraw(landing, id, out),
+        Work::Child(child) => {
+            if let Some(child) = agent::withdraw(child) {
+                close(&mut model.conversations, child, out);
+            }
+        }
     }
 }
 
@@ -417,6 +481,7 @@ pub(crate) fn checked(model: &mut Model, env: &Env<Limits>, owner: Token, ran: R
     let run = model.runs.get(call.run).expect("a run lives until its calls have returned");
     let settled = match &mut call.work {
         Work::Landing(landing) => land::checked(landing, id, call.owner, run, may_finish(&run.state), ran, env, out),
+        Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
     };
     settle(model, id, settled, out);
 }
@@ -426,6 +491,7 @@ pub(crate) fn aborted(model: &mut Model, owner: Token, out: &mut Queue<Request>)
     let call = model.calls.get_mut(id).expect("a call lives until it returns");
     let settled = match &mut call.work {
         Work::Landing(landing) => land::aborted(landing, call.owner, out),
+        Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
     };
     settle(model, id, settled, out);
 }
@@ -436,6 +502,7 @@ pub(crate) fn pushed(model: &mut Model, owner: Token, push: Push, out: &mut Queu
     let run = model.runs.get(call.run).expect("a run lives until its calls have returned");
     let settled = match &mut call.work {
         Work::Landing(landing) => land::pushed(landing, call.owner, may_finish(&run.state), push, out),
+        Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
     };
     settle(model, id, settled, out);
 }
@@ -445,12 +512,13 @@ pub(crate) fn host_cancelled(model: &mut Model, owner: Token, out: &mut Queue<Re
     let call = model.calls.get_mut(id).expect("a call lives until it returns");
     let settled = match &mut call.work {
         Work::Landing(landing) => land::host_cancelled(landing, call.owner, out),
+        Work::Child(_) => unreachable!("io and the worker answer only a landing's requests"),
     };
     settle(model, id, settled, out);
 }
 
 pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spend, out: &mut Queue<Request>) {
-    let Model { runs, conversations, calls: _, alarms } = model;
+    let Model { runs, conversations, calls, alarms } = model;
     let id = Id::<Conversation>::from_token(conversation);
     let conversation = conversations.get_mut(id).expect("a conversation lives until it has ended");
     assert!(conversation.calls == 0, "a conversation ends once its calls have returned");
@@ -462,14 +530,29 @@ pub(crate) fn ended(model: &mut Model, conversation: Token, end: End, spend: Spe
     // Its turns were counted as they were used; whatever its end counts beyond
     // them is counted now.
     let unaccounted = spend.saturating_sub(conversation.spent);
-    let run_id = conversation.run;
+    let (run_id, asker) = (conversation.run, conversation.asker);
     conversations.retire(id);
     let run = runs.get_mut(run_id).expect("a run lives until its conversations have ended");
     run.spent = run.spent.saturating_add(unaccounted);
+    run.conversations = run.conversations.checked_sub(1).expect("a run counts its conversations");
+    // A sub-agent's end is its call's return.
+    if let Some(asker) = asker {
+        let call = calls.get_mut(asker).expect("a sub-agent's call lives until it has ended");
+        let result = match &mut call.work {
+            Work::Child(child) => agent::ended(child, end),
+            Work::Landing(_) => unreachable!("a sub-agent serves a sub-agent's call"),
+        };
+        out.push(Request::Return { call: call.owner, result });
+        let asking = call.conversation;
+        calls.retire(asker);
+        let asking = conversations.get_mut(asking).expect("a conversation outlives its calls");
+        asking.calls = asking.calls.checked_sub(1).expect("a conversation counts its calls");
+        return;
+    }
     let state = mem::replace(&mut run.state, State::Closed);
     run.state = match state {
         State::Working { reply_to, main } | State::Over { reply_to, main, exhausted: _ } => {
-            assert!(main == id, "a run's only conversation is its main one");
+            assert!(main == id, "a conversation with no asker is main");
             answer(reply_to, ending(end, run.spent), out)
         }
         State::Winding { reply_to, ending } => answer(reply_to, finished(ending, run.spent), out),
@@ -696,8 +779,10 @@ fn finish(
             }
             let work = Work::Landing(land::landing(change));
             let id = calls.insert(Call { run: run_id, conversation: main, owner: call, work });
-            let Work::Landing(landing) = &mut calls.get_mut(id).expect("inserted above").work;
-            land::begin(landing, id, run, env, out);
+            match &mut calls.get_mut(id).expect("inserted above").work {
+                Work::Landing(landing) => land::begin(landing, id, run, env, out),
+                Work::Child(_) => unreachable!("inserted as a landing"),
+            }
             let conversation = conversations.get_mut(main).expect("main lives while its run works");
             conversation.calls = conversation.calls.saturating_add(1);
             match over {
@@ -708,6 +793,82 @@ fn finish(
     }
 }
 
+/// What a conversation asks for when it asks for a sub-agent.
+struct Wanted {
+    brief: Box<[u8]>,
+    families: Families,
+    llm: Option<Box<[u8]>>,
+    share: Option<Spend>,
+}
+
+/// Working: the conversation `asker` asked for a sub-agent as its call `call`.
+/// Open it, or return why not.
+#[expect(clippy::too_many_arguments, reason = "a cell handler takes the fields it touches")]
+fn sub_agent(
+    run: &mut Run,
+    run_id: Id<Run>,
+    conversations: &mut Slab<Conversation>,
+    calls: &mut Calls,
+    asker: Id<Conversation>,
+    call: Token,
+    wanted: Wanted,
+    env: &Env<Limits>,
+    out: &mut Queue<Request>,
+) {
+    let asking = conversations.get(asker).expect("a conversation lives until it has ended");
+    let means =
+        Means { spent: run.spent, conversations: run.conversations, left: run.deadline.saturating_since(env.now) };
+    let planned = agent::plan(
+        &run.charter,
+        means,
+        asking.families,
+        asking.depth,
+        wanted.families,
+        wanted.llm.as_deref(),
+        wanted.share,
+        &env.limits,
+    );
+    let plan = match planned {
+        Ok(plan) => plan,
+        Err(refusal) => {
+            out.push(Request::Return { call, result: Returned::Refused { refusal } });
+            return;
+        }
+    };
+    if conversations.is_full() || calls.is_full() {
+        out.push(Request::Return { call, result: Returned::Busy });
+        return;
+    }
+    // A call is stored before its child, which names it, and holds the child
+    // once the child has a name too.
+    let id = calls.insert(Call { run: run_id, conversation: asker, owner: call, work: Work::Child(Child::Closed) });
+    let child = Conversation {
+        run: run_id,
+        asker: Some(id),
+        families: plan.families,
+        depth: plan.depth,
+        spent: Spend::ZERO,
+        calls: 0,
+        phase: Phase::Opening,
+    };
+    let child = conversations.insert(child).expect("checked for room above");
+    calls.get_mut(id).expect("inserted above").work = Work::Child(agent::working(child));
+    let asking = conversations.get_mut(asker).expect("a conversation lives until it has ended");
+    asking.calls = asking.calls.saturating_add(1);
+    run.conversations = run.conversations.saturating_add(1);
+    let opening = Opening {
+        system: prompt::child(&run.charter, &run.found, &wanted.brief, plan.families),
+        prompt: copy_of(prompt::BEGIN),
+        tools: plan.families.tools,
+        checkout: run.charter.checkout.clone(),
+        budget: plan.budget,
+        finish: false,
+        families: plan.families,
+        llm: plan.llm,
+    };
+    out.push(Request::Open { conversation: child.token(), opening });
+}
+
 /// Working, an ending decided: close main, and wait for it to end.
 fn wind_down(
     conversations: &mut Slab<Conversation>,
@@ -716,17 +877,23 @@ fn wind_down(
     ending: Ending,
     out: &mut Queue<Request>,
 ) -> State {
-    let conversation = conversations.get_mut(main).expect("main lives while its run works");
+    close(conversations, main, out);
+    State::Winding { reply_to, ending }
+}
+
+/// Closes the conversation `id`, which its owner closes once: at once, or
+/// once it starts. A closing conversation withdraws its own calls.
+fn close(conversations: &mut Slab<Conversation>, id: Id<Conversation>, out: &mut Queue<Request>) {
+    let conversation = conversations.get_mut(id).expect("a conversation lives until it has ended");
     let phase = mem::replace(&mut conversation.phase, Phase::Closed);
     conversation.phase = match phase {
         // It is closed once it starts, or ends refused.
         Phase::Opening => Phase::Unwanted,
-        Phase::Running { peer } => close(peer, out),
+        Phase::Running { peer } => closing(peer, out),
         Phase::Pending | Phase::Unwanted | Phase::Closing | Phase::Closed => {
-            unreachable!("a run closes main once it is opened, once, winding down")
+            unreachable!("a conversation is closed once it is opened, once")
         }
     };
-    State::Winding { reply_to, ending }
 }
 
 /// Working, main yielded and may be nudged: tell it to carry on.
@@ -735,7 +902,7 @@ fn say(reply_to: ReplyTo, main: Id<Conversation>, peer: Token, text: Box<[u8]>, 
     State::Working { reply_to, main }
 }
 
-fn close(peer: Token, out: &mut Queue<Request>) -> Phase {
+fn closing(peer: Token, out: &mut Queue<Request>) -> Phase {
     out.push(Request::Close { peer });
     Phase::Closing
 }
@@ -761,6 +928,7 @@ fn opening(charter: &Charter, found: &Found, spent: Spend, left: Duration) -> Op
         checkout: charter.checkout.clone(),
         budget: charter.budget.remainder(spent, left),
         finish: true,
+        families: Families::of(&charter.grants),
     }
 }
 

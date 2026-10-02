@@ -77,12 +77,12 @@ impl Settings {
             seed,
             run: run::Limits {
                 runs: 4,
-                conversations: 4,
+                conversations: 16,
                 run_bytes: 1 << 16,
                 repositories: 4,
                 outlets: 4,
                 verdicts: 4,
-                calls: 4,
+                calls: 16,
                 budget: run::Budget {
                     turns: 1000,
                     input: 1 << 32,
@@ -92,6 +92,10 @@ impl Settings {
                     time: Duration::from_secs(24 * 3600),
                 },
                 max_tokens: 8192,
+                models: 4,
+                depth: 2,
+                run_conversations: 4,
+                answer_bytes: 512,
                 nudges: 2,
                 guide_bytes: 1024,
                 io_timeout: Duration::from_secs(5),
@@ -120,6 +124,7 @@ impl Settings {
                 changes: 700,
                 checks: 800,
                 verdicts: 700,
+                agents: 0,
                 push_min: Duration::from_millis(10),
                 push_max: Duration::from_millis(500),
                 moves: 0,
@@ -134,7 +139,10 @@ impl Settings {
                 cache: 2_000,
                 faults: 0,
                 finishes: 0,
+                asks: 0,
                 yields: 200,
+                bad_asks: 0,
+                shares: 0,
                 changes: 500,
                 good: 1000,
                 finish_deadline: Span::millis(600_000, 600_000),
@@ -173,8 +181,10 @@ pub struct Stats {
     /// Pushes the run asked the worker for, and host calls it cancelled.
     pub pushes: u32,
     pub host_cancels: u32,
-    /// Conversations the run opened, nudges it said, and closes it sent.
+    /// Conversations the run opened, sub-agents among them, nudges it said,
+    /// and closes it sent.
     pub opens: u32,
+    pub children: u32,
     pub says: u32,
     pub closes: u32,
     /// What the partner counted.
@@ -285,6 +295,8 @@ struct Made {
     run: Option<Token>,
     requests: u32,
     cancel: Option<(Token, &'static str)>,
+    /// The call, if the step took an ask for a sub-agent.
+    asked: Option<Token>,
 }
 
 /// A conversation's call, as the world tracks it.
@@ -356,8 +368,12 @@ pub struct World {
     cancel_cells: BTreeMap<&'static str, u32>,
     deadline_cells: BTreeMap<&'static str, u32>,
     iteration: u64,
-    /// The run the last request answered, for the iteration's attribution.
+    /// The run the last request answered, for the iteration's attribution;
+    /// the call the step being attributed took, if it asked for a sub-agent;
+    /// and the sub-agent each such call opened, until it returns.
     just_answered: Option<Token>,
+    asked: Option<Token>,
+    child_of_call: BTreeMap<Token, Token>,
 
     stats: Stats,
     trace: Vec<String>,
@@ -407,6 +423,8 @@ impl World {
             deadline_cells: BTreeMap::new(),
             iteration: 0,
             just_answered: None,
+            asked: None,
+            child_of_call: BTreeMap::new(),
             stats: Stats::default(),
             trace: Vec::new(),
         }
@@ -480,16 +498,21 @@ impl World {
             self.log(&format!("run <- {event:?}"));
             let run = self.run_of(&event);
             let cancel = self.note(&event, run);
+            let asked = if let run::Event::Delegated { call, ask: run::Ask::SubAgent { .. }, .. } = &event {
+                Some(*call)
+            } else {
+                None
+            };
             let before = self.run_out.len();
             run::step(&mut self.run, &self.run_env, event, &mut self.run_out);
-            made.push(Made { run, requests: self.run_out.len() - before, cancel });
+            made.push(Made { run, requests: self.run_out.len() - before, cancel, asked });
         }
         while self.run_out.room() >= run::MAX_OUT && self.run.is_due(self.now) {
             self.log("run alarm");
             let run = self.deadline_due();
             let before = self.run_out.len();
             run::fire(&mut self.run, &self.run_env, &mut self.run_out);
-            made.push(Made { run, requests: self.run_out.len() - before, cancel: None });
+            made.push(Made { run, requests: self.run_out.len() - before, cancel: None, asked: None });
         }
         while self.worker_out.room() >= worker::MAX_OUT {
             let Some(event) = self.worker_in.pop_front() else { break };
@@ -504,6 +527,7 @@ impl World {
         let mut answered = BTreeMap::new();
         for (index, made) in made.iter().enumerate() {
             let mut current = made.run;
+            self.asked = made.asked;
             for _ in 0..made.requests {
                 let request = self.run_out.pop().expect("a step's requests are queued");
                 current = self.run_request(request, current);
@@ -565,15 +589,7 @@ impl World {
                     self.just_answered = Some(run);
                 }
             }
-            run::Request::Open { conversation, opening } => {
-                let fresh = self.opens.insert(conversation, Open::default()).is_none();
-                assert!(fresh, "conversations have distinct names");
-                let run = current.expect("a run opens main in a step about it");
-                self.run_of_conversation.insert(conversation, run);
-                self.views.get_mut(&run).expect("a run is admitted before it opens main").main = Some(conversation);
-                self.stats.opens += 1;
-                self.send(Lane::Conversations, Delivery::Open { conversation, opening });
-            }
+            run::Request::Open { conversation, opening } => self.open(conversation, opening, current),
             run::Request::Say { peer, text: _ } => {
                 self.stats.says += 1;
                 self.send(Lane::Conversations, Delivery::Say { peer });
@@ -589,6 +605,9 @@ impl World {
                 let ledger = self.calls.get_mut(&call).expect("a return is of a call that was made");
                 assert!(!ledger.returned, "a call returns once");
                 ledger.returned = true;
+                if let Some(child) = self.child_of_call.remove(&call) {
+                    assert!(self.opens[&child].ended, "a sub-agent has ended before its call returns");
+                }
                 self.send(Lane::Conversations, Delivery::Return { call, result });
             }
             request @ (run::Request::Read { .. } | run::Request::Probe { .. } | run::Request::Abort { .. }) => {
@@ -772,6 +791,41 @@ impl World {
         Some(run)
     }
 
+    /// The run opens a conversation: main, or the sub-agent of the call the
+    /// step took.
+    fn open(&mut self, conversation: Token, opening: run::Opening, current: Option<Token>) {
+        let fresh = self.opens.insert(conversation, Open::default()).is_none();
+        assert!(fresh, "conversations have distinct names");
+        let run = current.expect("a run opens a conversation in a step about it");
+        self.run_of_conversation.insert(conversation, run);
+        let view = self.views.get_mut(&run).expect("a run is admitted before it opens a conversation");
+        match self.asked.take() {
+            None => {
+                assert!(view.main.is_none(), "a run opens main once, and sub-agents when asked");
+                view.main = Some(conversation);
+            }
+            Some(call) => {
+                // A sub-agent's share is within what its run has left.
+                let left = view.budget_left(self.now);
+                let share = opening.budget;
+                assert!(
+                    share.turns <= left.turns
+                        && share.input <= left.input
+                        && share.output <= left.output
+                        && share.cache_read <= left.cache_read
+                        && share.cache_write <= left.cache_write
+                        && share.time <= left.time,
+                    "a sub-agent's share {share:?} is within what its run has left, {left:?}"
+                );
+                assert!(!opening.finish, "a sub-agent may not finish");
+                self.child_of_call.insert(call, conversation);
+                self.stats.children += 1;
+            }
+        }
+        self.stats.opens += 1;
+        self.send(Lane::Conversations, Delivery::Open { conversation, opening });
+    }
+
     /// The run's answer, checked against its budget and what it did: the
     /// worker's name for the run.
     fn answer(&mut self, to: ReplyTo, answer: run::Answer) -> Token {
@@ -782,11 +836,12 @@ impl World {
         if let run::Answer::Accepted { outcome: run::outcome::Declared::Change(_), .. } = &answer {
             assert!(self.pushed.contains(&owner), "a change is accepted only once it is pushed");
         }
-        // A run answers once its main conversation, if it opened one, has
-        // ended.
-        let main = self.run_of_owner.get(&owner).and_then(|run| self.views[run].main);
-        if let Some(main) = main {
-            assert!(self.opens[&main].ended, "a run answers once its main conversation has ended");
+        // A run answers once its main conversation, if it opened one, and
+        // every other conversation it opened have ended.
+        if let Some(run) = self.run_of_owner.get(&owner) {
+            for (conversation, of) in &self.run_of_conversation {
+                assert!(of != run || self.opens[conversation].ended, "no conversation outlives its run");
+            }
         }
         let translated = translate::answer(&answer);
         start.answer = Some(answer);
@@ -1065,6 +1120,7 @@ impl World {
             "io answered every operation"
         );
         assert!(self.pushes.is_empty(), "every push was answered");
+        assert!(self.child_of_call.is_empty(), "every sub-agent's call returned");
         assert!(self.wire.is_empty() && self.run_in.is_empty() && self.worker_in.is_empty(), "nothing is on its way");
         let mut answered = run::Spend::ZERO;
         for (owner, start) in &self.starts {
@@ -1116,6 +1172,19 @@ impl World {
 }
 
 impl RunView {
+    /// What the run has left of its budget at `now`.
+    fn budget_left(&self, now: Time) -> run::Budget {
+        let (spent, budget) = (self.spent, self.budget);
+        run::Budget {
+            turns: budget.turns.saturating_sub(spent.turns),
+            input: budget.input.saturating_sub(spent.input),
+            output: budget.output.saturating_sub(spent.output),
+            cache_read: budget.cache_read.saturating_sub(spent.cache_read),
+            cache_write: budget.cache_write.saturating_sub(spent.cache_write),
+            time: self.deadline.saturating_since(now),
+        }
+    }
+
     /// Whether its conversations spent past any part of its budget.
     fn budget_spent(&self) -> bool {
         let (spent, budget) = (self.spent, self.budget);
@@ -1127,18 +1196,29 @@ impl RunView {
     }
 }
 
-/// A run spends within its budget, give or take one turn in flight: a
-/// conversation keeps to its share of turns, and may go past its share of
-/// tokens by the turn that crossed it.
+/// A run spends within its budget, give or take three turns: the one that
+/// crossed it, the one main has in flight then, and one more that wins its
+/// race with the close. A conversation keeps to its own share, but main's
+/// share was the whole budget when it opened, and its sub-agents spend from
+/// the same budget; so their spending may make the run cross while main has
+/// room left in its share, main keeps the turn it has in flight (seams.md B),
+/// and is closed at its next. The partner starts a turn the moment one ends,
+/// so the close finds one in flight; a session would run the calls of its
+/// completion first. (Only one conversation of a run takes turns at a time
+/// here: an asker waits on its sub-agent.)
 fn assert_within(budget: &run::Budget, answer: &run::Answer, turn: run::Spend) {
     let (run::Answer::Failed { spent, .. } | run::Answer::Accepted { spent, .. }) = answer else { return };
-    assert!(spent.turns <= budget.turns, "{spent:?} keeps to the turns of {budget:?}");
+    let turn = turn.saturating_add(turn).saturating_add(turn);
+    assert!(
+        spent.turns <= budget.turns.saturating_add(turn.turns),
+        "{spent:?} is within the turns of {budget:?}, and three"
+    );
     let over = |spent: u64, budget: u64, turn: u64| spent <= budget.saturating_add(turn);
     assert!(
         over(spent.input, budget.input, turn.input)
             && over(spent.output, budget.output, turn.output)
             && over(spent.cache_read, budget.cache_read, turn.cache_read)
             && over(spent.cache_write, budget.cache_write, turn.cache_write),
-        "{spent:?} is within {budget:?} and one turn of at most {turn:?}"
+        "{spent:?} is within {budget:?} and three turns of at most {turn:?} between them"
     );
 }

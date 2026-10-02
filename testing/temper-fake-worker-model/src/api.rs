@@ -24,6 +24,8 @@ pub struct Charter {
     pub endpoint: u32,
     pub model: Box<[u8]>,
     pub max_tokens: u32,
+    /// The models sub-agents may run on, at the same endpoint.
+    pub models: Box<[Box<[u8]>]>,
 }
 
 /// A repository the worker checked out for the run.

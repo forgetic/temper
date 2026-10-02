@@ -24,6 +24,7 @@
 
 extern crate alloc;
 
+mod agent;
 mod boundary;
 mod budget;
 mod call;
@@ -39,8 +40,8 @@ mod run;
 mod tests;
 
 pub use boundary::{
-    Answer, Ask, End, Event, Exit, Failure, Fault, Invalid, Opening, Place, Policy, Push, Ran, Read, Refusal, Request,
-    Returned, Stop,
+    Answer, Ask, AskRefusal, End, Event, Exit, Failure, Fault, Invalid, Opening, Place, Policy, Push, Ran, Read,
+    Refusal, Request, Returned, Stop,
 };
 pub use budget::{Budget, Exhausted, Spend};
 pub use charter::Charter;

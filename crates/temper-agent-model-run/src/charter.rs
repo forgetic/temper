@@ -19,7 +19,7 @@ use crate::outcome::{self, OutcomeSpec};
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Charter {
     /// Text for the LLM, rendered by the engine: the work item and its
-    /// lineage, the role, the action's guidance, the repository's conventions.
+    /// lineage, the role, the action's guidance.
     pub brief: Box<[u8]>,
     pub checkout: Checkout,
     pub grants: Grants,
@@ -29,6 +29,8 @@ pub struct Charter {
     pub budget: Budget,
     /// The LLM the main conversation starts with.
     pub llm: Llm,
+    /// The LLMs a sub-agent may be opened on, each named by its model.
+    pub models: Box<[Llm]>,
 }
 
 /// The repositories prepared for the run, and which of them it may write: the
@@ -58,6 +60,32 @@ pub struct Grants {
     pub agents: bool,
     /// What the LLM may act on the world through, besides finishing.
     pub outlets: Box<[Outlet]>,
+}
+
+/// The families of tools a conversation has: those it runs on the checkout,
+/// and those the run serves. Outlets stay with main for now.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Families {
+    pub tools: Tools,
+    pub forge: bool,
+    pub agents: bool,
+}
+
+impl Families {
+    /// The families `grants` give.
+    pub(crate) fn of(grants: &Grants) -> Families {
+        Families { tools: grants.tools, forge: grants.forge, agents: grants.agents }
+    }
+
+    /// Whether these families are among `wider`'s.
+    pub(crate) fn within(self, wider: Families) -> bool {
+        let (Tools { inspect, modify, shell }, wide) = (self.tools, wider.tools);
+        (!inspect || wide.inspect)
+            && (!modify || wide.modify)
+            && (!shell || wide.shell)
+            && (!self.forge || wider.forge)
+            && (!self.agents || wider.agents)
+    }
 }
 
 /// The tool families a conversation runs on the checkout.
@@ -99,12 +127,17 @@ pub struct Endpoint(pub u32);
 /// not fit them. Counts are checked before anything that compares names in
 /// pairs.
 pub(crate) fn check(charter: &Charter, limits: &Limits) -> Result<(), Invalid> {
-    let Charter { brief: _, checkout, grants, outcome, budget, llm } = charter;
+    let Charter { brief: _, checkout, grants, outcome, budget, llm, models } = charter;
     if !budget.is_workable() || !budget.within(&limits.budget) {
         return Err(Invalid::Budget);
     }
-    if llm.max_tokens == 0 || llm.max_tokens > limits.max_tokens {
+    if !fits(llm, limits) || count(models.len()) > limits.models {
         return Err(Invalid::Llm);
+    }
+    for model in models {
+        if !fits(model, limits) {
+            return Err(Invalid::Llm);
+        }
     }
     match cost(charter) {
         Some(bytes) if bytes <= limits.run_bytes => {}
@@ -126,6 +159,10 @@ pub(crate) fn check(charter: &Charter, limits: &Limits) -> Result<(), Invalid> {
 /// at its fixed size, plus its payload. `None` past a `u64`.
 pub(crate) fn cost(charter: &Charter) -> Option<u64> {
     let mut cost = len(&charter.brief)?.checked_add(len(&charter.llm.model)?)?;
+    let llm = u64::try_from(size_of::<Llm>()).ok()?;
+    for Llm { endpoint: _, model, max_tokens: _ } in &charter.models {
+        cost = cost.checked_add(llm)?.checked_add(len(model)?)?;
+    }
     let repository = u64::try_from(size_of::<Repository>()).ok()?;
     for Repository { name, root: _, writable: _ } in &charter.checkout.repositories {
         cost = cost.checked_add(repository)?.checked_add(len(name)?)?;
@@ -135,6 +172,11 @@ pub(crate) fn cost(charter: &Charter) -> Option<u64> {
         cost = cost.checked_add(outlet)?.checked_add(len(name)?)?;
     }
     cost.checked_add(outcome::cost(&charter.outcome)?)
+}
+
+/// Whether an LLM asks for an answer that fits the limits.
+fn fits(llm: &Llm, limits: &Limits) -> bool {
+    llm.max_tokens > 0 && llm.max_tokens <= limits.max_tokens
 }
 
 fn repeated_repository(repositories: &[Repository]) -> bool {

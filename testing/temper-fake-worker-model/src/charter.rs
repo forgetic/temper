@@ -5,7 +5,8 @@
 //! - The checkout is one or two repositories, the first writable with the
 //!   configured chance.
 //! - Reading is always granted; writing, the shell, forge reads and a
-//!   "comment" outlet each at random; sub-agents never.
+//!   "comment" outlet each at random; sub-agents with the configured chance,
+//!   with two more models listed for them.
 //! - The outcome is a change, the verdicts "approve" (no children) and
 //!   "request-changes" (one to eight children, each "blocking" or a "nit",
 //!   with a "path" and a "body"), or either, with the configured chances;
@@ -53,12 +54,13 @@ pub(crate) fn draw(rng: &mut Rng, config: &Config) -> Charter {
         repositories: repositories.into_boxed(),
         tools,
         forge,
-        agents: false,
+        agents: rng.chance(config.agents),
         outlets,
         outcome,
         budget,
         endpoint: 0,
         model: copy_of(b"fake-1"),
+        models: Box::new([copy_of(b"fake-2"), copy_of(b"fake-3")]),
         max_tokens: config.max_tokens,
     }
 }

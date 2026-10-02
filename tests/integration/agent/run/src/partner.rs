@@ -9,9 +9,12 @@
 //! - A started conversation takes turns, each a `Used` once its latency has
 //!   passed. After each, the script draws what the LLM does next: fail
 //!   (`Ended` with a fault), call `finish` (`Delegated`, then wait for its
-//!   `Return`), yield (`Yielded`, then wait for `Say` or `Close`), or carry
-//!   on. A finish declares an outcome that fits the fake worker's charters
-//!   or one that breaks them, a change or a verdict.
+//!   `Return`), ask for a sub-agent (the same), yield (`Yielded`, then wait
+//!   for `Say` or `Close`), or carry on. A finish declares an outcome that
+//!   fits the fake worker's charters or one that breaks them, a change or a
+//!   verdict. An ask may want more than the asker has, or an LLM the charter
+//!   does not list, and may ask for a small share. A sub-agent may not
+//!   finish: where main would, it yields its answer.
 //! - It keeps to its share of the budget as a session keeps to its ceilings
 //!   (seams.md B): it starts a turn only while turns, input and output each
 //!   have some left; after a turn that went past any part of its share, it
@@ -31,6 +34,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use temper_agent_model_run::charter::Families;
 use temper_agent_model_run::outcome::{Change, Child, Declared, Field, Verdict};
 use temper_agent_model_run::{Ask, Budget, End, Event, Exhausted, Fault, Opening, Returned, Spend, Stop};
 use temper_lib::{Duration, Rng, Time, Token};
@@ -56,12 +60,17 @@ pub struct Script {
     /// on.
     pub faults: u32,
     pub finishes: u32,
+    pub asks: u32,
     pub yields: u32,
+    /// Of asks, the chance, per mille, that it is one the run cannot grant,
+    /// and that it asks for a small share.
+    pub bad_asks: u32,
+    pub shares: u32,
     /// Of finishes, the chance, per mille, that the outcome is a change
     /// rather than a verdict, and that it fits the fake worker's charters.
     pub changes: u32,
     pub good: u32,
-    /// How long a finish may take before the conversation withdraws it.
+    /// How long a call may take before the conversation withdraws it.
     pub finish_deadline: Span,
     /// The chance, per mille, that a yield stops for something other than the
     /// end of a turn.
@@ -90,8 +99,12 @@ pub struct Tally {
     pub yields: u32,
     pub nudged: u32,
     pub faults: u32,
-    /// Finishes called, and how they returned.
+    /// Finishes called, sub-agents asked for, and how they returned.
     pub finishes: u32,
+    pub asks: u32,
+    pub answered: u32,
+    pub unanswered: u32,
+    pub ask_refused: u32,
     pub accepted: u32,
     pub rejected: u32,
     pub checks_failed: u32,
@@ -130,6 +143,9 @@ pub struct Partner {
 struct Talk {
     /// The run's name for it.
     conversation: Token,
+    /// Whether it may finish, and its families.
+    finish: bool,
+    families: Families,
     budget: Budget,
     expires: Time,
     spent: Spend,
@@ -144,11 +160,11 @@ enum Phase {
     Turning,
     /// Waiting for `Say` or `Close`: its wake is the expiry.
     Yielded,
-    /// Its finish `call` is in flight: its wake is the call's deadline or the
-    /// expiry. `over` is the part of the share the turn that called it went
-    /// past, if any.
-    Finishing { call: Token, over: Option<Exhausted> },
-    /// It withdrew its finish `call`, and waits for its return; then `then`.
+    /// Its call `call` (a finish, or an ask for a sub-agent) is in flight: its
+    /// wake is the call's deadline or the expiry. `over` is the part of the
+    /// share the turn that called it went past, if any.
+    Calling { call: Token, over: Option<Exhausted> },
+    /// It withdrew its call `call`, and waits for its return; then `then`.
     Withdrawn { call: Token, then: Then },
     /// Closed, settling: its wake ends it. `in_flight` says a turn was.
     Closing { in_flight: bool },
@@ -212,11 +228,18 @@ impl Partner {
             self.tally.refused += 1;
             return;
         }
-        assert!(opening.finish, "a main conversation may finish");
         let peer = self.mint();
         let expires = now.saturating_add(opening.budget.time);
-        let talk =
-            Talk { conversation, budget: opening.budget, expires, spent: Spend::ZERO, phase: Phase::Turning, wake: 0 };
+        let talk = Talk {
+            conversation,
+            finish: opening.finish,
+            families: opening.families,
+            budget: opening.budget,
+            expires,
+            spent: Spend::ZERO,
+            phase: Phase::Turning,
+            wake: 0,
+        };
         self.talks.insert(peer, talk);
         out.push(Out::Event(Event::Started { conversation, peer }));
         self.tally.opened += 1;
@@ -247,7 +270,7 @@ impl Partner {
             Phase::Yielded => false,
             // It withdraws its finish in flight and waits for it to return,
             // with no wake.
-            Phase::Finishing { call, over: _ } => {
+            Phase::Calling { call, over: _ } => {
                 talk.phase = Phase::Withdrawn { call, then: Then::Close };
                 talk.wake += 1;
                 out.push(Out::Event(Event::Withdraw { conversation, call }));
@@ -275,10 +298,13 @@ impl Partner {
             Returned::Unpushed => self.tally.unpushed += 1,
             Returned::Cancelled => self.tally.cancelled += 1,
             Returned::Busy => self.tally.busy += 1,
+            Returned::Answered { .. } => self.tally.answered += 1,
+            Returned::Unanswered { .. } => self.tally.unanswered += 1,
+            Returned::Refused { .. } => self.tally.ask_refused += 1,
         }
         let talk = self.talks.get_mut(&peer).expect("a conversation outlives its calls");
         let then = match talk.phase {
-            Phase::Finishing { call: finishing, over } => {
+            Phase::Calling { call: finishing, over } => {
                 assert_eq!(finishing, call, "a conversation has one finish in flight");
                 Then::CarryOn { over }
             }
@@ -319,7 +345,7 @@ impl Partner {
                 assert!(now >= expires, "a yielded conversation wakes only when it expires");
                 self.end(peer, End::Budget(Exhausted::Time), out);
             }
-            Phase::Finishing { call, over } => {
+            Phase::Calling { call, over } => {
                 // Past the call's deadline, or the conversation's.
                 let then = if now >= expires { Then::Expire } else { Then::CarryOn { over } };
                 talk.phase = Phase::Withdrawn { call, then };
@@ -343,19 +369,24 @@ impl Partner {
         self.spend(peer, out);
         let talk = self.talks.get(&peer).expect("a turn is of a live conversation");
         let over = overspent(&talk.budget, talk.spent);
+        let (finish, agents) = (talk.finish, talk.families.agents);
         let roll = u32::try_from(self.rng.below(1000)).expect("below 1000");
-        let Script { faults, finishes, yields, .. } = self.script;
+        let Script { faults, finishes, asks, yields, .. } = self.script;
+        let finishing = faults.saturating_add(finishes);
+        let asking = finishing.saturating_add(asks);
         if roll < faults {
             let fault = if self.rng.chance(500) { Fault::Provider } else { Fault::ContextFull };
             self.tally.faults += 1;
             self.end(peer, End::Fault(fault), out);
-        } else if roll < faults.saturating_add(finishes) {
+        } else if roll < finishing && finish {
             self.finish(now, peer, over, out);
+        } else if roll >= finishing && roll < asking && agents && over.is_none() {
+            self.ask(now, peer, out);
         } else if let Some(exhausted) = over {
             // Past its share with no call to settle: it ends.
             self.tally.ceilings += 1;
             self.end(peer, End::Budget(exhausted), out);
-        } else if roll < faults.saturating_add(finishes).saturating_add(yields) {
+        } else if roll < asking.saturating_add(yields) || roll < finishing {
             let stop = if self.rng.chance(self.script.odd_stops) {
                 match self.rng.below(3) {
                     0 => Stop::MaxTokens,
@@ -379,14 +410,51 @@ impl Partner {
     /// The LLM calls `finish`, with an outcome drawn from the script.
     fn finish(&mut self, now: Time, peer: Token, over: Option<Exhausted>, out: &mut Vec<Out>) {
         let outcome = self.outcome();
+        self.tally.finishes += 1;
+        self.call(now, peer, over, Ask::Finish { outcome }, out);
+    }
+
+    /// The LLM asks for a sub-agent, as the script draws it.
+    fn ask(&mut self, now: Time, peer: Token, out: &mut Vec<Out>) {
+        let own = self.talks[&peer].families;
+        let bad = self.rng.chance(self.script.bad_asks);
+        let mut families = Families { agents: self.rng.chance(500) && own.agents, ..own };
+        let mut llm = if self.rng.chance(300) { Some(b"fake-2"[..].into()) } else { None };
+        if bad {
+            // More than it has, if it lacks anything; else an unknown LLM.
+            if own.tools.shell && own.tools.modify {
+                llm = Some(b"fake-9"[..].into());
+            } else {
+                families.tools.shell = true;
+                families.tools.modify = true;
+            }
+        }
+        let share = if self.rng.chance(self.script.shares) {
+            Some(Spend {
+                turns: u32::try_from(self.rng.between(1, 3)).expect("small"),
+                input: self.rng.between(100, 4_000),
+                output: self.rng.between(100, 2_000),
+                cache_read: self.rng.between(0, 2_000),
+                cache_write: self.rng.between(0, 2_000),
+            })
+        } else {
+            None
+        };
+        let brief = b"Look into the parser, and say what you found."[..].into();
+        self.tally.asks += 1;
+        self.call(now, peer, None, Ask::SubAgent { brief, families, llm, share }, out);
+    }
+
+    /// The LLM's turn called the run for `ask`, `over` its share if it went
+    /// past it.
+    fn call(&mut self, now: Time, peer: Token, over: Option<Exhausted>, ask: Ask, out: &mut Vec<Out>) {
         let call = self.mint();
         let deadline = self.draw(self.script.finish_deadline);
-        let talk = self.talks.get_mut(&peer).expect("a live conversation finishes");
-        talk.phase = Phase::Finishing { call, over };
+        let talk = self.talks.get_mut(&peer).expect("a live conversation calls");
+        talk.phase = Phase::Calling { call, over };
         let (conversation, expires) = (talk.conversation, talk.expires);
         self.calls.insert(call, peer);
-        out.push(Out::Event(Event::Delegated { conversation, call, ask: Ask::Finish { outcome } }));
-        self.tally.finishes += 1;
+        out.push(Out::Event(Event::Delegated { conversation, call, ask }));
         self.wake(now.saturating_add(deadline).min(expires), peer, out);
     }
 

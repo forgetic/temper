@@ -30,6 +30,15 @@ pub struct Limits {
     pub budget: Budget,
     /// The largest `max_tokens` a charter's LLM may ask for.
     pub max_tokens: u32,
+    /// The LLMs a charter may list for sub-agents.
+    pub models: u32,
+    /// How deep sub-agents may nest: main is at depth zero, a sub-agent one
+    /// deeper than its asker.
+    pub depth: u32,
+    /// Conversations a run may have at once, main included.
+    pub run_conversations: u32,
+    /// The most bytes of a sub-agent's last message its asker is given.
+    pub answer_bytes: u32,
     /// Nudges a run gives its LLM when it stops without finishing, after which
     /// the run fails.
     pub nudges: u32,
@@ -66,8 +75,8 @@ pub fn worst_case(limits: &Limits) -> Option<u64> {
     // A winding run holds the outcome it accepted.
     let run = limits.run_bytes.checked_add(guides)?.checked_add(checks)?.checked_add(limits.outcome_bytes)?;
     let held = u64::from(limits.runs).checked_mul(run)?;
-    // A call landing a change holds it.
-    let calls =
-        Calls::worst_case(limits.calls)?.checked_add(u64::from(limits.calls).checked_mul(limits.outcome_bytes)?)?;
+    // A call landing a change holds it; a sub-agent's call, its answer.
+    let call = limits.outcome_bytes.max(u64::from(limits.answer_bytes));
+    let calls = Calls::worst_case(limits.calls)?.checked_add(u64::from(limits.calls).checked_mul(call)?)?;
     runs.checked_add(conversations)?.checked_add(alarms)?.checked_add(held)?.checked_add(calls)
 }

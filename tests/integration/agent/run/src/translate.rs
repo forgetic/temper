@@ -23,6 +23,7 @@ pub fn charter(charter: worker::Charter, roots: &[Token]) -> run::Charter {
         endpoint,
         model,
         max_tokens,
+        models,
     } = charter;
     run::Charter {
         brief,
@@ -41,6 +42,10 @@ pub fn charter(charter: worker::Charter, roots: &[Token]) -> run::Charter {
         },
         budget: self::budget(budget),
         llm: charter::Llm { endpoint: charter::Endpoint(endpoint), model, max_tokens },
+        models: models
+            .into_iter()
+            .map(|model| charter::Llm { endpoint: charter::Endpoint(endpoint), model, max_tokens })
+            .collect(),
     }
 }
 

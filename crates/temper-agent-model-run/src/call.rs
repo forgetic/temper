@@ -9,6 +9,7 @@
 
 use temper_lib::{Id, Map, Slab, Token};
 
+use crate::agent::Child;
 use crate::land::Landing;
 use crate::run::{Conversation, Run};
 
@@ -28,6 +29,8 @@ pub(crate) struct Call {
 pub(crate) enum Work {
     /// A finish, landing its change.
     Landing(Landing),
+    /// A sub-agent's.
+    Child(Child),
 }
 
 /// The calls in flight, and the names their conversations know them by.

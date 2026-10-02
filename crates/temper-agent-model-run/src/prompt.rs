@@ -1,7 +1,9 @@
-//! What a run tells its LLM (agent-model.md, 4.1): the system text, which is
-//! the brief, then what the run found in its checkout (each repository's
-//! `AGENTS.md`), then the sections on the run's own mechanics (its tools, its
-//! checkout, how to finish); and the nudges. The brief and the guides go in as
+//! What a run tells its LLMs (agent-model.md, 4.1): the system text, which is
+//! the brief (the charter's for main, the asker's for a sub-agent), then what
+//! the run found in its checkout (each repository's `AGENTS.md`), then the
+//! sections on the run's own mechanics (its tools, its checkout, its
+//! sub-agents, and how to finish, or for a sub-agent how to answer); and the
+//! nudges. The brief and the guides go in as
 //! they came; the rest is rendered here from constant fragments and the
 //! charter's data, its labels verbatim.
 //!
@@ -13,7 +15,7 @@ use alloc::boxed::Box;
 use temper_lib::Writer;
 
 use crate::boundary::Stop;
-use crate::charter::{Charter, Repository, Tools};
+use crate::charter::{Charter, Families, Llm, Repository, Tools};
 use crate::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
 use crate::prepare::{self, Found, Guide};
 
@@ -23,10 +25,20 @@ pub(crate) const BEGIN: &[u8] = b"Begin the work your brief describes.";
 /// The system text of a run's main conversation, given what the run found in
 /// its checkout.
 pub(crate) fn system(charter: &Charter, found: &Found) -> Box<[u8]> {
+    let families = Families::of(&charter.grants);
     let mut measured = Text::measuring();
-    render_system(&mut measured, charter, found);
+    render_system(&mut measured, charter, found, &charter.brief, families, true);
     let mut text = measured.writing();
-    render_system(&mut text, charter, found);
+    render_system(&mut text, charter, found, &charter.brief, families, true);
+    text.finish()
+}
+
+/// The system text of a sub-agent asked for with `brief` and `families`.
+pub(crate) fn child(charter: &Charter, found: &Found, brief: &[u8], families: Families) -> Box<[u8]> {
+    let mut measured = Text::measuring();
+    render_system(&mut measured, charter, found, brief, families, false);
+    let mut text = measured.writing();
+    render_system(&mut text, charter, found, brief, families, false);
     text.finish()
 }
 
@@ -40,20 +52,56 @@ pub(crate) fn nudge(stop: Stop, nudge: u32, nudges: u32) -> Box<[u8]> {
     text.finish()
 }
 
-fn render_system(text: &mut Text, charter: &Charter, found: &Found) {
-    if !charter.brief.is_empty() {
-        text.put(&charter.brief);
-        end_paragraph(text, &charter.brief);
+/// The system text of main, or of a sub-agent: on `brief`, with `families`.
+fn render_system(text: &mut Text, charter: &Charter, found: &Found, brief: &[u8], families: Families, main: bool) {
+    if !brief.is_empty() {
+        text.put(brief);
+        end_paragraph(text, brief);
     }
     let repositories = &charter.checkout.repositories;
     for guide in &found.guides {
         render_guide(text, repositories, guide);
     }
-    render_tools(text, charter.grants.tools);
+    render_tools(text, families.tools);
     text.put(b"\n");
     render_checkout(text, repositories, found.checks.as_slice());
     text.put(b"\n");
-    render_finishing(text, &charter.outcome, !found.checks.is_empty());
+    if families.agents {
+        render_agents(text, &charter.models);
+        text.put(b"\n");
+    }
+    if main {
+        render_finishing(text, &charter.outcome, !found.checks.is_empty());
+    } else {
+        text.put(b"## Answering\n\nWhen you are done, end your turn with your answer: your last message goes, as it ");
+        text.put(b"is, to the LLM that asked for you, and you are done.\n");
+    }
+}
+
+fn render_agents(text: &mut Text, models: &[Llm]) {
+    text.put(b"## Sub-agents\n\n");
+    text.put(
+        b"You can ask for a sub-agent: an LLM of its own, working on a brief you write, with tools no wider than ",
+    );
+    text.put(b"yours and a share of the budget. Its last message comes back to you as the result. It runs on the ");
+    if models.is_empty() {
+        text.put(b"run's main LLM.\n");
+        return;
+    }
+    text.put(b"run's main LLM unless you name one of these: ");
+    let mut rest = models.len();
+    for llm in models {
+        text.put(b"`");
+        text.put(&llm.model);
+        text.put(b"`");
+        rest = rest.saturating_sub(1);
+        match rest {
+            0 => {}
+            1 => text.put(b" or "),
+            _ => text.put(b", "),
+        }
+    }
+    text.put(b".\n");
 }
 
 /// One blank line after a text that came as it is, whether or not it ends
@@ -261,9 +309,9 @@ mod tests {
 
     use temper_lib::Token;
 
-    use super::{Text, nudge, system};
+    use super::{Text, child, nudge, system};
     use crate::boundary::Stop;
-    use crate::charter::{Charter, Checkout, Grants, Repository, Tools};
+    use crate::charter::{Charter, Checkout, Families, Grants, Repository, Tools};
     use crate::outcome::{ChangeSpec, Children, OutcomeSpec, VerdictRule};
     use crate::prepare::{Found, Guide};
     use crate::tests::{bytes, charter, rule};
@@ -326,6 +374,37 @@ You can finish with one of these verdicts:
 - `request`, with 1 to 8 children, each of kind `blocking` or `nit`, each with the fields `path` and `body`
 ";
         assert_eq!(text(&system(&charter, &found())), text(expected));
+    }
+
+    #[test]
+    fn a_sub_agent_is_told_its_brief_its_tools_its_checkout_and_how_to_answer() {
+        let mut charter = charter();
+        charter.models = Box::new([crate::charter::Llm { model: bytes(b"model-b"), ..charter.llm.clone() }]);
+        let families =
+            Families { tools: Tools { inspect: true, modify: false, shell: false }, forge: false, agents: true };
+        let expected: &[u8] = b"Find where tabs are parsed.
+
+## Tools
+
+You can read, list and search the files in the checkout.
+
+## Checkout
+
+- `temper`, which you may only read
+
+## Sub-agents
+
+You can ask for a sub-agent: an LLM of its own, working on a brief you write, with tools no wider than yours \
+and a share of the budget. Its last message comes back to you as the result. It runs on the run's main LLM \
+unless you name one of these: `model-b`.
+
+## Answering
+
+When you are done, end your turn with your answer: your last message goes, as it is, to the LLM that asked for \
+you, and you are done.
+";
+        let found = Found::with_capacity(1);
+        assert_eq!(text(&child(&charter, &found, b"Find where tabs are parsed.", families)), text(expected));
     }
 
     #[test]
