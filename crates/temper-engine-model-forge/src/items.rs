@@ -82,8 +82,11 @@ pub(crate) struct Entry {
     pull: Option<u64>,
     level: Option<Level>,
     told: Told,
-    /// Known from its first read.
+    /// Known from its first read; and the position a record write of the
+    /// engine's carried that may or may not have landed, whose revision is not
+    /// known.
     record: Option<Record>,
+    uncertain: Option<Position>,
     /// The inbox position the parent took, which the next record written
     /// carries, and the one the news held reach.
     taken: Position,
@@ -211,6 +214,7 @@ pub(crate) fn admit(model: &mut Model, env: &Env<Limits>, item: Item, updated: T
         level: None,
         told: QUIET,
         record: None,
+        uncertain: None,
         taken: Position::START,
         announced: Position::START,
         inbox: Queue::with_capacity(env.limits.inbox),
@@ -853,11 +857,13 @@ fn follow(model: &mut Model, env: &Env<Limits>, id: Id<Entry>) {
     }
 }
 
-/// The record of `item` as the working set knows it, if it is held and read.
-pub(crate) fn record(model: &Model, item: Item) -> Option<(Record, Position, u64)> {
+/// The record of `item` as the working set knows it, if it is held and read;
+/// the position taken; and the position of a record write that may have
+/// landed.
+pub(crate) fn record(model: &Model, item: Item) -> Option<(Record, Position, Option<Position>)> {
     let id = model.index.get(&item)?;
     let entry = model.entries.get(*id).expect("the index names live entries");
-    Some((entry.record?, entry.taken, entry.announced.comment))
+    Some((entry.record?, entry.taken, entry.uncertain))
 }
 
 /// A write found `item`'s record as `record`: posted, edited, or changed by
@@ -869,6 +875,19 @@ pub(crate) fn recorded(model: &mut Model, item: Item, record: Record) {
     let entry = model.entries.get_mut(*id).expect("the index names live entries");
     if entry.record.is_some() {
         entry.record = Some(record);
+        entry.uncertain = None;
+    }
+}
+
+/// A record write of `item` carrying `position` gave up after an attempt
+/// that may have landed: what the record now is, is not known.
+pub(crate) fn uncertain(model: &mut Model, item: Item, position: Position) {
+    let Some(id) = model.index.get(&item) else {
+        return;
+    };
+    let entry = model.entries.get_mut(*id).expect("the index names live entries");
+    if entry.record.is_some() {
+        entry.uncertain = Some(position);
     }
 }
 

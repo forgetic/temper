@@ -101,9 +101,11 @@ pub(crate) struct Writing {
     since: Time,
     from: u64,
     /// A record's: the comment it edits and its revision as last read, or
-    /// none to post one; and the inbox position it carries.
+    /// none to post one; the inbox position it carries; and the position a
+    /// record write before it carried that may have landed.
     target: Option<Target>,
     position: Position,
+    uncertain: Option<Position>,
     state: State,
 }
 
@@ -167,9 +169,9 @@ pub(crate) fn write(
         out.push(Request::Wrote { owner, result: Err(Failure::Busy) });
         return;
     }
-    let (target, position) = match &write {
+    let (target, position, uncertain) = match &write {
         Write::Record { item, .. } => match items::record(model, *item) {
-            Some((record, position, _)) => (target_of(record), position),
+            Some((record, position, uncertain)) => (target_of(record), position, uncertain),
             None => {
                 out.push(Request::Wrote { owner, result: Err(Failure::Unknown) });
                 return;
@@ -183,7 +185,7 @@ pub(crate) fn write(
         | Write::Close { .. }
         | Write::DeleteBranch { .. }
         | Write::PutPage { .. }
-        | Write::DeletePage { .. } => (None, Position::START),
+        | Write::DeletePage { .. } => (None, Position::START, None),
     };
     let lane = lane(&write);
     let writing = Writing {
@@ -199,6 +201,7 @@ pub(crate) fn write(
         from: 0,
         target,
         position,
+        uncertain,
         state: State::Queued,
     };
     let id = model.writes.insert(writing).expect("checked for room above");
@@ -237,7 +240,12 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
     };
     let writing = model.writes.get_mut(id).expect("a write lives until it closes");
     writing.since = env.now;
-    writing.from = from;
+    // A record that may have been posted is looked for from the first
+    // comment: the working set may have passed it since.
+    writing.from = match writing.uncertain {
+        Some(_) => 0,
+        None => from,
+    };
     if let Some((_, position, _)) = known {
         // It carries the position taken as it goes; it aims at the record as
         // it was when it was asked for, or as the writes before it in its lane
@@ -247,7 +255,7 @@ fn start(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
     let phase = match &writing.write {
         Write::Record { .. } => match writing.target {
             Some(_) => Phase::Check,
-            None if writing.resumed => find(writing),
+            None if writing.resumed || writing.uncertain.is_some() => find(writing),
             None => Phase::Make,
         },
         Write::CreateIssue { .. } | Write::Comment { .. } | Write::OpenPull { .. } => {
@@ -442,6 +450,15 @@ fn checked(
             let comment = api::comment(answer);
             let target = writing.target.expect("a record is checked when it has one");
             if comment.revision == target.revision {
+                return State::Due { phase: Phase::Make };
+            }
+            // A record write of the engine's that may have landed: the record
+            // saying what it carried is its own.
+            let ours = match comment.mark {
+                Mark::Record(position) => comment.author == engine && writing.uncertain == Some(position),
+                Mark::None | Mark::Key(_) | Mark::Mangled => false,
+            };
+            if ours {
                 return State::Due { phase: Phase::Make };
             }
             let record = match comment.mark {
@@ -746,30 +763,7 @@ fn conclude(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Que
             writing.state = State::Due { phase };
             ask(model, id);
         }
-        State::Done { result, record } => {
-            let owner = writing.owner;
-            if writing.found {
-                model.facts.push(Fact::Found { owner });
-            }
-            if let Some(record) = record {
-                let item = subject(&writing.write).expect("a record is about an item");
-                let next = writing.next;
-                items::recorded(model, item, record);
-                if result.is_ok() {
-                    follow_record(&mut model.writes, next, record, env.limits.writes);
-                }
-                match result {
-                    Err(Failure::Edited { .. }) => model.facts.push(Fact::Edited { item }),
-                    Ok(_) | Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Forge(_)) => {}
-                }
-            }
-            match result {
-                Ok(_) => model.facts.push(Fact::Wrote { owner }),
-                Err(_) => model.facts.push(Fact::Unwritten { owner }),
-            }
-            out.push(Request::Wrote { owner, result });
-            close(model, env, id);
-        }
+        State::Done { result, record } => answer(model, env, id, result, record, out),
         State::Waiting { phase, until } => {
             writing.state = State::Waiting { phase, until };
             model.facts.push(Fact::Retried { owner: writing.owner });
@@ -779,6 +773,69 @@ fn conclude(model: &mut Model, env: &Env<Limits>, id: Id<Writing>, out: &mut Que
         State::Busy { phase } => writing.state = State::Busy { phase },
         State::Closed => unreachable!("a write is concluded while it lives"),
     }
+}
+
+/// A write done: the working set hears what it found of its item's record,
+/// and so do the record writes queued after it; the parent hears how it went;
+/// and it closes.
+fn answer(
+    model: &mut Model,
+    env: &Env<Limits>,
+    id: Id<Writing>,
+    result: Result<Written, Failure>,
+    record: Option<Record>,
+    out: &mut Queue<Request>,
+) {
+    let writing = model.writes.get(id).expect("a write lives until it closes");
+    let (owner, found, next, position, ambiguous) =
+        (writing.owner, writing.found, writing.next, writing.position, writing.ambiguous);
+    let recording = match writing.write {
+        Write::Record { item, .. } => Some(item),
+        Write::CreateIssue { .. }
+        | Write::Comment { .. }
+        | Write::SetLabels { .. }
+        | Write::OpenPull { .. }
+        | Write::Merge { .. }
+        | Write::Close { .. }
+        | Write::DeleteBranch { .. }
+        | Write::PutPage { .. }
+        | Write::DeletePage { .. } => None,
+    };
+    if found {
+        model.facts.push(Fact::Found { owner });
+    }
+    if let Some(item) = recording {
+        match record {
+            Some(record) => {
+                items::recorded(model, item, record);
+                if result.is_ok() {
+                    follow_record(&mut model.writes, next, Some(record), None, env.limits.writes);
+                }
+            }
+            None => {
+                // Given up after an attempt that may have landed: the record
+                // may now say what this one carried.
+                let gave_up = match result {
+                    Err(Failure::Forge(_)) => ambiguous,
+                    Ok(_) | Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Edited { .. }) => false,
+                };
+                if gave_up {
+                    items::uncertain(model, item, position);
+                    follow_record(&mut model.writes, next, None, Some(position), env.limits.writes);
+                }
+            }
+        }
+        match result {
+            Err(Failure::Edited { .. }) => model.facts.push(Fact::Edited { item }),
+            Ok(_) | Err(Failure::Busy | Failure::Invalid | Failure::Unknown | Failure::Forge(_)) => {}
+        }
+    }
+    match result {
+        Ok(_) => model.facts.push(Fact::Wrote { owner }),
+        Err(_) => model.facts.push(Fact::Unwritten { owner }),
+    }
+    out.push(Request::Wrote { owner, result });
+    close(model, env, id);
 }
 
 /// Queues the call a write is due.
@@ -815,10 +872,18 @@ fn close(model: &mut Model, env: &Env<Limits>, id: Id<Writing>) {
 }
 
 /// A write posted or edited its item's record, which is now `record`: the
-/// record writes queued after it in its lane aim at it. A record found
-/// changed by someone else is not passed on: the writes asked for before the
-/// parent heard of it fail as this one did.
-fn follow_record(writes: &mut Slab<Writing>, next: Option<Id<Writing>>, record: Record, most: u32) {
+/// record writes queued after it in its lane aim at it. Or it gave up after
+/// an attempt carrying `uncertain` that may have landed: they take a record
+/// saying it as their own. A record found changed by someone else is not
+/// passed on: the writes asked for before the parent heard of it fail as this
+/// one did.
+fn follow_record(
+    writes: &mut Slab<Writing>,
+    next: Option<Id<Writing>>,
+    record: Option<Record>,
+    uncertain: Option<Position>,
+    most: u32,
+) {
     let mut next = next;
     for _ in 0..most {
         let Some(id) = next else {
@@ -826,7 +891,13 @@ fn follow_record(writes: &mut Slab<Writing>, next: Option<Id<Writing>>, record: 
         };
         let writing = writes.get_mut(id).expect("a lane's writes live until they close");
         match writing.write {
-            Write::Record { .. } => writing.target = target_of(record),
+            Write::Record { .. } => match record {
+                Some(record) => {
+                    writing.target = target_of(record);
+                    writing.uncertain = None;
+                }
+                None => writing.uncertain = uncertain,
+            },
             Write::CreateIssue { .. }
             | Write::Comment { .. }
             | Write::SetLabels { .. }

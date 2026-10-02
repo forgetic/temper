@@ -1,0 +1,440 @@
+//! The protocol layer, as the world plays it: the forge sub-model's
+//! operations as calls to the fake forge, and the fake's answers as the
+//! sub-model's, with what a Forgejo protocol layer would put inside what the
+//! engine creates and find again when it reads.
+//!
+//! - **Markers.** A key goes at the head of what it keys (an issue's body, a
+//!   comment), and a record at the head of its comment, its inbox position
+//!   written out; a body that starts as a record and does not decode is a
+//!   record mangled. A person's marker is read like any other: the sub-model
+//!   decides whose it is.
+//! - **Payloads** the sub-model names by tokens are filled in by the parent as
+//!   the call goes out ([`Fill`]).
+//! - **Commits** are the fake's counts, in the first 8 bytes, big-endian.
+//! - **A comment's revision** is a digest of its body, so it changes whenever
+//!   the body does, at any resolution of the forge's clock.
+//! - **Pages** are the sub-model's: a listing asks the fake for a page of the
+//!   sub-model's size, and a page of comments is cut to it.
+
+use std::collections::BTreeMap;
+
+use temper_engine_model_forge::api as engine;
+use temper_engine_model_forge::{Ci, Position};
+use temper_forge_model::api as forge;
+use temper_lib::Token;
+
+const KEY: &[u8] = b"<!-- temper:key ";
+const RECORD: &[u8] = b"<!-- temper:record ";
+const END: &[u8] = b" -->\n";
+
+/// The payloads the parent names, by token: what it fills in as a call
+/// carrying one goes out.
+pub type Fill = BTreeMap<u64, Vec<u8>>;
+
+/// What an engine call asked, which says how its answer reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Asked {
+    Items,
+    Item,
+    Comment {
+        number: u64,
+    },
+    /// A pull request, and a page of its reviews after the first `reviews`.
+    Pull {
+        reviews: u32,
+    },
+    Statuses,
+    Permission,
+    Branch,
+    Pages,
+    Page,
+    Create,
+    /// A comment posted, with the digest of its body.
+    Post {
+        revision: u64,
+    },
+    /// A comment edited, likewise.
+    Edit {
+        revision: u64,
+    },
+    Merge,
+    Revision,
+    Done,
+}
+
+/// A commit's name in the engine.
+#[must_use]
+pub fn commit(count: u64) -> [u8; 32] {
+    let mut name = [0; 32];
+    name[..8].copy_from_slice(&count.to_be_bytes());
+    name
+}
+
+/// The fake's count of a commit the engine names.
+#[must_use]
+pub fn count(commit: [u8; 32]) -> u64 {
+    let mut bytes = [0; 8];
+    bytes.copy_from_slice(&commit[..8]);
+    u64::from_be_bytes(bytes)
+}
+
+/// A digest of `body`: a comment's revision (FNV-1a).
+#[must_use]
+pub fn digest(body: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in body {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
+/// `content`, keyed by `key`.
+#[must_use]
+pub fn keyed(key: &[u8], content: &[u8]) -> Vec<u8> {
+    let mut body = KEY.to_vec();
+    body.extend_from_slice(&hex(key));
+    body.extend_from_slice(END);
+    body.extend_from_slice(content);
+    body
+}
+
+/// A record saying `position`, and the parent's `payload`.
+#[must_use]
+pub fn recorded(position: Position, payload: &[u8]) -> Vec<u8> {
+    let head = match position.head {
+        Some(head) => count(head).to_string(),
+        None => "-".to_owned(),
+    };
+    let ci = match position.ci {
+        Ci::None => 0,
+        Ci::Pending => 1,
+        Ci::Passed => 2,
+        Ci::Failed => 3,
+    };
+    let mut body = RECORD.to_vec();
+    body.extend_from_slice(format!("{} {} {head} {ci}", position.comment, position.reviews).as_bytes());
+    body.extend_from_slice(END);
+    body.extend_from_slice(payload);
+    body
+}
+
+/// The key a body starts with, if it starts with one.
+#[must_use]
+pub fn key_of(body: &[u8]) -> Option<Vec<u8>> {
+    let rest = body.strip_prefix(KEY)?;
+    let end = find(rest, END)?;
+    unhex(&rest[..end])
+}
+
+/// Whether a body starts as a record, whether or not it decodes.
+#[must_use]
+pub fn is_record(body: &[u8]) -> bool {
+    body.starts_with(RECORD)
+}
+
+/// What a comment's body has at its head, for the sub-model.
+#[must_use]
+pub fn mark(body: &[u8]) -> engine::Mark {
+    if let Some(rest) = body.strip_prefix(RECORD) {
+        return match position(rest) {
+            Some(position) => engine::Mark::Record(position),
+            None => engine::Mark::Mangled,
+        };
+    }
+    match key_of(body) {
+        Some(key) => engine::Mark::Key(key.into()),
+        None => engine::Mark::None,
+    }
+}
+
+/// The position a record's head says.
+fn position(rest: &[u8]) -> Option<Position> {
+    let end = find(rest, END)?;
+    let text = std::str::from_utf8(&rest[..end]).ok()?;
+    let mut fields = text.split(' ');
+    let comment = fields.next()?.parse().ok()?;
+    let reviews = fields.next()?.parse().ok()?;
+    let head = match fields.next()? {
+        "-" => None,
+        count => Some(commit(count.parse().ok()?)),
+    };
+    let ci = match fields.next()? {
+        "0" => Ci::None,
+        "1" => Ci::Pending,
+        "2" => Ci::Passed,
+        "3" => Ci::Failed,
+        _ => return None,
+    };
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(Position { comment, reviews, head, ci })
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+fn hex(bytes: &[u8]) -> Vec<u8> {
+    bytes.iter().flat_map(|byte| format!("{byte:02x}").into_bytes()).collect()
+}
+
+fn unhex(text: &[u8]) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    text.chunks(2).map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()).collect()
+}
+
+/// The body a write carries, payloads filled in.
+fn body(body: engine::Body, fill: &Fill) -> Vec<u8> {
+    match body {
+        engine::Body::Text(text) => text.into_vec(),
+        engine::Body::Payload(token) => payload(token, fill),
+        engine::Body::Record { payload: token, position } => recorded(position, &payload(token, fill)),
+    }
+}
+
+fn payload(token: Token, fill: &Fill) -> Vec<u8> {
+    fill.get(&token.raw()).expect("the parent names payloads it has").clone()
+}
+
+/// The fake's call for an engine operation, asking for pages of `page`
+/// entries, and what it asked.
+#[must_use]
+pub fn op(op: engine::Op, page: u32, fill: &Fill) -> (Asked, forge::Op) {
+    use forge::{Op, Read, Write};
+    match op {
+        engine::Op::Items { state, kind, label, since, page: number } => {
+            let labels = match label {
+                Some(label) => vec![label].into_boxed_slice(),
+                None => Box::new([]),
+            };
+            let read = Read::Items {
+                state: state.map(state_of),
+                kind: kind.map(kind_of),
+                labels,
+                since,
+                page: number,
+                limit: page,
+            };
+            (Asked::Items, Op::Read(read))
+        }
+        engine::Op::Item { number, after } => (Asked::Item, Op::Read(Read::Item { number, after })),
+        engine::Op::Comment { number, id } => (Asked::Comment { number }, Op::Read(Read::Comment { id })),
+        engine::Op::Pull { number, reviews } => (Asked::Pull { reviews }, Op::Read(Read::Pull { number })),
+        engine::Op::PullFor { head, base } => (Asked::Pull { reviews: 0 }, Op::Read(Read::PullFor { head, base })),
+        engine::Op::Statuses { commit } => (Asked::Statuses, Op::Read(Read::Statuses { commit: count(commit) })),
+        engine::Op::Permission { user } => (Asked::Permission, Op::Read(Read::Permission { user })),
+        engine::Op::Branch { branch } => (Asked::Branch, Op::Read(Read::Branch { branch })),
+        engine::Op::Pages { after } => (Asked::Pages, Op::Read(Read::Pages { after })),
+        engine::Op::Page { name } => (Asked::Page, Op::Read(Read::Page { name })),
+        engine::Op::CreateIssue { key, title, body: content, labels } => {
+            let body = keyed(&key, &body(content, fill)).into_boxed_slice();
+            (Asked::Create, Op::Write(Write::CreateIssue { title, body, labels }))
+        }
+        engine::Op::Post { number, key, body: content } => {
+            let content = body(content, fill);
+            let body = match key {
+                Some(key) => keyed(&key, &content),
+                None => content,
+            };
+            let revision = digest(&body);
+            (Asked::Post { revision }, Op::Write(Write::Comment { number, body: body.into_boxed_slice() }))
+        }
+        engine::Op::EditComment { number: _, id, body: content } => {
+            let body = body(content, fill);
+            let revision = digest(&body);
+            (Asked::Edit { revision }, Op::Write(Write::EditComment { id, body: body.into_boxed_slice() }))
+        }
+        engine::Op::SetLabels { number, labels } => (Asked::Done, Op::Write(Write::SetLabels { number, labels })),
+        engine::Op::OpenPull { title, body: content, head, base } => {
+            let body = body(content, fill).into_boxed_slice();
+            (Asked::Create, Op::Write(Write::OpenPull { title, body, head, base }))
+        }
+        engine::Op::Merge { number, head } => (Asked::Merge, Op::Write(Write::Merge { number, head: count(head) })),
+        engine::Op::Close { number } => (Asked::Done, Op::Write(Write::Close { number })),
+        engine::Op::DeleteBranch { branch } => (Asked::Done, Op::Write(Write::DeleteBranch { branch })),
+        engine::Op::PutPage { name, content } => {
+            let content = body(content, fill).into_boxed_slice();
+            (Asked::Revision, Op::Write(Write::PutPage { name, content }))
+        }
+        engine::Op::DeletePage { name } => (Asked::Done, Op::Write(Write::DeletePage { name })),
+    }
+}
+
+/// The sub-model's answer for what the fake answered a call that asked
+/// `asked`, cutting a page of comments or reviews to `page`.
+///
+/// # Errors
+///
+/// What the call failed with, as the sub-model names it.
+pub fn answer(
+    asked: Asked,
+    result: Result<forge::Answer, forge::Error>,
+    page: u32,
+) -> Result<engine::Answer, engine::Error> {
+    let answer = result.map_err(error)?;
+    let page = usize::try_from(page).expect("a page fits a usize");
+    let answer = match (asked, answer) {
+        (Asked::Items, forge::Answer::Items { items, more }) => {
+            engine::Answer::Items { items: items.iter().map(summary).collect(), more }
+        }
+        (Asked::Item, forge::Answer::Item { item, comments, more }) => {
+            let cut = comments.len() > page;
+            let comments = comments.iter().take(page).map(comment).collect();
+            engine::Answer::Item { item: summary(&item), comments, more: more || cut }
+        }
+        (Asked::Comment { number }, forge::Answer::Comment { number: on, comment: found }) => {
+            if on != number {
+                return Err(engine::Error::Missing);
+            }
+            engine::Answer::Comment(comment(&found))
+        }
+        (Asked::Pull { reviews }, forge::Answer::Pull(found)) => {
+            engine::Answer::Pull(pull(&found, usize::try_from(reviews).expect("fits"), page))
+        }
+        (Asked::Statuses, forge::Answer::Statuses(statuses)) => {
+            engine::Answer::Statuses(statuses.iter().map(status).collect())
+        }
+        (Asked::Permission, forge::Answer::Permission(permission)) => engine::Answer::Permission(match permission {
+            forge::Permission::None => engine::Permission::None,
+            forge::Permission::Read => engine::Permission::Read,
+            forge::Permission::Write => engine::Permission::Write,
+            forge::Permission::Admin => engine::Permission::Admin,
+        }),
+        (Asked::Branch, forge::Answer::Commit(found)) => engine::Answer::Commit(commit(found)),
+        (Asked::Pages, forge::Answer::Pages { pages, next }) => engine::Answer::Pages {
+            pages: pages
+                .iter()
+                .map(|name| engine::PageName { name: name.name.clone(), revision: name.revision })
+                .collect(),
+            next,
+        },
+        (Asked::Page, forge::Answer::Page(found)) => {
+            engine::Answer::Page(engine::Page { name: found.name, content: found.content, revision: found.revision })
+        }
+        (Asked::Create, forge::Answer::Created(number)) => engine::Answer::Created(number),
+        (Asked::Post { revision }, forge::Answer::Commented(id)) => engine::Answer::Commented { id, revision },
+        (Asked::Edit { revision }, forge::Answer::Done) => engine::Answer::Edited { revision },
+        (Asked::Merge, forge::Answer::Merged(made)) => engine::Answer::Merged(commit(made)),
+        (Asked::Revision, forge::Answer::Revision(revision)) => engine::Answer::Revision(revision),
+        (Asked::Done, forge::Answer::Done) => engine::Answer::Done,
+        (asked, answer) => panic!("the fake answers {asked:?} as asked: {answer:?}"),
+    };
+    Ok(answer)
+}
+
+/// The sub-model's error for the fake's.
+#[must_use]
+pub fn error(error: forge::Error) -> engine::Error {
+    match error {
+        forge::Error::Unavailable => engine::Error::Unavailable,
+        forge::Error::Timeout => engine::Error::Timeout,
+        forge::Error::RateLimited { reset } => engine::Error::RateLimited { reset },
+        forge::Error::Forbidden => engine::Error::Forbidden,
+        forge::Error::Missing(_) => engine::Error::Missing,
+        forge::Error::TooLarge => engine::Error::TooLarge,
+        forge::Error::Full => engine::Error::Full,
+        forge::Error::Exists => engine::Error::Exists,
+        forge::Error::NothingToMerge => engine::Error::NothingToMerge,
+        forge::Error::Empty => engine::Error::Empty,
+        forge::Error::Closed => engine::Error::Closed,
+        forge::Error::Stale => engine::Error::Stale,
+        forge::Error::Conflict => engine::Error::Conflict,
+        forge::Error::Protected => engine::Error::Protected,
+        forge::Error::Circular | forge::Error::Unreachable | forge::Error::Refused => {
+            panic!("the engine's calls are refused so only for what it does not ask: {error:?}")
+        }
+    }
+}
+
+fn state_of(state: engine::State) -> forge::State {
+    match state {
+        engine::State::Open => forge::State::Open,
+        engine::State::Closed => forge::State::Closed,
+    }
+}
+
+fn kind_of(kind: engine::Kind) -> forge::Kind {
+    match kind {
+        engine::Kind::Issue => forge::Kind::Issue,
+        engine::Kind::Pull => forge::Kind::Pull,
+    }
+}
+
+fn summary(item: &forge::Summary) -> engine::Summary {
+    engine::Summary {
+        number: item.number,
+        kind: match item.kind {
+            forge::Kind::Issue => engine::Kind::Issue,
+            forge::Kind::Pull => engine::Kind::Pull,
+        },
+        state: match item.state {
+            forge::State::Open => engine::State::Open,
+            forge::State::Closed => engine::State::Closed,
+        },
+        author: item.author,
+        key: key_of(&item.body).map(Vec::into_boxed_slice),
+        labels: item.labels.clone(),
+        title: item.title.clone(),
+        body: item.body.clone(),
+        updated: item.updated,
+    }
+}
+
+fn comment(comment: &forge::Comment) -> engine::Comment {
+    engine::Comment {
+        id: comment.id,
+        author: comment.author,
+        revision: digest(&comment.body),
+        mark: mark(&comment.body),
+        body: comment.body.clone(),
+    }
+}
+
+/// A pull request, with the page of its reviews after the first `skip`.
+fn pull(pull: &forge::Pull, skip: usize, page: usize) -> engine::Pull {
+    engine::Pull {
+        number: pull.number,
+        state: match pull.state {
+            forge::State::Open => engine::State::Open,
+            forge::State::Closed => engine::State::Closed,
+        },
+        head: pull.head.clone(),
+        base: pull.base.clone(),
+        commit: commit(pull.commit),
+        merged: pull.merged.map(commit),
+        mergeable: pull.mergeable,
+        more: pull.reviews.len() > skip + page,
+        reviews: pull
+            .reviews
+            .iter()
+            .skip(skip)
+            .take(page)
+            .map(|review| engine::Review {
+                author: review.author,
+                verdict: match review.verdict {
+                    forge::Verdict::Approve => engine::Verdict::Approve,
+                    forge::Verdict::RequestChanges => engine::Verdict::RequestChanges,
+                    forge::Verdict::Comment => engine::Verdict::Comment,
+                },
+                commit: commit(review.commit),
+                body: review.body.clone(),
+            })
+            .collect(),
+        statuses: pull.statuses.iter().map(status).collect(),
+    }
+}
+
+fn status(status: &forge::Status) -> engine::Status {
+    engine::Status {
+        context: status.context.clone(),
+        check: match status.state {
+            forge::Check::Pending => engine::Check::Pending,
+            forge::Check::Passed => engine::Check::Passed,
+            forge::Check::Failed => engine::Check::Failed,
+        },
+    }
+}

@@ -129,6 +129,21 @@ impl Harness {
         sent.next().expect("checked above")
     }
 
+    /// Sends the calls ready, answering listings with nothing, and returns
+    /// the one asking `op`.
+    fn sends_for(&mut self, op: &Op) -> Sent {
+        let mut found = None;
+        for sent in self.send() {
+            if sent.op == *op {
+                found = Some(sent);
+            } else {
+                assert!(lists_changes(&sent.op), "only listings besides: {sent:?}");
+                self.answer(&sent, page(Box::new([]), false));
+            }
+        }
+        found.expect("a call asks it")
+    }
+
     /// Sends the calls ready, and returns the one asking `op`.
     fn send_for(&mut self, op: &Op) -> Sent {
         for sent in self.send() {
@@ -1177,4 +1192,42 @@ fn an_untracked_item_tells_nothing_more_and_its_read_is_dropped() {
     let told = h.answer(&read, item_page(issue(9, &[TRACKING], 4), Box::new([]), false));
     assert!(told.is_empty(), "nothing is told of it");
     assert_eq!(h.model.items(), 0, "and it is retired");
+}
+
+#[test]
+fn a_record_edit_that_gave_up_after_a_timeout_leaves_the_record_its_own_to_the_next() {
+    let mut h = Harness::new(LIMITS);
+    h.start(&[issue(5, &[TRACKING], 1)], &[]);
+    let owner = Token::new(1);
+    let payload = Token::new(3);
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: false });
+    let check = h.send_one();
+    h.answer(&check, Ok(Answer::Comment(record(100, 5, Position::START))));
+    for secs in [3, 10, 30] {
+        let edit = h.send_one();
+        assert_eq!(
+            edit.op,
+            Op::EditComment { number: 5, id: 100, body: Body::Record { payload, position: Position::START } }
+        );
+        let told = h.answer(&edit, Err(Error::Timeout));
+        if secs == 30 {
+            assert_eq!(*told, [Request::Wrote { owner, result: Err(Failure::Forge(Error::Timeout)) }], "gave up");
+        } else {
+            h.at(secs);
+            h.fire();
+        }
+    }
+    // The edit may have landed: the record says what it carried, at a
+    // revision not known.
+    h.step(Event::Write { owner, write: Write::Record { item: item(5), payload }, resumed: false });
+    let check = h.sends_for(&Op::Comment { number: 5, id: 100 });
+    let mut landed = record(100, 5, Position::START);
+    landed.revision = 999;
+    h.answer(&check, Ok(Answer::Comment(landed)));
+    let edit = h.send_one();
+    assert_eq!(
+        edit.op,
+        Op::EditComment { number: 5, id: 100, body: Body::Record { payload, position: Position::START } },
+        "its own: edited, not held"
+    );
 }
