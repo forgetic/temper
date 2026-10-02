@@ -18,6 +18,10 @@
 //!   has gone, after the exit's. What the agent wrote is still read to the
 //!   channel's end, and a request on a process that has gone ends at once.
 //!
+//! io's terminals reach the model each after a latency of its own: only the
+//! reads of one channel keep their order, and a process's exit comes before
+//! its reap (the world's lanes).
+//!
 //! Children live a while, or outlive the agent until they are signalled;
 //! some hold the agent's channel open as long as they live.
 
@@ -100,6 +104,8 @@ pub struct Tally {
     pub sends: u32,
     pub unsent: u32,
     pub hangups: u32,
+    /// Agents that closed their output before they exited.
+    pub closed: u32,
     pub malformed: u32,
 }
 
@@ -122,9 +128,10 @@ struct Proc {
     /// What the agent wrote and the model has not read, each with when it is
     /// through the pipe.
     up: VecDeque<(Time, Said)>,
-    /// The agent reads its channel; when the last message sent down is
-    /// through the pipe.
+    /// The agent reads its channel, and writes it; when the last message
+    /// sent down is through the pipe.
     stdin: bool,
+    stdout: bool,
     down: Time,
     /// A read is in flight; the channel up ended as the model read it.
     reading: bool,
@@ -144,7 +151,7 @@ impl Proc {
     }
 
     fn writers(&self) -> bool {
-        self.main || self.children.iter().any(|child| child.alive && child.holds)
+        (self.main && self.stdout) || self.children.iter().any(|child| child.alive && child.holds)
     }
 }
 
@@ -326,6 +333,7 @@ impl Tree {
             children,
             up: VecDeque::new(),
             stdin: true,
+            stdout: true,
             down: Time::ZERO,
             reading: false,
             ended: false,
@@ -486,6 +494,12 @@ impl Tree {
                 Act::Deaf => {
                     let proc = self.procs.get_mut(&process).expect("an agent of a spawned tree");
                     proc.stdin = false;
+                }
+                Act::Close => {
+                    self.tally.closed += 1;
+                    let proc = self.procs.get_mut(&process).expect("an agent of a spawned tree");
+                    proc.stdout = false;
+                    outs.extend(self.try_read(now, process));
                 }
             }
         }

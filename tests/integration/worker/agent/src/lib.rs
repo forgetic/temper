@@ -20,7 +20,9 @@
 //! the run waits for a call's answer or an inbound event, nor before it has
 //! been silent past the deadline or a long operation's deadline, so a run
 //! that keeps making progress is never stopped by it, and the wall time only
-//! once it is up; every breach of the channel's rules is caught, stops the
+//! once it is up; and a run that falls silent while live, with no call
+//! waiting for an answer, is stopped by the watchdog unless its client or
+//! its wall time stopped it first, waits that crossed an event included; every breach of the channel's rules is caught, stops the
 //! agent, and is told as such while the run is live, and nothing else is;
 //! and inbound events reach the agent once each, in the order sent. Once it
 //! settles: nothing in flight, no agent left, no alarm armed, every process

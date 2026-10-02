@@ -14,9 +14,8 @@ use crate::tree::{self, Tree};
 /// it may produce) is exercised.
 const SPARE: u32 = 2;
 
-/// How long past the grace and `kill_after` an agent may take to go once it
-/// is stopping: the kill, io's terminals a hop each, and what it wrote still
-/// to read.
+/// How long past the grace, `kill_after` and a pipe's latency an agent may
+/// take to go once it is stopping: the kill, and io's terminals a hop each.
 const SLACK: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -98,6 +97,7 @@ impl Settings {
                 waits: 150,
                 pushes: 300,
                 blocking: 300,
+                call_deadline: Span::millis(5_000, 20_000),
                 long: Span::millis(5_000, 60_000),
                 idle: Span::millis(5_000, 60_000),
                 fates: Fates {
@@ -112,11 +112,13 @@ impl Settings {
                     trailing: 0,
                     oversized: 0,
                     deaf: 0,
+                    mute: 0,
                 },
                 exit: Span::millis(10, 500),
                 slow_exits: 0,
                 slow_exit: Span::millis(6_000, 20_000),
                 deaf_to_cancel: 0,
+                mute: 0,
                 wind: Span::millis(100, 2_000),
                 stubborn: 0,
                 term: Span::millis(10, 500),
@@ -152,7 +154,16 @@ impl Settings {
                 stop_on_end: 800,
                 ..calm.client
             },
-            tree: tree::Script { unspawned: 60, children: 2, lingering: 300, holding: 300, stubborn: 200, ..calm.tree },
+            tree: tree::Script {
+                // Some spawns take longer than io's deadline for them.
+                spawn: Span::millis(10, 1_200),
+                unspawned: 60,
+                children: 2,
+                lingering: 300,
+                holding: 300,
+                stubborn: 200,
+                ..calm.tree
+            },
             script: script::Script {
                 fates: Fates {
                     ended: 4,
@@ -166,9 +177,13 @@ impl Settings {
                     trailing: 1,
                     oversized: 1,
                     deaf: 1,
+                    mute: 1,
                 },
                 slow_exits: 200,
                 deaf_to_cancel: 200,
+                mute: 150,
+                // Some wind down past the grace.
+                wind: Span::millis(100, 8_000),
                 stubborn: 200,
                 ..calm.script
             },
@@ -194,6 +209,8 @@ pub struct Stats {
     /// as too large.
     pub busy: u32,
     pub too_large: u32,
+    /// Paths taken that the sweep must reach, by name.
+    pub paths: BTreeMap<&'static str, u32>,
     /// Facts the model told, by kind, and how many it dropped.
     pub facts: BTreeMap<&'static str, u32>,
     pub facts_lost: u64,
@@ -215,10 +232,13 @@ enum Delivery {
 }
 
 /// The one-way channels whose order matters, each delivering in the order it
-/// was given.
+/// was given. io's other terminals each take a latency of their own.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Lane {
-    IoToModel,
+    /// The reads of a channel, one at a time.
+    Reads,
+    /// A process's exit, then its reap.
+    Exits,
     ClientToModel,
     ModelToClient,
 }
@@ -259,8 +279,11 @@ struct Mirror {
     withdrawn: BTreeSet<Token>,
     /// Inbound events the model sent down.
     sent: u64,
-    /// When it first had a reason to stop.
+    /// When it first had a reason to stop, and when the client stopped it.
     first_stop: Option<Time>,
+    stopped_at: Option<Time>,
+    /// The fault the client was told.
+    fault: Option<Fault>,
     /// io's requests in flight.
     pending: BTreeMap<Kind, u32>,
 }
@@ -351,7 +374,7 @@ pub struct World {
     tree: Tree,
 
     wire: Schedule<Delivery>,
-    lanes: [Time; 3],
+    lanes: [Time; 4],
 
     /// The agents the model spawned and that have not gone, by its tokens;
     /// and those tokens, by the client's.
@@ -373,6 +396,7 @@ impl World {
             fact: limits.fact_bytes,
             outcome: limits.outcome_bytes,
             snapshot: limits.snapshot_bytes,
+            long: limits.long_span,
         };
         let client = Client::new(settings.client, limits, rng.next_u64());
         let tree = Tree::new(settings.tree, settings.script, sizes, rng.next_u64());
@@ -386,7 +410,7 @@ impl World {
             client,
             tree,
             wire: Schedule::new(),
-            lanes: [Time::ZERO; 3],
+            lanes: [Time::ZERO; 4],
             mirrors: BTreeMap::new(),
             owners: BTreeMap::new(),
             stats: Stats::default(),
@@ -484,6 +508,7 @@ impl World {
                 if let Some(mirror) = self.mirrors.get_mut(agent) {
                     mirror.stopped = true;
                     mirror.first_stop.get_or_insert(self.now);
+                    mirror.stopped_at.get_or_insert(self.now);
                 }
                 Taken::Other
             }
@@ -523,6 +548,11 @@ impl World {
             }
             Event::Hangup { owner } => {
                 self.ended(*owner, Kind::Read);
+                let mirror = self.mirrors.get(owner).expect("io speaks of a spawned agent");
+                if mirror.listening {
+                    let path = if mirror.stopped { "hangup while cancelled" } else { "hangup while live" };
+                    *self.stats.paths.entry(path).or_default() += 1;
+                }
                 self.quiet(*owner);
                 Taken::Other
             }
@@ -678,11 +708,15 @@ impl World {
             Made::Finished { client, kind } => {
                 let mirror = self.mirror_of(client);
                 assert!(!mirror.told, "a client hears at most one finish or fault");
+                let late = mirror.terminating;
                 mirror.told = true;
                 mirror.finished = true;
                 mirror.listening = false;
                 mirror.first_stop.get_or_insert(now);
                 *self.stats.finishes.entry(kind).or_default() += 1;
+                if late {
+                    *self.stats.paths.entry("finish while terminating").or_default() += 1;
+                }
             }
             Made::Faulted { client, fault } => self.faulted(client, fault),
             Made::Bounced { bounce } => {
@@ -706,11 +740,17 @@ impl World {
                     End::Stopped => {
                         assert!(self.tree.is_gone(owner), "stopped only once the process exited and its tree is empty");
                         let first = mirror.first_stop.expect("an agent stops for a reason");
-                        let bound = first.saturating_add(limits.grace).saturating_add(limits.kill_after);
+                        // Past the kill, what it wrote is still read out
+                        // of the pipe.
+                        let bound = first
+                            .saturating_add(limits.grace)
+                            .saturating_add(limits.kill_after)
+                            .saturating_add(self.settings.tree.pipe.max);
                         assert!(
                             now <= bound.saturating_add(SLACK),
                             "a stopping agent is terminated, then killed, in time"
                         );
+                        self.silenced(owner, &mirror);
                     }
                     End::Unspawned => assert!(mirror.started.is_none(), "an agent unspawned never started"),
                     End::Busy | End::Invalid(_) => panic!("a spawn asked of io is not refused"),
@@ -756,6 +796,7 @@ impl World {
         let mirror = self.mirror_of(client);
         assert!(!mirror.told && !mirror.stopped, "a fault is told only while the run is live");
         mirror.told = true;
+        mirror.fault = Some(fault);
         mirror.listening = false;
         mirror.first_stop.get_or_insert(now);
         let started = mirror.started.expect("a faulted agent started");
@@ -776,6 +817,25 @@ impl World {
             Fault::Rules => {}
         }
         *self.stats.faults.entry(fault_kind(fault)).or_default() += 1;
+    }
+
+    /// An agent whose script hung while live, with no call waiting for an
+    /// answer, was stopped by the watchdog: unless the client stopped it, or
+    /// its wall time came, before the watchdog could fire.
+    fn silenced(&mut self, owner: Token, mirror: &Mirror) {
+        let limits = self.settings.agent;
+        let Some(hung) = self.tree.view(owner).hung else {
+            return;
+        };
+        if mirror.fault == Some(Fault::NoProgress) {
+            *self.stats.paths.entry("silence caught").or_default() += 1;
+            return;
+        }
+        let deadline = hung.saturating_add(limits.no_progress).saturating_add(SLACK);
+        let started = mirror.started.expect("a hung agent started");
+        let stopped = mirror.stopped_at.is_some_and(|at| at <= deadline);
+        let overdue = started.saturating_add(limits.wall_time) <= deadline;
+        assert!(stopped || overdue, "a run silent while live is stopped by the watchdog: {mirror:?}");
     }
 
     fn opened(&mut self, owner: Token, kind: Kind) {
@@ -824,7 +884,22 @@ impl World {
         for out in outs {
             match out {
                 tree::Out::Model { after, event } => {
-                    let at = self.lane(Lane::IoToModel, after);
+                    let lane = match event {
+                        Event::Received { .. } | Event::Malformed { .. } | Event::Hangup { .. } => Some(Lane::Reads),
+                        Event::Exited { .. } | Event::Reaped { .. } => Some(Lane::Exits),
+                        Event::Spawned { .. }
+                        | Event::Unspawned { .. }
+                        | Event::Sent { .. }
+                        | Event::Unsent { .. }
+                        | Event::Signalled { .. } => None,
+                        Event::Spawn { .. } | Event::Deliver { .. } | Event::Answer { .. } | Event::Stop { .. } => {
+                            unreachable!("io ends requests")
+                        }
+                    };
+                    let at = match lane {
+                        Some(lane) => self.lane(lane, after),
+                        None => self.now.saturating_add(after).saturating_add(self.settings.hop.draw(&mut self.rng)),
+                    };
                     self.wire.send(at, Delivery::Model(event));
                 }
                 tree::Out::Due { after, due } => {
@@ -873,9 +948,10 @@ impl World {
     /// and after what was sent on it before.
     fn lane(&mut self, lane: Lane, after: Duration) -> Time {
         let index = match lane {
-            Lane::IoToModel => 0,
-            Lane::ClientToModel => 1,
-            Lane::ModelToClient => 2,
+            Lane::Reads => 0,
+            Lane::Exits => 1,
+            Lane::ClientToModel => 2,
+            Lane::ModelToClient => 3,
         };
         let at = self.now.saturating_add(after).saturating_add(self.settings.hop.draw(&mut self.rng));
         let at = at.max(self.lanes[index]);
@@ -943,6 +1019,8 @@ impl Mirror {
             withdrawn: BTreeSet::new(),
             sent: 0,
             first_stop: None,
+            stopped_at: None,
+            fault: None,
             pending: BTreeMap::new(),
         }
     }

@@ -4,15 +4,17 @@
 //! protocol layer would encode and decode them.
 //!
 //! Once it hears its start, a run takes a number of steps, each after a
-//! while: a fact, a host call (some of which it waits for), a long operation
-//! (silent for up to its span), or a wait for an inbound event (parking if
-//! none comes within its idle time). Then it meets its fate: it ends, parks or
-//! fails as it says, and exits after a while (sometimes slowly, past the
+//! while: a fact, a host call (some of which it waits for, withdrawing one
+//! whose answer is later than its own deadline), a long operation (silent for
+//! up to its span, then done), or a wait for an inbound event (parking if
+//! none comes within its idle time). Then it meets its fate: it ends, parks
+//! or fails as it says, and exits after a while (sometimes slowly, past the
 //! grace); or it misbehaves: it crashes (exits without a word), hangs
 //! (silence), overruns (progress until its wall time), writes garbage, reuses
-//! a call's name before its answer, says more after its finish, says more
-//! than the limits allow, or stops reading its channel. A cancel winds it down
-//! to a cancelled failure, unless it ignores cancels; a terminate makes it
+//! a call's name or withdraws a call twice before its answer, says more after
+//! its finish, says more than the limits allow, stops reading its channel, or
+//! closes its output and exits. A cancel winds it down to a cancelled failure,
+//! unless it ignores cancels or closes its output at one; a terminate makes it
 //! exit after a while, unless it ignores that too, and a kill always does.
 //!
 //! It checks what it hears as it goes: the start first and once, inbound
@@ -32,12 +34,12 @@ pub enum Said {
         push: bool,
         body: Vec<u8>,
     },
-    Fact {
-        text: Vec<u8>,
-    },
     /// It withdraws its call `name`, past its own deadline for it.
     Withdraw {
         name: u64,
+    },
+    Fact {
+        text: Vec<u8>,
     },
     /// It started an operation that may run for `span`.
     Long {
@@ -101,13 +103,14 @@ pub enum Why {
     Stale,
 }
 
-/// The limits the agent writes within, or one byte past when it misbehaves.
+/// The limits the agent writes within, or just past when it misbehaves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Sizes {
     pub call: u64,
     pub fact: u64,
     pub outcome: u64,
     pub snapshot: u64,
+    pub long: Duration,
 }
 
 /// How scripted agents behave.
@@ -122,10 +125,12 @@ pub struct Script {
     pub longs: u32,
     pub waits: u32,
     /// The chance, per mille, that a call is a push, and that the run waits
-    /// for its answer.
+    /// for its answer; and its own deadline for a call it waits for, past
+    /// which it withdraws it.
     pub pushes: u32,
     pub blocking: u32,
-    /// The span a long operation announces; it ends within it.
+    pub call_deadline: Span,
+    /// The span a long operation announces; it is done within it.
     pub long: Span,
     /// How long a waiting run waits for an inbound event before it parks.
     pub idle: Span,
@@ -136,9 +141,10 @@ pub struct Script {
     pub exit: Span,
     pub slow_exits: u32,
     pub slow_exit: Span,
-    /// The chance, per mille, that it ignores a cancel, and how long it takes
-    /// to wind down when it does not.
+    /// The chance, per mille, that it ignores a cancel, and that it closes
+    /// its output at one and exits; and how long it takes to wind down.
     pub deaf_to_cancel: u32,
+    pub mute: u32,
     pub wind: Span,
     /// The chance, per mille, that it ignores a terminate, and how long it
     /// takes to exit when it does not.
@@ -160,6 +166,7 @@ pub struct Fates {
     pub trailing: u32,
     pub oversized: u32,
     pub deaf: u32,
+    pub mute: u32,
 }
 
 /// How a run ends, as its script has it.
@@ -176,6 +183,7 @@ pub enum Fate {
     Trailing,
     Oversized,
     Deaf,
+    Mute,
 }
 
 impl Fates {
@@ -192,6 +200,7 @@ impl Fates {
             (self.trailing, Fate::Trailing),
             (self.oversized, Fate::Oversized),
             (self.deaf, Fate::Deaf),
+            (self.mute, Fate::Mute),
         ];
         let total: u64 = weights.iter().map(|(weight, _)| u64::from(*weight)).sum();
         assert!(total > 0, "some fate has weight");
@@ -217,6 +226,8 @@ pub enum Act {
     Exit { after: Duration },
     /// It stops reading its channel.
     Deaf,
+    /// It closes its end of the channel up.
+    Close,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -225,8 +236,9 @@ enum Phase {
     Unstarted,
     /// It takes its steps.
     Working,
-    /// It waits for the answer to its call `name`.
-    Blocked { name: u64 },
+    /// It waits for the answer to its call `name`, which it has withdrawn
+    /// once its deadline passed.
+    Blocked { name: u64, withdrawn: bool },
     /// In a long operation, until its wake.
     Long,
     /// It waits for an inbound event, and parks at its wake.
@@ -248,7 +260,8 @@ pub struct View {
     pub fate: Fate,
     /// When it last wrote.
     pub last_write: Time,
-    /// When its last long operation's span runs out.
+    /// When its last long operation's span runs out, or when it said it was
+    /// done.
     pub long_until: Time,
     /// It waits for a call's answer, or for an inbound event.
     pub blocked: bool,
@@ -257,6 +270,9 @@ pub struct View {
     pub deaf: bool,
     /// It wrote its finish.
     pub finished: bool,
+    /// When it hung, if it did with no call waiting for an answer: its
+    /// silence must end with the watchdog.
+    pub hung: Option<Time>,
 }
 
 /// A scripted agent's run.
@@ -274,18 +290,19 @@ pub struct Agent {
     names: u64,
     /// Its calls without an answer, by name: a name it reused counts twice.
     awaiting: BTreeMap<u64, u32>,
-    /// Inbound events heard and not yet taken.
+    /// Inbound events heard and not yet taken, and read in all.
     events: u32,
-    last_event: Option<u64>,
-    /// Inbound events it has read.
     heard: u64,
+    last_event: Option<u64>,
     obeys_cancel: bool,
+    mute: bool,
     obeys_terminate: bool,
     slow_exit: bool,
     last_write: Time,
     long_until: Time,
     deaf: bool,
     finished: bool,
+    hung: Option<Time>,
 }
 
 impl Agent {
@@ -295,6 +312,7 @@ impl Agent {
         let fate = script.fates.draw(&mut rng);
         let steps = u32::try_from(rng.below(u64::from(script.steps) + 1)).expect("fits");
         let obeys_cancel = !rng.chance(script.deaf_to_cancel);
+        let mute = rng.chance(script.mute);
         let obeys_terminate = !rng.chance(script.stubborn);
         let slow_exit = rng.chance(script.slow_exits);
         Agent {
@@ -308,38 +326,42 @@ impl Agent {
             names: 0,
             awaiting: BTreeMap::new(),
             events: 0,
-            last_event: None,
             heard: 0,
+            last_event: None,
             obeys_cancel,
+            mute,
             obeys_terminate,
             slow_exit,
             last_write: Time::ZERO,
             long_until: Time::ZERO,
             deaf: false,
             finished: false,
+            hung: None,
         }
     }
 
     #[must_use]
     pub fn view(&self) -> View {
+        let blocked = match self.phase {
+            Phase::Blocked { .. } => true,
+            Phase::Unstarted
+            | Phase::Working
+            | Phase::Long
+            | Phase::Waiting
+            | Phase::Hung
+            | Phase::Overrunning
+            | Phase::Winding
+            | Phase::Done => false,
+        };
         View {
             fate: self.fate,
             last_write: self.last_write,
             long_until: self.long_until,
-            blocked: match self.phase {
-                Phase::Blocked { .. } => true,
-                Phase::Unstarted
-                | Phase::Working
-                | Phase::Long
-                | Phase::Waiting
-                | Phase::Hung
-                | Phase::Overrunning
-                | Phase::Winding
-                | Phase::Done => false,
-            },
+            blocked,
             waiting: self.phase == Phase::Waiting,
             deaf: self.deaf,
             finished: self.finished,
+            hung: self.hung,
         }
     }
 
@@ -373,7 +395,18 @@ impl Agent {
                 if *count == 0 {
                     self.awaiting.remove(&name);
                 }
-                if self.phase == (Phase::Blocked { name }) {
+                let unblocked = match self.phase {
+                    Phase::Blocked { name: blocked, .. } => blocked == name,
+                    Phase::Unstarted
+                    | Phase::Working
+                    | Phase::Long
+                    | Phase::Waiting
+                    | Phase::Hung
+                    | Phase::Overrunning
+                    | Phase::Winding
+                    | Phase::Done => false,
+                };
+                if unblocked {
                     self.phase = Phase::Working;
                     self.next(&mut acts);
                 }
@@ -387,7 +420,13 @@ impl Agent {
                 | Phase::Waiting
                 | Phase::Hung
                 | Phase::Overrunning => {
-                    if self.obeys_cancel {
+                    if self.mute {
+                        // It closes its output, and exits after a while.
+                        self.phase = Phase::Done;
+                        self.serial += 1;
+                        acts.push(Act::Close);
+                        acts.push(Act::Exit { after: self.script.wind.draw(&mut self.rng) });
+                    } else if self.obeys_cancel {
                         self.phase = Phase::Winding;
                         let wind = self.script.wind.draw(&mut self.rng);
                         self.wake(wind, &mut acts);
@@ -406,6 +445,12 @@ impl Agent {
         }
         match self.phase {
             Phase::Working => self.step(now, &mut acts),
+            // Its own deadline for the call passed: it withdraws it, and
+            // waits for the answer all the same.
+            Phase::Blocked { name, withdrawn: false } => {
+                self.write(now, Said::Withdraw { name }, &mut acts);
+                self.phase = Phase::Blocked { name, withdrawn: true };
+            }
             Phase::Long => {
                 self.write(now, Said::LongDone, &mut acts);
                 self.long_until = now;
@@ -421,7 +466,7 @@ impl Agent {
                 self.next(&mut acts);
             }
             Phase::Winding => self.finish(now, Said::Failed { why: Why::Cancelled }, &mut acts),
-            Phase::Unstarted | Phase::Blocked { .. } | Phase::Hung | Phase::Done => {
+            Phase::Unstarted | Phase::Blocked { withdrawn: true, .. } | Phase::Hung | Phase::Done => {
                 unreachable!("no wake is armed in {:?}", self.phase)
             }
         }
@@ -453,12 +498,14 @@ impl Agent {
         if roll < script.calls {
             let name = self.call(now, acts);
             if self.rng.chance(script.blocking) {
-                self.phase = Phase::Blocked { name };
+                self.phase = Phase::Blocked { name, withdrawn: false };
+                let deadline = script.call_deadline.draw(&mut self.rng);
+                self.wake(deadline, acts);
             } else {
                 self.next(acts);
             }
         } else if roll < script.calls + script.longs {
-            let span = script.long.draw(&mut self.rng);
+            let span = script.long.draw(&mut self.rng).min(self.sizes.long);
             self.write(now, Said::Long { span }, acts);
             self.long_until = now.saturating_add(span);
             self.phase = Phase::Long;
@@ -509,7 +556,17 @@ impl Agent {
                 self.phase = Phase::Done;
                 acts.push(Act::Exit { after: Duration::ZERO });
             }
-            Fate::Hang => self.phase = Phase::Hung,
+            Fate::Mute => {
+                self.phase = Phase::Done;
+                acts.push(Act::Close);
+                acts.push(Act::Exit { after: self.script.exit.draw(&mut self.rng) });
+            }
+            Fate::Hang => {
+                self.phase = Phase::Hung;
+                if self.awaiting.is_empty() {
+                    self.hung = Some(now);
+                }
+            }
             Fate::Overrun => {
                 self.phase = Phase::Overrunning;
                 self.next(acts);
@@ -519,12 +576,17 @@ impl Agent {
                 self.phase = Phase::Hung;
             }
             Fate::Duplicate => {
-                // The same name twice, back to back: the second comes up
-                // before the first can have been answered.
+                // The same name twice back to back, or a withdraw twice: the
+                // second comes up before the first can have been answered.
                 let name = self.call(now, acts);
-                let body = self.bytes(self.sizes.call);
-                self.write(now, Said::Call { name, push: false, body }, acts);
-                *self.awaiting.entry(name).or_default() += 1;
+                if self.rng.chance(500) {
+                    let body = self.bytes(self.sizes.call);
+                    self.write(now, Said::Call { name, push: false, body }, acts);
+                    *self.awaiting.entry(name).or_default() += 1;
+                } else {
+                    self.write(now, Said::Withdraw { name }, acts);
+                    self.write(now, Said::Withdraw { name }, acts);
+                }
                 self.fate = Fate::Ended;
                 self.next(acts);
             }
@@ -534,8 +596,13 @@ impl Agent {
                 self.write(now, Said::Fact { text: b"and one more thing".to_vec() }, acts);
             }
             Fate::Oversized => {
-                let text = vec![b'o'; usize::try_from(self.sizes.fact + 1).expect("fits")];
-                self.write(now, Said::Fact { text }, acts);
+                if self.rng.chance(500) {
+                    let text = vec![b'o'; usize::try_from(self.sizes.fact + 1).expect("fits")];
+                    self.write(now, Said::Fact { text }, acts);
+                } else {
+                    let span = self.sizes.long.saturating_add(Duration::from_secs(1));
+                    self.write(now, Said::Long { span }, acts);
+                }
                 self.phase = Phase::Hung;
             }
         }
