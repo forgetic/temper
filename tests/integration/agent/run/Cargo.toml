@@ -15,7 +15,7 @@ temper-world.workspace = true
 # Ordinary Rust (programming-model.md, 10.2), so not the step crates' lints.
 # tests/integration/clippy.toml bans what would make a run unrepeatable.
 [lints.rust]
-unsafe_code = "deny"                  # not forbid: tests/memory.rs's counting allocator expects it
+unsafe_code = "forbid"
 elided_lifetimes_in_paths = "deny"
 unused_must_use = "deny"
 

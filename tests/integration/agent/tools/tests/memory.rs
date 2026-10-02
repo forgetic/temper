@@ -2,64 +2,18 @@
 //! a counting allocator: the tools sub-model with every kit holding the
 //! longest authority, knowing as many files as it may at the longest paths,
 //! and running as many edits, writes and reads as it may; and the model driven
-//! at random through every terminal io may give, measured after every step.
+//! at random through every terminal io may give, its peak measured in every
+//! step.
 
 use temper_agent_model_tools::{
     Authority, Call, Done, Entry, Event, Exit, Expect, Fault, Grants, Hit, Kind, Limits, Model, Name, Op, Part, Path,
     Repo, Request, Var, Version, max_out, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
+use temper_world::heap::{self, Meter};
 
-/// Counts the heap each thread allocates, so that tests running side by side
-/// do not see each other's.
-#[expect(unsafe_code, reason = "a global allocator is an unsafe impl; it only counts, and System allocates")]
-mod heap {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-
-    struct Counting;
-
-    #[global_allocator]
-    static COUNTING: Counting = Counting;
-
-    thread_local! {
-        // Const-initialised and without a destructor: reading it never
-        // allocates, so the allocator can use it.
-        static LIVE: Cell<i64> = const { Cell::new(0) };
-    }
-
-    fn count(layout: Layout, sign: i64) {
-        let size = i64::try_from(layout.size()).unwrap_or(i64::MAX);
-        LIVE.with(|live| live.set(live.get().wrapping_add(size.wrapping_mul(sign))));
-    }
-
-    // SAFETY: every call is passed to System unchanged; counting touches no
-    // memory the caller sees. realloc and alloc_zeroed keep their default
-    // bodies, which call these two.
-    unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            count(layout, 1);
-            // SAFETY: the caller upholds alloc's contract, which is System's.
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            count(layout, -1);
-            // SAFETY: `ptr` came from System.alloc with `layout`, above.
-            unsafe { System.dealloc(ptr, layout) }
-        }
-    }
-
-    /// Heap this thread allocated and has not freed, in bytes.
-    pub fn live() -> i64 {
-        LIVE.with(Cell::get)
-    }
-}
-
-/// Bytes allocated on this thread since `base` and not freed.
-fn held(base: i64) -> u64 {
-    u64::try_from(heap::live() - base).expect("nothing freed that was not allocated since the base")
-}
+#[global_allocator]
+static HEAP: heap::Counting = heap::Counting;
 
 const LIMITS: Limits = Limits {
     kits: 2,
@@ -137,22 +91,24 @@ fn edit(limits: &Limits, file: u64) -> Call {
     Call::Edit { path: path(limits, file), old: full(limits, b'x'), new: full(limits, b'y'), all: true }
 }
 
-/// Fills every kit of a model under `limits` to its limits, checking the heap
-/// against the worst case after every step: it knows twice as many files as
-/// it may, the oldest forgotten, then runs as many calls as it may at once,
-/// writes of the files it knows and reads.
+/// Fills every kit of a model under `limits` to its limits, checking the peak
+/// of the heap in every step against the worst case: it knows twice as many
+/// files as it may, the oldest forgotten, then runs as many calls as it may at
+/// once, writes of the files it knows and reads.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
     let mut out = Queue::with_capacity(max_out(&limits));
-    let base = heap::live();
+    let meter = Meter::new();
     let mut model = Model::new(&limits);
     // Each step is an iteration of its own, ending at the reclaim point. The
     // requests are the session's and io's to hold and count: each is dropped,
-    // keeping only the token it names, before the heap is measured.
+    // keeping only the token it names, and the step's peak checked less them.
     let mut step = |event: Event| -> Vec<Token> {
+        meter.start();
         temper_agent_model_tools::step(&mut model, &env, event, &mut out);
         model.reclaim();
+        let measured = meter.end();
         let mut named = Vec::new();
         while let Some(request) = out.pop() {
             match request {
@@ -164,8 +120,7 @@ fn fill(limits: Limits) {
                 }
             }
         }
-        let held = held(base);
-        assert!(held <= bound, "{limits:?}: the model holds {held} bytes, more than its worst case of {bound}");
+        meter.check(measured, bound, limits);
         named
     };
     let deadline = Time::ZERO.saturating_add(Duration::from_secs(60));
@@ -193,7 +148,7 @@ fn fill(limits: Limits) {
             assert_eq!(step(Event::Call { kit, reply_to, call, deadline }).len(), 1, "{limits:?}: the call runs");
         }
     }
-    let held = held(base);
+    let held = meter.held();
     let known = u64::from(limits.kits) * u64::from(limits.known_files) * u64::from(limits.path_bytes);
     assert!(held >= known, "{limits:?}: every kit knows as many files as it may, at the longest paths");
     drop(model);
@@ -219,8 +174,9 @@ enum Asked {
 /// Drives a model under `limits` at random for `rounds` steps, each an
 /// iteration of its own: kits open and close, calls of every kind arrive,
 /// some past their deadline, and io ends operations in any terminal it may,
-/// in any order. The heap is checked against the worst case after every step;
-/// once every kit has closed and every operation ended, nothing is left.
+/// in any order. The peak of the heap in every step is checked against the
+/// worst case; once every kit has closed and every operation ended, nothing is
+/// left.
 fn churn(limits: Limits, seed: u64, rounds: u32) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let mut env = Env { now: Time::ZERO, limits };
@@ -232,7 +188,7 @@ fn churn(limits: Limits, seed: u64, rounds: u32) {
     let mut ops: Vec<(Token, Asked)> = Vec::with_capacity(slots);
     let mut out = Queue::with_capacity(max_out(&limits));
     let mut counted = [0; 6];
-    let base = heap::live();
+    let meter = Meter::new();
     let mut model = Model::new(&limits);
     for round in 0..u64::from(rounds) {
         env.now = Time::from_nanos(round * 1_000_000);
@@ -255,11 +211,12 @@ fn churn(limits: Limits, seed: u64, rounds: u32) {
             _ => None,
         };
         let Some(event) = event else { continue };
+        meter.start();
         temper_agent_model_tools::step(&mut model, &env, event, &mut out);
-        drain(&mut out, &mut kits, &mut ops, &mut counted);
         model.reclaim();
-        let held = held(base);
-        assert!(held <= bound, "{limits:?}: the model holds {held} bytes, more than its worst case of {bound}");
+        let measured = meter.end();
+        drain(&mut out, &mut kits, &mut ops, &mut counted);
+        meter.check(measured, bound, limits);
     }
     // Everything settles: every kit closes, and io ends what is in flight.
     while let Some(kit) = kits.pop() {

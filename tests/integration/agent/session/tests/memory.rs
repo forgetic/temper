@@ -11,57 +11,10 @@ use temper_agent_model_session::{Budget, Event, Limits, MAX_PARALLEL, Model, Req
 use temper_agent_model_session_tests::TOOLS;
 use temper_agent_model_tools::{Authority, Call, Done, Effect, Grants, Name, Part, Path, Repo, Version};
 use temper_lib::{Deadlines, Duration, Env, List, Map, Queue, Rng, Set, Slab, Time, Token};
+use temper_world::heap::{self, Meter};
 
-/// Counts the heap each thread allocates, so that tests running side by side
-/// do not see each other's.
-#[expect(unsafe_code, reason = "a global allocator is an unsafe impl; it only counts, and System allocates")]
-mod heap {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-
-    struct Counting;
-
-    #[global_allocator]
-    static COUNTING: Counting = Counting;
-
-    thread_local! {
-        // Const-initialised and without a destructor: reading it never
-        // allocates, so the allocator can use it.
-        static LIVE: Cell<i64> = const { Cell::new(0) };
-    }
-
-    fn count(layout: Layout, sign: i64) {
-        let size = i64::try_from(layout.size()).unwrap_or(i64::MAX);
-        LIVE.with(|live| live.set(live.get().wrapping_add(size.wrapping_mul(sign))));
-    }
-
-    // SAFETY: every call is passed to System unchanged; counting touches no
-    // memory the caller sees. realloc and alloc_zeroed keep their default
-    // bodies, which call these two.
-    unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            count(layout, 1);
-            // SAFETY: the caller upholds alloc's contract, which is System's.
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            count(layout, -1);
-            // SAFETY: `ptr` came from System.alloc with `layout`, above.
-            unsafe { System.dealloc(ptr, layout) }
-        }
-    }
-
-    /// Heap this thread allocated and has not freed, in bytes.
-    pub fn live() -> i64 {
-        LIVE.with(Cell::get)
-    }
-}
-
-/// Bytes allocated on this thread since `base` and not freed.
-fn held(base: i64) -> u64 {
-    u64::try_from(heap::live() - base).expect("nothing freed that was not allocated since the base")
-}
+#[global_allocator]
+static HEAP: heap::Counting = heap::Counting;
 
 fn bytes(len: u64) -> Box<[u8]> {
     vec![b'x'; usize::try_from(len).expect("a test length fits")].into_boxed_slice()
@@ -135,7 +88,8 @@ enum Route {
 
 /// Fills every session of a model under `limits` to exactly its byte limit by
 /// `route` and leaves it in backoff, the state that also holds both of its
-/// alarms, checking the heap against the worst case after every step. Its
+/// alarms, checking the peak of the heap in every step against the worst case.
+/// Its
 /// tools have a kit for each session, and room for its widest batch.
 fn fill(limits: Limits, route: Route) {
     let tools = temper_agent_model_tools::Limits {
@@ -147,13 +101,15 @@ fn fill(limits: Limits, route: Route) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
     let mut out = Queue::with_capacity(max_out(&limits));
-    let base = heap::live();
+    let meter = Meter::new();
     let mut model = Model::new(&limits, 1);
     // The requests are the protocol layer's and the opener's to hold and
-    // count: each is dropped, keeping only what it asked for, before the heap
-    // is measured.
+    // count: each is dropped, keeping only what it asked for, and the step's
+    // peak checked less them.
     let mut step = |event: Event| -> Option<Asked> {
+        meter.start();
         temper_agent_model_session::step(&mut model, &env, event, &mut out);
+        let measured = meter.end();
         let mut asked = None;
         while let Some(request) = out.pop() {
             asked = Some(match request {
@@ -169,8 +125,7 @@ fn fill(limits: Limits, route: Route) {
                 | Request::Withdraw { .. } => Asked::Other,
             });
         }
-        let held = held(base);
-        assert!(held <= bound, "{limits:?}: the model holds {held} bytes, more than its worst case of {bound}");
+        meter.check(measured, bound, limits);
         asked
     };
     let (block, part) = (size(size_of::<Block>()), size(size_of::<Part>()));
@@ -244,7 +199,7 @@ fn fill(limits: Limits, route: Route) {
         let backoff = step(Event::Failed { owner, failure: Failure::Overloaded });
         assert!(backoff.is_none(), "a transient failure backs off quietly");
     }
-    let held = held(base);
+    let held = meter.held();
     let full = u64::from(limits.sessions) * limits.session_bytes;
     assert!(held >= full, "{limits:?}: every session holds its byte limit");
 }
@@ -260,22 +215,23 @@ fn a_model_with_every_session_full_stays_within_its_worst_case() {
 }
 
 /// Arms, re-arms, cancels and fires timers at random in a table of `capacity`,
-/// checking its heap against its worst case after every change. The bound
+/// checking the peak of its heap in every change against its worst case. The
+/// bound
 /// leans on how the standard library builds its B-trees, which this checks.
 fn churn<K: Ord + Copy>(capacity: u32, seed: u64, key: fn(u64) -> K) {
     let bound = Deadlines::<K>::worst_case(capacity).expect("a test capacity fits");
     let mut rng = Rng::new(seed);
-    let base = heap::live();
+    let meter = Meter::new();
     let mut timers = Deadlines::with_capacity(capacity);
     let keys = u64::from(capacity) * 2;
     for round in 0..u64::from(capacity) * 20 {
+        meter.start();
         match rng.below(8) {
             0..=4 => drop(timers.arm(key(rng.below(keys)), Time::from_nanos(round + rng.below(keys)))),
             5 | 6 => timers.cancel(key(rng.below(keys))),
             _ => drop(timers.expire(Time::from_nanos(round))),
         }
-        let held = held(base);
-        assert!(held <= bound, "{capacity} timers hold {held} bytes, more than their worst case of {bound}");
+        meter.check(meter.end(), bound, format_args!("{capacity} timers"));
     }
 }
 
@@ -291,16 +247,19 @@ fn a_deadline_table_stays_within_its_worst_case_whatever_its_keys_and_order() {
 }
 
 /// Inserts, replaces, updates and removes entries at random in a map of
-/// `capacity`, checking its heap against its worst case after every change.
-/// `payload` is the heap each entry's key and value own, which is the owner's
-/// to count: the bound adds it per entry held.
+/// `capacity`, checking the peak of its heap in every change against its worst
+/// case. `payload` is the heap each entry's key and value own, which is the
+/// owner's to count: the bound adds it for each entry held, and for the key
+/// handed in.
 fn traffic<K: Ord, V>(capacity: u32, seed: u64, key: fn(u64) -> K, value: fn(u64) -> V, payload: u64) {
     let bound = Map::<K, V>::worst_case(capacity).expect("a test capacity fits");
     let mut rng = Rng::new(seed);
-    let base = heap::live();
+    let meter = Meter::new();
     let mut map = Map::with_capacity(capacity);
     let keys = u64::from(capacity) * 2;
     for _ in 0..u64::from(capacity) * 20 {
+        let owned = (u64::from(map.len()) + 1) * payload;
+        meter.start();
         match rng.below(8) {
             0..=4 => drop(map.insert(key(rng.below(keys)), value(rng.next_u64()))),
             5 => {
@@ -310,12 +269,7 @@ fn traffic<K: Ord, V>(capacity: u32, seed: u64, key: fn(u64) -> K, value: fn(u64
             }
             _ => drop(map.remove(&key(rng.below(keys)))),
         }
-        let held = held(base);
-        let owned = u64::from(map.len()) * payload;
-        assert!(
-            held <= bound + owned,
-            "{capacity} entries hold {held} bytes, more than their worst case of {bound} and {owned}"
-        );
+        meter.check(meter.end(), bound + owned, format_args!("{capacity} entries"));
     }
 }
 
@@ -323,17 +277,17 @@ fn traffic<K: Ord, V>(capacity: u32, seed: u64, key: fn(u64) -> K, value: fn(u64
 fn members<K: Ord>(capacity: u32, seed: u64, key: fn(u64) -> K) {
     let bound = Set::<K>::worst_case(capacity).expect("a test capacity fits");
     let mut rng = Rng::new(seed);
-    let base = heap::live();
+    let meter = Meter::new();
     let mut set = Set::with_capacity(capacity);
     let keys = u64::from(capacity) * 2;
     for _ in 0..u64::from(capacity) * 20 {
+        meter.start();
         if rng.chance(600) {
             drop(set.insert(key(rng.below(keys))));
         } else {
             let _: bool = set.remove(&key(rng.below(keys)));
         }
-        let held = held(base);
-        assert!(held <= bound, "{capacity} keys hold {held} bytes, more than their worst case of {bound}");
+        meter.check(meter.end(), bound, format_args!("{capacity} keys"));
     }
 }
 
@@ -355,15 +309,21 @@ fn maps_and_sets_stay_within_their_worst_case_whatever_their_keys_and_values() {
 #[test]
 fn slabs_lists_and_queues_take_no_more_than_their_worst_case() {
     for capacity in [0, 1, 100] {
-        let base = heap::live();
+        let meter = Meter::new();
+        meter.start();
         let slab: Slab<[u64; 5]> = Slab::with_capacity(capacity);
-        assert!(held(base) <= Slab::<[u64; 5]>::worst_case(capacity).expect("fits"), "a slab of {capacity}");
+        let bound = Slab::<[u64; 5]>::worst_case(capacity).expect("fits");
+        meter.check(meter.end(), bound, format_args!("a slab of {capacity}"));
         drop(slab);
+        meter.start();
         let list: List<[u64; 5]> = List::with_capacity(capacity);
-        assert!(held(base) <= List::<[u64; 5]>::worst_case(capacity).expect("fits"), "a list of {capacity}");
+        let bound = List::<[u64; 5]>::worst_case(capacity).expect("fits");
+        meter.check(meter.end(), bound, format_args!("a list of {capacity}"));
         drop(list);
+        meter.start();
         let queue: Queue<[u64; 5]> = Queue::with_capacity(capacity);
-        assert!(held(base) <= Queue::<[u64; 5]>::worst_case(capacity).expect("fits"), "a queue of {capacity}");
+        let bound = Queue::<[u64; 5]>::worst_case(capacity).expect("fits");
+        meter.check(meter.end(), bound, format_args!("a queue of {capacity}"));
         drop(queue);
     }
 }

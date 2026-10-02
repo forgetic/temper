@@ -11,57 +11,10 @@ use temper_agent_model_run::{
     Spend, Stop, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Time, Token};
+use temper_world::heap::{self, Meter};
 
-/// Counts the heap each thread allocates, so that tests running side by side
-/// do not see each other's.
-#[expect(unsafe_code, reason = "a global allocator is an unsafe impl; it only counts, and System allocates")]
-mod heap {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-
-    struct Counting;
-
-    #[global_allocator]
-    static COUNTING: Counting = Counting;
-
-    thread_local! {
-        // Const-initialised and without a destructor: reading it never
-        // allocates, so the allocator can use it.
-        static LIVE: Cell<i64> = const { Cell::new(0) };
-    }
-
-    fn count(layout: Layout, sign: i64) {
-        let size = i64::try_from(layout.size()).unwrap_or(i64::MAX);
-        LIVE.with(|live| live.set(live.get().wrapping_add(size.wrapping_mul(sign))));
-    }
-
-    // SAFETY: every call is passed to System unchanged; counting touches no
-    // memory the caller sees. realloc and alloc_zeroed keep their default
-    // bodies, which call these two.
-    unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            count(layout, 1);
-            // SAFETY: the caller upholds alloc's contract, which is System's.
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            count(layout, -1);
-            // SAFETY: `ptr` came from System.alloc with `layout`, above.
-            unsafe { System.dealloc(ptr, layout) }
-        }
-    }
-
-    /// Heap this thread allocated and has not freed, in bytes.
-    pub fn live() -> i64 {
-        LIVE.with(Cell::get)
-    }
-}
-
-/// Bytes allocated on this thread since `base` and not freed.
-fn held(base: i64) -> u64 {
-    u64::try_from(heap::live() - base).expect("nothing freed that was not allocated since the base")
-}
+#[global_allocator]
+static HEAP: heap::Counting = heap::Counting;
 
 fn bytes(len: u64) -> Box<[u8]> {
     vec![b'x'; usize::try_from(len).expect("a test length fits")].into_boxed_slice()
@@ -154,19 +107,21 @@ enum Asked {
 /// answers with more than the answer limit, and finish with a change of
 /// exactly the outcome limit, which is checked and pushed: each run ends
 /// winding down with the change, while the calls that returned still hold
-/// their copies until the reclaim point. The heap is checked against the
-/// worst case after every step.
+/// their copies until the reclaim point. The peak of the heap in every step is
+/// checked against the worst case.
 fn fill(limits: Limits) {
     let bound = worst_case(&limits).expect("the test limits fit");
     let env = Env { now: Time::ZERO, limits };
     let mut out = Queue::with_capacity(MAX_OUT);
-    let base = heap::live();
+    let meter = Meter::new();
     let mut model = Model::new(&limits);
     // The requests are the parent's to route and their receivers' to count:
-    // each is dropped, keeping only what it asked for, before the heap is
-    // measured.
+    // each is dropped, keeping only what it asked for, and the step's peak
+    // checked less them.
     let mut step = |event: Event| -> Vec<Asked> {
+        meter.start();
         temper_agent_model_run::step(&mut model, &env, event, &mut out);
+        let measured = meter.end();
         let mut asked = Vec::new();
         while let Some(request) = out.pop() {
             asked.push(match request {
@@ -185,8 +140,7 @@ fn fill(limits: Limits) {
                 | Request::Return { .. } => Asked::Other,
             });
         }
-        let held = held(base);
-        assert!(held <= bound, "{limits:?}: the model holds {held} bytes, more than its worst case of {bound}");
+        meter.check(measured, bound, limits);
         asked
     };
     let spend = Spend { turns: 1, input: 1, output: 1, cache_read: 1, cache_write: 1 };
@@ -231,7 +185,7 @@ fn fill(limits: Limits) {
         assert_eq!(step(Event::Checked { owner, ran }), [Asked::Other], "checked, it is pushed");
         assert_eq!(step(Event::Pushed { owner, push: Push::Done }), [Asked::Other, Asked::Other], "accepted");
     }
-    let held = held(base);
+    let held = meter.held();
     let charters = limits.run_bytes + u64::from(limits.guide_bytes);
     let full = u64::from(limits.runs) * (charters + 2 * limits.outcome_bytes + u64::from(limits.answer_bytes));
     assert!(held >= full, "{limits:?}: every run holds its byte limit");
