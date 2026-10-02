@@ -43,7 +43,7 @@ what is still open is listed in section 9.
 
 ```
 engine   workflow and forge authority: what work exists, for whom; applies outcomes
-worker   checkouts and gates: starts runs, relays their host calls, pushes their branches
+worker   checkouts: starts runs, relays their host calls, pushes their changes
 agent    LLM work: runs sessions with tools, reports facts and outcomes to the worker
 ```
 
@@ -51,13 +51,16 @@ agent    LLM work: runs sessions with tools, reports facts and outcomes to the w
   makes every change (pull requests, bodies, comments, child issues,
   labels), and answers the forge reads and outlets a run asks for. The
   worker's one write is pushing a run's branch, over git.
+- **The engine never reads a repository.** It works from forge state:
+  issues, pull requests, labels, reviews, CI. What a checkout holds, such
+  as a repository's `AGENTS.md` or its checks, is for the run to find.
 - **The worker starts a run** with a charter (4.1). Credentials never reach
   the model: it names an LLM endpoint, and the protocol layer holds the
   rest.
-- **The agent acts on the world only through the worker:** the pre-push
-  gate, which the worker runs, and the forge reads and outlets its charter
-  grants (4.3), which the worker relays to the engine. It never pushes,
-  merges or writes to the forge on its own authority.
+- **The agent acts on the world only through the worker:** pushing a
+  change, which the worker does, and the forge reads and outlets its
+  charter grants (4.3), which the worker relays to the engine. It never
+  pushes, merges or writes to the forge on its own authority.
 - **Retrying a failed run is decided above the run,** across attempts. A
   run answers once and is done.
 
@@ -90,10 +93,11 @@ What the worker gives a run when it starts it, most of it from the engine's
 assignment:
 
 - **Brief.** Text for the LLM: the work item and its lineage, the role's
-  charter, the action's guidance, the repository's `AGENTS.md`, rendered by
-  the engine, which holds the forge and the workflow. The agent adds only
-  the sections about its own mechanics (its tools, its checkout, how to
-  finish), because those are what it enforces.
+  charter, the action's guidance, rendered by the engine, which holds the
+  forge and the workflow. The agent adds what it finds in the checkout
+  (the repository's `AGENTS.md`) and the sections about its own mechanics
+  (its tools, its checkout, how to finish), because those are what it
+  enforces.
 - **Checkout.** The repositories, where they sit, and which may be
   written: the effective write authority, decided by the engine and
   enforced by the tools, not stated in prose.
@@ -103,7 +107,8 @@ assignment:
 - **Outcome spec.** What counts as done: a change (the diff, with a title
   and body for its pull request), a verdict from a closed list with a
   contract per verdict (how many children, of which kinds, which fields are
-  required), or either.
+  required), or either. For a change, it also says whether the
+  repository's checks must pass (4.4).
 - **Budget.** Turns, tokens and wall time for the whole run, across all
   its sessions. It is checked at the entrance against the agent's
   `Limits`; a run that asks for more is refused.
@@ -151,7 +156,7 @@ runs use one of each.
 
 | Agent | Inbound | Outlets | Ends when |
 |---|---|---|---|
-| coding job | the request | finish with a change | the change passes the gate |
+| coding job | the request | finish with a change | the change passes its checks |
 | review, triage | the request | finish with a verdict | the verdict meets its contract |
 | design session | human messages | reply, propose issues | the human closes it, or it idles |
 | feature coordinator | progress, human questions | reply, comment, open issues | its report is written |
@@ -160,10 +165,26 @@ runs use one of each.
 
 `finish` is a tool, not a convention about the last message. Its input is
 the outcome, typed by the protocol layer; the run checks it against the
-outcome spec and answers with acceptance or with what is wrong. For a
-change, finishing runs the worker's pre-push gate in the same call, and a
-failing gate is feedback like any other. An LLM that stops without
-finishing is nudged by the run, within its budget.
+outcome spec and answers with acceptance or with what is wrong. An LLM
+that stops without finishing is nudged by the run, within its budget.
+
+For a change, finishing also runs the repository's checks, when the
+outcome spec asks for them, and then asks the worker to push:
+
+- **The repository says what its checks are,** by convention: an
+  executable at a known path, such as `.temper/pre-pr`, looked up when the
+  run starts. A repository without one has no checks, and nothing above
+  the agent needs to know either way.
+- **Checked is pushed.** The checks run as contained processes with
+  deadlines, while nothing else writes to the checkout, and the worker then
+  commits and pushes exactly that tree.
+- **Failures are feedback,** like any other: a failing check comes back
+  with its output, and a push that finds the branch moved says so.
+- **Not a security boundary.** An agent can change what a check runs; CI
+  on the forge and the engine's rules guard landing. The checks catch
+  failures early, inside the run that can fix them.
+
+Proposing a change mid-run, as a session does, goes the same way.
 
 ### 4.5 Lifetime
 
@@ -252,11 +273,11 @@ search, write, edit and shell.
 
 Not yet discussed in depth. Each sub-model pushes what happened as typed
 facts into a bounded queue (programming-model.md, section 3): a run
-admitted or ended, an LLM call started, retried or finished, a tool started
-or finished, the usage of each turn. The protocol layer projects them for
-the worker: a content-free stream for liveness, and an optional trace whose
-content follows a capture policy. Nothing the agent decides depends on
-whether a fact is delivered.
+admitted or ended, an LLM call started, retried or finished, a tool or a
+check started (with its deadline) or finished, the usage of each turn.
+The protocol layer projects them for the worker: a content-free stream for
+liveness, and an optional trace whose content follows a capture policy.
+Nothing the agent decides depends on whether a fact is delivered.
 
 ## 8. Below the model
 
@@ -266,7 +287,8 @@ to be designed after it:
 - **LLM providers:** HTTP, server-sent events and JSON for each provider
   API; tool schemas and decoding; classifying failures; refreshing
   credentials.
-- **The worker:** one framed channel carrying requests, answers, facts,
+- **The worker:** one agent process per run (worker-model.md, section 6),
+  and one framed channel over its pipes carrying requests, answers, facts,
   cancels and the run's host calls.
 - **MCP servers,** over a child process's pipes.
 - **Files and processes,** through io: contained process trees,
@@ -283,6 +305,3 @@ to be designed after it:
 - **Facts and the layers below** (sections 7 and 8).
 - **Long-lived runs:** where their state would be kept, and how a live run
   is addressed.
-- **Process shape:** one agent process per run, or one agent service
-  hosting many. Short-lived runs work with either; the model sees only the
-  capacity of its run slab.
