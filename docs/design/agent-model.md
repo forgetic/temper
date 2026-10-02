@@ -4,7 +4,8 @@ Provisional, 2026-10-02. What the temper agent does, as a model layer: its
 parts, what each is responsible for, and how they fit together. The
 mechanics are those of `programming-model.md`; this document says what the
 agent's model is made of. Each part's details are settled as it is built;
-what is still open is listed in section 9.
+what is still open is listed in section 9, and what is not built yet in
+section 10.
 
 ## 1. In one page
 
@@ -331,3 +332,24 @@ to be designed after it:
 - **Long-lived runs:** what a run puts in its snapshot. The engine keeps
   snapshots as a cache and addresses a run through its item
   (engine-model.md, section 6).
+
+## 10. Not built yet
+
+The model layer runs everything above in its worlds. What it does not do
+yet, each to be designed before it is built:
+
+- **Context management** (section 5): eliding old tool output as a
+  transcript nears its limit, then a summarising session.
+- **MCP servers as a tool source** (sections 5 and 6): calls that leave
+  the model as opaque payloads, starting with the code graph that
+  complements `rg`.
+- **Forge reads, outlets beyond finish, and inbound events beyond the
+  first request** (4.3), which the engine answers through the worker
+  (engine-model.md).
+- **Facts for the worker** (section 7): the content-free stream for
+  liveness and the trace, projected by the protocol layer.
+- **The environment commands run with** (section 6): empty today, so no
+  `PATH`; what a command needs to build and test, without credentials.
+- **The layers below the model** (section 8), including one io vocabulary
+  for the tools' and the run's operations, which the top level carries as
+  two families for now.
