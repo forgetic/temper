@@ -413,6 +413,9 @@ The checks:
   and in the agent's top-level world.
 - **Transition coverage** is not measured, and nothing is fuzzed yet, as
   there is no protocol machine.
+- **Scenario expectations** are checked inline in each world, beside its
+  contracts: the agent's top-level world checking that the engine records
+  the outcome the run accepted is one. There is no referee yet.
 
 ## 9. Not built yet
 
@@ -429,6 +432,8 @@ By tier:
 - **The simulator,** with the io layers, the services and the shells.
 - **The real loop:** a shell that drives every service in one loop, and
   the sandbox.
+- **The referee** (section 5.2), with the worlds' scenario-level checks
+  moved into it, so that they run at every tier.
 - **Checks:** replay in every world, transition coverage, fuzzing.
 
 By fake:
@@ -458,6 +463,10 @@ By fake:
 - **Differential checks:** whether a scenario must end the same way at
   every tier it runs at, as a check that the layers below the model
   decide nothing.
+- **What the referee sees in the real loop:** the machine is real there
+  and reports nothing, so an expectation about it, such as what an
+  agent's environment holds, needs facts that say so, or is checked only
+  in the tiers below.
 - **The real loop's privileges:** the containment it shares with
   production needs user namespaces and a delegated cgroup on the test
   host.
