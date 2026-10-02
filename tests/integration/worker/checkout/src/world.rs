@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use temper_checkout_fake::Checkout;
-use temper_checkout_fake::git::{Forge, Move, Tree};
+use temper_checkout_fake::git::{Created, Remote, Tree};
 use temper_lib::{Duration, Rng, Time, Token};
 use temper_worker_model_checkout::git::{Done, Fault, Kind, Missing, Op, Want};
 use temper_worker_model_checkout::{
@@ -11,6 +11,7 @@ use temper_worker_model_checkout::{
 use temper_world::{Key, Ledger, Schedule, Span, Stage, Trace};
 
 use crate::client::{Client, Interrupt, Operation, Pick, Plan, Release, Repo};
+use crate::forge::{Forge, Move};
 use crate::translate;
 
 /// Room in the model's output queue beyond what one step may emit. Small, so
@@ -291,7 +292,7 @@ impl World {
     pub fn new(settings: Settings) -> World {
         assert!(worst_case(&settings.checkout).is_some(), "the shell refuses limits it cannot provision");
         let mut rng = Rng::new(settings.seed);
-        let mut forge = Forge::new();
+        let mut forge = Forge::new(settings.seed);
         let mut repositories = Vec::new();
         for place in 0..settings.repositories {
             let name = format!("r{place}").into_bytes();
@@ -459,6 +460,7 @@ impl World {
     /// Another party advances `branch` of `repository`, or creates it from the
     /// default branch if the forge does not have it.
     fn advance(&mut self, repository: &[u8], branch: &[u8]) {
+        self.forge.at(self.now);
         if self.forge.branch(repository, branch).is_some() {
             let content = format!("theirs {}", self.wire.name()).into_bytes();
             self.forge.advance(repository, branch, b"THEIRS", &content);
@@ -466,10 +468,11 @@ impl World {
             self.log(&format!("forge: {} advanced", String::from_utf8_lossy(branch)));
         } else {
             let main = self.forge.branch(repository, b"main").expect("every repository has its default branch");
-            let created = self.forge.create(repository, branch, main);
-            assert!(created.is_ok(), "another party creates a branch where there is none");
+            let created = self.forge.create_branch(repository, branch, main);
+            assert_eq!(created, Ok(Created::Created), "another party creates a branch where there is none");
             self.log(&format!("forge: {} created", String::from_utf8_lossy(branch)));
         }
+        self.check_moves();
     }
 
     // The client.
@@ -790,7 +793,7 @@ impl World {
                 assert_eq!(commit, named, "a repository starts at the commit its spec names");
             }
             let tree = self.tree(workspace, &repo.name);
-            assert_eq!(tree, self.forge.object(commit).tree, "a repository is checked out at its starting point");
+            assert_eq!(tree, self.forge.tree(commit), "a repository is checked out at its starting point");
             start.push(tree);
         }
         let client = self.clients.get_mut(&name).expect("a client submitted");
@@ -835,8 +838,8 @@ impl World {
             match landing {
                 Landing::Landed { commit } => {
                     assert!(repo.writable, "only a writable repository is pushed");
-                    let object = self.forge.object(translate::fake(*commit));
-                    assert_eq!(&object.tree, left, "what landed is exactly the tree the client left");
+                    let tree = self.forge.tree(translate::fake(*commit));
+                    assert_eq!(&tree, left, "what landed is exactly the tree the client left");
                     if !saved {
                         client.pushed[index] = left.clone();
                     }
@@ -1062,23 +1065,13 @@ impl World {
             | Op::Push { .. } => {}
         }
         let creates = op.kind() == Kind::Create;
-        let moves = self.forge.moves().len();
+        self.forge.at(self.now);
         let done = translate::perform(&mut self.forge, &mut self.disk, op);
         if let Some(name) = &on_forge {
             self.forge.set_reachable(name, true);
             self.forge.set_refusing(name, false);
         }
-        let new = &self.forge.moves()[moves..];
-        for Move { remote, branch, from, to } in new {
-            if let Some(from) = from {
-                assert!(
-                    self.forge.is_ancestor(*from, *to),
-                    "{}: {} moved only by a fast-forward",
-                    String::from_utf8_lossy(remote),
-                    String::from_utf8_lossy(branch)
-                );
-            }
-        }
+        let new = self.check_moves();
         match done {
             Done::Failed { fault: Fault::Unreachable } => self.stats.unreachable += 1,
             Done::Failed { fault: Fault::Refused } => self.stats.refusals += 1,
@@ -1098,6 +1091,23 @@ impl World {
             | Done::Failed { .. } => {}
         }
         done
+    }
+
+    /// The branches the forge moved since the world last looked, each a
+    /// fast-forward.
+    fn check_moves(&mut self) -> Vec<Move> {
+        let moves = self.forge.moves();
+        for Move { remote, branch, from, to } in &moves {
+            if let Some(from) = from {
+                assert!(
+                    self.forge.is_ancestor(*from, *to),
+                    "{}: {} moved only by a fast-forward",
+                    String::from_utf8_lossy(remote),
+                    String::from_utf8_lossy(branch)
+                );
+            }
+        }
+        moves
     }
 
     // Facts.
@@ -1147,11 +1157,11 @@ impl World {
             assert!(client.operation.is_none() && client.refusals == 0, "client {name} heard every end");
         }
         for hosted in &self.repositories {
-            for branch in self.forge.branches(&hosted.remote).keys() {
+            for branch in self.forge.branches(&hosted.remote) {
                 assert!(
                     branch.starts_with(b"base/") || branch.starts_with(b"saved/") || branch == b"main",
                     "only the workstreams' branches are made: {}",
-                    String::from_utf8_lossy(branch)
+                    String::from_utf8_lossy(&branch)
                 );
             }
         }

@@ -1,18 +1,20 @@
 //! A simulated world for the worker's checkout sub-model
 //! (programming-style.md, 4.5; worker-model.md, 9): the checkout, with the
-//! world as its parent, against a fake forge's git and a fake disk, driven by
-//! one loop, deterministically from a seed.
+//! world as its parent, against a fake forge and a fake disk, driven by one
+//! loop, deterministically from a seed.
 //!
 //! The world owns the clock and the seed, and stands in for everything around
 //! the model: its clients, scripted ([`client`]), which prepare workspaces for
 //! several workstreams (so the cache fills, evicts and reuses), edit the
 //! working trees between their pushes as a run's tools would, push, save,
 //! release, and abort or release at moments of their own; and the protocol
-//! layer and io, which run each operation on the fakes
-//! ([`temper_checkout_fake`]) after a latency, racing its deadline and any
-//! cancel, with the faults the world scripts: a repository that cannot be
-//! reached or refuses a push, io failing, another party advancing a branch,
-//! and specs that name what the forge does not have ([`translate`]).
+//! layer and io, which run each operation on the fakes after a latency,
+//! racing its deadline and any cancel: git's working trees on the fake disk
+//! ([`temper_checkout_fake`]), their remotes on the fake forge
+//! (`temper_forge_model`, through [`forge`]), with the faults the world
+//! scripts: a repository that cannot be reached or refuses a push, io
+//! failing, another party advancing a branch, and specs that name what the
+//! forge does not have ([`translate`]).
 //!
 //! It checks the boundary's contracts as it goes: one terminal event per
 //! operation, a hold before its prepare's end, one end per prepare, push,
@@ -28,6 +30,7 @@
 //! crossed the boundary unless some were dropped.
 
 pub mod client;
+pub mod forge;
 pub mod translate;
 mod world;
 

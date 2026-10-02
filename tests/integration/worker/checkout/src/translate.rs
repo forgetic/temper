@@ -1,10 +1,10 @@
 //! Between the checkout's operations and the fakes, as the protocol layer
 //! and io would translate them: io names a workspace's directory by its token,
 //! and a repository's by the workspace's and the repository's name; a commit
-//! is the fake's count, in the first bytes of the model's hash.
+//! is the fake forge's count, in the first bytes of the model's hash.
 
 use temper_checkout_fake::Checkout;
-use temper_checkout_fake::git::{self, Created, Forge, Pushed, What};
+use temper_checkout_fake::git::{self, Created, Pushed, Remote, What};
 use temper_lib::Token;
 use temper_worker_model_checkout::git::{Commit, Done, Fault, Missing, Op, Place, Want};
 
@@ -77,8 +77,8 @@ pub fn remote(op: &Op) -> Option<&[u8]> {
 }
 
 /// Runs `op` on the fakes, as the protocol layer would run its git
-/// invocation, and says how it ended.
-pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
+/// invocation, git reaching the forge through `forge`, and says how it ended.
+pub fn perform(forge: &mut impl Remote, disk: &mut Checkout, op: Op) -> Done {
     match op {
         Op::Make { workspace } => {
             // Empty: whatever is there goes first.
@@ -89,7 +89,7 @@ pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
         }
         Op::Clone { at, remote, identity: _ } => {
             assert!(disk.exists(&dir(at.workspace)), "a repository is cloned into a workspace made");
-            match forge.clone_repository(disk, &remote, &path(&at)) {
+            match git::clone_repository(forge, disk, &remote, &path(&at)) {
                 Ok(()) => Done::Succeeded,
                 Err(fault) => failed(fault),
             }
@@ -101,14 +101,14 @@ pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
                 Want::Commit { commit } => git::Want::Commit(fake(*commit)),
                 Want::Default => git::Want::Default,
             };
-            match forge.fetch(disk, &remote, &path(&at), want) {
+            match git::fetch(forge, disk, &remote, &path(&at), want) {
                 Ok(fetched) => Done::Fetched { commit: commit(fetched) },
                 Err(fault) => failed(fault),
             }
         }
         Op::Create { at, remote, branch, commit, identity: _ } => {
             assert_cloned(disk, &at);
-            match forge.create(&remote, &branch, fake(commit)) {
+            match git::create(forge, &remote, &branch, fake(commit)) {
                 Ok(Created::Created) => Done::Succeeded,
                 Ok(Created::Exists) => Done::Exists,
                 Err(fault) => failed(fault),
@@ -116,14 +116,14 @@ pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
         }
         Op::CheckOut { at, commit } => {
             assert_cloned(disk, &at);
-            let checked_out = forge.check_out(disk, &path(&at), fake(commit));
+            let checked_out = git::check_out(forge, disk, &path(&at), fake(commit));
             checked_out.expect("a checkout is of a commit fetched into the repository");
             Done::Succeeded
         }
         Op::Commit { at, parent, title, body: _, identity: _ } => {
             assert_cloned(disk, &at);
             assert!(!title.is_empty(), "a commit has a title");
-            let committed = forge.commit(disk, &path(&at), fake(parent));
+            let committed = git::commit(forge, disk, &path(&at), fake(parent));
             match committed.expect("a commit is on a commit the repository has") {
                 Some(committed) => Done::Committed { commit: commit(committed) },
                 None => Done::Unchanged,
@@ -131,7 +131,7 @@ pub fn perform(forge: &mut Forge, disk: &mut Checkout, op: Op) -> Done {
         }
         Op::Push { at, remote, commit, branch, identity: _ } => {
             assert_cloned(disk, &at);
-            match forge.push(disk, &remote, &path(&at), fake(commit), &branch) {
+            match git::push(forge, disk, &remote, &path(&at), fake(commit), &branch) {
                 Ok(Pushed::Pushed) => Done::Succeeded,
                 Ok(Pushed::Rejected) => Done::Rejected,
                 Err(fault) => failed(fault),

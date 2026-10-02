@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use temper_agent_model::run::charter::{Checkout, Repository as Placed};
 use temper_agent_model::run::{self, Spend};
 use temper_agent_model::{self as agent};
-use temper_checkout_fake::git::Move;
+use temper_checkout_fake::git::{Move, Remote};
 use temper_fake_engine_model::{self as engine, BASE, IDENTITY, api};
 use temper_lib::{Time, Token};
 use temper_worker_model::agent::channel::{Down, Reply, Up};

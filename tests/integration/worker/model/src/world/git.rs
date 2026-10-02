@@ -4,7 +4,7 @@
 //! the world scripts; and what moves on the forge, and what lands, checked as
 //! it does.
 
-use temper_checkout_fake::git::{Forge, Move, Tree as Files};
+use temper_checkout_fake::git::{Forge, Move, Remote, Tree as Files};
 use temper_checkout_fake::{Checkout, in_git};
 use temper_fake_engine_model::{BASE, IDENTITY};
 use temper_lib::{Rng, Time, Token};

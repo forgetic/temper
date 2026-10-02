@@ -1,6 +1,6 @@
 [package]
 name = "temper-worker-model-checkout-tests"
-description = "The checkout sub-model's world: a simulation against a fake forge's git and a fake disk"
+description = "The checkout sub-model's world: a simulation against a fake forge and a fake disk"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,7 @@ publish.workspace = true
 temper-lib.workspace = true
 temper-worker-model-checkout.workspace = true
 temper-checkout-fake.workspace = true
+temper-forge-model.workspace = true
 temper-world.workspace = true
 
 # Ordinary Rust (programming-style.md, 10.2), so not the step crates' lints.

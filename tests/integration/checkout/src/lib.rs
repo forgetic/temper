@@ -12,9 +12,10 @@
 //! a file gives it a new version, never reused, as a file renamed into place
 //! gets a new inode.
 //!
-//! Beside it, [`git`] is a fake forge's git, whose working trees are
-//! directories of the checkout, for the worker's model worlds: what an agent's
-//! tools write there is what the worker commits.
+//! Beside it, [`git`] is git's working trees, directories of the checkout,
+//! for the worker's model worlds: what an agent's tools write there is what
+//! the worker commits. Their remotes are on a fake forge, which a world
+//! reaches for them through [`git::Remote`].
 
 pub mod git;
 

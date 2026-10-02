@@ -263,6 +263,7 @@ name = "temper-worker-model-checkout-tests"
 version = "0.0.0"
 dependencies = [
  "temper-checkout-fake",
+ "temper-forge-model",
  "temper-lib",
  "temper-worker-model-checkout",
  "temper-world",
