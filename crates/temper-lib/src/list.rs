@@ -59,9 +59,17 @@ impl<T> List<T> {
         Ok(())
     }
 
+    /// The item at `index`, counted from the first pushed.
     #[must_use]
     pub fn get(&self, index: u32) -> Option<&T> {
         self.items.get(usize::try_from(index).ok()?)
+    }
+
+    /// The item at `index`, to change in place: a list of slots pushed in
+    /// order can be filled in any order.
+    #[must_use]
+    pub fn get_mut(&mut self, index: u32) -> Option<&mut T> {
+        self.items.get_mut(usize::try_from(index).ok()?)
     }
 
     #[must_use]
@@ -117,5 +125,19 @@ mod tests {
         assert_eq!(list.get(2), None);
         assert_eq!(&*list.to_boxed(), &[1, 2]);
         assert_eq!(&*list.into_boxed(), &[1, 2]);
+    }
+
+    #[test]
+    fn slots_pushed_in_order_are_filled_in_any_order() {
+        let mut results = List::with_capacity(3);
+        for _ in 0_u32..3 {
+            results.push(None).expect("room");
+        }
+        for (index, result) in [(2, 'c'), (0, 'a'), (1, 'b')] {
+            let slot = results.get_mut(index).expect("a slot per call");
+            *slot = Some(result);
+        }
+        assert_eq!(results.get_mut(3), None);
+        assert_eq!(&*results.into_boxed(), &[Some('a'), Some('b'), Some('c')]);
     }
 }
