@@ -5,8 +5,8 @@
 //! at random through every terminal io may give, measured after every step.
 
 use temper_agent_model_tools::{
-    Authority, Call, Done, Entry, Event, Exit, Expect, Fault, Grants, Kind, Limits, Model, Name, Op, Part, Path, Repo,
-    Request, Var, Version, max_out, worst_case,
+    Authority, Call, Done, Entry, Event, Exit, Expect, Fault, Grants, Hit, Kind, Limits, Model, Name, Op, Part, Path,
+    Repo, Request, Var, Version, max_out, worst_case,
 };
 use temper_lib::{Duration, Env, Queue, ReplyTo, Rng, Time, Token};
 
@@ -77,6 +77,9 @@ const LIMITS: Limits = Limits {
     shell_timeout_max: Duration::from_secs(600),
     shell_head: 64,
     shell_tail: 128,
+    search_hits: 8,
+    search_bytes: 256,
+    search_timeout: Duration::from_secs(30),
 };
 
 const GRANTS: Grants = Grants { inspect: true, modify: true, shell: true };
@@ -209,6 +212,7 @@ enum Asked {
     Scan,
     Store { creating: bool },
     Spawn,
+    Search,
 }
 
 /// Drives a model under `limits` at random for `rounds` steps, each an
@@ -226,7 +230,7 @@ fn churn(limits: Limits, seed: u64, rounds: u32) {
     let slots = usize::try_from(limits.kits * limits.calls * 2).expect("small");
     let mut ops: Vec<(Token, Asked)> = Vec::with_capacity(slots);
     let mut out = Queue::with_capacity(max_out(&limits));
-    let mut counted = [0; 5];
+    let mut counted = [0; 6];
     let base = heap::live();
     let mut model = Model::new(&limits);
     for round in 0..u64::from(rounds) {
@@ -272,9 +276,9 @@ fn churn(limits: Limits, seed: u64, rounds: u32) {
 }
 
 /// Takes what a step asked for, keeping what the driver needs to go on, and
-/// counting the operations by kind: loads, scans, creates, replaces and
-/// spawns.
-fn drain(out: &mut Queue<Request>, kits: &mut Vec<Token>, ops: &mut Vec<(Token, Asked)>, seen: &mut [u32; 5]) {
+/// counting the operations by kind: loads, scans, creates, replaces, spawns
+/// and searches.
+fn drain(out: &mut Queue<Request>, kits: &mut Vec<Token>, ops: &mut Vec<(Token, Asked)>, seen: &mut [u32; 6]) {
     while let Some(request) = out.pop() {
         match request {
             Request::Opened { kit, .. } => kits.push(kit),
@@ -285,6 +289,7 @@ fn drain(out: &mut Queue<Request>, kits: &mut Vec<Token>, ops: &mut Vec<(Token, 
                     Op::Store { expect: Expect::Absent, .. } => (Asked::Store { creating: true }, 2),
                     Op::Store { expect: Expect::Is { .. }, .. } => (Asked::Store { creating: false }, 3),
                     Op::Spawn { .. } => (Asked::Spawn, 4),
+                    Op::Search { .. } => (Asked::Search, 5),
                 };
                 seen[kind] += 1;
                 ops.push((owner, asked));
@@ -298,7 +303,8 @@ fn random_call(limits: &Limits, rng: &mut Rng) -> Call {
     // A few more files than a kit remembers: most writes meet a read, and
     // some meet a file forgotten.
     let file = rng.below(u64::from(limits.known_files) + 2);
-    match rng.below(5) {
+    match rng.below(6) {
+        4 => Call::Search { path: path(limits, file), pattern: b"fn"[..].into(), glob: None },
         0 => read(limits, file),
         1 => Call::List { path: path(limits, file) },
         2 => write(limits, file),
@@ -343,6 +349,16 @@ fn random_done(limits: &Limits, rng: &mut Rng, asked: Asked) -> Done {
                 let tail = vec![b't'; usize::try_from(limits.shell_tail).expect("small")];
                 Done::Exited { exit, head: head.into(), tail: tail.into(), dropped: rng.below(1000) }
             }
+            Asked::Search => {
+                let hits: Vec<Hit> = (0..rng.below(u64::from(limits.search_hits) + 1))
+                    .map(|line| Hit {
+                        path: name(b"src").as_bytes().into(),
+                        line: u32::try_from(line).expect("small"),
+                        text: vec![b'x'; usize::try_from(limits.search_bytes).expect("small")].into(),
+                    })
+                    .collect();
+                Done::Found { hits: hits.into(), more: rng.below(3) }
+            }
             Asked::Store { creating } => match rng.below(3) {
                 0 if creating => Done::Conflict { now: Some(version) },
                 0 => Done::Conflict { now: if rng.chance(500) { Some(version) } else { None } },
@@ -356,7 +372,7 @@ fn random_done(limits: &Limits, rng: &mut Rng, asked: Asked) -> Done {
 #[test]
 fn a_model_driven_at_random_stays_within_its_worst_case_at_every_step() {
     for seed in 0..20 {
-        churn(LIMITS, seed, 2_000);
-        churn(Limits { kits: 4, calls: 4, known_files: 8, file_bytes: 64, ..LIMITS }, seed, 2_000);
+        churn(LIMITS, seed, 3_000);
+        churn(Limits { kits: 4, calls: 4, known_files: 8, file_bytes: 64, ..LIMITS }, seed, 3_000);
     }
 }

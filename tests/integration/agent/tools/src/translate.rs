@@ -4,7 +4,7 @@
 //! kernel.
 
 use temper_agent_model_tools::{
-    Done, Entry, Exit, Expect, Fault, Kind, Name, Op, Part, Path, Place, Root, Var, Version,
+    Done, Entry, Exit, Expect, Fault, Hit, Kind, Name, Op, Part, Path, Place, Root, Var, Version,
 };
 use temper_checkout_fake as fake;
 use temper_lib::Token;
@@ -129,8 +129,26 @@ pub fn perform(checkout: &mut fake::Checkout, op: Op) -> Done {
                 Err(failure) => done(failure),
             }
         }
+        Op::Search { at, pattern, glob, hits, bytes } => {
+            let limits = (usize::try_from(hits).expect("small"), usize::try_from(bytes).expect("small"));
+            match checkout.search(root(at.root), &at.path, &pattern, glob.as_deref(), limits) {
+                Ok(found) => Done::Found { hits: found.hits.into_iter().map(hit).collect(), more: found.more },
+                // rg exits with 2 for a pattern it cannot read.
+                Err(fake::Searched::Unreadable(stderr)) => {
+                    let head = usize::try_from(bytes).expect("small").min(stderr.len());
+                    let dropped = u64::try_from(stderr.len() - head).expect("small");
+                    let head = stderr[..head].into();
+                    Done::Exited { exit: Exit::Code { code: 2 }, head, tail: Box::new([]), dropped }
+                }
+                Err(fake::Searched::Failed(failure)) => done(failure),
+            }
+        }
         Op::Spawn { .. } => panic!("a spawn is started, not run"),
     }
+}
+
+fn hit((path, line, text): (Vec<u8>, usize, Vec<u8>)) -> Hit {
+    Hit { path: path.into(), line: u32::try_from(line).expect("a short file"), text: text.into() }
 }
 
 fn entry((name, kind): (Vec<u8>, fake::Kind)) -> Entry {

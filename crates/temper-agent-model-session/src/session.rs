@@ -1028,6 +1028,7 @@ const fn succeeded(outcome: &Outcome) -> bool {
         | Outcome::Listed { .. }
         | Outcome::Written { .. }
         | Outcome::Edited { .. }
+        | Outcome::Found { .. }
         | Outcome::Exited { exit: tools::Exit::Code { code: 0 }, .. } => true,
         Outcome::Exited { .. }
         | Outcome::NotGranted
@@ -1048,8 +1049,7 @@ const fn succeeded(outcome: &Outcome) -> bool {
         | Outcome::Failed { .. }
         | Outcome::TimedOut
         | Outcome::Cancelled
-        | Outcome::Busy
-        | Outcome::Unsupported => false,
+        | Outcome::Busy => false,
     }
 }
 
@@ -1196,6 +1196,13 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
             }
             Some(cost)
         }
+        Outcome::Found { hits, more: _ } => {
+            let mut cost = u64::try_from(size_of::<tools::Hit>()).ok()?.checked_mul(u64::try_from(hits.len()).ok()?)?;
+            for hit in hits {
+                cost = cost.checked_add(len(&hit.path)?)?.checked_add(len(&hit.text)?)?;
+            }
+            Some(cost)
+        }
         Outcome::Exited { exit: _, head, tail, dropped: _ } => len(head)?.checked_add(len(tail)?),
         Outcome::Ambiguous { count: _, lines } => {
             u64::try_from(size_of::<u32>()).ok()?.checked_mul(u64::try_from(lines.len()).ok()?)
@@ -1219,8 +1226,7 @@ fn outcome_cost(outcome: &Outcome) -> Option<u64> {
         | Outcome::Failed { .. }
         | Outcome::TimedOut
         | Outcome::Cancelled
-        | Outcome::Busy
-        | Outcome::Unsupported => Some(0),
+        | Outcome::Busy => Some(0),
     }
 }
 

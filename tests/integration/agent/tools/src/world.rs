@@ -66,6 +66,9 @@ impl Settings {
                 shell_timeout_max: Duration::from_secs(600),
                 shell_head: 64,
                 shell_tail: 128,
+                search_hits: 8,
+                search_bytes: 256,
+                search_timeout: Duration::from_secs(30),
             },
             io: Span::millis(1, 20),
             faults: 0,
@@ -487,7 +490,7 @@ impl World {
                     Err(done) => (Work::Ending(done), latency),
                 }
             }
-            op @ (Op::Load { .. } | Op::Scan { .. } | Op::Store { .. }) => {
+            op @ (Op::Load { .. } | Op::Scan { .. } | Op::Store { .. } | Op::Search { .. }) => {
                 if let Op::Store { at, expect: Expect::Is { version }, .. } = &op {
                     let known = (at.root.raw(), at.path.to_vec(), version.raw()[0]);
                     assert!(self.versions.contains(&known), "a store expects a version io gave for its place");
@@ -516,7 +519,7 @@ impl World {
     /// Runs `op` on the checkout, and notes the version it tells of.
     fn perform(&mut self, op: Op) -> Done {
         let at = match &op {
-            Op::Load { at, .. } | Op::Scan { at, .. } | Op::Store { at, .. } => at.clone(),
+            Op::Load { at, .. } | Op::Scan { at, .. } | Op::Store { at, .. } | Op::Search { at, .. } => at.clone(),
             Op::Spawn { .. } => unreachable!("a spawn is started, not run"),
         };
         let done = translate::perform(&mut self.checkout, op);
@@ -531,6 +534,7 @@ impl World {
             | Done::NotFile
             | Done::Linked
             | Done::Exited { .. }
+            | Done::Found { .. }
             | Done::NotDirectory
             | Done::TooLarge { .. }
             | Done::Escapes

@@ -4,9 +4,9 @@
 use std::collections::BTreeSet;
 
 use temper_agent_model_tools::{
-    self as tools, Authority, Entry, Fault, Grants, Kind, Limits, Name, Outcome, Refusal, Repo,
+    self as tools, Authority, Entry, Fault, Grants, Hit, Kind, Limits, Name, Outcome, Refusal, Repo,
 };
-use temper_agent_model_tools_tests::calls::{edit, list, read, read_lines, shell, write};
+use temper_agent_model_tools_tests::calls::{edit, list, read, read_lines, search, shell, write};
 use temper_agent_model_tools_tests::{Settings, Span, Stats, Step, World, authority, repo};
 use temper_checkout_fake::{Checkout, Exit, Program};
 use temper_lib::{Duration, Rng, Time};
@@ -368,6 +368,7 @@ fn random_worlds_settle_with_every_call_answered() {
         "edited",
         "exited",
         "failed",
+        "found",
         "linked",
         "listed",
         "no match",
@@ -405,6 +406,7 @@ fn kind(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Read { .. } => "read",
         Outcome::Listed { .. } => "listed",
+        Outcome::Found { .. } => "found",
         Outcome::Written { .. } => "written",
         Outcome::Edited { .. } => "edited",
         Outcome::Exited { .. } => "exited",
@@ -427,7 +429,6 @@ fn kind(outcome: &Outcome) -> &'static str {
         Outcome::TimedOut => "timed out",
         Outcome::Cancelled => "cancelled",
         Outcome::Busy => "busy",
-        Outcome::Unsupported => "unsupported",
     }
 }
 
@@ -545,7 +546,8 @@ fn noisy_calls(rng: &mut Rng) -> Vec<temper_agent_model_tools::Call> {
         // Half the calls are about a few files, so that kits and changes meet.
         let pool: &[&[u8]] = if rng.chance(500) { &HOT } else { &PATHS };
         let path = pool[usize::try_from(rng.below(pool.len() as u64)).expect("an index")];
-        let call = match rng.below(9) {
+        let call = match rng.below(10) {
+            9 => search(path, SNIPPETS[usize::try_from(rng.below(SNIPPETS.len() as u64)).expect("an index")], None),
             8 => shell(COMMANDS[usize::try_from(rng.below(COMMANDS.len() as u64)).expect("an index")], None),
             0 => list(path),
             1 => read_lines(path, u32::try_from(rng.below(5)).expect("small"), 2),
@@ -1087,5 +1089,73 @@ fn a_command_writes_only_the_repositories_its_kit_may() {
     assert_eq!(checkout.content(b"work/temper/src/new.rs"), Some(&b"new\n"[..]));
 
     let (answers, world) = run(Settings::calm(64), MODIFY, vec![Step::Calls(vec![shell(b"cargo fmt", None)])]);
+    assert_eq!((answers, world.stats().ops), (vec![Outcome::NotGranted], 0));
+}
+
+fn hit(path: &[u8], line: u32, text: &[u8]) -> Hit {
+    Hit { path: path.into(), line, text: text.into() }
+}
+
+#[test]
+fn a_search_finds_lines_in_path_order_without_following_links() {
+    let script = vec![Step::Calls(vec![
+        search(b"src", b"fn", None),
+        search(b".", b"vendored", None),
+        search(b"src/lib.rs", b"two", None),
+        search(b"..", b"Guide", Some(b"*.md")),
+        // A link to search through is followed; links beneath it are not.
+        search(b"srclink", b"main", None),
+        search(b"third_party", b"vendored", None),
+    ])];
+    let (answers, _) = run(Settings::calm(70), INSPECT, script);
+    let found = |hits: Vec<Hit>| Outcome::Found { hits: hits.into(), more: 0 };
+    let expected = vec![
+        found(vec![
+            hit(b"lib.rs", 1, b"pub fn one() {}"),
+            hit(b"lib.rs", 2, b"pub fn two() {}"),
+            hit(b"lib.rs", 3, b"pub fn three() {}"),
+            hit(b"main.rs", 1, b"fn main() {}"),
+        ]),
+        found(vec![hit(b"vendor/lib/lib.rs", 1, b"// vendored")]),
+        found(vec![hit(b"", 2, b"pub fn two() {}")]),
+        Outcome::Outside,
+        found(vec![hit(b"main.rs", 1, b"fn main() {}")]),
+        found(vec![hit(b"lib.rs", 1, b"// vendored")]),
+    ];
+    assert_eq!(answers, expected);
+}
+
+#[test]
+fn a_search_is_bounded_and_says_when_it_cannot_run() {
+    let calm = Settings::calm(71);
+    let settings = Settings { tools: Limits { search_hits: 2, search_bytes: 20, ..calm.tools }, ..calm };
+    let script = vec![Step::Calls(vec![
+        search(b"src", b"fn", None),
+        search(b"long.txt", b"line", None),
+        search(b"src", b"fn (", None),
+        search(b"nowhere", b"fn", None),
+        search(b"escape", b"root", None),
+        search(b"../docs", b"Guide", None),
+    ])];
+    let (answers, _) = run(settings, INSPECT, script);
+    let stderr = b"rg: regex parse error: unclosed group\n";
+    let expected = vec![
+        // Two hits, and the second cut where twenty bytes of text ran out.
+        Outcome::Found { hits: [hit(b"lib.rs", 1, b"pub fn one() {}"), hit(b"lib.rs", 2, b"pub f")].into(), more: 2 },
+        Outcome::Found { hits: [hit(b"", 1, b"line 000 .........."), hit(b"", 2, b"l")].into(), more: 98 },
+        Outcome::Exited {
+            exit: tools::Exit::Code { code: 2 },
+            head: stderr[..20].into(),
+            tail: [].into(),
+            dropped: 18,
+        },
+        Outcome::NotFound,
+        Outcome::Outside,
+        Outcome::Found { hits: [hit(b"guide.md", 1, b"# Guide")].into(), more: 0 },
+    ];
+    assert_eq!(answers, expected);
+
+    let modify = Grants { inspect: false, modify: true, shell: true };
+    let (answers, world) = run(Settings::calm(72), modify, vec![Step::Calls(vec![search(b".", b"fn", None)])]);
     assert_eq!((answers, world.stats().ops), (vec![Outcome::NotGranted], 0));
 }

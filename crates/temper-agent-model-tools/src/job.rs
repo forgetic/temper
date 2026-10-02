@@ -35,6 +35,9 @@
 //!            any other                   Done      what it says
 //! Running    exited                      Done      how it ended, and its output
 //!            any other                   Done      what it says
+//! Searching  found                       Done      the lines found
+//!            exited                      Done      how rg failed
+//!            any other                   Done      what it says
 //! Storing    stored                      Done      written or edited; the new version is known
 //!            conflict, creating          Done      not read
 //!            conflict, replacing         Done      stale; a file now absent is forgotten
@@ -87,6 +90,8 @@ enum State {
     Storing { reply_to: ReplyTo, place: Place, change: Change },
     /// Running a command.
     Running { reply_to: ReplyTo },
+    /// Searching files.
+    Searching { reply_to: ReplyTo },
     /// Terminal: answered, holds nothing.
     Done,
 }
@@ -139,6 +144,11 @@ pub(crate) enum Work {
         env: Box<[Var]>,
         roots: Box<[Root]>,
     },
+    Search {
+        place: Place,
+        pattern: Box<[u8]>,
+        glob: Option<Box<[u8]>>,
+    },
 }
 
 /// Starts a job for `work` in the kit `kit`, which has room for one, asking
@@ -158,6 +168,7 @@ pub(crate) fn start(
     // A command has a limit of its own; any other call is a file operation.
     let limit = match &work {
         Work::Shell { timeout, .. } => *timeout,
+        Work::Search { .. } => limits.search_timeout,
         Work::Read { .. } | Work::List { .. } | Work::Write { .. } | Work::Edit { .. } => limits.file_timeout,
     };
     let deadline = deadline.min(env.now.saturating_add(limit));
@@ -183,6 +194,10 @@ pub(crate) fn start(
         Work::Shell { cwd, command, timeout: _, env, roots } => {
             let op = Op::Spawn { cwd, command, env, roots, head: limits.shell_head, tail: limits.shell_tail };
             (State::Running { reply_to }, op)
+        }
+        Work::Search { place, pattern, glob } => {
+            let op = Op::Search { at: place, pattern, glob, hits: limits.search_hits, bytes: limits.search_bytes };
+            (State::Searching { reply_to }, op)
         }
     };
     // Room: a kit has at most `calls` jobs, and the slab twice that many slots
@@ -217,6 +232,7 @@ pub(crate) fn done(model: &mut Model, env: &Env<Limits>, owner: Token, done: Don
         State::Editing { reply_to, editing } => to_edit(kit, id, reply_to, editing, done, env, out),
         State::Storing { reply_to, place, change } => stored(&mut kit.knowledge, reply_to, place, change, done, out),
         State::Running { reply_to } => exited(reply_to, done, out),
+        State::Searching { reply_to } => found(reply_to, done, out),
         State::Done => unreachable!("a job that has answered has nothing in flight"),
     };
     follow(kits, jobs, id, out);
@@ -231,7 +247,8 @@ fn follow(kits: &mut Slab<Kit>, jobs: &mut Slab<Job>, id: Id<Job>, out: &mut Que
         | State::Listing { .. }
         | State::Editing { .. }
         | State::Storing { .. }
-        | State::Running { .. } => {}
+        | State::Running { .. }
+        | State::Searching { .. } => {}
         State::Done => {
             kit::finished(kits, job.kit, id, out);
             jobs.retire(id);
@@ -268,7 +285,12 @@ fn loaded(
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::Linked | Done::Exited { .. } => {
+        Done::Scanned { .. }
+        | Done::Stored { .. }
+        | Done::Conflict { .. }
+        | Done::Linked
+        | Done::Exited { .. }
+        | Done::Found { .. } => {
             unreachable!("io ends a load with a load's terminal")
         }
     };
@@ -291,7 +313,8 @@ fn scanned(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
         | Done::NotFile
         | Done::Linked
         | Done::TooLarge { .. }
-        | Done::Exited { .. } => unreachable!("io ends a scan with a scan's terminal"),
+        | Done::Exited { .. }
+        | Done::Found { .. } => unreachable!("io ends a scan with a scan's terminal"),
     };
     answer(reply_to, outcome, out)
 }
@@ -340,7 +363,12 @@ fn to_edit(
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Scanned { .. } | Done::Stored { .. } | Done::Conflict { .. } | Done::Linked | Done::Exited { .. } => {
+        Done::Scanned { .. }
+        | Done::Stored { .. }
+        | Done::Conflict { .. }
+        | Done::Linked
+        | Done::Exited { .. }
+        | Done::Found { .. } => {
             unreachable!("io ends a load with a load's terminal")
         }
     };
@@ -381,9 +409,36 @@ fn stored(
         Done::Failed { fault } => Outcome::Failed { fault },
         Done::TimedOut => Outcome::TimedOut,
         Done::Cancelled => Outcome::Cancelled,
-        Done::Loaded { .. } | Done::Scanned { .. } | Done::Missing | Done::TooLarge { .. } | Done::Exited { .. } => {
+        Done::Loaded { .. }
+        | Done::Scanned { .. }
+        | Done::Missing
+        | Done::TooLarge { .. }
+        | Done::Exited { .. }
+        | Done::Found { .. } => {
             unreachable!("io ends a store with a store's terminal")
         }
+    };
+    answer(reply_to, outcome, out)
+}
+
+/// Searching, ended: answer with the lines found, or how rg failed.
+fn found(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
+    let outcome = match done {
+        Done::Found { hits, more } => Outcome::Found { hits, more },
+        Done::Exited { exit, head, tail, dropped } => Outcome::Exited { exit, head, tail, dropped },
+        Done::Missing => Outcome::NotFound,
+        Done::NotDirectory => Outcome::NotDirectory,
+        Done::Escapes => Outcome::Outside,
+        Done::Failed { fault } => Outcome::Failed { fault },
+        Done::TimedOut => Outcome::TimedOut,
+        Done::Cancelled => Outcome::Cancelled,
+        Done::Loaded { .. }
+        | Done::Scanned { .. }
+        | Done::Stored { .. }
+        | Done::Conflict { .. }
+        | Done::NotFile
+        | Done::Linked
+        | Done::TooLarge { .. } => unreachable!("io ends a search with a search's terminal"),
     };
     answer(reply_to, outcome, out)
 }
@@ -405,7 +460,8 @@ fn exited(reply_to: ReplyTo, done: Done, out: &mut Queue<Request>) -> State {
         | Done::Conflict { .. }
         | Done::NotFile
         | Done::Linked
-        | Done::TooLarge { .. } => unreachable!("io ends a spawn with a spawn's terminal"),
+        | Done::TooLarge { .. }
+        | Done::Found { .. } => unreachable!("io ends a spawn with a spawn's terminal"),
     };
     answer(reply_to, outcome, out)
 }

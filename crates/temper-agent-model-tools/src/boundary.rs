@@ -25,7 +25,7 @@ use alloc::boxed::Box;
 use temper_lib::{ReplyTo, Time, Token};
 
 use crate::authority::{Authority, Var};
-use crate::call::{Call, Entry, Exit, Fault, Outcome};
+use crate::call::{Call, Entry, Exit, Fault, Hit, Outcome};
 use crate::path::Place;
 
 /// session -> tools
@@ -112,6 +112,17 @@ pub enum Op {
     /// `NotDirectory` (for `cwd`), `Escapes`, `Failed` (it could not start),
     /// or `Cancelled` (killed by a cancel).
     Spawn { cwd: Place, command: Box<[u8]>, env: Box<[Var]>, roots: Box<[Root]>, head: u32, tail: u32 },
+    /// Search the files at and beneath `at` for lines matching `pattern`, in
+    /// those whose names match `glob` if given, with rg run as a contained
+    /// process: it follows no link beneath `at`, and skips what rg skips by
+    /// default (hidden and ignored files, binary ones). The protocol layer
+    /// decodes its output into hits, in path order: at most `hits` of them,
+    /// with at most `bytes` of text between them, the last one cut to fit;
+    /// the hits beyond are counted. Ends in `Found`, `Exited` (rg failed, as
+    /// for a pattern it cannot read: its exit, and at most `bytes` of what it
+    /// wrote to standard error in `head`), `Missing`, `NotDirectory`,
+    /// `Escapes`, or a common terminal.
+    Search { at: Place, pattern: Box<[u8]>, glob: Option<Box<[u8]>>, hits: u32, bytes: u32 },
 }
 
 /// A repository a command sees: io's name for its root, and whether the
@@ -145,8 +156,11 @@ pub enum Done {
     Stored { version: Version },
     /// Store: the file is not as expected. It is at `now`, or absent.
     Conflict { now: Option<Version> },
-    /// Spawn: the command ended so, with the output captured.
+    /// Spawn: the command ended so, with the output captured. Search: rg
+    /// failed so.
     Exited { exit: Exit, head: Box<[u8]>, tail: Box<[u8]>, dropped: u64 },
+    /// Search: the lines found, and how many more matched.
+    Found { hits: Box<[Hit]>, more: u64 },
     /// Load, Scan: nothing is at the place.
     Missing,
     /// Load, Store: what is at the place is not a regular file.

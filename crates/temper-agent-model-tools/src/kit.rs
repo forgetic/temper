@@ -171,9 +171,9 @@ fn admit(kit: &Kit, call: Call, deadline: Time, env: &Env<Limits>) -> Result<Wor
             let located = authority::locate(&kit.checkout, &path, limits.path_bytes)?;
             Work::List { place: located.place }
         }
-        Call::Search { path, .. } => {
-            drop(authority::locate(&kit.checkout, &path, limits.path_bytes)?);
-            return Err(Outcome::Unsupported);
+        Call::Search { path, pattern, glob } => {
+            let located = authority::locate(&kit.checkout, &path, limits.path_bytes)?;
+            Work::Search { place: located.place, pattern, glob }
         }
         Call::Write { path, content } => {
             let located = writable(&kit.checkout, &path, limits)?;

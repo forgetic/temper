@@ -41,3 +41,10 @@ pub fn edit(at: &[u8], old: &[u8], new: &[u8], all: bool) -> Call {
 pub fn shell(command: &[u8], timeout: Option<Duration>) -> Call {
     Call::Shell { command: command.into(), timeout }
 }
+
+/// Searches the files at and beneath `at` for `pattern`, in those whose names
+/// match `glob` if given.
+#[must_use]
+pub fn search(at: &[u8], pattern: &[u8], glob: Option<&[u8]>) -> Call {
+    Call::Search { path: path(at), pattern: pattern.into(), glob: glob.map(Into::into) }
+}

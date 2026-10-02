@@ -43,6 +43,11 @@ pub struct Limits {
     /// How much of a command's output is kept: its first bytes, and its last.
     pub shell_head: u32,
     pub shell_tail: u32,
+    /// The most lines a search answers with, and the most text in them.
+    pub search_hits: u32,
+    pub search_bytes: u32,
+    /// How long a search may take, within its call's deadline.
+    pub search_timeout: Duration,
 }
 
 /// The most memory the model holds under `limits`, in bytes (6.4), or `None`

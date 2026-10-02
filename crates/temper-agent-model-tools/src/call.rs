@@ -63,6 +63,9 @@ pub enum Outcome {
     /// A listing: the directory's first entries in name order, and how many
     /// `more` it has.
     Listed { entries: Box<[Entry]>, more: u64 },
+    /// A search: the first lines that matched, in path order, and how many
+    /// `more` did.
+    Found { hits: Box<[Hit]>, more: u64 },
     /// The file holds what was written; it was `created` if there was none.
     Written { created: bool },
     /// The edit `replaced` that many occurrences.
@@ -120,8 +123,18 @@ pub enum Outcome {
     Cancelled,
     /// The kit has as many calls running as it may.
     Busy,
-    /// The tools do not run this call yet: search comes next.
-    Unsupported,
+}
+
+/// A line a search found.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Hit {
+    /// The file it is in, beneath the path searched: names joined by `/`,
+    /// empty if the path searched is the file.
+    pub path: Box<[u8]>,
+    /// Its number, counting from 1.
+    pub line: u32,
+    /// The line, without its end, cut where the search's byte limit fell.
+    pub text: Box<[u8]>,
 }
 
 /// An entry of a listed directory.

@@ -41,6 +41,23 @@ pub struct Program {
     pub changes: Vec<(Vec<u8>, Option<Vec<u8>>)>,
 }
 
+/// What a search found: the file each line is in (beneath the path
+/// searched), its number counting from 1, and its text; and how many more
+/// lines matched.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Found {
+    pub hits: Vec<(Vec<u8>, usize, Vec<u8>)>,
+    pub more: u64,
+}
+
+/// Why a search found nothing.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Searched {
+    /// rg could not read the pattern, and said so on standard error.
+    Unreadable(Vec<u8>),
+    Failed(Failure),
+}
+
 /// How a command ends.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Exit {
@@ -204,6 +221,71 @@ impl Checkout {
                 None => self.remove(path),
             }
         }
+    }
+
+    /// Searches the files at and beneath `path` beneath `root` for lines
+    /// holding `pattern`, as rg would for a pattern without special
+    /// characters: in path order, following no link beneath `path`, skipping
+    /// hidden files and directories, in those whose names end as `glob` does
+    /// after its `*` if given. At most `hits` lines, with at most `bytes` of
+    /// text between them, the last cut to fit; and how many more matched. A
+    /// pattern with an unclosed `(` is one rg cannot read.
+    pub fn search(
+        &self,
+        root: u64,
+        path: &[u8],
+        pattern: &[u8],
+        glob: Option<&[u8]>,
+        (hits, bytes): (usize, usize),
+    ) -> Result<Found, Searched> {
+        if pattern.contains(&b'(') && !pattern.contains(&b')') {
+            return Err(Searched::Unreadable(b"rg: regex parse error: unclosed group\n".to_vec()));
+        }
+        let (at, _) = self.resolve(root, path, Resolve::Follow).map_err(Searched::Failed)?;
+        let files: Vec<(&Vec<u8>, &Vec<u8>)> = match self.nodes.get(&at) {
+            None => return Err(Searched::Failed(Failure::Missing)),
+            Some(Node::File { content, .. }) => vec![(&at, content)],
+            Some(Node::Special) => Vec::new(),
+            Some(Node::Directory) => {
+                let prefix = if at.is_empty() { Vec::new() } else { [&at[..], b"/"].concat() };
+                let mut files = Vec::new();
+                for (file, node) in self.nodes.range(prefix.clone()..) {
+                    let Some(beneath) = file.strip_prefix(prefix.as_slice()) else { break };
+                    let hidden = beneath.split(|byte| *byte == b'/').any(|name| name.first() == Some(&b'.'));
+                    match node {
+                        Node::File { content, .. } if !hidden => files.push((file, content)),
+                        Node::File { .. } | Node::Directory | Node::Link { .. } | Node::Special => {}
+                    }
+                }
+                files
+            }
+            Some(Node::Link { .. }) => unreachable!("links are followed"),
+        };
+        let mut found = Found { hits: Vec::new(), more: 0 };
+        let mut left = bytes;
+        for (file, content) in files {
+            let name = file.rsplit(|byte| *byte == b'/').next().unwrap_or(file);
+            if let Some(glob) = glob
+                && !name.ends_with(glob.strip_prefix(b"*").unwrap_or(glob))
+            {
+                continue;
+            }
+            let beneath = file.strip_prefix(at.as_slice()).unwrap_or(file);
+            let beneath = beneath.strip_prefix(b"/").unwrap_or(beneath).to_vec();
+            for (index, line) in content.split(|byte| *byte == b'\n').enumerate() {
+                if !line.windows(pattern.len().max(1)).any(|window| window == pattern) {
+                    continue;
+                }
+                if found.hits.len() >= hits || left == 0 {
+                    found.more += 1;
+                    continue;
+                }
+                let text = line[..line.len().min(left)].to_vec();
+                left -= text.len();
+                found.hits.push((beneath.clone(), index + 1, text));
+            }
+        }
+        Ok(found)
     }
 
     // What anything else on the machine does: an outsider changing the

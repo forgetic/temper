@@ -809,7 +809,15 @@ impl World {
                 Outcome::Listed { entries: Box::new([Entry { name, kind: Kind::File }]), more: 0 }
             }
             tools::Call::Write { .. } => Outcome::Written { created: true },
-            tools::Call::Search { .. } | tools::Call::Edit { .. } | tools::Call::Shell { .. } => Outcome::Unsupported,
+            tools::Call::Search { .. } => {
+                let hit = tools::Hit { path: b"main.rs"[..].into(), line: 1, text: b"fn main() {}"[..].into() };
+                Outcome::Found { hits: Box::new([hit]), more: 0 }
+            }
+            tools::Call::Edit { .. } => Outcome::Edited { replaced: 1 },
+            tools::Call::Shell { .. } => {
+                let exit = tools::Exit::Code { code: 0 };
+                Outcome::Exited { exit, head: b"ok\n"[..].into(), tail: Box::new([]), dropped: 0 }
+            }
         }
     }
 

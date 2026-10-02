@@ -12,8 +12,8 @@ use crate::knowledge::Knowledge;
 use crate::path;
 use crate::window::{self, Span};
 use crate::{
-    Authority, Call, Done, Effect, Entry, Event, Exit, Expect, Fault, Grants, Kind, Limits, Model, Name, Op, Outcome,
-    Part, Path, Place, Refusal, Repo, Request, Root, Var, Version, effect, max_out, step, worst_case,
+    Authority, Call, Done, Effect, Entry, Event, Exit, Expect, Fault, Grants, Hit, Kind, Limits, Model, Name, Op,
+    Outcome, Part, Path, Place, Refusal, Repo, Request, Root, Var, Version, effect, max_out, step, worst_case,
 };
 
 const LIMITS: Limits = Limits {
@@ -32,6 +32,9 @@ const LIMITS: Limits = Limits {
     shell_timeout_max: Duration::from_secs(600),
     shell_head: 64,
     shell_tail: 128,
+    search_hits: 8,
+    search_bytes: 256,
+    search_timeout: Duration::from_secs(30),
 };
 
 const ALL: Grants = Grants { inspect: true, modify: true, shell: true };
@@ -410,7 +413,6 @@ fn calls_are_refused_at_the_entrance() {
         (inspect, read(b"a/very/long/path/that/does/not/fit/in/the/sixty/four/bytes/allowed"), Outcome::TooLong),
         // What passes the entrance does not run yet.
         (ALL, edit(b"src/lib.rs"), Outcome::NotRead),
-        (ALL, Call::Search { path: path(b"src"), pattern: bytes(b"fn"), glob: None }, Outcome::Unsupported),
     ];
     let mut h = Harness::new(Limits { kits: 32, ..LIMITS });
     for (index, (grants, call, expected)) in table.into_iter().enumerate() {
@@ -837,7 +839,9 @@ fn an_edit_that_matches_nothing_or_too_much_stores_nothing() {
     let loaded = Done::Loaded { content: bytes(b"a\nb\na\n"), version: version(3) };
     match h.next(owner, loaded) {
         Op::Store { content, .. } => assert_eq!(&*content, b"y\nb\ny\n"),
-        op @ (Op::Load { .. } | Op::Scan { .. } | Op::Spawn { .. }) => panic!("expected the store, not {op:?}"),
+        op @ (Op::Load { .. } | Op::Scan { .. } | Op::Spawn { .. } | Op::Search { .. }) => {
+            panic!("expected the store, not {op:?}")
+        }
     }
 }
 
@@ -1032,4 +1036,56 @@ fn an_environment_that_cannot_be_one_or_is_too_large_is_refused() {
     fits.env = Box::new([var(b"A", &[b'x'; 254])]);
     let mut h = Harness::new(LIMITS);
     let _: Token = h.open(1, fits);
+}
+
+#[test]
+fn a_search_asks_io_for_bounded_hits_and_answers_with_them() {
+    let mut h = Harness::new(LIMITS);
+    let kit = h.open(1, authority(ALL));
+    let reply_to = ReplyTo::new(Token::new(1));
+    let call = Call::Search { path: path(b"src"), pattern: bytes(b"fn"), glob: Some(bytes(b"*.rs")) };
+    let (owner, op, deadline) = match h.step(Event::Call { kit, reply_to, call, deadline: at(3600) }) {
+        Some(Request::Io { owner, op, deadline }) => (owner, op, deadline),
+        other => panic!("expected a search, not {other:?}"),
+    };
+    let expected = Op::Search {
+        at: place(1, b"src"),
+        pattern: bytes(b"fn"),
+        glob: Some(bytes(b"*.rs")),
+        hits: LIMITS.search_hits,
+        bytes: LIMITS.search_bytes,
+    };
+    assert_eq!((op, deadline), (expected, at(30)), "the tools' limit for a search");
+    let hits: Box<[Hit]> = Box::new([Hit { path: bytes(b"lib.rs"), line: 3, text: bytes(b"pub fn three() {}") }]);
+    let (_, outcome) = h.end(owner, Done::Found { hits: hits.clone(), more: 4 });
+    assert_eq!(outcome, Outcome::Found { hits, more: 4 });
+
+    let unreadable =
+        Done::Exited { exit: Exit::Code { code: 2 }, head: bytes(b"regex parse error"), tail: bytes(b""), dropped: 0 };
+    let table = [
+        (
+            unreadable.clone(),
+            Outcome::Exited {
+                exit: Exit::Code { code: 2 },
+                head: bytes(b"regex parse error"),
+                tail: bytes(b""),
+                dropped: 0,
+            },
+        ),
+        (Done::Missing, Outcome::NotFound),
+        (Done::NotDirectory, Outcome::NotDirectory),
+        (Done::Escapes, Outcome::Outside),
+        (Done::TimedOut, Outcome::TimedOut),
+        (Done::Cancelled, Outcome::Cancelled),
+    ];
+    for (done, expected) in table {
+        let call = Call::Search { path: path(b"."), pattern: bytes(b"fn ("), glob: None };
+        let (owner, _) = match h.send(kit, 2, call) {
+            Some(Request::Io { owner, op, .. }) => (owner, op),
+            other => panic!("expected a search, not {other:?}"),
+        };
+        assert_eq!(h.end(owner, done), (2, expected));
+    }
+    let outside = Call::Search { path: path(b"/etc"), pattern: bytes(b"root"), glob: None };
+    assert_eq!(h.call(kit, outside), Outcome::Outside);
 }
