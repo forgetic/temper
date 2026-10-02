@@ -316,7 +316,11 @@ fn random_worlds_settle_and_reach_every_ending() {
         endings.parked += ended.parked;
         endings.cancelled += ended.cancelled;
     }
-    for kind in translate::ANSWER_KINDS {
+    // A run says it was cancelled only once something cancelled it, and the
+    // worker reports that cancel as its own: the engine's, lost contact, a
+    // shutdown, or the wall time of its agent.
+    assert!(!answers.contains_key("run cancelled"), "no run's cancel is its own: {answers:?}");
+    for kind in translate::ANSWER_KINDS.into_iter().filter(|kind| *kind != "run cancelled") {
         assert!(answers.contains_key(kind), "some run is answered {kind}: {answers:?}");
     }
     let Endings { finished, rejected, held, parked, cancelled } = endings;

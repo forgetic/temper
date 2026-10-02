@@ -181,9 +181,12 @@ fn runs_that_keep_making_progress_are_stopped_only_by_their_wall_time() {
     let started = stats.client.started;
     assert!(started > 0, "{stats:?}");
     assert_eq!(count(&stats.facts, "overdue"), started, "every run is cancelled for its wall time: {stats:?}");
-    let (failed, faulted) = (count(&stats.finishes, "failed"), count(&stats.faults, "wall time"));
-    assert!(failed > 0 && faulted > 0, "{stats:?}");
-    assert_eq!(failed + faulted, started, "and says it was cancelled, or is faulted for it: {stats:?}");
+    // A run that winds down says it was cancelled, which is the wall time's
+    // doing: either way, the client hears the fault.
+    let terminated = stats.tree.terminates;
+    assert!(terminated > 0 && terminated < started, "some wound down, the rest were terminated: {stats:?}");
+    assert_eq!(count(&stats.faults, "wall time"), started, "every run is faulted for its wall time: {stats:?}");
+    assert_eq!(count(&stats.finishes, "failed"), 0, "{stats:?}");
     assert_eq!(count(&stats.faults, "no progress"), 0, "{stats:?}");
 }
 

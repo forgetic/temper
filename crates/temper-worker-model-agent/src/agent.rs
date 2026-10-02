@@ -27,8 +27,9 @@
 //! Stopping is cancel, then kill. The client's stop sends the cancel down,
 //! behind what waits, and the run winds down on its own within
 //! `Limits::grace`; so does the wall time, which is owed to the client as the
-//! agent's fault if the run does not say how it finishes. A run that says how
-//! it finishes is given the same grace to exit. Past the grace the tree is
+//! agent's fault if the run does not say how it finishes, or says only that
+//! it was cancelled: that cancel was the agent's fault, not the run's own
+//! ending. A run that says how it finishes is given the same grace to exit. Past the grace the tree is
 //! terminated, and past `Limits::kill_after` after that, killed. A broken rule
 //! or the watchdog terminates the tree at once, and so does a live run that
 //! hangs up its channel without saying how it finishes. A process that exits,
@@ -52,8 +53,8 @@
 //! A transition table, by state; what is not listed is unreachable by the
 //! boundary's contract (one terminal per request, `Exited` before `Reaped`,
 //! the client naming an agent only once it has started). "Owed" is the fault
-//! told if the run does not say how it finishes: none once the client has
-//! stopped the agent.
+//! told if the run does not say how it finishes (or, for the wall time, says
+//! it was cancelled): none once the client has stopped the agent.
 //!
 //! ```text
 //! state        event                          next          requests
@@ -83,7 +84,8 @@
 //!              received: a fact               Cancelled     told
 //!              received: long, long done,     Cancelled
 //!                waiting
-//!              received: finish               Exiting       finished
+//!              received: finish               Exiting       finished, or faulted: wall time if
+//!                                                             owed and it says it was cancelled
 //!              received: a broken rule        Terminating   faulted: rules if owed, terminate
 //!              malformed                      Terminating   faulted: rules if owed, terminate
 //!              hangup                         Exiting       faulted: what is owed
@@ -95,7 +97,7 @@
 //! Draining     received: a fact               Draining      told
 //!              received: a call, a withdraw,  Draining      (dropped: nothing hears its
 //!                long, long done, waiting                     answer)
-//!              received: finish               Exiting       finished
+//!              received: finish               Exiting       finished, or faulted: as Cancelled
 //!              received: a broken rule        Terminating   faulted: rules if owed, terminate
 //!              malformed                      Terminating   faulted: rules if owed, terminate
 //!              hangup                         Exiting       faulted: what is owed
@@ -132,7 +134,7 @@ use temper_lib::bytes::copy_of;
 use temper_lib::{Deadlines, Env, Id, Queue, Set, Slab, Time, Token};
 
 use crate::boundary::{Bounce, End, Fault, Invalid, Request, Signal, Spawn};
-use crate::channel::{Ask, Down, Finish, Reply, Up};
+use crate::channel::{Ask, Down, Finish, Reply, RunFailure, Up};
 use crate::facts::{Fact, Facts};
 use crate::limits::{self, BUSY, Limits};
 use crate::model::Model;
@@ -933,7 +935,7 @@ fn heard(
             out.push(Request::Waiting { client });
         }
         Up::Finish { finish } => {
-            return finished(client, process, finish, now.saturating_add(env.limits.grace), facts, out);
+            return finished(client, process, finish, now.saturating_add(env.limits.grace), None, facts, out);
         }
     }
     State::Live { process, channel, watch }
@@ -957,7 +959,7 @@ fn wound(
         Up::Withdraw { call } => withdrew(client, &mut channel, call, out),
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
         Up::Long { span: _ } | Up::LongDone | Up::Waiting { heard: _ } => {}
-        Up::Finish { finish } => return finished(client, process, finish, until, facts, out),
+        Up::Finish { finish } => return finished(client, process, finish, until, owed, facts, out),
     }
     State::Cancelled { process, channel, until, owed }
 }
@@ -976,7 +978,7 @@ fn drained(
     match message {
         Up::Call { .. } | Up::Withdraw { .. } | Up::Long { .. } | Up::LongDone | Up::Waiting { .. } => {}
         Up::Fact { fact } => out.push(Request::Told { client, fact }),
-        Up::Finish { finish } => return finished(client, process, finish, until, facts, out),
+        Up::Finish { finish } => return finished(client, process, finish, until, owed, facts, out),
     }
     State::Draining { process, until, owed }
 }
@@ -1030,17 +1032,26 @@ fn withdrew(client: Token, channel: &mut Channel, call: Token, out: &mut Queue<R
 }
 
 /// The run said how it finishes: its last word. Its process exits on its own
-/// until `until`.
+/// until `until`. A run the wall time cancelled, `owed` the client, that says
+/// it was cancelled has not said how it finishes of its own: the client is
+/// told the fault instead.
 fn finished(
     client: Token,
     process: Process,
     finish: Finish,
     until: Time,
+    owed: Option<Fault>,
     facts: &mut Facts,
     out: &mut Queue<Request>,
 ) -> State {
-    facts.push(Fact::Finished { client });
-    out.push(Request::Finished { client, finish });
+    let cancelled = finish == Finish::Failed { failure: RunFailure::Cancelled };
+    match owed {
+        Some(Fault::WallTime) if cancelled => tell_fault(client, Fault::WallTime, true, facts, out),
+        Some(Fault::WallTime | Fault::Exited | Fault::Rules | Fault::NoProgress) | None => {
+            facts.push(Fact::Finished { client });
+            out.push(Request::Finished { client, finish });
+        }
+    }
     State::Exiting { process, until, told: true }
 }
 

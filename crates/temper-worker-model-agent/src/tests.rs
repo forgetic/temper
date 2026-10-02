@@ -547,6 +547,38 @@ fn the_wall_time_cancels_a_run_and_its_finish_stands() {
 }
 
 #[test]
+fn a_run_the_wall_time_cancelled_that_says_it_was_cancelled_is_faulted_for_it() {
+    let mut h = Harness::new(LIMITS);
+    let a = overdue(&mut h);
+    h.sent(a);
+    let cancelled = Up::Finish { finish: Finish::Failed { failure: RunFailure::Cancelled } };
+    assert_eq!(&*h.say(a, cancelled), [faulted(a, Fault::WallTime), read(a)], "the cancel was the agent's fault");
+    h.goes(a);
+}
+
+#[test]
+fn a_run_the_wall_time_cancelled_that_exited_and_says_it_was_cancelled_is_faulted_for_it() {
+    let mut h = Harness::new(LIMITS);
+    let a = overdue(&mut h);
+    h.sent(a);
+    assert!(h.step(Event::Exited { owner: a.agent }).is_empty(), "what it wrote is drained");
+    let cancelled = Up::Finish { finish: Finish::Failed { failure: RunFailure::Cancelled } };
+    assert_eq!(&*h.say(a, cancelled), [faulted(a, Fault::WallTime), read(a)], "the cancel was the agent's fault");
+}
+
+#[test]
+fn a_run_its_client_stopped_that_says_it_was_cancelled_finishes_so() {
+    let mut h = Harness::new(LIMITS);
+    let a = h.live(1);
+    assert_eq!(&*h.stop(a), [send(a, Down::Cancel)]);
+    h.sent(a);
+    let finish = Finish::Failed { failure: RunFailure::Cancelled };
+    let emitted = h.say(a, Up::Finish { finish });
+    let finished = Request::Finished { client: a.client, finish: Finish::Failed { failure: RunFailure::Cancelled } };
+    assert_eq!(&*emitted, [finished, read(a)], "the client's cancel is the client's to report");
+}
+
+#[test]
 fn a_run_past_its_wall_time_that_does_not_finish_is_faulted_past_the_grace() {
     let mut h = Harness::new(LIMITS);
     let a = overdue(&mut h);
