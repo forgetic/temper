@@ -2,7 +2,8 @@
 //! (programming-style.md, 4.5; engine-model.md, sections 3 and 5): the
 //! engine's plan policy. It knows the primitives (agent steps, changes, waits
 //! and sessions), plans as graphs of steps under a goal, gates, wake rules,
-//! envelopes and templates. It checks a plan before it exists.
+//! envelopes and templates. It checks a plan before it exists, says what
+//! accepting it makes, and what growing it does to its envelope.
 //!
 //! It knows nothing of the forge's API, the workers, the record's encoding or
 //! the mechanics of an item's lifecycle, and it never checks the rules: it
@@ -23,13 +24,17 @@
 
 extern crate alloc;
 
+mod accept;
 mod check;
 mod config;
 mod limits;
 mod plan;
+mod record;
 #[cfg(test)]
 mod tests;
+mod write;
 
+pub use accept::{Growing, accept, grow};
 pub use check::{Problem, Problems, check};
 pub use config::{Config, Repo, Template};
 pub use limits::{Limits, max_out, worst_case};
@@ -37,3 +42,5 @@ pub use plan::{
     AgentSpec, Batch, Budget, ChangeSpec, Charter, Commit, Envelope, Gate, Grants, Growth, Plan, Repository, Resume,
     Review, SessionSpec, Sources, Step, Target, WaitSpec, Wake, Work,
 };
+pub use record::{Goal, Progress, Record, Reviewed, Verdict};
+pub use write::{Key, Write};

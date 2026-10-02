@@ -3,12 +3,12 @@
 use alloc::boxed::Box;
 use core::mem::size_of;
 
-use temper_lib::{Duration, Env, List, Time};
+use temper_lib::{Duration, Env, List, Queue, Time};
 
 use crate::{
-    AgentSpec, Batch, Budget, ChangeSpec, Charter, Config, Envelope, Gate, Grants, Limits, Plan, Problem, Problems,
-    Repo, Repository, Resume, Review, SessionSpec, Sources, Step, Target, Template, WaitSpec, Wake, Work, check,
-    max_out, worst_case,
+    AgentSpec, Batch, Budget, ChangeSpec, Charter, Config, Envelope, Gate, Goal, Grants, Growing, Growth, Key, Limits,
+    Plan, Problem, Problems, Progress, Record, Repo, Repository, Resume, Review, SessionSpec, Sources, Step, Target,
+    Template, WaitSpec, Wake, Work, Write, accept, check, grow, max_out, worst_case,
 };
 
 /// The most a run may ask for.
@@ -340,6 +340,112 @@ fn problems_past_the_listed_are_counted() {
     // And comes after a step the plan does not have.
     assert_eq!(found.listed.len(), 8);
     assert_eq!(found.more, 8);
+}
+
+// Accepting and growing.
+
+fn out() -> Queue<Write> {
+    Queue::with_capacity(max_out(&LIMITS))
+}
+
+/// What `out` holds, taken out.
+fn writes(out: &mut Queue<Write>) -> Box<[Write]> {
+    let mut taken = List::with_capacity(max_out(&LIMITS));
+    while let Some(write) = out.pop() {
+        taken.push(write).expect("room for every write");
+    }
+    taken.into_boxed()
+}
+
+fn created(step: &Step) -> Write {
+    Write::Create {
+        key: Key::Step(step.name.clone()),
+        record: Box::new(Record { step: step.clone(), progress: Progress::NEW, goal: None }),
+    }
+}
+
+/// The goal of the plan of `steps`, as accepted: an agent step and a change.
+fn goal() -> Goal {
+    Goal { steps: names(&["a", "b"]), envelope: envelope(), budget: 10_000, estimate: 200, growth: Growth::NONE }
+}
+
+#[test]
+fn accepting_a_plan_makes_an_item_for_each_step_then_its_goal() {
+    let plan = plan(Box::new([agent("a", &[]), change("b", &["a"])]));
+    let mut out = out();
+    assert_eq!(accept(&config(), &env(), &plan, &mut out), Ok(()));
+    assert_eq!(*writes(&mut out), [created(&plan.steps[0]), created(&plan.steps[1]), Write::Goal(goal())]);
+}
+
+#[test]
+fn a_plan_with_problems_makes_nothing() {
+    let mut out = out();
+    let refused = accept(&config(), &env(), &plan(Box::new([agent("a", &["a"])])), &mut out);
+    assert_eq!(refused, Err(Problems { listed: Box::new([Problem::Cycle { step: 0 }]), more: 0 }));
+    assert!(out.is_empty());
+}
+
+#[test]
+fn growth_within_the_envelope_needs_no_acceptance() {
+    let feat = change_with("d", ChangeSpec { base: bytes("feat"), ..change_spec() });
+    let steps = [agent("c", &["a"]), feat, wait("e", WaitSpec::Steps, &["c", "d", "b"])];
+    let mut out = out();
+    assert_eq!(grow(&config(), &env(), &goal(), &steps, &mut out), Ok(Growing::Within));
+    let grown = Goal {
+        steps: names(&["a", "b", "c", "d", "e"]),
+        estimate: 400,
+        growth: Growth { agents: 1, changes: 1, waits: 1, sessions: 0 },
+        ..goal()
+    };
+    assert_eq!(*writes(&mut out), [created(&steps[0]), created(&steps[1]), created(&steps[2]), Write::Goal(grown)]);
+}
+
+#[test]
+fn growth_beyond_the_envelope_needs_a_persons_acceptance() {
+    let mut out = out();
+    // A change into a branch the envelope does not name.
+    let main = [change("c", &[])];
+    assert_eq!(grow(&config(), &env(), &goal(), &main, &mut out), Ok(Growing::Beyond));
+    assert_eq!(writes(&mut out).len(), 2);
+    // A session, of which the envelope allows none.
+    assert_eq!(grow(&config(), &env(), &goal(), &[session("c")], &mut out), Ok(Growing::Beyond));
+    assert_eq!(writes(&mut out).len(), 2);
+    // A third agent step, counting the growth so far.
+    let grown = Goal { growth: Growth { agents: 2, ..Growth::NONE }, ..goal() };
+    assert_eq!(grow(&config(), &env(), &grown, &[agent("c", &[])], &mut out), Ok(Growing::Beyond));
+    assert_eq!(writes(&mut out).len(), 2);
+}
+
+#[test]
+fn growth_is_checked_against_the_plan_it_joins() {
+    let mut out = out();
+    let refused = grow(&config(), &env(), &goal(), &[agent("a", &[]), agent("c", &["d", "c"])], &mut out);
+    assert_eq!(
+        refused,
+        Err(Problems {
+            listed: Box::new([
+                Problem::NameTaken { step: 0 },
+                Problem::UnknownDependency { step: 1, dependency: 0 },
+                Problem::Cycle { step: 1 },
+            ]),
+            more: 0,
+        })
+    );
+    assert_eq!(
+        grow(&config(), &env(), &goal(), &[], &mut out),
+        Err(Problems { listed: Box::new([Problem::NoSteps]), more: 0 })
+    );
+    let spent = Goal { estimate: 9_950, ..goal() };
+    assert_eq!(
+        grow(&config(), &env(), &spent, &[agent("c", &[])], &mut out),
+        Err(Problems { listed: Box::new([Problem::OverBudget { estimate: 10_050, budget: 10_000 }]), more: 0 })
+    );
+    let full = nameless(LIMITS.steps - 1, &[]);
+    assert_eq!(
+        grow(&config(), &env(), &goal(), &full, &mut out),
+        Err(Problems { listed: Box::new([Problem::TooManySteps { max: LIMITS.steps }]), more: 0 })
+    );
+    assert!(out.is_empty());
 }
 
 // Limits.
