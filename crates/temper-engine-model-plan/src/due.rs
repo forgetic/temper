@@ -20,8 +20,9 @@
 //!                 clean ─► merge at exactly the head
 //! ```
 //!
-//! A change repaired as many times as the limits allow is held for a person
-//! when it needs another repair. Which sections a run's brief carries follows
+//! A change repaired for failures as many times as the limits allow is held
+//! for a person when it needs another such repair; rebasing onto a base that
+//! moved is bounded by the changes that land there, and is not counted. Which sections a run's brief carries follows
 //! from why it runs: a repair's say why it repairs (9).
 
 use alloc::boxed::Box;
@@ -358,9 +359,13 @@ fn open(
 }
 
 /// A run that repairs the change, its brief saying why, or a hold once it has
-/// been repaired as many times as the limits allow.
+/// been repaired for failures as many times as the limits allow.
 fn repair(config: &Config, env: &Env<Limits>, record: &Record, spec: &ChangeSpec, facts: &Facts, why: Repair) -> Due {
-    if record.progress.repairs >= env.limits.repairs {
+    let failure = match why {
+        Repair::CiFailed | Repair::ChangesRequested | Repair::Conflicts => true,
+        Repair::BaseMoved => false,
+    };
+    if failure && record.progress.repairs >= env.limits.repairs {
         return Due::Hold(Hold::Repairs);
     }
     let base = sections(facts);

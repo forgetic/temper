@@ -2,8 +2,9 @@
 //! becomes an item for each step, keyed by the step's name, each with its step
 //! in its record, and the goal's part of the record on the item that proposed
 //! it. Steps added to an accepted plan are checked as a plan's are, against
-//! the steps it has, and then against its envelope: growth within it needs no
-//! one's acceptance, growth beyond it a person's. Whether a plan needs a
+//! the steps it has (a step is done only once the steps it added are, so they
+//! may not come after it), and then against its envelope: growth within it
+//! needs no one's acceptance, growth beyond it a person's. Whether a plan needs a
 //! person's acceptance in the first place is the rules' call.
 
 use alloc::boxed::Box;
@@ -15,7 +16,7 @@ use crate::check::{Among, Found, Problem, Problems, check_plan, check_steps, cou
 use crate::config::Config;
 use crate::limits::Limits;
 use crate::plan::{Envelope, Growth, Plan, Step, Work};
-use crate::record::{Goal, Progress, Record};
+use crate::record::{Entry, Goal, Progress, Record};
 use crate::write::{Key, Write};
 
 /// Whether steps added to a plan are within its envelope.
@@ -41,7 +42,7 @@ pub fn accept(config: &Config, env: &Env<Limits>, plan: &Plan, out: &mut Queue<W
         out.push(create(step));
     }
     out.push(Write::Goal(Goal {
-        steps: joined(&[], &plan.steps),
+        steps: joined(&[], None, &plan.steps),
         envelope: plan.envelope.clone(),
         budget: plan.budget,
         estimate,
@@ -52,12 +53,15 @@ pub fn accept(config: &Config, env: &Env<Limits>, plan: &Plan, out: &mut Queue<W
 
 /// The writes that add `steps` to `goal`'s plan, into `out`, which has room
 /// for [`max_out`](crate::max_out) of them: an item for each step, then the
-/// goal's part of its item's record. Whether the growth is within the goal's
-/// envelope, or what is wrong with it, and nothing written.
+/// goal's part of its item's record. `by` is the step of the plan that adds
+/// them, by its place among the goal's steps, which makes them its children;
+/// none if the goal's session adds them. Whether the growth is within the
+/// goal's envelope, or what is wrong with it, and nothing written.
 pub fn grow(
     config: &Config,
     env: &Env<Limits>,
     goal: &Goal,
+    by: Option<u32>,
     steps: &[Step],
     out: &mut Queue<Write>,
 ) -> Result<Growing, Problems> {
@@ -65,7 +69,7 @@ pub fn grow(
     if steps.is_empty() {
         found.add(Problem::NoSteps);
     }
-    let added = check_steps(config, &env.limits, &goal.steps, steps, Among::Plan, &mut found);
+    let added = check_steps(config, &env.limits, &goal.steps, by, steps, Among::Plan, &mut found);
     let estimate = goal.estimate.saturating_add(added);
     if estimate > goal.budget {
         found.add(Problem::OverBudget { estimate, budget: goal.budget });
@@ -84,7 +88,7 @@ pub fn grow(
         out.push(create(step));
     }
     out.push(Write::Goal(Goal {
-        steps: joined(&goal.steps, steps),
+        steps: joined(&goal.steps, by, steps),
         envelope: goal.envelope.clone(),
         budget: goal.budget,
         estimate,
@@ -101,19 +105,20 @@ fn create(step: &Step) -> Write {
     }
 }
 
-/// The names of `existing`, then of `steps`.
-fn joined(existing: &[Box<[u8]>], steps: &[Step]) -> Box<[Box<[u8]>]> {
+/// The steps of `existing`, then `steps`, added by `by`.
+fn joined(existing: &[Entry], by: Option<u32>, steps: &[Step]) -> Box<[Entry]> {
     let total = count(existing.len()).saturating_add(count(steps.len()));
-    let mut names = List::with_capacity(total);
-    for name in existing {
-        let pushed = names.push(copy_of(name));
-        assert!(pushed.is_ok(), "room for every name");
+    let mut entries = List::with_capacity(total);
+    for entry in existing {
+        let pushed = entries.push(entry.clone());
+        assert!(pushed.is_ok(), "room for every step");
     }
     for step in steps {
-        let pushed = names.push(copy_of(&step.name));
-        assert!(pushed.is_ok(), "room for every name");
+        let entry = Entry { name: copy_of(&step.name), after: step.after.clone(), parent: by };
+        let pushed = entries.push(entry);
+        assert!(pushed.is_ok(), "room for every step");
     }
-    names.into_boxed()
+    entries.into_boxed()
 }
 
 /// `growth` with `step` added to it.

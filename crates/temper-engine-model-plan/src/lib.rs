@@ -53,6 +53,6 @@ pub use plan::{
     AgentSpec, Batch, Budget, ChangeSpec, Charter, Commit, Envelope, Gate, Grants, Growth, Plan, Repository, Resume,
     Review, SessionSpec, Sources, Step, Target, WaitSpec, Wake, Work,
 };
-pub use record::{Goal, Progress, Record, Reviewed, Verdict};
+pub use record::{Entry, Goal, Progress, Record, Reviewed, Verdict};
 pub use wake::{Inbound, Source, Woken, wake};
 pub use write::{Key, Write};

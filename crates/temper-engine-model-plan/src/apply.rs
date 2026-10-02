@@ -6,7 +6,7 @@
 //! with feedback the run can act on.
 //!
 //! ```text
-//! change      a change step's: on a branch still at its head; a repair once its pull request is open
+//! change      a change step's: on a branch still at its head; a repair for a failure is counted
 //! verdict     an agent's review of a change, on its pull request's head still
 //! report      an agent step's, once: it finishes the step
 //! plan        a chatting session's: accepted, it makes the plan's items, and the session its goal
@@ -27,9 +27,9 @@ use alloc::boxed::Box;
 use temper_lib::{Env, Queue};
 
 use crate::accept::{Growing, accept, grow};
-use crate::check::{Among, Found, Problem, Problems, check_steps, count};
+use crate::check::{Among, Found, Problem, Problems, check_steps, count, entry_named};
 use crate::config::Config;
-use crate::due::Hold;
+use crate::due::{Hold, Repair};
 use crate::facts::{Facts, PullState};
 use crate::limits::Limits;
 use crate::plan::{Commit, Plan, Review, Step, Work};
@@ -39,9 +39,11 @@ use crate::write::{Key, Write};
 /// A run's outcome, in the plan's terms.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Outcome {
-    /// A change, pushed: the item's branch holds `head`.
+    /// A change, pushed: the item's branch holds `head`. `repair` is the
+    /// repair its run was due for, if it was one.
     Change {
         head: Commit,
+        repair: Option<Repair>,
     },
     /// A verdict on a change's exact head.
     Verdict {
@@ -121,8 +123,8 @@ pub fn apply(
     let step = &record.step;
     let progress = record.progress;
     match outcome {
-        Outcome::Change { head } => match &step.work {
-            Work::Change(_) => changed(progress, facts, *head, out),
+        Outcome::Change { head, repair } => match &step.work {
+            Work::Change(_) => changed(progress, facts, *head, *repair, out),
             Work::Agent(_) | Work::Wait(_) | Work::Session(_) => not_allowed(),
         },
         Outcome::Verdict { head, verdict } => match &step.work {
@@ -154,7 +156,8 @@ pub fn apply(
                 let Some(goal) = goal else {
                     return invalid(Problem::NoGoal);
                 };
-                match grow(config, env, goal, steps, out) {
+                let by = entry_named(&goal.steps, &step.name);
+                match grow(config, env, goal, by, steps, out) {
                     Ok(growing) => {
                         out.push(Write::Progress(Progress { finished: true, ..progress }));
                         writes(accepted_by(growing))
@@ -180,9 +183,10 @@ pub fn apply(
     }
 }
 
-/// A change pushed to the item's branch: a repair, once its pull request is
-/// open.
-fn changed(progress: Progress, facts: &Facts, head: Commit, out: &mut Queue<Write>) -> Applied {
+/// A change pushed to the item's branch. A repair for a failure counts
+/// against the limit of repairs; a rebase onto a base that moved does not,
+/// since how often that happens is bounded by the changes landing there.
+fn changed(progress: Progress, facts: &Facts, head: Commit, repair: Option<Repair>, out: &mut Queue<Write>) -> Applied {
     if let Some(pull) = facts.pull {
         match pull.state {
             PullState::Open => {}
@@ -193,8 +197,11 @@ fn changed(progress: Progress, facts: &Facts, head: Commit, out: &mut Queue<Writ
     if facts.branch != Some(head) {
         return Applied::Stale(Stale::Moved);
     }
-    if facts.pull.is_some() {
-        out.push(Write::Progress(Progress { repairs: progress.repairs.saturating_add(1), ..progress }));
+    match repair {
+        Some(Repair::CiFailed | Repair::ChangesRequested | Repair::Conflicts) => {
+            out.push(Write::Progress(Progress { repairs: progress.repairs.saturating_add(1), ..progress }));
+        }
+        Some(Repair::BaseMoved) | None => {}
     }
     writes(Accept::Rules)
 }
@@ -225,9 +232,9 @@ fn proposed(config: &Config, env: &Env<Limits>, plan: &Plan, out: &mut Queue<Wri
     }
 }
 
-/// Steps added to `goal`'s plan.
+/// Steps added to `goal`'s plan by its session.
 fn grown(config: &Config, env: &Env<Limits>, goal: &Goal, steps: &[Step], out: &mut Queue<Write>) -> Applied {
-    match grow(config, env, goal, steps, out) {
+    match grow(config, env, goal, None, steps, out) {
         Ok(growing) => writes(accepted_by(growing)),
         Err(problems) => Applied::Invalid(problems),
     }
@@ -248,7 +255,7 @@ fn tasked(config: &Config, env: &Env<Limits>, tasks: &[Step], out: &mut Queue<Wr
     if tasks.is_empty() {
         found.add(Problem::NoSteps);
     }
-    let _estimate: u64 = check_steps(config, &env.limits, &[], tasks, Among::Alone, &mut found);
+    let _estimate: u64 = check_steps(config, &env.limits, &[], None, tasks, Among::Alone, &mut found);
     if !found.is_empty() {
         return Applied::Invalid(found.into_problems());
     }

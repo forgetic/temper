@@ -12,9 +12,10 @@ use alloc::boxed::Box;
 
 use temper_lib::{Env, List, Queue};
 
-use crate::config::{Config, names};
+use crate::config::Config;
 use crate::limits::Limits;
 use crate::plan::{Charter, Envelope, Gate, Plan, Review, Step, Work};
+use crate::record::Entry;
 
 /// Something wrong with a plan, or with an outcome, for the run that wrote it
 /// to fix. Steps are counted from zero, in the order the run gave them, and so
@@ -100,7 +101,7 @@ pub(crate) fn check_plan(config: &Config, limits: &Limits, plan: &Plan, found: &
     if plan.steps.is_empty() {
         found.add(Problem::NoSteps);
     }
-    let estimate = check_steps(config, limits, &[], &plan.steps, Among::Plan, found);
+    let estimate = check_steps(config, limits, &[], None, &plan.steps, Among::Plan, found);
     check_envelope(config, limits, &plan.envelope, found);
     if estimate > plan.budget {
         found.add(Problem::OverBudget { estimate, budget: plan.budget });
@@ -117,12 +118,14 @@ pub(crate) enum Among {
     Alone,
 }
 
-/// Checks `steps`, to join a plan whose steps are named `existing` or to stand
-/// alone, and returns the tokens they are estimated to spend.
+/// Checks `steps`, to join a plan that has the steps `existing` (added by
+/// its step `by`, if one adds them) or to stand alone, and returns the tokens
+/// they are estimated to spend.
 pub(crate) fn check_steps(
     config: &Config,
     limits: &Limits,
-    existing: &[Box<[u8]>],
+    existing: &[Entry],
+    by: Option<u32>,
     steps: &[Step],
     among: Among,
     found: &mut Found,
@@ -147,7 +150,7 @@ pub(crate) fn check_steps(
         check_step(config, limits, existing, steps, at, among, found);
         estimate = estimate.saturating_add(cost(step));
     }
-    check_order(steps, found);
+    check_order(existing, by, steps, found);
     estimate
 }
 
@@ -168,7 +171,7 @@ pub(crate) fn cost(step: &Step) -> u64 {
 fn check_step(
     config: &Config,
     limits: &Limits,
-    existing: &[Box<[u8]>],
+    existing: &[Entry],
     steps: &[Step],
     at: u32,
     among: Among,
@@ -179,7 +182,7 @@ fn check_step(
         found.add(Problem::EmptyName { step: at });
     } else if count(step.name.len()) > limits.name_bytes {
         found.add(Problem::LongName { step: at, max: limits.name_bytes });
-    } else if names(existing, &step.name) || first_named(steps, &step.name) != Some(at) {
+    } else if entry_named(existing, &step.name).is_some() || first_named(steps, &step.name) != Some(at) {
         found.add(Problem::NameTaken { step: at });
     }
     if config.repo(step.repository).is_none() {
@@ -209,7 +212,7 @@ fn check_step(
     }
 }
 
-fn check_after(limits: &Limits, existing: &[Box<[u8]>], steps: &[Step], at: u32, among: Among, found: &mut Found) {
+fn check_after(limits: &Limits, existing: &[Entry], steps: &[Step], at: u32, among: Among, found: &mut Found) {
     let step = steps.get(place(at)).expect("a step of the steps checked");
     if count(step.after.len()) > limits.dependencies {
         found.add(Problem::TooManyDependencies { step: at, max: limits.dependencies });
@@ -217,7 +220,7 @@ fn check_after(limits: &Limits, existing: &[Box<[u8]>], steps: &[Step], at: u32,
     }
     for (dependency, name) in step.after.iter().enumerate() {
         let known = match among {
-            Among::Plan => names(existing, name) || first_named(steps, name).is_some(),
+            Among::Plan => resolve(existing, steps, name).is_some(),
             Among::Alone => false,
         };
         if !known {
@@ -272,28 +275,29 @@ fn check_envelope(config: &Config, limits: &Limits, envelope: &Envelope, found: 
     }
 }
 
-/// Orders `steps` by their dependencies among themselves, as Kahn's algorithm
-/// does: a step is ready once every step it comes after is ordered. A step
-/// never ready comes after a cycle, or is on one; one on a cycle is reported.
-/// Dependencies on steps the plan already has are met, and names nothing
-/// has are reported elsewhere. Where names repeat, the first step of a name is
-/// the one others come after.
-fn check_order(steps: &[Step], found: &mut Found) {
-    let total = count(steps.len());
-    // How many of the steps each one comes after are not yet ordered.
+/// Orders the steps of the plan, those it has (`existing`) and those
+/// checked, as Kahn's algorithm does: a step is ready once every step it
+/// comes after is ordered, and every step it added. Steps checked are added
+/// by `by`, one of those it has, if a step adds them. A step never ready
+/// comes after a cycle, or is on one; a step checked on one is reported (the
+/// steps the plan has made none, so every cycle goes through one checked).
+/// Names nothing has are reported elsewhere; where names repeat, the first
+/// step of a name is the one others come after.
+fn check_order(existing: &[Entry], by: Option<u32>, steps: &[Step], found: &mut Found) {
+    let known = count(existing.len());
+    let total = known.saturating_add(count(steps.len()));
+    // How many times each step waits on a step not yet ordered.
     let mut waiting: List<u32> = List::with_capacity(total);
     let mut ready: Queue<u32> = Queue::with_capacity(total);
-    for (index, step) in steps.iter().enumerate() {
-        let mut among: u32 = 0;
-        for name in &step.after {
-            if first_named(steps, name).is_some() {
-                among = among.saturating_add(1);
-            }
+    for node in 0..total {
+        let mut on: u32 = 0;
+        for other in 0..total {
+            on = on.saturating_add(waits_on(existing, by, steps, node, other));
         }
-        if among == 0 {
-            ready.push(count(index));
+        if on == 0 {
+            ready.push(node);
         }
-        let pushed = waiting.push(among);
+        let pushed = waiting.push(on);
         assert!(pushed.is_ok(), "a count for each step");
     }
     let mut ordered: u32 = 0;
@@ -302,45 +306,86 @@ fn check_order(steps: &[Step], found: &mut Found) {
             break;
         };
         ordered = ordered.saturating_add(1);
-        let name = &steps.get(place(done)).expect("a step of the steps ordered").name;
-        if first_named(steps, name) != Some(done) {
-            // Steps that come after this name come after an earlier step.
-            continue;
-        }
-        for (index, step) in steps.iter().enumerate() {
-            for after in &step.after {
-                if **after != **name {
-                    continue;
-                }
-                let left = waiting.get_mut(count(index)).expect("a count for each step");
-                *left = left.checked_sub(1).expect("a step is released once for each time it names the step");
-                if *left == 0 {
-                    ready.push(count(index));
-                }
+        for node in 0..total {
+            let times = waits_on(existing, by, steps, node, done);
+            if times == 0 {
+                continue;
+            }
+            let left = waiting.get_mut(node).expect("a count for each step");
+            *left = left.checked_sub(times).expect("a step is released once for each time it waits");
+            if *left == 0 {
+                ready.push(node);
             }
         }
     }
     if ordered == total {
         return;
     }
-    // Every step never ordered comes after one never ordered, so following
-    // such dependencies from any of them for as many steps as there are ends
-    // on a cycle.
+    // Every step never ordered waits on one never ordered, so following such
+    // steps from any of them for as many moves as there are steps ends on a
+    // cycle, and following it on reaches a step checked.
     let mut at = first_waiting(&waiting).expect("a step never ordered");
-    for _ in 0..total {
-        let step = steps.get(place(at)).expect("a step of the steps ordered");
+    let moves = total.saturating_mul(2);
+    for moved in 0..moves {
+        if moved >= total && at >= known {
+            break;
+        }
         let mut next = None;
-        for name in &step.after {
-            if let Some(before) = first_named(steps, name)
-                && waiting.get(before).copied().unwrap_or(0) > 0
-            {
-                next = Some(before);
+        for other in 0..total {
+            if waits_on(existing, by, steps, at, other) > 0 && waiting.get(other).copied().unwrap_or(0) > 0 {
+                next = Some(other);
                 break;
             }
         }
-        at = next.expect("a step never ordered comes after one never ordered");
+        at = next.expect("a step never ordered waits on one never ordered");
     }
-    found.add(Problem::Cycle { step: at });
+    let step = at.checked_sub(known).expect("every cycle goes through a step checked");
+    found.add(Problem::Cycle { step });
+}
+
+/// How many times step `node` waits on step `other`: once for each time it
+/// comes after it, and once more if it added it. Steps are those of
+/// `existing`, then those of `steps`, which `by` adds.
+fn waits_on(existing: &[Entry], by: Option<u32>, steps: &[Step], node: u32, other: u32) -> u32 {
+    let known = count(existing.len());
+    let after: &[Box<[u8]>] = match existing.get(place(node)) {
+        Some(entry) => &entry.after,
+        None => &steps.get(place(node.saturating_sub(known))).expect("a step of the plan").after,
+    };
+    let mut times: u32 = 0;
+    for name in after {
+        if resolve(existing, steps, name) == Some(other) {
+            times = times.saturating_add(1);
+        }
+    }
+    let parent = match existing.get(place(other)) {
+        Some(entry) => entry.parent,
+        None => by,
+    };
+    if parent == Some(node) {
+        times = times.saturating_add(1);
+    }
+    times
+}
+
+/// The step named `name`: the first the plan has of that name, else the
+/// first checked, counted after those the plan has.
+fn resolve(existing: &[Entry], steps: &[Step], name: &[u8]) -> Option<u32> {
+    if let Some(index) = entry_named(existing, name) {
+        return Some(index);
+    }
+    let checked = first_named(steps, name)?;
+    count(existing.len()).checked_add(checked)
+}
+
+/// The first of `entries` named `name`.
+pub(crate) fn entry_named(entries: &[Entry], name: &[u8]) -> Option<u32> {
+    for (index, entry) in entries.iter().enumerate() {
+        if *entry.name == *name {
+            return Some(count(index));
+        }
+    }
+    None
 }
 
 /// The first step of `waiting` still waiting.

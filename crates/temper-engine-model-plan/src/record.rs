@@ -24,7 +24,9 @@ pub struct Progress {
     /// An agent step's run has finished: its report, or the steps it added,
     /// applied.
     pub finished: bool,
-    /// Runs that repaired a change, their outcomes applied.
+    /// Runs that repaired a change for a failure (CI failed, changes asked
+    /// for, a conflict), their outcomes applied. Rebasing onto a base that
+    /// moved is not counted.
     pub repairs: u32,
     /// A change's last review by an agent.
     pub review: Option<Reviewed>,
@@ -53,12 +55,24 @@ pub enum Verdict {
 /// An accepted plan, on its goal's item: what its growth is checked against.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Goal {
-    /// Its steps' names, in the order they joined it.
-    pub steps: Box<[Box<[u8]>]>,
+    /// Its steps, in the order they joined it.
+    pub steps: Box<[Entry]>,
     pub envelope: Envelope,
     pub budget: u64,
     /// The tokens its steps are estimated to spend.
     pub estimate: u64,
     /// The steps added since it was accepted, of each primitive.
     pub growth: Growth,
+}
+
+/// A step of an accepted plan, as its goal keeps it: enough to check that
+/// growth makes no cycle.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Entry {
+    pub name: Box<[u8]>,
+    /// The steps it comes after.
+    pub after: Box<[Box<[u8]>]>,
+    /// The step that added it, by its place among the goal's steps, if a step
+    /// did: that step is done only once this one is.
+    pub parent: Option<u32>,
 }

@@ -6,7 +6,7 @@ use core::mem::size_of;
 use temper_lib::{Duration, Env, List, Queue, Time};
 
 use crate::{
-    Accept, Action, AgentSpec, Applied, Batch, Budget, ChangeSpec, Charter, Ci, Commit, Config, Decision, Due,
+    Accept, Action, AgentSpec, Applied, Batch, Budget, ChangeSpec, Charter, Ci, Commit, Config, Decision, Due, Entry,
     Envelope, Facts, Finish, Gate, Goal, Grants, Growing, Growth, Hold, Inbound, Key, Limits, Mergeable, Outcome, Plan,
     Problem, Problems, Progress, Pull, PullState, Record, Relations, Repair, Repo, Repository, Resume, Review,
     Reviewed, Run, Sections, SessionSpec, Source, Sources, Stale, Step, Target, Template, Then, Verdict, WaitSpec,
@@ -366,9 +366,19 @@ fn created(step: &Step) -> Write {
     }
 }
 
+fn entry(name: &str, after: &[&str], parent: Option<u32>) -> Entry {
+    Entry { name: bytes(name), after: names(after), parent }
+}
+
 /// The goal of the plan of `steps`, as accepted: an agent step and a change.
 fn goal() -> Goal {
-    Goal { steps: names(&["a", "b"]), envelope: envelope(), budget: 10_000, estimate: 200, growth: Growth::NONE }
+    Goal {
+        steps: Box::new([entry("a", &[], None), entry("b", &["a"], None)]),
+        envelope: envelope(),
+        budget: 10_000,
+        estimate: 200,
+        growth: Growth::NONE,
+    }
 }
 
 #[test]
@@ -392,9 +402,15 @@ fn growth_within_the_envelope_needs_no_acceptance() {
     let feat = change_with("d", ChangeSpec { base: bytes("feat"), ..change_spec() });
     let steps = [agent("c", &["a"]), feat, wait("e", WaitSpec::Steps, &["c", "d", "b"])];
     let mut out = out();
-    assert_eq!(grow(&config(), &env(), &goal(), &steps, &mut out), Ok(Growing::Within));
+    assert_eq!(grow(&config(), &env(), &goal(), None, &steps, &mut out), Ok(Growing::Within));
     let grown = Goal {
-        steps: names(&["a", "b", "c", "d", "e"]),
+        steps: Box::new([
+            entry("a", &[], None),
+            entry("b", &["a"], None),
+            entry("c", &["a"], None),
+            entry("d", &[], None),
+            entry("e", &["c", "d", "b"], None),
+        ]),
         estimate: 400,
         growth: Growth { agents: 1, changes: 1, waits: 1, sessions: 0 },
         ..goal()
@@ -407,21 +423,50 @@ fn growth_beyond_the_envelope_needs_a_persons_acceptance() {
     let mut out = out();
     // A change into a branch the envelope does not name.
     let main = [change("c", &[])];
-    assert_eq!(grow(&config(), &env(), &goal(), &main, &mut out), Ok(Growing::Beyond));
+    assert_eq!(grow(&config(), &env(), &goal(), None, &main, &mut out), Ok(Growing::Beyond));
     assert_eq!(writes(&mut out).len(), 2);
     // A session, of which the envelope allows none.
-    assert_eq!(grow(&config(), &env(), &goal(), &[session("c")], &mut out), Ok(Growing::Beyond));
+    assert_eq!(grow(&config(), &env(), &goal(), None, &[session("c")], &mut out), Ok(Growing::Beyond));
     assert_eq!(writes(&mut out).len(), 2);
     // A third agent step, counting the growth so far.
     let grown = Goal { growth: Growth { agents: 2, ..Growth::NONE }, ..goal() };
-    assert_eq!(grow(&config(), &env(), &grown, &[agent("c", &[])], &mut out), Ok(Growing::Beyond));
+    assert_eq!(grow(&config(), &env(), &grown, None, &[agent("c", &[])], &mut out), Ok(Growing::Beyond));
     assert_eq!(writes(&mut out).len(), 2);
+}
+
+#[test]
+fn growth_may_not_come_after_the_step_that_adds_it() {
+    // c comes after b, which comes after a: a step a adds that comes after c
+    // waits for a, which waits for the steps it added.
+    let plan =
+        Goal { steps: Box::new([entry("a", &[], None), entry("b", &["a"], None), entry("c", &["b"], None)]), ..goal() };
+    let mut out = out();
+    let added = [agent("d", &[]), agent("e", &["d", "c"])];
+    assert_eq!(
+        grow(&config(), &env(), &plan, Some(0), &added, &mut out),
+        Err(Problems { listed: Box::new([Problem::Cycle { step: 1 }]), more: 0 })
+    );
+    // Added by c, or by the goal's session, the same steps make no cycle.
+    assert_eq!(grow(&config(), &env(), &plan, Some(2), &[agent("d", &["b"])], &mut out), Ok(Growing::Within));
+    assert_eq!(grow(&config(), &env(), &plan, None, &added, &mut out), Ok(Growing::Within));
+    // Nor through a step an earlier growth added to a.
+    let grown = Goal {
+        steps: Box::new([
+            entry("a", &[], None),
+            entry("b", &["a"], None),
+            entry("c", &["b"], None),
+            entry("d", &[], Some(2)),
+        ]),
+        ..goal()
+    };
+    let refused = grow(&config(), &env(), &grown, Some(3), &[agent("e", &["c"])], &mut out);
+    assert_eq!(refused, Err(Problems { listed: Box::new([Problem::Cycle { step: 0 }]), more: 0 }));
 }
 
 #[test]
 fn growth_is_checked_against_the_plan_it_joins() {
     let mut out = out();
-    let refused = grow(&config(), &env(), &goal(), &[agent("a", &[]), agent("c", &["d", "c"])], &mut out);
+    let refused = grow(&config(), &env(), &goal(), None, &[agent("a", &[]), agent("c", &["d", "c"])], &mut out);
     assert_eq!(
         refused,
         Err(Problems {
@@ -434,17 +479,17 @@ fn growth_is_checked_against_the_plan_it_joins() {
         })
     );
     assert_eq!(
-        grow(&config(), &env(), &goal(), &[], &mut out),
+        grow(&config(), &env(), &goal(), None, &[], &mut out),
         Err(Problems { listed: Box::new([Problem::NoSteps]), more: 0 })
     );
     let spent = Goal { estimate: 9_950, ..goal() };
     assert_eq!(
-        grow(&config(), &env(), &spent, &[agent("c", &[])], &mut out),
+        grow(&config(), &env(), &spent, None, &[agent("c", &[])], &mut out),
         Err(Problems { listed: Box::new([Problem::OverBudget { estimate: 10_050, budget: 10_000 }]), more: 0 })
     );
     let full = nameless(LIMITS.steps - 1, &[]);
     assert_eq!(
-        grow(&config(), &env(), &goal(), &full, &mut out),
+        grow(&config(), &env(), &goal(), None, &full, &mut out),
         Err(Problems { listed: Box::new([Problem::TooManySteps { max: LIMITS.steps }]), more: 0 })
     );
     assert!(out.is_empty());
@@ -715,6 +760,14 @@ fn a_change_repaired_to_the_limit_is_held_when_it_needs_more() {
 }
 
 #[test]
+fn a_change_rebases_onto_a_moved_base_past_its_repairs() {
+    let repaired =
+        Record { progress: Progress { repairs: LIMITS.repairs, ..Progress::NEW }, ..record(change("a", &[])) };
+    let moved = pulled(Pull { base_moved: true, ..ready(head(1)) });
+    assert_eq!(ran(&repaired, &moved).why, Why::Repair(Repair::BaseMoved));
+}
+
+#[test]
 fn a_change_reviewed_by_a_person_waits_for_an_approval_of_its_head() {
     let change = record(change("a", &[]));
     assert_eq!(decided(&change, &pulled(Pull { approvals: 0, ..ready(head(1)) })), Due::Nothing(Waits::Review));
@@ -881,21 +934,26 @@ fn grower(name: &str) -> Step {
 }
 
 #[test]
-fn a_pushed_change_counts_as_a_repair_once_its_pull_request_is_open() {
+fn a_change_repaired_for_a_failure_counts_against_the_limit() {
     let change = record(change("a", &[]));
     let pushed = Facts { branch: Some(head(1)), ..facts() };
-    assert_eq!(apply_to(&change, None, &pushed, &Outcome::Change { head: head(1) }), (WRITES, Box::from([])));
-    let open = pulled(Pull { ci: Ci::Failed, ..ready(head(2)) });
-    assert_eq!(
-        apply_to(&change, None, &open, &Outcome::Change { head: head(2) }),
-        (WRITES, Box::from([Write::Progress(Progress { repairs: 1, ..Progress::NEW })]))
-    );
+    let produced = Outcome::Change { head: head(1), repair: None };
+    assert_eq!(apply_to(&change, None, &pushed, &produced), (WRITES, Box::from([])));
+    let open = pulled(ready(head(2)));
+    for repair in [Repair::CiFailed, Repair::ChangesRequested, Repair::Conflicts] {
+        assert_eq!(
+            apply_to(&change, None, &open, &Outcome::Change { head: head(2), repair: Some(repair) }),
+            (WRITES, Box::from([Write::Progress(Progress { repairs: 1, ..Progress::NEW })]))
+        );
+    }
+    let rebased = Outcome::Change { head: head(2), repair: Some(Repair::BaseMoved) };
+    assert_eq!(apply_to(&change, None, &open, &rebased), (WRITES, Box::from([])));
 }
 
 #[test]
 fn a_change_the_item_moved_on_from_is_stale() {
     let change = record(change("a", &[]));
-    let outcome = Outcome::Change { head: head(1) };
+    let outcome = Outcome::Change { head: head(1), repair: None };
     assert_eq!(apply_to(&change, None, &Facts { branch: Some(head(2)), ..facts() }, &outcome), stale(Stale::Moved));
     assert_eq!(apply_to(&change, None, &facts(), &outcome), stale(Stale::Moved));
     let merged = pulled(Pull { state: PullState::Merged, ..ready(head(1)) });
@@ -1027,7 +1085,7 @@ fn an_outcome_of_another_primitives_is_invalid() {
     let person = record(change("b", &[]));
     let verdict = Outcome::Verdict { head: head(1), verdict: Verdict::Approve };
     let cases = [
-        (record(agent("a", &[])), Outcome::Change { head: head(1) }),
+        (record(agent("a", &[])), Outcome::Change { head: head(1), repair: None }),
         (record(agent("a", &[])), verdict.clone()),
         (person, verdict),
         (record(session("c")), Outcome::Report),
@@ -1066,7 +1124,11 @@ fn the_output_has_room_for_the_largest_decision() {
     assert_eq!(accept(&config(), &env(), &plan(numbered(0, steps, true)), &mut out), Ok(()));
     assert_eq!(out.len(), LIMITS.steps + 1, "an item for each step, and the goal");
     let mut out = super::tests::out();
-    let started = Goal { steps: names(&["s0"]), envelope: Envelope { agents: LIMITS.steps, ..envelope() }, ..goal() };
+    let started = Goal {
+        steps: Box::new([entry("s0", &[], None)]),
+        envelope: Envelope { agents: LIMITS.steps, ..envelope() },
+        ..goal()
+    };
     let added = Outcome::Steps(numbered(1, steps, true));
     let applied = apply(&config(), &env(), &record(grower("build")), Some(&started), &facts(), &added, &mut out);
     assert_eq!(applied, WRITES);
