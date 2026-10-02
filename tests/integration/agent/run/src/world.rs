@@ -43,6 +43,9 @@ pub struct Settings {
     /// The chance, per mille, that a check or a push in flight wins the race
     /// with its cancel.
     pub races: u32,
+    /// The chance, per mille, that as the run is handed an event, the worker's
+    /// cancel of that event's run comes right before it or right after it.
+    pub inject: u32,
 }
 
 /// The checkouts the world makes for runs, and io's way with them.
@@ -101,6 +104,8 @@ impl Settings {
                 cancels: 0,
                 cancel_min: Duration::from_secs(1),
                 cancel_max: Duration::from_secs(60),
+                recancels: 0,
+                late_cancels: 0,
                 brief_min: 100,
                 brief_max: 2000,
                 turns_min: 20,
@@ -148,6 +153,7 @@ impl Settings {
                 check: Span::millis(100, 5_000),
             },
             races: 500,
+            inject: 0,
         }
     }
 }
@@ -255,6 +261,31 @@ struct Open {
     ended: bool,
 }
 
+/// A run as the world sees it from outside, to tell what state a cancel finds
+/// it in.
+struct RunView {
+    budget: run::Budget,
+    deadline: Time,
+    /// Its main conversation, once opened.
+    main: Option<Token>,
+    started: bool,
+    /// Whether it decided how it ends: it closed main, or a cancel or its
+    /// deadline came while it prepared or worked.
+    decided: bool,
+    spent: run::Spend,
+    /// The iteration it answered in.
+    answered: Option<u64>,
+}
+
+/// What one step or alarm of the run made, for the world to attribute: the run
+/// it was about, if known, how many requests it made, and the state a cancel
+/// it took found the run in.
+struct Made {
+    run: Option<Token>,
+    requests: u32,
+    cancel: Option<(Token, &'static str)>,
+}
+
 /// A conversation's call, as the world tracks it.
 struct Call {
     conversation: Token,
@@ -300,14 +331,32 @@ pub struct World {
     files: BTreeMap<(Token, Vec<u8>), Vec<u8>>,
     executables: BTreeSet<(Token, Vec<u8>)>,
     failures: BTreeMap<Token, u64>,
-    /// io's operations in flight, by their owners, and where the result of
-    /// each check in flight is on the wire.
-    io: BTreeSet<Token>,
+    /// io's operations in flight, by their owners: the runs' looks and the
+    /// calls' checks, apart, as their tokens are of different kinds; and where
+    /// the result of each check in flight is on the wire.
+    looks: BTreeSet<Token>,
+    checking: BTreeSet<Token>,
     checks: BTreeMap<Token, (Time, u64)>,
     /// Pushes in flight, by the run's owner; and the jobs whose runs pushed a
     /// change.
     pushes: BTreeMap<Token, Pushing>,
     pushed: BTreeSet<Token>,
+    /// The runs as the world sees them, by the run's names for them; which run
+    /// each worker's name, conversation and landing call is of; the
+    /// conversation each peer is; and the landing calls with a check or push
+    /// in flight.
+    views: BTreeMap<Token, RunView>,
+    run_of_owner: BTreeMap<Token, Token>,
+    run_of_conversation: BTreeMap<Token, Token>,
+    run_of_call: BTreeMap<Token, Token>,
+    conversation_of_peer: BTreeMap<Token, Token>,
+    landing: BTreeSet<Token>,
+    /// The states cancels and deadlines found runs in, and how many times.
+    cancel_cells: BTreeMap<&'static str, u32>,
+    deadline_cells: BTreeMap<&'static str, u32>,
+    iteration: u64,
+    /// The run the last request answered, for the iteration's attribution.
+    just_answered: Option<Token>,
 
     stats: Stats,
     trace: Vec<String>,
@@ -342,10 +391,21 @@ impl World {
             files: BTreeMap::new(),
             executables: BTreeSet::new(),
             failures: BTreeMap::new(),
-            io: BTreeSet::new(),
+            looks: BTreeSet::new(),
+            checking: BTreeSet::new(),
             checks: BTreeMap::new(),
             pushes: BTreeMap::new(),
             pushed: BTreeSet::new(),
+            views: BTreeMap::new(),
+            run_of_owner: BTreeMap::new(),
+            run_of_conversation: BTreeMap::new(),
+            run_of_call: BTreeMap::new(),
+            conversation_of_peer: BTreeMap::new(),
+            landing: BTreeSet::new(),
+            cancel_cells: BTreeMap::new(),
+            deadline_cells: BTreeMap::new(),
+            iteration: 0,
+            just_answered: None,
             stats: Stats::default(),
             trace: Vec::new(),
         }
@@ -365,6 +425,20 @@ impl World {
     #[must_use]
     pub fn trace(&self) -> &[String] {
         &self.trace
+    }
+
+    /// The states cancels found runs in: preparing, stopping, opening,
+    /// working, landing, over (its budget), winding, answered (earlier in the
+    /// same iteration) or gone; and how many times each.
+    #[must_use]
+    pub fn cancel_cells(&self) -> &BTreeMap<&'static str, u32> {
+        &self.cancel_cells
+    }
+
+    /// The states runs' deadlines found them in, as for cancels.
+    #[must_use]
+    pub fn deadline_cells(&self) -> &BTreeMap<&'static str, u32> {
+        &self.deadline_cells
     }
 
     /// Every run started, with the run's answer once it has come.
@@ -398,14 +472,23 @@ impl World {
 
         // Each stage takes its events, then fires its alarms, while it has room
         // for what one more may produce.
+        self.iteration += 1;
+        let mut made = Vec::new();
         while self.run_out.room() >= run::MAX_OUT {
             let Some(event) = self.run_in.pop_front() else { break };
             self.log(&format!("run <- {event:?}"));
+            let run = self.run_of(&event);
+            let cancel = self.note(&event, run);
+            let before = self.run_out.len();
             run::step(&mut self.run, &self.run_env, event, &mut self.run_out);
+            made.push(Made { run, requests: self.run_out.len() - before, cancel });
         }
         while self.run_out.room() >= run::MAX_OUT && self.run.is_due(self.now) {
             self.log("run alarm");
+            let run = self.deadline_due();
+            let before = self.run_out.len();
             run::fire(&mut self.run, &self.run_env, &mut self.run_out);
+            made.push(Made { run, requests: self.run_out.len() - before, cancel: None });
         }
         while self.worker_out.room() >= worker::MAX_OUT {
             let Some(event) = self.worker_in.pop_front() else { break };
@@ -415,9 +498,28 @@ impl World {
             worker::fire(&mut self.worker, &self.worker_env, &mut self.worker_out);
         }
 
-        // What the steps asked for, submitted at the end of the iteration.
-        while let Some(request) = self.run_out.pop() {
-            self.run_request(request);
+        // What the steps asked for, submitted at the end of the iteration, each
+        // attributed to the run its step was about.
+        let mut answered = BTreeMap::new();
+        for (index, made) in made.iter().enumerate() {
+            let mut current = made.run;
+            for _ in 0..made.requests {
+                let request = self.run_out.pop().expect("a step's requests are queued");
+                current = self.run_request(request, current);
+                if let Some(run) = self.just_answered.take() {
+                    answered.insert(run, index);
+                }
+            }
+        }
+        // A cancel stepped after its run answered in this iteration found it
+        // answered, not yet reclaimed.
+        for (index, made) in made.iter().enumerate() {
+            if let Some((run, mut cell)) = made.cancel {
+                if answered.get(&run).is_some_and(|at| *at < index) {
+                    cell = "answered";
+                }
+                *self.cancel_cells.entry(cell).or_insert(0) += 1;
+            }
         }
         while let Some(request) = self.worker_out.pop() {
             self.worker_request(request);
@@ -432,17 +534,42 @@ impl World {
     }
 
     /// The run's requests, carried out the way the top level, the protocol
-    /// layer, io and the conversations would.
-    fn run_request(&mut self, request: run::Request) {
+    /// layer, io and the conversations would. `current` is the run the step
+    /// that made it was about, if known; what it is after the request is
+    /// returned.
+    fn run_request(&mut self, request: run::Request, current: Option<Token>) -> Option<Token> {
         self.log(&format!("run -> {request:?}"));
+        let mut current = current;
         match request {
             run::Request::Admitted { worker, run } => {
+                let budget = self.starts[&worker].budget;
+                let view = RunView {
+                    budget,
+                    deadline: self.now.saturating_add(budget.time),
+                    main: None,
+                    started: false,
+                    decided: false,
+                    spent: run::Spend::ZERO,
+                    answered: None,
+                };
+                self.views.insert(run, view);
+                self.run_of_owner.insert(worker, run);
+                current = Some(run);
                 self.send(Lane::Worker, Delivery::Admitted { owner: worker, run });
             }
-            run::Request::Answer { to, answer } => self.answer(to, answer),
+            run::Request::Answer { to, answer } => {
+                let owner = self.answer(to, answer);
+                if let Some(&run) = self.run_of_owner.get(&owner) {
+                    self.views.get_mut(&run).expect("a view per admitted run").answered = Some(self.iteration);
+                    self.just_answered = Some(run);
+                }
+            }
             run::Request::Open { conversation, opening } => {
                 let fresh = self.opens.insert(conversation, Open::default()).is_none();
                 assert!(fresh, "conversations have distinct names");
+                let run = current.expect("a run opens main in a step about it");
+                self.run_of_conversation.insert(conversation, run);
+                self.views.get_mut(&run).expect("a run is admitted before it opens main").main = Some(conversation);
                 self.stats.opens += 1;
                 self.send(Lane::Conversations, Delivery::Open { conversation, opening });
             }
@@ -451,6 +578,9 @@ impl World {
                 self.send(Lane::Conversations, Delivery::Say { peer });
             }
             run::Request::Close { peer } => {
+                let conversation = self.conversation_of_peer[&peer];
+                let run = self.run_of_conversation[&conversation];
+                self.views.get_mut(&run).expect("a run outlives its conversations").decided = true;
                 self.stats.closes += 1;
                 self.send(Lane::Conversations, Delivery::Close { peer });
             }
@@ -460,6 +590,44 @@ impl World {
                 ledger.returned = true;
                 self.send(Lane::Conversations, Delivery::Return { call, result });
             }
+            request @ (run::Request::Read { .. } | run::Request::Probe { .. } | run::Request::Abort { .. }) => {
+                self.io_request(request);
+            }
+            run::Request::Check { owner, program, deadline, tail } => {
+                self.run_of_call.insert(owner, current.expect("a check is made in a step about its run"));
+                self.landing.insert(owner);
+                self.check(owner, &program, deadline, tail);
+            }
+            run::Request::Checking { worker, deadline } => {
+                self.send(Lane::Worker, Delivery::Checking { job: worker, deadline });
+            }
+            run::Request::Push { worker, owner, change } => {
+                self.run_of_call.insert(owner, current.expect("a push is made in a step about its run"));
+                self.landing.insert(owner);
+                let fresh = self.pushes.insert(owner, Pushing { job: worker, cancelled: false }).is_none();
+                assert!(fresh, "a host call is in flight once");
+                self.stats.pushes += 1;
+                self.send(Lane::Worker, Delivery::Push { owner, job: worker, change: translate::change(change) });
+            }
+            run::Request::CancelHost { owner } => {
+                self.stats.host_cancels += 1;
+                // A push the worker has answered already won the race; the
+                // protocol layer may also wait for one that is about to.
+                if let Some(pushing) = self.pushes.get_mut(&owner)
+                    && !pushing.cancelled
+                    && !self.rng.chance(self.settings.races)
+                {
+                    pushing.cancelled = true;
+                    self.send(Lane::Agent, Delivery::Host(run::Event::HostCancelled { owner }));
+                }
+            }
+        }
+        current
+    }
+
+    /// The run's reads, probes and aborts, carried out the way io would.
+    fn io_request(&mut self, request: run::Request) {
+        match request {
             run::Request::Read { owner, at, max, deadline } => {
                 let (at_time, read) = match self.io_result(owner, deadline) {
                     Some(at_time) => {
@@ -486,7 +654,6 @@ impl World {
                 self.stats.probes += 1;
                 self.schedule(at_time, Delivery::Io(run::Event::Probed { owner, executable }));
             }
-            run::Request::Check { owner, program, deadline, tail } => self.check(owner, &program, deadline, tail),
             run::Request::Abort { owner } => {
                 self.stats.aborts += 1;
                 // A check whose result is on its way already won the race.
@@ -499,32 +666,114 @@ impl World {
                     self.schedule(at, Delivery::Io(run::Event::Aborted { owner }));
                 }
             }
-            run::Request::Checking { worker, deadline } => {
-                self.send(Lane::Worker, Delivery::Checking { job: worker, deadline });
-            }
-            run::Request::Push { worker, owner, change } => {
-                let fresh = self.pushes.insert(owner, Pushing { job: worker, cancelled: false }).is_none();
-                assert!(fresh, "a host call is in flight once");
-                self.stats.pushes += 1;
-                self.send(Lane::Worker, Delivery::Push { owner, job: worker, change: translate::change(change) });
-            }
-            run::Request::CancelHost { owner } => {
-                self.stats.host_cancels += 1;
-                // A push the worker has answered already won the race; the
-                // protocol layer may also wait for one that is about to.
-                if let Some(pushing) = self.pushes.get_mut(&owner)
-                    && !pushing.cancelled
-                    && !self.rng.chance(self.settings.races)
-                {
-                    pushing.cancelled = true;
-                    self.send(Lane::Agent, Delivery::Host(run::Event::HostCancelled { owner }));
-                }
-            }
+            run::Request::Admitted { .. }
+            | run::Request::Answer { .. }
+            | run::Request::Open { .. }
+            | run::Request::Say { .. }
+            | run::Request::Close { .. }
+            | run::Request::Return { .. }
+            | run::Request::Check { .. }
+            | run::Request::Checking { .. }
+            | run::Request::Push { .. }
+            | run::Request::CancelHost { .. } => unreachable!("not one of io's requests"),
         }
     }
 
-    /// The run's answer, checked against its budget and what it did.
-    fn answer(&mut self, to: ReplyTo, answer: run::Answer) {
+    /// The run an event is about, if the world knows it yet.
+    fn run_of(&self, event: &run::Event) -> Option<Token> {
+        match event {
+            run::Event::Start { .. } => None,
+            run::Event::Cancel { run } => Some(*run),
+            run::Event::Read { owner, .. } | run::Event::Probed { owner, .. } => Some(*owner),
+            run::Event::Started { conversation, .. }
+            | run::Event::Yielded { conversation, .. }
+            | run::Event::Used { conversation, .. }
+            | run::Event::Ended { conversation, .. }
+            | run::Event::Delegated { conversation, .. }
+            | run::Event::Withdraw { conversation, .. } => self.run_of_conversation.get(conversation).copied(),
+            run::Event::Checked { owner, .. }
+            | run::Event::Aborted { owner }
+            | run::Event::Pushed { owner, .. }
+            | run::Event::HostCancelled { owner } => self.run_of_call.get(owner).copied(),
+        }
+    }
+
+    /// What an event the run is about to take tells the world of it; for a
+    /// cancel, the state it finds the run in.
+    fn note(&mut self, event: &run::Event, run: Option<Token>) -> Option<(Token, &'static str)> {
+        let view = self.views.get_mut(&run?)?;
+        match event {
+            run::Event::Started { conversation, peer } => {
+                self.conversation_of_peer.insert(*peer, *conversation);
+                view.started = true;
+            }
+            run::Event::Used { spend, .. } => view.spent = view.spent.saturating_add(*spend),
+            run::Event::Checked { owner, .. }
+            | run::Event::Aborted { owner }
+            | run::Event::Pushed { owner, .. }
+            | run::Event::HostCancelled { owner } => {
+                self.landing.remove(owner);
+            }
+            run::Event::Cancel { run } => {
+                let cell = self.cell(*run);
+                let view = self.views.get_mut(run).expect("looked up above");
+                if matches!(cell, "preparing" | "opening" | "working" | "landing" | "over") {
+                    view.decided = true;
+                }
+                return Some((*run, cell));
+            }
+            run::Event::Start { .. }
+            | run::Event::Yielded { .. }
+            | run::Event::Ended { .. }
+            | run::Event::Delegated { .. }
+            | run::Event::Withdraw { .. }
+            | run::Event::Read { .. }
+            | run::Event::Probed { .. } => {}
+        }
+        None
+    }
+
+    /// The state the world sees the run `run` in.
+    fn cell(&self, run: Token) -> &'static str {
+        let view = &self.views[&run];
+        let landing = self.landing.iter().any(|owner| self.run_of_call.get(owner) == Some(&run));
+        match view.answered {
+            Some(at) if at < self.iteration => "gone",
+            Some(_) => "answered",
+            None if view.main.is_none() && view.decided => "stopping",
+            None if view.main.is_none() => "preparing",
+            None if view.decided => "winding",
+            None if !view.started => "opening",
+            None if landing => "landing",
+            None if view.budget_spent() => "over",
+            None => "working",
+        }
+    }
+
+    /// The run whose deadline the run's alarm is about to fire, if one alone
+    /// is due; its state, counted.
+    fn deadline_due(&mut self) -> Option<Token> {
+        let mut due =
+            self.views.iter().filter(|(_, view)| view.answered.is_none() && !view.decided && view.deadline <= self.now);
+        let (run, view) = due.next()?;
+        let (run, deadline) = (*run, view.deadline);
+        let tied = due.any(|(_, other)| other.deadline <= deadline);
+        let earliest = self
+            .views
+            .iter()
+            .all(|(other, view)| *other == run || view.answered.is_some() || view.decided || view.deadline > deadline);
+        if tied || !earliest {
+            return None;
+        }
+        let cell = self.cell(run);
+        *self.deadline_cells.entry(cell).or_insert(0) += 1;
+        self.views.get_mut(&run).expect("looked up above").decided = true;
+        Some(run)
+    }
+
+    /// The run's answer, checked against its budget and what it did: the
+    /// worker's name for the run.
+    fn answer(&mut self, to: ReplyTo, answer: run::Answer) -> Token {
         let owner = to.into_token();
         let start = self.starts.get_mut(&owner).expect("an answer is to a start that was made");
         assert!(start.answer.is_none(), "a start is answered once");
@@ -535,12 +784,13 @@ impl World {
         let translated = translate::answer(&answer);
         start.answer = Some(answer);
         self.send(Lane::Worker, Delivery::Answered { owner, answer: translated });
+        owner
     }
 
     /// Runs the checks at `program` as io would: they fail as many times as
     /// their repository was given, then pass, unless they outlast `deadline`.
     fn check(&mut self, owner: Token, program: &run::Place, deadline: Time, tail: u32) {
-        assert!(self.io.insert(owner), "a call has one check in flight at a time");
+        assert!(self.checking.insert(owner), "a call has one check in flight at a time");
         assert!(self.executables.contains(&(program.root, program.path.to_vec())), "checks are run where found");
         self.stats.checks += 1;
         let at = self.now.saturating_add(self.draw(self.settings.checkout.check));
@@ -565,7 +815,7 @@ impl World {
     /// When io answers a read or a probe of `owner`'s due by `deadline`, or
     /// `None` if it fails or runs out of time.
     fn io_result(&mut self, owner: Token, deadline: Time) -> Option<Time> {
-        assert!(self.io.insert(owner), "a run has one look in flight at a time");
+        assert!(self.looks.insert(owner), "a run has one look in flight at a time");
         let at = self.now.saturating_add(self.draw(self.settings.checkout.io));
         let failed = self.rng.chance(self.settings.checkout.io_failures);
         (!failed && at <= deadline).then_some(at)
@@ -636,7 +886,7 @@ impl World {
                     self.run_in.push_back(run::Event::Start { reply_to: ReplyTo::new(owner), worker: owner, charter });
                 }
                 Delivery::Cancel { run } => self.run_in.push_back(run::Event::Cancel { run }),
-                Delivery::Host(event) => self.run_in.push_back(event),
+                Delivery::Host(event) => self.hand(event),
                 Delivery::Admitted { owner, run } => self.worker_in.push_back(worker::Event::Admitted { owner, run }),
                 Delivery::Answered { owner, answer } => {
                     self.worker_in.push_back(worker::Event::Answered { owner, answer });
@@ -674,21 +924,48 @@ impl World {
                 }
                 Delivery::Event(event) => {
                     self.check_conversation(&event);
-                    self.run_in.push_back(event);
+                    self.hand(event);
                 }
                 Delivery::Io(event) => {
-                    let (run::Event::Read { owner, .. }
-                    | run::Event::Probed { owner, .. }
-                    | run::Event::Checked { owner, .. }
-                    | run::Event::Aborted { owner }) = &event
-                    else {
-                        unreachable!("io answers reads, probes and checks");
+                    let answered = match &event {
+                        run::Event::Read { owner, .. } | run::Event::Probed { owner, .. } => self.looks.remove(owner),
+                        run::Event::Checked { owner, .. } | run::Event::Aborted { owner } => {
+                            self.checks.remove(owner);
+                            self.checking.remove(owner)
+                        }
+                        run::Event::Start { .. }
+                        | run::Event::Cancel { .. }
+                        | run::Event::Started { .. }
+                        | run::Event::Yielded { .. }
+                        | run::Event::Used { .. }
+                        | run::Event::Ended { .. }
+                        | run::Event::Delegated { .. }
+                        | run::Event::Withdraw { .. }
+                        | run::Event::Pushed { .. }
+                        | run::Event::HostCancelled { .. } => unreachable!("io answers reads, probes and checks"),
                     };
-                    assert!(self.io.remove(owner), "io answers each operation once");
-                    self.checks.remove(owner);
-                    self.run_in.push_back(event);
+                    assert!(answered, "io answers each operation once");
+                    self.hand(event);
                 }
             }
+        }
+    }
+
+    /// Hands the run `event`, and with the configured chance, the worker's
+    /// cancel of its run right before or right after it.
+    fn hand(&mut self, event: run::Event) {
+        let run = self.run_of(&event);
+        let inject = match run {
+            Some(_) => self.rng.chance(self.settings.inject),
+            None => false,
+        };
+        let before = inject && self.rng.chance(500);
+        if let Some(run) = run.filter(|_| before) {
+            self.run_in.push_back(run::Event::Cancel { run });
+        }
+        self.run_in.push_back(event);
+        if let Some(run) = run.filter(|_| inject && !before) {
+            self.run_in.push_back(run::Event::Cancel { run });
         }
     }
 
@@ -776,7 +1053,10 @@ impl World {
         assert_eq!(self.worker.pushes(), 0, "the worker answered every push");
         assert_eq!(self.worker.answered(), self.settings.worker.jobs, "every job was started and answered");
         assert_eq!(self.partner.live(), 0, "every conversation has ended");
-        assert!(self.io.is_empty() && self.checks.is_empty(), "io answered every operation");
+        assert!(
+            self.looks.is_empty() && self.checking.is_empty() && self.checks.is_empty(),
+            "io answered every operation"
+        );
         assert!(self.pushes.is_empty(), "every push was answered");
         assert!(self.wire.is_empty() && self.run_in.is_empty() && self.worker_in.is_empty(), "nothing is on its way");
         let mut answered = run::Spend::ZERO;
@@ -825,6 +1105,18 @@ impl World {
 
     fn log(&mut self, line: &str) {
         self.trace.push(format!("{:>16} {line}", self.now.as_nanos()));
+    }
+}
+
+impl RunView {
+    /// Whether its conversations spent past any part of its budget.
+    fn budget_spent(&self) -> bool {
+        let (spent, budget) = (self.spent, self.budget);
+        spent.turns > budget.turns
+            || spent.input > budget.input
+            || spent.output > budget.output
+            || spent.cache_read > budget.cache_read
+            || spent.cache_write > budget.cache_write
     }
 }
 

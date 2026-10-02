@@ -250,25 +250,6 @@ fn a_run_with_nothing_to_look_for_opens_main_at_once() {
 }
 
 #[test]
-fn a_run_cancelled_or_out_of_time_while_it_prepares_answers_once_its_look_has_ended() {
-    let mut h = Harness::new(LIMITS);
-    let run = h.prepare(1);
-    assert!(h.step(Event::Cancel { run }).is_empty(), "the look is in flight");
-    assert!(h.step(Event::Cancel { run }).is_empty(), "the ending is decided");
-    assert_eq!(h.model.next_deadline(), None);
-    let emitted = h.step(Event::Read { owner: run, read: Read::Missing });
-    assert_eq!(answered(emitted), (1, failed(Failure::Cancelled, Spend::ZERO)));
-    h.model.reclaim();
-    assert_eq!((h.model.runs(), h.model.conversations()), (0, 0), "main was never opened, and is gone too");
-
-    let run = h.prepare(2);
-    h.after(BUDGET.time);
-    assert!(h.fire().is_empty(), "the look is in flight");
-    let emitted = h.step(Event::Probed { owner: run, executable: false });
-    assert_eq!(answered(emitted), (2, failed(Failure::Budget(Exhausted::Time), Spend::ZERO)));
-}
-
-#[test]
 fn starts_beyond_the_run_or_conversation_slots_are_refused_as_busy() {
     let mut h = Harness::new(Limits { runs: 1, ..LIMITS });
     let _: (Token, Token) = h.admit(1);
@@ -452,37 +433,6 @@ fn the_deadline_closes_main_and_fails_the_run_for_time() {
     assert_eq!(&*h.fire(), &[Request::Close { peer: Token::new(100) }]);
     let emitted = h.step(Event::Ended { conversation, end: End::Budget(Exhausted::Time), spend: Spend::ZERO });
     assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Time), Spend::ZERO)));
-}
-
-#[test]
-fn a_cancel_closes_main_and_later_cancels_change_nothing() {
-    let mut h = Harness::new(LIMITS);
-    let (run, conversation) = h.running(1, 100);
-    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
-    assert!(h.step(Event::Cancel { run }).is_empty(), "the ending is decided");
-    // The conversation failed before it saw the close: the cancel still wins.
-    let emitted = h.step(Event::Ended { conversation, end: End::Fault(Fault::Provider), spend: Spend::ZERO });
-    assert_eq!(answered(emitted), (1, failed(Failure::Cancelled, Spend::ZERO)));
-    assert!(h.step(Event::Cancel { run }).is_empty(), "answered, not reclaimed yet");
-    h.model.reclaim();
-    assert!(h.step(Event::Cancel { run }).is_empty(), "answered and gone");
-}
-
-#[test]
-fn a_cancel_before_main_starts_closes_main_once_it_does() {
-    let mut h = Harness::new(LIMITS);
-    let (run, conversation) = h.admit(1);
-    assert!(h.step(Event::Cancel { run }).is_empty(), "main has no peer to close yet");
-    let peer = Token::new(100);
-    assert_eq!(&*h.step(Event::Started { conversation, peer }), &[Request::Close { peer }]);
-    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
-    assert_eq!(answered(emitted), (1, failed(Failure::Cancelled, Spend::ZERO)));
-
-    // Or main is refused, and the cancel is still how the run ends.
-    let (run, conversation) = h.admit(2);
-    drop(h.step(Event::Cancel { run }));
-    let emitted = h.step(Event::Ended { conversation, end: End::Busy, spend: Spend::ZERO });
-    assert_eq!(answered(emitted), (2, failed(Failure::Cancelled, Spend::ZERO)));
 }
 
 #[test]
@@ -679,35 +629,6 @@ fn a_withdrawn_landing_stops_what_is_in_flight_and_returns_once_it_has() {
 }
 
 #[test]
-fn a_run_cancelled_while_it_lands_answers_cancelled_once_the_landing_has_settled() {
-    let mut h = Harness::new(LIMITS);
-    let (run, conversation) = h.coding(1, 100);
-    let owner = h.land(conversation, 7);
-    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
-    // A check that passes now does not lead to a push.
-    assert_eq!(&*h.step(Event::Checked { owner, ran: ran(0, b"") }), &[returned(7, Returned::Cancelled)]);
-    // A finish that crossed the close is cancelled too.
-    assert_eq!(
-        &*h.step(finish(conversation, 8, verdict(b"approve", Box::new([])))),
-        &[returned(8, Returned::Cancelled)]
-    );
-    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
-    assert_eq!(answered(emitted), (1, failed(Failure::Cancelled, Spend::ZERO)));
-
-    // Or the push is in flight, wins the race with the withdraw, and loses to
-    // the cancel all the same.
-    let (run, conversation) = h.coding(2, 101);
-    let owner = h.land(conversation, 9);
-    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
-    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
-    drop(h.step(Event::Cancel { run }));
-    assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(9) }), &[Request::CancelHost { owner }]);
-    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(9, Returned::Cancelled)]);
-    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
-    assert_eq!(answered(emitted), (2, failed(Failure::Cancelled, Spend::ZERO)));
-}
-
-#[test]
 fn past_the_budget_a_finish_in_the_turn_in_flight_still_counts() {
     let mut h = Harness::new(LIMITS);
     let (_, conversation) = h.running(1, 100);
@@ -724,4 +645,147 @@ fn past_the_budget_a_finish_in_the_turn_in_flight_still_counts() {
     let emitted = h.step(finish(conversation, 8, verdict(b"reject", Box::new([]))));
     let problems = Problems { listed: Box::new([Problem::UnknownVerdict]), more: 0 };
     assert_eq!(&*emitted, &[returned(8, Returned::Rejected { problems }), Request::Close { peer: Token::new(101) }]);
+}
+
+#[test]
+fn a_run_out_of_time_while_it_prepares_answers_once_its_look_has_ended() {
+    let mut h = Harness::new(LIMITS);
+    let run = h.prepare(1);
+    h.after(BUDGET.time);
+    assert!(h.fire().is_empty(), "the look is in flight");
+    let emitted = h.step(Event::Read { owner: run, read: Read::Missing });
+    assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Time), Spend::ZERO)));
+}
+
+// A cancel in every state.
+
+fn cancelled() -> Answer {
+    failed(Failure::Cancelled, Spend::ZERO)
+}
+
+#[test]
+fn a_cancel_while_preparing_stops_the_run_once_its_look_has_ended() {
+    let mut h = Harness::new(LIMITS);
+    let run = h.prepare(1);
+    assert!(h.step(Event::Cancel { run }).is_empty(), "the look is in flight");
+    assert_eq!(h.model.next_deadline(), None);
+    assert!(h.step(Event::Cancel { run }).is_empty(), "stopping: the ending is decided");
+    let emitted = h.step(Event::Read { owner: run, read: Read::Missing });
+    assert_eq!(answered(emitted), (1, cancelled()));
+    h.model.reclaim();
+    assert_eq!((h.model.runs(), h.model.conversations()), (0, 0), "main was never opened, and is gone too");
+}
+
+#[test]
+fn a_cancel_while_main_opens_closes_main_once_it_starts() {
+    let mut h = Harness::new(LIMITS);
+    let (run, conversation) = h.admit(1);
+    assert!(h.step(Event::Cancel { run }).is_empty(), "main has no peer to close yet");
+    assert!(h.step(Event::Cancel { run }).is_empty(), "the ending is decided");
+    let peer = Token::new(100);
+    assert_eq!(&*h.step(Event::Started { conversation, peer }), &[Request::Close { peer }]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, cancelled()));
+
+    // Or main is refused, and the cancel is still how the run ends.
+    let (run, conversation) = h.admit(2);
+    drop(h.step(Event::Cancel { run }));
+    let emitted = h.step(Event::Ended { conversation, end: End::Busy, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (2, cancelled()));
+}
+
+#[test]
+fn a_cancel_while_main_works_closes_it() {
+    let mut h = Harness::new(LIMITS);
+    let (run, conversation) = h.running(1, 100);
+    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
+    // The conversation failed before it saw the close: the cancel still wins.
+    let emitted = h.step(Event::Ended { conversation, end: End::Fault(Fault::Provider), spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, cancelled()));
+}
+
+#[test]
+fn a_cancel_while_main_is_over_the_budget_closes_it() {
+    let mut h = Harness::new(LIMITS);
+    let (run, conversation) = h.running(1, 100);
+    drop(h.step(Event::Used { conversation, spend: spend(BUDGET.input + 1) }));
+    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
+    let spent = spend(BUDGET.input + 1);
+    let emitted = h.step(Event::Ended { conversation, end: End::Budget(Exhausted::Input), spend: spent });
+    assert_eq!(answered(emitted), (1, failed(Failure::Cancelled, spent)));
+}
+
+#[test]
+fn a_cancel_while_a_change_is_checked_stops_the_checks_once_main_withdraws_its_call() {
+    let mut h = Harness::new(LIMITS);
+    let (run, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
+    assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(7) }), &[Request::Abort { owner }]);
+    // The checks pass before the abort lands: nothing is pushed.
+    assert_eq!(&*h.step(Event::Checked { owner, ran: ran(0, b"") }), &[returned(7, Returned::Cancelled)]);
+    // A finish that crossed the close is cancelled too.
+    let crossed = finish(conversation, 8, verdict(b"approve", Box::new([])));
+    assert_eq!(&*h.step(crossed), &[returned(8, Returned::Cancelled)]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, cancelled()));
+}
+
+#[test]
+fn a_cancel_while_a_change_is_pushed_wins_over_the_push() {
+    let mut h = Harness::new(LIMITS);
+    let (run, conversation) = h.coding(1, 100);
+    let owner = h.land(conversation, 7);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    assert_eq!(&*h.step(Event::Cancel { run }), &[Request::Close { peer: Token::new(100) }]);
+    assert_eq!(&*h.step(Event::Withdraw { conversation, call: Token::new(7) }), &[Request::CancelHost { owner }]);
+    // The push won the race with its cancel, and loses to the run's.
+    assert_eq!(&*h.step(Event::Pushed { owner, push: Push::Done }), &[returned(7, Returned::Cancelled)]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, cancelled()));
+
+    // Or the cancel wins its race.
+    let (run, conversation) = h.coding(2, 101);
+    let owner = h.land(conversation, 8);
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Checked { owner, ran: ran(0, b"") }));
+    drop(h.step(Event::Cancel { run }));
+    drop(h.step(Event::Withdraw { conversation, call: Token::new(8) }));
+    assert_eq!(&*h.step(Event::HostCancelled { owner }), &[returned(8, Returned::Cancelled)]);
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (2, cancelled()));
+}
+
+#[test]
+fn a_cancel_while_the_run_winds_down_changes_nothing() {
+    let mut h = Harness::new(LIMITS);
+    let (run, conversation) = h.running(1, 100);
+    h.after(BUDGET.time);
+    drop(h.fire());
+    assert!(h.step(Event::Cancel { run }).is_empty(), "the ending is decided");
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    assert_eq!(answered(emitted), (1, failed(Failure::Budget(Exhausted::Time), Spend::ZERO)));
+
+    // Winding down to an accepted outcome, too.
+    let (run, conversation) = h.running(2, 101);
+    drop(h.step(finish(conversation, 7, verdict(b"approve", Box::new([])))));
+    assert!(h.step(Event::Cancel { run }).is_empty(), "the ending is decided");
+    let emitted = h.step(Event::Ended { conversation, end: End::Closed, spend: Spend::ZERO });
+    let accepted = Answer::Accepted { outcome: verdict(b"approve", Box::new([])), spent: Spend::ZERO };
+    assert_eq!(answered(emitted), (2, accepted));
+}
+
+#[test]
+fn a_cancel_of_a_run_that_has_answered_changes_nothing() {
+    let mut h = Harness::new(LIMITS);
+    let (run, conversation) = h.running(1, 100);
+    drop(h.step(Event::Ended { conversation, end: End::Fault(Fault::Provider), spend: Spend::ZERO }));
+    assert!(h.step(Event::Cancel { run }).is_empty(), "answered, not reclaimed yet");
+    h.model.reclaim();
+    assert!(h.step(Event::Cancel { run }).is_empty(), "answered and gone");
+    // Its slot taken by another run, the old name still finds nothing.
+    let (_, _) = h.running(2, 101);
+    assert!(h.step(Event::Cancel { run }).is_empty(), "a stale name");
+    assert_eq!(h.model.runs(), 1);
 }

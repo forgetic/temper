@@ -7,10 +7,15 @@
 //! Waiting     start alarm      Starting    start
 //! Starting    admitted         Running     (the cancel alarm, if it is to be cancelled)
 //!             answered         Closed
-//! Running     cancel alarm     Cancelling  cancel
-//!             answered         Closed
-//! Cancelling  answered         Closed
+//! Running     cancel alarm     Cancelling  cancel (the alarm again, to cancel twice)
+//!             answered         Closed      (or Lingering, to cancel late)
+//! Cancelling  cancel alarm     Cancelling  cancel
+//!             answered         Closed      (or Lingering)
+//! Lingering   cancel alarm     Closed      cancel
 //! ```
+//!
+//! A late cancel names a run that has answered, and a second one a run that
+//! has decided how it ends: the agent ignores both, which is what they test.
 //!
 //! A push is answered after a latency drawn from the configuration: the
 //! branch has moved, for as many pushes as the job drew when it started;
@@ -38,6 +43,11 @@ pub struct Config {
     pub cancels: u32,
     pub cancel_min: Duration,
     pub cancel_max: Duration,
+    /// The chances, per mille, that a run is cancelled again after a cancel,
+    /// and that a run is cancelled after it has answered, each after a delay
+    /// drawn from `cancel_min..=cancel_max`.
+    pub recancels: u32,
+    pub late_cancels: u32,
     /// The length of each brief, drawn from `brief_min..=brief_max`.
     pub brief_min: u32,
     pub brief_max: u32,
@@ -124,8 +134,11 @@ enum State {
     Starting,
     /// Its run is admitted as `run`. Its timer, if armed, cancels it.
     Running { run: Token },
-    /// Its run is cancelled, and not answered yet.
-    Cancelling,
+    /// Its run `run` is cancelled, and not answered yet. Its timer, if armed,
+    /// cancels it again.
+    Cancelling { run: Token },
+    /// Its run `run` has answered; its timer cancels it all the same.
+    Lingering { run: Token },
     /// Terminal: holds nothing.
     Closed,
 }
@@ -218,7 +231,7 @@ impl Model {
 pub fn step(model: &mut Model, env: &Env<Config>, event: Event, _out: &mut Queue<Request>) {
     match event {
         Event::Admitted { owner, run } => admitted(model, env, owner, run),
-        Event::Answered { owner, answer: _ } => answered(model, owner),
+        Event::Answered { owner, answer: _ } => answered(model, env, owner),
         Event::Push { reply_to, job, change: _ } => push(model, env, reply_to, job),
         Event::Checking { job: _, deadline: _ } => model.checking = model.checking.saturating_add(1),
     }
@@ -247,20 +260,48 @@ pub fn fire(model: &mut Model, env: &Env<Config>, out: &mut Queue<Request>) {
 }
 
 fn job_alarm(model: &mut Model, env: &Env<Config>, id: Id<Job>, out: &mut Queue<Request>) {
-    let Model { jobs, rng, .. } = model;
-    let job = jobs.get_mut(id).expect("a job lives until its run is answered");
+    let Model { jobs, timers, rng, .. } = model;
+    let config = &env.limits;
+    let job = jobs.get_mut(id).expect("a job lives until its last cancel");
     let state = mem::replace(&mut job.state, State::Closed);
     job.state = match state {
         State::Waiting => {
-            out.push(Request::Start { owner: id.token(), charter: charter::draw(rng, &env.limits) });
+            out.push(Request::Start { owner: id.token(), charter: charter::draw(rng, config) });
             State::Starting
         }
         State::Running { run } => {
             out.push(Request::Cancel { run });
-            State::Cancelling
+            if rng.chance(config.recancels) {
+                let delay = rng.between(config.cancel_min.as_nanos(), config.cancel_max.as_nanos());
+                let at = env.now.saturating_add(Duration::from_nanos(delay));
+                timers.arm(Alarm::Job(id), at).expect("a timer per job");
+            }
+            State::Cancelling { run }
         }
-        State::Starting | State::Cancelling | State::Closed => unreachable!("timers run only while waiting or running"),
+        State::Cancelling { run } => {
+            out.push(Request::Cancel { run });
+            State::Cancelling { run }
+        }
+        State::Lingering { run } => {
+            out.push(Request::Cancel { run });
+            State::Closed
+        }
+        State::Starting | State::Closed => unreachable!("timers run only while waiting, running or lingering"),
     };
+    follow(jobs, id);
+}
+
+/// Retires a job once it is Closed.
+fn follow(jobs: &mut Slab<Job>, id: Id<Job>) {
+    let job = jobs.get(id).expect("a job lives until it is retired");
+    match job.state {
+        State::Closed => jobs.retire(id),
+        State::Waiting
+        | State::Starting
+        | State::Running { .. }
+        | State::Cancelling { .. }
+        | State::Lingering { .. } => {}
+    }
 }
 
 /// Starting, admitted: the run may be cancelled later.
@@ -279,24 +320,34 @@ fn admitted(model: &mut Model, env: &Env<Config>, owner: Token, run: Token) {
             }
             State::Running { run }
         }
-        State::Waiting | State::Running { .. } | State::Cancelling | State::Closed => {
+        State::Waiting | State::Running { .. } | State::Cancelling { .. } | State::Lingering { .. } | State::Closed => {
             unreachable!("a run is admitted once, after it starts and before its answer")
         }
     };
 }
 
-/// Any state with a run, answered: the job is done.
-fn answered(model: &mut Model, owner: Token) {
+/// Any state with a run, answered: the job is done, unless it is to cancel its
+/// run late.
+fn answered(model: &mut Model, env: &Env<Config>, owner: Token) {
+    let config = &env.limits;
     let id = Id::from_token(owner);
     let job = model.jobs.get_mut(id).expect("a job lives until its run is answered");
-    let state = mem::replace(&mut job.state, State::Closed);
-    match state {
-        State::Starting | State::Running { .. } | State::Cancelling => {}
-        State::Waiting | State::Closed => unreachable!("a run is answered once, after it starts"),
-    }
     model.timers.cancel(Alarm::Job(id));
-    model.jobs.retire(id);
     model.answered = model.answered.saturating_add(1);
+    let state = mem::replace(&mut job.state, State::Closed);
+    job.state = match state {
+        State::Running { run } | State::Cancelling { run } if model.rng.chance(config.late_cancels) => {
+            let delay = model.rng.between(config.cancel_min.as_nanos(), config.cancel_max.as_nanos());
+            let at = env.now.saturating_add(Duration::from_nanos(delay));
+            model.timers.arm(Alarm::Job(id), at).expect("a timer per job");
+            State::Lingering { run }
+        }
+        State::Starting | State::Running { .. } | State::Cancelling { .. } => State::Closed,
+        State::Waiting | State::Lingering { .. } | State::Closed => {
+            unreachable!("a run is answered once, after it starts")
+        }
+    };
+    follow(&mut model.jobs, id);
 }
 
 /// A push from the run of `job`: decided now, answered later.
@@ -304,8 +355,10 @@ fn push(model: &mut Model, env: &Env<Config>, reply_to: ReplyTo, job: Token) {
     let config = &env.limits;
     let job = model.jobs.get_mut(Id::from_token(job)).expect("a job lives until its run is answered");
     match job.state {
-        State::Running { .. } | State::Cancelling => {}
-        State::Waiting | State::Starting | State::Closed => unreachable!("a run pushes once it is admitted"),
+        State::Running { .. } | State::Cancelling { .. } => {}
+        State::Waiting | State::Starting | State::Lingering { .. } | State::Closed => {
+            unreachable!("a run pushes once it is admitted, before it answers")
+        }
     }
     let pushed = if job.moves > 0 {
         job.moves = job.moves.saturating_sub(1);

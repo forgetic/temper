@@ -2,7 +2,7 @@
 //! a scripted partner playing their conversations, in a simulated world.
 //!
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use temper_agent_model_run::{Answer, Budget, Exhausted, Failure, Fault, Invalid, Limits, Policy, Refusal};
 use temper_agent_model_run_tests::partner::Script;
@@ -343,6 +343,8 @@ fn noisy(seed: u64) -> Settings {
         ..calm.worker
     };
     let worker = Config {
+        recancels: small(pick(0, 300)),
+        late_cancels: small(pick(0, 300)),
         push_min: Duration::ZERO,
         push_max: Duration::from_millis(pick(0, 3_000)),
         moves: small(pick(0, 2)),
@@ -382,5 +384,88 @@ fn noisy(seed: u64) -> Settings {
         check_tail: small(pick(0, 300)),
         ..run
     };
-    Settings { run, worker, partner, hop: Span::millis(0, pick(0, 50)), checkout, races: small(pick(0, 1000)), ..calm }
+    let inject = small(pick(0, 150));
+    Settings {
+        run,
+        worker,
+        partner,
+        hop: Span::millis(0, pick(0, 50)),
+        checkout,
+        races: small(pick(0, 1000)),
+        inject,
+        ..calm
+    }
+}
+
+/// Adds what `world` counted of the states cancels and deadlines found runs in.
+fn tally(world: &World, cancels: &mut BTreeMap<&'static str, u32>, deadlines: &mut BTreeMap<&'static str, u32>) {
+    for (cell, count) in world.cancel_cells() {
+        *cancels.entry(*cell).or_insert(0) += count;
+    }
+    for (cell, count) in world.deadline_cells() {
+        *deadlines.entry(*cell).or_insert(0) += count;
+    }
+}
+
+/// Cancels at random moments, from the worker (once, twice, late) and handed
+/// to the run right before or after any of its events, find runs in every
+/// state, and each answers once (checked by `World::run`).
+#[test]
+fn cancels_find_runs_in_every_state() {
+    let (mut cancels, mut deadlines) = (BTreeMap::new(), BTreeMap::new());
+    for seed in 0..200 {
+        tally(&settled(&noisy(seed)), &mut cancels, &mut deadlines);
+    }
+    // Cancelled twice while the run reads a slow checkout.
+    let calm = Settings::calm(20);
+    let worker = Config {
+        cancels: 1000,
+        cancel_min: Duration::ZERO,
+        cancel_max: Duration::from_secs(1),
+        recancels: 1000,
+        ..calm.worker
+    };
+    let checkout = Checkouts { io: Span::millis(3_000, 5_000), ..calm.checkout };
+    tally(&settled(&Settings { worker, checkout, ..calm }), &mut cancels, &mut deadlines);
+    // Cancelled as changes are checked and pushed, and as the LLM spends past
+    // its budget.
+    for seed in 21..24 {
+        let landing = finishing(seed);
+        let run = Limits { runs: 16, conversations: 16, ..landing.run };
+        let worker = Config {
+            jobs: 16,
+            cancels: 1000,
+            cancel_min: Duration::from_secs(2),
+            cancel_max: Duration::from_secs(30),
+            tokens_min: 5_000,
+            tokens_max: 40_000,
+            ..landing.worker
+        };
+        let partner = Script { changes: 1000, ..landing.partner };
+        let checkout = Checkouts { check: Span::millis(2_000, 8_000), check_failures: 3, ..landing.checkout };
+        let settings = Settings { run, worker, partner, checkout, inject: 20, ..landing };
+        tally(&settled(&settings), &mut cancels, &mut deadlines);
+    }
+    let cells = ["preparing", "stopping", "opening", "working", "landing", "over", "winding", "answered", "gone"];
+    for cell in cells {
+        assert!(cancels.get(cell).is_some_and(|count| *count > 0), "no cancel found a run {cell}: {cancels:?}");
+    }
+}
+
+/// Deadlines short against a slow checkout and slow conversations fall due in
+/// every state a run's deadline runs in.
+#[test]
+fn deadlines_find_runs_in_every_state_they_run_in() {
+    let (mut cancels, mut deadlines) = (BTreeMap::new(), BTreeMap::new());
+    for seed in 0..50 {
+        let calm = Settings::calm(seed);
+        let worker = Config { time_min: Duration::from_secs(1), time_max: Duration::from_secs(6), ..calm.worker };
+        let checkout = Checkouts { io: Span::millis(0, 2_000), ..calm.checkout };
+        let partner = Script { turn: Span::millis(100, 2_000), ..calm.partner };
+        let settings = Settings { worker, checkout, partner, hop: Span::millis(0, 1_500), ..calm };
+        tally(&settled(&settings), &mut cancels, &mut deadlines);
+    }
+    for cell in ["preparing", "opening", "working"] {
+        assert!(deadlines.get(cell).is_some_and(|count| *count > 0), "no deadline found a run {cell}: {deadlines:?}");
+    }
 }
